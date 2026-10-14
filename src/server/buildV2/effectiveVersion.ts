@@ -290,7 +290,7 @@ const WORKSPACE_DEPENDENCY_FINGERPRINT_FILES = [
 
 /** Per-input record surfaced for build-metadata / diagnostics observability. */
 export interface RootDependencyFingerprintFile {
-  /** File name relative to the resolved app root. */
+  /** Logical input label: host-relative name or workspace:<file>. */
   file: string;
   /** Absolute path the fingerprint read (or would have read). */
   path: string;
@@ -704,14 +704,12 @@ function dependencyFingerprintInputs(
   }));
   if (workspaceRoot) {
     for (const file of WORKSPACE_DEPENDENCY_FINGERPRINT_FILES) {
-      const filePath = path.join(workspaceRoot, file);
-      const relative = path.relative(root, filePath);
       inputs.push({
-        file:
-          relative && !relative.startsWith("..") && !path.isAbsolute(relative)
-            ? relative
-            : `workspace:${file}`,
-        path: filePath,
+        // The workspace is a semantic input scope even when packaging owns
+        // its scratch beneath the host. Physical placement is diagnostics,
+        // never an input to the existing v8 fold or runtime build identity.
+        file: `workspace:${file}`,
+        path: path.join(workspaceRoot, file),
       });
     }
   }

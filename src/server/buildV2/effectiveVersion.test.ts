@@ -25,6 +25,62 @@ import {
 } from "./effectiveVersion.js";
 
 describe("sealed v8 dependency input capture", () => {
+  it("keeps workspace identity independent of nested pack scratch and external placement", async () => {
+    fs.mkdirSync(path.resolve(".cache"), { recursive: true });
+    const root = fs.mkdtempSync(path.resolve(".cache/workspace-fingerprint-labels-"));
+    const appRoot = path.join(root, "app");
+    const workspaceRoots = [
+      path.join(appRoot, "release/.template-release-A/workspaces/system/source"),
+      path.join(appRoot, "release/.template-release-B/workspaces/system/source"),
+      path.join(root, "external/workspaces/system/source"),
+    ];
+    const inputs = [
+      ["package.json", '{"name":"workspace"}'],
+      ["pnpm-lock.yaml", "lockfileVersion: '9.0'\n"],
+      ["pnpm-workspace.yaml", "packages: []\n"],
+      ["tsconfig.json", '{"compilerOptions":{"strict":true}}'],
+      ["tsconfig.integration.json", '{"extends":"./tsconfig.json"}'],
+    ] as const;
+    try {
+      fs.mkdirSync(appRoot, { recursive: true });
+      fs.writeFileSync(path.join(appRoot, "package.json"), '{"name":"host"}');
+      const host = await computeRootDependencyFingerprint(appRoot);
+      const capture = captureRootDependencyFingerprint(host);
+      for (const workspaceRoot of workspaceRoots) {
+        fs.mkdirSync(workspaceRoot, { recursive: true });
+        for (const [file, bytes] of inputs) fs.writeFileSync(path.join(workspaceRoot, file), bytes);
+      }
+      const fresh = await Promise.all(
+        workspaceRoots.map((workspaceRoot) =>
+          computeRootDependencyFingerprint(appRoot, workspaceRoot)
+        )
+      );
+      const composed = await Promise.all(
+        workspaceRoots.map((workspaceRoot) =>
+          composeWorkspaceDependencyFingerprint(capture, appRoot, workspaceRoot)
+        )
+      );
+      const expected = fresh[2]!;
+      for (let index = 0; index < workspaceRoots.length; index++) {
+        expect(composed[index]).toEqual(fresh[index]);
+        expect(fresh[index]?.value).toBe(expected.value);
+        expect(computeBuildKey(fresh[index]!, "apps/shell", "same-ev", false)).toBe(
+          computeBuildKey(expected, "apps/shell", "same-ev", false)
+        );
+        const workspaceFiles = fresh[index]!.files.slice(3, 8);
+        expect(workspaceFiles.map(({ file }) => file)).toEqual(
+          inputs.map(([file]) => `workspace:${file}`)
+        );
+        expect(workspaceFiles.map(({ path: filePath }) => filePath)).toEqual(
+          inputs.map(([file]) => path.join(workspaceRoots[index]!, file))
+        );
+      }
+      expect((await computeRootDependencyFingerprint(appRoot)).value).toBe(host.value);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("reuses the exact full fingerprint and reads only five workspace files", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "sealed-dependencies-"));
     const appRoot = path.join(root, "app");
