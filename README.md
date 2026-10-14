@@ -469,7 +469,7 @@ Windows builds include MXC's `wxc-host-prep.exe` alongside the executor so its O
 - `pnpm stage:server-npm` - Build and stage the optional headless server npm package under `dist-packages/server/`
 - `pnpm setup:npm-token` - Save the local release token; `pnpm setup:npm-token --check` verifies it ([authentication guide](docs/npm-publish-authentication.md))
 - `pnpm publish:server-npm` - Build, stage, dry-run, publish, verify, and install-smoke the headless server package
-- `pnpm publish:server-npm:staged` - Reuse the staged server package for an auth-only publish retry
+- `pnpm publish:server-npm:staged` - Reuse the staged server package for a local auth-only publish retry; releases use the protected `npm-server-publish` workflow and its exact CI candidate
 - `pnpm type-check:cloudflare` - Type-check the callback/apex Cloudflare Worker
 - `pnpm deploy:cloudflare` - Deploy the callback/apex Worker
 - `pnpm smoke:cloudflare` - Smoke the deployed callback/apex Worker

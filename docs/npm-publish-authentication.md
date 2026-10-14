@@ -6,6 +6,13 @@ mode `0600` under `${XDG_CONFIG_HOME:-~/.config}/vibestudio/npm-publish-token`.
 `VIBESTUDIO_NPM_TOKEN_FILE` can select another path. Release commands prefer
 `NODE_AUTH_TOKEN`, then `NPM_TOKEN`, then that saved file.
 
+The hosted `npm-server-publish` workflow reads the repository's `NPM_TOKEN`
+secret only in its final publication step. It first validates the public release
+tag and exact successful protected-main CI run, then downloads that run's npm
+candidate by artifact ID and digest. Candidate validation, dry-run, and install
+smoke subprocesses receive an anonymous registry environment; only `npm whoami`
+and `npm publish` receive the isolated token configuration.
+
 For the longest supported local publishing access, create a granular token with
 90-day expiration, package read/write **publish and stage** permissions for the
 packages/scopes being released, and bypass 2FA for unattended direct publication.

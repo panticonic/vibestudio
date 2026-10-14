@@ -352,14 +352,22 @@ The npm preflight retains its canonical `npm pack` archive after staging,
 dry-run, and fresh-install smoke checks succeed. Its artifact name includes the
 exact source SHA and run attempt; its receipt records package identity, archive
 length, and SHA-256. Publication may reuse that archive from the matching
-successful CI run after all release gates succeed. Run
-`pnpm publish:server-npm -- --candidate-receipt PATH` against that exact checkout.
-The publisher verifies the receipt against Git HEAD and package version, checks
-the archive length and SHA-256, and validates the installed package manifest.
+successful CI run after all release gates succeed. Run the `npm-server-publish`
+workflow with the release tag, source SHA, and successful candidate run ID. It
+revalidates the protected-main run and release tag, downloads the artifact by its
+GitHub ID and digest, and passes the receipt's explicit source and version to the
+shared publisher. A local recovery can use `pnpm publish:server-npm --
+--candidate-receipt PATH --candidate-source-sha SHA --candidate-version VERSION`
+with the same explicit identity. The publisher checks the archive length,
+SHA-256, link types, and installed package manifest.
 The ordinary producer packs once; dry-run, fresh-install smoke and publication
 consume the same archive bytes, followed by registry verification and smoke.
 CI uses `--candidate-output DIR` to retain that verified archive and receipt.
 Receipt reuse avoids another build, stage and pack without bypassing acceptance.
+If the immutable version already exists, the publisher compares the decompressed
+registry archive with the candidate before skipping upload; a version string alone
+does not establish idempotency. Candidate checks and install scripts never inherit
+the publication token.
 This candidate is an output of the ordinary producer, not a separate packaging
 implementation. Record producer, transfer, and final publication wall-clock
 times before claiming a measured deployment speedup.

@@ -2,13 +2,17 @@
 // Manual npm publish helper for the headless server package.
 // Real publishes require a granular token with bypass 2FA enabled.
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
+import { Readable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { createGunzip } from "node:zlib";
 import { formatRpcFailure } from "@vibestudio/rpc";
+import { valid as validSemver } from "semver";
 import { tsImport } from "tsx/esm/api";
 import { runWithOwnedCleanup } from "./lib/owned-cleanup.mjs";
 import { spawnResultFailure } from "./lib/spawn-result-failure.mjs";
@@ -69,22 +73,10 @@ async function main() {
     return;
   }
 
-  const publishToken = getAuthToken();
-  if (!options.dryRunOnly && !publishToken) {
-    throw new Error(
-      "npm publish requires a saved token. Run pnpm setup:npm-token, or export NPM_TOKEN/NODE_AUTH_TOKEN for this shell."
-    );
-  }
-
   if (options.dryRunOnly) {
     const whoami = capture("npm", ["whoami"], { cwd: repoRoot });
     if (whoami.status !== 0) {
       console.warn("[publish-npm] npm is not logged in; continuing because --dry-run-only is set.");
-    }
-  } else if (publishToken) {
-    const npmUser = ensureTokenAuth();
-    if (npmUser !== "panticonic") {
-      console.warn(`[publish-npm] npm token authenticates as ${npmUser}; expected panticonic.`);
     }
   }
 
@@ -94,17 +86,27 @@ async function main() {
         "--candidate-receipt cannot be combined with build, stage, or candidate-output options"
       );
     }
+    if (!options.candidateSourceSha || !options.candidateVersion) {
+      throw new Error(
+        "--candidate-receipt requires --candidate-source-sha and --candidate-version"
+      );
+    }
   } else {
+    if (options.candidateSourceSha || options.candidateVersion) {
+      throw new Error(
+        "--candidate-source-sha and --candidate-version require --candidate-receipt"
+      );
+    }
     if (!options.skipBuild) run("pnpm", ["build"], { cwd: repoRoot });
     if (!options.skipStage)
       run("node", ["scripts/build-server-npm-package.mjs"], { cwd: repoRoot });
   }
 
   const manifests = options.candidateReceipt
-    ? [validateCandidateIdentity(serverPackage)]
+    ? [validateCandidateIdentity(serverPackage, options.candidateVersion)]
     : [validateStagedPackage(serverPackage)];
   const entry = manifests[0];
-  const sourceSha = currentSourceSha();
+  const sourceSha = options.candidateSourceSha ?? currentSourceSha();
   let candidate;
   if (options.candidateReceipt) {
     candidate = await readVerifiedNpmPackageCandidate(options.candidateReceipt, {
@@ -127,8 +129,9 @@ async function main() {
   for (const entry of manifests) {
     const existing = npmView(entry.pkg.name, entry.version);
     if (existing === entry.version) {
+      await verifyPublishedCandidate(entry, candidate.tarballPath);
       console.log(
-        `[publish-npm] ${entry.pkg.name}@${entry.version} is already published; skipping.`
+        `[publish-npm] ${entry.pkg.name}@${entry.version} is already published with the same candidate payload; skipping.`
       );
     } else if (existing) {
       console.log(
@@ -161,6 +164,17 @@ async function main() {
 
   if (!publishQueue.length) {
     console.log("\n[publish-npm] All selected package versions are already published.");
+  } else {
+    const publishToken = getAuthToken();
+    if (!publishToken) {
+      throw new Error(
+        "npm publish requires a saved token. Run pnpm setup:npm-token, or export NPM_TOKEN/NODE_AUTH_TOKEN for this shell."
+      );
+    }
+    const npmUser = ensureTokenAuth();
+    if (npmUser !== "panticonic") {
+      console.warn(`[publish-npm] npm token authenticates as ${npmUser}; expected panticonic.`);
+    }
   }
 
   for (const entry of publishQueue) {
@@ -173,7 +187,7 @@ async function main() {
         cwd: repoRoot,
         stdio: ["inherit", "pipe", "pipe"],
         encoding: "utf8",
-        env: npmEnv(),
+        env: npmEnv({ authenticated: true }),
       }
     );
     if (result.stdout) process.stdout.write(redactAuthToken(result.stdout));
@@ -198,11 +212,13 @@ async function main() {
   }
 }
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const options = {
     dryRunOnly: false,
     candidateOutput: null,
     candidateReceipt: null,
+    candidateSourceSha: null,
+    candidateVersion: null,
     help: false,
     skipBuild: false,
     skipStage: false,
@@ -221,6 +237,10 @@ function parseArgs(argv) {
       options.candidateOutput = path.resolve(requireValue(argv, ++i, arg));
     } else if (arg === "--candidate-receipt") {
       options.candidateReceipt = path.resolve(requireValue(argv, ++i, arg));
+    } else if (arg === "--candidate-source-sha") {
+      options.candidateSourceSha = requireValue(argv, ++i, arg);
+    } else if (arg === "--candidate-version") {
+      options.candidateVersion = requireValue(argv, ++i, arg);
     } else if (arg === "--skip-build") {
       options.skipBuild = true;
     } else if (arg === "--skip-stage") {
@@ -235,6 +255,15 @@ function parseArgs(argv) {
   }
 
   if (!options.tag) throw new Error("--tag must not be empty");
+  if (
+    options.candidateSourceSha &&
+    !/^[0-9a-f]{40}$/u.test(options.candidateSourceSha)
+  ) {
+    throw new Error("--candidate-source-sha must be a full Git commit SHA");
+  }
+  if (options.candidateVersion && validSemver(options.candidateVersion) === null) {
+    throw new Error("--candidate-version must be a valid semantic version");
+  }
   return options;
 }
 
@@ -290,6 +319,8 @@ Options:
   --dry-run-only            Build/stage/check only; do not publish
   --candidate-output <dir>  Retain the verified archive and receipt in this directory
   --candidate-receipt <file> Reuse an archive whose receipt matches this Git commit
+  --candidate-source-sha <sha> Exact release source attested by a reused receipt
+  --candidate-version <version> Exact package version attested by a reused receipt
   --tag <tag>               npm dist-tag. Default: latest
 
 Common reruns:
@@ -325,14 +356,14 @@ export function validateStagedPackage(pkg) {
   return { pkg, manifest, version: manifest.version };
 }
 
-function validateCandidateIdentity(pkg) {
+function validateCandidateIdentity(pkg, version) {
   if (pkg.name !== "@panticonic/vibestudio-server") {
     throw new Error(`Unexpected npm candidate package: ${pkg.name}`);
   }
   return {
     pkg,
-    manifest: { name: pkg.name, version: rootPkg.version, publishConfig: { access: "public" } },
-    version: rootPkg.version,
+    manifest: { name: pkg.name, version, publishConfig: { access: "public" } },
+    version,
   };
 }
 
@@ -354,6 +385,50 @@ function npmView(name, version) {
   throw new Error(`Could not check npm registry for ${name}@${version}`);
 }
 
+async function verifyPublishedCandidate(entry, candidatePath) {
+  const result = capture(
+    "npm",
+    ["view", `${entry.pkg.name}@${entry.version}`, "dist.tarball", "--json"],
+    { cwd: repoRoot }
+  );
+  const failure = spawnResultFailure(
+    result,
+    `npm view ${entry.pkg.name}@${entry.version} dist.tarball`
+  );
+  if (failure) throw failure;
+  let tarballUrl;
+  try {
+    tarballUrl = new URL(JSON.parse(result.stdout));
+  } catch (error) {
+    throw new Error("npm returned an invalid published tarball URL", { cause: error });
+  }
+  if (tarballUrl.protocol !== "https:" || tarballUrl.hostname !== "registry.npmjs.org") {
+    throw new Error(`npm returned an unexpected published tarball URL: ${tarballUrl.origin}`);
+  }
+  const response = await fetch(tarballUrl, { redirect: "error" });
+  if (!response.ok || !response.body) {
+    throw new Error(
+      `Could not download published npm archive for integrity verification: HTTP ${response.status}`
+    );
+  }
+  const [candidatePayload, publishedPayload] = await Promise.all([
+    npmArchivePayloadSha256(fs.createReadStream(candidatePath)),
+    npmArchivePayloadSha256(Readable.fromWeb(response.body)),
+  ]);
+  if (publishedPayload !== candidatePayload) {
+    throw new Error(
+      `Published ${entry.pkg.name}@${entry.version} does not match the verified candidate payload`
+    );
+  }
+}
+
+export async function npmArchivePayloadSha256(compressedStream) {
+  const hash = createHash("sha256");
+  const payload = compressedStream.pipe(createGunzip());
+  for await (const chunk of payload) hash.update(chunk);
+  return hash.digest("hex");
+}
+
 async function verifyPublished(entry) {
   // npm acknowledges an accepted upload before its processing makes it public.
   // A missing version is still pending; only registry readiness or an actual
@@ -372,7 +447,7 @@ async function verifyPublished(entry) {
 }
 
 function ensureTokenAuth() {
-  const whoami = capture("npm", ["whoami"], { cwd: repoRoot });
+  const whoami = capture("npm", ["whoami"], { cwd: repoRoot, authenticated: true });
   if (whoami.status !== 0) {
     const detail = redactAuthToken(whoami.stderr.trim() || whoami.stdout.trim());
     const failure = spawnResultFailure(whoami, "npm whoami");
@@ -505,17 +580,33 @@ function capture(command, args, options) {
   return spawnSync(command, args, {
     cwd: options.cwd,
     encoding: "utf8",
-    env: npmEnv(),
+    env: npmEnv({ authenticated: options.authenticated }),
   });
 }
 
-function npmEnv() {
+function npmEnv({ authenticated = false } = {}) {
+  if (!authenticated) return publicNpmEnvironment(process.env);
   const auth = getNpmAuth();
   if (auth.token && !announcedTokenEnv) {
     console.log(`[publish-npm] Using npm publish token from ${auth.token.source}.`);
     announcedTokenEnv = true;
   }
   return auth.environment();
+}
+
+export function publicNpmEnvironment(env) {
+  const clean = { ...env };
+  for (const key of [
+    "NPM_TOKEN",
+    "NODE_AUTH_TOKEN",
+    "NPM_CONFIG_USERCONFIG",
+    "npm_config_userconfig",
+  ]) {
+    delete clean[key];
+  }
+  clean.NPM_CONFIG_REGISTRY = "https://registry.npmjs.org/";
+  clean.npm_config_registry = "https://registry.npmjs.org/";
+  return clean;
 }
 
 function getNpmAuth() {

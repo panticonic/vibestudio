@@ -32,7 +32,10 @@ export function validateReleaseCiRun({
   if (artifacts.total_count > artifacts.artifacts?.length) {
     failures.push("candidate artifact list was truncated");
   }
-  const required = [`vibestudio-release-gate-${sourceSha}`];
+  const required = [
+    `vibestudio-release-gate-${sourceSha}`,
+    `vibestudio-server-npm-${sourceSha}-${run.run_attempt}`,
+  ];
   if (enabled.linux) required.push(`vibestudio-linux-release-${sourceSha}`);
   if (enabled.mac) {
     required.push(`vibestudio-macos-${sourceSha}`);
@@ -161,6 +164,7 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
     }
     const outputNames = {
       gate: `vibestudio-release-gate-${sourceSha}`,
+      npm: `vibestudio-server-npm-${sourceSha}-${run.run_attempt}`,
       linux: `vibestudio-linux-release-${sourceSha}`,
       mac: `vibestudio-macos-${sourceSha}`,
       observers: `darwin-process-observers-release-${sourceSha}`,

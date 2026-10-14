@@ -1,0 +1,163 @@
+name: Publish verified headless server to npm
+
+# Publication consumes the immutable candidate from the exact protected-main CI
+# run that passed the release gate. A registry failure can therefore resume
+# without rebuilding any desktop or server artifact.
+on:
+  workflow_dispatch:
+    inputs:
+      release-tag:
+        description: Existing public GitHub release tag (for example v0.2.0)
+        type: string
+        required: true
+      source-sha:
+        description: Full release source commit
+        type: string
+        required: true
+      candidate-run-id:
+        description: Successful protected-main CI run that produced the npm candidate
+        type: string
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: npm-server-publish-${{ inputs.release-tag }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate exact release and protected CI candidate
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    outputs:
+      candidate-attempt: ${{ steps.candidate.outputs.candidate-attempt }}
+      npm-id: ${{ steps.candidate.outputs.npm-id }}
+      npm-digest: ${{ steps.candidate.outputs.npm-digest }}
+    env:
+      RELEASE_TAG: ${{ inputs.release-tag }}
+      SOURCE_SHA: ${{ inputs.source-sha }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate-run-id }}
+    steps:
+      - name: Checkout publication tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Validate immutable release identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          test "$WORKFLOW_REF" = refs/heads/main
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+
+          release_json="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName)"
+          test "$(jq -r '.tagName' <<<"$release_json")" = "$RELEASE_TAG"
+          test "$(jq -r '.isDraft' <<<"$release_json")" = false
+
+          ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")"
+          object_type="$(jq -r '.object.type' <<<"$ref_json")"
+          object_sha="$(jq -r '.object.sha' <<<"$ref_json")"
+          if test "$object_type" = tag; then
+            tag_json="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$object_sha")"
+            object_type="$(jq -r '.object.type' <<<"$tag_json")"
+            object_sha="$(jq -r '.object.sha' <<<"$tag_json")"
+          fi
+          test "$object_type" = commit
+          test "$object_sha" = "$SOURCE_SHA"
+
+      - name: Validate protected-main candidate and exact artifact
+        id: candidate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_LINUX: ${{ vars.RELEASE_LINUX }}
+          RELEASE_MAC: ${{ vars.RELEASE_MAC }}
+          RELEASE_WINDOWS: ${{ vars.RELEASE_WINDOWS }}
+        run: node scripts/verify-release-ci-run.mjs
+
+  publish:
+    name: Publish and verify exact npm candidate
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      contents: read
+    env:
+      RELEASE_TAG: ${{ inputs.release-tag }}
+      SOURCE_SHA: ${{ inputs.source-sha }}
+      CANDIDATE_RUN_ID: ${{ inputs.candidate-run-id }}
+      CANDIDATE_ATTEMPT: ${{ needs.validate.outputs.candidate-attempt }}
+      NPM_ARTIFACT_ID: ${{ needs.validate.outputs.npm-id }}
+      NPM_ARTIFACT_DIGEST: ${{ needs.validate.outputs.npm-digest }}
+    steps:
+      - name: Checkout publication tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Prepare private publication scratch
+        run: |
+          owned_tmpdir="$RUNNER_TEMP/vibestudio-npm-publish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -m 0700 -p "$owned_tmpdir/candidate"
+          printf 'TMPDIR=%s\n' "$owned_tmpdir" >> "$GITHUB_ENV"
+
+      - name: Download exact CI candidate artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          node scripts/download-release-artifact.mjs
+          "$NPM_ARTIFACT_ID" "$NPM_ARTIFACT_DIGEST" "$TMPDIR/candidate"
+          "$CANDIDATE_RUN_ID" "$CANDIDATE_ATTEMPT" "$SOURCE_SHA"
+
+      - name: Install publication tooling dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build publication tooling dependencies
+        run: pnpm build:infrastructure
+
+      - name: Install npm candidate sandbox runtime
+        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
+
+      - name: Allow installed candidate user namespace under AppArmor
+        run: |
+          profile="$RUNNER_TEMP/vibestudio-server-npm-publish-mxc.apparmor"
+          executable="$TMPDIR/vibestudio-npm-server-check-*/install/lib/node_modules/@panticonic/vibestudio-server/dist/mxc/linux-x64/lxc-exec"
+          cat > "$profile" <<EOF
+          abi <abi/4.0>,
+          include <tunables/global>
+
+          profile vibestudio_server_npm_publish_mxc "$executable" flags=(unconfined) {
+            userns,
+          }
+          EOF
+          sudo install -m 0644 "$profile" /etc/apparmor.d/vibestudio-server-npm-publish-mxc
+          sudo apparmor_parser -r /etc/apparmor.d/vibestudio-server-npm-publish-mxc
+
+      - name: Publish exact candidate and verify the public registry install
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          package_version="${RELEASE_TAG#v}"
+          node scripts/publish-npm.mjs \
+            --candidate-receipt "$TMPDIR/candidate/candidate-receipt.json" \
+            --candidate-source-sha "$SOURCE_SHA" \
+            --candidate-version "$package_version"
+
+      - name: Retire publication scratch
+        if: ${{ always() }}
+        run: rm -rf -- "$RUNNER_TEMP/vibestudio-npm-publish-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"

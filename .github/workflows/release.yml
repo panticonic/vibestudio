@@ -2,9 +2,10 @@ name: Release
 
 # Dispatch against an exact commit and requested version. Every enabled native
 # candidate and its acceptance must pass before the workflow creates the tag.
-# Nothing here publishes to npm; the headless server
-# has a separate manual `pnpm publish:server-npm` path for hosts no native
-# package covers.
+# Nothing here publishes to npm; the headless server uses the separately
+# dispatched npm-server-publish workflow after this release is public. That
+# workflow consumes this run's exact protected candidate, so registry failures
+# resume without rebuilding unrelated application artifacts.
 #   - vars.RELEASE_LINUX = 'true'  → deb/rpm/pacman, plus the signed apt and
 #     dnf repositories on GitHub Pages after this workflow succeeds
 #     (needs build-resources icons and LINUX_SIGNING_KEY)
@@ -41,6 +42,8 @@ jobs:
       actions: read
     outputs:
       candidate-attempt: ${{ steps.candidate.outputs.candidate-attempt }}
+      npm-id: ${{ steps.candidate.outputs.npm-id }}
+      npm-digest: ${{ steps.candidate.outputs.npm-digest }}
       linux-id: ${{ steps.candidate.outputs.linux-id }}
       linux-digest: ${{ steps.candidate.outputs.linux-digest }}
       mac-id: ${{ steps.candidate.outputs.mac-id }}
