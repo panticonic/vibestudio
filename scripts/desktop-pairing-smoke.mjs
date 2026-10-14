@@ -1505,7 +1505,7 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
               return contents.executeJavaScript(`(() => {
               const initialPrompt = "I just opened this workspace for the first time, help me get onboarded.";
               const args = window.__vibestudioStateArgs ?? {};
-              const connect = document.querySelector('[role="region"][aria-label="Connect a model provider"]');
+              const setup = document.querySelector('.agent-setup-card');
               return {
                 source: window.__vibestudioSourceRepo,
                 text: document.body.innerText,
@@ -1516,7 +1516,10 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
                 openingRequestReady: [...document.querySelectorAll('[data-message-role="player"]')]
                   .some((message) => message.textContent.includes(initialPrompt)),
                 introductoryVideoReady: Boolean(document.querySelector('iframe[title="An introduction to Vibestudio and a live demo"][src^="https://www.youtube-nocookie.com/embed/"]')),
-                credentialSetupReady: Boolean(connect?.querySelector("button:not([disabled])"))
+                modelChoiceReady: Boolean(
+                  setup?.querySelector('[role="combobox"][aria-label="Provider"]:not([disabled])') &&
+                  setup?.querySelector('[role="combobox"][aria-label="Model"]:not([disabled])')
+                )
               };
             })()`);
             },
@@ -1540,7 +1543,7 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
           configuredSystemPrompt: rendered.configuredSystemPrompt,
           openingRequestReady: rendered.openingRequestReady,
           introductoryVideoReady: rendered.introductoryVideoReady,
-          credentialSetupReady: rendered.credentialSetupReady,
+          modelChoiceReady: rendered.modelChoiceReady,
         };
         if (JSON.stringify(observed) !== JSON.stringify(latestObservation)) {
           latestObservation = observed;
@@ -1556,12 +1559,12 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
             throw new Error(`Initial chat delivery failed: ${rendered.deliveryError}`);
           if (!rendered.configuredPrompt || !rendered.configuredSystemPrompt)
             throw new Error("Personal initial chat lost its configured onboarding prompt options");
-          // A fresh account has no model credential. Its next actionable step
+          // A fresh account has no selected model. Its explicit model choice
           // must be visible without requiring an AI turn to complete first.
           if (
             !rendered.openingRequestReady ||
             !rendered.introductoryVideoReady ||
-            !rendered.credentialSetupReady
+            !rendered.modelChoiceReady
           ) {
             await sleep(500);
             continue;
@@ -1615,7 +1618,7 @@ async function observePersonalPanel(app, workspaceId, expectedSource, deadline, 
             : {
                 openingRequestReady: rendered.openingRequestReady,
                 introductoryVideoReady: rendered.introductoryVideoReady,
-                credentialSetupReady: rendered.credentialSetupReady,
+                modelChoiceReady: rendered.modelChoiceReady,
               }),
           screenshotPath,
         };
