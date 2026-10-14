@@ -55,6 +55,7 @@ describe("workerd bootstrap policy", () => {
     const inert = {};
     wireWorkerdCore({
       schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-workerd-bootstrap-fixture"),
+      schemaProbeReleaseRoot: "/workspace/release",
       container: { registerManaged: (service) => services.push(service) },
       tokenManager: inert as WorkerdBootstrapDeps["tokenManager"],
       workspacePath: "/workspace",
@@ -114,6 +115,7 @@ describe("workerd bootstrap policy", () => {
     } as unknown as WorkerdBootstrapDeps["workspaceDeclarations"];
     wireWorkerdCore({
       schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-workerd-bootstrap-fixture"),
+      schemaProbeReleaseRoot: "/workspace/release",
       container: { registerManaged: (service) => services.push(service) },
       tokenManager: inert as WorkerdBootstrapDeps["tokenManager"],
       workspacePath: "/workspace",
@@ -208,6 +210,7 @@ describe("workerd bootstrap policy", () => {
     );
     wireWorkerdCore({
       schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-workerd-bootstrap-fixture"),
+      schemaProbeReleaseRoot: "/workspace/release",
       container: { registerManaged: (service) => services.push(service) },
       tokenManager: inert as WorkerdBootstrapDeps["tokenManager"],
       workspacePath: "/workspace",

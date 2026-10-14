@@ -11,7 +11,11 @@
 
 import type { WorkerExecutableAdmission } from "./workerExecutableDispatch.js";
 import type { WorkspaceReleaseIdentity } from "./preparedWorkspaceRelease.js";
-import { acquireSchemaProbeEvidence } from "./services/schemaProbeEvidence.js";
+import {
+  acquireSchemaProbeEvidence,
+  readInstalledSchemaProbeEvidence,
+  type InstalledSchemaProbeEvidence,
+} from "./services/schemaProbeEvidence.js";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { spawn, type ChildProcess } from "child_process";
 import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
@@ -466,6 +470,7 @@ export interface WorkerInstance {
 export interface WorkerdManagerDeps {
   /** Existing admitted host/SDK installation capture; never rescan at admission. */
   readonly schemaProbeEnvironment: WorkspaceReleaseIdentity;
+  readonly schemaProbeReleaseRoot: string;
   tokenManager: TokenManager;
   fsService: FsService;
   /**
@@ -768,6 +773,10 @@ export class WorkerdManager {
   private readonly sqliteIntegrityWorker: SqliteIntegrityWorkerClient;
   private readonly schemaProbeBuilds = new Map<string, SchemaProbeBuild>();
   private readonly schemaAdmissionLifetime = new AbortController();
+  private installedSchemaEvidence: Promise<InstalledSchemaProbeEvidence> | undefined;
+  private readonly schemaProbeOperations = new Set<
+    Promise<DurableObjectPublishedSchemaDescriptor>
+  >();
   private readonly shutdownCancellation = Object.assign(
     new Error("WorkerdManager is shutting down"),
     { code: "ECANCELLED" }
@@ -2786,6 +2795,11 @@ export class WorkerdManager {
   private toCapnpText(config: Record<string, unknown>): string {
     this.bundleFileCounter = 0;
     this.pendingConfigWrites = [];
+    this.configModuleFiles.esModule.clear();
+    this.configModuleFiles.wasm.clear();
+    this.configModuleReferenceCount = 0;
+    this.configModuleReferenceBytes = 0;
+    this.configModulePayloadBytes = 0;
     const body = this.capnpValue(config, 1);
     return `using Workerd = import "/workerd/workerd.capnp";\n\nconst config :Workerd.Config = ${body};\n`;
   }
@@ -2805,6 +2819,32 @@ export class WorkerdManager {
 
   private bundleFileCounter = 0;
   private pendingConfigWrites: Array<{ filename: string; content: string | Buffer }> = [];
+  private readonly configModuleFiles = {
+    esModule: new Map<string, { filename: string; bytes: number }>(),
+    wasm: new Map<string, { filename: string; bytes: number }>(),
+  };
+  private configModuleReferenceCount = 0;
+  private configModuleReferenceBytes = 0;
+  private configModulePayloadBytes = 0;
+
+  /** Equal module payloads share one embed file in this exact configuration.
+   * Service bindings, module names, and durable storage identities remain
+   * distinct. No executable identity is recalculated at runtime. */
+  private configModuleFile(kind: "esModule" | "wasm", value: string): string {
+    const files = this.configModuleFiles[kind];
+    let module = files.get(value);
+    if (!module) {
+      const filename = `${kind === "esModule" ? "bundle" : "module"}-${this.bundleFileCounter++}.${kind === "esModule" ? "js" : "wasm"}`;
+      const content = kind === "esModule" ? value : Buffer.from(value, "base64");
+      module = { filename, bytes: Buffer.byteLength(content) };
+      files.set(value, module);
+      this.pendingConfigWrites.push({ filename, content });
+      this.configModulePayloadBytes += module.bytes;
+    }
+    this.configModuleReferenceCount++;
+    this.configModuleReferenceBytes += module.bytes;
+    return module.filename;
+  }
 
   private capnpValue(value: unknown, depth: number): string {
     if (value === null || value === undefined) return "void";
@@ -2831,14 +2871,12 @@ export class WorkerdManager {
       const fields = entries.map(([k, v]) => {
         // esModule bundles: collect for async flush, reference via embed.
         if (k === "esModule" && typeof v === "string") {
-          const filename = `bundle-${this.bundleFileCounter++}.js`;
-          this.pendingConfigWrites.push({ filename, content: v });
+          const filename = this.configModuleFile("esModule", v);
           return `${indent}${k} = embed "${filename}",`;
         }
         // wasm module bindings: value is base64; decode to binary + embed.
         if (k === "wasm" && typeof v === "string") {
-          const filename = `module-${this.bundleFileCounter++}.wasm`;
-          this.pendingConfigWrites.push({ filename, content: Buffer.from(v, "base64") });
+          const filename = this.configModuleFile("wasm", v);
           return `${indent}${k} = embed "${filename}",`;
         }
         return `${indent}${k} = ${this.capnpValue(v, depth + 1)},`;
@@ -3245,12 +3283,18 @@ export class WorkerdManager {
 
   private async startWorkerdOnce(): Promise<void> {
     if (this.shuttingDown) throw this.shutdownCancellation;
+    const startedAt = performance.now();
     const config = await this.generateConfig();
+    const configuredAt = performance.now();
     if (this.shuttingDown) throw this.shutdownCancellation;
     const configPath = path.join(this.configDir, "config.capnp");
     const capnpText = this.toCapnpText(config as Record<string, unknown>);
+    const serializedAt = performance.now();
+    const moduleFileCount = this.pendingConfigWrites.length;
     await this.flushConfigWrites();
+    const payloadWrittenAt = performance.now();
     await fs.promises.writeFile(configPath, capnpText);
+    const configWrittenAt = performance.now();
     if (this.shuttingDown) throw this.shutdownCancellation;
 
     const binary = this.findWorkerdBinary();
@@ -3272,6 +3316,7 @@ export class WorkerdManager {
       configPath,
     ];
 
+    const spawningAt = performance.now();
     this.process = spawn(binary, args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env },
@@ -3382,7 +3427,25 @@ export class WorkerdManager {
       );
     });
 
-    log.info(`workerd started on port ${this.port} with ${this.instances.size} worker(s)`);
+    const readyAt = performance.now();
+    const startupReport = {
+      generation: receipt.generation,
+      totalMs: readyAt - startedAt,
+      configPreparationMs: configuredAt - startedAt,
+      configSerializationMs: serializedAt - configuredAt,
+      modulePayloadWriteMs: payloadWrittenAt - serializedAt,
+      configWriteMs: configWrittenAt - payloadWrittenAt,
+      processPreparationMs: spawningAt - configWrittenAt,
+      spawnToHttpReadyMs: readyAt - spawningAt,
+      moduleReferenceCount: this.configModuleReferenceCount,
+      moduleReferenceBytes: this.configModuleReferenceBytes,
+      moduleFileCount,
+      modulePayloadBytes: this.configModulePayloadBytes,
+      configBytes: Buffer.byteLength(capnpText),
+    };
+    log.info(
+      `workerd started on port ${this.port} with ${this.instances.size} worker(s); workerdStartupReport=${JSON.stringify(startupReport)}`
+    );
   }
 
   private startWorkerdMemorySampling(pid: number | undefined): void {
@@ -4162,22 +4225,7 @@ export class WorkerdManager {
           `Durable Object ${image.source}:${className} schema executable failed sealed identity verification`
         );
       }
-      const descriptor = await acquireSchemaProbeEvidence(
-        {
-          identity: {
-            installation: this.deps.schemaProbeEnvironment,
-            artifactDigest: image.artifact.artifactDigest,
-            source: image.source,
-            className,
-            protocol: SCHEMA_PROBE_CACHE_VERSION,
-            platform: process.platform,
-            arch: process.arch,
-            compatibility: USER_CODE_COMPATIBILITY,
-          },
-          signal: this.schemaAdmissionLifetime.signal,
-        },
-        () => this.probeDurableObjectSchema(image.source, className, build)
-      );
+      const descriptor = await this.probeDurableObjectSchema(image.source, className, build);
       this.recordDurableObjectSchema({
         source: image.source,
         effectiveVersion: image.artifact.sourceState.effectiveVersion,
@@ -4312,24 +4360,56 @@ export class WorkerdManager {
     className: string,
     build: StoredBuildResult
   ): Promise<DurableObjectPublishedSchemaDescriptor> {
-    if (build.metadata.kind !== "worker" || build.metadata.sourcePath !== source) {
-      throw new Error(`Schema probe build does not belong to worker source ${source}`);
+    this.schemaAdmissionLifetime.signal.throwIfAborted();
+    const operation = (async () => {
+      if (build.metadata.kind !== "worker" || build.metadata.sourcePath !== source) {
+        throw new Error(`Schema probe build does not belong to worker source ${source}`);
+      }
+      const artifact = executionArtifactRefFromBuild(this.deps.workspaceId, build);
+      this.installedSchemaEvidence ??= readInstalledSchemaProbeEvidence(
+        this.deps.schemaProbeReleaseRoot,
+        this.deps.schemaProbeEnvironment
+      );
+      return acquireSchemaProbeEvidence(
+        {
+          identity: {
+            installation: this.deps.schemaProbeEnvironment,
+            artifactDigest: artifact.artifactDigest,
+            source,
+            className,
+            protocol: SCHEMA_PROBE_CACHE_VERSION,
+            platform: process.platform,
+            arch: process.arch,
+            compatibility: USER_CODE_COMPATIBILITY,
+          },
+          installed: await this.installedSchemaEvidence,
+          signal: this.schemaAdmissionLifetime.signal,
+        },
+        async () => {
+          const wasmModules: Record<string, string> = {};
+          for (const artifact of build.artifacts) {
+            if (artifact.role === "wasm")
+              wasmModules[artifact.path] = await this.requireWorkspaceProvider(
+                "DO schema probe"
+              ).readBuildArtifactContent(build, artifact);
+          }
+          return this.probeSchemaExecutable(source, className, {
+            version: `${build.metadata.ev}:${build.buildKey}`,
+            modules: await workerJavaScriptModules(
+              build,
+              this.requireWorkspaceProvider("DO schema probe").readBuildArtifactContent
+            ),
+            ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
+          });
+        }
+      );
+    })();
+    this.schemaProbeOperations.add(operation);
+    try {
+      return await operation;
+    } finally {
+      this.schemaProbeOperations.delete(operation);
     }
-    const wasmModules: Record<string, string> = {};
-    for (const artifact of build.artifacts) {
-      if (artifact.role === "wasm")
-        wasmModules[artifact.path] = await this.requireWorkspaceProvider(
-          "DO schema probe"
-        ).readBuildArtifactContent(build, artifact);
-    }
-    return this.probeSchemaExecutable(source, className, {
-      version: `${build.metadata.ev}:${build.buildKey}`,
-      modules: await workerJavaScriptModules(
-        build,
-        this.requireWorkspaceProvider("DO schema probe").readBuildArtifactContent
-      ),
-      ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
-    });
   }
 
   private async probeSchemaExecutable(
@@ -5205,7 +5285,10 @@ export class WorkerdManager {
         reason: "shutdown",
       });
     }
-    const schemaResults = await Promise.allSettled([...this.schemaAdmissions.values()]);
+    const schemaResults = await Promise.allSettled([
+      ...this.schemaAdmissions.values(),
+      ...this.schemaProbeOperations,
+    ]);
     for (const result of schemaResults) {
       if (result.status === "rejected") retainFailure(result.reason);
     }

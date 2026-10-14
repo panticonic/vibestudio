@@ -6695,6 +6695,7 @@ async function main() {
   const { wireWorkerdCore } = await import("./bootstrap/workerd.js");
   const { resolveLiveExecutionCaller } = await import("./services/liveExecutionCaller.js");
   wireWorkerdCore({
+    schemaProbeReleaseRoot: releaseResourceRoot,
     schemaProbeEnvironment: {
       hostBuild: preparedInput.hostBuild,
       compilerProtocol: preparedInput.compilerProtocol,

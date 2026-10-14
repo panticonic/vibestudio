@@ -20,6 +20,7 @@ import { DatabaseSync } from "node:sqlite";
 import { stateLayout } from "./stateLayout.js";
 import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
 import { schemaProbeEnvironmentForFixture } from "../../tests/fixtures/schemaProbeEnvironment.js";
+import { stageInstalledSchemaProbeEvidence } from "../../scripts/lib/schema-probe-evidence.mjs";
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
 import {
   buildWorkerdPrograms,
@@ -200,6 +201,7 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
   testStatePaths.add(statePath);
   return {
     schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-mocked-workerd-programs"),
+    schemaProbeReleaseRoot: path.join(statePath, "installed-resources"),
     tokenManager: {
       ensureToken: vi.fn().mockReturnValue("mock-token-123"),
       revokeToken: vi.fn(),
@@ -328,6 +330,115 @@ afterEach(async () => {
 });
 
 describe("WorkerdManager", () => {
+  it("shares exact module embeds without merging service bindings or module names", async () => {
+    const deps = createMockDeps();
+    const manager = new WorkerdManager(deps);
+    const serializer = manager as unknown as {
+      toCapnpText(config: Record<string, unknown>): string;
+      flushConfigWrites(): Promise<void>;
+      configModuleReferenceCount: number;
+      configModuleReferenceBytes: number;
+      configModulePayloadBytes: number;
+    };
+    const script = "export default { fetch() { return new Response('π'); } };";
+    const wasm = Buffer.from([0, 97, 115, 109]);
+    const config = {
+      services: ["first", "second"].map((name) => ({
+        name,
+        worker: {
+          modules: [
+            { name: `${name}.js`, esModule: script },
+            { name: `${name}.wasm`, wasm: wasm.toString("base64") },
+          ],
+          bindings: [{ name: "OWNER", text: name }],
+        },
+      })),
+    };
+    const write = vi.spyOn(fs.promises, "writeFile");
+    try {
+      const text = serializer.toCapnpText(config);
+      await serializer.flushConfigWrites();
+      expect(write).toHaveBeenCalledTimes(2);
+      const files = [...text.matchAll(/embed "([^"]+)"/gu)].map((match) => match[1]);
+      expect(files).toEqual(["bundle-0.js", "module-1.wasm", "bundle-0.js", "module-1.wasm"]);
+      for (const name of ["first", "second"]) {
+        expect(text).toContain(`name = "${name}.js"`);
+        expect(text).toContain(`text = "${name}"`);
+      }
+      const directory = stateLayout(deps.statePath).workerdConfigDir;
+      expect(fs.readFileSync(path.join(directory, files[0]!), "utf8")).toBe(script);
+      expect(fs.readFileSync(path.join(directory, files[1]!))).toEqual(wasm);
+      expect(serializer.configModuleReferenceCount).toBe(4);
+      expect(serializer.configModuleReferenceBytes).toBe(
+        2 * (Buffer.byteLength(script) + wasm.length)
+      );
+      expect(serializer.configModulePayloadBytes).toBe(Buffer.byteLength(script) + wasm.length);
+      write.mockClear();
+      // Each generation owns its own complete payload; no stale-file reuse.
+      const next = serializer.toCapnpText({
+        services: [
+          {
+            name: "replacement",
+            worker: { modules: [{ name: "worker.js", esModule: "export default {};" }] },
+          },
+        ],
+      });
+      await serializer.flushConfigWrites();
+      expect(write).toHaveBeenCalledOnce();
+      expect(next).toContain('embed "bundle-0.js"');
+      expect(fs.readFileSync(path.join(directory, "bundle-0.js"), "utf8")).toBe(
+        "export default {};"
+      );
+      expect(serializer.configModuleReferenceCount).toBe(1);
+    } finally {
+      write.mockRestore();
+      await manager.shutdown();
+    }
+  });
+
+  it("reports finite native startup phases without executable payloads or credentials", async () => {
+    const deps = createMockDeps();
+    const manager = new WorkerdManager(deps);
+    const logger = vi.spyOn(console, "log");
+    try {
+      await manager.startWorker(startArgs());
+      const message = logger.mock.calls
+        .map(([message]) => String(message))
+        .find((message) => message.includes("workerdStartupReport="));
+      expect(message).toBeDefined();
+      const report = JSON.parse(message!.split("workerdStartupReport=")[1]!) as Record<
+        string,
+        number
+      >;
+      expect(Object.keys(report)).toEqual([
+        "generation",
+        "totalMs",
+        "configPreparationMs",
+        "configSerializationMs",
+        "modulePayloadWriteMs",
+        "configWriteMs",
+        "processPreparationMs",
+        "spawnToHttpReadyMs",
+        "moduleReferenceCount",
+        "moduleReferenceBytes",
+        "moduleFileCount",
+        "modulePayloadBytes",
+        "configBytes",
+      ]);
+      expect(Object.values(report).every((value) => Number.isFinite(value) && value >= 0)).toBe(
+        true
+      );
+      expect(report["moduleFileCount"]).toBeLessThanOrEqual(report["moduleReferenceCount"]!);
+      expect(report["modulePayloadBytes"]).toBeLessThanOrEqual(report["moduleReferenceBytes"]!);
+      expect(message).not.toContain(deps.egressSecret);
+      expect(message).not.toContain(deps.getWorkerdGatewayToken());
+      expect(message).not.toContain(deps.workerdPrograms.router);
+    } finally {
+      logger.mockRestore();
+      await manager.shutdown();
+    }
+  });
+
   it("waits for handle retirement and finishes worker cleanup before propagating its failure", async () => {
     const deps = createMockDeps({
       cleanupWebhookSubscriptions: vi.fn(),
@@ -426,15 +537,22 @@ describe("WorkerdManager", () => {
       await reopened.shutdown();
     });
 
-    it("replays immutable probe evidence into the current workspace execution only", async () => {
+    it("replays installed immutable evidence into the current workspace execution only", async () => {
       const source = "workers/board";
       const first = new WorkerdManager(createMockDeps({ workspaceId: "workspace:first" }));
-      const second = new WorkerdManager(createMockDeps({ workspaceId: "workspace:second" }));
+      const secondDeps = createMockDeps({ workspaceId: "workspace:second" });
+      const second = new WorkerdManager(secondDeps);
       const firstProbe = vi
-        .spyOn(first, "probeDurableObjectSchema")
+        .spyOn(
+          first as unknown as { probeSchemaExecutable(): Promise<ReturnType<typeof descriptor>> },
+          "probeSchemaExecutable"
+        )
         .mockResolvedValue(descriptor(1, "shared-shape"));
       const secondProbe = vi
-        .spyOn(second, "probeDurableObjectSchema")
+        .spyOn(
+          second as unknown as { probeSchemaExecutable(): Promise<ReturnType<typeof descriptor>> },
+          "probeSchemaExecutable"
+        )
         .mockResolvedValue(descriptor(1, "shared-shape"));
       try {
         const a = await first.ensureDurableObjectEntity({
@@ -444,6 +562,28 @@ describe("WorkerdManager", () => {
           ref: "main",
           contextId: "a",
         });
+        await fs.promises.mkdir(secondDeps.schemaProbeReleaseRoot, { recursive: true });
+        const mutable = path.join(
+          process.env["VIBESTUDIO_SHARED_DERIVED_CACHE_DIR"]!,
+          "schema-probes"
+        );
+        const staged = await stageInstalledSchemaProbeEvidence({
+          source: mutable,
+          output: secondDeps.schemaProbeReleaseRoot,
+          installation: secondDeps.schemaProbeEnvironment,
+          artifacts: [
+            {
+              source,
+              artifactDigest: runtimeArtifact(source, "main", "workspace:first").artifactDigest,
+            },
+          ],
+        });
+        try {
+          await staged.publish();
+        } finally {
+          await staged.close();
+        }
+        await fs.promises.rm(mutable, { recursive: true });
         const b = await second.ensureDurableObjectEntity({
           source,
           className: "BoardDO",
@@ -475,9 +615,14 @@ describe("WorkerdManager", () => {
       }
     });
 
-    it.each([false, true])(
-      "cancels active probe HTTP and joins facet retirement before shutdown (retirement failure: %s)",
-      async (failRetirement) => {
+    it.each([
+      [false, false],
+      [true, false],
+      [false, true],
+      [true, true],
+    ])(
+      "cancels active probe HTTP and joins facet retirement before shutdown (retirement failure: %s, direct publication: %s)",
+      async (failRetirement, directPublication) => {
         const manager = new WorkerdManager(createMockDeps());
         const internals = manager as unknown as { stopWorkerd(): Promise<void> };
         const stop = vi.spyOn(internals, "stopWorkerd");
@@ -513,12 +658,18 @@ describe("WorkerdManager", () => {
           }
           return ordinaryFetch(input, init);
         });
-        const admission = manager.ensureDurableObjectEntity({
-          source: "workers/board",
-          className: "BoardDO",
-          key: "a",
-          contextId: "a",
-        });
+        const admission = directPublication
+          ? manager.probeDurableObjectSchema(
+              "workers/board",
+              "BoardDO",
+              mockWorkerBuildFor("workers/board", runtimeArtifact("workers/board", "main"))
+            )
+          : manager.ensureDurableObjectEntity({
+              source: "workers/board",
+              className: "BoardDO",
+              key: "a",
+              contextId: "a",
+            });
         const observedAdmission = admission.catch((error: unknown) => error);
         await probeEntered;
         // Initial DO registration may replace the initial native generation.

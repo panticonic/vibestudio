@@ -21,6 +21,7 @@ import type { RpcServer } from "../rpcServer.js";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
 import { isHostIntrinsicDirectMethod } from "@vibestudio/shared/authority/hostIntrinsicDirectMethods";
 import { WorkspaceRpcMethodUndeclaredError } from "../workspaceRpcCatalogMismatch.js";
+import { createDevLogger } from "@vibestudio/dev-log";
 import { gatewayHttpUrl } from "@vibestudio/shared/hostConfig";
 
 export interface WorkerdGatewayBootstrapConfig {
@@ -30,6 +31,7 @@ export interface WorkerdGatewayBootstrapConfig {
 
 export interface WorkerdBootstrapDeps {
   readonly schemaProbeEnvironment: WorkspaceReleaseIdentity;
+  readonly schemaProbeReleaseRoot: string;
   container: Pick<ServiceContainer, "registerManaged">;
   tokenManager: TokenManager;
   workspacePath: string;
@@ -268,12 +270,17 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
     // workerdWorkspace once its exact build provider is ready.
     dependencies: ["fsService", "rpcServer"],
     async start(resolve) {
+      const startedAt = performance.now();
       const { WorkerdManager } = await import("../workerdManager.js");
       const { getWorkerdProgramSources } = await import("../workerdProgramLoader.js");
+      const importsReadyAt = performance.now();
+      const workerdPrograms = getWorkerdProgramSources();
+      const programsReadyAt = performance.now();
       const fsService = assertPresent(resolve<FsService>("fsService"));
       const egressSecret = randomBytes(32).toString("hex");
       const manager: WorkerdManager = new WorkerdManager({
         schemaProbeEnvironment: deps.schemaProbeEnvironment,
+        schemaProbeReleaseRoot: deps.schemaProbeReleaseRoot,
         tokenManager: deps.tokenManager,
         fsService,
         getServerUrl: () => {
@@ -282,7 +289,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
           return `http://127.0.0.1:${port}`;
         },
         getServerAliasUrls: () => resolveWorkerdServerAliasUrls(deps.gateway),
-        workerdPrograms: getWorkerdProgramSources(),
+        workerdPrograms,
         workspaceId: deps.workspaceId,
         workspacePath: deps.workspacePath,
         statePath: deps.statePath,
@@ -351,8 +358,20 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
 
       const { INTERNAL_DO_SOURCE } = await import("../internalDOs/internalDoLoader.js");
       const { INTERNAL_DO_CLASSES } = await import("../internalDOs/internalDoLoader.js");
+      const registrationStartedAt = performance.now();
       await manager.registerAllDOClasses(
         INTERNAL_DO_CLASSES.map((className) => ({ source: INTERNAL_DO_SOURCE, className }))
+      );
+      const readyAt = performance.now();
+      createDevLogger("WorkerdManager").info(
+        `workerdBootstrapReport=${JSON.stringify({
+          totalMs: readyAt - startedAt,
+          importsMs: importsReadyAt - startedAt,
+          programSourcesMs: programsReadyAt - importsReadyAt,
+          managerPreparationMs: registrationStartedAt - programsReadyAt,
+          internalRegistrationMs: readyAt - registrationStartedAt,
+          internalClassCount: INTERNAL_DO_CLASSES.length,
+        })}`
       );
       return manager;
     },
