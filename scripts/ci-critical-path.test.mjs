@@ -74,9 +74,15 @@ test("npm publication resumes from the exact protected-main CI artifact", async 
   const workflow = await readWorkflow("npm-server-publish.yml");
   assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs).sort(), [
     "candidate-run-id",
+    "release-id",
     "release-tag",
     "source-sha",
   ]);
+  assert.deepEqual(
+    Object.keys(workflow.on.workflow_call.inputs).sort(),
+    Object.keys(workflow.on.workflow_dispatch.inputs).sort()
+  );
+  assert.equal(workflow.on.workflow_call.secrets.NPM_TOKEN.required, true);
   assert.deepEqual(workflow.permissions, {});
   assert.equal(workflow.concurrency["cancel-in-progress"], false);
   assert.deepEqual(dependenciesOf(workflow.jobs.publish), ["validate"]);
@@ -87,6 +93,11 @@ test("npm publication resumes from the exact protected-main CI artifact", async 
   );
   assert.match(validation.run, /verify-release-ci-run\.mjs/u);
   assert.equal(validation.env.RELEASE_ARTIFACT_SCOPE, "npm");
+  const releaseIdentity = workflow.jobs.validate.steps.find(
+    (step) => step.name === "Validate immutable release identity"
+  );
+  assert.match(releaseIdentity.run, /releases\/\$RELEASE_ID/u);
+  assert.doesNotMatch(releaseIdentity.run, /isDraft|\.draft/u);
   const download = workflow.jobs.publish.steps.find(
     (step) => step.name === "Download exact CI candidate artifact"
   );
@@ -835,7 +846,10 @@ test("native artifact consumers wait for their exact producers without unrelated
     "the universal npm candidate must consume all prepared platform inputs"
   );
   assert.ok(producerJobs.includes("native-input-darwin-arm64"));
-  const releaseJobs = (await readWorkflow("release.yml")).jobs;
+  const releaseWorkflow = await readWorkflow("release.yml");
+  const releaseJobs = releaseWorkflow.jobs;
+  assert.equal(releaseWorkflow.concurrency["cancel-in-progress"], false);
+  assert.match(releaseWorkflow.concurrency.group, /inputs\.release-tag/u);
   assert.equal(
     releaseJobs["release-quality"],
     undefined,
@@ -995,7 +1009,27 @@ test("native artifact consumers wait for their exact producers without unrelated
     );
   }
 
+  const npmPublisher = releaseJobs["publish-npm"];
+  assert.deepEqual(dependenciesOf(npmPublisher), ["github-release", "validate-release-input"]);
+  assert.equal(npmPublisher.uses, "./.github/workflows/npm-server-publish.yml");
+  assert.deepEqual(npmPublisher.with, {
+    "release-tag": "${{ inputs.release-tag }}",
+    "release-id": "${{ needs.github-release.outputs.release-id }}",
+    "source-sha": "${{ inputs.source-sha }}",
+    "candidate-run-id": "${{ inputs.candidate-run-id }}",
+  });
+  assert.deepEqual(npmPublisher.permissions, { actions: "read", contents: "read" });
+  assert.equal(npmPublisher.secrets.NPM_TOKEN, "${{ secrets.NPM_TOKEN }}");
+  for (const platformPublisher of ["publish-linux", "publish-windows", "publish-macos"]) {
+    assert.ok(
+      !transitiveDependencies(releaseJobs, "publish-npm").has(platformPublisher),
+      `npm publication must run independently of ${platformPublisher}`
+    );
+  }
+
   assert.ok(transitiveDependencies(releaseJobs, "publish-release").has("validate-release-input"));
+  assert.ok(dependenciesOf(releaseJobs["publish-release"]).includes("publish-npm"));
+  assert.match(releaseJobs["publish-release"].if, /needs\.publish-npm\.result == 'success'/u);
   const releasePublication = releaseJobs["publish-release"].steps.find(
     (step) => step.name === "Make the complete release public and latest"
   );

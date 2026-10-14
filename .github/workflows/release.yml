@@ -2,10 +2,10 @@ name: Release
 
 # Dispatch against an exact commit and requested version. Every enabled native
 # candidate and its acceptance must pass before the workflow creates the tag.
-# Nothing here publishes to npm; the headless server uses the separately
-# dispatched npm-server-publish workflow after this release is public. That
-# workflow consumes this run's exact protected candidate, so registry failures
-# resume without rebuilding unrelated application artifacts.
+# The headless server publishes from this run's exact protected npm candidate in
+# parallel with installer attachment. The release remains a draft until npm and
+# every enabled platform publication succeed. The same reusable workflow can be
+# dispatched independently to resume a failed registry operation without rebuilds.
 #   - vars.RELEASE_LINUX = 'true'  → deb/rpm/pacman, plus the signed apt and
 #     dnf repositories on GitHub Pages after this workflow succeeds
 #     (needs build-resources icons and LINUX_SIGNING_KEY)
@@ -32,6 +32,10 @@ on:
 # Jobs opt into only the token authority they need. Artifact upload/download uses
 # GitHub's run-scoped artifact token, not a repository-write GITHUB_TOKEN.
 permissions: {}
+
+concurrency:
+  group: release-${{ inputs.release-tag }}
+  cancel-in-progress: false
 
 jobs:
   validate-release-input:
@@ -336,14 +340,30 @@ jobs:
             release/latest.yml
             release/SHA256SUMS-windows
 
+  publish-npm:
+    name: Publish verified headless server to npm
+    needs: [github-release, validate-release-input]
+    uses: ./.github/workflows/npm-server-publish.yml
+    with:
+      release-tag: ${{ inputs.release-tag }}
+      release-id: ${{ needs.github-release.outputs.release-id }}
+      source-sha: ${{ inputs.source-sha }}
+      candidate-run-id: ${{ inputs.candidate-run-id }}
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    permissions:
+      actions: read
+      contents: read
+
   publish-release:
     name: Publish the verified release
-    needs: [github-release, publish-linux, publish-macos, publish-windows]
+    needs: [github-release, publish-linux, publish-macos, publish-windows, publish-npm]
     if: >-
       ${{ !cancelled() && needs.github-release.result == 'success'
         && (vars.RELEASE_LINUX != 'true' || needs.publish-linux.result == 'success')
         && (vars.RELEASE_MAC != 'true' || needs.publish-macos.result == 'success')
-        && (vars.RELEASE_WINDOWS != 'true' || needs.publish-windows.result == 'success') }}
+        && (vars.RELEASE_WINDOWS != 'true' || needs.publish-windows.result == 'success')
+        && needs.publish-npm.result == 'success' }}
     runs-on: ubuntu-24.04
     concurrency:
       group: release-latest-promotion
