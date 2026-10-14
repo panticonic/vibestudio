@@ -478,7 +478,10 @@ describe("dependency-environment resolver", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-nearest-prepared-dependency-"));
     try {
       const modules = path.join(root, "installed", "server", "node_modules");
-      const workspace = path.join(root, "producer", "workspaces", "base", "source");
+      const physicalWorkspace = path.join(root, "producer", "workspaces", "base", "source");
+      const workspace = path.join(root, "workspace-alias");
+      fs.mkdirSync(physicalWorkspace, { recursive: true });
+      fs.symlinkSync(physicalWorkspace, workspace, "junction");
       const owner = path.join(workspace, "packages", "owner");
       const child = path.join(workspace, "packages", "child");
       fs.mkdirSync(owner, { recursive: true });
@@ -507,8 +510,11 @@ describe("dependency-environment resolver", () => {
       const entry = path.join(root, "entry.js");
       fs.writeFileSync(entry, 'export { marker } from "owner";');
       const prepared = prepareDependencyResolution([modules], ["owner"]);
-      const ownerIdentity = preparedDependencyDirectoryIdentity(prepared, owner)!;
-      expect(prepared.dependencyResolveDirectories.get(ownerIdentity)?.get("child")).toBe(owner);
+      const ownerIdentity = fs.realpathSync.native(owner);
+      expect(preparedDependencyDirectoryIdentity(prepared, ownerIdentity)).toBe(ownerIdentity);
+      expect(prepared.dependencyResolveDirectories.get(ownerIdentity)?.get("child")).toBe(
+        fs.realpathSync.native(owner)
+      );
 
       const result = await esbuild.build({
         entryPoints: [entry],

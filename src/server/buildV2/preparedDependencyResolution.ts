@@ -8,7 +8,7 @@ export interface PreparedDependencyResolution {
   packageDirectories: ReadonlySet<string>;
   /** Every observed logical or physical package location mapped to one physical identity. */
   packageDirectoryIdentities: ReadonlyMap<string, string>;
-  /** The exact installation search directory selected for each importer dependency edge. */
+  /** The physical installation search directory selected for each importer dependency edge. */
   dependencyResolveDirectories: ReadonlyMap<string, ReadonlyMap<string, string>>;
 }
 
@@ -38,6 +38,7 @@ export function prepareDependencyResolution(
   const missingLocations = new Set<string>();
   const installationRoots = normalizedNodePaths.map((root) => fs.realpathSync.native(root));
   const resolvedPackages = new Map<string, string>();
+  const physicalResolveDirectories = new Map<string, string>();
   const locationKey = (directory: string): string => {
     const normalized = path.resolve(directory);
     return process.platform === "win32" ? normalized.toLowerCase() : normalized;
@@ -100,6 +101,19 @@ export function prepareDependencyResolution(
     locationsByPackage.set(physical, locations);
     for (const location of locations) packagesByLocation.set(locationKey(location), physical);
   };
+  const physicalResolveDirectory = (root: string): string => {
+    const key = locationKey(root);
+    const captured = physicalResolveDirectories.get(key);
+    if (captured) return captured;
+    const directory = path.dirname(fs.realpathSync.native(root));
+    physicalResolveDirectories.set(key, directory);
+    return directory;
+  };
+  const recordDependencyEdge = (from: string, name: string, root: string): void => {
+    const dependencies = dependencyResolveDirectories.get(from) ?? new Map<string, string>();
+    dependencies.set(name, physicalResolveDirectory(root));
+    dependencyResolveDirectories.set(from, dependencies);
+  };
   const resolvePackage = (name: string, from?: string): string | undefined => {
     const key = `${from ?? ""}\0${name}`;
     const captured = resolvedPackages.get(key);
@@ -137,11 +151,7 @@ export function prepareDependencyResolution(
       const candidateKey = locationKey(candidate);
       const known = packagesByLocation.get(candidateKey);
       if (known) {
-        if (from) {
-          const dependencies = dependencyResolveDirectories.get(from) ?? new Map<string, string>();
-          dependencies.set(name, path.dirname(root));
-          dependencyResolveDirectories.set(from, dependencies);
-        }
+        if (from) recordDependencyEdge(from, name, root);
         resolvedPackages.set(key, known);
         return known;
       }
@@ -153,11 +163,7 @@ export function prepareDependencyResolution(
         const physical = fs.realpathSync.native(candidate);
         if (!manifests.has(physical)) manifests.set(physical, manifest);
         recordLocation(physical, candidate, from);
-        if (from) {
-          const dependencies = dependencyResolveDirectories.get(from) ?? new Map<string, string>();
-          dependencies.set(name, path.dirname(root));
-          dependencyResolveDirectories.set(from, dependencies);
-        }
+        if (from) recordDependencyEdge(from, name, root);
         resolvedPackages.set(key, physical);
         return physical;
       } catch (error) {
