@@ -11,6 +11,20 @@ const source = {
 };
 
 describe("host-selected workspace sources", () => {
+  it("preserves exact manifest and repository metadata through typed source transport", () => {
+    const reviewed = {
+      ...source,
+      review: {
+        manifestText: "systemEpoch: 0\ntemplate:\n  name: Authored manifest\n",
+        repositories: ["meta", "panels/example"],
+        dependencies: [],
+      },
+    };
+    expect(readWorkspaceSources({ [WORKSPACE_SOURCES_ENV]: JSON.stringify([reviewed]) })).toEqual([
+      reviewed,
+    ]);
+  });
+
   it.each(["development", "production", undefined])(
     "accepts host-selected snapshots in %s without a feature flag",
     (mode) => {

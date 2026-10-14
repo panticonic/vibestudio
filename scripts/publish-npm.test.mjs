@@ -4,11 +4,25 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 import {
+  publishArgs,
   runWithOwnedCleanup,
   spawnResultFailure,
   validateNpmPackageManifest,
   validateStagedPackage,
 } from "./publish-npm.mjs";
+
+void test("real publication retains errors without buffering the package file manifest", () => {
+  assert.deepEqual(publishArgs({ packagePath: "/candidate.tgz", dryRun: false, tag: "latest" }), [
+    "publish",
+    "/candidate.tgz",
+    "--access",
+    "public",
+    "--tag",
+    "latest",
+    "--loglevel",
+    "error",
+  ]);
+});
 
 void test("rejects a stale staged candidate before publication", () => {
   const rootPackage = JSON.parse(fs.readFileSync(new URL("../package.json", import.meta.url)));

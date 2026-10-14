@@ -38,6 +38,11 @@ function cacheRoots(): StorageRoot[] {
     { kind: "live-safe", name: "shared build results", path: path.join(shared, "build-results") },
     {
       kind: "live-safe",
+      name: "shared prepared workspace releases",
+      path: path.join(shared, "workspace-releases"),
+    },
+    {
+      kind: "live-safe",
       name: "shared root template checkouts",
       path: path.join(shared, "root-templates"),
     },

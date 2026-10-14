@@ -18,6 +18,7 @@ import { cleanHostBuildOutput } from "./scripts/clean-host-build-output.mjs";
 import {
   assertHostBuildPayloadComplete,
   publishHostBuildGeneration,
+  admitPublishedHostBuildGeneration,
 } from "./scripts/host-build-generations.mjs";
 import { buildInfrastructurePackages } from "./scripts/infrastructure-package-cache.mjs";
 import { nativeWorkspaceArtifactConfigs } from "./scripts/native-workspace-artifacts.mjs";
@@ -762,8 +763,11 @@ async function build() {
         expected
       )
     ) {
-      await checkBuildArtifacts();
-      publishHostBuildGeneration(process.cwd(), { ...expected, kind: "desktop" });
+      const build = { ...expected, kind: "desktop" };
+      if (!admitPublishedHostBuildGeneration(process.cwd(), build)) {
+        await checkBuildArtifacts();
+        publishHostBuildGeneration(process.cwd(), build);
+      }
       console.log("Host artifacts already match the current source snapshot.");
       return;
     }
@@ -941,7 +945,9 @@ async function buildSourceServerPrerequisites() {
     releaseLock = await acquireSourcePrerequisiteLock();
     const inputSnapshot = computeHostBuildFingerprint();
     if (sameHostBuildFingerprint(readHostBuildFingerprint(), inputSnapshot)) {
-      publishHostBuildGeneration(process.cwd(), { ...inputSnapshot, kind: "source" });
+      const build = { ...inputSnapshot, kind: "source" };
+      if (!admitPublishedHostBuildGeneration(process.cwd(), build))
+        publishHostBuildGeneration(process.cwd(), build);
       console.log("Source server prerequisites already match the current source snapshot.");
       return;
     }

@@ -7,12 +7,7 @@ import { mainRpcMethods } from "../mainRpc.js";
  * Direct-address events are delivered by the authenticated RPC transport and
  * broadcast events are delivered by the owned watch response.
  */
-import {
-  isPanelRuntimeLeaseConflict,
-  isRpcConnectionLost,
-  type RpcStreamOptions,
-  type RpcClient,
-} from "@vibestudio/rpc";
+import { type RpcStreamOptions, type RpcClient } from "@vibestudio/rpc";
 import type { EventName, EventPayloads } from "@vibestudio/shared/events";
 import type { RecoveryCoordinator } from "@vibestudio/shell-core/recoveryCoordinator";
 import { eventsMethods } from "@vibestudio/service-schemas/events";
@@ -20,7 +15,8 @@ import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 
 type Listener<E extends EventName> = (payload: EventPayloads[E]) => void;
 type EventsServiceName = "events" | "desktopEvents";
-type EventsRpc = Pick<RpcClient, "stream"> & Partial<Pick<RpcClient, "streamReadable">>;
+type EventsRpc = Pick<RpcClient, "stream"> &
+  Partial<Pick<RpcClient, "streamReadable" | "onRecovery">>;
 
 interface ActiveWatch {
   generation: number;
@@ -57,8 +53,12 @@ export class EventsClient {
   private readonly lastSequenceByEvent = new Map<EventName, number>();
   private readonly refreshQueue = new Map<string, Promise<unknown>>();
   private watchAdmission: Promise<void> = Promise.resolve();
-  private retryTimer: ReturnType<typeof setTimeout> | null = null;
-  private retryDelayMs = 250;
+  private recoveryFailure: unknown = undefined;
+  private readonly recoveryCoordinator?: Pick<
+    RecoveryCoordinator,
+    "registerResubscribeHandler" | "registerColdRecoverHandler"
+  >;
+  private recoveryReleases: (() => void)[] = [];
 
   constructor(
     rpc: EventsRpc,
@@ -70,9 +70,7 @@ export class EventsClient {
   ) {
     this.rpc = rpc;
     this.serviceName = serviceName;
-    const recover = () => this.queueRefresh();
-    recoveryCoordinator?.registerResubscribeHandler("events-client", recover);
-    recoveryCoordinator?.registerColdRecoverHandler("events-client", recover);
+    this.recoveryCoordinator = recoveryCoordinator;
   }
 
   /** Typed stream admission for callers that own and display the wire records. */
@@ -94,12 +92,14 @@ export class EventsClient {
   }
 
   async subscribeAll(events: Iterable<EventName>): Promise<void> {
+    const hadDemand = this.subscriptions.size > 0;
     let changed = false;
     for (const event of new Set(events)) {
       const owners = this.subscriptions.get(event) ?? 0;
       this.subscriptions.set(event, owners + 1);
       changed = owners === 0 || changed;
     }
+    if (!hadDemand && this.subscriptions.size > 0) this.observeRecovery();
     if (changed) await this.queueRefresh();
     else await this.watchAdmission;
   }
@@ -120,19 +120,92 @@ export class EventsClient {
         this.subscriptions.set(event, owners - 1);
       }
     }
-    if (changed) await this.queueRefresh();
-    else await this.watchAdmission;
+    const retiringLastOwner = this.subscriptions.size === 0;
+    try {
+      if (changed) await this.queueRefresh();
+      else await this.watchAdmission;
+    } catch (error) {
+      if (!retiringLastOwner) throw error;
+      this.releaseRecovery(error);
+      return;
+    }
+    if (retiringLastOwner) this.releaseRecovery();
   }
 
   async unsubscribeAll(): Promise<void> {
-    if (this.subscriptions.size === 0 && !this.active && !this.pending) return;
+    if (this.subscriptions.size === 0 && !this.active && !this.pending) {
+      this.releaseRecovery();
+      return;
+    }
     this.subscriptions.clear();
-    await this.queueRefresh();
+    try {
+      await this.queueRefresh();
+    } catch (error) {
+      this.releaseRecovery(error);
+      return;
+    }
+    this.releaseRecovery();
   }
 
   /** Re-open the desired watch after the transport reports a recovered session. */
-  recover(): Promise<void> {
-    return this.queueRefresh();
+  async recover(): Promise<void> {
+    const previousFailure = this.recoveryFailure;
+    this.recoveryFailure = undefined;
+    try {
+      await this.queueRefresh();
+    } catch (error) {
+      if (previousFailure === undefined || previousFailure === error) throw error;
+      throw new AggregateError(
+        [previousFailure, error],
+        "Event watch termination and recovery failed",
+        { cause: previousFailure }
+      );
+    }
+  }
+
+  private observeRecovery(): void {
+    if (this.recoveryReleases.length > 0) return;
+    if (this.recoveryCoordinator) {
+      const name = `events-client:${this.serviceName}:${this.watchId}`;
+      this.recoveryReleases.push(
+        this.recoveryCoordinator.registerResubscribeHandler(name, () => this.recover(), {
+          includeCurrentGeneration: false,
+        })
+      );
+      try {
+        this.recoveryReleases.push(
+          this.recoveryCoordinator.registerColdRecoverHandler(name, () => this.recover())
+        );
+      } catch (error) {
+        this.releaseRecovery(error);
+      }
+      return;
+    }
+    if (!this.rpc.onRecovery) return;
+    this.recoveryReleases.push(
+      this.rpc.onRecovery(() => {
+        void this.recover().catch((error: unknown) => {
+          console.error("[EventsClient] event watch recovery failed:", error);
+        });
+      })
+    );
+  }
+
+  private releaseRecovery(operationFailure?: unknown): void {
+    const failures: unknown[] = operationFailure === undefined ? [] : [operationFailure];
+    for (const release of this.recoveryReleases.splice(0)) {
+      try {
+        release();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, "Event watch retirement failed", {
+        cause: failures[0],
+      });
+    }
   }
 
   on<E extends EventName>(event: E, listener: Listener<E>): () => void {
@@ -168,7 +241,6 @@ export class EventsClient {
   }
 
   private async refresh(): Promise<void> {
-    this.clearRetry();
     const previous = this.active;
     if (this.subscriptions.size === 0) {
       this.active = null;
@@ -214,7 +286,6 @@ export class EventsClient {
             }
             watchEpoch = record.epoch;
             acknowledged = true;
-            this.retryDelayMs = 250;
             resolveAck();
             continue;
           }
@@ -252,48 +323,39 @@ export class EventsClient {
     this.pending = next;
     void terminal.then(
       () => this.watchTerminated(generation, controller),
-      () => this.watchTerminated(generation, controller)
+      (error: unknown) => this.watchTerminated(generation, controller, error)
     );
     try {
       await ack;
       this.active = next;
       this.pending = null;
+      this.recoveryFailure = undefined;
     } catch (error) {
       controller.abort();
       if (this.pending === next) this.pending = null;
       if (previous?.settled && this.active === previous) this.active = null;
-      this.scheduleRecovery();
+      const concurrentFailure = this.recoveryFailure;
+      this.recoveryFailure = undefined;
+      if (concurrentFailure !== undefined && concurrentFailure !== error) {
+        throw new AggregateError(
+          [concurrentFailure, error],
+          "Event watch generation and replacement failed",
+          { cause: concurrentFailure }
+        );
+      }
       throw error;
     }
   }
 
-  private watchTerminated(generation: number, controller: AbortController): void {
+  private watchTerminated(generation: number, controller: AbortController, error?: unknown): void {
     if (controller.signal.aborted || this.active?.generation !== generation) return;
     if (this.pending) {
       this.active = null;
+      if (error !== undefined) this.recoveryFailure = error;
       return;
     }
     this.active = null;
-    this.scheduleRecovery();
-  }
-
-  private scheduleRecovery(): void {
-    if (this.subscriptions.size === 0 || this.retryTimer) return;
-    const delayMs = this.retryDelayMs;
-    this.retryDelayMs = Math.min(this.retryDelayMs * 2, 10_000);
-    this.retryTimer = setTimeout(() => {
-      this.retryTimer = null;
-      void this.queueRefresh().catch((error: unknown) => {
-        // Recovery is a retry loop, so a refusal that the next attempt resolves
-        // is not news. A lost connection and a panel runtime lease moving to
-        // another connection are both transitions of that kind; warning about
-        // them reads as a broken panel, and the desktop smoke fails a run whose
-        // panel recovered moments later.
-        if (!isRpcConnectionLost(error) && !isPanelRuntimeLeaseConflict(error))
-          console.warn("[EventsClient] event watch recovery failed:", error);
-      });
-    }, delayMs);
-    (this.retryTimer as ReturnType<typeof setTimeout> & { unref?: () => void }).unref?.();
+    this.recoveryFailure = error ?? new Error("Event watch closed unexpectedly");
   }
 
   private deliver(event: EventName, payload: unknown): void {
@@ -304,11 +366,5 @@ export class EventsClient {
         console.error(`[EventsClient] listener for ${event} failed:`, error);
       }
     }
-  }
-
-  private clearRetry(): void {
-    if (!this.retryTimer) return;
-    clearTimeout(this.retryTimer);
-    this.retryTimer = null;
   }
 }

@@ -37,6 +37,8 @@ const INPUT_FILES = [
   "scripts/lib/mac-app-executable.mjs",
   "scripts/lib/file-digest.mjs",
   "scripts/lib/join-child-process.mjs",
+  "scripts/lib/owned-concurrency.mjs",
+  "scripts/lib/owned-cleanup.mjs",
   "scripts/prepare-workspace-release.mjs",
   "scripts/prepare-workspace-templates.ts",
   "scripts/prebuild-release-userland.mjs",

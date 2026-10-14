@@ -15,6 +15,10 @@ import { canonicalTemplateYaml } from "@vibestudio/workspace/templateManifest";
 import {
   WorkspaceRootTemplateBootstrap,
   composeDeclaredTemplateLayers,
+  resolveDeclaredTemplateLayerPlan,
+  composeResolvedTemplateLayerPlan,
+  readTemplateLayerMetadata,
+  type ResolvedTemplateLayerPlan,
   enumerateRootTemplateRepositories,
 } from "./workspaceRootTemplateBootstrap.js";
 
@@ -58,6 +62,7 @@ function fixture(
   options: {
     preparedTemplate?: import("./workspaceRootTemplateBootstrap.js").WorkspaceRootTemplateBootstrapDeps["preparedTemplate"];
     designation?: (pin: { url: string }) => { vouchesWholeTree: boolean } | null;
+    layerPlan?: ResolvedTemplateLayerPlan;
     layers?: Record<string, ExactGitSnapshot>;
     resolveTrack?: (address: { url: string; track: string }) => Promise<{
       ref: string;
@@ -111,6 +116,7 @@ function fixture(
       ...(options.preparedTemplate ? { preparedTemplate: options.preparedTemplate } : {}),
       ...(options.designation ? { designation: options.designation } : {}),
       ...(options.resolveTrack ? { resolveTrack: options.resolveTrack } : {}),
+      ...(options.layerPlan ? { layerPlan: options.layerPlan } : {}),
     }),
   };
 }
@@ -193,6 +199,51 @@ describe("WorkspaceRootTemplateBootstrap", () => {
       consumer.bootstrap.preparedBuildForContent(`state:${"c".repeat(64)}`, "extensions/templates")
     ).toBeNull();
     expect(consumer.bootstrap.preparedBuildForContent(expectedState, "workers/missing")).toBeNull();
+  });
+
+  it("hydrates a captured plan and checks prepared source pins before any acquisition", async () => {
+    const source = seededSnapshot();
+    const producer = fixture(source);
+    const resolveTrack = vi.fn(async () => {
+      throw new Error("Captured plan must not resolve tracks during hydration");
+    });
+    const layerPlan = await resolveDeclaredTemplateLayerPlan({
+      pin: producer.pin,
+      root: await readTemplateLayerMetadata(source),
+      expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      acquire: async () => {
+        throw new Error("Standalone template has no dependency acquisition");
+      },
+      resolveTrack,
+    });
+    const plannedProducer = fixture(source, { layerPlan, resolveTrack });
+    await plannedProducer.bootstrap.prepareSource();
+    const stateHash = await plannedProducer.bootstrap.prepareBootstrapState();
+    const record = plannedProducer.bootstrap.preparedRecord([], []);
+    const preparedTemplate = vi.fn(async () => ({
+      record,
+      readFile: (file: string) => fs.readFileSync(path.join(plannedProducer.sourcePath, file)),
+    }));
+    const consumer = fixture(source, { layerPlan, preparedTemplate, resolveTrack });
+    await consumer.bootstrap.prepareSource();
+    expect(await consumer.bootstrap.prepareBootstrapState()).toBe(stateHash);
+    expect(consumer.acquire).not.toHaveBeenCalled();
+    expect(preparedTemplate).toHaveBeenCalledOnce();
+    expect(resolveTrack).not.toHaveBeenCalled();
+    expect(plannedProducer.acquire).toHaveBeenCalledOnce();
+    const stale = { ...record, layers: [{ ...record.layers[0]!, commit: "e".repeat(40) }] };
+    const staleConsumer = fixture(source, {
+      layerPlan,
+      preparedTemplate: async () => ({ record: stale, readFile: () => null }),
+    });
+    await expect(staleConsumer.bootstrap.prepareSource()).rejects.toThrow(/resolved layer plan/);
+    expect(staleConsumer.acquire).not.toHaveBeenCalled();
+    const wrongPurpose = fixture(source, {
+      layerPlan: { ...layerPlan, purpose: "author" },
+      preparedTemplate,
+    });
+    await expect(wrongPurpose.bootstrap.prepareSource()).rejects.toThrow(/creation coordinate/);
+    expect(wrongPurpose.acquire).not.toHaveBeenCalled();
   });
 
   it("records what a designated template shipped, so units need no signature", async () => {
@@ -555,9 +606,200 @@ describe("composeDeclaredTemplateLayers", () => {
     await composeDeclaredTemplateLayers({ ...input, purpose: "author" });
     expect(resolveTrack).toHaveBeenCalledOnce();
     resolveTrack.mockClear();
-    await composeDeclaredTemplateLayers({ ...input, pin: { ...pin, commit: "c".repeat(40) } });
+    await composeDeclaredTemplateLayers({
+      ...input,
+      pin: { ...pin, commit: "c".repeat(40) },
+      root: { ...input.root, commit: "c".repeat(40) },
+    });
     expect(resolveTrack).toHaveBeenCalledOnce();
   });
+
+  it("resolves a metadata-only transitive closure once and hydrates those exact pins", async () => {
+    const leafUrl = "git+https://example.test/leaf.git";
+    const leafCommit = "d".repeat(40);
+    const base = snapshot(
+      [
+        {
+          path: "meta/vibestudio.yml",
+          text: canonicalTemplateYaml({
+            systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+            template: { dependencies: [{ url: leafUrl }] },
+          }),
+        },
+        { path: "packages/runtime/index.ts", text: "export {};" },
+      ],
+      baseCommit
+    );
+    const leaf = snapshot(
+      [
+        {
+          path: "meta/vibestudio.yml",
+          text: canonicalTemplateYaml({ systemEpoch: WORKSPACE_SYSTEM_EPOCH, template: {} }),
+        },
+        { path: "packages/leaf/index.ts", text: "export {};" },
+      ],
+      leafCommit
+    );
+    const root = dependentRoot();
+    const pin = {
+      url: "git+https://example.test/system.git",
+      ref: "refs/tags/v1",
+      commit: root.commit,
+    };
+    const metadataReads = vi.fn(async (source: ExactGitSnapshot, file: string) => {
+      if (file !== "meta/vibestudio.yml") throw new Error(`Metadata loaded source bytes: ${file}`);
+      return source.readFile(file);
+    });
+    const metadata = (source: ExactGitSnapshot) =>
+      readTemplateLayerMetadata({
+        commit: source.commit,
+        files: source.files.map(({ path }) => ({ path })),
+        readFile: (file: string) => metadataReads(source, file),
+      });
+    const sources = new Map([
+      [baseCommit, base],
+      [leafCommit, leaf],
+      [root.commit, root],
+    ]);
+    const resolveTrack = vi.fn(async ({ url }: { url: string }) => ({
+      ref: "refs/tags/v1",
+      commit: url === dependencyUrl ? baseCommit : leafCommit,
+    }));
+    const acquireMetadata = vi.fn(async (requested: { commit: string }) =>
+      metadata(sources.get(requested.commit)!)
+    );
+    const plan = await resolveDeclaredTemplateLayerPlan({
+      pin,
+      root: await metadata(root),
+      expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      acquire: acquireMetadata,
+      resolveTrack,
+    });
+    expect(metadataReads).toHaveBeenCalledTimes(3);
+    expect(resolveTrack).toHaveBeenCalledTimes(2);
+    expect(plan.layers.map(({ pin }) => pin.commit)).toEqual([leafCommit, baseCommit, root.commit]);
+    expect(plan.layers[1]?.dependencies).toEqual([{ url: leafUrl }]);
+    expect(plan.dependencies.map(({ url }) => url)).toEqual([leafUrl, dependencyUrl]);
+    resolveTrack.mockImplementation(async () => ({ ref: "refs/tags/v2", commit: "e".repeat(40) }));
+    const acquire = vi.fn(async (requested: { commit: string }) => sources.get(requested.commit)!);
+    const composed = await composeResolvedTemplateLayerPlan({
+      plan: JSON.parse(JSON.stringify(plan)),
+      acquire,
+    });
+    expect(resolveTrack).toHaveBeenCalledTimes(2);
+    expect(acquire.mock.calls.map(([pin]) => pin.commit).sort()).toEqual(
+      [leafCommit, baseCommit, root.commit].sort()
+    );
+    expect(composed.layers.map(({ commit }) => commit)).toEqual(
+      plan.layers.map(({ pin }) => pin.commit)
+    );
+    expect(composed.snapshot.files.map(({ path }) => path)).toContain("packages/leaf/index.ts");
+    const full = await composeDeclaredTemplateLayers({
+      pin,
+      root,
+      expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      acquire,
+      resolveTrack: async ({ url }) => ({
+        ref: "refs/tags/v1",
+        commit: url === dependencyUrl ? baseCommit : leafCommit,
+      }),
+    });
+    expect(composed).toMatchObject({
+      layers: full.layers,
+      installation: full.installation,
+      snapshot: { files: full.snapshot.files, snapshot: full.snapshot.snapshot },
+    });
+  });
+
+  it("admits override semantics and exact metadata coordinates before source hydration", async () => {
+    const root = dependentRoot();
+    const pin = {
+      url: "git+https://example.test/system.git",
+      ref: "refs/tags/v1",
+      commit: root.commit,
+    };
+    const acquire = vi.fn(async () => readTemplateLayerMetadata(baseLayer()));
+    await expect(
+      resolveDeclaredTemplateLayerPlan({
+        pin: { ...pin, commit: "f".repeat(40) },
+        root: await readTemplateLayerMetadata(root),
+        expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+        acquire,
+      })
+    ).rejects.toThrow(/different commit/);
+    expect(acquire).not.toHaveBeenCalled();
+    const conflicting = snapshot([
+      ...[
+        {
+          path: "meta/vibestudio.yml",
+          text: canonicalTemplateYaml({
+            systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+            template: { dependencies: [{ url: dependencyUrl }] },
+          }),
+        },
+      ],
+      { path: "packages/runtime/index.ts", text: "unacknowledged override" },
+    ]);
+    await expect(
+      resolveDeclaredTemplateLayerPlan({
+        pin,
+        root: await readTemplateLayerMetadata(conflicting),
+        expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+        acquire,
+        resolveTrack: async () => ({ ref: "refs/tags/v1", commit: baseCommit }),
+      })
+    ).rejects.toThrow(/override|owns|collision|claimed/i);
+  });
+
+  it.each(["commit", "manifest", "repositories"] as const)(
+    "rejects %s drift during exact-plan hydration",
+    async (drift) => {
+      const root = dependentRoot();
+      const pin = {
+        url: "git+https://example.test/system.git",
+        ref: "refs/tags/v1",
+        commit: root.commit,
+      };
+      const plan = await resolveDeclaredTemplateLayerPlan({
+        pin,
+        root: await readTemplateLayerMetadata(root),
+        expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+        acquire: async () => readTemplateLayerMetadata(baseLayer()),
+        resolveTrack: async () => ({ ref: "refs/tags/v1", commit: baseCommit }),
+      });
+      const changed = {
+        ...root,
+        ...(drift === "commit" ? { commit: "e".repeat(40) } : {}),
+        ...(drift === "repositories"
+          ? {
+              files: [
+                ...root.files,
+                {
+                  path: "packages/unplanned/index.ts",
+                  contentHash: "a".repeat(64),
+                  size: 0,
+                  mode: 0o644 as const,
+                },
+              ],
+            }
+          : {}),
+        ...(drift === "manifest"
+          ? {
+              readFile: (file: string) =>
+                file === "meta/vibestudio.yml"
+                  ? new TextEncoder().encode("changed")
+                  : root.readFile(file),
+            }
+          : {}),
+      };
+      await expect(
+        composeResolvedTemplateLayerPlan({
+          plan,
+          acquire: async (requested) => (requested.commit === root.commit ? changed : baseLayer()),
+        })
+      ).rejects.toThrow(/resolved layer plan/);
+    }
+  );
 
   it.each([undefined, "use", "author"] as const)(
     "composes dependency ownership with purpose %s",

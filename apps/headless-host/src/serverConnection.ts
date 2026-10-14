@@ -53,14 +53,21 @@ export async function connectToServer(config: HeadlessHostConfig): Promise<Serve
     selfId: config.clientSessionId,
     callerKind: "shell",
     transport,
+    onRecovery: (handler) => {
+      const removeResubscribe = transport.onRecovery("resubscribe", () => handler("resubscribe"));
+      const removeColdRecover = transport.onRecovery("cold-recover", () => handler("cold-recover"));
+      return () => {
+        removeResubscribe();
+        removeColdRecover();
+      };
+    },
   });
 
   return {
     rpc,
     getToken: () => currentToken,
     onResubscribe: (handler) => {
-      transport.onRecovery("resubscribe", handler);
-      transport.onRecovery("cold-recover", handler);
+      rpc.onRecovery(handler);
     },
     close: () => transport.close(),
   };

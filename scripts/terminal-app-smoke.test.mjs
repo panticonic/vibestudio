@@ -26,14 +26,15 @@ function fixture() {
   );
   const release = { format: "vibestudio-template-release/1", workspaceTemplates: pins };
   const manifest = {
-    format: "vibestudio-workspace-runtime-release/2",
-    version: 2,
+    format: "vibestudio-workspace-runtime-release/3",
+    version: 3,
     platform: process.platform,
     arch: process.arch,
     appDependencyFingerprint: "b".repeat(64),
     hostBuild: { version: 1, mode: "production", fingerprint: "c".repeat(64), inputCount: 1 },
     compilerProtocol: { cacheVersion: "test", panelEntryProtocolFingerprint: "d".repeat(64) },
     templates: pins,
+    layers: Object.fromEntries(Object.entries(pins).map(([role, pin]) => [role, [pin]])),
     preparedTemplates: Object.keys(pins).map((workspace) => ({
       workspace,
       recordDigest: "e".repeat(64),

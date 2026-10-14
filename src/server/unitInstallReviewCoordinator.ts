@@ -37,6 +37,8 @@ interface PendingRequest {
   applyDenied(): void;
   resolve(): void;
   reject(error: unknown): void;
+  settleReview(decision: "accepted" | "deny" | "dismiss"): void;
+  failReview(error: unknown): void;
 }
 
 interface ReviewPresentation {
@@ -74,6 +76,87 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
    * trigger is latched open and a late arrival publishes on its own.
    */
   private released = new Set<"startup" | "meta-change">();
+  private readonly unitApplications = new Map<
+    string,
+    Set<{
+      settlement: Promise<"accepted" | "deny" | "dismiss">;
+      pending: boolean;
+    }>
+  >();
+  private readonly unitApplicationObservers = new Map<string, Set<() => void>>();
+  private startupReviewsStaged = false;
+  private reviewStagingFailure: { error: unknown } | undefined;
+
+  /** Startup classification is authoritative: a missing exact unit will not
+   * acquire an application later in this staging operation. */
+  finishStartupReviewStaging(error?: unknown): void {
+    this.startupReviewsStaged = true;
+    if (error !== undefined) this.reviewStagingFailure = { error };
+    for (const observers of this.unitApplicationObservers.values())
+      for (const observer of [...observers]) observer();
+  }
+
+  /** Join this exact unit's review and committed application. An observer may
+   * arrive before startup has staged the review; cancellation removes only the
+   * observer and leaves the shared human question actionable. */
+  whenUnitReviewSettled(
+    code: { repoPath: string; effectiveVersion: string },
+    signal: AbortSignal
+  ): Promise<"accepted" | "deny" | "dismiss"> {
+    signal.throwIfAborted();
+    const key = `${code.repoPath}@${code.effectiveVersion}`;
+    return new Promise((resolve, reject) => {
+      let observing = false;
+      const cleanup = () => {
+        signal.removeEventListener("abort", aborted);
+        const observers = this.unitApplicationObservers.get(key);
+        observers?.delete(observe);
+        if (observers?.size === 0) this.unitApplicationObservers.delete(key);
+      };
+      const aborted = () => {
+        cleanup();
+        reject(signal.reason);
+      };
+      const observe = () => {
+        const applications = this.unitApplications.get(key);
+        if (observing) return;
+        if (!applications?.size) {
+          if (this.startupReviewsStaged) {
+            cleanup();
+            reject(
+              this.reviewStagingFailure?.error ??
+                new Error(
+                  `The reviewed unit ${code.repoPath} no longer has an exact review application`
+                )
+            );
+          }
+          return;
+        }
+        observing = true;
+        void Promise.all([...applications].map((application) => application.settlement)).then(
+          (decisions) => {
+            cleanup();
+            resolve(
+              decisions.includes("deny")
+                ? "deny"
+                : decisions.includes("dismiss")
+                  ? "dismiss"
+                  : "accepted"
+            );
+          },
+          (error) => {
+            cleanup();
+            reject(error);
+          }
+        );
+      };
+      const observers = this.unitApplicationObservers.get(key) ?? new Set();
+      observers.add(observe);
+      this.unitApplicationObservers.set(key, observers);
+      signal.addEventListener("abort", aborted, { once: true });
+      observe();
+    });
+  }
 
   constructor(
     private readonly deps: {
@@ -122,9 +205,39 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
       }
     }
     assertCompatiblePresentation(batch.requests, request.presentation);
-    return new Promise<void>((resolve, reject) => {
-      batch.requests.push({ ...request, resolve, reject });
+    let settleReview!: PendingRequest["settleReview"];
+    let failReview!: PendingRequest["failReview"];
+    const reviewSettlement = new Promise<"accepted" | "deny" | "dismiss">((resolve, reject) => {
+      settleReview = resolve;
+      failReview = reject;
     });
+    // The enqueue promise already propagates application failures. Its exact
+    // unit observers independently receive the same retained failure.
+    void reviewSettlement.catch(() => {});
+    const application = { settlement: reviewSettlement, pending: true };
+    void reviewSettlement.then(
+      () => {
+        application.pending = false;
+      },
+      () => {
+        application.pending = false;
+      }
+    );
+    const enqueue = new Promise<void>((resolve, reject) => {
+      batch.requests.push({ ...request, resolve, reject, settleReview, failReview });
+    });
+    for (const entry of request.entries) {
+      const key = `${entry.source.repo}@${entry.ev}`;
+      const previous = this.unitApplications.get(key);
+      const applications =
+        previous && [...previous].some((entry) => entry.pending)
+          ? previous
+          : new Set<typeof application>();
+      applications.add(application);
+      this.unitApplications.set(key, applications);
+      for (const observer of this.unitApplicationObservers.get(key) ?? []) observer();
+    }
+    return enqueue;
   }
 
   publishPending(
@@ -232,17 +345,20 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
           .then(async (resolvedDecision) => {
             if (resolvedDecision === "deny" || resolvedDecision === "dismiss") {
               request.applyDenied();
+              request.settleReview(resolvedDecision);
               request.resolve();
             } else if (resolvedDecision === "accepted") {
               acceptedDecision = true;
               try {
                 await request.applyApproved();
+                request.settleReview("accepted");
                 for (const entry of request.entries) landedEntries.add(entryKey(entry));
                 request.resolve();
               } catch (error) {
                 const reason = error instanceof Error ? error.message : String(error);
                 for (const entry of request.entries) failedEntries.set(entryKey(entry), reason);
                 request.reject(error);
+                request.failReview(error);
                 throw error;
               } finally {
                 completedRequests += 1;
@@ -259,6 +375,7 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
             if (!acceptedDecision) {
               reportDecisionFailureOnce(error);
               request.reject(error);
+              request.failReview(error);
             }
             throw error;
           }),

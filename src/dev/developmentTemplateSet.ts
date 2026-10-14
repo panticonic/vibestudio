@@ -7,6 +7,7 @@ export {
   developmentTemplateSetSources,
 } from "../../scripts/lib/development-template-set.mjs";
 import { inspectWorkspaceSources } from "../workspaceTemplateSource.js";
+import type { WorkspaceSource } from "@vibestudio/workspace/workspaceSources";
 import { selectDevelopmentTemplateCheckouts } from "./developmentTemplateConfig.js";
 
 export interface DevelopmentTemplateSet {
@@ -14,6 +15,7 @@ export interface DevelopmentTemplateSet {
   checkouts: Record<string, string> & Record<keyof DefaultWorkspaceTemplates, string>;
   sourceCheckouts: Record<string, string> & Record<keyof DefaultWorkspaceTemplates, string>;
   sourcePins: Record<string, WorkspaceTemplatePin>;
+  reviews: Record<string, NonNullable<WorkspaceSource["review"]>>;
   sources: Array<{
     id: string;
     role: keyof DefaultWorkspaceTemplates | "development" | "catalog";
@@ -71,6 +73,7 @@ export async function resolveDevelopmentTemplateSet(input: {
   const byCheckout = new Map(inspected.map((source) => [source.sourceCheckout, source]));
   const pins = {} as Record<keyof DefaultWorkspaceTemplates, WorkspaceTemplatePin>;
   const sourcePins: Record<string, WorkspaceTemplatePin> = {};
+  const reviews: DevelopmentTemplateSet["reviews"] = {};
   const checkouts = {} as Record<string, string> & Record<keyof DefaultWorkspaceTemplates, string>;
   for (const catalogSource of selected.sources) {
     const sourceCheckout = fs.realpathSync(
@@ -80,6 +83,8 @@ export async function resolveDevelopmentTemplateSet(input: {
     if (!source) throw new Error(`Development ${catalogSource.id} template was not inspected`);
     checkouts[catalogSource.id] = source.checkout;
     sourcePins[catalogSource.id] = source.pin;
+    if (!source.review) throw new Error(`Development ${catalogSource.id} template has no review`);
+    reviews[catalogSource.id] = source.review;
     if (
       catalogSource.role === "base" ||
       catalogSource.role === "personal" ||
@@ -93,6 +98,7 @@ export async function resolveDevelopmentTemplateSet(input: {
     checkouts,
     sourceCheckouts: selected.checkouts,
     sourcePins,
+    reviews,
     sources: selected.sources,
   };
 }

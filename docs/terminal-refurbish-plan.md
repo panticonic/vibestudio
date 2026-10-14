@@ -16,7 +16,7 @@ The terminal stack cannot be reached from any current workflow:
   `stdio: ["ignore","pipe","pipe","ipc"]` (`src/server/hubServer.ts` ~2941).
   So `vibestudio.app.interactive` + `stdio:"inherit"` gives the app
   `/dev/null` and a pipe, and terminal-browser exits on its `isTTY` check. Even
-  if it worked, it would draw on the *server's* terminal and could never work
+  if it worked, it would draw on the _server's_ terminal and could never work
   remotely. `vibestudio terminal start` only asks the server to start the app.
 - **It is not installed.** `system/meta/vibestudio.yml` does not list
   `apps/terminal-browser`; `hostTargets.terminal.app` is `apps/remote-cli`, a
@@ -56,7 +56,7 @@ process of the server. This mirrors the existing `native-bootstrap` model for th
 React Native app:
 
 1. The CLI resolves `hostTargets.terminal.app` and runs the existing launch gate
-   (approvals prompt) *before* taking raw mode.
+   (approvals prompt) _before_ taking raw mode.
 2. It fetches the built `primary` `.mjs` artifact through the app-artifact URL
    (`packages/shared/src/appArtifacts.ts`).
 3. It obtains an app-principal connection grant through
@@ -184,19 +184,19 @@ headless `ChatSession` in resident delivery mode. Its `ChatHostController`
 `StateArgsPort` is backed by the DO's own storage (channel name, installed
 agents, agent config).
 
-| Area | Terminal behaviour |
-|---|---|
-| Transcript | Markdown to ANSI (headings, lists, tables, code blocks with highlighting), streaming deltas, thinking collapsed by default, tool cards collapsible with result summaries (eval output, file-mutation diffs in colour, images as `[image]` + open), subagent/task cards expandable into the child transcript, typing indicator, receipts, retracted/edited markers, disconnect and diagnostic rows, usage-limit card with resume/schedule |
-| Navigation | Transcript scrollback with a selection cursor; act on the selected message (copy, fork here, edit & fork, expand, retry/resume); history paging via replay |
-| Composer | Multiline editor (Enter sends, Alt/Shift-Enter for a newline), input history, `@mention` autocomplete, bracketed paste, queued-outbox view with edit/undo, Esc to interrupt, Esc Esc to flush and interrupt |
-| Slash commands | `/model`, `/thinking`, `/fast`, `/approval`, `/respond`, `/connect <provider>`, `/agents` (add/replace/remove), `/new`, `/resume` (chat list), `/fork`, `/forks` (tree + switch), `/title`, `/missions`, `/retry`, `/export`, `/help`; all also reachable from a `Ctrl-K` palette |
-| Status line | Model, thinking level, context-usage %, approval level, connection, agent busy/idle, unread forks |
-| Approvals | Inline cards are display-only. Decisions go through the browser's trusted overlay (shellApproval queue), and the card names the key that opens it |
-| `ask_user` | Advertise `feedback_form` and render JSON-schema forms as terminal forms. Do not advertise `inline_ui`, action bar, `feedback_custom`, custom message-type renderers or `client_eval`, so agents fall back to text |
-| Provider connect | Pre-agent and in-chat (`connectModelCredential`) flows use host `openUrl` on the user's machine, with the pasted-callback fallback from `src/cli/modelConnect.ts` |
-| Attachments | Host `requestFile`: the browser reads a local path the user confirmed and sends the bytes to the session |
-| Attention | Escalations and finished turns while unfocused call `setAttention` (tab badge, optional bell) |
-| Missions | List/run/pause/resume via `createMissionsClient` |
+| Area             | Terminal behaviour                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Transcript       | Markdown to ANSI (headings, lists, tables, code blocks with highlighting), streaming deltas, thinking collapsed by default, tool cards collapsible with result summaries (eval output, file-mutation diffs in colour, images as `[image]` + open), subagent/task cards expandable into the child transcript, typing indicator, receipts, retracted/edited markers, disconnect and diagnostic rows, usage-limit card with resume/schedule |
+| Navigation       | Transcript scrollback with a selection cursor; act on the selected message (copy, fork here, edit & fork, expand, retry/resume); history paging via replay                                                                                                                                                                                                                                                                               |
+| Composer         | Multiline editor (Enter sends, Alt/Shift-Enter for a newline), input history, `@mention` autocomplete, bracketed paste, queued-outbox view with edit/undo, Esc to interrupt, Esc Esc to flush and interrupt                                                                                                                                                                                                                              |
+| Slash commands   | `/model`, `/thinking`, `/fast`, `/approval`, `/respond`, `/connect <provider>`, `/agents` (add/replace/remove), `/new`, `/resume` (chat list), `/fork`, `/forks` (tree + switch), `/title`, `/missions`, `/retry`, `/export`, `/help`; all also reachable from a `Ctrl-K` palette                                                                                                                                                        |
+| Status line      | Model, thinking level, context-usage %, approval level, connection, agent busy/idle, unread forks                                                                                                                                                                                                                                                                                                                                        |
+| Approvals        | Inline cards are display-only. Decisions go through the browser's trusted overlay (shellApproval queue), and the card names the key that opens it                                                                                                                                                                                                                                                                                        |
+| `ask_user`       | Advertise `feedback_form` and render JSON-schema forms as terminal forms. Do not advertise `inline_ui`, action bar, `feedback_custom`, custom message-type renderers or `client_eval`, so agents fall back to text                                                                                                                                                                                                                       |
+| Provider connect | Pre-agent and in-chat (`connectModelCredential`) flows use host `openUrl` on the user's machine, with the pasted-callback fallback from `src/cli/modelConnect.ts`                                                                                                                                                                                                                                                                        |
+| Attachments      | Host `requestFile`: the browser reads a local path the user confirmed and sends the bytes to the session                                                                                                                                                                                                                                                                                                                                 |
+| Attention        | Escalations and finished turns while unfocused call `setAttention` (tab badge, optional bell)                                                                                                                                                                                                                                                                                                                                            |
+| Missions         | List/run/pause/resume via `createMissionsClient`                                                                                                                                                                                                                                                                                                                                                                                         |
 
 Out of scope for v1: dictation (speech extension) and image rendering protocols
 (sixel/kitty).
@@ -361,7 +361,7 @@ moving and refactoring whatever is needed and ripping out all legacy infrastruct
 
 1. **Unit kind + build.** A terminal-app manifest kind (choose location/name, e.g.
    `<template>/terminal-apps/<name>` with `vibestudio.terminal {title, description,
-   icon?, entry}`), built as a bundled Node ESM like `buildTerminalApp`, with native
+icon?, entry}`), built as a bundled Node ESM like `buildTerminalApp`, with native
    deps materialized like extensions (`populateExtensionRuntimeDeps`) so it runs from
    `builds/` inside the sandbox. Launcher discovery lists these units per workspace.
 2. **Launch service (trusted, server-side).** One call, e.g.

@@ -15,6 +15,15 @@ import { createOwnedProcessGroupReceiver } from "@vibestudio/shared/ownedProcess
 const MARKER = ".vibestudio-development-client.json";
 const CHUNK_BYTES = 1024 * 1024;
 
+/** Fingerprinting belongs to the executor operation, not GUI construction.
+ * Streaming bounds memory and lets presentation IPC run between file reads. */
+async function hashExecutable(executable: string): Promise<string> {
+  const hash = createHash("sha256");
+  const stream = fs.createReadStream(executable, { highWaterMark: CHUNK_BYTES });
+  for await (const chunk of stream) hash.update(chunk);
+  return hash.digest("hex");
+}
+
 type ExecutorClient = TypedServiceClient<typeof developmentClientExecutorMethods>;
 type LaunchClaim = Awaited<ReturnType<ExecutorClient["claim"]>>;
 
@@ -36,8 +45,8 @@ export class CurrentHostDevelopmentClientExecutor {
   private readonly pendingLaunches = new Map<string, Promise<void>>();
   private startup: Promise<void> | null = null;
   private closing: Promise<void> | null = null;
-  private readonly executorDigest: string;
-  private readonly providerId: string;
+  private identity: Promise<{ executable: string; digest: string; providerId: string }> | null =
+    null;
   private readonly executor: ExecutorClient;
 
   constructor(
@@ -59,9 +68,6 @@ export class CurrentHostDevelopmentClientExecutor {
       developmentClientExecutorMethods,
       (service, method, args) => deps.client.call(service, method, args)
     );
-    const executable = fs.realpathSync(deps.electronExecutable ?? process.execPath);
-    this.executorDigest = sha256(fs.readFileSync(executable));
-    this.providerId = `electron-${this.executorDigest.slice(0, 24)}`;
   }
 
   start(): Promise<void> {
@@ -72,6 +78,8 @@ export class CurrentHostDevelopmentClientExecutor {
   }
 
   private async startOnce(): Promise<void> {
+    await this.prepareIdentity();
+    if (this.closed) return;
     await this.register();
     if (this.closed) return;
     this.heartbeat = setInterval(() => {
@@ -248,12 +256,23 @@ export class CurrentHostDevelopmentClientExecutor {
   }
 
   private async register(): Promise<void> {
+    const identity = await this.prepareIdentity();
     await this.executor.register({
-      providerId: this.providerId,
+      providerId: identity.providerId,
       platform: process.platform,
       arch: process.arch,
-      executorDigest: this.executorDigest,
+      executorDigest: identity.digest,
     });
+  }
+
+  private prepareIdentity() {
+    return (this.identity ??= (async () => {
+      const executable = await fs.promises.realpath(
+        this.deps.electronExecutable ?? process.execPath
+      );
+      const digest = await hashExecutable(executable);
+      return { executable, digest, providerId: `electron-${digest.slice(0, 24)}` };
+    })());
   }
 
   private async materialize(claim: LaunchClaim): Promise<string> {
@@ -344,8 +363,9 @@ export class CurrentHostDevelopmentClientExecutor {
   }
 
   private async launch(root: string, claim: LaunchClaim): Promise<ChildProcess> {
+    const identity = await this.prepareIdentity();
     const executable = fs.realpathSync(this.deps.electronExecutable ?? process.execPath);
-    if (sha256(fs.readFileSync(executable)) !== this.executorDigest) {
+    if ((await hashExecutable(executable)) !== identity.digest) {
       throw coded("EEXECUTOR_DRIFT", "Electron executor changed after registration");
     }
     const profile = path.join(root, "profile");
@@ -581,10 +601,6 @@ function requestIdFrom(payload: unknown): string {
     throw coded("EINVAL", "Development client request id is invalid");
   }
   return value;
-}
-
-function sha256(bytes: Buffer): string {
-  return createHash("sha256").update(bytes).digest("hex");
 }
 
 function code(error: unknown): string {

@@ -4,6 +4,7 @@ import {
   HubReadyPayloadSchema,
   HubWorkspaceRouteSchema,
   type HubPairingInvite,
+  type HubReadyPayload,
 } from "@vibestudio/service-schemas/hubControl";
 import { selectedWorkspacePath } from "@vibestudio/shared/connect";
 import { loadCliCredentials, saveCliCredentials, type CliCredentials } from "./credentialStore.js";
@@ -66,7 +67,7 @@ function pairingResponse(value: unknown): PairingResponse {
 
 async function postPairing(
   gatewayUrl: string,
-  invite: HubPairingInvite,
+  invite: Pick<HubPairingInvite, "code">,
   label: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<PairingResponse> {
@@ -208,7 +209,7 @@ async function pairWithInvite(
   input: {
     gatewayUrl: string;
     serverId: string;
-    invite: HubPairingInvite;
+    invite: HubPairingInvite | NonNullable<HubReadyPayload["rootInvite"]>;
     workspace?: LocalCliWorkspaceSelection;
   },
   credentialFile: string | undefined,

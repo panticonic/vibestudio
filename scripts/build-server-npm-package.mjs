@@ -94,7 +94,7 @@ async function main() {
   await prepareServerTemplateRelease(path.join(outRoot, "server"));
   assertNoBundledUserlandSource(path.join(outRoot, "server"), "staged server npm package");
   console.log("\n✔ Staged dist-packages/server. Validate with:");
-  console.log("    (cd dist-packages/server && npm publish --dry-run)");
+  console.log("    pnpm npm:authenticated publish dist-packages/server --dry-run");
 }
 
 /** Compile against a real installation of the staged package. Publication

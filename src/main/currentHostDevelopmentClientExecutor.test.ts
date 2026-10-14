@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { once } from "node:events";
+import { PassThrough } from "node:stream";
 import { createHash } from "node:crypto";
 import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +15,114 @@ import {
 
 const roots: string[] = [];
 const executors: CurrentHostDevelopmentClientExecutor[] = [];
+
+/** This controlled fixture supplies only the ReadStream readable contract
+ * consumed by hashing; it deliberately has no file descriptor or file path. */
+function controlledExecutableStream(stream: PassThrough): ReturnType<typeof fs.createReadStream> {
+  return stream as unknown as ReturnType<typeof fs.createReadStream>;
+}
+
+describe("diagnostic executor startup ownership", () => {
+  it("does not fingerprint in the constructor and keeps the event loop available during streamed startup", async () => {
+    const stream = new PassThrough();
+    const read = vi
+      .spyOn(fs, "createReadStream")
+      .mockReturnValue(controlledExecutableStream(stream));
+    const call = vi.fn(async () => ({ leaseExpiresAt: Date.now() + 60_000 }));
+    const executor = new CurrentHostDevelopmentClientExecutor({
+      client: { call } as never,
+      stateRoot: "/unused-diagnostic-state",
+    });
+    executors.push(executor);
+    expect(read).not.toHaveBeenCalled();
+    const startup = executor.start();
+    expect(executor.start()).toBe(startup);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    expect(read).toHaveBeenCalledWith(expect.any(String), { highWaterMark: 1024 * 1024 });
+    expect(call).not.toHaveBeenCalled();
+    // A renderer IPC/presentation task can complete while executor bytes have
+    // not arrived. No synchronous whole-executable read owns the main thread.
+    const presented = vi.fn();
+    await new Promise<void>((resolve) =>
+      setImmediate(() => {
+        presented();
+        resolve();
+      })
+    );
+    expect(presented).toHaveBeenCalledOnce();
+    let retired = false;
+    const close = executor.close().then(() => {
+      retired = true;
+    });
+    await Promise.resolve();
+    expect(retired).toBe(false);
+    stream.end("executable bytes");
+    await startup;
+    await close;
+    expect(call).not.toHaveBeenCalled();
+    read.mockRestore();
+  });
+
+  it("preserves the original fingerprint failure for an actual diagnostic consumer", async () => {
+    const failure = new Error("executable read failed");
+    const stream = new PassThrough();
+    const read = vi
+      .spyOn(fs, "createReadStream")
+      .mockReturnValue(controlledExecutableStream(stream));
+    const executor = new CurrentHostDevelopmentClientExecutor({
+      client: { call: vi.fn() } as never,
+      stateRoot: "/unused-diagnostic-state",
+    });
+    const startup = executor.start();
+    const rejected = expect(startup).rejects.toBe(failure);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    stream.destroy(failure);
+    await rejected;
+    await expect(executor.close()).rejects.toMatchObject({ errors: [failure] });
+    read.mockRestore();
+  });
+
+  it("joins an admitted registration before shutdown and propagates its original failure", async () => {
+    const stream = new PassThrough();
+    const read = vi
+      .spyOn(fs, "createReadStream")
+      .mockReturnValue(controlledExecutableStream(stream));
+    const failure = new Error("registration rejected");
+    let reject!: (error: Error) => void;
+    const call = vi.fn(
+      () =>
+        new Promise((_, fail) => {
+          reject = fail;
+        })
+    );
+    const executor = new CurrentHostDevelopmentClientExecutor({
+      client: { call } as never,
+      stateRoot: "/unused-diagnostic-state",
+    });
+    const startup = executor.start();
+    const rejected = expect(startup).rejects.toBe(failure);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    stream.end("executable bytes");
+    await vi.waitFor(() => expect(call).toHaveBeenCalledOnce());
+    expect(call).toHaveBeenCalledWith("developmentClientExecutor", "register", [
+      expect.objectContaining({
+        executorDigest: createHash("sha256").update("executable bytes").digest("hex"),
+      }),
+    ]);
+    let retired = false;
+    const close = executor.close();
+    const closeAssertion = expect(close).rejects.toMatchObject({ errors: [failure] });
+    void close.catch(() => {
+      retired = true;
+    });
+    await Promise.resolve();
+    expect(retired).toBe(false);
+    reject(failure);
+    await rejected;
+    await closeAssertion;
+    read.mockRestore();
+  });
+});
 
 function materializationFixture(
   readArtifact: (input: { offset: number }) => Promise<unknown>,

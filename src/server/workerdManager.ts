@@ -10,6 +10,8 @@
  */
 
 import type { WorkerExecutableAdmission } from "./workerExecutableDispatch.js";
+import type { WorkspaceReleaseIdentity } from "./preparedWorkspaceRelease.js";
+import { acquireSchemaProbeEvidence } from "./services/schemaProbeEvidence.js";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { spawn, type ChildProcess } from "child_process";
 import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
@@ -461,6 +463,8 @@ export interface WorkerInstance {
 }
 
 export interface WorkerdManagerDeps {
+  /** Existing admitted host/SDK installation capture; never rescan at admission. */
+  readonly schemaProbeEnvironment: WorkspaceReleaseIdentity;
   tokenManager: TokenManager;
   fsService: FsService;
   /**
@@ -762,6 +766,11 @@ export class WorkerdManager {
   private readonly doSchemaDescriptorDb: DatabaseSync;
   private readonly sqliteIntegrityWorker: SqliteIntegrityWorkerClient;
   private readonly schemaProbeBuilds = new Map<string, SchemaProbeBuild>();
+  private readonly schemaAdmissionLifetime = new AbortController();
+  private readonly shutdownCancellation = Object.assign(
+    new Error("WorkerdManager is shutting down"),
+    { code: "ECANCELLED" }
+  );
   private readonly schemaAdmissions = new Map<string, Promise<void>>();
   private readonly doMaintenanceChains = new Map<string, Promise<unknown>>();
   private readonly doMaintenanceRecovery: Promise<void>;
@@ -1825,6 +1834,8 @@ export class WorkerdManager {
    * concurrent planned or crash transition.
    */
   private async stopWorkerdIfIdle(): Promise<void> {
+    // Closing owns the final process stop, after all admitted probes retire.
+    if (this.shuttingDown) return;
     if (
       this.instances.size > 0 ||
       this.doServices.size > 0 ||
@@ -3208,14 +3219,14 @@ export class WorkerdManager {
   }
 
   private async startWorkerdOnce(): Promise<void> {
-    if (this.shuttingDown) throw new Error("WorkerdManager is shutting down");
+    if (this.shuttingDown) throw this.shutdownCancellation;
     const config = await this.generateConfig();
-    if (this.shuttingDown) throw new Error("WorkerdManager is shutting down");
+    if (this.shuttingDown) throw this.shutdownCancellation;
     const configPath = path.join(this.configDir, "config.capnp");
     const capnpText = this.toCapnpText(config as Record<string, unknown>);
     await this.flushConfigWrites();
     await fs.promises.writeFile(configPath, capnpText);
-    if (this.shuttingDown) throw new Error("WorkerdManager is shutting down");
+    if (this.shuttingDown) throw this.shutdownCancellation;
 
     const binary = this.findWorkerdBinary();
     if (!this.inspectorPort && workerdInspectorEnabled()) {
@@ -4126,7 +4137,22 @@ export class WorkerdManager {
           `Durable Object ${image.source}:${className} schema executable failed sealed identity verification`
         );
       }
-      const descriptor = await this.probeDurableObjectSchema(image.source, className, build);
+      const descriptor = await acquireSchemaProbeEvidence(
+        {
+          identity: {
+            installation: this.deps.schemaProbeEnvironment,
+            artifactDigest: image.artifact.artifactDigest,
+            source: image.source,
+            className,
+            protocol: SCHEMA_PROBE_CACHE_VERSION,
+            platform: process.platform,
+            arch: process.arch,
+            compatibility: USER_CODE_COMPATIBILITY,
+          },
+          signal: this.schemaAdmissionLifetime.signal,
+        },
+        () => this.probeDurableObjectSchema(image.source, className, build)
+      );
       this.recordDurableObjectSchema({
         source: image.source,
         effectiveVersion: image.artifact.sourceState.effectiveVersion,
@@ -4297,6 +4323,7 @@ export class WorkerdManager {
               this.getDoAdmission(target.source, target.className, target.objectKey)
             ),
           },
+          signal: this.schemaAdmissionLifetime.signal,
           dispatcher: getWorkerdConnectionDispatcher(
             `http://127.0.0.1:${assertPresent(this.port)}`
           ),
@@ -5104,22 +5131,33 @@ export class WorkerdManager {
 
   async shutdown(): Promise<void> {
     this.shuttingDown = true;
+    this.schemaAdmissionLifetime.abort(this.shutdownCancellation);
     const failures: unknown[] = [];
+    // Only acknowledgement of this exact owner's cancellation is successful
+    // retirement. A mixed aggregate retains every independent original failure.
+    const acknowledgesCancellation = (error: unknown): boolean =>
+      error === this.shutdownCancellation ||
+      (error instanceof AggregateError &&
+        error.errors.length > 0 &&
+        error.errors.every(acknowledgesCancellation));
+    const retainFailure = (error: unknown): void => {
+      if (!acknowledgesCancellation(error)) failures.push(error);
+    };
     const attempt = async (operation: () => Promise<unknown>): Promise<void> => {
       try {
         await operation();
       } catch (error) {
-        failures.push(error);
+        retainFailure(error);
       }
     };
     const preparationResults = await Promise.allSettled([...this.executablePreparations.values()]);
     for (const result of preparationResults) {
-      if (result.status === "rejected") failures.push(result.reason);
+      if (result.status === "rejected") retainFailure(result.reason);
     }
     await attempt(() => this.doMaintenanceRecovery);
     const maintenanceResults = await Promise.allSettled([...this.doMaintenanceChains.values()]);
     for (const result of maintenanceResults) {
-      if (result.status === "rejected") failures.push(result.reason);
+      if (result.status === "rejected") retainFailure(result.reason);
     }
     if (this.activeTransition) await attempt(() => this.activeTransition!.promise);
     if (this.process) {
@@ -5134,12 +5172,12 @@ export class WorkerdManager {
         reason: "shutdown",
       });
     }
-    await attempt(() => this.stopWorkerd("shutdown", "force"));
-    await attempt(() => this.storageClones.join());
     const schemaResults = await Promise.allSettled([...this.schemaAdmissions.values()]);
     for (const result of schemaResults) {
-      if (result.status === "rejected") failures.push(result.reason);
+      if (result.status === "rejected") retainFailure(result.reason);
     }
+    await attempt(() => this.stopWorkerd("shutdown", "force"));
+    await attempt(() => this.storageClones.join());
     // stopWorkerd collected retirement journals after reaping the process.
     // Clean up the remaining schema probe bookkeeping without recovering
     // failed retirement through a second maintenance owner.

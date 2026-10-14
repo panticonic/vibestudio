@@ -16,10 +16,231 @@ import {
   prepareBuildRootConfig,
   type RootDependencyFingerprintInfo,
   computeRootDependencyFingerprint,
+  captureRootDependencyFingerprint,
+  composeWorkspaceDependencyFingerprint,
+  dependencyInstallationPolicy,
   loadPersistedEvState,
   persistEvState,
   type ContentHashMap,
 } from "./effectiveVersion.js";
+
+describe("sealed v8 dependency input capture", () => {
+  it("keeps workspace identity independent of nested pack scratch and external placement", async () => {
+    fs.mkdirSync(path.resolve(".cache"), { recursive: true });
+    const root = fs.mkdtempSync(path.resolve(".cache/workspace-fingerprint-labels-"));
+    const appRoot = path.join(root, "app");
+    const workspaceRoots = [
+      path.join(appRoot, "release/.template-release-A/workspaces/system/source"),
+      path.join(appRoot, "release/.template-release-B/workspaces/system/source"),
+      path.join(root, "external/workspaces/system/source"),
+    ];
+    const inputs = [
+      ["package.json", '{"name":"workspace"}'],
+      ["pnpm-lock.yaml", "lockfileVersion: '9.0'\n"],
+      ["pnpm-workspace.yaml", "packages: []\n"],
+      ["tsconfig.json", '{"compilerOptions":{"strict":true}}'],
+      ["tsconfig.integration.json", '{"extends":"./tsconfig.json"}'],
+    ] as const;
+    try {
+      fs.mkdirSync(appRoot, { recursive: true });
+      fs.writeFileSync(path.join(appRoot, "package.json"), '{"name":"host"}');
+      const host = await computeRootDependencyFingerprint(appRoot);
+      const capture = captureRootDependencyFingerprint(host);
+      for (const workspaceRoot of workspaceRoots) {
+        fs.mkdirSync(workspaceRoot, { recursive: true });
+        for (const [file, bytes] of inputs) fs.writeFileSync(path.join(workspaceRoot, file), bytes);
+      }
+      const fresh = await Promise.all(
+        workspaceRoots.map((workspaceRoot) =>
+          computeRootDependencyFingerprint(appRoot, workspaceRoot)
+        )
+      );
+      const composed = await Promise.all(
+        workspaceRoots.map((workspaceRoot) =>
+          composeWorkspaceDependencyFingerprint(capture, appRoot, workspaceRoot)
+        )
+      );
+      const expected = fresh[2]!;
+      for (let index = 0; index < workspaceRoots.length; index++) {
+        expect(composed[index]).toEqual(fresh[index]);
+        expect(fresh[index]?.value).toBe(expected.value);
+        expect(computeBuildKey(fresh[index]!, "apps/shell", "same-ev", false)).toBe(
+          computeBuildKey(expected, "apps/shell", "same-ev", false)
+        );
+        const workspaceFiles = fresh[index]!.files.slice(3, 8);
+        expect(workspaceFiles.map(({ file }) => file)).toEqual(
+          inputs.map(([file]) => `workspace:${file}`)
+        );
+        expect(workspaceFiles.map(({ path: filePath }) => filePath)).toEqual(
+          inputs.map(([file]) => path.join(workspaceRoots[index]!, file))
+        );
+      }
+      expect((await computeRootDependencyFingerprint(appRoot)).value).toBe(host.value);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("reuses the exact full fingerprint and reads only five workspace files", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "sealed-dependencies-"));
+    const appRoot = path.join(root, "app");
+    const workspaceRoot = path.join(root, "workspace");
+    fs.mkdirSync(path.join(appRoot, "packages/sdk"), { recursive: true });
+    fs.mkdirSync(path.join(appRoot, "node_modules/dependency"), { recursive: true });
+    fs.mkdirSync(workspaceRoot);
+    fs.writeFileSync(path.join(appRoot, "package.json"), '{"name":"host"}');
+    fs.writeFileSync(path.join(appRoot, "packages/sdk/package.json"), '{"name":"sdk"}');
+    fs.writeFileSync(path.join(appRoot, "packages/sdk/index.ts"), "export const sdk = 1;");
+    fs.writeFileSync(
+      path.join(appRoot, "node_modules/dependency/package.json"),
+      '{"name":"dependency","version":"1"}'
+    );
+    fs.writeFileSync(path.join(workspaceRoot, "tsconfig.json"), "{}");
+    try {
+      const original = await computeRootDependencyFingerprint(appRoot, workspaceRoot);
+      // Independent reference to the pre-capture v8 encoding. Workspace
+      // evidence stays between host root files and SDK/installation trees.
+      expect(original.files.slice(0, 8).map(({ file }) => file)).toEqual([
+        "package.json",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+        "workspace:package.json",
+        "workspace:pnpm-lock.yaml",
+        "workspace:pnpm-workspace.yaml",
+        "workspace:tsconfig.json",
+        "workspace:tsconfig.integration.json",
+      ]);
+      const legacy = createHash("sha256")
+        .update("root-deps-v8\0")
+        .update(`dependency-installation:${dependencyInstallationPolicy()}\0`);
+      for (const input of original.files) {
+        legacy.update(input.file);
+        if (input.file.endsWith("/**")) legacy.update(`\0tree\0${input.contentHash ?? "absent"}\0`);
+        else if (input.file.startsWith("installed-node-modules:"))
+          legacy.update(`\0installed-tree\0${input.contentHash ?? "absent"}\0`);
+        else legacy.update(input.present ? `\0present\0${input.contentHash}\0` : "\0absent\0");
+      }
+      expect(original.value).toBe(legacy.digest("hex"));
+      const capture = captureRootDependencyFingerprint(
+        await computeRootDependencyFingerprint(appRoot)
+      );
+      expect(capture.files.every((file) => !path.isAbsolute(file.relativePath))).toBe(true);
+      const reads = vi.spyOn(fs.promises, "readFile");
+      const walks = vi.spyOn(fs.promises, "readdir");
+      const restored = await composeWorkspaceDependencyFingerprint(capture, appRoot, workspaceRoot);
+      expect(restored).toEqual(original);
+      expect(reads.mock.calls.map(([file]) => file)).toEqual(
+        [
+          "package.json",
+          "pnpm-lock.yaml",
+          "pnpm-workspace.yaml",
+          "tsconfig.json",
+          "tsconfig.integration.json",
+        ].map((file) => path.join(workspaceRoot, file))
+      );
+      expect(walks).not.toHaveBeenCalled();
+      reads.mockRestore();
+      walks.mockRestore();
+      expect(computeBuildKey(restored!, "unit", "ev", true)).toBe(
+        computeBuildKey(original, "unit", "ev", true)
+      );
+    } finally {
+      vi.restoreAllMocks();
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rebinds diagnostic paths without changing the semantic labels or value", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "rebind-dependencies-"));
+    try {
+      const appRoot = path.join(root, "original/app");
+      const workspaceRoot = path.join(root, "original/workspace");
+      fs.mkdirSync(appRoot, { recursive: true });
+      fs.mkdirSync(workspaceRoot);
+      const info = await computeRootDependencyFingerprint(appRoot, workspaceRoot);
+      const relocatedApp = path.join(root, "relocated/app");
+      const relocatedWorkspace = path.join(root, "relocated/workspace");
+      fs.mkdirSync(relocatedApp, { recursive: true });
+      fs.mkdirSync(relocatedWorkspace);
+      const restored = await composeWorkspaceDependencyFingerprint(
+        captureRootDependencyFingerprint(await computeRootDependencyFingerprint(appRoot)),
+        relocatedApp,
+        relocatedWorkspace
+      );
+      expect(restored?.value).toBe(info.value);
+      expect(restored?.files.map(({ file }) => file)).toEqual(info.files.map(({ file }) => file));
+      expect(restored?.files.every(({ path: filePath }) => filePath.includes("relocated"))).toBe(
+        true
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("folds changed workspace inputs identically to ordinary fresh capture", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "changed-dependencies-"));
+    try {
+      const workspace = path.join(root, "workspace");
+      fs.mkdirSync(workspace);
+      const captured = captureRootDependencyFingerprint(
+        await computeRootDependencyFingerprint(root)
+      );
+      fs.writeFileSync(path.join(workspace, "tsconfig.json"), "");
+      const fresh = await computeRootDependencyFingerprint(root, workspace);
+      expect(await composeWorkspaceDependencyFingerprint(captured, root, workspace)).toEqual(fresh);
+      await expect(
+        composeWorkspaceDependencyFingerprint(
+          { ...captured, value: "0".repeat(64) },
+          root,
+          workspace
+        )
+      ).rejects.toThrow(/trace does not reproduce/);
+      await expect(
+        composeWorkspaceDependencyFingerprint(
+          { ...captured, policy: captured.policy === "prepared" ? "shared-host" : "prepared" },
+          root,
+          workspace
+        )
+      ).rejects.toThrow(/policy/);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("composes the same physical ASAR SDK and legitimately rebases parent-relative diagnostics", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "asar-dependency-capture-"));
+    try {
+      const physical = path.join(root, "app.asar.unpacked");
+      const virtual = path.join(root, "app.asar");
+      const workspace = path.join(root, "workspace");
+      fs.mkdirSync(path.join(physical, "node_modules/dependency"), { recursive: true });
+      fs.mkdirSync(path.join(physical, "packages/sdk"), { recursive: true });
+      fs.mkdirSync(virtual);
+      fs.mkdirSync(workspace);
+      fs.writeFileSync(path.join(physical, "package.json"), '{"name":"installed"}');
+      fs.writeFileSync(path.join(physical, "packages/sdk/package.json"), '{"name":"sdk"}');
+      fs.writeFileSync(path.join(physical, "packages/sdk/index.js"), "export const sdk = 1;");
+      fs.writeFileSync(
+        path.join(physical, "node_modules/dependency/package.json"),
+        '{"name":"dependency"}'
+      );
+      const capture = captureRootDependencyFingerprint(
+        await computeRootDependencyFingerprint(physical)
+      );
+      const realm = capture.files.find(({ file }) => file === "installed-node-modules:0")!;
+      realm.relativePath = "../app.asar.unpacked/node_modules";
+      const expected = await computeRootDependencyFingerprint(physical, workspace);
+      const actual = await composeWorkspaceDependencyFingerprint(capture, virtual, workspace);
+      expect(actual.value).toBe(expected.value);
+      expect(actual.files).toEqual(expected.files);
+      expect(computeBuildKey(actual, "unit", "ev", true)).toBe(
+        computeBuildKey(expected, "unit", "ev", true)
+      );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 function node(
   name: string,
@@ -403,6 +624,24 @@ describe("effectiveVersion", () => {
       expect(computeBuildKey(rootFingerprint, "unit-a", "ev1", true)).not.toBe(before);
     });
 
+    it("distinguishes a shared development installation from prepared production dependencies", async () => {
+      const dir = path.join(root, "installation-policy");
+      writeRootFiles(dir, '{"name":"host"}', "lock\n", "ws\n");
+      const previous = process.env["NODE_ENV"];
+      try {
+        process.env["NODE_ENV"] = "development";
+        const development = await prepareBuildRootConfig({ appRoot: dir });
+        process.env["NODE_ENV"] = "production";
+        const production = await prepareBuildRootConfig({ appRoot: dir });
+        expect(computeBuildKey(development, "unit-a", "ev1", true)).not.toBe(
+          computeBuildKey(production, "unit-a", "ev1", true)
+        );
+      } finally {
+        if (previous === undefined) delete process.env["NODE_ENV"];
+        else process.env["NODE_ENV"] = previous;
+      }
+    });
+
     it("uses the injected app root when VIBESTUDIO_APP_ROOT is unset", async () => {
       const dirA = path.join(root, "a");
       const dirB = path.join(root, "b");
@@ -445,7 +684,10 @@ describe("effectiveVersion", () => {
       rootFingerprint = await prepareBuildRootConfig({ appRoot, workspaceRoot });
       const before = computeBuildKey(rootFingerprint, "unit-a", "ev1", true);
       const beforeInfo = rootFingerprint;
-      expect(beforeInfo.files.map((f) => f.file)).toContain("workspace/package.json");
+      expect(beforeInfo.files.map((f) => f.file)).toContain("workspace:package.json");
+      expect(beforeInfo.files.find((f) => f.file === "workspace:package.json")?.path).toBe(
+        path.join(workspaceRoot, "package.json")
+      );
 
       fs.writeFileSync(
         path.join(workspaceRoot, "package.json"),

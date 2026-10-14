@@ -12,6 +12,7 @@ const DERIVED_CACHE_MAX_BYTES_BY_ROOT: Readonly<Record<string, number>> = {
   "extension-runtime-deps": 1 * GIB,
   "build-results": 1 * GIB,
   "root-templates": 512 * MIB,
+  "workspace-releases": 1 * GIB,
 };
 const AUTOMATIC_PRUNE_INTERVAL_MS = 15 * 60_000;
 
@@ -76,12 +77,12 @@ function entryPath(root: string, key: string): string {
   return path.join(canonicalRoot(root), key);
 }
 
-async function allocatedBytes(storedPath: string): Promise<number> {
+async function allocatedBytes(storedPath: string): Promise<number | null> {
   let stat: fs.Stats;
   try {
     stat = await fs.promises.lstat(storedPath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
     throw error;
   }
   if (!stat.isDirectory()) {
@@ -94,8 +95,19 @@ async function allocatedBytes(storedPath: string): Promise<number> {
     return Math.ceil(allocated / Math.max(1, stat.nlink));
   }
   let bytes = (stat.blocks ?? 0) * 512;
-  for (const child of await fs.promises.readdir(storedPath)) {
-    bytes += await allocatedBytes(path.join(storedPath, child));
+  let children: string[];
+  try {
+    children = await fs.promises.readdir(storedPath);
+  } catch (error) {
+    // Directory discovery is only a snapshot. Another cache coordinator may
+    // atomically move an unleased entry to trash before measurement reaches
+    // it, while a producer may retire an unpublished private attempt.
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+  for (const child of children) {
+    const childBytes = await allocatedBytes(path.join(storedPath, child));
+    if (childBytes !== null) bytes += childBytes;
   }
   return bytes;
 }
@@ -130,7 +142,8 @@ async function cacheDirectories(root: string): Promise<string[]> {
           entry.isDirectory() &&
           !entry.name.startsWith(".") &&
           !entry.name.includes(".tmp.") &&
-          !entry.name.includes(".gc.")
+          !entry.name.includes(".gc.") &&
+          !entry.name.includes(".publishing.")
       )
       .map((entry) => entry.name);
   } catch (error) {
@@ -139,7 +152,7 @@ async function cacheDirectories(root: string): Promise<string[]> {
   }
 }
 
-function processIdentity(pid: number): string | undefined {
+export function cacheProcessIdentity(pid: number): string | undefined {
   if (process.platform !== "linux") return undefined;
   try {
     const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
@@ -151,7 +164,7 @@ function processIdentity(pid: number): string | undefined {
   }
 }
 
-function ownerIsAlive(owner: string): boolean {
+export function cacheOwnerIsAlive(owner: string): boolean {
   const [pidText, , identity] = owner.split(":");
   const pid = Number(pidText);
   // Unknown identities remain protected: inability to inspect is not death.
@@ -162,7 +175,7 @@ function ownerIsAlive(owner: string): boolean {
     if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
     return true;
   }
-  const current = identity ? processIdentity(pid) : undefined;
+  const current = identity ? cacheProcessIdentity(pid) : undefined;
   return !current || !identity || current === identity;
 }
 
@@ -175,7 +188,7 @@ function ownerIsAlive(owner: string): boolean {
  */
 export class DerivedCacheCoordinator {
   private readonly db: DatabaseSync;
-  private readonly ownerId = `${process.pid}:${crypto.randomBytes(16).toString("hex")}:${processIdentity(process.pid) ?? ""}`;
+  private readonly ownerId = `${process.pid}:${crypto.randomBytes(16).toString("hex")}:${cacheProcessIdentity(process.pid) ?? ""}`;
   private readonly leases = new Set<string>();
 
   constructor(filePath: string) {
@@ -427,7 +440,7 @@ export class DerivedCacheCoordinator {
       .prepare("SELECT owner_id FROM cache_maintenance WHERE root = ?")
       .get(root) as { owner_id: string | null } | undefined;
     const observedDeadOwner =
-      observed?.owner_id && !ownerIsAlive(observed.owner_id) ? observed.owner_id : null;
+      observed?.owner_id && !cacheOwnerIsAlive(observed.owner_id) ? observed.owner_id : null;
     const claimed = this.transaction(() => {
       const current = this.db
         .prepare("SELECT owner_id, last_pruned_at FROM cache_maintenance WHERE root = ?")
@@ -484,25 +497,33 @@ export class DerivedCacheCoordinator {
         }>
       ).map((entry) => entry.key)
     );
-    const entries = await Promise.all(
-      (await cacheDirectories(root)).map(async (key) => {
-        const storedPath = entryPath(root, key);
-        const bytes = await allocatedBytes(storedPath);
-        let modified = 0;
-        try {
-          modified = Math.floor((await fs.promises.stat(storedPath)).mtimeMs);
-        } catch {
-          // A concurrent owner can remove a failed unpublished entry.
-        }
-        return {
-          key,
-          bytes,
-          lastAccess: stored.get(key) ?? modified,
-          leased: leased.has(key),
-        };
-      })
-    );
+    let entries = (
+      await Promise.all(
+        (await cacheDirectories(root)).map(async (key) => {
+          const storedPath = entryPath(root, key);
+          const bytes = await allocatedBytes(storedPath);
+          if (bytes === null) return null;
+          let modified: number;
+          try {
+            modified = Math.floor((await fs.promises.stat(storedPath)).mtimeMs);
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+            throw error;
+          }
+          return {
+            key,
+            bytes,
+            lastAccess: stored.get(key) ?? modified,
+            leased: leased.has(key),
+          };
+        })
+      )
+    ).filter((entry): entry is DerivedCacheEntry => entry !== null);
     this.transaction(() => {
+      // Serialize the final existence check with coordinated eviction. If a
+      // pruner committed its rename after our asynchronous walk, do not
+      // resurrect that key in SQLite or report it in this snapshot.
+      entries = entries.filter((entry) => fs.existsSync(entryPath(root, entry.key)));
       const present = new Set(entries.map((entry) => entry.key));
       for (const entry of entries) {
         this.db
@@ -562,7 +583,9 @@ export class DerivedCacheCoordinator {
     const owners = this.db.prepare("SELECT DISTINCT owner_id FROM cache_leases").all() as Array<{
       owner_id: string;
     }>;
-    const deadOwners = owners.map((row) => row.owner_id).filter((owner) => !ownerIsAlive(owner));
+    const deadOwners = owners
+      .map((row) => row.owner_id)
+      .filter((owner) => !cacheOwnerIsAlive(owner));
     if (deadOwners.length === 0) return;
 
     const placeholders = deadOwners.map(() => "?").join(", ");

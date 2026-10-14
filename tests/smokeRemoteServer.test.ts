@@ -87,11 +87,13 @@ describe("smoke remote-server root invite selection", () => {
 
   it("selects the one universal invite from the ready-file contract", async () => {
     const ready = {
-      rootInvite: { pairUrl: "https://vibestudio.app/p#root" },
+      rootInvite: { reach: { status: "ready", pairUrl: "https://vibestudio.app/p#root" } },
     };
 
     const file = await readyFile(ready);
-    await expect(waitForRootInvite({ readyFile: file })).resolves.toEqual(ready.rootInvite);
+    await expect(waitForRootInvite({ readyFile: file })).resolves.toEqual({
+      pairUrl: ready.rootInvite.reach.pairUrl,
+    });
   });
 
   it("fails when the root account already exists", async () => {
@@ -108,13 +110,15 @@ describe("smoke remote-server root invite selection", () => {
     const pending = waitForRootInvite({ readyFile: file, timeoutMs: 2_000 });
     await fs.writeFile(
       file,
-      JSON.stringify({ rootInvite: { pairUrl: "https://vibestudio.app/p#ready" } })
+      JSON.stringify({
+        rootInvite: { reach: { status: "ready", pairUrl: "https://vibestudio.app/p#ready" } },
+      })
     );
     await expect(pending).resolves.toEqual({ pairUrl: "https://vibestudio.app/p#ready" });
   });
 
   it("rejects a malformed ready-file contract immediately", async () => {
-    const file = await readyFile({ rootInvite: { pairUrl: "" } });
+    const file = await readyFile({ rootInvite: { reach: { status: "ready", pairUrl: "" } } });
     await expect(waitForRootInvite({ readyFile: file })).rejects.toThrow("has no pairing URL");
   });
 });

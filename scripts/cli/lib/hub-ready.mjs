@@ -200,6 +200,34 @@ export function parseHubReadyPayload(value) {
     throw new Error("hub ready file workspaces must be an array");
   ready.workspaces.forEach(parseWorkspace);
 
-  if (ready.rootInvite !== null) parseInvite(ready.rootInvite, "hub ready file rootInvite", ready);
+  if (ready.rootInvite !== null) {
+    const invite = objectRecord(ready.rootInvite, "hub ready file rootInvite");
+    const keys = new Set(["code", "expiresInMs", "expiresAt", "serverId", "serverBootId", "reach"]);
+    assertExactKeys(invite, keys, [...keys], "hub ready file rootInvite");
+    if (typeof invite.code !== "string" || !PAIRING_CODE_PATTERN.test(invite.code))
+      throw new Error("hub ready file rootInvite.code has an unexpected format");
+    for (const field of ["expiresInMs", "expiresAt"])
+      if (!Number.isSafeInteger(invite[field]) || invite[field] <= 0)
+        throw new Error(`hub ready file rootInvite.${field} must be a positive integer`);
+    for (const field of ["serverId", "serverBootId"])
+      if (invite[field] !== ready[field])
+        throw new Error(`hub ready file rootInvite.${field} does not match the ready file`);
+    const reach = objectRecord(invite.reach, "hub ready file rootInvite.reach");
+    if (reach.status === "preparing") {
+      assertExactKeys(reach, new Set(["status"]), ["status"], "rootInvite.reach");
+    } else if (reach.status === "ready") {
+      const reachKeys = new Set(["status", "endpointId", "relays", "v", "deepLink", "pairUrl"]);
+      assertExactKeys(reach, reachKeys, [...reachKeys], "rootInvite.reach");
+      parseInvite(rootBootstrapPairingInvite(invite), "hub ready file rootInvite", ready);
+    } else throw new Error("hub ready file rootInvite.reach.status must be preparing or ready");
+  }
   return ready;
+}
+
+/** Remote presentation requires reach; local redemption requires only the credential. */
+export function rootBootstrapPairingInvite(invite) {
+  if (!invite || invite.reach.status !== "ready") return null;
+  const { reach, ...credential } = invite;
+  const { status, ...coordinates } = reach;
+  return { ...credential, ...coordinates };
 }

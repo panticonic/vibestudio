@@ -1,9 +1,6 @@
 import type { DevelopmentTemplateSet } from "../../src/dev/developmentTemplateSet.js";
-import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
+import type { WorkspaceSource } from "@vibestudio/workspace/workspaceSources";
 
-export function developmentTemplateSetSources(selection: DevelopmentTemplateSet): Array<{
-  pin: WorkspaceTemplatePin;
-  checkout: string;
-}>;
+export function developmentTemplateSetSources(selection: DevelopmentTemplateSet): WorkspaceSource[];
 
 export function developmentTemplateSetEnv(selection: DevelopmentTemplateSet): NodeJS.ProcessEnv;

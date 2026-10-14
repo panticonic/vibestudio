@@ -1,17 +1,38 @@
-import * as fs from "node:fs/promises";
+import fs from "node:fs/promises";
+import fsNative from "node:fs";
+import { gzipSync } from "node:zlib";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { preparedWorkspaceTemplatePath } from "./preparedWorkspaceTemplate.js";
-import { preparedWorkspaceReleaseManifestSchema } from "./preparedWorkspaceRelease.js";
+import {
+  preparedWorkspaceReleaseManifestSchema,
+  type WorkspaceReleaseOperation,
+} from "./preparedWorkspaceRelease.js";
+import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
+import {
+  prepareBuildRootConfig,
+  computeRootDependencyFingerprint,
+  captureRootDependencyFingerprint,
+  type RootDependencyFingerprintInfo,
+} from "./buildV2/effectiveVersion.js";
+import { blobCasPath } from "./storage/blobCas.js";
 
-vi.mock("./buildV2/effectiveVersion.js", () => ({
+const { capturedHostRoots } = vi.hoisted(() => ({
+  capturedHostRoots: new Map<string, RootDependencyFingerprintInfo>(),
+}));
+vi.mock("./buildV2/effectiveVersion.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./buildV2/effectiveVersion.js")>()),
   buildCompilerProtocolIdentity: () => ({
     cacheVersion: "test-cache",
     panelEntryProtocolFingerprint: "b".repeat(64),
   }),
-  prepareBuildRootConfig: async () => ({ value: "a".repeat(64) }),
+  prepareBuildRootConfig: vi.fn(async ({ appRoot }: { appRoot: string }) => {
+    const captured = capturedHostRoots.get(appRoot);
+    if (!captured) throw new Error(`No canonical fixture host capture for ${appRoot}`);
+    return captured;
+  }),
 }));
 const roots: string[] = [];
 const basePin = {
@@ -24,6 +45,11 @@ const templates = {
   personal: { ...basePin, commit: "d".repeat(40) },
   system: { ...basePin, commit: "e".repeat(40) },
 };
+const layers = {
+  base: [templates.base],
+  personal: [templates.personal],
+  system: [templates.system],
+};
 const hostBuild = {
   version: 1,
   mode: "production" as const,
@@ -32,8 +58,12 @@ const hostBuild = {
 } as const;
 
 afterEach(async () => {
+  await closeDerivedCacheCoordinators();
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
   vi.unstubAllEnvs();
+  vi.clearAllMocks();
+  vi.restoreAllMocks();
+  capturedHostRoots.clear();
 });
 
 async function fixture() {
@@ -47,10 +77,18 @@ async function fixture() {
     JSON.stringify(hostBuild)
   );
   vi.stubEnv("VIBESTUDIO_HOST_ARTIFACT_ROOT", path.join(root, "dist"));
+  await fs.writeFile(
+    path.join(root, "package.json"),
+    JSON.stringify({ name: "release-fixture", private: true })
+  );
+  const rootFingerprint = await computeRootDependencyFingerprint(root);
+  capturedHostRoots.set(root, rootFingerprint);
   const builds = [];
   for (const workspace of ["base", "personal", "system"] as const) {
     const buildKey = createHash("sha256").update(workspace).digest("hex");
     const artifactBytes = Buffer.from(`runtime-${workspace}`);
+    const sourceBytes = Buffer.from(`source-${workspace}`);
+    const sourceDigest = createHash("sha256").update(sourceBytes).digest("hex");
     const record = {
       format: "vibestudio-prepared-workspace/1",
       purpose: "use",
@@ -64,7 +102,15 @@ async function fixture() {
       repositories: [],
       stateHash: `state:${"e".repeat(64)}`,
       builds: [{ source: "panels/chat", buildKey, effectiveVersion: "f".repeat(64) }],
-      blobs: [],
+      blobs: [{ digest: sourceDigest, size: sourceBytes.length }],
+      compilationInput: {
+        hostBuild,
+        compilerProtocol: {
+          cacheVersion: "test-cache",
+          panelEntryProtocolFingerprint: "b".repeat(64),
+        },
+        fingerprint: captureRootDependencyFingerprint(rootFingerprint),
+      },
     };
     const buildDirectory = path.join(output, "userland-builds", buildKey);
     await fs.mkdir(buildDirectory, { recursive: true });
@@ -88,9 +134,16 @@ async function fixture() {
       ])
     );
     await fs.writeFile(path.join(buildDirectory, "runtime.js"), artifactBytes);
+    await fs.writeFile(
+      path.join(buildDirectory, "executable-modules.json.gz"),
+      gzipSync(Buffer.from("[]"))
+    );
     const recordDir = preparedWorkspaceTemplatePath(output, templates[workspace], "use");
     await fs.mkdir(recordDir, { recursive: true });
     await fs.writeFile(path.join(recordDir, "template.json"), JSON.stringify(record));
+    const sourcePath = blobCasPath(path.join(recordDir, "blobs"), sourceDigest);
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(sourcePath, sourceBytes);
     builds.push({
       workspace,
       source: "panels/chat",
@@ -98,33 +151,263 @@ async function fixture() {
       builtAt: "2026-10-12T00:00:00.000Z",
     });
   }
-  const { createPreparedWorkspaceReleaseManifest } = await import("./preparedWorkspaceRelease.js");
-  const manifest = await createPreparedWorkspaceReleaseManifest(
-    { appRoot: root, output, templates },
-    builds,
-    {
-      appDependencyFingerprint: "a".repeat(64),
-      hostBuild,
-      compilerProtocol: {
-        cacheVersion: "test-cache",
-        panelEntryProtocolFingerprint: "b".repeat(64),
-      },
-    }
-  );
-  await fs.mkdir(path.join(output, "userland-builds"), { recursive: true });
-  await fs.writeFile(path.join(output, "userland-builds/release.json"), JSON.stringify(manifest));
-  return { root, output, builds };
+  const { publishPreparedWorkspaceRelease } = await import("./preparedWorkspaceRelease.js");
+  await publishPreparedWorkspaceRelease({ appRoot: root, output, templates, layers }, builds, {
+    appDependencyFingerprint: rootFingerprint.value,
+    hostBuild,
+    compilerProtocol: {
+      cacheVersion: "test-cache",
+      panelEntryProtocolFingerprint: "b".repeat(64),
+    },
+  });
+  return { root, output, builds, rootFingerprint };
 }
 
 describe("prepared workspace release admission", () => {
-  it("reuses only a matching complete release and verifies every unique build artifact", async () => {
+  it.each(["missing", "host", "compiler", "digest", "policy"] as const)(
+    "rejects a %s compilation capture at publication and completed-release admission",
+    async (mismatch) => {
+      const { root, output, builds } = await fixture();
+      const recordPath = path.join(
+        preparedWorkspaceTemplatePath(output, basePin, "use"),
+        "template.json"
+      );
+      const record = JSON.parse(await fs.readFile(recordPath, "utf8"));
+      if (mismatch === "missing") delete record.compilationInput;
+      else if (mismatch === "host") record.compilationInput.hostBuild.fingerprint = "0".repeat(64);
+      else if (mismatch === "compiler")
+        record.compilationInput.compilerProtocol.cacheVersion = "other";
+      else if (mismatch === "digest") record.compilationInput.fingerprint.value = "0".repeat(64);
+      else
+        record.compilationInput.fingerprint.policy =
+          record.compilationInput.fingerprint.policy === "shared-host" ? "prepared" : "shared-host";
+      const recordBytes = Buffer.from(JSON.stringify(record));
+      await fs.writeFile(recordPath, recordBytes);
+      const manifestPath = path.join(output, "userland-builds/release.json");
+      const manifest = preparedWorkspaceReleaseManifestSchema.parse(
+        JSON.parse(await fs.readFile(manifestPath, "utf8"))
+      );
+      const entry = manifest.preparedTemplates.find((entry) => entry.workspace === "base");
+      if (!entry) throw new Error("Fixture has no Base record digest");
+      entry.recordDigest = createHash("sha256").update(recordBytes).digest("hex");
+      await fs.writeFile(manifestPath, JSON.stringify(manifest));
+      const { createPreparedWorkspaceReleaseManifest, validateExistingPreparedWorkspaceRelease } =
+        await import("./preparedWorkspaceRelease.js");
+      await expect(
+        createPreparedWorkspaceReleaseManifest({ appRoot: root, output, templates, layers }, builds)
+      ).rejects.toThrow(/compilation input|dependency fingerprint|installation policy/);
+      await expect(
+        validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates, layers })
+      ).rejects.toThrow(/compilation input|dependency fingerprint|installation policy/);
+    }
+  );
+  it("projects only owned release resources from a packaged application's resource root", async () => {
+    const { root, output } = await fixture();
+    vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));
+    const host = path.join(output, "app.asar.unpacked", "dist", "node");
+    await fs.mkdir(host, { recursive: true });
+    await fs.writeFile(path.join(host, "corepack.cjs"), "host-owned executable");
+    await fs.symlink("corepack.cjs", path.join(host, "corepack"));
+    await fs.writeFile(path.join(output, "app.asar"), "host-owned archive");
+    const { prepareCachedWorkspaceRelease } = await import("./preparedWorkspaceReleaseCache.js");
+    const cold = path.join(root, "packaged", "resources");
+    const producer = vi.fn(async () => {
+      await fs.cp(output, cold, { recursive: true });
+    });
+    await prepareCachedWorkspaceRelease(
+      { appRoot: root, output: cold, templates, layers },
+      producer
+    );
+    expect(
+      await fs.readlink(path.join(cold, "app.asar.unpacked", "dist", "node", "corepack"))
+    ).toContain("corepack.cjs");
+    const cached = path.join(root, "derived", "workspace-releases");
+    const keys = (await fs.readdir(cached)).filter((entry) => /^[a-f0-9]{64}$/u.test(entry));
+    expect(keys).toHaveLength(1);
+    expect(await fs.readdir(path.join(cached, keys[0]!))).toEqual([
+      "userland-builds",
+      "workspace-templates",
+    ]);
+    const warm = path.join(root, "consumer", "resources");
+    await prepareCachedWorkspaceRelease(
+      { appRoot: root, output: warm, templates, layers },
+      producer
+    );
+    expect(producer).toHaveBeenCalledTimes(1);
+    expect(await fs.readdir(warm)).toEqual(["userland-builds", "workspace-templates"]);
+  });
+
+  it("captures one identity per cold publication or trusted warm admission", async () => {
+    const { root, output, builds, rootFingerprint } = await fixture();
+    vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));
+    const { prepareCachedWorkspaceRelease } = await import("./preparedWorkspaceReleaseCache.js");
+    const { publishPreparedWorkspaceRelease } = await import("./preparedWorkspaceRelease.js");
+    const cold = path.join(root, "cold", "release");
+    const producer = vi.fn(async (operation: WorkspaceReleaseOperation) => {
+      await fs.cp(output, cold, { recursive: true });
+      await fs.rm(path.join(cold, "userland-builds/release.json"));
+      // Publication uses the same operation capture; it does not re-fingerprint.
+      await publishPreparedWorkspaceRelease(
+        { appRoot: root, output: cold, templates, layers },
+        builds,
+        operation.identity
+      );
+    });
+    await prepareCachedWorkspaceRelease(
+      { appRoot: root, output: cold, templates, layers },
+      producer
+    );
+    expect(prepareBuildRootConfig).toHaveBeenCalledTimes(1);
+    expect(producer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        identity: expect.objectContaining({ appDependencyFingerprint: rootFingerprint.value }),
+        rootFingerprint,
+      })
+    );
+    const warm = path.join(root, "warm", "release");
+    // Diagnostic paths may change without changing the logical input identity.
+    // They must not enter the release cache key or its completion manifest.
+    capturedHostRoots.set(root, {
+      ...rootFingerprint,
+      files: rootFingerprint.files.map((file) => ({
+        ...file,
+        path: path.join(root, "relocated-inputs", file.file),
+      })),
+    });
+    const reads = vi.spyOn(fs, "readFile");
+    const streams = vi.spyOn(fsNative, "createReadStream");
+    await prepareCachedWorkspaceRelease(
+      { appRoot: root, output: warm, templates, layers },
+      producer
+    );
+    expect(prepareBuildRootConfig).toHaveBeenCalledTimes(2);
+    expect(producer).toHaveBeenCalledTimes(1);
+    expect(
+      reads.mock.calls.every(([file]) =>
+        ["release.json", "template.json", "metadata.json", "artifacts.json"].includes(
+          path.basename(String(file))
+        )
+      )
+    ).toBe(true);
+    expect(streams).not.toHaveBeenCalled();
+    const publishedManifest = JSON.parse(
+      await fs.readFile(path.join(warm, "userland-builds/release.json"), "utf8")
+    );
+    expect(publishedManifest).not.toHaveProperty("rootFingerprint");
+    expect(JSON.stringify(publishedManifest)).not.toContain("relocated-inputs");
+    expect(JSON.stringify(publishedManifest)).not.toContain(root);
+  });
+
+  it("captures an identity once when the requested complete release is already present", async () => {
+    const { root, output } = await fixture();
+    const { prepareCachedWorkspaceRelease } = await import("./preparedWorkspaceReleaseCache.js");
+    const producer = vi.fn(async () => {
+      throw new Error("Complete output must not be rebuilt");
+    });
+    await prepareCachedWorkspaceRelease({ appRoot: root, output, templates, layers }, producer);
+    expect(prepareBuildRootConfig).toHaveBeenCalledTimes(1);
+    expect(producer).not.toHaveBeenCalled();
+  });
+
+  it("publishes an inherited completion marker only after every projection link joins", async () => {
+    const { root, output, builds } = await fixture();
+    vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));
+    const { prepareCachedWorkspaceRelease } = await import("./preparedWorkspaceReleaseCache.js");
+    const cold = path.join(root, "cold-projection");
+    await prepareCachedWorkspaceRelease(
+      { appRoot: root, output: cold, templates, layers },
+      async () => {
+        await fs.cp(output, cold, { recursive: true });
+      }
+    );
+    const warm = path.join(root, "warm-projection");
+    const blockedFile = path.join(warm, "userland-builds", builds[0]!.buildKey, "runtime.js");
+    let unblock!: () => void;
+    let acknowledge!: () => void;
+    const blocked = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      acknowledge = resolve;
+    });
+    const link = fs.link;
+    vi.spyOn(fs, "link").mockImplementation(async (source, destination) => {
+      if (destination === blockedFile) {
+        acknowledge();
+        await blocked;
+      }
+      return link(source, destination);
+    });
+    const projection = prepareCachedWorkspaceRelease(
+      { appRoot: root, output: warm, templates, layers },
+      async () => {
+        throw new Error("Warm projection must not compile");
+      }
+    );
+    try {
+      await entered;
+      await expect(fs.stat(path.join(warm, "userland-builds/release.json"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      unblock();
+      await projection;
+    }
+    await expect(fs.stat(path.join(warm, "userland-builds/release.json"))).resolves.toBeDefined();
+  });
+  it("reuses a validated complete release after the first ephemeral projection is discarded", async () => {
+    const { root, output } = await fixture();
+    vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));
+    const { prepareCachedWorkspaceRelease } = await import("./preparedWorkspaceReleaseCache.js");
+    const first = path.join(root, "first-ephemeral", "release");
+    await prepareCachedWorkspaceRelease(
+      { appRoot: root, output: first, templates, layers },
+      async () => {
+        await fs.cp(output, first, { recursive: true });
+      }
+    );
+    await fs.rm(path.dirname(first), { recursive: true });
+    const second = path.join(root, "second-ephemeral", "release");
+    const producer = vi.fn(async () => {
+      throw new Error("An unchanged warm launch must not compile");
+    });
+    const sourcesReady = vi.fn();
+    await prepareCachedWorkspaceRelease(
+      { appRoot: root, output: second, templates, layers, onSourcesPrepared: sourcesReady },
+      producer
+    );
+    expect(producer).not.toHaveBeenCalled();
+    expect(sourcesReady).toHaveBeenCalledWith(second);
+    const { validateExistingPreparedWorkspaceRelease } =
+      await import("./preparedWorkspaceRelease.js");
+    expect(
+      await validateExistingPreparedWorkspaceRelease({
+        appRoot: root,
+        output: second,
+        templates,
+        layers,
+      })
+    ).toBe(true);
+    expect(await fs.readdir(path.join(root, "derived", "workspace-releases"))).toHaveLength(2);
+  });
+  it("admits a matching completed release without reading payloads or compressed inventories", async () => {
     const { output } = await fixture();
     const { validateExistingPreparedWorkspaceRelease } =
       await import("./preparedWorkspaceRelease.js");
+    const reads = vi.spyOn(fs, "readFile");
+    const streams = vi.spyOn(fsNative, "createReadStream");
 
     await expect(
-      validateExistingPreparedWorkspaceRelease({ appRoot: roots[0]!, output, templates })
+      validateExistingPreparedWorkspaceRelease({ appRoot: roots[0]!, output, templates, layers })
     ).resolves.toBe(true);
+    expect(
+      reads.mock.calls.every(([file]) =>
+        ["release.json", "template.json", "metadata.json", "artifacts.json"].includes(
+          path.basename(String(file))
+        )
+      )
+    ).toBe(true);
+    expect(streams).not.toHaveBeenCalled();
   });
 
   it("rejects partial output instead of treating it as a cache miss", async () => {
@@ -135,8 +418,94 @@ describe("prepared workspace release admission", () => {
     const { validateExistingPreparedWorkspaceRelease } =
       await import("./preparedWorkspaceRelease.js");
     await expect(
-      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates })
+      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates, layers })
     ).rejects.toThrow(/incomplete/);
+  });
+
+  it("admits independent descriptors concurrently and joins all admitted failures", async () => {
+    const { root, output, builds } = await fixture();
+    const { validateExistingPreparedWorkspaceRelease } =
+      await import("./preparedWorkspaceRelease.js");
+    const paths = builds.map((build) =>
+      path.join(output, "userland-builds", build.buildKey, "metadata.json")
+    );
+    const firstFailure = new Error("first descriptor failed");
+    const secondFailure = new Error("second descriptor failed");
+    let entered!: () => void;
+    let unblock!: () => void;
+    const allEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const lastOwned = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
+    const read = fs.readFile;
+    let started = 0;
+    vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
+      const index = paths.indexOf(String(args[0]));
+      if (index !== -1) {
+        if (++started === 3) entered();
+        if (index === 0) throw firstFailure;
+        if (index === 1) throw secondFailure;
+        await lastOwned;
+      }
+      return read(...args);
+    });
+    let settled = false;
+    const admission = validateExistingPreparedWorkspaceRelease({
+      appRoot: root,
+      output,
+      templates,
+      layers,
+    }).then(
+      () => {
+        settled = true;
+        return undefined;
+      },
+      (failure: unknown) => {
+        settled = true;
+        return failure;
+      }
+    );
+    try {
+      await allEntered;
+      expect(started).toBe(3);
+      expect(settled).toBe(false);
+    } finally {
+      unblock();
+    }
+    const failure = await admission;
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual(
+      expect.arrayContaining([firstFailure, secondFailure])
+    );
+  });
+
+  it("reads a shared build descriptor once even when multiple roles reference it", async () => {
+    const { root, output, builds } = await fixture();
+    await fs.rm(path.join(output, "userland-builds/release.json"));
+    const directory = preparedWorkspaceTemplatePath(output, templates.personal, "use");
+    const recordPath = path.join(directory, "template.json");
+    const record = JSON.parse(await fs.readFile(recordPath, "utf8"));
+    const previous = builds[1]!.buildKey;
+    builds[1]!.buildKey = builds[0]!.buildKey;
+    record.builds[0].buildKey = builds[0]!.buildKey;
+    await fs.writeFile(recordPath, JSON.stringify(record));
+    await fs.rm(path.join(output, "userland-builds", previous), { recursive: true });
+    const { publishPreparedWorkspaceRelease, validateExistingPreparedWorkspaceRelease } =
+      await import("./preparedWorkspaceRelease.js");
+    await publishPreparedWorkspaceRelease({ appRoot: root, output, templates, layers }, builds);
+    const reads = vi.spyOn(fs, "readFile");
+    await expect(
+      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates, layers })
+    ).resolves.toBe(true);
+    const sharedMetadata = path.join(
+      output,
+      "userland-builds",
+      builds[0]!.buildKey,
+      "metadata.json"
+    );
+    expect(reads.mock.calls.filter(([file]) => file === sharedMetadata)).toHaveLength(1);
   });
 
   it("rejects an existing release when its template pin differs", async () => {
@@ -145,7 +514,12 @@ describe("prepared workspace release admission", () => {
       await import("./preparedWorkspaceRelease.js");
     const changed = { ...templates, base: { ...basePin, commit: "9".repeat(40) } };
     await expect(
-      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates: changed })
+      validateExistingPreparedWorkspaceRelease({
+        appRoot: root,
+        output,
+        templates: changed,
+        layers,
+      })
     ).rejects.toThrow(/does not match/);
   });
 
@@ -158,7 +532,7 @@ describe("prepared workspace release admission", () => {
     const { validateExistingPreparedWorkspaceRelease } =
       await import("./preparedWorkspaceRelease.js");
     await expect(
-      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates })
+      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates, layers })
     ).rejects.toThrow(/does not match/);
   });
 
@@ -171,7 +545,7 @@ describe("prepared workspace release admission", () => {
     const { validateExistingPreparedWorkspaceRelease } =
       await import("./preparedWorkspaceRelease.js");
     await expect(
-      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates })
+      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates, layers })
     ).rejects.toThrow(/metadata does not match/);
   });
 
@@ -198,7 +572,7 @@ describe("prepared workspace release admission", () => {
     const { validateExistingPreparedWorkspaceRelease } =
       await import("./preparedWorkspaceRelease.js");
     await expect(
-      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates })
+      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates, layers })
     ).rejects.toThrow(/no runtime builds for base/);
   });
 
@@ -214,20 +588,80 @@ describe("prepared workspace release admission", () => {
     const { validateExistingPreparedWorkspaceRelease } =
       await import("./preparedWorkspaceRelease.js");
     await expect(
-      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates })
+      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates, layers })
     ).rejects.toThrow(/record digest mismatch/);
   });
 
-  it("rejects a runtime artifact whose sealed bytes have changed", async () => {
+  it("rejects corrupted runtime payloads before publishing a completion marker", async () => {
     const { root, output, builds } = await fixture();
-    await fs.writeFile(
-      path.join(output, "userland-builds", builds[0]!.buildKey, "runtime.js"),
-      "changed"
-    );
-    const { validateExistingPreparedWorkspaceRelease } =
+    await fs.rm(path.join(output, "userland-builds/release.json"));
+    const artifact = path.join(output, "userland-builds", builds[0]!.buildKey, "runtime.js");
+    const bytes = await fs.readFile(artifact);
+    await fs.writeFile(artifact, Buffer.alloc(bytes.length, "X"));
+    const { publishPreparedWorkspaceRelease, validateExistingPreparedWorkspaceRelease } =
       await import("./preparedWorkspaceRelease.js");
     await expect(
-      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates })
+      publishPreparedWorkspaceRelease({ appRoot: root, output, templates, layers }, builds)
     ).rejects.toThrow(/integrity mismatch/);
+    await expect(fs.stat(path.join(output, "userland-builds/release.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(
+      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates, layers })
+    ).rejects.toThrow(/incomplete/);
+  });
+
+  it("proves source blob payloads before publishing a completion marker", async () => {
+    const { root, output, builds } = await fixture();
+    await fs.rm(path.join(output, "userland-builds/release.json"));
+    const directory = preparedWorkspaceTemplatePath(output, basePin, "use");
+    const record = JSON.parse(await fs.readFile(path.join(directory, "template.json"), "utf8"));
+    const blob = record.blobs[0];
+    await fs.writeFile(
+      blobCasPath(path.join(directory, "blobs"), blob.digest),
+      Buffer.alloc(blob.size, "X")
+    );
+    const { publishPreparedWorkspaceRelease } = await import("./preparedWorkspaceRelease.js");
+    await expect(
+      publishPreparedWorkspaceRelease({ appRoot: root, output, templates, layers }, builds)
+    ).rejects.toThrow(/blob .*integrity/);
+    await expect(fs.stat(path.join(output, "userland-builds/release.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("proves compressed executable inventories before publishing a completion marker", async () => {
+    const { root, output, builds } = await fixture();
+    await fs.rm(path.join(output, "userland-builds/release.json"));
+    await fs.writeFile(
+      path.join(output, "userland-builds", builds[0]!.buildKey, "executable-modules.json.gz"),
+      gzipSync(Buffer.from("{}"))
+    );
+    const { publishPreparedWorkspaceRelease } = await import("./preparedWorkspaceRelease.js");
+    await expect(
+      publishPreparedWorkspaceRelease({ appRoot: root, output, templates, layers }, builds)
+    ).rejects.toThrow(/Invalid executable module inventory/);
+    await expect(fs.stat(path.join(output, "userland-builds/release.json"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
+  it("still rejects missing payloads and noncanonical artifact paths during descriptor admission", async () => {
+    const { root, output, builds } = await fixture();
+    const { validateExistingPreparedWorkspaceRelease } =
+      await import("./preparedWorkspaceRelease.js");
+    const directory = path.join(output, "userland-builds", builds[0]!.buildKey);
+    const bytes = await fs.readFile(path.join(directory, "runtime.js"));
+    await fs.rm(path.join(directory, "runtime.js"));
+    await expect(
+      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates, layers })
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await fs.writeFile(path.join(directory, "runtime.js"), bytes);
+    const artifacts = JSON.parse(await fs.readFile(path.join(directory, "artifacts.json"), "utf8"));
+    artifacts[0].path = "../escaped.js";
+    await fs.writeFile(path.join(directory, "artifacts.json"), JSON.stringify(artifacts));
+    await expect(
+      validateExistingPreparedWorkspaceRelease({ appRoot: root, output, templates, layers })
+    ).rejects.toThrow(/Invalid release artifact path/);
   });
 });

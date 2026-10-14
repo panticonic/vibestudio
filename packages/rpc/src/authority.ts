@@ -562,6 +562,10 @@ export interface AcquisitionInfo {
     | "template.suggest";
   renderedAction: string;
   pending: boolean;
+  /** The canonical acquisition joins this existing unit review without a new prompt. */
+  existingReview?: { approvalId: string; title: string };
+  /** Canonical denial of this exact invocation; it cannot start another ask. */
+  denied?: true;
   /** The host has minted an exact invocation grant; the receiver may retry
    * authorization inline without entering the human-decision rendezvous. */
   preauthorized?: true;

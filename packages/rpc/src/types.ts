@@ -7,6 +7,7 @@ import type { WebsiteMethodPolicy } from "./authority.js";
  */
 
 import type { DecodedFramedStream } from "./protocol/streamCodec.js";
+import type { RecoveryKind } from "./protocol/recoveryCoordinator.js";
 export type { DecodedFramedStream };
 
 /**
@@ -660,6 +661,13 @@ export interface RpcClient extends RpcCaller {
   status(): RpcConnectionStatus;
   ready(): Promise<void>;
   onStatusChange(handler: (status: RpcConnectionStatus) => void): () => void;
+  /**
+   * Observe a completed physical/server transport generation recovery. The
+   * client first applies its own pending-call and exposure recovery policy,
+   * then notifies isolated observers in registration order. Returned promises
+   * are observed for failure without delaying transport recovery.
+   */
+  onRecovery(handler: (kind: RecoveryKind) => void | Promise<void>): () => void;
 }
 
 // =============================================================================

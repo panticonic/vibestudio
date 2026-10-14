@@ -657,7 +657,12 @@ describe("DerivedCacheCoordinator", () => {
   it("never accounts for or reclaims its own internal directories", async () => {
     const root = cacheRoot();
     put(root, "entry", 64 * 1024);
-    for (const internal of [".trash", "staging.tmp.abc", "sweep.gc.abc"]) {
+    for (const internal of [
+      ".trash",
+      "staging.tmp.abc",
+      "sweep.gc.abc",
+      "entry.publishing.legacy",
+    ]) {
       put(root, internal, 64 * 1024);
     }
     const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
@@ -667,7 +672,13 @@ describe("DerivedCacheCoordinator", () => {
       await coordinator.prune(root, { targetBytes: 0, freeFloorBytes: 0 });
 
       expect(fs.existsSync(path.join(root, "entry"))).toBe(false);
-      for (const internal of [".trash", "staging.tmp.abc", "sweep.gc.abc", ".storage"]) {
+      for (const internal of [
+        ".trash",
+        "staging.tmp.abc",
+        "sweep.gc.abc",
+        "entry.publishing.legacy",
+        ".storage",
+      ]) {
         expect(fs.existsSync(path.join(root, internal))).toBe(true);
       }
     } finally {
@@ -698,6 +709,32 @@ describe("DerivedCacheCoordinator", () => {
         database.close();
       }
     } finally {
+      coordinator.close();
+    }
+  });
+
+  it("treats an entry retired during recursive measurement as absent", async () => {
+    const root = cacheRoot();
+    const directory = path.join(root, "retired-during-scan");
+    put(root, "retired-during-scan", 64 * 1024);
+    const coordinator = new DerivedCacheCoordinator(derivedCacheDatabasePath(root));
+    const discovered = await fs.promises.readdir(root, { withFileTypes: true });
+    const readdir = vi
+      .spyOn(fs.promises, "readdir")
+      // Vitest normalizes this overloaded API to its Buffer-returning overload;
+      // the runtime call is the string-path/Dirent variant captured above.
+      .mockResolvedValueOnce(discovered as never)
+      .mockImplementationOnce(async () => {
+        fs.rmSync(directory, { recursive: true, force: true });
+        throw Object.assign(new Error("entry retired"), { code: "ENOENT" });
+      });
+    try {
+      const status = await coordinator.status(root);
+
+      expect(status.entries).toBe(0);
+      expect(status.bytes).toBe(0);
+    } finally {
+      readdir.mockRestore();
       coordinator.close();
     }
   });

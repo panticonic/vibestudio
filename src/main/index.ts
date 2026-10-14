@@ -246,6 +246,7 @@ import { recordMainProcessError } from "./mainProcessErrorLedger.js";
 import {
   clearPanelInitializationFailure,
   recordPanelInitializationFailure,
+  readPanelInitializationFailure,
 } from "./panelInitializationFailure.js";
 
 // Native ownership receipts resolve their installed observer from this
@@ -1461,8 +1462,7 @@ type ElectronHostTargetSyncResult =
   | "adopted"
   | "blocked-by-approval"
   | "preparing"
-  | "waiting-for-change"
-  | "retry";
+  | "waiting-for-change";
 
 function rememberElectronHostLaunchStatus(
   status: string,
@@ -1486,6 +1486,11 @@ function rememberElectronHostLaunchStatus(
 async function syncElectronHostTarget(
   serverClient: Pick<ServerClient, "call">
 ): Promise<ElectronHostTargetSyncResult> {
+  if (readPanelInitializationFailure()?.phase === "host-launch" && !appliedElectronHostTargetKey) {
+    bootstrapStartupError = null;
+    clearPanelInitializationFailure("host-launch");
+    pushBootstrapConnectionState();
+  }
   try {
     const result = await new HostLaunchClient((service, method, args) =>
       serverClient.call(service, method, args)
@@ -1528,7 +1533,19 @@ async function syncElectronHostTarget(
         error instanceof Error ? error.message : String(error)
       }`
     );
-    return "retry";
+    if (!appliedElectronHostTargetKey) {
+      bootstrapWorkspaceRpcReady = false;
+      bootstrapStartupError = {
+        message: "Could not prepare the desktop app",
+        detail: "Review the error details, then retry startup or choose another workspace.",
+        diagnostics: formatUnknownError(error),
+      };
+      pushBootstrapConnectionState();
+    }
+    // A failed build/permission resolution is a terminal attempt. New app,
+    // permission, or connection lifecycle events may request another attempt;
+    // polling the same failure hides it behind an endless startup spinner.
+    return "waiting-for-change";
   }
 }
 
@@ -1538,7 +1555,7 @@ function startElectronHostTargetLaunchLoop(serverClient: Pick<ServerClient, "cal
   electronHostLaunchLastStatusKey = null;
   electronHostTargetSyncLoop = new AsyncStateConvergenceLoop(
     () => syncElectronHostTarget(serverClient),
-    (result) => result === "preparing" || result === "retry",
+    (result) => result === "preparing",
     1_000
   );
   electronHostTargetSyncLoop.start();
@@ -2520,15 +2537,16 @@ app.on("ready", async () => {
           log.warn(`[development] client stop failed: ${formatUnknownError(error)}`);
         });
       });
-      await currentHostDevelopmentExecutor.start().catch((error: unknown) => {
-        log.warn(`[development] current-device executor unavailable: ${formatUnknownError(error)}`);
-        currentHostDevelopmentExecutor = null;
-      });
       const developmentLaunchRequest = process.env["VIBESTUDIO_DEVELOPMENT_LAUNCH_REQUEST"];
-      if (developmentLaunchRequest) {
-        await serverClientRef.call("developmentClientExecutor", "attest", [
-          { requestId: developmentLaunchRequest },
-        ]);
+      // An executor-only client and an attested diagnostic launch are actual
+      // consumers of registration. Ordinary desktop presentation is not.
+      if (IS_DEVELOPMENT_CLIENT_EXECUTOR || developmentLaunchRequest) {
+        await currentHostDevelopmentExecutor.start();
+        if (developmentLaunchRequest) {
+          await serverClientRef.call("developmentClientExecutor", "attest", [
+            { requestId: developmentLaunchRequest },
+          ]);
+        }
       }
     }
     workspaceId = serverSession.workspaceId;
@@ -2883,6 +2901,12 @@ app.on("ready", async () => {
     );
 
     deferredStartupWork = () => {
+      // Hosted adapter readiness is not a paint fence. This diagnostic service
+      // still uses asynchronous, bounded file reads so it cannot block the
+      // renderer's subsequent layout/IPC; its lifetime remains shutdown-owned.
+      void currentHostDevelopmentExecutor?.start().catch((error: unknown) => {
+        log.warn(`[development] current-device executor unavailable: ${formatUnknownError(error)}`);
+      });
       releaseUpdateController?.start();
       // These are useful background services, but neither belongs on the path
       // to the first usable workspace frame.

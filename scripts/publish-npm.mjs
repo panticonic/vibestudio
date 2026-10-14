@@ -12,6 +12,7 @@ import { formatRpcFailure } from "@vibestudio/rpc";
 import { tsImport } from "tsx/esm/api";
 import { runWithOwnedCleanup } from "./lib/owned-cleanup.mjs";
 import { spawnResultFailure } from "./lib/spawn-result-failure.mjs";
+import { createNpmAuth, npmTokenFilePath } from "./lib/npm-auth.mjs";
 import {
   packNpmPackageCandidate,
   readVerifiedNpmPackageCandidate,
@@ -30,9 +31,7 @@ const { createDevelopmentClientLifetime } = await tsImport(
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const rootPkg = readJson(path.join(repoRoot, "package.json"));
 let announcedTokenEnv = false;
-let tokenUserConfigPath = null;
-let tokenUserConfigDirectory = null;
-let resolvedAuthToken = undefined;
+let npmAuth;
 let candidateScratchDirectory = null;
 const serverPackage = {
   name: "@panticonic/vibestudio-server",
@@ -56,9 +55,7 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
 export { spawnResultFailure };
 
 function redactAuthToken(value) {
-  const token = resolvedAuthToken?.value;
-  const text = String(value);
-  return token ? text.split(token).join("[redacted]") : text;
+  return npmAuth ? npmAuth.redact(value) : String(value);
 }
 
 function formatSafeRpcFailure(error) {
@@ -174,10 +171,13 @@ async function main() {
       publishArgs({ packagePath: candidate.tarballPath, dryRun: false, tag: options.tag }),
       {
         cwd: repoRoot,
-        stdio: "inherit",
+        stdio: ["inherit", "pipe", "pipe"],
+        encoding: "utf8",
         env: npmEnv(),
       }
     );
+    if (result.stdout) process.stdout.write(redactAuthToken(result.stdout));
+    if (result.stderr) process.stderr.write(redactAuthToken(result.stderr));
     const failure = spawnResultFailure(result, "npm publish");
     if (failure) {
       throw new Error(
@@ -257,7 +257,7 @@ function currentSourceSha() {
 
 function cleanupPublisherScratch() {
   const failures = [];
-  for (const ownedPath of [candidateScratchDirectory, tokenUserConfigDirectory]) {
+  for (const ownedPath of [candidateScratchDirectory]) {
     if (!ownedPath) continue;
     try {
       fs.rmSync(ownedPath, { recursive: true, force: true });
@@ -266,8 +266,11 @@ function cleanupPublisherScratch() {
     }
   }
   candidateScratchDirectory = null;
-  tokenUserConfigDirectory = null;
-  tokenUserConfigPath = null;
+  try {
+    npmAuth?.close();
+  } catch (error) {
+    failures.push(error);
+  }
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) {
     throw new AggregateError(failures, "Could not retire npm publisher scratch paths", {
@@ -303,9 +306,10 @@ Auth:
 `);
 }
 
-function publishArgs({ packagePath, dryRun, tag }) {
+export function publishArgs({ packagePath, dryRun, tag }) {
   const args = ["publish", packagePath, "--access", "public", "--tag", tag];
   if (dryRun) args.push("--dry-run", "--silent");
+  else args.push("--loglevel", "error");
   return args;
 }
 
@@ -487,9 +491,12 @@ function run(command, args, options) {
   console.log(`\n[publish-npm] $ ${command} ${args.join(" ")}`);
   const result = spawnSync(command, args, {
     cwd: options.cwd,
-    stdio: "inherit",
+    stdio: command === "npm" ? ["inherit", "pipe", "pipe"] : "inherit",
+    encoding: "utf8",
     env: npmEnv(),
   });
+  if (result.stdout) process.stdout.write(redactAuthToken(result.stdout));
+  if (result.stderr) process.stderr.write(redactAuthToken(result.stderr));
   const failure = spawnResultFailure(result, `${command} ${args.join(" ")}`);
   if (failure) throw failure;
 }
@@ -503,102 +510,21 @@ function capture(command, args, options) {
 }
 
 function npmEnv() {
-  const env = { ...process.env };
-  const token = getAuthToken();
-  if (token) {
-    env.NODE_AUTH_TOKEN = token.value;
-    const userConfig = tokenUserConfig();
-    env.NPM_CONFIG_USERCONFIG = userConfig;
-    env.npm_config_userconfig = userConfig;
-    if (!announcedTokenEnv) {
-      console.log(`[publish-npm] Using npm publish token from ${token.source}.`);
-      announcedTokenEnv = true;
-    }
+  const auth = getNpmAuth();
+  if (auth.token && !announcedTokenEnv) {
+    console.log(`[publish-npm] Using npm publish token from ${auth.token.source}.`);
+    announcedTokenEnv = true;
   }
-  return env;
+  return auth.environment();
+}
+
+function getNpmAuth() {
+  npmAuth ??= createNpmAuth();
+  return npmAuth;
 }
 
 function getAuthToken() {
-  if (resolvedAuthToken !== undefined) return resolvedAuthToken;
-
-  const envToken = process.env.NODE_AUTH_TOKEN || process.env.NPM_TOKEN;
-  if (envToken?.trim()) {
-    resolvedAuthToken = {
-      source: process.env.NODE_AUTH_TOKEN ? "NODE_AUTH_TOKEN" : "NPM_TOKEN",
-      value: envToken.trim(),
-    };
-    return resolvedAuthToken;
-  }
-
-  const tokenFile = npmTokenFilePath();
-  if (!fs.existsSync(tokenFile)) {
-    resolvedAuthToken = null;
-    return resolvedAuthToken;
-  }
-
-  secureTokenFileMode(tokenFile);
-  const value = parseStoredToken(fs.readFileSync(tokenFile, "utf8"));
-  if (!value) {
-    throw new Error(`npm token file is empty: ${tokenFile}`);
-  }
-
-  resolvedAuthToken = { source: tokenFile, value };
-  return resolvedAuthToken;
-}
-
-function npmTokenFilePath() {
-  if (process.env.VIBESTUDIO_NPM_TOKEN_FILE) {
-    return path.resolve(expandHome(process.env.VIBESTUDIO_NPM_TOKEN_FILE));
-  }
-  const configHome = process.env.XDG_CONFIG_HOME
-    ? path.resolve(expandHome(process.env.XDG_CONFIG_HOME))
-    : path.join(os.homedir(), ".config");
-  return path.join(configHome, "vibestudio", "npm-publish-token");
-}
-
-function expandHome(value) {
-  if (value === "~") return os.homedir();
-  if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
-  return value;
-}
-
-function parseStoredToken(contents) {
-  const line =
-    contents
-      .split(/\r?\n/)
-      .map((entry) => entry.trim())
-      .find((entry) => entry && !entry.startsWith("#")) ?? "";
-  const match = /^(?:NPM_TOKEN|NODE_AUTH_TOKEN)\s*=\s*(.*)$/.exec(line);
-  const value = match ? match[1].trim() : line;
-  return value.replace(/^['"]|['"]$/g, "");
-}
-
-function secureTokenFileMode(file) {
-  if (process.platform === "win32") return;
-  const stat = fs.statSync(file);
-  if (!stat.isFile()) throw new Error(`npm token path is not a file: ${file}`);
-  if ((stat.mode & 0o077) === 0) return;
-
-  fs.chmodSync(file, 0o600);
-}
-
-function tokenUserConfig() {
-  if (tokenUserConfigPath) return tokenUserConfigPath;
-
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-auth-"));
-  tokenUserConfigDirectory = dir;
-  tokenUserConfigPath = path.join(dir, ".npmrc");
-  fs.writeFileSync(
-    tokenUserConfigPath,
-    [
-      "registry=https://registry.npmjs.org/",
-      "//registry.npmjs.org/:_authToken=${NODE_AUTH_TOKEN}",
-      "",
-    ].join("\n"),
-    { mode: 0o600 }
-  );
-
-  return tokenUserConfigPath;
+  return getNpmAuth().token;
 }
 
 function readJson(file) {

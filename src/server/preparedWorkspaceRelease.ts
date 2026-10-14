@@ -1,5 +1,5 @@
-import * as fs from "node:fs/promises";
-import { createReadStream } from "node:fs";
+import fs from "node:fs/promises";
+import fsNative from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
@@ -13,10 +13,17 @@ import {
 import {
   preparedWorkspaceTemplateSchema,
   preparedWorkspaceTemplatePath,
+  validatePreparedCompilationInput,
 } from "./preparedWorkspaceTemplate.js";
 import { blobCasPath } from "./storage/blobCas.js";
-import { verifyReleaseBuildDirectory } from "../../scripts/prebuild-release-userland.mjs";
+import {
+  readReleaseBuildDescriptor,
+  assertExactReleaseBuildFiles,
+  verifyReleaseBuildDirectory,
+} from "../../scripts/prebuild-release-userland.mjs";
 import { readHostBuildFingerprint, resolveRequiredHostArtifactRoot } from "./appRoot.js";
+import { forEachOwnedConcurrent } from "../../scripts/lib/owned-concurrency.mjs";
+import { runWithOwnedCleanup } from "../../scripts/lib/owned-cleanup.mjs";
 
 const digestSchema = z.string().regex(/^[0-9a-f]{64}$/u);
 const hostBuildFingerprintSchema = z
@@ -38,8 +45,8 @@ const runtimeBuildSchema = z
 
 export const preparedWorkspaceReleaseManifestSchema = z
   .object({
-    format: z.literal("vibestudio-workspace-runtime-release/2"),
-    version: z.literal(2),
+    format: z.literal("vibestudio-workspace-runtime-release/3"),
+    version: z.literal(3),
     platform: z.string().min(1),
     arch: z.string().min(1),
     appDependencyFingerprint: digestSchema,
@@ -51,6 +58,10 @@ export const preparedWorkspaceReleaseManifestSchema = z
       })
       .strict(),
     templates: z.record(z.enum(["base", "personal", "system"]), WorkspaceTemplatePinSchema),
+    layers: z.record(
+      z.enum(["base", "personal", "system"]),
+      z.array(WorkspaceTemplatePinSchema).min(1)
+    ),
     preparedTemplates: z
       .array(
         z
@@ -74,6 +85,9 @@ export interface PreparedWorkspaceReleaseInput {
   readonly appRoot: string;
   readonly output: string;
   readonly templates: Readonly<Record<"base" | "personal" | "system", WorkspaceTemplatePin>>;
+  readonly layers: Readonly<
+    Record<"base" | "personal" | "system", readonly WorkspaceTemplatePin[]>
+  >;
 }
 
 export async function workspaceReleaseIdentity(appRoot: string) {
@@ -82,11 +96,17 @@ export async function workspaceReleaseIdentity(appRoot: string) {
     readHostBuildFingerprint(resolveRequiredHostArtifactRoot())
   );
   return {
-    appDependencyFingerprint: rootFingerprint.value,
-    hostBuild,
-    compilerProtocol: buildCompilerProtocolIdentity(),
+    identity: {
+      appDependencyFingerprint: rootFingerprint.value,
+      hostBuild,
+      compilerProtocol: buildCompilerProtocolIdentity(),
+    },
+    rootFingerprint,
   };
 }
+
+export type WorkspaceReleaseOperation = Awaited<ReturnType<typeof workspaceReleaseIdentity>>;
+export type WorkspaceReleaseIdentity = WorkspaceReleaseOperation["identity"];
 
 export function workspaceReleaseManifestPath(output: string): string {
   return path.join(output, "userland-builds/release.json");
@@ -95,8 +115,9 @@ export function workspaceReleaseManifestPath(output: string): string {
 export async function createPreparedWorkspaceReleaseManifest(
   input: PreparedWorkspaceReleaseInput,
   builds: readonly PreparedWorkspaceReleaseBuild[],
-  identity?: Awaited<ReturnType<typeof workspaceReleaseIdentity>>
+  identity?: WorkspaceReleaseIdentity
 ): Promise<PreparedWorkspaceReleaseManifest> {
+  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot)).identity;
   const preparedTemplates: PreparedWorkspaceReleaseManifest["preparedTemplates"] = [];
   for (const workspace of ["base", "personal", "system"] as const) {
     const directory = preparedWorkspaceTemplatePath(
@@ -106,31 +127,37 @@ export async function createPreparedWorkspaceReleaseManifest(
     );
     const recordPath = path.join(directory, "template.json");
     const recordBytes = await fs.readFile(recordPath);
+    const record = preparedWorkspaceTemplateSchema.parse(JSON.parse(recordBytes.toString("utf8")));
+    validatePreparedCompilationInput(record.compilationInput, resolvedIdentity);
     preparedTemplates.push({
       workspace,
       recordDigest: sha256(recordBytes),
     });
   }
-  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot));
   return preparedWorkspaceReleaseManifestSchema.parse({
-    format: "vibestudio-workspace-runtime-release/2",
-    version: 2,
+    format: "vibestudio-workspace-runtime-release/3",
+    version: 3,
     platform: process.platform,
     arch: process.arch,
     ...resolvedIdentity,
     templates: input.templates,
+    layers: input.layers,
     preparedTemplates,
     builds,
   });
 }
 
 /**
- * Reuse only a completely sealed release. A missing manifest in a genuinely
+ * Admit only a completed release from its trusted immutable installation.
+ * Publication proves payloads before sealing this record; reuse checks identity,
+ * provenance and the complete descriptor inventory without re-reading payloads.
+ * A missing manifest in a genuinely
  * empty artifact area means this call owns first production; any partial
  * artifact area or any mismatch is an error and must not fall through to build.
  */
 export async function validateExistingPreparedWorkspaceRelease(
-  input: PreparedWorkspaceReleaseInput
+  input: PreparedWorkspaceReleaseInput,
+  identity?: WorkspaceReleaseIdentity
 ): Promise<boolean> {
   const outputStat = await lstatOrNull(input.output);
   if (!outputStat) return false;
@@ -169,14 +196,29 @@ export async function validateExistingPreparedWorkspaceRelease(
   } catch (error) {
     throw new Error("Prepared workspace release manifest is invalid", { cause: error });
   }
-  const identity = await workspaceReleaseIdentity(input.appRoot);
+  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot)).identity;
+  const inventory = await inspectPreparedWorkspaceRelease(input, manifest, resolvedIdentity);
+  await verifyExactDirectoryEntries(
+    path.join(input.output, "userland-builds"),
+    new Set(["release.json", ...inventory.artifactKeys])
+  );
+  return true;
+}
+
+/** One descriptor/provenance boundary shared by admission and publication. */
+async function inspectPreparedWorkspaceRelease(
+  input: PreparedWorkspaceReleaseInput,
+  manifest: PreparedWorkspaceReleaseManifest,
+  resolvedIdentity: WorkspaceReleaseIdentity
+) {
   if (
     manifest.platform !== process.platform ||
     manifest.arch !== process.arch ||
-    manifest.appDependencyFingerprint !== identity.appDependencyFingerprint ||
-    canonicalJson(manifest.hostBuild) !== canonicalJson(identity.hostBuild) ||
-    canonicalJson(manifest.compilerProtocol) !== canonicalJson(identity.compilerProtocol) ||
-    canonicalJson(manifest.templates) !== canonicalJson(input.templates)
+    manifest.appDependencyFingerprint !== resolvedIdentity.appDependencyFingerprint ||
+    canonicalJson(manifest.hostBuild) !== canonicalJson(resolvedIdentity.hostBuild) ||
+    canonicalJson(manifest.compilerProtocol) !== canonicalJson(resolvedIdentity.compilerProtocol) ||
+    canonicalJson(manifest.templates) !== canonicalJson(input.templates) ||
+    canonicalJson(manifest.layers) !== canonicalJson(input.layers)
   ) {
     throw new Error(
       "Prepared workspace release does not match the current host and template inputs"
@@ -201,6 +243,16 @@ export async function validateExistingPreparedWorkspaceRelease(
   }
 
   const artifactKeys = new Set<string>();
+  const preparedTemplates: Array<{
+    directory: string;
+    record: z.infer<typeof preparedWorkspaceTemplateSchema>;
+  }> = [];
+  const descriptors = new Map<string, Awaited<ReturnType<typeof readReleaseBuildDescriptor>>>();
+  const provenance: Array<{
+    workspace: "base" | "personal" | "system";
+    build: PreparedWorkspaceReleaseBuild;
+    effectiveVersion: string;
+  }> = [];
   for (const workspace of ["base", "personal", "system"] as const) {
     const pin = input.templates[workspace];
     const directory = preparedWorkspaceTemplatePath(input.output, pin, "use");
@@ -210,6 +262,7 @@ export async function validateExistingPreparedWorkspaceRelease(
       throw new Error(`Prepared ${workspace} template record digest mismatch`);
     }
     const record = preparedWorkspaceTemplateSchema.parse(JSON.parse(recordBytes.toString("utf8")));
+    validatePreparedCompilationInput(record.compilationInput, resolvedIdentity);
     const roleBuildInventory = buildsByRole.get(workspace);
     if (!roleBuildInventory) throw new Error(`Prepared workspace release is missing ${workspace}`);
     const roleBuilds = buildsByRole
@@ -223,6 +276,7 @@ export async function validateExistingPreparedWorkspaceRelease(
     if (
       record.purpose !== "use" ||
       canonicalJson(record.pin) !== canonicalJson(pin) ||
+      canonicalJson(record.layers) !== canonicalJson(input.layers[workspace]) ||
       new Set(record.builds.map((build) => build.source)).size !== record.builds.length ||
       new Set(roleBuildInventory.map((build) => build.source)).size !== roleBuildInventory.length ||
       recordBuilds.length !== roleBuilds.length ||
@@ -230,7 +284,8 @@ export async function validateExistingPreparedWorkspaceRelease(
     ) {
       throw new Error(`Prepared ${workspace} template record does not match its release inventory`);
     }
-    await verifyPreparedTemplateFiles(directory, record);
+    await inspectPreparedTemplateFiles(directory, record);
+    preparedTemplates.push({ directory, record });
     if (roleBuildInventory.length === 0) {
       throw new Error(`Prepared workspace release has no runtime builds for ${workspace}`);
     }
@@ -240,55 +295,85 @@ export async function validateExistingPreparedWorkspaceRelease(
       if (!templateBuild) {
         throw new Error(`Prepared ${workspace} runtime record is missing ${build.source}`);
       }
-      const buildDirectory = path.join(input.output, "userland-builds", build.buildKey);
-      const metadata = JSON.parse(
-        await fs.readFile(path.join(buildDirectory, "metadata.json"), "utf8")
-      );
-      if (
-        metadata.buildKey !== build.buildKey ||
-        metadata.sourcePath !== build.source ||
-        metadata.ev !== templateBuild.effectiveVersion ||
-        metadata.builtAt !== build.builtAt
-      ) {
-        throw new Error(`Prepared ${workspace} runtime metadata does not match its source record`);
-      }
+      provenance.push({ workspace, build, effectiveVersion: templateBuild.effectiveVersion });
     }
   }
 
-  for (const buildKey of artifactKeys) {
-    await verifyReleaseBuildDirectory(
-      path.join(input.output, "userland-builds", buildKey),
-      buildKey,
-      true
-    );
+  // Role inventories establish the exact unique descriptor inputs. Independent
+  // runtime headers, presence checks and directory censuses then share one
+  // four-way budget, joining every admitted failure before provenance checking.
+  await forEachOwnedConcurrent([...artifactKeys], 4, async (buildKey) => {
+    const directory = path.join(input.output, "userland-builds", buildKey);
+    const descriptor = await readReleaseBuildDescriptor(directory, buildKey);
+    await assertExactReleaseBuildFiles(directory, descriptor.files);
+    descriptors.set(buildKey, descriptor);
+  });
+  for (const { workspace, build, effectiveVersion } of provenance) {
+    const metadata = descriptors.get(build.buildKey)!.metadata;
+    if (
+      metadata.buildKey !== build.buildKey ||
+      metadata.sourcePath !== build.source ||
+      metadata.ev !== effectiveVersion ||
+      metadata.builtAt !== build.builtAt
+    )
+      throw new Error(`Prepared ${workspace} runtime metadata does not match its source record`);
   }
-  await verifyExactDirectoryEntries(
-    path.join(input.output, "userland-builds"),
-    new Set(["release.json", ...artifactKeys])
-  );
-  return true;
+  return { artifactKeys, preparedTemplates };
 }
 
 export async function publishPreparedWorkspaceRelease(
   input: PreparedWorkspaceReleaseInput,
   builds: readonly PreparedWorkspaceReleaseBuild[],
-  identity?: Awaited<ReturnType<typeof workspaceReleaseIdentity>>
+  identity?: WorkspaceReleaseIdentity
 ): Promise<void> {
   const manifestPath = workspaceReleaseManifestPath(input.output);
   const temporaryPath = `${manifestPath}.publishing`;
+  if (await lstatOrNull(manifestPath))
+    throw new Error("A completed immutable workspace release cannot be republished");
   await fs.mkdir(path.dirname(manifestPath), { recursive: true });
-  const manifest = await createPreparedWorkspaceReleaseManifest(input, builds, identity);
+  const resolvedIdentity = identity ?? (await workspaceReleaseIdentity(input.appRoot)).identity;
+  const manifest = await createPreparedWorkspaceReleaseManifest(input, builds, resolvedIdentity);
+  const inventory = await inspectPreparedWorkspaceRelease(input, manifest, resolvedIdentity);
+  await verifyExactDirectoryEntries(
+    path.join(input.output, "userland-builds"),
+    inventory.artifactKeys
+  );
+  for (const { directory, record } of inventory.preparedTemplates) {
+    await provePreparedTemplateFiles(directory, record);
+  }
+  await forEachOwnedConcurrent([...inventory.artifactKeys], 4, async (buildKey) => {
+    await verifyReleaseBuildDirectory(
+      path.join(input.output, "userland-builds", buildKey),
+      buildKey,
+      true
+    );
+  });
   const bytes = `${JSON.stringify(manifest)}\n`;
-  await fs.writeFile(temporaryPath, bytes, { flag: "wx", mode: 0o600 });
-  await fs.rename(temporaryPath, manifestPath);
+  let ownsTemporary = false;
+  await runWithOwnedCleanup(
+    async () => {
+      const handle = await fs.open(temporaryPath, "wx", 0o600);
+      ownsTemporary = true;
+      await runWithOwnedCleanup(
+        () => handle.writeFile(bytes),
+        () => handle.close(),
+        "Release manifest write and close failed"
+      );
+      await fs.rename(temporaryPath, manifestPath);
+    },
+    async () => {
+      if (ownsTemporary) await fs.rm(temporaryPath, { force: true });
+    },
+    "Release manifest publication and retirement failed"
+  );
 }
 
-async function verifyPreparedTemplateFiles(
+export async function inspectPreparedTemplateFiles(
   directory: string,
   record: z.infer<typeof preparedWorkspaceTemplateSchema>
 ): Promise<void> {
   const expectedFiles = new Set(["template.json"]);
-  for (const blob of record.blobs) {
+  await forEachOwnedConcurrent(record.blobs, 8, async (blob) => {
     const relative = path.relative(
       directory,
       blobCasPath(path.join(directory, "blobs"), blob.digest)
@@ -299,11 +384,9 @@ async function verifyPreparedTemplateFiles(
     if (!stat.isFile() || stat.isSymbolicLink()) {
       throw new Error(`Prepared template blob ${blob.digest} is not a regular file`);
     }
-    const actual = await streamedFileDigest(blobPath);
-    if (actual.size !== blob.size || actual.digest !== blob.digest) {
-      throw new Error(`Prepared template blob ${blob.digest} failed integrity verification`);
-    }
-  }
+    if (stat.size !== blob.size)
+      throw new Error(`Prepared template blob ${blob.digest} has a different sealed length`);
+  });
   const actualFiles = new Set<string>();
   await collectRegularFiles(directory, directory, actualFiles);
   if (
@@ -312,6 +395,20 @@ async function verifyPreparedTemplateFiles(
   ) {
     throw new Error("Prepared template directory does not match its sealed blob closure");
   }
+}
+
+/** Payload integrity belongs to the publisher, not each trusted cache read. */
+export async function provePreparedTemplateFiles(
+  directory: string,
+  record: z.infer<typeof preparedWorkspaceTemplateSchema>
+): Promise<void> {
+  await forEachOwnedConcurrent(record.blobs, 8, async (blob) => {
+    const actual = await streamedFileDigest(
+      blobCasPath(path.join(directory, "blobs"), blob.digest)
+    );
+    if (actual.size !== blob.size || actual.digest !== blob.digest)
+      throw new Error(`Prepared template blob ${blob.digest} failed integrity verification`);
+  });
 }
 
 async function collectRegularFiles(
@@ -366,7 +463,7 @@ function sha256(bytes: Uint8Array): string {
 async function streamedFileDigest(filePath: string): Promise<{ digest: string; size: number }> {
   const hash = createHash("sha256");
   let size = 0;
-  for await (const chunk of createReadStream(filePath)) {
+  for await (const chunk of fsNative.createReadStream(filePath)) {
     size += chunk.byteLength;
     hash.update(chunk);
   }

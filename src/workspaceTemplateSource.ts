@@ -2,17 +2,19 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import YAML from "yaml";
-import { sha256Hex } from "@vibestudio/content-addressing";
-import { GitClient, readExactGitSnapshot } from "@vibestudio/git";
+import { GitClient, readExactGitSnapshotIndex } from "@vibestudio/git";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { templateRepositories } from "@vibestudio/workspace/templateManifest";
 import { validateRootTemplateSource } from "@vibestudio/workspace/rootTemplate";
-import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
+import {
+  normalizeTemplateGitUrl,
+  TEMPLATE_SOURCE_MANIFEST_PATH,
+} from "@vibestudio/workspace/templateCoordinates";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { WorkspaceSource } from "@vibestudio/workspace/workspaceSources";
 import { checkpointWorkspaceSource } from "./workspaceTemplateCheckpoint.js";
-import { enumerateRootTemplateRepositories } from "./server/workspaceRootTemplateBootstrap.js";
+import { discoverRepos } from "@vibestudio/shared/runtime/repoDiscovery";
 
 export interface WorkspaceSourceInspection extends WorkspaceSource {
   sourceCheckout: string;
@@ -128,24 +130,21 @@ export async function inspectWorkspaceSources(input: {
     if (!commit || !branch) {
       throw new Error(`Development template checkpoint ${checkpoint.checkout} has no named commit`);
     }
-    const snapshot = await readExactGitSnapshot({
+    const snapshot = await readExactGitSnapshotIndex({
       git: gitClient,
       dir: checkpoint.checkout,
       commit,
       label: `development template ${url}`,
-      sink: {
-        async put(bytes) {
-          return { digest: sha256Hex(bytes), size: bytes.byteLength };
-        },
-      },
       reservedPaths: "exclude",
     });
+    const manifestBytes = await snapshot.readFile(TEMPLATE_SOURCE_MANIFEST_PATH);
+    const snapshotPaths = snapshot.files.map((file) => file.path);
     const manifest = validateRootTemplateSource({
       workspaceId: "development-template",
       expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
-      readFile: snapshot.readFile,
-      snapshotPaths: snapshot.files.map((file) => file.path),
-      repositories: enumerateRootTemplateRepositories(snapshot),
+      readFile: (filePath) => (filePath === TEMPLATE_SOURCE_MANIFEST_PATH ? manifestBytes : null),
+      snapshotPaths,
+      repositories: discoverRepos(snapshotPaths),
     });
     const pin = WorkspaceTemplatePinSchema.parse({
       url,
@@ -156,6 +155,7 @@ export async function inspectWorkspaceSources(input: {
       ...checkpoint,
       pin,
       review: {
+        manifestText: new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes!),
         ...(manifest.presentation
           ? {
               presentation: {
@@ -177,8 +177,17 @@ export async function inspectWorkspaceSources(input: {
     while (next < checkouts.length) await inspect(next++);
   });
   const results = await Promise.allSettled(workers);
-  for (const result of results) {
-    if (result.status === "rejected") throw result.reason;
-  }
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : []
+  );
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1)
+    throw new AggregateError(
+      failures,
+      `Workspace source inspections failed:\n${failures.map((error) => (error instanceof Error ? error.message : String(error))).join("\n")}`,
+      {
+        cause: failures[0],
+      }
+    );
   return selections;
 }

@@ -111,7 +111,7 @@ jobs:
         run: pnpm build:infrastructure
 
       - name: Test npm package and publication helpers
-        run: node --test scripts/build-server-npm-package.test.mjs scripts/build-artifact-contracts.test.mjs scripts/publish-npm.test.mjs
+        run: node --test scripts/build-server-npm-package.test.mjs scripts/build-artifact-contracts.test.mjs scripts/lib/npm-package-candidate.test.mjs scripts/publish-npm.test.mjs
 
       - name: Generate pinned template release metadata
         run: pnpm generate:workspace-template-release

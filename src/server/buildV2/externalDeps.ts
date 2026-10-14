@@ -27,6 +27,11 @@ import {
 } from "@vibestudio/shared/derivedCache";
 import { optionalPeerNames, type PackageGraph, type GraphNode } from "./packageGraph.js";
 import { BuildRequestError } from "./diagnostics.js";
+import { dependencyInstallationPolicy } from "./effectiveVersion.js";
+import {
+  prepareDependencyResolution,
+  type PreparedDependencyResolution,
+} from "./preparedDependencyResolution.js";
 import { resolveRequiredHostArtifactRoot } from "../appRoot.js";
 import {
   prepareDependencyContent,
@@ -1207,6 +1212,7 @@ export async function acquireExternalDeps(
 export interface ExternalDependencyEnvironment {
   nodeModulesDir: string;
   nodePaths: string[];
+  dependencyResolution: PreparedDependencyResolution;
   externalDeps: Record<string, string>;
   /**
    * Closure externals nobody in the unit's own closure owns. Installed above
@@ -1296,12 +1302,15 @@ export async function prepareExternalDependencyEnvironment(
   );
   const { closure, dependencyOverrides, dependencyPatches } = requirements;
   const externalDeps = closure.installSet;
-  const hostProjection = resolveHostDependencyProjection(
-    externalDeps,
-    dependencyOverrides,
-    dependencyPatches,
-    appNodeModules
-  );
+  const hostProjection =
+    dependencyInstallationPolicy() === "shared-host"
+      ? resolveHostDependencyProjection(
+          externalDeps,
+          dependencyOverrides,
+          dependencyPatches,
+          appNodeModules
+        )
+      : null;
   const borrowed = hostProjection
     ? null
     : await acquireExternalDeps(externalDeps, dependencyOverrides, {
@@ -1315,11 +1324,20 @@ export async function prepareExternalDependencyEnvironment(
       `Reusing ${Object.keys(externalDeps).length} fingerprinted host dependencies for ${unit.name}`
     );
   }
+  const nodePaths = hostProjection
+    ? hostProjection.nodePaths
+    : [...(borrowed?.nodeModulesDir ? [borrowed.nodeModulesDir] : []), ...appNodeModules];
+  let dependencyResolution: PreparedDependencyResolution;
+  try {
+    dependencyResolution = prepareDependencyResolution(nodePaths, Object.keys(externalDeps));
+  } catch (error) {
+    borrowed?.release();
+    throw error;
+  }
   return {
     nodeModulesDir: hostProjection?.nodeModulesDir ?? borrowed?.nodeModulesDir ?? "",
-    nodePaths: hostProjection
-      ? hostProjection.nodePaths
-      : [...(borrowed?.nodeModulesDir ? [borrowed.nodeModulesDir] : []), ...appNodeModules],
+    nodePaths,
+    dependencyResolution,
     externalDeps,
     providedPeers: closure.providedPeers,
     optionalProvidedPeers: closure.optionalProvidedPeers,
@@ -1618,10 +1636,9 @@ async function ensureDepsInstalledOnce(
         { reason: error.reason, packages }
       );
     }
-    throw new Error(
-      `Failed to install external dependencies: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error }
-    );
+    // The joined installer owns the original failure, including the exact
+    // cancellation reason. Context must not invent a different terminal event.
+    throw error;
   }
 }
 

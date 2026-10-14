@@ -39,6 +39,10 @@ describe("Iroh product E2E entry points", () => {
     expect(desktop).toContain("waitForSystemNewPanel");
     expect(desktop).toContain("createAndWaitForNewPanel");
     expect(desktop).toContain("with Iroh pairing deep link");
+    expect(desktop).toContain("setupOverviewReady");
+    expect(desktop).toContain("!rendered.modelChoiceReady && !rendered.setupOverviewReady");
+    expect(desktop).toContain("Setup status is unavailable.");
+    expect(desktop).toContain("Live setup updates paused:");
   });
 
   it("prepares the source host and exact workspace release before the desktop acceptance budget", () => {

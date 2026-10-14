@@ -300,7 +300,13 @@ export class ServiceContainer {
           return timing;
         }),
       };
-      log.info(`${this.startOrder.length} services ready`);
+      // One finite graph packet per successful readiness boundary. Keep the
+      // complete report on one line for native stdout/profile capture; only
+      // service identities and monotonic timings enter it, never instances,
+      // configuration or RPC definitions.
+      log.info(
+        `${this.startOrder.length} services ready; startupReport=${JSON.stringify(this.startupReport)}`
+      );
     } catch (error) {
       startupAborted = true;
       const thrown = firstError ?? error;

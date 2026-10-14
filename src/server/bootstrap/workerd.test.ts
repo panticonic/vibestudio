@@ -1,4 +1,5 @@
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
+import { schemaProbeEnvironmentForFixture } from "../../../tests/fixtures/schemaProbeEnvironment.js";
 import type { ManagedService } from "@vibestudio/shared/managedService";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import type { BuildSystemV2 } from "../buildV2/index.js";
@@ -53,6 +54,7 @@ describe("workerd bootstrap policy", () => {
     const services: ManagedService[] = [];
     const inert = {};
     wireWorkerdCore({
+      schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-workerd-bootstrap-fixture"),
       container: { registerManaged: (service) => services.push(service) },
       tokenManager: inert as WorkerdBootstrapDeps["tokenManager"],
       workspacePath: "/workspace",
@@ -112,6 +114,7 @@ describe("workerd bootstrap policy", () => {
       singletons: new SingletonRegistry([]),
     } as unknown as WorkerdBootstrapDeps["workspaceDeclarations"];
     wireWorkerdCore({
+      schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-workerd-bootstrap-fixture"),
       container: { registerManaged: (service) => services.push(service) },
       tokenManager: inert as WorkerdBootstrapDeps["tokenManager"],
       workspacePath: "/workspace",
@@ -206,6 +209,7 @@ describe("workerd bootstrap policy", () => {
       }
     );
     wireWorkerdCore({
+      schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-workerd-bootstrap-fixture"),
       container: { registerManaged: (service) => services.push(service) },
       tokenManager: inert as WorkerdBootstrapDeps["tokenManager"],
       workspacePath: "/workspace",

@@ -2,10 +2,13 @@ import { logVerbose } from "@vibestudio/dev-log";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import {
-  acquireExactGitSnapshot,
+  acquireExactGitCheckout,
+  materializeExactGitSnapshot,
+  readExactGitSnapshotIndex,
   readExactGitSnapshot,
   readThroughImmutableGitCheckout,
   type ExactGitSnapshot,
+  type ExactGitSnapshotIndex,
   type GitClient,
   type SnapshotContentSink,
 } from "@vibestudio/git";
@@ -21,6 +24,7 @@ import {
   derivedCacheCoordinator,
   scheduleDerivedCachePrune,
 } from "@vibestudio/shared/derivedCache";
+import { runWithOwnedCleanup } from "../../scripts/lib/owned-cleanup.mjs";
 
 /**
  * Where an exact template checkout is cached.
@@ -41,25 +45,35 @@ function rootTemplateCacheRoot(): string {
   return path.join(getSharedDerivedDataPath(), "root-templates");
 }
 
-async function withRootTemplateLease<T>(
-  pin: { url: string; commit: string },
-  operation: () => Promise<T>
-): Promise<T> {
+function acquireRootTemplateLease(pin: { url: string; commit: string }): () => void {
   const root = rootTemplateCacheRoot();
   const lease = derivedCacheCoordinator(root).acquire(
     root,
     canonicalTemplateNodeId(pin.url, pin.commit)
   );
-  try {
-    return await operation();
-  } finally {
+  let closed = false;
+  return () => {
+    if (closed) return;
     lease.release();
+    closed = true;
     void scheduleDerivedCachePrune(root).catch((error) => {
       console.warn(
         `[rootTemplates] Cache prune failed: ${error instanceof Error ? error.message : String(error)}`
       );
     });
-  }
+  };
+}
+
+async function withRootTemplateLease<T>(
+  pin: { url: string; commit: string },
+  operation: () => Promise<T>
+): Promise<T> {
+  const close = acquireRootTemplateLease(pin);
+  return runWithOwnedCleanup(
+    operation,
+    close,
+    "Root template acquisition and lease retirement failed"
+  );
 }
 
 /**
@@ -67,42 +81,72 @@ async function withRootTemplateLease<T>(
  * A crash may leave a complete published coordinate or a private temporary
  * attempt, never a half-cloned checkout at the coordinate used by retries.
  */
-export function acquireRootTemplateSnapshot(input: {
+export async function acquireRootTemplateSnapshot(input: {
   pin: WorkspaceTemplatePin;
   git: GitClient;
   sink: SnapshotContentSink;
   fs?: typeof fsp;
 }): Promise<ExactGitSnapshot> {
+  const owned = await acquireRootTemplateSnapshotIndex(input);
+  return runWithOwnedCleanup(
+    () =>
+      materializeExactGitSnapshot(owned.index, {
+        label: `workspace root template ${input.pin.url}`,
+        sink: input.sink,
+      }),
+    () => owned.close(),
+    "Root template snapshot and lease retirement failed"
+  );
+}
+
+/** Lazy readers are opened at the final cache path, after atomic checkout
+ * publication. The caller owns this lease until all uses of the index join;
+ * cancellation does not retire a checkout underneath an admitted blob read. */
+export async function acquireRootTemplateSnapshotIndex(input: {
+  pin: WorkspaceTemplatePin;
+  git: GitClient;
+  signal?: AbortSignal;
+  fs?: typeof fsp;
+}): Promise<{ index: ExactGitSnapshotIndex; close(): void }> {
+  input.signal?.throwIfAborted();
   const fs = input.fs ?? fsp;
   const label = `workspace root template ${input.pin.url}`;
   const target = rootTemplateCheckoutTarget(input.pin);
-  const read = (dir: string) =>
-    readExactGitSnapshot({
-      git: input.git,
-      dir,
-      commit: input.pin.commit,
-      label,
-      sink: input.sink,
-      reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
-    });
-  return withRootTemplateLease(input.pin, () =>
-    readThroughImmutableGitCheckout({
-      fs,
-      target,
-      label: "root-template",
-      read,
-      prepare: (dir) =>
-        acquireExactGitSnapshot({
-          git: input.git,
-          dir,
-          url: templateGitTransportUrl(input.pin.url),
-          ref: input.pin.ref,
-          expectedCommit: input.pin.commit,
-          label,
-          sink: input.sink,
-          reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
-        }),
-    })
+  const close = acquireRootTemplateLease(input.pin);
+  let transferred = false;
+  return runWithOwnedCleanup(
+    async () => {
+      const coordinate = await readThroughImmutableGitCheckout({
+        fs,
+        target,
+        label: "root-template",
+        read: async () => ({ commit: input.pin.commit, ref: input.pin.ref }),
+        prepare: (dir) =>
+          acquireExactGitCheckout({
+            git: input.git,
+            dir,
+            url: templateGitTransportUrl(input.pin.url),
+            ref: input.pin.ref,
+            expectedCommit: input.pin.commit,
+            label,
+          }),
+      });
+      input.signal?.throwIfAborted();
+      const index = await readExactGitSnapshotIndex({
+        git: input.git,
+        dir: target,
+        commit: coordinate.commit,
+        label,
+        reservedPaths: TEMPLATE_RESERVED_PATH_POLICY,
+      });
+      input.signal?.throwIfAborted();
+      transferred = true;
+      return { index, close };
+    },
+    () => {
+      if (!transferred) close();
+    },
+    "Root template index acquisition and lease retirement failed"
   );
 }
 

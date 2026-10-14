@@ -183,7 +183,7 @@ function projectCheckoutSource(
       addDiscoveredPackagePaths(target, units);
     }
   }
-  for (const entry of ["apps", "packages", "src", "tests"]) {
+  for (const entry of ["apps", "packages", "scripts", "src", "tests"]) {
     linkDirectory(path.join(appRoot, entry), path.join(targetRoot, entry));
   }
 }

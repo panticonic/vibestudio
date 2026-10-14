@@ -15,6 +15,7 @@ import { SOURCE_SERVER_PREREQUISITE_ARTIFACTS } from "./server-runtime-artifacts
 
 test("stages every standalone child required by source-server readiness", () => {
   assert.ok(SERVER_RUNTIME_ARTIFACTS.includes("dist/dependency-content-maintenance.cjs"));
+  assert.ok(SERVER_RUNTIME_ARTIFACTS.includes("dist/host-preparation-recipes.json"));
   for (const artifact of SERVER_RUNTIME_ARTIFACTS) {
     assert.ok(
       SOURCE_SERVER_PREREQUISITE_ARTIFACTS.includes(artifact),

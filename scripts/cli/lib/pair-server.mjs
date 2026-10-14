@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { printConnectBanner } from "./connect-banner.mjs";
-import { parseHubReadyPayload } from "./hub-ready.mjs";
+import { parseHubReadyPayload, rootBootstrapPairingInvite } from "./hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./server-entry.mjs";
 import { hostArtifactRootForServerEntry } from "../../host-build-generations.mjs";
 import { bindProcessLifetimeToParent } from "../../owned-process-tree.mjs";
@@ -473,7 +473,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
       return false;
     }
     rootStatusPrinted = false;
-    rootInvite = ready.rootInvite;
+    rootInvite = rootBootstrapPairingInvite(ready.rootInvite);
     tryPrintBanner();
     return true;
   };

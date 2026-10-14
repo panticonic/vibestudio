@@ -95,14 +95,14 @@ importers:
         specifier: workspace:*
         version: link:packages/builtin
       '@panticonic/pi-ai':
-        specifier: 1.1.0-vibestudio.2
-        version: 1.1.0-vibestudio.2(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
+        specifier: 1.2.0-vibestudio.1
+        version: 1.2.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
       '@panticonic/pi-chord':
-        specifier: 1.1.0-vibestudio.2
-        version: 1.1.0-vibestudio.2
+        specifier: 1.2.0-vibestudio.1
+        version: 1.2.0-vibestudio.1
       '@panticonic/pi-durable':
-        specifier: 1.1.0-vibestudio.2
-        version: 1.1.0-vibestudio.2(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
+        specifier: 1.2.0-vibestudio.1
+        version: 1.2.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
       '@puppeteer/browsers':
         specifier: ^2.6.1
         version: 2.13.2
@@ -452,6 +452,9 @@ importers:
       prettier:
         specifier: ^3.6.2
         version: 3.8.1
+      tar:
+        specifier: 7.5.22
+        version: 7.5.22
       vitest:
         specifier: ^3.2.7
         version: 3.2.7(@types/debug@4.1.12)(@types/node@24.10.9)(@vitest/browser@3.2.7)(jiti@2.7.0)(jsdom@29.0.1(@noble/hashes@2.2.0))(terser@5.46.1)(tsx@4.21.0)(yaml@2.9.0)
@@ -3293,21 +3296,25 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@panticonic/pi-ai@1.1.0-vibestudio.2':
-    resolution: {integrity: sha512-MKdpVXYkjHAnxxQK/sLlS2tyEmQ4adZgP74llf+a3n1pJffzIch0HaOXlftAyjTuwGj+CRmgntFJkDkCj2AcgQ==}
+  '@panticonic/pi-ai@1.2.0-vibestudio.1':
+    resolution: {integrity: sha512-djgGR/RcKLDTba6Y6+gGhtff1noOUoY7zt1nn2OgPmeOBvrFhqkiyyiQuH8dP9U98vZLtuO7Ucto/JVro8/mjg==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
-  '@panticonic/pi-chord@1.1.0-vibestudio.2':
-    resolution: {integrity: sha512-oETIAPJQpblO4PKLA6iOj94InrjzDqGvfy3CJhe3v1q4LSKmZ+P+WsM3lH6htVaN/nw0wwtFE9D1RcT2q221/A==}
+  '@panticonic/pi-chord@1.2.0-vibestudio.1':
+    resolution: {integrity: sha512-goDrlPkd7TKG1CEOP+XuOdYRgS3/JSLNHt6qP3qrUra9mkQcJD0YuoiAsQk73cErGbhQ0sRG77YQnXT2PJfjkw==}
     engines: {node: '>=22.19.0'}
 
-  '@panticonic/pi-durable@1.1.0-vibestudio.2':
-    resolution: {integrity: sha512-gaiHgmIR5z9uOtIVZl4JXiETQ4rfa8QI51Nw0nFNjO9qqglC6WcsmWQ0/in0qM+gvmst91Tsk423eQwMulnzsw==}
+  '@panticonic/pi-codemode@1.2.0-vibestudio.1':
+    resolution: {integrity: sha512-9fKLJG/sh+ZwffSYP64SK/mB+xqDoZK5rbmQvSlRmN4nEr8RTRCthiUeUu5zfJuBpI8r//EEQnKs0zGZ7oGGFQ==}
     engines: {node: '>=22.19.0'}
 
-  '@panticonic/pi-telemetry@1.1.0-vibestudio.2':
-    resolution: {integrity: sha512-6cDS5Oy3ZKBfEkKdylLmhSEc2SWY3+nya4XOYdy5pplVjjk/sj6PhqG07Iv1Q/lqDl4FH4ZA4fxw9CyZY9D5zw==}
+  '@panticonic/pi-durable@1.2.0-vibestudio.1':
+    resolution: {integrity: sha512-B9NROcM0WvYds7Oj8kHHXSMEf16CSS6FuvWOYno8OmVqMnB7HTeW7fT9XBsyLSiqpvQyRcq9S4nYTOyF4JXu5w==}
+    engines: {node: '>=22.19.0'}
+
+  '@panticonic/pi-telemetry@1.2.0-vibestudio.1':
+    resolution: {integrity: sha512-9PosUlEW97O9Q5ZVERkuNiM5JR+uiTgmwh5EcVVnGLAeWkO8v/SHMW+K/zIUrCi/m7l0zn9mB7Kja6tSqzg9wQ==}
     engines: {node: '>=22.19.0'}
 
   '@peculiar/asn1-schema@2.8.0':
@@ -8351,6 +8358,9 @@ packages:
     resolution: {integrity: sha512-WuyALRjWPDGtt/wzJiadO5AXY+8hZ80hVpe6MyivgraREW751X3SbhRvG3eLKOYN+8VEvqLcf3wdnt44Z4S4SA==}
     engines: {node: '>=10'}
 
+  quickjs-wasi@3.6.2:
+    resolution: {integrity: sha512-FCqGtGOrMgzUiIrMNMA2YnsOxCNwo31dzqXvclXUC6xeT35NJLKXQJsvbeCTjvoFAwZgEAPg8U6+KAPDGXn8Mg==}
+
   radix-ui@1.4.3:
     resolution: {integrity: sha512-aWizCQiyeAenIdUbqEpXgRA1ya65P13NKn/W8rWkcN0OPkRDxdBVLWnIEDsS2RpwCK2nobI7oMUSmexzTDyAmA==}
     peerDependencies:
@@ -11979,12 +11989,12 @@ snapshots:
   '@panticonic/iroh-win32-x64-msvc@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.2.tgz':
     optional: true
 
-  '@panticonic/pi-ai@1.1.0-vibestudio.2(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
+  '@panticonic/pi-ai@1.2.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.129.0(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1127.0
       '@google/genai': 2.21.0
-      '@panticonic/pi-telemetry': 1.1.0-vibestudio.2
+      '@panticonic/pi-telemetry': 1.2.0-vibestudio.1
       '@smithy/node-http-handler': 4.12.1
       http-proxy-agent: 9.1.0
       https-proxy-agent: 9.1.0
@@ -12004,14 +12014,19 @@ snapshots:
       - ws
       - zod
 
-  '@panticonic/pi-chord@1.1.0-vibestudio.2':
+  '@panticonic/pi-chord@1.2.0-vibestudio.1':
     dependencies:
-      esbuild: 0.28.2
+      typebox: 1.3.27
 
-  '@panticonic/pi-durable@1.1.0-vibestudio.2(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
+  '@panticonic/pi-codemode@1.2.0-vibestudio.1':
     dependencies:
-      '@panticonic/pi-ai': 1.1.0-vibestudio.2(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
-      '@panticonic/pi-chord': 1.1.0-vibestudio.2
+      quickjs-wasi: 3.6.2
+
+  '@panticonic/pi-durable@1.2.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
+    dependencies:
+      '@panticonic/pi-ai': 1.2.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
+      '@panticonic/pi-chord': 1.2.0-vibestudio.1
+      '@panticonic/pi-codemode': 1.2.0-vibestudio.1
       '@silvia-odwyer/photon': 0.3.3
       diff: 8.0.4
       typebox: 1.3.27
@@ -12028,7 +12043,7 @@ snapshots:
       - ws
       - zod
 
-  '@panticonic/pi-telemetry@1.1.0-vibestudio.2': {}
+  '@panticonic/pi-telemetry@1.2.0-vibestudio.1': {}
 
   '@peculiar/asn1-schema@2.8.0':
     dependencies:
@@ -13164,9 +13179,7 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 
@@ -18166,6 +18179,8 @@ snapshots:
       inherits: 2.0.4
 
   quick-lru@5.1.1: {}
+
+  quickjs-wasi@3.6.2: {}
 
   radix-ui@1.4.3(@types/react-dom@19.2.3(@types/react@19.2.10))(@types/react@19.2.10)(react-dom@19.0.0(react@19.0.0))(react@19.0.0):
     dependencies:

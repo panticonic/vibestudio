@@ -9,6 +9,16 @@ import {
 } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { blobCasPath, linkReconstructableBlobFile } from "./storage/blobCas.js";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import { forEachOwnedConcurrent } from "../../scripts/lib/owned-concurrency.mjs";
+import { readHostBuildFingerprint, resolveRequiredHostArtifactRoot } from "./appRoot.js";
+import {
+  rootDependencyFingerprintCaptureSchema,
+  composeWorkspaceDependencyFingerprint,
+  validateRootDependencyFingerprintCapture,
+  buildCompilerProtocolIdentity,
+  type RootDependencyFingerprintInfo,
+} from "./buildV2/effectiveVersion.js";
 
 const digest = z.string().regex(/^[0-9a-f]{64}$/u);
 const relativePath = z
@@ -35,6 +45,23 @@ const snapshotFile = file.extend({
 });
 const snapshotDigest = z.string().regex(/^v1-sha256:[0-9a-f]{64}$/u);
 const stateHash = z.string().regex(/^state:[0-9a-f]{64}$/u);
+export const preparedCompilationInputSchema = z
+  .object({
+    hostBuild: z
+      .object({
+        version: z.literal(1),
+        mode: z.enum(["development", "production"]),
+        fingerprint: digest,
+        inputCount: z.number().int().positive(),
+      })
+      .strict(),
+    compilerProtocol: z
+      .object({ cacheVersion: z.string().min(1), panelEntryProtocolFingerprint: digest })
+      .strict(),
+    fingerprint: rootDependencyFingerprintCaptureSchema,
+  })
+  .strict();
+export type PreparedCompilationInput = z.infer<typeof preparedCompilationInputSchema>;
 export const preparedWorkspaceTemplateSchema = z
   .object({
     format: z.literal("vibestudio-prepared-workspace/1"),
@@ -60,9 +87,65 @@ export const preparedWorkspaceTemplateSchema = z
       z.object({ source: relativePath, buildKey: digest, effectiveVersion: digest }).strict()
     ),
     blobs: z.array(z.object({ digest, size: z.number().int().nonnegative() }).strict()),
+    compilationInput: preparedCompilationInputSchema.optional(),
   })
   .strict();
 export type PreparedWorkspaceTemplate = z.infer<typeof preparedWorkspaceTemplateSchema>;
+
+/** Publication binds the SDK capture to the same installation identity as the
+ * release. Source/author records may omit it; runnable releases may not. */
+export function validatePreparedCompilationInput(
+  input: PreparedCompilationInput | undefined,
+  identity: Pick<PreparedCompilationInput, "hostBuild" | "compilerProtocol"> & {
+    readonly appDependencyFingerprint: string;
+  }
+): PreparedCompilationInput {
+  if (!input) throw new Error("Prepared host installation has no compilation input capture");
+  input = preparedCompilationInputSchema.parse(input);
+  validateRootDependencyFingerprintCapture(input.fingerprint);
+  if (
+    input.fingerprint.value !== identity.appDependencyFingerprint ||
+    canonicalJson(input.hostBuild) !== canonicalJson(identity.hostBuild) ||
+    canonicalJson(input.compilerProtocol) !== canonicalJson(identity.compilerProtocol)
+  )
+    throw new Error("Prepared compilation input does not match its release identity");
+  return input;
+}
+
+export async function prepareWorkspaceCompilationFingerprint(
+  input: PreparedCompilationInput,
+  appRoot: string,
+  workspaceRoot: string
+): Promise<RootDependencyFingerprintInfo> {
+  input = preparedCompilationInputSchema.parse(input);
+  if (
+    canonicalJson(input.hostBuild) !==
+      canonicalJson(readHostBuildFingerprint(resolveRequiredHostArtifactRoot())) ||
+    canonicalJson(input.compilerProtocol) !== canonicalJson(buildCompilerProtocolIdentity())
+  )
+    throw new Error(
+      "Prepared compilation input belongs to a different host or compiler generation"
+    );
+  return composeWorkspaceDependencyFingerprint(input.fingerprint, appRoot, workspaceRoot);
+}
+
+export function readPreparedWorkspaceTemplate(
+  directory: string,
+  pin: WorkspaceTemplatePin,
+  purpose: "use" | "author"
+): PreparedWorkspaceTemplate {
+  const prepared = preparedWorkspaceTemplateSchema.parse(
+    JSON.parse(fs.readFileSync(path.join(directory, "template.json"), "utf8"))
+  );
+  if (
+    prepared.pin.url !== pin.url ||
+    prepared.pin.commit !== pin.commit ||
+    prepared.pin.ref !== pin.ref ||
+    prepared.purpose !== purpose
+  )
+    throw new Error("Prepared workspace template does not match its creation coordinate");
+  return prepared;
+}
 
 /** One release resource root. Source supervisors supply their owned prepared
  * resources; installed hosts use the resources shipped with their application. */
@@ -93,32 +176,16 @@ export async function installPreparedWorkspaceTemplate(
   pin: WorkspaceTemplatePin,
   purpose: "use" | "author"
 ): Promise<PreparedWorkspaceTemplate> {
-  const prepared = preparedWorkspaceTemplateSchema.parse(
-    JSON.parse(fs.readFileSync(path.join(directory, "template.json"), "utf8"))
-  );
-  if (
-    prepared.pin.url !== pin.url ||
-    prepared.pin.commit !== pin.commit ||
-    prepared.pin.ref !== pin.ref ||
-    prepared.purpose !== purpose
-  )
-    throw new Error("Prepared workspace template does not match its creation coordinate");
+  const prepared = readPreparedWorkspaceTemplate(directory, pin, purpose);
   // Bound independent filesystem work and join every admitted operation before
   // returning failure to the owner of the destination.
-  let next = 0;
-  const results = await Promise.allSettled(
-    Array.from({ length: Math.min(16, prepared.blobs.length) }, async () => {
-      while (next < prepared.blobs.length) {
-        const blob = prepared.blobs[next++]!;
-        await linkReconstructableBlobFile(
-          blobsDir,
-          blob.digest,
-          blobCasPath(path.join(directory, "blobs"), blob.digest),
-          blob.size
-        );
-      }
-    })
-  );
-  for (const result of results) if (result.status === "rejected") throw result.reason;
+  await forEachOwnedConcurrent(prepared.blobs, 16, async (blob) => {
+    await linkReconstructableBlobFile(
+      blobsDir,
+      blob.digest,
+      blobCasPath(path.join(directory, "blobs"), blob.digest),
+      blob.size
+    );
+  });
   return prepared;
 }

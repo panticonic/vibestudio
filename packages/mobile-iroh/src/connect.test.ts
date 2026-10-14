@@ -3,6 +3,10 @@ vi.mock("./polyfills.js", () => ({}));
 const fixture = vi.hoisted(() => ({
   password: null as string | null,
   terminal: null as null | ((error: Error) => void),
+  recovery: null as null | ((kind: "resubscribe" | "cold-recover") => Promise<void>),
+  rpcRecoveryRegistration: null as
+    | null
+    | ((handler: (kind: "resubscribe" | "cold-recover") => void) => () => void),
   close: vi.fn(async () => {}),
   sessionClose: vi.fn(async () => {}),
   ready: vi.fn(async () => {}),
@@ -33,7 +37,12 @@ vi.mock("./nativeBridge.js", () => ({
 }));
 vi.mock("@vibestudio/rpc", async (original) => ({
   ...(await original<typeof import("@vibestudio/rpc")>()),
-  createRpcClient: () => ({}),
+  createRpcClient: (options: {
+    onRecovery?: (handler: (kind: "resubscribe" | "cold-recover") => void) => () => void;
+  }) => {
+    fixture.rpcRecoveryRegistration = options.onRecovery ?? null;
+    return {};
+  },
 }));
 vi.mock("@vibestudio/rpc/transports/reconnectingIrohClient", () => ({
   createReconnectingIrohClientPipe: () => {
@@ -51,9 +60,11 @@ vi.mock("@vibestudio/rpc/transports/reconnectingIrohClient", () => ({
       openSession: (options: {
         connectionId: string;
         onTerminalClose: (error: Error) => void;
+        onRecovery: (kind: "resubscribe" | "cold-recover") => Promise<void>;
       }) => {
         fixture.connectionIds.push(options.connectionId);
         fixture.terminal = options.onTerminalClose;
+        fixture.recovery = options.onRecovery;
         return {
           ready: fixture.ready,
           callerId: () => "shell:test",
@@ -81,6 +92,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   fixture.password = null;
   fixture.terminal = null;
+  fixture.recovery = null;
+  fixture.rpcRecoveryRegistration = null;
   fixture.reset.mockResolvedValue(true);
   fixture.sessionClose.mockResolvedValue(undefined);
   fixture.ready.mockResolvedValue(undefined);
@@ -88,6 +101,48 @@ beforeEach(() => {
 });
 
 describe("MobileEndpointPool relay configuration", () => {
+  it("delivers physical recovery to the RPC client before the account observer", async () => {
+    const calls: string[] = [];
+    const connection = await establishIrohConnection(
+      pairing,
+      makeReturningShellTokenProvider(credential),
+      "installed-endpoint",
+      "app-scheme",
+      { onRecovery: () => calls.push("account") }
+    );
+    const remove = fixture.rpcRecoveryRegistration!(() => calls.push("rpc"));
+
+    await fixture.recovery!("resubscribe");
+    expect(calls).toEqual(["rpc", "account"]);
+
+    remove();
+    await fixture.recovery!("cold-recover");
+    expect(calls).toEqual(["rpc", "account", "account"]);
+    await connection.close();
+  });
+
+  it("propagates workspace reconciliation failure through awaited session recovery", async () => {
+    const failure = new Error("workspace reconciliation failed");
+    const calls: string[] = [];
+    const connection = await establishIrohConnection(
+      pairing,
+      makeReturningShellTokenProvider(credential),
+      "installed-endpoint",
+      "app-scheme",
+      {
+        onRecovery: async () => {
+          calls.push("account");
+          throw failure;
+        },
+      }
+    );
+    fixture.rpcRecoveryRegistration!(() => calls.push("rpc"));
+
+    await expect(fixture.recovery!("resubscribe")).rejects.toBe(failure);
+    expect(calls).toEqual(["rpc", "account"]);
+    await connection.close();
+  });
+
   it("shares one endpoint when peers prefer different homes in the same relay set", async () => {
     const relays = ["https://us.example/", "https://eu.example/"];
     const pool = new MobileEndpointPool("identity", relays);

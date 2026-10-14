@@ -3,7 +3,7 @@ import type { BuildSystemV2 } from "./buildV2/index.js";
 import type { GraphNode } from "./buildV2/packageGraph.js";
 import { prepareWorkspaceRuntimeBuilds } from "./workspaceTemplateBuilds.js";
 
-type Binding = Awaited<ReturnType<BuildSystemV2["getBuild"]>>;
+type Binding = Awaited<ReturnType<BuildSystemV2["getStoredBuild"]>>;
 function node(relativePath: string): GraphNode {
   return { relativePath, kind: "worker", manifest: {} } as GraphNode;
 }

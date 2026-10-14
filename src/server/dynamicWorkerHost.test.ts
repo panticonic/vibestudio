@@ -22,6 +22,11 @@ import { join } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 import {
+  schemaProbeEnvironmentForFixture,
+  useSchemaProbeFixtureCache,
+} from "../../tests/fixtures/schemaProbeEnvironment.js";
+useSchemaProbeFixtureCache();
+import {
   cleanupStoredBuildFixtures,
   storedBuildFixture,
 } from "../../tests/helpers/storedBuildFixture.js";
@@ -171,6 +176,7 @@ async function createHarness(
   // holder) so the gateway closure can reference a `const` manager.
   const portHolder = { value: 0 };
   const deps: WorkerdManagerDeps = {
+    schemaProbeEnvironment: schemaProbeEnvironmentForFixture(compiledWorkerdPrograms),
     tokenManager,
     fsService: { closeHandlesForCaller: () => {} } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,

@@ -5,7 +5,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { deserializeRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
-import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
+import { parseHubReadyPayload, rootBootstrapPairingInvite } from "./cli/lib/hub-ready.mjs";
 
 import { joinChildProcess } from "./lib/join-child-process.mjs";
 import { resolveMacAppExecutable } from "./lib/mac-app-executable.mjs";
@@ -39,7 +39,8 @@ export function awaitHubReady(child, readyFile, signal) {
     const check = () => {
       if (settled) return;
       try {
-        finish(null, parseHubReadyPayload(JSON.parse(fs.readFileSync(readyFile, "utf8"))));
+        const ready = parseHubReadyPayload(JSON.parse(fs.readFileSync(readyFile, "utf8")));
+        if (!ready.rootInvite || rootBootstrapPairingInvite(ready.rootInvite)) finish(null, ready);
       } catch (error) {
         if (error.code !== "ENOENT") finish(error);
       }
@@ -132,10 +133,22 @@ async function releaseBuildDestinationExists(destination) {
   }
 }
 
-export async function verifyReleaseBuildDirectory(directory, expectedKey, exactContents) {
+/** Admit a completed runtime's descriptors without reading executable payloads.
+ * Payload proof belongs to publication; consumers inspect the sealed inventory. */
+export async function readReleaseBuildDescriptor(directory, expectedKey) {
+  const directoryStat = await fsp.lstat(directory);
+  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink())
+    throw new Error("Release build directory is not a real directory");
+  const metadataStat = await fsp.lstat(path.join(directory, "metadata.json"));
+  if (!metadataStat.isFile() || metadataStat.isSymbolicLink())
+    throw new Error("Release build descriptor is not a regular file: metadata.json");
   const metadata = JSON.parse(await fsp.readFile(path.join(directory, "metadata.json"), "utf8"));
   if (!metadata || typeof metadata !== "object" || metadata.buildKey !== expectedKey)
     throw new Error("Release build record key mismatch");
+
+  const artifactStat = await fsp.lstat(path.join(directory, "artifacts.json"));
+  if (!artifactStat.isFile() || artifactStat.isSymbolicLink())
+    throw new Error("Release build descriptor is not a regular file: artifacts.json");
 
   const artifacts = JSON.parse(await fsp.readFile(path.join(directory, "artifacts.json"), "utf8"));
   if (!Array.isArray(artifacts)) throw new Error("Invalid release artifact manifest");
@@ -162,30 +175,48 @@ export async function verifyReleaseBuildDirectory(directory, expectedKey, exactC
     ) {
       throw new Error(`Invalid release artifact manifest entry: ${artifactPath}`);
     }
-    const bytes = await fsp.readFile(path.join(directory, artifactPath));
-    if (
-      bytes.length !== artifact.byteLength ||
-      artifact.integrity !== `sha256-${createHash("sha256").update(bytes).digest("hex")}`
-    ) {
+    const stat = await fsp.lstat(path.join(directory, artifactPath));
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size !== artifact.byteLength)
       throw new Error(`Release artifact integrity mismatch: ${artifactPath}`);
-    }
     files.add(artifactPath);
   }
 
   try {
     const modulesPath = path.join(directory, "executable-modules.json.gz");
-    const modules = JSON.parse(gunzipSync(await fsp.readFile(modulesPath)).toString("utf8"));
-    if (!Array.isArray(modules)) throw new Error("Invalid executable module inventory");
+    const stat = await fsp.lstat(modulesPath);
+    if (!stat.isFile() || stat.isSymbolicLink())
+      throw new Error("Executable module inventory is not a regular file");
     files.add("executable-modules.json.gz");
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
 
+  return { metadata, artifacts, files };
+}
+
+export async function verifyReleaseBuildDirectory(directory, expectedKey, exactContents) {
+  const { artifacts, files } = await readReleaseBuildDescriptor(directory, expectedKey);
+  for (const artifact of artifacts) {
+    const bytes = await fsp.readFile(path.join(directory, artifact.path));
+    if (
+      bytes.length !== artifact.byteLength ||
+      artifact.integrity !== `sha256-${createHash("sha256").update(bytes).digest("hex")}`
+    )
+      throw new Error(`Release artifact integrity mismatch: ${artifact.path}`);
+  }
+  if (files.has("executable-modules.json.gz")) {
+    const modules = JSON.parse(
+      gunzipSync(await fsp.readFile(path.join(directory, "executable-modules.json.gz"))).toString(
+        "utf8"
+      )
+    );
+    if (!Array.isArray(modules)) throw new Error("Invalid executable module inventory");
+  }
   if (exactContents) await assertExactReleaseBuildFiles(directory, files);
   return [...files];
 }
 
-async function assertExactReleaseBuildFiles(directory, expectedFiles) {
+export async function assertExactReleaseBuildFiles(directory, expectedFiles) {
   const actualFiles = new Set();
   const visit = async (current, relative = "") => {
     for (const entry of await fsp.readdir(current, { withFileTypes: true })) {
@@ -436,7 +467,7 @@ async function withReleaseConsumerSession(
             cancellation.signal.removeEventListener("abort", onCancellation);
           }
         };
-        await cli(["remote", "pair", ready.rootInvite.deepLink]);
+        await cli(["remote", "pair", rootBootstrapPairingInvite(ready.rootInvite).deepLink]);
         const pair = await cli(["remote", "ensure-user-workspaces"]);
         const result = await operation({
           cli,

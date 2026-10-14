@@ -5,7 +5,7 @@ import {
   type CanonicalSnapshotDigest,
 } from "@vibestudio/content-addressing";
 import { semanticVcsPathAdmission } from "@vibestudio/vcs-path-policy";
-import { GitClient, type GitCommitTreeEntry } from "./client.js";
+import { GitClient, type GitCommitTreeEntry, type GitCommitTreeIndexEntry } from "./client.js";
 
 export interface SnapshotContentSink {
   put(bytes: Uint8Array): Promise<{ digest: string; size: number }>;
@@ -24,6 +24,12 @@ export interface ExactGitSnapshot {
   snapshot: CanonicalSnapshotDigest;
   files: ExactSnapshotFile[];
   readFile(path: string): Uint8Array | null;
+}
+
+export interface ExactGitSnapshotIndex {
+  commit: string;
+  files: readonly GitCommitTreeIndexEntry[];
+  readFile(path: string): Promise<Uint8Array | null>;
 }
 
 /**
@@ -76,6 +82,33 @@ export interface DiscoverTrackedGitSnapshotOptions extends Omit<
 > {
   /** Canonical branch/tag ref, or a refs/tags/* pattern. */
   track: string;
+}
+
+export type AcquireExactGitSnapshotIndexOptions = Omit<
+  AcquireExactGitSnapshotOptions,
+  "sink" | "expectedSnapshot"
+>;
+export type DiscoverExactGitSnapshotIndexOptions = Omit<DiscoverExactGitSnapshotOptions, "sink">;
+export type DiscoverTrackedGitSnapshotIndexOptions = Omit<
+  DiscoverTrackedGitSnapshotOptions,
+  "sink"
+>;
+
+export type AcquireExactGitCheckoutOptions = Omit<
+  AcquireExactGitSnapshotIndexOptions,
+  "subdir" | "reservedPaths"
+>;
+export type DiscoverExactGitCheckoutOptions = Omit<
+  DiscoverExactGitSnapshotIndexOptions,
+  "subdir" | "reservedPaths"
+>;
+export type DiscoverTrackedGitCheckoutOptions = Omit<
+  DiscoverTrackedGitSnapshotIndexOptions,
+  "subdir" | "reservedPaths"
+>;
+export interface ExactGitCheckoutCoordinate {
+  readonly commit: string;
+  readonly ref: string;
 }
 
 const FULL_OID = /^[0-9a-f]{40}$/i;
@@ -147,10 +180,10 @@ function naturalPartsCompare(left: string, right: string): number {
   return compareUtf16CodeUnits(left, right);
 }
 
-function selectSubtree(
-  entries: readonly GitCommitTreeEntry[],
+function selectSubtree<T extends GitCommitTreeIndexEntry>(
+  entries: readonly T[],
   subdir: string | undefined
-): GitCommitTreeEntry[] {
+): T[] {
   if (!subdir) return [...entries];
   const normalized = subdir.replace(/^\/+|\/+$/g, "");
   const admission = semanticVcsPathAdmission(`${normalized}/placeholder`);
@@ -160,22 +193,19 @@ function selectSubtree(
   const prefix = `${normalized}/`;
   return entries
     .filter((entry) => entry.path.startsWith(prefix))
-    .map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) }) as GitCommitTreeEntry);
+    .map((entry) => ({ ...entry, path: entry.path.slice(prefix.length) }) as T);
 }
 
-async function admitAndStore(
+/** Metadata admission is shared by review and full content import. Irregular
+ * leaves are rejected before either consumer can use a partially valid tree. */
+function admitSnapshotEntries<T extends GitCommitTreeIndexEntry>(
   label: string,
-  entries: readonly GitCommitTreeEntry[],
-  sink: SnapshotContentSink,
+  entries: readonly T[],
   reservedPaths: ReservedPathPolicy
-): Promise<{
-  files: ExactSnapshotFile[];
-  bytesByPath: Map<string, Uint8Array>;
-  snapshot: CanonicalSnapshotDigest;
-}> {
+): Array<T & { type: "blob"; mode: 0o100644 | 0o100755 }> {
   const excluded: string[] = [];
   const inadmissible: string[] = [];
-  const admitted: Array<ExactSnapshotFile & { bytes: Uint8Array; snapshotMode: number }> = [];
+  const admitted: Array<T & { type: "blob"; mode: 0o100644 | 0o100755 }> = [];
   for (const entry of entries) {
     const admission = semanticVcsPathAdmission(entry.path);
     if (!admission.admissible && admission.reason === "platform-reserved") {
@@ -190,15 +220,7 @@ async function admitAndStore(
       inadmissible.push(`${entry.path} (${entry.type}, mode ${entry.mode.toString(8)})`);
       continue;
     }
-    const bytes = new Uint8Array(entry.bytes);
-    admitted.push({
-      path: entry.path,
-      bytes,
-      contentHash: sha256Hex(bytes),
-      size: bytes.byteLength,
-      mode: entry.mode === 0o100755 ? 0o755 : 0o644,
-      snapshotMode: entry.mode,
-    });
+    admitted.push(entry as T & { type: "blob"; mode: 0o100644 | 0o100755 });
   }
   if (reservedPaths === "reject" && excluded.length > 0) {
     throw new Error(
@@ -212,10 +234,71 @@ async function admitAndStore(
         `(${inadmissible.sort(compareUtf16CodeUnits).join(", ")}); only regular files and executable files are importable`
     );
   }
-  admitted.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
+  return admitted.sort((left, right) => compareUtf16CodeUnits(left.path, right.path));
+}
+
+async function assertExactSnapshotCommit(
+  options: Pick<ReadExactGitSnapshotOptions, "git" | "dir" | "commit" | "label">
+): Promise<void> {
+  if (!FULL_OID.test(options.commit)) {
+    throw new Error(`Exact Git snapshot commit must be a full 40-character object id`);
+  }
+  const observedHead = await options.git.getCurrentCommit(options.dir);
+  if (observedHead?.toLowerCase() !== options.commit.toLowerCase()) {
+    throw new Error(
+      `Cannot import ${options.label}: Git HEAD advanced while resolving the snapshot ` +
+        `(expected ${options.commit}, observed ${observedHead ?? "no commit"}); retry`
+    );
+  }
+}
+
+/** Review uses the exact same tree and semantic admission as content import,
+ * but loads only the immutable blobs its validation actually consumes. */
+export async function readExactGitSnapshotIndex(
+  options: Omit<ReadExactGitSnapshotOptions, "sink" | "expectedSnapshot">
+): Promise<ExactGitSnapshotIndex> {
+  await assertExactSnapshotCommit(options);
+  const index = await options.git.readCommitTreeIndex(options.dir, options.commit);
+  const files = admitSnapshotEntries(
+    options.label,
+    selectSubtree(index.entries, options.subdir),
+    options.reservedPaths ?? "reject"
+  );
+  const paths = new Set(files.map((file) => file.path));
+  const prefix = options.subdir ? `${options.subdir.replace(/^\/+|\/+$/g, "")}/` : "";
+  return {
+    commit: options.commit.toLowerCase(),
+    files,
+    readFile: (filePath) =>
+      paths.has(filePath) ? index.readFile(`${prefix}${filePath}`) : Promise.resolve(null),
+  };
+}
+
+async function admitAndStore(
+  label: string,
+  entries: readonly GitCommitTreeEntry[],
+  sink: SnapshotContentSink,
+  reservedPaths: ReservedPathPolicy
+): Promise<{
+  files: ExactSnapshotFile[];
+  bytesByPath: Map<string, Uint8Array>;
+  snapshot: CanonicalSnapshotDigest;
+}> {
+  const admitted: Array<ExactSnapshotFile & { bytes: Uint8Array; snapshotMode: number }> = [];
+  for (const entry of admitSnapshotEntries(label, entries, reservedPaths)) {
+    const bytes = new Uint8Array(entry.bytes);
+    admitted.push({
+      path: entry.path,
+      bytes,
+      contentHash: sha256Hex(bytes),
+      size: bytes.byteLength,
+      mode: entry.mode === 0o100755 ? 0o755 : 0o644,
+      snapshotMode: entry.mode,
+    });
+  }
   const distinct = [...new Map(admitted.map((file) => [file.contentHash, file])).values()];
   let cursor = 0;
-  await Promise.all(
+  const storedOutcomes = await Promise.allSettled(
     Array.from(
       { length: Math.min(SNAPSHOT_CONTENT_STORE_CONCURRENCY, distinct.length) },
       async () => {
@@ -233,6 +316,14 @@ async function admitAndStore(
       }
     )
   );
+  const storedFailures = storedOutcomes.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason] : []
+  );
+  if (storedFailures.length === 1) throw storedFailures[0];
+  if (storedFailures.length)
+    throw new AggregateError(storedFailures, "Git snapshot content storage failed", {
+      cause: storedFailures[0],
+    });
   return {
     files: admitted.map(({ path, contentHash, size, mode }) => ({
       path,
@@ -256,44 +347,55 @@ async function admitAndStore(
 export async function readExactGitSnapshot(
   options: ReadExactGitSnapshotOptions
 ): Promise<ExactGitSnapshot> {
-  if (!FULL_OID.test(options.commit)) {
-    throw new Error(`Exact Git snapshot commit must be a full 40-character object id`);
-  }
   const startedAt = performance.now();
-  const observedHead = await options.git.getCurrentCommit(options.dir);
-  const headReadAt = performance.now();
-  if (observedHead?.toLowerCase() !== options.commit.toLowerCase()) {
-    throw new Error(
-      `Cannot import ${options.label}: Git HEAD advanced while resolving the snapshot ` +
-        `(expected ${options.commit}, observed ${observedHead ?? "no commit"}); retry`
-    );
-  }
-  // The immutable commit tree, rather than the checkout's worktree, is the
-  // snapshot source. Verifying every worktree path here is both redundant and
-  // prohibitively expensive for a large template: local worktree changes
-  // cannot influence readCommitTree(commit).
-  const tree = await options.git.readCommitTree(options.dir, options.commit);
-  const treeReadAt = performance.now();
-  const selected = selectSubtree(tree, options.subdir);
-  const admitted = await admitAndStore(
-    options.label,
-    selected,
-    options.sink,
-    options.reservedPaths ?? "reject"
-  );
-  const admittedAt = performance.now();
+  const index = await readExactGitSnapshotIndex(options);
+  const indexedAt = performance.now();
+  const snapshot = await materializeExactGitSnapshot(index, options);
   if (
     process.env["VIBESTUDIO_LOG_LEVEL"] === "verbose" ||
     process.env["VIBESTUDIO_LOG_LEVEL"] === "trace"
   ) {
     console.debug("[Perf] exact Git snapshot read", {
-      headMs: headReadAt - startedAt,
-      treeMs: treeReadAt - headReadAt,
-      admitAndStoreMs: admittedAt - treeReadAt,
-      totalMs: admittedAt - startedAt,
-      files: selected.length,
+      indexMs: indexedAt - startedAt,
+      materializeMs: performance.now() - indexedAt,
+      totalMs: performance.now() - startedAt,
+      files: index.files.length,
     });
   }
+  return snapshot;
+}
+
+/** Continue the same admitted immutable tree after metadata review. The index
+ * owner keeps its checkout lease until every blob read and sink write joins. */
+export async function materializeExactGitSnapshot(
+  index: ExactGitSnapshotIndex,
+  options: Pick<ReadExactGitSnapshotOptions, "label" | "sink" | "expectedSnapshot">
+): Promise<ExactGitSnapshot> {
+  const entries = new Array<GitCommitTreeEntry>(index.files.length);
+  let cursor = 0;
+  const outcomes = await Promise.allSettled(
+    Array.from(
+      { length: Math.min(SNAPSHOT_CONTENT_STORE_CONCURRENCY, index.files.length) },
+      async () => {
+        for (let position = cursor++; position < index.files.length; position = cursor++) {
+          const file = index.files[position];
+          if (!file)
+            throw new Error("Admitted Git snapshot inventory changed during materialization");
+          const bytes = await index.readFile(file.path);
+          if (!bytes)
+            throw new Error(`Git tree blob ${file.path} (${file.oid}) has no readable content`);
+          entries[position] = { ...file, type: "blob", bytes };
+        }
+      }
+    )
+  );
+  const failures = outcomes.flatMap((outcome) =>
+    outcome.status === "rejected" ? [outcome.reason] : []
+  );
+  if (failures.length === 1) throw failures[0];
+  if (failures.length)
+    throw new AggregateError(failures, "Git tree blob reads failed", { cause: failures[0] });
+  const admitted = await admitAndStore(options.label, entries, options.sink, "reject");
   if (options.expectedSnapshot && admitted.snapshot !== options.expectedSnapshot) {
     throw new Error(
       `Cannot import ${options.label}: canonical snapshot mismatch ` +
@@ -301,7 +403,7 @@ export async function readExactGitSnapshot(
     );
   }
   return {
-    commit: options.commit.toLowerCase(),
+    commit: index.commit,
     snapshot: admitted.snapshot,
     files: admitted.files,
     readFile(path) {
@@ -315,6 +417,22 @@ export async function readExactGitSnapshot(
 export async function acquireExactGitSnapshot(
   options: AcquireExactGitSnapshotOptions
 ): Promise<ExactGitSnapshot> {
+  return materializeExactGitSnapshot(await acquireExactGitSnapshotIndex(options), options);
+}
+
+/** Exact acquisition and semantic tree admission, without reading payloads. */
+export async function acquireExactGitSnapshotIndex(
+  options: AcquireExactGitSnapshotIndexOptions
+): Promise<ExactGitSnapshotIndex> {
+  const coordinate = await acquireExactGitCheckout(options);
+  return readExactGitSnapshotIndex({ ...options, commit: coordinate.commit });
+}
+
+/** Publishable checkout evidence contains coordinates, never readers capturing
+ * its temporary directory. Open an index only after the owner's atomic rename. */
+export async function acquireExactGitCheckout(
+  options: AcquireExactGitCheckoutOptions
+): Promise<ExactGitCheckoutCoordinate> {
   assertExactCoordinates(options.ref, options.expectedCommit);
   options.git.resolveUrl(options.url);
   await options.git.clone({
@@ -335,16 +453,13 @@ export async function acquireExactGitSnapshot(
   if (head?.toLowerCase() !== options.expectedCommit.toLowerCase()) {
     await options.git.checkout(options.dir, options.expectedCommit, { force: true });
   }
-  return readExactGitSnapshot({
+  await assertExactSnapshotCommit({
     git: options.git,
     dir: options.dir,
     commit: options.expectedCommit,
     label: options.label,
-    sink: options.sink,
-    ...(options.expectedSnapshot ? { expectedSnapshot: options.expectedSnapshot } : {}),
-    ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
   });
+  return { commit: options.expectedCommit.toLowerCase(), ref: options.ref };
 }
 
 /**
@@ -355,6 +470,19 @@ export async function acquireExactGitSnapshot(
 export async function discoverExactGitSnapshot(
   options: DiscoverExactGitSnapshotOptions
 ): Promise<ExactGitSnapshot> {
+  return materializeExactGitSnapshot(await discoverExactGitSnapshotIndex(options), options);
+}
+
+export async function discoverExactGitSnapshotIndex(
+  options: DiscoverExactGitSnapshotIndexOptions
+): Promise<ExactGitSnapshotIndex> {
+  const coordinate = await discoverExactGitCheckout(options);
+  return readExactGitSnapshotIndex({ ...options, commit: coordinate.commit });
+}
+
+export async function discoverExactGitCheckout(
+  options: DiscoverExactGitCheckoutOptions
+): Promise<ExactGitCheckoutCoordinate> {
   assertExactCoordinates(options.ref, "0".repeat(40));
   options.git.resolveUrl(options.url);
   await options.git.clone({
@@ -368,15 +496,13 @@ export async function discoverExactGitSnapshot(
   if (!observed || !FULL_OID.test(observed)) {
     throw new Error(`Git ref ${options.ref} did not resolve to a full commit`);
   }
-  return readExactGitSnapshot({
+  await assertExactSnapshotCommit({
     git: options.git,
     dir: options.dir,
     commit: observed.toLowerCase(),
     label: options.label,
-    sink: options.sink,
-    ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
   });
+  return { commit: observed.toLowerCase(), ref: options.ref };
 }
 
 /** Discover a remote's advertised default branch and freeze it to exact coordinates. */
@@ -417,12 +543,27 @@ export async function discoverDefaultGitSnapshot(
 export async function discoverTrackedGitSnapshot(
   options: DiscoverTrackedGitSnapshotOptions
 ): Promise<ExactGitSnapshot & { ref: string }> {
+  const index = await discoverTrackedGitSnapshotIndex(options);
+  return { ...(await materializeExactGitSnapshot(index, options)), ref: index.ref };
+}
+
+/** Track selection is frozen once, before metadata or full import consumes it. */
+export async function discoverTrackedGitSnapshotIndex(
+  options: DiscoverTrackedGitSnapshotIndexOptions
+): Promise<ExactGitSnapshotIndex & { ref: string }> {
+  const coordinate = await discoverTrackedGitCheckout(options);
+  const index = await readExactGitSnapshotIndex({ ...options, commit: coordinate.commit });
+  return { ...index, ref: coordinate.ref };
+}
+
+export async function discoverTrackedGitCheckout(
+  options: DiscoverTrackedGitCheckoutOptions
+): Promise<ExactGitCheckoutCoordinate> {
   if (!TRACK_GLOB_META.test(options.track)) {
-    const snapshot = await discoverExactGitSnapshot({
+    return discoverExactGitCheckout({
       ...options,
       ref: options.track,
     });
-    return { ...snapshot, ref: options.track };
   }
   if (!options.track.startsWith("refs/tags/") || /[\s~^:[\]\\]/u.test(options.track)) {
     throw new Error("Template track glob must be a canonical refs/tags/* pattern");
@@ -450,14 +591,5 @@ export async function discoverTrackedGitSnapshot(
   if (!commit || !FULL_OID.test(commit)) {
     throw new Error(`Git tag ${ref} did not resolve to a full commit`);
   }
-  const snapshot = await readExactGitSnapshot({
-    git: options.git,
-    dir: options.dir,
-    commit: commit.toLowerCase(),
-    label: options.label,
-    sink: options.sink,
-    ...(options.subdir ? { subdir: options.subdir } : {}),
-    ...(options.reservedPaths ? { reservedPaths: options.reservedPaths } : {}),
-  });
-  return { ...snapshot, ref };
+  return { commit: commit.toLowerCase(), ref };
 }

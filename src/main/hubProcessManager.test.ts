@@ -100,9 +100,15 @@ function readyInvite() {
     v: 5 as const,
   };
   return {
-    ...pairing,
-    deepLink: createConnectDeepLink(pairing),
-    pairUrl: createConnectPairUrl(pairing),
+    code: pairing.code,
+    reach: {
+      status: "ready" as const,
+      endpointId: pairing.endpointId,
+      relays: pairing.relays,
+      v: pairing.v,
+      deepLink: createConnectDeepLink(pairing),
+      pairUrl: createConnectPairUrl(pairing),
+    },
     expiresInMs: 60_000,
     expiresAt: 2_000_000_000_000,
     serverId: SERVER_ID,
@@ -231,6 +237,16 @@ describe("HubProcessManager", () => {
       workspaces: [],
     };
     expect(parseHubReadyFile(canonical)).toEqual(canonical);
+    const { reach: _reach, ...credential } = canonical.rootInvite;
+    expect(
+      parseHubReadyFile({
+        ...canonical,
+        rootInvite: { ...credential, reach: { status: "preparing" } },
+      })
+    ).toMatchObject({ rootInvite: { code: credential.code, reach: { status: "preparing" } } });
+    expect(() =>
+      parseHubReadyFile({ ...canonical, rootInvite: { ...credential, reach: { status: "ready" } } })
+    ).toThrow(/canonical contract/);
     expect(() => parseHubReadyFile({ ...canonical, adminToken: "secret" })).toThrow(
       /canonical contract/
     );

@@ -2,6 +2,7 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
+import { rootBootstrapPairingInvite } from "./hub-ready.mjs";
 
 function runCommandBuffer(command, args, options = {}) {
   return new Promise((resolve, reject) => {
@@ -122,7 +123,10 @@ export function waitForRootInvite({ readyFile, timeoutMs = 180_000 }) {
     const read = async () => {
       try {
         const payload = JSON.parse(await fsp.readFile(readyFile, "utf8"));
-        const invite = payload?.rootInvite;
+        const rootInvite = payload?.rootInvite;
+        if (rootInvite != null && !["preparing", "ready"].includes(rootInvite.reach?.status))
+          throw new Error("root invite has no canonical reach state");
+        const invite = rootBootstrapPairingInvite(rootInvite ?? null);
         if (typeof invite?.pairUrl === "string" && invite.pairUrl) {
           finish(() => resolve(invite));
           return;

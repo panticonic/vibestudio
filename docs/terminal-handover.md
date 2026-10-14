@@ -61,16 +61,23 @@ These decisions are settled. Don't reopen them without new evidence.
 Nothing is merged into main or pushed. The integration branch is
 `terminal/apps-lifecycle`, and the same branch name exists in every repo:
 
-| Repo | Worktree | Tip | Ahead of main |
-|---|---|---|---|
-| host | `/home/werg/vibestudio-worktrees/apps/vibestudio` | infrastructure/polish handoff (this commit) | 74 |
-| base | `…/apps/templates/base` | `68b4b9d` | 50 |
-| system | `…/apps/templates/system` | `7db3e96` | 37 |
-| system-testing | `…/apps/templates/system-testing` | `7df786e` | 18 |
-| personal | `…/apps/templates/personal` | `81a01c1` | 3 |
+| Repo           | Worktree                                          | Tip                                  | Ahead of main |
+| -------------- | ------------------------------------------------- | ------------------------------------ | ------------- |
+| host           | `/home/werg/vibestudio-worktrees/apps/vibestudio` | local-main integration (this commit) | 75            |
+| base           | `…/apps/templates/base`                           | `9959532`                            | 51            |
+| system         | `…/apps/templates/system`                         | `94d36c5`                            | 38            |
+| system-testing | `…/apps/templates/system-testing`                 | `7df786e`                            | 18            |
+| personal       | `…/apps/templates/personal`                       | `40693ce`                            | 4             |
 
-The other template worktrees (examples, google-workspace, news, spectrolite)
-have no changes.
+On 2026-10-14, merged local host main `8ff2c20cc`, Base main `a64dca1`,
+System main `ca3ab80`, and Personal main `87cd767` into these branches.
+System-testing main `8dd93f3` was already included. This is integration **from**
+main, not publication or integration **into** main. Earlier verification receipts
+below describe the pre-merge implementation, unless explicitly labelled otherwise.
+
+The catalog worktrees have no terminal-specific changes. Examples (`c351a87`),
+Google Workspace (`ca8c0b4`), and News (`4f8885e`) were fast-forwarded to local
+main in the same integration; Spectrolite (`32c4475`) was already current.
 
 `terminal/native` (`…/worktrees/native/`) and `terminal/perf`
 (`…/worktrees/perf/`) are fully merged into `terminal/apps-lifecycle`. They can
@@ -93,6 +100,7 @@ belongs to someone else.
   Bound concurrent type checks by available memory. Base/System passed together,
   but each compiler reached roughly 5.8 GB RSS (see §5); four-way failures have
   not been established as a cache collision.
+
 - **Instances.** Give every instance a unique name. Stop and join it in a
   finally-equivalent path, and check that its ephemeral root and its
   dev-instance registry record are gone.
@@ -108,7 +116,7 @@ belongs to someone else.
 ### CLI and the one command
 
 - **Entry points.** `pnpm terminal [--ephemeral]` is `src/dev/runInstance.ts
-  terminal`. The product command is `vibestudio terminal`, in
+terminal`. The product command is `vibestudio terminal`, in
   `src/cli/terminal/terminalCommand.ts`.
 - **Starting the server.** `src/cli/terminal/localServer.ts` attaches to a
   server or starts an owned one. `ttyRestore.ts` restores the terminal.
@@ -233,24 +241,24 @@ belongs to someone else.
 
 ## 4. Verification evidence at handover
 
-| Check | Result |
-|---|---|
-| Full commit hook | Passed for this infrastructure/polish handoff, including type-check, lint, format, dependency census, template hygiene and the unit authority audit |
-| `type-check:userland` | Base, System, System-testing and Personal passed, each run on its own; Base and System-testing were rerun after the latest changes |
-| System test `eval-cancel-run` | Passed on final readiness/ownership sources in run `st_4c1422d4fdc04f2a81939af8eafbc0af`, 1.515 s, zero tool failures |
-| System test `terminal-chat-approval-fork-resume` | Passed on final sources in run `st_79a0805c43fa446597cdb60c3a3c7c24`, 55.440 s: fork-agent reply, switch-back, kill/relaunch, older-question/result restoration and original tool-title preservation; zero tool failures, concurrency 1. The managed instance was stopped and retired. See §5. |
-| Host focused suites | 45 passed after main integration; release preparation tests 20 passed |
-| Base terminal/core focused tests | 34 passed after removing speculative input/join changes; projected composition typecheck passed |
-| System-testing terminal/frame/history tests | 38 passed; projected composition typecheck passed |
-| Infrastructure/polish focused host tests | Approval/tier/matrix 24, RPC client 85, native build-report/authority 49, installed-smoke 10 passed |
-| Replay and invocation projection regressions | Replay 88 and canonical protocol 73 passed; final Base composition typecheck passed |
-| Ordered replay readiness and connection ownership | 101 focused replay tests, 17 independently rerun connection tests and 3 signal-store tests passed; Base main/integration composition checks passed |
-| Terminal browser tests | 108 passed |
-| Live `pnpm terminal` checks | Launcher, Chat streaming, detach/resume, kill/relaunch with transcript, shell cwd, quit with a live PTY (~10 s, clean). Fork plus fork-agent reply checked only before the upstream merge |
-| Cold start to launcher | Before: about 26 min to template-preparation done. After: ~70 s on a quiet host; ~27.5 s with a warm derived cache |
-| `extensions.invoke` p50 | ~225 ms → 9.1 ms. Shell echo p50 ≈ 58 ms, measured before the last extension fix |
-| Full host test suite on the final branch | **Not run** |
-| Other system tests on the final branch | **Not run** |
+| Check                                             | Result                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Full commit hook                                  | Passed for this infrastructure/polish handoff, including type-check, lint, format, dependency census, template hygiene and the unit authority audit                                                                                                                                            |
+| `type-check:userland`                             | Base, System, System-testing and Personal passed, each run on its own; Base and System-testing were rerun after the latest changes                                                                                                                                                             |
+| System test `eval-cancel-run`                     | Passed on final readiness/ownership sources in run `st_4c1422d4fdc04f2a81939af8eafbc0af`, 1.515 s, zero tool failures                                                                                                                                                                          |
+| System test `terminal-chat-approval-fork-resume`  | Passed on final sources in run `st_79a0805c43fa446597cdb60c3a3c7c24`, 55.440 s: fork-agent reply, switch-back, kill/relaunch, older-question/result restoration and original tool-title preservation; zero tool failures, concurrency 1. The managed instance was stopped and retired. See §5. |
+| Host focused suites                               | 45 passed after main integration; release preparation tests 20 passed                                                                                                                                                                                                                          |
+| Base terminal/core focused tests                  | 34 passed after removing speculative input/join changes; projected composition typecheck passed                                                                                                                                                                                                |
+| System-testing terminal/frame/history tests       | 38 passed; projected composition typecheck passed                                                                                                                                                                                                                                              |
+| Infrastructure/polish focused host tests          | Approval/tier/matrix 24, RPC client 85, native build-report/authority 49, installed-smoke 10 passed                                                                                                                                                                                            |
+| Replay and invocation projection regressions      | Replay 88 and canonical protocol 73 passed; final Base composition typecheck passed                                                                                                                                                                                                            |
+| Ordered replay readiness and connection ownership | 101 focused replay tests, 17 independently rerun connection tests and 3 signal-store tests passed; Base main/integration composition checks passed                                                                                                                                             |
+| Terminal browser tests                            | 108 passed                                                                                                                                                                                                                                                                                     |
+| Live `pnpm terminal` checks                       | Launcher, Chat streaming, detach/resume, kill/relaunch with transcript, shell cwd, quit with a live PTY (~10 s, clean). Fork plus fork-agent reply checked only before the upstream merge                                                                                                      |
+| Cold start to launcher                            | Before: about 26 min to template-preparation done. After: ~70 s on a quiet host; ~27.5 s with a warm derived cache                                                                                                                                                                             |
+| `extensions.invoke` p50                           | ~225 ms → 9.1 ms. Shell echo p50 ≈ 58 ms, measured before the last extension fix                                                                                                                                                                                                               |
+| Full host test suite on the final branch          | **Not run**                                                                                                                                                                                                                                                                                    |
+| Other system tests on the final branch            | **Not run**                                                                                                                                                                                                                                                                                    |
 
 ## 5. Open work, in priority order
 
@@ -266,6 +274,7 @@ belongs to someone else.
    The final exact agent-driven fork/resume and eval-cancellation samples now
    pass (see §4). The full host suite remains unrun; do not substitute the
    focused sample for that broader pre-merge gate.
+
 2. **Fork scenario harness corrected.** The earlier cloned-agent delivery
    diagnosis was wrong. `/Forked/` matched the parent's transcript marker before
    navigation completed, so the harness sent its prompt to the wrong conversation.
@@ -335,6 +344,7 @@ belongs to someone else.
    `eval-cancel-run` also passed on these final sources in
    `st_4c1422d4fdc04f2a81939af8eafbc0af`, 1.515 s. The final managed instance
    was stopped and its root and registry record retired.
+
 3. **Approval withdrawal cancellation is complete.** Host `a52e2fb42`
    propagates a typed cancellation with the original lifecycle cause through
    approval waiters, DO dispatch and EvalDO. `eval-cancel-run` passed.
@@ -437,6 +447,7 @@ belongs to someone else.
     correctness/cache reuse, not an installed-launch speedup.
     No speculative-prefill delay or user-visible speedup has been established,
     so no scheduling change is justified by this run.
+
 16. **Installed acceptance tooling ready; exact artifact unavailable.** The
     existing `scripts/terminal-app-smoke.mjs` accepts `--app-directory` and
     `--expected-release`, validates exact template pins and the canonical full

@@ -8,6 +8,7 @@ export function developmentTemplateSetSources(selection) {
   return selection.sources.map((source) => ({
     pin: requiredEntry(selection.sourcePins, source.id, "pin"),
     checkout: requiredEntry(selection.checkouts, source.id, "checkpoint"),
+    review: requiredEntry(selection.reviews, source.id, "review"),
   }));
 }
 

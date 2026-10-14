@@ -1,6 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   HOST_BRAND_RUNTIME_ARTIFACTS,
   NATIVE_WORKSPACE_ENTRIES,
@@ -36,6 +36,85 @@ const REQUIRED = {
   ],
 };
 const COMPLETION_RECEIPT = "host-build-fingerprint.json";
+export const HOST_PREPARATION_RECIPES = "host-preparation-recipes.json";
+const PREPARATION_ENTRIES = ["prepare-workspace-templates.mjs", "prepare-workspace-templates.cjs"];
+
+/** Capture executable recipe bytes at publication, never at consumer startup. */
+function preparationRecipes(root) {
+  const entries = {};
+  for (const entry of PREPARATION_ENTRIES) {
+    const file = path.join(root, entry);
+    if (fs.existsSync(file))
+      entries[entry] = createHash("sha256").update(fs.readFileSync(file)).digest("hex");
+  }
+  if (!entries[PREPARATION_ENTRIES[0]])
+    throw new Error("Host preparation publication is missing its standalone entry");
+  return { format: "vibestudio-host-preparation-recipes/1", entries };
+}
+
+function writeGenerationRecord(destination, record, failureMessage) {
+  const temporary = `${destination}.${randomUUID()}.publishing`;
+  let handle;
+  let owned = false;
+  const failures = [];
+  try {
+    handle = fs.openSync(temporary, "wx", 0o600);
+    owned = true;
+    fs.writeFileSync(handle, `${JSON.stringify(record)}\n`);
+    fs.closeSync(handle);
+    handle = undefined;
+    fs.renameSync(temporary, destination);
+  } catch (error) {
+    failures.push(error);
+  } finally {
+    for (const cleanup of [
+      () => {
+        if (handle !== undefined) fs.closeSync(handle);
+      },
+      () => {
+        if (owned) fs.rmSync(temporary, { force: true });
+      },
+    ]) {
+      try {
+        cleanup();
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length)
+    throw new AggregateError(failures, failureMessage, {
+      cause: failures[0],
+    });
+}
+
+function writePreparationRecipes(root, record) {
+  writeGenerationRecord(
+    path.join(root, HOST_PREPARATION_RECIPES),
+    record,
+    "Preparation recipe publication and retirement failed"
+  );
+}
+
+export function readHostPreparationRecipe(root, entry) {
+  if (!PREPARATION_ENTRIES.includes(entry))
+    throw new Error(`Unknown host preparation entry: ${entry}`);
+  const record = JSON.parse(fs.readFileSync(path.join(root, HOST_PREPARATION_RECIPES), "utf8"));
+  if (
+    record?.format !== "vibestudio-host-preparation-recipes/1" ||
+    !record.entries ||
+    typeof record.entries !== "object" ||
+    Array.isArray(record.entries) ||
+    Object.keys(record.entries).some((name) => !PREPARATION_ENTRIES.includes(name)) ||
+    Object.values(record.entries).some(
+      (value) => typeof value !== "string" || !/^[a-f0-9]{64}$/u.test(value)
+    ) ||
+    !record.entries[entry]
+  )
+    throw new Error("Published host preparation recipe record is invalid");
+  return record.entries[entry];
+}
 
 const heldGenerations = new Map();
 let exitCleanupInstalled = false;
@@ -213,23 +292,105 @@ export function assertHostBuildPayloadComplete(cwd, kind) {
   }
 }
 
+function validateBuildIdentity(build) {
+  if (!(build.kind in REQUIRED)) throw new Error(`Unknown host generation kind: ${build.kind}`);
+  if (!["development", "production"].includes(build.mode))
+    throw new Error("Invalid host build mode");
+  if (!/^[a-f0-9]{64}$/u.test(build.fingerprint)) throw new Error("Invalid host build fingerprint");
+  if (!Number.isSafeInteger(build.inputCount) || build.inputCount < 1)
+    throw new Error("Invalid host build input count");
+}
+
+/** The publisher already proved executable bytes. Every consumer admits the
+ * same finite identity/layout/recipe receipts, without rehashing payloads. */
+function validatePublishedGeneration(cwd, root, build) {
+  validateGenerationLayout(cwd, root);
+  const receipt = JSON.parse(fs.readFileSync(path.join(root, COMPLETION_RECEIPT), "utf8"));
+  if (
+    Object.keys(receipt ?? {})
+      .sort()
+      .join(",") !== "fingerprint,inputCount,mode,version" ||
+    receipt.version !== 1 ||
+    receipt.mode !== build.mode ||
+    receipt.fingerprint !== build.fingerprint ||
+    receipt.inputCount !== build.inputCount
+  )
+    throw new Error("Published host build generation receipt does not match its identity");
+  for (const entry of REQUIRED[build.kind]) {
+    if (!fs.existsSync(path.join(root, entry)))
+      throw new Error(`Published ${build.kind} host generation is incomplete: missing ${entry}`);
+  }
+  readHostPreparationRecipe(root, PREPARATION_ENTRIES[0]);
+}
+
+function currentGenerationOrNull(generations, kind) {
+  try {
+    return parseCurrentGenerationRecord(generations, kind, { ignoreLegacy: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+function selectCurrentGeneration(generations, build, target, current) {
+  if (current?.resolvedRoot === target) return;
+  const pointer = path.join(generations, `current-${build.kind}.json`);
+  writeGenerationRecord(
+    pointer,
+    {
+      version: 2,
+      kind: build.kind,
+      mode: build.mode,
+      fingerprint: build.fingerprint,
+      inputCount: build.inputCount,
+      root: path.basename(target),
+    },
+    "Host generation selection and retirement failed"
+  );
+  collectHostBuildGenerationsLocked(generations);
+}
+
+function admitPublishedGenerationLocked(cwd, build) {
+  const generations = path.resolve(cwd, "dist/host-generations");
+  const current = currentGenerationOrNull(generations, build.kind);
+  const target = hostBuildGenerationRoot(cwd, build.kind, build.fingerprint);
+  if (!fs.existsSync(target)) {
+    if (current?.resolvedRoot === target) validatePublishedGeneration(cwd, target, build);
+    return null;
+  }
+  validatePublishedGeneration(cwd, target, build);
+  if (
+    current?.resolvedRoot === target &&
+    (current.mode !== build.mode || current.inputCount !== build.inputCount)
+  )
+    throw new Error("Published host build generation pointer does not match its identity");
+  selectCurrentGeneration(generations, build, target, current);
+  return target;
+}
+
+/** An absent publication permits the ordinary producer to run. A present
+ * malformed/incomplete publication fails admission, never falls through. */
+export function admitPublishedHostBuildGeneration(cwd, build) {
+  validateBuildIdentity(build);
+  const generations = path.resolve(cwd, "dist/host-generations");
+  if (!fs.existsSync(generations)) return null;
+  return withGenerationLock(generations, () => admitPublishedGenerationLocked(cwd, build));
+}
+
 export function publishHostBuildGeneration(cwd, build) {
   const dist = path.resolve(cwd, "dist");
   const generations = path.join(dist, "host-generations");
-  if (!(build.kind in REQUIRED)) throw new Error(`Unknown host generation kind: ${build.kind}`);
-  if (!["development", "production"].includes(build.mode)) {
-    throw new Error("Invalid host build mode");
-  }
-  if (!/^[a-f0-9]{64}$/u.test(build.fingerprint)) throw new Error("Invalid host build fingerprint");
-  if (!Number.isSafeInteger(build.inputCount) || build.inputCount < 1) {
-    throw new Error("Invalid host build input count");
-  }
+  validateBuildIdentity(build);
+  const admitted = admitPublishedHostBuildGeneration(cwd, build);
+  if (admitted) return admitted;
   assertHostBuildPayloadComplete(cwd, build.kind);
   if (!fs.existsSync(path.join(dist, COMPLETION_RECEIPT))) {
     throw new Error(
       `Cannot publish incomplete ${build.kind} host generation: missing ${COMPLETION_RECEIPT}`
     );
   }
+  const recipes = preparationRecipes(dist);
+  writePreparationRecipes(dist, recipes);
   return withGenerationLock(generations, () => {
     const target = hostBuildGenerationRoot(cwd, build.kind, build.fingerprint);
     if (!fs.existsSync(target)) {
@@ -259,28 +420,21 @@ export function publishHostBuildGeneration(cwd, build) {
           path.join(staging, "node_modules"),
           "dir"
         );
+        writePreparationRecipes(staging, {
+          ...recipes,
+          entries: Object.fromEntries(
+            Object.entries(recipes.entries).filter(([entry]) =>
+              fs.existsSync(path.join(staging, entry))
+            )
+          ),
+        });
+        validatePublishedGeneration(cwd, staging, build);
         fs.renameSync(staging, target);
       } finally {
         fs.rmSync(staging, { recursive: true, force: true });
       }
     }
-    validateGenerationLayout(cwd, target);
-    const current = path.join(generations, `current-${build.kind}.json`);
-    const temporary = `${current}.${randomUUID()}.tmp`;
-    fs.writeFileSync(
-      temporary,
-      `${JSON.stringify({
-        version: 2,
-        kind: build.kind,
-        mode: build.mode,
-        fingerprint: build.fingerprint,
-        inputCount: build.inputCount,
-        root: path.basename(target),
-      })}\n`
-    );
-    fs.renameSync(temporary, current);
-    collectHostBuildGenerationsLocked(generations);
-    return target;
+    return admitPublishedGenerationLocked(cwd, build);
   });
 }
 
@@ -311,10 +465,7 @@ export function readCurrentHostBuildGeneration(cwd = process.cwd(), kind) {
   return withGenerationLock(generations, () => {
     const record = parseCurrentGenerationRecord(generations, kind);
     const root = record.resolvedRoot;
-    if (fs.realpathSync(root) !== root) {
-      throw new Error("Current host build generation root is invalid");
-    }
-    validateGenerationLayout(cwd, root);
+    validatePublishedGeneration(cwd, root, record);
     retainGeneration(generations, root);
     return root;
   });

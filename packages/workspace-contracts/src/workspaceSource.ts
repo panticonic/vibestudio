@@ -22,6 +22,8 @@ export interface WorkspaceSourceExactPin {
 /** Review facts shared by native folder and remote template inspection. */
 export const WorkspaceSourceReviewSchema = z
   .object({
+    /** Canonical manifest bytes decoded from the reviewed exact commit. */
+    manifestText: z.string().optional(),
     presentation: z
       .object({ name: z.string().optional(), description: z.string().optional() })
       .strict()

@@ -103,6 +103,19 @@ export type GitCommitTreeEntry =
       oid: string;
     };
 
+/** Immutable tree evidence; blob bytes are loaded only by their actual consumer. */
+export interface GitCommitTreeIndexEntry {
+  path: string;
+  type: "blob" | "commit" | "special";
+  mode: number;
+  oid: string;
+}
+
+export interface GitCommitTreeIndex {
+  readonly entries: readonly GitCommitTreeIndexEntry[];
+  readFile(path: string): Promise<Uint8Array | null>;
+}
+
 function toGitLogEntry(commit: Awaited<ReturnType<typeof git.log>>[number]): GitLogEntry {
   return {
     oid: commit.oid,
@@ -1529,31 +1542,84 @@ export class GitClient {
    * Irregular leaves are returned without interpretation so the importing
    * semantic boundary can reject entry kinds it cannot represent.
    */
-  async readCommitTree(dir: string, commitOid: string): Promise<GitCommitTreeEntry[]> {
+  async readCommitTreeIndex(dir: string, commitOid: string): Promise<GitCommitTreeIndex> {
     if (!isFullOid(commitOid)) {
       throw new Error(`readCommitTree requires a full commit object id, got "${commitOid}"`);
     }
+    const readers = new Map<string, () => Promise<Uint8Array>>();
     const entries = await git.walk({
       fs: this.fs,
       dir,
       trees: [git.TREE({ ref: commitOid })],
-      map: async (filepath, [entry]): Promise<GitCommitTreeEntry | undefined> => {
+      map: async (filepath, [entry]): Promise<GitCommitTreeIndexEntry | undefined> => {
         if (filepath === "." || !entry) return undefined;
         const type = await entry.type();
         if (type === "tree") return undefined;
         const mode = await entry.mode();
         const oid = await entry.oid();
         if (type !== "blob") return { path: filepath, type, mode, oid };
-        const content = await entry.content();
-        if (!content) {
-          throw new Error(`Git tree blob ${filepath} (${oid}) has no readable content`);
-        }
-        return { path: filepath, type, mode, oid, bytes: content };
+        readers.set(filepath, async () => {
+          const content = await entry.content();
+          if (!content)
+            throw new Error(`Git tree blob ${filepath} (${oid}) has no readable content`);
+          return content;
+        });
+        return { path: filepath, type, mode, oid };
       },
     });
-    return (entries as Array<GitCommitTreeEntry | undefined>)
-      .filter((entry): entry is GitCommitTreeEntry => entry !== undefined)
-      .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+    const loaded = new Map<string, Promise<Uint8Array>>();
+    return {
+      entries: (entries as Array<GitCommitTreeIndexEntry | undefined>)
+        .filter((entry): entry is GitCommitTreeIndexEntry => entry !== undefined)
+        .sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0)),
+      async readFile(filePath) {
+        const reader = readers.get(filePath);
+        if (!reader) return null;
+        let bytes = loaded.get(filePath);
+        if (!bytes) {
+          bytes = reader();
+          loaded.set(filePath, bytes);
+        }
+        return bytes;
+      },
+    };
+  }
+
+  /** Full consumers materialize the same indexed immutable tree, with bounded
+   * blob reads. Review consumers need only its metadata and manifest bytes. */
+  async readCommitTree(dir: string, commitOid: string): Promise<GitCommitTreeEntry[]> {
+    const index = await this.readCommitTreeIndex(dir, commitOid);
+    const entries = new Array<GitCommitTreeEntry>(index.entries.length);
+    let cursor = 0;
+    let failed = false;
+    const results = await Promise.allSettled(
+      Array.from({ length: Math.min(8, index.entries.length) }, async () => {
+        try {
+          while (!failed && cursor < index.entries.length) {
+            const position = cursor++;
+            const entry = index.entries[position]!;
+            if (entry.type !== "blob") {
+              entries[position] = { ...entry, type: entry.type };
+              continue;
+            }
+            const bytes = await index.readFile(entry.path);
+            if (!bytes)
+              throw new Error(`Git tree blob ${entry.path} (${entry.oid}) has no readable content`);
+            entries[position] = { ...entry, type: "blob", bytes };
+          }
+        } catch (error) {
+          failed = true;
+          throw error;
+        }
+      })
+    );
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []
+    );
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1)
+      throw new AggregateError(failures, "Git tree blob reads failed", { cause: failures[0] });
+    return entries;
   }
 
   /**

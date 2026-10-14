@@ -134,6 +134,7 @@ describe("npm CLI packaging", () => {
       "dist/internal-do.bundle.mjs",
       "dist/sql-wasm.wasm",
       "dist/host-build-fingerprint.json",
+      "dist/host-preparation-recipes.json",
     ]);
   });
 

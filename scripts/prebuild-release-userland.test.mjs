@@ -372,9 +372,15 @@ test("installed session joins its server and listeners after operation and shutd
     mode: "hub",
     gatewayUrl: "https://example.test",
     rootInvite: {
-      ...pairing,
-      deepLink: createConnectDeepLink(pairing),
-      pairUrl: createConnectPairUrl(pairing),
+      code: pairing.code,
+      reach: {
+        status: "ready",
+        endpointId: pairing.endpointId,
+        relays: pairing.relays,
+        v: pairing.v,
+        deepLink: createConnectDeepLink(pairing),
+        pairUrl: createConnectPairUrl(pairing),
+      },
       expiresInMs: 60_000,
       expiresAt: 60_000,
       serverId,
@@ -437,9 +443,15 @@ test("installed verification carries the supported build concurrency into server
     mode: "hub",
     gatewayUrl: "https://example.test",
     rootInvite: {
-      ...pairing,
-      deepLink: createConnectDeepLink(pairing),
-      pairUrl: createConnectPairUrl(pairing),
+      code: pairing.code,
+      reach: {
+        status: "ready",
+        endpointId: pairing.endpointId,
+        relays: pairing.relays,
+        v: pairing.v,
+        deepLink: createConnectDeepLink(pairing),
+        pairUrl: createConnectPairUrl(pairing),
+      },
       expiresInMs: 60_000,
       expiresAt: 60_000,
       serverId: `srv_${"s".repeat(24)}`,
@@ -511,9 +523,15 @@ test("release-session cancellation aborts and joins an admitted CLI call before 
     mode: "hub",
     gatewayUrl: "https://example.test",
     rootInvite: {
-      ...pairing,
-      deepLink: createConnectDeepLink(pairing),
-      pairUrl: createConnectPairUrl(pairing),
+      code: pairing.code,
+      reach: {
+        status: "ready",
+        endpointId: pairing.endpointId,
+        relays: pairing.relays,
+        v: pairing.v,
+        deepLink: createConnectDeepLink(pairing),
+        pairUrl: createConnectPairUrl(pairing),
+      },
       expiresInMs: 60_000,
       expiresAt: 60_000,
       serverId,
@@ -771,7 +789,12 @@ test("installed producer ignores an inherited borrowed release root", async () =
   const root = await fixture();
   const entry = path.join(root, "producer.mjs");
   const inheritedRoot = path.join(root, "missing-borrowed-release");
-  await fs.writeFile(entry, `process.send({ kind: "completed" }, () => process.exit(0));`);
+  await fs.writeFile(
+    entry,
+    `const root = process.argv[process.argv.indexOf("--output") + 1];
+    process.send({ kind: "sources-ready", root }, () =>
+      process.send({ kind: "completed" }, () => process.exit(0)));`
+  );
   const previous = process.env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT;
   process.env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT = inheritedRoot;
   try {

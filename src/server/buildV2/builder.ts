@@ -39,12 +39,15 @@ import { resolveNativeTypeScriptServerPath } from "../appRoot.js";
 import {
   BuildFlight,
   BuildSlotQueue,
+  BuildPriorityOwner,
+  hasBuildSlotCapacity,
   BuilderLifetime,
   joinedFailure,
   type BuildPriority,
-  type BuildPriorityOwner,
 } from "./builderLifetime.js";
 import { profileEsbuildBuild } from "./compilerProfile.js";
+import { SharedBuildCoordinator } from "./sharedBuildCoordinator.js";
+import { derivedCacheCoordinator } from "@vibestudio/shared/derivedCache";
 import type { GraphNode, PackageGraph } from "./packageGraph.js";
 import { BuildDiagnosticsError, BuildRequestError, diagnosticsFromError } from "./diagnostics.js";
 import type { LibraryBuildTarget, WorkspaceTestRuntime } from "@vibestudio/service-schemas/build";
@@ -106,6 +109,7 @@ import type {
 } from "@vibestudio/shared/buildProvider";
 import { WorkspaceRpcCatalogWorkerClient } from "./workspaceRpcCatalogWorkerClient.js";
 import { composePreparedDependencyPlugins } from "./preparedDependencyPlugins.js";
+import type { PreparedDependencyResolution } from "./preparedDependencyResolution.js";
 import {
   unknownWorkspaceRpcSchemaError,
   workspaceRpcSchema,
@@ -175,6 +179,7 @@ export class BuildProcessOwner {
 
   private workerBatches = 0;
   private readonly sharedBuildFlights = new Map<string, SharedBuildFlightEntry>();
+  private readonly sharedCoordinators = new Map<string, SharedBuildCoordinator>();
   private readonly extensionRuntimeProjections = new Map<string, Promise<void>>();
   private runningBuilds = 0;
   private runningNonInteractiveBuilds = 0;
@@ -297,6 +302,14 @@ export class BuildProcessOwner {
           outcome.status === "rejected" ? [outcome.reason] : []
         ),
       ];
+      for (const coordinator of this.sharedCoordinators.values()) {
+        try {
+          coordinator.close();
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      this.sharedCoordinators.clear();
       const failure = joinedFailure(failures, "Build process owner shutdown failed");
       if (failure !== undefined || failures.length > 0) throw failure;
     })();
@@ -305,6 +318,16 @@ export class BuildProcessOwner {
 
   get activeBuilds(): number {
     return this.runningBuilds;
+  }
+
+  sharedCoordinator(root: string): SharedBuildCoordinator {
+    this.lifetime.assertOpen();
+    let coordinator = this.sharedCoordinators.get(root);
+    if (!coordinator) {
+      coordinator = new SharedBuildCoordinator(root, MAX_CONCURRENT_BUILDS);
+      this.sharedCoordinators.set(root, coordinator);
+    }
+    return coordinator;
   }
 
   /**
@@ -358,7 +381,9 @@ export class BuildProcessOwner {
       released = true;
       entry.borrowers--;
       if (entry.borrowers === 0 && !entry.settled && !entry.controller.signal.aborted) {
-        entry.controller.abort(new Error("All shared build requesters withdrew"));
+        entry.controller.abort(
+          signal.aborted ? signal.reason : new Error("All shared build requesters withdrew")
+        );
       }
     };
     if (signal.aborted) {
@@ -398,6 +423,26 @@ export class BuildProcessOwner {
   ): Promise<T> {
     this.lifetime.assertOpen();
     if (buildSlotHeld.getStore()) return run();
+    const coordinator = sharedBuildContext.getStore();
+    if (coordinator) {
+      // The shared queue is the compiler budget for this cache. Nested
+      // dependencies run under their parent's permit, just as in the local
+      // queue; a cross-process result waiter never takes a compiler permit.
+      const demand = priorityOwner ?? new BuildPriorityOwner(priority);
+      return coordinator.withSlot(demand, signal, async () => {
+        const admittedPriority = demand.priority;
+        this.runningBuilds++;
+        if (admittedPriority !== "interactive") this.runningNonInteractiveBuilds++;
+        if (admittedPriority === "speculative") this.runningSpeculativeBuilds++;
+        try {
+          return await buildSlotHeld.run(true, run);
+        } finally {
+          this.runningBuilds--;
+          if (admittedPriority !== "interactive") this.runningNonInteractiveBuilds--;
+          if (admittedPriority === "speculative") this.runningSpeculativeBuilds--;
+        }
+      });
+    }
     let lease: Awaited<ReturnType<BuildSlotQueue["acquire"]>>;
     try {
       lease = await this.buildSlotQueue.acquire(
@@ -518,9 +563,53 @@ function admitSessionBuild(
   const cacheRoot = session.sharedBuildResultCacheRoot;
   if (!cacheRoot) return create(session.signal);
   const sharedKey = `${cacheRoot}\0${buildKey}`;
-  const admitted = session.processOwner.admitSharedBuild(sharedKey, create);
+  const coordinator = session.processOwner.sharedCoordinator(cacheRoot);
+  const admitted = session.processOwner.admitSharedBuild(
+    sharedKey,
+    (signal) =>
+      new BuildFlight(priority, async (demand) => {
+        const lease = derivedCacheCoordinator(cacheRoot).acquire(cacheRoot, buildKey);
+        try {
+          const outcome = await coordinator.run(
+            buildKey,
+            demand,
+            signal,
+            async (compilerDemand) => {
+              // Another process may have published between the initial lookup and
+              // ownership admission. Validate and bind that result before compiling.
+              const cached = await session.store.getOrHydrate(buildKey, sourceStateHash);
+              if (cached) {
+                await ensureNodeProgramBuildReady(session, cached);
+                return cached;
+              }
+              return sharedBuildContext.run(coordinator, async () => {
+                const flight = create(signal);
+                compilerDemand.bindQueuedPromotion((next) => flight.priority.promote(next));
+                try {
+                  return await flight.promise;
+                } finally {
+                  compilerDemand.clearQueuedPromotion();
+                }
+              });
+            }
+          );
+          if (outcome.produced) return outcome.value;
+          const hydrated = await session.store.getOrHydrate(buildKey, sourceStateHash);
+          if (!hydrated)
+            throw new Error(`Shared build ${buildKey} completed without a validated cache result`);
+          await ensureNodeProgramBuildReady(session, hydrated);
+          return hydrated;
+        } finally {
+          lease.release();
+        }
+      })
+  );
 
   return new BuildFlight(priority, async (adopter) => {
+    // Every borrowing role pins the reconstruction result through its own
+    // provenance hydration, not merely until the compiler owner's promise
+    // settles. Collection may run in another process at either boundary.
+    const roleLease = derivedCacheCoordinator(cacheRoot).acquire(cacheRoot, buildKey);
     adopter.bindQueuedPromotion((promoted) => admitted.entry.flight.priority.promote(promoted));
     try {
       const result = await withBuilderWorkers(session, () =>
@@ -537,6 +626,7 @@ function admitSessionBuild(
       return hydrated;
     } finally {
       adopter.clearQueuedPromotion();
+      roleLease.release();
     }
   });
 }
@@ -698,21 +788,7 @@ function sourcePathForNode(node: GraphNode, sourceRoot: string): string {
  * Neither can be preempted once npm, TypeScript, or esbuild is running, so
  * queue ordering alone is insufficient to protect required work.
  */
-export function hasBuildSlotCapacity(
-  priority: BuildPriority,
-  activeBuilds: number,
-  activeNonInteractiveBuilds: number,
-  activeSpeculativeBuilds: number,
-  maxConcurrentBuilds: number
-): boolean {
-  if (activeBuilds >= maxConcurrentBuilds) return false;
-  if (priority === "interactive") return true;
-  const nonInteractiveLimit = Math.max(1, maxConcurrentBuilds - 1);
-  if (activeNonInteractiveBuilds >= nonInteractiveLimit) return false;
-  if (priority === "background") return true;
-  const speculativeLimit = Math.max(1, maxConcurrentBuilds - 2);
-  return activeSpeculativeBuilds < speculativeLimit;
-}
+export { hasBuildSlotCapacity } from "./builderLifetime.js";
 
 /**
  * Narrate where a build actually is.
@@ -765,6 +841,7 @@ function traceBuildStages(
 }
 
 const buildSlotHeld = new AsyncLocalStorage<true>();
+const sharedBuildContext = new AsyncLocalStorage<SharedBuildCoordinator>();
 
 // Build coalescing is scoped to the build session because a stored descriptor
 // belongs to that session's state root even when artifact bytes are shared.
@@ -2833,6 +2910,7 @@ interface BuildEnv {
   outdir: string;
   sourcePath: string;
   nodePaths: string[];
+  dependencyResolution: PreparedDependencyResolution;
   nodeModulesDir: string | null;
   externalDeps: Record<string, string>;
   /** Closure externals the composing realm provides; never bundled into this unit. */
@@ -2919,6 +2997,7 @@ async function prepareBuildEnv(
       outdir,
       sourcePath,
       nodePaths,
+      dependencyResolution: dependencyEnvironment.dependencyResolution,
       nodeModulesDir,
       externalDeps,
       providedPeers,
@@ -3328,10 +3407,13 @@ async function buildWebsiteBundle(
     const dedupe = createDedupePlugin(env.resolveDir, dedupePackages);
     if (dedupe) plugins.push(dedupe);
     if (adapter.plugins) plugins.push(...(await adapter.plugins()));
-    const preparedPlugins = composePreparedDependencyPlugins(plugins, env.nodePaths, [
-      sourceRoot,
-      env.outdir,
-    ]);
+    const preparedPlugins = composePreparedDependencyPlugins(
+      plugins,
+      env.nodePaths,
+      [sourceRoot, env.outdir],
+      [],
+      env.dependencyResolution
+    );
 
     const options: esbuild.BuildOptions = {
       absWorkingDir: env.outdir,
@@ -3533,7 +3615,8 @@ async function buildPanel(
     plugins,
     nodePaths,
     [sourceRoot, outdir],
-    externalSpecifiers
+    externalSpecifiers,
+    env.dependencyResolution
   );
 
   // Build esbuild options with adapter-driven JSX settings
@@ -4183,7 +4266,8 @@ async function buildWorker(
     plugins,
     nodePaths,
     [sourceRoot, outdir],
-    WORKER_RUNTIME_EXTERNALS
+    WORKER_RUNTIME_EXTERNALS,
+    env.dependencyResolution
   );
   const configureReadyAt = Date.now();
 
@@ -4617,7 +4701,8 @@ async function buildTerminalApp(input: AppBuildInput): Promise<StoredBuildResult
         ],
         nodePaths,
         [sourceRoot, outdir],
-        WORKER_RUNTIME_EXTERNALS
+        WORKER_RUNTIME_EXTERNALS,
+        env.dependencyResolution
       ),
       nodePaths,
       absWorkingDir: resolveDir,
@@ -4890,7 +4975,13 @@ async function bundleNodeProgram(
     conditions: [...input.conditions],
     mainFields: ["module", "main"],
     external: [...KNOWN_NATIVE_EXTERNALS, ...expandExternalSpecifiers(runtimeExternalDeps)],
-    plugins: composePreparedDependencyPlugins(plugins, nodePaths, [sourceRoot, outdir], externals),
+    plugins: composePreparedDependencyPlugins(
+      plugins,
+      nodePaths,
+      [sourceRoot, outdir],
+      externals,
+      env.dependencyResolution
+    ),
     nodePaths,
     // Same automatic JSX runtime the userland type-check and panel builds use.
     tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
@@ -4977,7 +5068,6 @@ async function buildExtension(
     authority
   );
   const dependencyMode = normalizeExtensionDependencyMode(extensionManifest?.["dependencyMode"]);
-
   try {
     const program = await bundleNodeProgram(
       session,
@@ -5038,10 +5128,16 @@ async function buildExtension(
         },
         artifacts: smokeArtifacts,
       };
-      await smokeTestExtensionBuild(session, smokeResult, node, {
-        dependencyDiagnostics,
-        runtimeNodeModulesDir: program.runtimeDeps.nodeModulesDir,
-      });
+      await smokeTestExtensionBuild(
+        session,
+        smokeResult,
+        node,
+        {
+          dependencyDiagnostics,
+          runtimeNodeModulesDir: program.runtimeDeps.nodeModulesDir,
+        },
+        signal
+      );
 
       const result = await storeSimpleBuild(
         session,
@@ -5164,8 +5260,12 @@ async function smokeTestExtensionBuild(
   details: {
     dependencyDiagnostics: ExtensionDependencyDiagnostics;
     runtimeNodeModulesDir: string;
-  }
+  },
+  signal: AbortSignal
 ): Promise<void> {
+  // This exact flight, not a borrowing role's lifetime, owns admission. Once
+  // admitted, the job is joined before its executor can be retired.
+  signal.throwIfAborted();
   try {
     await session.runNativeJob({
       script: generateExtensionSmokeScript(
@@ -5543,7 +5643,8 @@ async function buildLibraryBundle(
         [
           ...libraryExternals,
           ...(target === "worker" ? WORKER_RUNTIME_EXTERNALS : NODE_BUILTIN_EXTERNALS),
-        ]
+        ],
+        env.dependencyResolution
       ),
       nodePaths: env.nodePaths,
       loader: LIBRARY_ASSET_LOADERS,

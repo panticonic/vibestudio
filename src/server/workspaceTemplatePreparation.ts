@@ -1,10 +1,16 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
-import { readExactGitSnapshot, discoverTrackedGitSnapshot } from "@vibestudio/git";
+import {
+  readExactGitSnapshotIndex,
+  discoverTrackedGitCheckout,
+  materializeExactGitSnapshot,
+  type ExactGitSnapshotIndex,
+} from "@vibestudio/git";
 import { getCentralDataPath, getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { readDefaultWorkspaceTemplates } from "@vibestudio/workspace/templateRelease";
+import { readWorkspaceSources } from "@vibestudio/workspace/workspaceSources";
 import { workspaceReleaseResourceRoot } from "./preparedWorkspaceTemplate.js";
 import {
   sameWorkspaceTemplatePin,
@@ -14,21 +20,34 @@ import {
   templateGitTransportUrl,
   normalizeTemplateGitUrl,
 } from "@vibestudio/workspace/templateCoordinates";
-import { WorkspaceRootTemplateBootstrap } from "./workspaceRootTemplateBootstrap.js";
+import {
+  WorkspaceRootTemplateBootstrap,
+  resolveDeclaredTemplateLayerPlan,
+  readTemplateLayerMetadata,
+  type ResolvedTemplateLayerPlan,
+  type TemplateLayerMetadata,
+} from "./workspaceRootTemplateBootstrap.js";
 import {
   preparedWorkspaceTemplatePath,
   preparedWorkspaceTemplateSchema,
+  installPreparedWorkspaceTemplate,
+  readPreparedWorkspaceTemplate,
+  type PreparedWorkspaceTemplate,
 } from "./preparedWorkspaceTemplate.js";
 import {
   putBootstrapBytes,
   collectTreeReachableDigests,
   blobPath,
 } from "./services/blobstoreService.js";
-import { acquireRootTemplateSnapshot } from "./acquireRootTemplateSnapshot.js";
+import { acquireRootTemplateSnapshotIndex } from "./acquireRootTemplateSnapshot.js";
 import { WorkspaceVcs } from "./vcsHost/workspaceVcs.js";
 import { createProtectedRefStore } from "./services/protectedRefStore.js";
 import { initBuildSystemV2 } from "./buildV2/index.js";
 import { createBuildProcessOwner } from "./buildV2/builder.js";
+import {
+  composeWorkspaceDependencyFingerprint,
+  captureRootDependencyFingerprint,
+} from "./buildV2/effectiveVersion.js";
 import { resolveBuildStoreRoots } from "./buildV2/buildStore.js";
 import { prepareWorkspaceRuntimeBuilds } from "./workspaceTemplateBuilds.js";
 import { startNativeWorkspaceRuntime } from "./nativeWorkspaceRuntime.js";
@@ -39,68 +58,530 @@ import { drainExternalDependencyPruning } from "./buildV2/externalDeps.js";
 import { blobCasPath, linkReconstructableBlobFile } from "./storage/blobCas.js";
 import { createHostBootstrapGitReadClient } from "./services/hostGitHttpClient.js";
 import { hasOwnershipFailure } from "../../scripts/lib/owned-cleanup.mjs";
+import { runWithOwnedCleanup, runOwnedCleanupSteps } from "../../scripts/lib/owned-cleanup.mjs";
+import { forEachOwnedConcurrent } from "../../scripts/lib/owned-concurrency.mjs";
 import {
   publishPreparedWorkspaceRelease,
   validateExistingPreparedWorkspaceRelease,
   workspaceReleaseIdentity,
+  type WorkspaceReleaseOperation,
+  type WorkspaceReleaseIdentity,
   type PreparedWorkspaceReleaseBuild,
   type PreparedWorkspaceReleaseInput,
 } from "./preparedWorkspaceRelease.js";
+import { prepareCachedWorkspaceRelease } from "./preparedWorkspaceReleaseCache.js";
+import { acquirePreparedWorkspaceSources } from "./preparedWorkspaceSourceCache.js";
+import { readHostPreparationRecipe } from "../../scripts/host-build-generations.mjs";
+import { resolveRequiredHostArtifactRoot } from "./appRoot.js";
 
-/**
- * What a producer publishes.
- *   - "sources": the sealed template sources a workspace is created from. A
- *     source supervisor needs nothing else to start: the server compiles the
- *     runtimes it is asked for on demand, in its own scheduler, with interactive
- *     work ahead of background preparation, and reuses the shared derived cache.
- *   - "release": the sources plus every runtime built and sealed under one
- *     manifest. A packager ships this so an installed host never compiles.
- */
+/** Source supervisors need immutable source only; packagers also seal runtimes. */
 export type WorkspacePreparationScope = "sources" | "release";
 
-/** A fact the producer learned about its own progress, reported as it happens. */
+/** Facts emitted only after the corresponding owned work completes. */
 export type WorkspacePreparationProgress =
   | { phase: "sources"; done: number; total: number; item: string }
-  /** `total` is null until every template has listed the runtimes it will build. */
   | { phase: "runtimes"; done: number; total: number | null; item: string };
 
-/** Prepare an immutable workspace release for a source supervisor or a packager.
- * Source publication and, for the full release, compilation are phases of the
- * same owned producer. The output contains source and artifacts, never
- * producer state or grants. */
-export async function prepareWorkspaceTemplates(input: {
+const roles = ["base", "personal", "system"] as const;
+type WorkspaceRole = (typeof roles)[number];
+interface PreparedRole {
+  role: WorkspaceRole;
+  workspaceId: string;
+  statePath: string;
+  stateHash: string;
+  sourcePath: string;
+  blobsDir: string;
+  record: PreparedWorkspaceTemplate;
+}
+interface PreparationInput {
   appRoot: string;
   output: string;
   sourceOutput?: string;
   scratch: string;
-  scope: WorkspacePreparationScope;
+  /** Defaults to the complete release; source supervisors request sources explicitly. */
+  scope?: WorkspacePreparationScope;
   signal?: AbortSignal;
   onProgress?: (progress: WorkspacePreparationProgress) => void;
   onSourcesPrepared?: (root: string) => void | Promise<void>;
-}): Promise<void> {
+}
+
+/** Prepare the same immutable release for a source supervisor or a packager.
+ * Source publication and compilation are phases of the same owned producer.
+ * The output contains source and artifacts, never producer state or grants. */
+export async function prepareWorkspaceTemplates(input: PreparationInput): Promise<void> {
+  input.signal?.throwIfAborted();
   const pins = readDefaultWorkspaceTemplates(input.appRoot);
+  const sources = readWorkspaceSources();
+  const bootstrapGit = createHostBootstrapGitReadClient({ signal: input.signal });
+  const git = bootstrapGit.git;
+  const indexes = new Map<string, Promise<ExactGitSnapshotIndex>>();
+  const indexOwners: Array<{ close(): void | Promise<void> }> = [];
+  const key = (pin: WorkspaceTemplatePin) =>
+    JSON.stringify([normalizeTemplateGitUrl(pin.url), pin.commit]);
+  const acquireIndex = (pin: WorkspaceTemplatePin): Promise<ExactGitSnapshotIndex> => {
+    const coordinate = key(pin);
+    let pending = indexes.get(coordinate);
+    if (!pending) {
+      const local = sources.find((source) => sameWorkspaceTemplatePin(source.pin, pin));
+      pending = local
+        ? readExactGitSnapshotIndex({
+            git,
+            dir: local.checkout,
+            commit: pin.commit,
+            label: `prepare ${pin.url}`,
+            reservedPaths: "exclude",
+          })
+        : (async () => {
+            bootstrapGit.admitRemote(templateGitTransportUrl(pin.url));
+            const owner = await acquireRootTemplateSnapshotIndex({
+              pin,
+              git,
+              signal: input.signal,
+            });
+            indexOwners.push(owner);
+            return owner.index;
+          })();
+      indexes.set(coordinate, pending);
+    }
+    return pending;
+  };
+  const metadata = async (pin: WorkspaceTemplatePin): Promise<TemplateLayerMetadata> => {
+    const local = sources.find((source) => sameWorkspaceTemplatePin(source.pin, pin));
+    if (local?.review?.manifestText !== undefined)
+      return {
+        commit: pin.commit,
+        manifestText: local.review.manifestText,
+        repositories: local.review.repositories,
+      };
+    return readTemplateLayerMetadata(await acquireIndex(pin));
+  };
+  let trackSequence = 0;
+  const tracks = new Map<string, Promise<{ ref: string; commit: string }>>();
+  const discoverTrack = async (address: { url: string; track: string; credential?: string }) => {
+    const local = sources.find(
+      (source) => normalizeTemplateGitUrl(source.pin.url) === normalizeTemplateGitUrl(address.url)
+    );
+    if (local) return { ref: local.pin.ref, commit: local.pin.commit };
+    bootstrapGit.admitRemote(templateGitTransportUrl(address.url));
+    const dir = path.join(input.scratch, "tracks", String(trackSequence++));
+    fs.mkdirSync(dir, { recursive: true });
+    const coordinate = await discoverTrackedGitCheckout({
+      git,
+      dir,
+      url: templateGitTransportUrl(address.url),
+      track: address.track,
+      label: "template release dependency",
+    });
+    const pin = { url: address.url, ref: coordinate.ref, commit: coordinate.commit };
+    if (!indexes.has(key(pin)))
+      indexes.set(
+        key(pin),
+        readExactGitSnapshotIndex({
+          git,
+          dir,
+          commit: pin.commit,
+          label: "template release dependency",
+          reservedPaths: "exclude",
+        })
+      );
+    return coordinate;
+  };
+  const resolveTrack = (address: { url: string; track: string; credential?: string }) => {
+    const coordinate = JSON.stringify([normalizeTemplateGitUrl(address.url), address.track]);
+    let pending = tracks.get(coordinate);
+    if (!pending) {
+      pending = discoverTrack(address);
+      tracks.set(coordinate, pending);
+    }
+    return pending;
+  };
+  const plans = {} as Record<WorkspaceRole, ResolvedTemplateLayerPlan>;
+  let sourceHandle: Awaited<ReturnType<typeof acquirePreparedWorkspaceSources>> | undefined;
+  let preparedRoles: Promise<PreparedRole[]> | undefined;
+  let ownsUnretiredWork = false;
+  await runWithOwnedCleanup(
+    async () => {
+      try {
+        fs.mkdirSync(input.scratch, { recursive: true });
+        // Host identity and dependency metadata are independent exact inputs. Join
+        // both before lookup, retaining all failures and their owned index leases.
+        const outcomes = await Promise.allSettled([
+          workspaceReleaseIdentity(input.appRoot),
+          forEachOwnedConcurrent(roles, 3, async (role) => {
+            plans[role] = await resolveDeclaredTemplateLayerPlan({
+              pin: pins[role],
+              root: await metadata(pins[role]),
+              expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+              releaseTemplates: Object.values(pins),
+              acquire: metadata,
+              resolveTrack,
+            });
+          }),
+        ]);
+        const failures = outcomes.flatMap((outcome) =>
+          outcome.status === "rejected" ? [outcome.reason] : []
+        );
+        if (failures.length === 1) throw failures[0];
+        if (failures.length > 1)
+          throw new AggregateError(failures, "Workspace preparation input capture failed", {
+            cause: failures[0],
+          });
+        const operationOutcome = outcomes[0];
+        if (!operationOutcome || operationOutcome.status !== "fulfilled")
+          throw new Error("Workspace release identity capture produced no result");
+        const operation = operationOutcome.value;
+        const layers = Object.fromEntries(
+          roles.map((role) => [role, plans[role].layers.map(({ pin }) => pin)])
+        ) as Record<WorkspaceRole, WorkspaceTemplatePin[]>;
+        const snapshots = new Map<
+          string,
+          { pending: ReturnType<typeof materializeExactGitSnapshot>; blobsDir: string }
+        >();
+        const acquireFor = (blobsDir: string) => (pin: WorkspaceTemplatePin) => {
+          const coordinate = key(pin);
+          let captured = snapshots.get(coordinate);
+          if (!captured) {
+            captured = {
+              pending: acquireIndex(pin).then((index) =>
+                materializeExactGitSnapshot(index, {
+                  label: `prepare ${pin.url}`,
+                  sink: { put: (bytes) => putBootstrapBytes(blobsDir, Buffer.from(bytes)) },
+                })
+              ),
+              blobsDir,
+            };
+            snapshots.set(coordinate, captured);
+          }
+          const owned = captured;
+          return owned.pending.then(async (snapshot) => {
+            if (owned.blobsDir !== blobsDir)
+              await forEachOwnedConcurrent(snapshot.files, 16, async (file) => {
+                await linkReconstructableBlobFile(
+                  blobsDir,
+                  file.contentHash,
+                  blobCasPath(owned.blobsDir, file.contentHash),
+                  file.size
+                );
+              });
+            return snapshot;
+          });
+        };
+        const prepareSources = async () => {
+          const recipe = readHostPreparationRecipe(
+            resolveRequiredHostArtifactRoot(),
+            process.versions.electron
+              ? "prepare-workspace-templates.cjs"
+              : "prepare-workspace-templates.mjs"
+          );
+          sourceHandle = await acquirePreparedWorkspaceSources(
+            {
+              identity: {
+                recipe,
+                appDependencyFingerprint: operation.identity.appDependencyFingerprint,
+                systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+                templates: pins,
+                layers,
+              },
+              signal: input.signal,
+            },
+            async (stagingRoot) => {
+              // The cold source producer retains these private role states for the
+              // runtime continuation. Only immutable source records enter the cache.
+              preparedRoles = materializeTemplateSources({
+                input,
+                pins,
+                plans,
+                acquireFor,
+                output: stagingRoot,
+              });
+              await preparedRoles;
+            }
+          );
+          // Source readiness consumes the sealed immutable descriptors, not a
+          // private runtime checkout. Warm hydration belongs to the background
+          // producer only if this operation wins complete-build admission.
+          const preparedCacheRoot = sourceHandle.root;
+          const prepared = roles.map((role) => {
+            const directory = preparedWorkspaceTemplatePath(preparedCacheRoot, pins[role], "use");
+            return {
+              role,
+              record: readPreparedWorkspaceTemplate(directory, pins[role], "use"),
+              blobsDir: path.join(directory, "blobs"),
+            };
+          });
+          const sourceRoot =
+            input.scope === "sources"
+              ? input.output
+              : (input.sourceOutput ?? path.join(input.scratch, "source-ready-root"));
+          if (input.scope !== "sources" && path.resolve(sourceRoot) === path.resolve(input.output))
+            throw new Error("Source-ready resources must be separate from runtime publication");
+          let completedSources = 0;
+          await projectPreparedRoleRecords(prepared, sourceRoot, operation, (role) => {
+            input.onProgress?.({
+              phase: "sources",
+              done: ++completedSources,
+              total: roles.length,
+              item: role,
+            });
+          });
+          input.signal?.throwIfAborted();
+          await input.onSourcesPrepared?.(sourceRoot);
+        };
+        // Both scopes consume the same immutable source phase. Only complete
+        // publication admits the exhaustive runtime continuation and its cache.
+        if (input.scope === "sources") {
+          if (
+            await validateExistingPreparedWorkspaceRelease(
+              {
+                appRoot: input.appRoot,
+                output: input.output,
+                templates: pins,
+                layers,
+              },
+              operation.identity
+            )
+          ) {
+            input.signal?.throwIfAborted();
+            await input.onSourcesPrepared?.(input.output);
+            return;
+          }
+          await prepareSources();
+          return;
+        }
+        await prepareCachedWorkspaceRelease(
+          {
+            appRoot: input.appRoot,
+            output: input.output,
+            templates: pins,
+            operation,
+            layers,
+            signal: input.signal,
+            onSourcesPrepared: input.onSourcesPrepared,
+            prepareSources,
+          },
+          async (captured) => {
+            if (!sourceHandle)
+              throw new Error("Runtime preparation has no owned source preparation");
+            preparedRoles ??= materializeTemplateSources({
+              input,
+              pins,
+              plans,
+              acquireFor,
+              preparedRoot: sourceHandle.root,
+            });
+            await produceWorkspaceTemplates(
+              input,
+              captured.identity,
+              captured,
+              await preparedRoles
+            );
+          }
+        );
+      } catch (error) {
+        ownsUnretiredWork ||= hasOwnershipFailure(error);
+        throw error;
+      }
+    },
+    async () => {
+      await runOwnedCleanupSteps(
+        [
+          async () => {
+            await sourceHandle?.close();
+          },
+          ...indexOwners.map((owner) => async () => {
+            await owner.close();
+          }),
+          () => closeDerivedCacheCoordinators(),
+          () => {
+            if (!ownsUnretiredWork) fs.rmSync(input.scratch, { recursive: true, force: true });
+          },
+        ].map((cleanup: () => void | Promise<void>) => async () => {
+          try {
+            await cleanup();
+          } catch (error) {
+            ownsUnretiredWork ||= hasOwnershipFailure(error);
+            throw error;
+          }
+        }),
+        "Workspace source preparation retirement failed"
+      );
+    },
+    "Workspace preparation and source retirement failed"
+  );
+}
+
+async function projectPreparedRoleRecords(
+  prepared: readonly Pick<PreparedRole, "role" | "record" | "blobsDir">[],
+  output: string,
+  operation?: WorkspaceReleaseOperation,
+  onProjected?: (role: WorkspaceRole) => void
+): Promise<void> {
+  const fingerprint = operation
+    ? captureRootDependencyFingerprint(operation.rootFingerprint)
+    : undefined;
+  await forEachOwnedConcurrent(prepared, 3, async ({ role, record, blobsDir }) => {
+    const directory = preparedWorkspaceTemplatePath(output, record.pin, "use");
+    await forEachOwnedConcurrent(record.blobs, 16, async (blob) => {
+      await linkReconstructableBlobFile(
+        path.join(directory, "blobs"),
+        blob.digest,
+        blobPath(blobsDir, blob.digest),
+        blob.size
+      );
+    });
+    fs.mkdirSync(directory, { recursive: true });
+    const published = preparedWorkspaceTemplateSchema.parse({
+      ...record,
+      builds: [],
+      ...(operation
+        ? {
+            compilationInput: {
+              hostBuild: operation.identity.hostBuild,
+              compilerProtocol: operation.identity.compilerProtocol,
+              fingerprint,
+            },
+          }
+        : {}),
+    });
+    const recordPath = path.join(directory, "template.json");
+    fs.writeFileSync(`${recordPath}.publishing`, JSON.stringify(published));
+    fs.renameSync(`${recordPath}.publishing`, recordPath);
+    onProjected?.(role);
+  });
+}
+
+/** Source production and source-cache consumption share the same bootstrap
+ * boundary. A hit links immutable input, never producer databases or grants. */
+async function materializeTemplateSources(input: {
+  input: PreparationInput;
+  pins: Record<WorkspaceRole, WorkspaceTemplatePin>;
+  plans: Record<WorkspaceRole, ResolvedTemplateLayerPlan>;
+  acquireFor(
+    blobsDir: string
+  ): (pin: WorkspaceTemplatePin) => ReturnType<typeof materializeExactGitSnapshot>;
+  preparedRoot?: string;
+  output?: string;
+}): Promise<PreparedRole[]> {
+  const prepared: PreparedRole[] = [];
+  await forEachOwnedConcurrent(roles, 3, async (role) => {
+    input.input.signal?.throwIfAborted();
+    const pin = input.pins[role];
+    const workspaceId = `prepare-${role}`;
+    const workspacePath = path.join(input.input.scratch, "workspaces", workspaceId);
+    const statePath = path.join(workspacePath, "state");
+    const sourcePath = path.join(workspacePath, "source");
+    const blobsDir = path.join(statePath, "blobs");
+    let installedRecord: PreparedWorkspaceTemplate | undefined;
+    fs.mkdirSync(sourcePath, { recursive: true });
+    fs.mkdirSync(path.join(statePath, "workspace-creation"), { recursive: true });
+    fs.writeFileSync(
+      path.join(statePath, "workspace-creation/v1.json"),
+      JSON.stringify({ version: 1, workspaceId, rootTemplate: pin })
+    );
+    const preparedRoot = input.preparedRoot;
+    const bootstrap = new WorkspaceRootTemplateBootstrap({
+      workspaceId,
+      statePath,
+      sourcePath,
+      sink: { put: (bytes) => putBootstrapBytes(blobsDir, Buffer.from(bytes)) },
+      acquire: input.acquireFor(blobsDir),
+      expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      layerPlan: input.plans[role],
+      ...(preparedRoot
+        ? {
+            preparedTemplate: async () => {
+              const record = await installPreparedWorkspaceTemplate(
+                preparedWorkspaceTemplatePath(preparedRoot, pin, "use"),
+                blobsDir,
+                pin,
+                "use"
+              );
+              installedRecord = record;
+              return {
+                record,
+                readFile: (filePath: string) => {
+                  const file = record.files.find((file) => file.path === filePath);
+                  return file ? fs.readFileSync(blobPath(blobsDir, file.contentHash)) : null;
+                },
+              };
+            },
+          }
+        : {}),
+    });
+    await bootstrap.prepareSource();
+    const stateHash = await bootstrap.prepareBootstrapState();
+    const initialization = await bootstrap.prepareInitialization();
+    const closure = new Set<string>();
+    if (!installedRecord) {
+      for (const contentRoot of [
+        stateHash,
+        ...initialization.repositories.map((repository) => repository.contentRoot),
+      ]) {
+        const digests = await collectTreeReachableDigests(blobsDir, contentRoot);
+        if (!digests)
+          throw new Error(`Prepared template has an incomplete source closure: ${contentRoot}`);
+        for (const digest of [...digests.treeDigests, ...digests.contentDigests])
+          closure.add(digest);
+      }
+    }
+    const blobs =
+      installedRecord?.blobs ??
+      [...closure]
+        .sort()
+        .map((digest) => ({ digest, size: fs.statSync(blobPath(blobsDir, digest)).size }));
+    prepared.push({
+      role,
+      workspaceId,
+      statePath,
+      stateHash,
+      sourcePath,
+      blobsDir,
+      record: bootstrap.preparedRecord(blobs, []),
+    });
+  });
+  prepared.sort((a, b) => roles.indexOf(a.role) - roles.indexOf(b.role));
+  if (input.output) await projectPreparedRoleRecords(prepared, input.output);
+  return prepared;
+}
+
+async function produceWorkspaceTemplates(
+  input: PreparationInput,
+  releaseIdentity: WorkspaceReleaseIdentity,
+  operation: WorkspaceReleaseOperation,
+  sourceRoles: readonly PreparedRole[]
+): Promise<void> {
+  const pins = Object.fromEntries(
+    sourceRoles.map(({ role, record }) => [role, record.pin])
+  ) as Record<WorkspaceRole, WorkspaceTemplatePin>;
   const releaseInput: PreparedWorkspaceReleaseInput = {
     appRoot: input.appRoot,
     output: input.output,
     templates: pins,
+    layers: Object.fromEntries(
+      sourceRoles.map(({ role, record }) => [role, record.layers])
+    ) as Record<WorkspaceRole, WorkspaceTemplatePin[]>,
   };
-  input.signal?.throwIfAborted();
-  if (input.scope === "release" && (await validateExistingPreparedWorkspaceRelease(releaseInput))) {
-    input.signal?.throwIfAborted();
-    await input.onSourcesPrepared?.(input.output);
-    return;
-  }
-  const releaseIdentity =
-    input.scope === "release" ? await workspaceReleaseIdentity(input.appRoot) : undefined;
-  const sources = JSON.parse(process.env["VIBESTUDIO_WORKSPACE_SOURCES"] ?? "[]") as Array<{
-    pin: WorkspaceTemplatePin;
-    checkout: string;
-  }>;
-  const bootstrapGit = createHostBootstrapGitReadClient({ signal: input.signal });
-  const git = bootstrapGit.git;
-  const snapshots = new Map<string, ReturnType<typeof readExactGitSnapshot>>();
-  const snapshotBlobs = new Map<string, string>();
-  fs.mkdirSync(input.scratch, { recursive: true });
+  const hostDependencyCapture = captureRootDependencyFingerprint(operation.rootFingerprint);
+  await projectPreparedRoleRecords(sourceRoles, input.output, operation);
+  const prepared = await Promise.all(
+    sourceRoles.map(async (role) => ({
+      ...role,
+      directory: preparedWorkspaceTemplatePath(input.output, role.record.pin, "use"),
+      record: preparedWorkspaceTemplateSchema.parse({
+        ...role.record,
+        compilationInput: {
+          hostBuild: releaseIdentity.hostBuild,
+          compilerProtocol: releaseIdentity.compilerProtocol,
+          fingerprint: hostDependencyCapture,
+        },
+      }),
+      dependencyFingerprint: await composeWorkspaceDependencyFingerprint(
+        hostDependencyCapture,
+        input.appRoot,
+        role.sourcePath
+      ),
+    }))
+  );
   const previousInstance = process.env["VIBESTUDIO_INSTANCE_ROOT"];
   process.env["VIBESTUDIO_INSTANCE_ROOT"] = input.scratch;
   const centralDataRoot = getCentralDataPath();
@@ -112,166 +593,16 @@ export async function prepareWorkspaceTemplates(input: {
     appRoot: input.appRoot,
     appNodeModules: getExistingAppNodeModulesRoots(input.appRoot),
   });
-  let retirementFailed = false;
   const releaseBuilds: PreparedWorkspaceReleaseBuild[] = [];
-  const prepared: Array<{
-    role: "base" | "personal" | "system";
-    workspaceId: string;
-    statePath: string;
-    stateHash: string;
-    sourcePath: string;
-    blobsDir: string;
-    directory: string;
-    record: import("./preparedWorkspaceTemplate.js").PreparedWorkspaceTemplate;
-  }> = [];
   let plannedRoles = 0;
   let plannedRuntimes = 0;
   let completedRuntimes = 0;
+  const roleRetirements: Array<() => Promise<void>> = [];
   let operationFailure: unknown;
   let operationFailed = false;
   try {
-    for (const role of ["base", "personal", "system"] as const) {
-      const pin = pins[role];
-      input.signal?.throwIfAborted();
-      const workspaceId = `prepare-${role}`;
-      const workspacePath = path.join(input.scratch, "workspaces", workspaceId);
-      const statePath = path.join(workspacePath, "state");
-      const sourcePath = path.join(workspacePath, "source");
-      const blobsDir = path.join(statePath, "blobs");
-      fs.mkdirSync(sourcePath, { recursive: true });
-      fs.mkdirSync(path.join(statePath, "workspace-creation"), { recursive: true });
-      fs.writeFileSync(
-        path.join(statePath, "workspace-creation/v1.json"),
-        JSON.stringify({ version: 1, workspaceId, rootTemplate: pin })
-      );
-      const sink = { put: (bytes: Uint8Array) => putBootstrapBytes(blobsDir, Buffer.from(bytes)) };
-      const acquire = (requested: WorkspaceTemplatePin) => {
-        const key = JSON.stringify(requested);
-        let pending = snapshots.get(key);
-        if (!pending) {
-          const local = sources.find((source) => sameWorkspaceTemplatePin(source.pin, requested));
-          pending = local
-            ? readExactGitSnapshot({
-                git,
-                dir: local.checkout,
-                commit: requested.commit,
-                label: `prepare ${requested.url}`,
-                sink,
-                reservedPaths: "exclude",
-              })
-            : (() => {
-                bootstrapGit.admitRemote(templateGitTransportUrl(requested.url));
-                return acquireRootTemplateSnapshot({ pin: requested, git, sink });
-              })();
-          snapshots.set(key, pending);
-          snapshotBlobs.set(key, blobsDir);
-        }
-        return pending.then(async (snapshot) => {
-          for (const file of snapshot.files) {
-            await linkReconstructableBlobFile(
-              blobsDir,
-              file.contentHash,
-              blobCasPath(snapshotBlobs.get(key)!, file.contentHash),
-              file.size
-            );
-          }
-          return snapshot;
-        });
-      };
-      const bootstrap = new WorkspaceRootTemplateBootstrap({
-        workspaceId,
-        statePath,
-        sourcePath,
-        sink,
-        acquire,
-        expectedSystemEpoch: WORKSPACE_SYSTEM_EPOCH,
-        releaseTemplates: Object.values(pins),
-        resolveTrack: async (address) => {
-          const local = sources.find(
-            (source) =>
-              normalizeTemplateGitUrl(source.pin.url) === normalizeTemplateGitUrl(address.url)
-          );
-          if (local) return { ref: local.pin.ref, commit: local.pin.commit };
-          bootstrapGit.admitRemote(templateGitTransportUrl(address.url));
-          const dir = path.join(statePath, "tracks", String(snapshots.size));
-          fs.mkdirSync(dir, { recursive: true });
-          const snapshot = await discoverTrackedGitSnapshot({
-            git,
-            dir,
-            url: templateGitTransportUrl(address.url),
-            track: address.track,
-            label: "template release dependency",
-            sink,
-            reservedPaths: "exclude",
-          });
-          return { ref: snapshot.ref, commit: snapshot.commit };
-        },
-      });
-      await bootstrap.prepareSource();
-      const stateHash = await bootstrap.prepareBootstrapState();
-      const plan = await bootstrap.prepareInitialization();
-      const closure = new Set<string>();
-      for (const contentRoot of [
-        stateHash,
-        ...plan.repositories.map((repository) => repository.contentRoot),
-      ]) {
-        const digests = await collectTreeReachableDigests(blobsDir, contentRoot);
-        if (!digests)
-          throw new Error(`Prepared template has an incomplete source closure: ${contentRoot}`);
-        for (const digest of [...digests.treeDigests, ...digests.contentDigests])
-          closure.add(digest);
-      }
-      const directory = preparedWorkspaceTemplatePath(input.output, pin, "use");
-      fs.mkdirSync(directory, { recursive: true });
-      const blobs = [...closure]
-        .sort()
-        .map((digest) => ({ digest, size: fs.statSync(blobPath(blobsDir, digest)).size }));
-      for (const blob of blobs) {
-        const destination = blobPath(path.join(directory, "blobs"), blob.digest);
-        fs.mkdirSync(path.dirname(destination), { recursive: true });
-        fs.copyFileSync(blobPath(blobsDir, blob.digest), destination);
-      }
-      const record = preparedWorkspaceTemplateSchema.parse(bootstrap.preparedRecord(blobs, []));
-      fs.writeFileSync(path.join(directory, "template.json"), JSON.stringify(record));
-      input.onProgress?.({
-        phase: "sources",
-        done: prepared.length + 1,
-        total: 3,
-        item: role,
-      });
-      prepared.push({
-        role,
-        statePath,
-        workspaceId,
-        stateHash,
-        sourcePath,
-        blobsDir,
-        directory,
-        record,
-      });
-    }
-    input.signal?.throwIfAborted();
-    if (input.sourceOutput) {
-      for (const { record, blobsDir } of prepared) {
-        const directory = preparedWorkspaceTemplatePath(input.sourceOutput, record.pin, "use");
-        for (const blob of record.blobs) {
-          await linkReconstructableBlobFile(
-            path.join(directory, "blobs"),
-            blob.digest,
-            blobPath(blobsDir, blob.digest),
-            blob.size
-          );
-        }
-        fs.mkdirSync(directory, { recursive: true });
-        const recordPath = path.join(directory, "template.json");
-        fs.writeFileSync(`${recordPath}.publishing`, JSON.stringify(record));
-        fs.renameSync(`${recordPath}.publishing`, recordPath);
-      }
-    }
-    await input.onSourcesPrepared?.(input.sourceOutput ?? input.output);
-    input.signal?.throwIfAborted();
     const roleOutcomes = await Promise.allSettled(
-      (input.scope === "release" ? prepared : []).map(
+      prepared.map(
         async ({
           role,
           statePath,
@@ -281,6 +612,7 @@ export async function prepareWorkspaceTemplates(input: {
           blobsDir,
           directory,
           record,
+          dependencyFingerprint,
         }) => {
           input.signal?.throwIfAborted();
           const preparedBuilds: import("./preparedWorkspaceTemplate.js").PreparedWorkspaceTemplate["builds"] =
@@ -310,49 +642,23 @@ export async function prepareWorkspaceTemplates(input: {
           let builds: Awaited<ReturnType<typeof initBuildSystemV2>> | undefined;
           let retirement: ReturnType<typeof native.stop> | undefined;
           const retireNative = () => (retirement ??= native.stop());
-          const cancelled = () => {
-            void retireNative().catch(() => {});
-          };
-          input.signal?.addEventListener("abort", cancelled, { once: true });
-          if (input.signal?.aborted) cancelled();
-          const retireResources = async () => {
-            const failures: unknown[] = [];
-            const buildOutcome = await Promise.allSettled([builds?.shutdown()]);
-            failures.push(
-              ...buildOutcome.flatMap((outcome) =>
-                outcome.status === "rejected" ? [outcome.reason] : []
-              )
-            );
-            const nativeOutcome = await Promise.allSettled([
-              retireNative().then((stopped) => {
-                if (!stopped.launcherExited) {
-                  retirementFailed = true;
-                  throw Object.assign(
-                    new Error("Template preparation still owns a native executor"),
-                    {
-                      code: "EOWNERSHIP",
-                    }
-                  );
-                }
-              }),
-            ]);
-            failures.push(
-              ...nativeOutcome.flatMap((outcome) =>
-                outcome.status === "rejected" ? [outcome.reason] : []
-              )
-            );
-            if (failures.length > 0) {
-              retirementFailed = failures.some((failure) => hasOwnershipFailure(failure));
-              if (failures.length === 1) throw failures[0];
-              throw new AggregateError(
-                failures,
-                "Template preparation resource retirement failed",
-                {
-                  cause: failures[0],
-                }
-              );
+          const retireExecutor = async () => {
+            const stopped = await retireNative();
+            if (!stopped.launcherExited) {
+              throw Object.assign(new Error("Template preparation still owns a native executor"), {
+                code: "EOWNERSHIP",
+              });
             }
           };
+          // Cancellation belongs to the requests. The process-owned shared
+          // flight may retain this role's store, workers, and native executor
+          // after its last role borrower has withdrawn.
+          roleRetirements.push(() =>
+            runOwnedCleanupSteps(
+              [() => builds?.shutdown(), retireExecutor],
+              "Template preparation resource retirement failed"
+            )
+          );
           let operationFailure: unknown;
           let operationFailed = false;
           try {
@@ -370,17 +676,17 @@ export async function prepareWorkspaceTemplates(input: {
               ),
               signal: input.signal,
               dependencyWorkspaceRoot: sourcePath,
+              dependencyFingerprint,
               runNativeJob: (job) => native.runJob(job),
               admitNativeDependencies: (deps) => native.admitDependencies(deps),
             });
             const preparedAt = performance.now();
             console.log(`[workspace-release] Preparing runtimes for ${role}`);
             const owner = builds;
-
             const runtimeBuilds = await processOwner.withWorkers(() =>
               prepareWorkspaceRuntimeBuilds(
                 owner.getGraph().allNodes(),
-                (source) => owner.getBuild(source, stateHash),
+                (source) => owner.getStoredBuild(source, stateHash, { priority: "speculative" }),
                 (binding) =>
                   exportReleaseBuild(
                     path.join(statePath, "builds", binding.buildKey),
@@ -393,16 +699,15 @@ export async function prepareWorkspaceTemplates(input: {
                     plannedRoles += 1;
                     plannedRuntimes += event.count;
                   } else if (event.type === "started") {
-                    console.log(`[workspace-release] Runtime ${role}/${event.source}: started`);
+                    console.log(`[workspace-release] Runtime ${role}/${event.source}: queued`);
                   } else if (event.type === "completed") {
                     console.log(
                       `[workspace-release] Runtime ${role}/${event.source}: completed in ${Math.round(event.durationMs)}ms`
                     );
-                    completedRuntimes += 1;
                     input.onProgress?.({
                       phase: "runtimes",
-                      done: completedRuntimes,
-                      total: plannedRoles === 3 ? plannedRuntimes : null,
+                      done: ++completedRuntimes,
+                      total: plannedRoles === roles.length ? plannedRuntimes : null,
                       item: `${role}/${event.source}`,
                     });
                   } else {
@@ -435,20 +740,6 @@ export async function prepareWorkspaceTemplates(input: {
             operationFailure = error;
             operationFailed = true;
           }
-          try {
-            await retireResources();
-          } catch (retirementFailure) {
-            if (operationFailed) {
-              throw new AggregateError(
-                [operationFailure, retirementFailure],
-                "Template preparation and resource retirement failed",
-                { cause: operationFailure }
-              );
-            }
-            throw retirementFailure;
-          } finally {
-            input.signal?.removeEventListener("abort", cancelled);
-          }
           if (operationFailed) throw operationFailure;
           record.builds = preparedBuilds;
           const recordPath = path.join(directory, "template.json");
@@ -475,11 +766,26 @@ export async function prepareWorkspaceTemplates(input: {
     operationFailed = true;
   }
   const retirementFailures: unknown[] = [];
+  // A role can withdraw from a shared flight before that process-owned flight
+  // settles. All role borrowers are now joined; retain every role resource
+  // until the process owner has joined the compiler flights themselves.
   for (const retirement of [
+    () => processOwner.shutdown(),
+    async () => {
+      // The three role lifetimes are independent once their shared owner joins.
+      // Admit all cleanup, and retain every failure rather than short-circuiting.
+      const outcomes = await Promise.allSettled(roleRetirements.map((retire) => retire()));
+      const failures = outcomes.flatMap((outcome) =>
+        outcome.status === "rejected" ? [outcome.reason] : []
+      );
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1)
+        throw new AggregateError(failures, "Template role retirement failed", {
+          cause: failures[0],
+        });
+    },
     () => drainExternalDependencyPruning(),
     () => drainDependencyContentMaintenance(),
-    () => processOwner.shutdown(),
-    () => closeDerivedCacheCoordinators(),
   ]) {
     try {
       await retirement();
@@ -487,10 +793,8 @@ export async function prepareWorkspaceTemplates(input: {
       retirementFailures.push(error);
     }
   }
-  retirementFailed ||= retirementFailures.some((failure) => hasOwnershipFailure(failure));
   if (previousInstance === undefined) delete process.env["VIBESTUDIO_INSTANCE_ROOT"];
   else process.env["VIBESTUDIO_INSTANCE_ROOT"] = previousInstance;
-  if (!retirementFailed) fs.rmSync(input.scratch, { recursive: true, force: true });
   const failures = [...(operationFailed ? [operationFailure] : []), ...retirementFailures];
   if (failures.length === 1) throw failures[0];
   if (failures.length > 1) {
@@ -499,6 +803,5 @@ export async function prepareWorkspaceTemplates(input: {
     });
   }
   input.signal?.throwIfAborted();
-  if (input.scope === "release")
-    await publishPreparedWorkspaceRelease(releaseInput, releaseBuilds, releaseIdentity);
+  await publishPreparedWorkspaceRelease(releaseInput, releaseBuilds, releaseIdentity);
 }

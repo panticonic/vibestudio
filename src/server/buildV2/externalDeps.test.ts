@@ -91,6 +91,7 @@ import {
   extensionRuntimeDependencyKey,
   mergeExternalDependencySpecs,
   resolveHostDependencyProjection,
+  prepareExternalDependencyEnvironment,
   type ExternalDependencyPatch,
 } from "./externalDeps.js";
 import { NpmResolutionError, runNpmInstall } from "@vibestudio/shared/npmInstaller";
@@ -203,14 +204,34 @@ describe("extension runtime dependency publication", () => {
 
     await expect(
       ensureExternalDeps({ "compile-dependency-prepare-failure-test": "1.0.0" })
-    ).rejects.toMatchObject({
-      message: "Failed to install external dependencies: content preparation failed",
-      cause: failure,
-    });
+    ).rejects.toBe(failure);
     expect(prepareDependencyContent).toHaveBeenCalledOnce();
     const [stagingDir, cacheDir] = vi.mocked(prepareDependencyContent).mock.calls[0]!;
     expect(fs.existsSync(cacheDir)).toBe(false);
     expect(fs.existsSync(stagingDir)).toBe(false);
+  });
+
+  it("joins installer cancellation and staging cleanup without replacing the owner's reason", async () => {
+    const controller = new AbortController();
+    const reason = Object.assign(new Error("dependency owner cancelled"), { code: "ECANCELLED" });
+    let staging = "";
+    vi.mocked(runNpmInstall).mockImplementationOnce(async (cwd, options) => {
+      staging = cwd;
+      controller.abort(reason);
+      options!.signal!.throwIfAborted();
+    });
+    await expect(
+      acquireExternalDeps(
+        { "cancelled-install-test": "1.0.0" },
+        {},
+        {
+          appRoot: process.cwd(),
+          signal: controller.signal,
+        }
+      )
+    ).rejects.toBe(reason);
+    expect(staging).not.toBe("");
+    expect(fs.existsSync(staging)).toBe(false);
   });
 
   it("routes CAS cleanup after an actual cache prune to the maintenance owner", async () => {
@@ -266,6 +287,43 @@ describe("extension runtime dependency publication", () => {
 });
 
 describe("resolveHostDependencyProjection", () => {
+  it.each(["development", "production"])(
+    "uses the selected %s installation policy",
+    async (mode) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-dependency-policy-"));
+      const priorMode = process.env["NODE_ENV"];
+      try {
+        process.env["NODE_ENV"] = mode;
+        const hostModules = path.join(root, "node_modules");
+        writePackage(hostModules, "policy-dependency", "1.2.3");
+        const unit = makeNode("policy-consumer", { "policy-dependency": "1.2.3" });
+        const graph = new PackageGraph();
+        graph.addNode(unit);
+        const environment = await prepareExternalDependencyEnvironment(
+          unit,
+          graph,
+          root,
+          process.cwd(),
+          [hostModules]
+        );
+        try {
+          if (mode === "development") expect(environment.nodeModulesDir).toBe(hostModules);
+          else expect(environment.nodeModulesDir).not.toBe(hostModules);
+          expect(
+            environment.dependencyResolution.packageDirectories.has(
+              path.join(environment.nodeModulesDir, "policy-dependency")
+            )
+          ).toBe(true);
+        } finally {
+          environment.release();
+        }
+      } finally {
+        if (priorMode === undefined) delete process.env["NODE_ENV"];
+        else process.env["NODE_ENV"] = priorMode;
+        fs.rmSync(root, { recursive: true, force: true });
+      }
+    }
+  );
   it("reuses explicitly supplied host packages only within their declared ranges", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-dependency-projection-"));
     try {

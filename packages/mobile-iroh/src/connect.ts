@@ -6,6 +6,7 @@ import {
   CLOSE_TOKEN_REVOKED,
   createRpcClient,
   secureRandomUuid,
+  type RecoveryKind,
   type RpcClient,
 } from "@vibestudio/rpc";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
@@ -308,6 +309,7 @@ export async function establishIrohConnection(
   });
   let terminalRetirement: Promise<void> | null = null;
   let removeLifecycle = () => {};
+  const rpcRecoveryHandlers = new Set<(kind: RecoveryKind) => void>();
   console.log("[mobile-iroh] reconnect owner created");
   const connectionId = mobileReachConnectionId(endpointIdentityId, pairing.endpointId);
   console.log("[mobile-iroh] logical session identity created");
@@ -318,7 +320,10 @@ export async function establishIrohConnection(
     oauthCallbackMode,
     getToken: () => tokenProvider.getToken(),
     onPaired: handlers.onPaired,
-    onRecovery: handlers.onRecovery,
+    onRecovery: async (kind) => {
+      for (const handler of [...rpcRecoveryHandlers]) handler(kind);
+      await handlers.onRecovery?.(kind);
+    },
     onTerminalClose: (error) => {
       if ((error as { code?: unknown }).code !== CLOSE_TOKEN_REVOKED) return;
       const deviceId = /^refresh:([^:]+):/.exec(tokenProvider.getToken())?.[1];
@@ -373,6 +378,10 @@ export async function establishIrohConnection(
     callerKind: "shell",
     transport: session,
     publishExposures: true,
+    onRecovery: (handler) => {
+      rpcRecoveryHandlers.add(handler);
+      return () => rpcRecoveryHandlers.delete(handler);
+    },
   });
   removeLifecycle = registerLifecycle(transport);
   return {

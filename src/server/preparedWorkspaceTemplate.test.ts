@@ -1,13 +1,22 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { sha256Hex } from "@vibestudio/content-addressing";
 import { blobCasPath } from "./storage/blobCas.js";
+import * as blobCas from "./storage/blobCas.js";
 import {
   installPreparedWorkspaceTemplate,
+  prepareWorkspaceCompilationFingerprint,
+  validatePreparedCompilationInput,
   type PreparedWorkspaceTemplate,
 } from "./preparedWorkspaceTemplate.js";
+import { readHostBuildFingerprint, resolveRequiredHostArtifactRoot } from "./appRoot.js";
+import {
+  computeRootDependencyFingerprint,
+  captureRootDependencyFingerprint,
+  buildCompilerProtocolIdentity,
+} from "./buildV2/effectiveVersion.js";
 
 const pin = {
   url: "git+https://github.com/example/template.git",
@@ -46,6 +55,129 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
 describe("prepared workspace installation", () => {
+  it("requires a canonical installation capture bound to the release before publication", async () => {
+    const fingerprint = captureRootDependencyFingerprint(
+      await computeRootDependencyFingerprint(root)
+    );
+    const input = {
+      hostBuild: readHostBuildFingerprint(resolveRequiredHostArtifactRoot()),
+      compilerProtocol: buildCompilerProtocolIdentity(),
+      fingerprint,
+    };
+    const identity = { ...input, appDependencyFingerprint: fingerprint.value };
+    expect(validatePreparedCompilationInput(input, identity)).toEqual(input);
+    expect(() => validatePreparedCompilationInput(undefined, identity)).toThrow(
+      /no compilation input/
+    );
+    expect(() =>
+      validatePreparedCompilationInput(input, {
+        ...identity,
+        appDependencyFingerprint: "0".repeat(64),
+      })
+    ).toThrow(/release identity/);
+    expect(() =>
+      validatePreparedCompilationInput(input, {
+        ...identity,
+        hostBuild: { ...input.hostBuild, fingerprint: "0".repeat(64) },
+      })
+    ).toThrow(/release identity/);
+    expect(() =>
+      validatePreparedCompilationInput(input, {
+        ...identity,
+        compilerProtocol: { ...input.compilerProtocol, cacheVersion: "other" },
+      })
+    ).toThrow(/release identity/);
+    expect(() =>
+      validatePreparedCompilationInput(
+        { ...input, fingerprint: { ...fingerprint, value: "0".repeat(64) } },
+        identity
+      )
+    ).toThrow(/trace does not reproduce/);
+    expect(() =>
+      validatePreparedCompilationInput(
+        {
+          ...input,
+          fingerprint: {
+            ...fingerprint,
+            policy: fingerprint.policy === "shared-host" ? "prepared" : "shared-host",
+          },
+        },
+        identity
+      )
+    ).toThrow(/installation policy/);
+  });
+  it("joins all admitted blob links and retains their failures before returning ownership", async () => {
+    const blobs = Array.from({ length: 18 }, (_, index) => ({
+      digest: index.toString(16).padStart(64, "0"),
+      size: 1,
+    }));
+    fs.writeFileSync(path.join(release, "template.json"), JSON.stringify({ ...record, blobs }));
+    const failures = [new Error("first link failure"), new Error("second link failure")];
+    const pending = new Map<string, { resolve(): void; reject(error: unknown): void }>();
+    const link = vi
+      .spyOn(blobCas, "linkReconstructableBlobFile")
+      .mockImplementation((_root, digest) => {
+        if (digest === blobs[0]!.digest) return Promise.reject(failures[0]);
+        return new Promise<string>((resolve, reject) =>
+          pending.set(digest, { resolve: () => resolve(path.join(destination, digest)), reject })
+        );
+      });
+    let settled = false;
+    const installation = installPreparedWorkspaceTemplate(release, destination, pin, "use").catch(
+      (error: unknown) => {
+        settled = true;
+        return error;
+      }
+    );
+    try {
+      await vi.waitFor(() => expect(link).toHaveBeenCalledTimes(16));
+      expect(settled).toBe(false);
+      pending.get(blobs[1]!.digest)!.reject(failures[1]);
+      for (let index = 2; index < 16; index++) pending.get(blobs[index]!.digest)!.resolve();
+      expect(await installation).toMatchObject({ errors: failures });
+      expect(link).toHaveBeenCalledTimes(16);
+    } finally {
+      link.mockRestore();
+    }
+  });
+
+  it("reuses compilation inputs only within their exact host and compiler generation", async () => {
+    fs.mkdirSync(destination, { recursive: true });
+    const fingerprint = await computeRootDependencyFingerprint(root, destination);
+    const compilationInput = {
+      hostBuild: readHostBuildFingerprint(resolveRequiredHostArtifactRoot()),
+      compilerProtocol: buildCompilerProtocolIdentity(),
+      fingerprint: captureRootDependencyFingerprint(await computeRootDependencyFingerprint(root)),
+    };
+    expect(
+      await prepareWorkspaceCompilationFingerprint(compilationInput, root, destination)
+    ).toEqual(fingerprint);
+    await expect(
+      prepareWorkspaceCompilationFingerprint(
+        {
+          ...compilationInput,
+          hostBuild: { ...compilationInput.hostBuild, fingerprint: "0".repeat(64) },
+        },
+        root,
+        destination
+      )
+    ).rejects.toThrow(/different host or compiler generation/);
+    await expect(
+      prepareWorkspaceCompilationFingerprint(
+        {
+          ...compilationInput,
+          compilerProtocol: { ...compilationInput.compilerProtocol, cacheVersion: "different" },
+        },
+        root,
+        destination
+      )
+    ).rejects.toThrow(/different host or compiler generation/);
+    fs.writeFileSync(path.join(destination, "package.json"), "{}");
+    expect(
+      await prepareWorkspaceCompilationFingerprint(compilationInput, root, destination)
+    ).toEqual(await computeRootDependencyFingerprint(root, destination));
+  });
+
   it("installs the published immutable closure by reference", async () => {
     expect(await installPreparedWorkspaceTemplate(release, destination, pin, "use")).toEqual(
       record

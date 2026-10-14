@@ -6,7 +6,7 @@ import net from "net";
 import spawn from "cross-spawn";
 import { fileURLToPath } from "url";
 import { createPnpmInvocation } from "./lib/package-manager.mjs";
-import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
+import { parseHubReadyPayload, rootBootstrapPairingInvite } from "./lib/hub-ready.mjs";
 import { INTERNAL_ANDROID_PACKAGE } from "./lib/mobile-native-android.mjs";
 import { waitForAndroidBoot } from "./lib/android-avd.mjs";
 import { flagValue } from "./lib/args.mjs";
@@ -266,7 +266,9 @@ async function waitForServerReady(readyFile, serverChild, timeoutMs = 120_000) {
         }
         throw error;
       }
-      return parseHubReadyPayload(value);
+      const ready = parseHubReadyPayload(value);
+      if (!ready.rootInvite || rootBootstrapPairingInvite(ready.rootInvite)) return ready;
+      await sleep(250);
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
       await sleep(250);
@@ -518,7 +520,7 @@ async function main() {
     startedChildren.push(serverChild);
     const ready = await waitForServerReady(readyFilePath, serverChild);
     readyInfo = ready;
-    const invite = ready.rootInvite;
+    const invite = rootBootstrapPairingInvite(ready.rootInvite);
     if (!invite) {
       throw new Error("Fresh isolated hub did not publish a root invite");
     }

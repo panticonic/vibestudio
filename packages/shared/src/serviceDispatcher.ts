@@ -777,6 +777,11 @@ interface AuthorityAcquisitionRequest {
   substance?: OperationSubstance;
   target?: ApprovalTargetIdentity;
   attachedHost?: import("@vibestudio/rpc").AttachedHostExecutionFact;
+  pendingReview?: {
+    approvalId: string;
+    title: string;
+    code: { repoPath: string; effectiveVersion: string };
+  };
 }
 
 interface CollectedAuthorityAcquisition {
@@ -2244,7 +2249,7 @@ export class ServiceDispatcher {
             resourceKey,
             tier: reviewedTier,
           });
-      if (acquirable) {
+      if (acquirable || (openReview && !preflight && this.authorityAcquirer)) {
         const tier = reviewedTier as "gated" | "critical";
         const renderedAction = effectiveChallenge.operation.verb;
         const acquisitionInput: AuthorityAcquisitionRequest = {
@@ -2258,6 +2263,9 @@ export class ServiceDispatcher {
           presentation: effectiveChallenge,
           ...(target ? { target } : {}),
           ...(attachedHost ? { attachedHost } : {}),
+          ...(openReview && reviewSubject
+            ? { pendingReview: { ...openReview, code: reviewSubject } }
+            : {}),
         };
         if (preflight) {
           if (runManifest?.approvals === "pregranted-only") {
@@ -2380,6 +2388,26 @@ export class ServiceDispatcher {
           // RPC wait-mode client retries the denied invocation forever.
           this.authorityAcquirer.invalidate([acquisitionInput]);
           presented = this.authorityAcquirer.request(acquisitionInput);
+          if (presented.denied) {
+            throw new ServiceAccessError(
+              service,
+              method,
+              "The authority request was denied",
+              "EACCES",
+              {
+                denied: true,
+                authorityFailure: authorityFailureForDecision(
+                  {
+                    ...decision,
+                    allowed: false,
+                    code: "user-denied",
+                    reason: "The authority request was denied",
+                  },
+                  { capability, resourceKey, tier: reviewedTier }
+                ),
+              }
+            );
+          }
           this.observeAuthority(resolved.context, "authority-requested", {
             capability,
             resourceKey,

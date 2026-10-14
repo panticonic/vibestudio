@@ -1,7 +1,6 @@
 import { createDevLogger } from "@vibestudio/dev-log";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import * as crypto from "node:crypto";
 import { pathToFileURL } from "node:url";
 import type { PanelViewLike } from "@vibestudio/shared/panelInterfaces";
 import {
@@ -276,6 +275,8 @@ function sealedAppCodeIdentity(event: AppAvailableEvent): {
   };
 }
 
+/** Baked payloads are admitted by package publication. Startup checks their
+ * manifest/authority identity without rereading every published payload. */
 export function readBakedElectronApp(distDir: string): AppAvailableEvent | null {
   const manifestPath = path.join(distDir, "manifest.json");
   if (!fs.existsSync(manifestPath)) return null;
@@ -333,13 +334,6 @@ export function readBakedElectronApp(distDir: string): AppAvailableEvent | null 
     const artifactPath = path.join(distDir, "artifacts", artifact.path);
     if (!fs.existsSync(artifactPath)) {
       throw new Error(`Baked Electron app artifact is missing: ${artifact.path}`);
-    }
-    const actualIntegrity = `sha256-${crypto
-      .createHash("sha256")
-      .update(fs.readFileSync(artifactPath))
-      .digest("hex")}`;
-    if (actualIntegrity !== artifact.integrity) {
-      throw new Error(`Baked Electron app artifact integrity mismatch: ${artifact.path}`);
     }
   }
   const htmlPath = path.join(distDir, "artifacts", html.path);

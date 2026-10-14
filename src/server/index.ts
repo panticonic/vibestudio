@@ -1076,6 +1076,15 @@ async function main() {
     approvalQueue,
     grantStore: capabilityGrantStore,
     resolveTaskTitle,
+    waitForUnitReview: async (review, signal) => {
+      signal.throwIfAborted();
+      // Admission is durable across a host restart. An unanswered review is
+      // rebound to its exact unit's current application, whose lifetime also
+      // covers the startup placeholder before the shared review is published.
+      if (unitAdmissionStore.hasVersion(review.code.repoPath, review.code.effectiveVersion))
+        return "accepted";
+      return unitInstallReviewCoordinator.whenUnitReviewSettled(review.code, signal);
+    },
     notifyOwner: createAcquisitionOwnerNotifier(() => {
       const doDispatch = resolvedDoDispatchForTitles;
       const manager = workerdManagerForGateway;
@@ -2426,7 +2435,10 @@ async function main() {
     listPendingReviews: () =>
       approvalQueue.listPending().filter((pending) => pending.kind === "unit-install-review"),
     isLaunchGateRepoPath,
-    creationReviewOwed: () => creationReviewOwed,
+    creationReviewOwed: () =>
+      creationReviewOwed &&
+      (workspaceCreationReviewState.status === "preparing" ||
+        workspaceCreationReviewState.status === "pending"),
     creationReviewUnits: () => creationReviewUnits,
     hasVersion: (repoPath, effectiveVersion) =>
       unitAdmissionStore.hasVersion(repoPath, effectiveVersion),
@@ -2547,10 +2559,26 @@ async function main() {
     },
   });
 
-  const { computeRootDependencyFingerprint } = await import("./buildV2/effectiveVersion.js");
-  const dependencyFingerprint = await computeRootDependencyFingerprint(
+  const dependencyFingerprintStartedAt = performance.now();
+  const { readPreparedWorkspaceTemplate, prepareWorkspaceCompilationFingerprint } =
+    await import("./preparedWorkspaceTemplate.js");
+  // Host SDK evidence belongs to the installation, not this workspace's
+  // creation pin. Every supported launch carries its designated Base record.
+  const installationPin = readDefaultWorkspaceTemplates(appRoot).base;
+  const preparedInput = readPreparedWorkspaceTemplate(
+    preparedWorkspaceTemplatePath(releaseResourceRoot, installationPin, "use"),
+    installationPin,
+    "use"
+  ).compilationInput;
+  if (!preparedInput)
+    throw new Error("Prepared host installation has no compilation input capture");
+  const dependencyFingerprint = await prepareWorkspaceCompilationFingerprint(
+    preparedInput,
     appRoot,
     buildDependencyWorkspaceRoot
+  );
+  console.log(
+    `[Perf] workspace dependency identity prepared in ${Math.round(performance.now() - dependencyFingerprintStartedAt)}ms at ${Math.round(process.uptime() * 1000)}ms uptime`
   );
   console.log(
     `[Perf] workspace bootstrap publication recovered at ${Math.round(process.uptime() * 1000)}ms uptime`
@@ -5095,13 +5123,10 @@ async function main() {
     | null = null;
   const { resolveIrohRelayUrls } = await import("./irohRelayConfig.js");
   const workspaceRelayUrls = resolveIrohRelayUrls(process.env["VIBESTUDIO_IROH_RELAYS"]);
+  const { workspaceIrohReach } = await import("./workspaceIrohReach.js");
+  const getWorkspaceIrohReach = () => workspaceIrohReach(irohIngress, workspaceRelayUrls);
   const currentIrohReach = (): import("@vibestudio/iroh-transport").IrohReach | null =>
-    irohIngress?.isOnline ? irohIngress.endpoint.reach(workspaceRelayUrls) : null;
-  const waitForIrohReach = async (): Promise<import("@vibestudio/iroh-transport").IrohReach> => {
-    if (!irohIngress) throw new Error("Workspace Iroh ingress is not ready");
-    const onlineEndpoint = await irohIngress.waitUntilOnline();
-    return onlineEndpoint.reach(workspaceRelayUrls);
-  };
+    irohIngress?.isOnline ? getWorkspaceIrohReach() : null;
   // Persisted peers can reconnect as soon as the endpoint binds. Their RPC
   // admission must wait for the same completed startup reported to new peers.
   let settleWorkspaceReadyForPeers!: (ready: boolean) => void;
@@ -6040,7 +6065,7 @@ async function main() {
             return;
           }
           try {
-            respond(200, await waitForIrohReach());
+            respond(200, getWorkspaceIrohReach());
           } catch (error) {
             respond(503, {
               error: serializeRpcFailure(error, "transport"),
@@ -6744,6 +6769,11 @@ async function main() {
   const { wireWorkerdCore } = await import("./bootstrap/workerd.js");
   const { resolveLiveExecutionCaller } = await import("./services/liveExecutionCaller.js");
   wireWorkerdCore({
+    schemaProbeEnvironment: {
+      hostBuild: preparedInput.hostBuild,
+      compilerProtocol: preparedInput.compilerProtocol,
+      appDependencyFingerprint: preparedInput.fingerprint.value,
+    },
     container,
     tokenManager,
     workspacePath,
@@ -8032,6 +8062,7 @@ async function main() {
         error: err instanceof Error ? err.message : String(err),
       };
       console.warn("[Units] Failed to resolve the workspace creation review:", err);
+      unitInstallReviewCoordinator.finishStartupReviewStaging(err);
     }
   };
 
@@ -8065,6 +8096,7 @@ async function main() {
       // publishPending starts the queue entries synchronously; its promise is the
       // later human decision/application and therefore remains detached.
       await prepareWorkspaceCreationReview();
+      unitInstallReviewCoordinator.finishStartupReviewStaging();
       void reconcileDefaultAutomations();
       void unitInstallReviewCoordinator
         .publishPending("startup")
@@ -8072,6 +8104,7 @@ async function main() {
     })
     .catch((error: unknown) => {
       rejectInitialExtensionDeclarations(error);
+      unitInstallReviewCoordinator.finishStartupReviewStaging(error);
       throw error;
     });
   const startupWorkerArtifactPreparation = Promise.resolve().then(async () => {
@@ -8385,7 +8418,7 @@ async function main() {
   requestShutdown = () => void shutdown();
   const stoppedBeforeReady = process.send ? registerParentShutdown(requestShutdown) : false;
   if (stoppedBeforeReady || isShuttingDown) return;
-  const pairing = args.readyFile && irohIngress ? await waitForIrohReach() : null;
+  const pairing = args.readyFile && irohIngress ? getWorkspaceIrohReach() : null;
   if (isShuttingDown) return;
 
   // Readiness guarantees the parent-owned stop callback has been installed.
