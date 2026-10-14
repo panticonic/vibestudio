@@ -114,6 +114,15 @@ that boundary. Record cold and warm results separately, with the exact app revis
 template pins, prepared artifact identities, and native startup phase receipts.
 Until that boundary has been measured, do not claim that startup meets the target.
 
+Native service-startup evidence includes the existing ServiceContainer ready
+message with `startupReport=<JSON>`. Each successful readiness boundary records
+the container's elapsed duration, realized critical path, and service names,
+dependencies, start/completion times, queue delays, and durations. A later
+background extension has its own successful report; a failed extension does not
+emit a success packet. These finite graph facts contain no service instances or
+configuration. Use the required-readiness packet to attribute startup delays,
+not the duration of unrelated background services.
+
 Release producers prepare immutable template source closures and eligible runtime
 builds before packaging. The installed consumer waits for complete preparation;
 it must consume artifacts matching its content state, source, effective version,
@@ -132,11 +141,66 @@ production distinct from a cold installed launch with completed prepared
 artifacts. Neither increasing a smoke deadline nor serving an unproven workspace
 establishes fast startup.
 
-Source preparation uses the canonical shared derived build cache. Each hit must
-pass the existing build identity, manifest, payload, and workspace-authority
-checks before export into the launch's complete local artifact set. Fresh scratch
-paths must not force a new cache identity on every launch. A packaged consumer
-uses its exported release artifacts and does not depend on the producer's cache.
+The shared derived cache has two distinct immutable publication phases:
+
+- `workspace-releases` stores the complete
+  `vibestudio-workspace-runtime-release/3` publication. Its key binds platform,
+  architecture, host generation, host dependency fingerprint, compiler protocol,
+  the designated Base/Personal/System roots, and each role's dependency-first
+  ordered exact layer pins. The three root pins alone do not identify a
+  composition with floating transitive dependencies.
+- `workspace-sources` stores the `vibestudio-workspace-sources/1` source phase.
+  Its key binds the preparation recipe digest, host SDK/dependency fingerprint,
+  system epoch, designated roots, and the same ordered exact layer pins. The
+  recipe comes from the immutable generation's published
+  `host-preparation-recipes.json` receipt for its actual preparation entry;
+  startup does not hash the preparation bundle again. Source records carry the
+  complete immutable blob closure and source provenance, but no runtime builds
+  or captured compilation input. They retain no workspace SQL databases,
+  protected publication/history, provider credentials or credential stores,
+  runtime grants, or compiler state.
+
+Dependency metadata resolution and the operation's one current host SDK capture
+run independently and join before either cache lookup. The metadata resolver
+admits manifest epochs, repository ownership, overrides, and exact transitive
+pins without loading every source blob. Composition consumes that captured plan
+through the same resolver/composer boundary; it never re-resolves floating
+tracks during hydration. Reviewed local metadata can cross the supervisor
+boundary as manifest text and repository facts rather than another Git tree
+walk.
+
+A completed full-release hit projects its admitted artifacts directly. On a
+full-release miss, source acquisition and private source-ready projection happen
+before joining the complete background runtime coordinator. That projection
+attaches the current operation's compilation input and publishes source
+readiness exactly once, allowing developer CLI/desktop startup and selected
+demand builds to proceed while the exhaustive runtime batch remains owned.
+Warm source readiness reads sealed records and links their cache blobs; it does
+not first hydrate the producer's private runtime source paths. Only the winning
+background runtime producer later hydrates those paths through the ordinary
+prepared-template bootstrap hook. Cold source production retains its already
+materialized role states for that continuation. If another producer supplies the
+complete release while this operation waits, no redundant runtime hydration or
+second source-ready notification is needed.
+
+The critical dependency edges are:
+
+```text
+exact metadata plans + current host SDK capture (independent)
+  -> complete-release lookup
+     -> hit: complete artifact projection -> consumer startup
+     -> miss: source publication/projection -> consumer startup + selected demand
+                  -> background runtime coordination -> required private hydration
+                     -> all runtime builds + publication proof -> complete release
+```
+
+Source readiness is not workspace authority: each consumer still creates its
+own workspace state, initializes semantic protected main, and admits required
+runtime executions. Fresh scratch paths never form part of either cache key.
+A packaged consumer uses its exported complete release and does not depend on
+the producer's cache. Packaging still joins every runtime build and full
+publication proof before accepting the installed artifact.
+
 Cold verification and profiling select a private cache through the existing
 `VIBESTUDIO_SHARED_DERIVED_CACHE_DIR` input; their owner retires that cache after
 joining all work. Ordinary launch never deletes the inherited shared cache.
@@ -146,13 +210,21 @@ owners keep their smaller independent budget. Consumers reuse the complete
 immutable release keyed by its exact host and template inputs instead of
 starting a second producer.
 
-Publication checks source and executable payload integrity, including compressed
-inventories, before atomically exposing its completion record. Ordinary reuse
-admits the sealed identity, role inventories, descriptors, and file census; it
-does not reload and hash every payload. Artifact serving likewise reads the
+Each phase proves its complete source or executable payload integrity before
+atomically exposing its completion record; the full runtime phase also proves
+compressed executable inventories. Ordinary reuse admits the sealed identity,
+record digests, exact role/layer inventories, descriptors, and file census; it
+does not reload and hash every payload. A present but incomplete or mismatched
+publication fails admission rather than silently rebuilding over it. Source
+records and full runtime records have separate completion markers, so a source
+hit cannot satisfy the full production gate. Artifact serving likewise reads the
 admitted immutable file without another content hash. Cache projection joins all
 payload links or copies before exposing the inherited completion record. These
 are phases of one publication contract, not a switch that disables validation.
+The source-cache and lazy Git-index leases remain owned through the runtime
+continuation. Retirement first joins all admitted work, then releases those
+inputs and cache coordination, then removes private scratch; every operation
+and cleanup failure remains observable.
 
 The release operation captures host dependency inputs once. Its exact v8 hash
 trace is carried by the prepared template record, bound to the host generation,
