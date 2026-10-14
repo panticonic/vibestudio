@@ -306,9 +306,10 @@ Auth:
 `);
 }
 
-function publishArgs({ packagePath, dryRun, tag }) {
+export function publishArgs({ packagePath, dryRun, tag }) {
   const args = ["publish", packagePath, "--access", "public", "--tag", tag];
   if (dryRun) args.push("--dry-run", "--silent");
+  else args.push("--loglevel", "error");
   return args;
 }
 
