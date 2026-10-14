@@ -822,6 +822,15 @@ test("native artifact consumers wait for their exact producers without unrelated
   );
   assert.deepEqual(dependenciesOf(releaseJobs["create-release-tag"]), ["validate-release-input"]);
   assert.deepEqual(dependenciesOf(releaseJobs["github-release"]), ["create-release-tag"]);
+  assert.equal(
+    releaseJobs["github-release"].outputs["release-id"],
+    "${{ steps.release.outputs.id }}",
+    "the draft release ID must cross the job boundary because tag lookup excludes drafts"
+  );
+  assert.equal(
+    releaseJobs["github-release"].steps.find((step) => step.name === "GitHub Release")?.id,
+    "release"
+  );
   assert.match(
     JSON.stringify(releaseJobs["create-release-tag"]),
     /git\/tags/u,
@@ -956,6 +965,25 @@ test("native artifact consumers wait for their exact producers without unrelated
   }
 
   assert.ok(transitiveDependencies(releaseJobs, "publish-release").has("validate-release-input"));
+  const releasePublication = releaseJobs["publish-release"].steps.find(
+    (step) => step.name === "Make the complete release public and latest"
+  );
+  assert.equal(
+    releasePublication.env.RELEASE_ID,
+    "${{ needs.github-release.outputs.release-id }}"
+  );
+  assert.doesNotMatch(
+    releasePublication.run,
+    /releases\/tags/u,
+    "draft publication must use the release ID returned by the creating job"
+  );
+
+  const linuxRepositories = await readWorkflow("linux-repositories.yml");
+  assert.ok(
+    Object.hasOwn(linuxRepositories.on, "workflow_dispatch"),
+    "Linux repository publication must be resumable after a repaired release publication"
+  );
+  assert.match(linuxRepositories.jobs.publish.if, /github\.event_name == 'workflow_dispatch'/u);
 });
 
 test("Darwin production and development host inputs are immutable producer artifacts", async () => {
