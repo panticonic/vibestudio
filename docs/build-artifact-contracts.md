@@ -141,6 +141,14 @@ production distinct from a cold installed launch with completed prepared
 artifacts. Neither increasing a smoke deadline nor serving an unproven workspace
 establishes fast startup.
 
+An unchanged host source fingerprint admits its already-published immutable
+generation from the bound completion, layout, and preparation-recipe receipts.
+It does not repeat payload hashing, executable/import smokes, recipe hashing, or
+publication writes. A missing publication uses the ordinary producer; a corrupt
+requested generation fails admission. Producer validation and the final release
+gate remain unchanged. Developer launch still checks the mutable native
+dependency installation once, independently of the sealed host payload.
+
 The shared derived cache has two distinct immutable publication phases:
 
 - `workspace-releases` stores the complete

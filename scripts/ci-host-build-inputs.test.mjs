@@ -5,6 +5,11 @@ import path from "node:path";
 import { test } from "node:test";
 import { currentGeneration } from "./ci-host-build-inputs.mjs";
 import { computeHostBuildFingerprint } from "./host-build-fingerprint.mjs";
+import { publishHostBuildGeneration } from "./host-build-generations.mjs";
+import {
+  NATIVE_WORKSPACE_ENTRIES,
+  SOURCE_SERVER_PREREQUISITE_ARTIFACTS,
+} from "./server-runtime-artifacts.mjs";
 
 test("generation transport validates build receipt identity independently of pointer format", () => {
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "ci-host-inputs-"));
@@ -18,12 +23,29 @@ test("generation transport validates build receipt identity independently of poi
       const build = computeHostBuildFingerprint({ cwd, mode });
       const pointer = { ...build, version: 2, kind, root: `${kind}-${build.fingerprint}` };
       const root = path.join(cwd, "dist/host-generations", pointer.root);
-      fs.mkdirSync(root, { recursive: true });
-      fs.symlinkSync("../../../node_modules", path.join(root, "node_modules"), "dir");
       const receiptPath = path.join(root, "host-build-fingerprint.json");
       const pointerPath = path.join(cwd, "dist/host-generations", `current-${kind}.json`);
-      fs.writeFileSync(receiptPath, JSON.stringify(build));
-      fs.writeFileSync(pointerPath, JSON.stringify(pointer));
+      for (const artifact of new Set([
+        ...SOURCE_SERVER_PREREQUISITE_ARTIFACTS,
+        ...[
+          "main.cjs",
+          "adblock-engine-worker.cjs",
+          "server-electron.cjs",
+          "panelPreload.cjs",
+          "browserPrivacyPreload.cjs",
+          "browserTransport.js",
+          "fs-disk-worker.cjs",
+          ...Object.values(NATIVE_WORKSPACE_ENTRIES),
+        ].map((entry) => `dist/${entry}`),
+      ])) {
+        const file = path.join(cwd, artifact);
+        fs.mkdirSync(path.dirname(file), { recursive: true });
+        if (["dist/headless-host", "dist/workerd-programs"].includes(artifact))
+          fs.mkdirSync(file, { recursive: true });
+        else fs.writeFileSync(file, "fixture payload");
+      }
+      fs.writeFileSync(path.join(cwd, "dist/host-build-fingerprint.json"), JSON.stringify(build));
+      assert.equal(publishHostBuildGeneration(cwd, { ...build, kind }), root);
       assert.deepEqual(currentGeneration(kind, mode, cwd), {
         mode,
         fingerprint: build.fingerprint,

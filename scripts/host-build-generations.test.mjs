@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import * as fs from "node:fs";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
 import {
   assertHostBuildPayloadComplete,
+  admitPublishedHostBuildGeneration,
   collectHostBuildGenerations,
   publishHostBuildGeneration,
   readCurrentHostBuildGeneration,
@@ -19,6 +21,15 @@ import {
   SOURCE_SERVER_PREREQUISITE_ARTIFACTS,
 } from "./server-runtime-artifacts.mjs";
 import { cleanHostBuildOutput } from "./clean-host-build-output.mjs";
+
+function publishFixtureGeneration(root, build) {
+  const { kind: _kind, ...identity } = build;
+  fs.writeFileSync(
+    path.join(root, "dist/host-build-fingerprint.json"),
+    JSON.stringify({ version: 1, ...identity })
+  );
+  return publishHostBuildGeneration(root, build);
+}
 
 function writeSourcePrerequisites(root, prefix) {
   for (const artifact of SOURCE_SERVER_PREREQUISITE_ARTIFACTS) {
@@ -35,6 +46,133 @@ function writeHostBrandRuntimeArtifacts(root, prefix) {
     fs.writeFileSync(file, `${prefix}:${path.basename(file)}`);
   }
 }
+
+function admittedSourceFixture() {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-admission-"));
+  fs.writeFileSync(path.join(root, "package.json"), '{"name":"fixture"}');
+  fs.mkdirSync(path.join(root, "node_modules"));
+  writeSourcePrerequisites(root, "admission");
+  for (const name of ["headless-host", "workerd-programs"]) {
+    fs.rmSync(path.join(root, "dist", name));
+    fs.mkdirSync(path.join(root, "dist", name));
+  }
+  const build = { kind: "source", mode: "development", fingerprint: "a".repeat(64), inputCount: 1 };
+  const published = publishFixtureGeneration(root, build);
+  return { root, build, published };
+}
+
+test("admits the sealed generation without reading payloads or rewriting publication records", (t) => {
+  const { root, build, published } = admittedSourceFixture();
+  const reads = [];
+  const writes = [];
+  const read = fs.readFileSync;
+  const write = fs.writeFileSync;
+  t.mock.method(fs, "readFileSync", (file, ...args) => {
+    reads.push(String(file));
+    return read(file, ...args);
+  });
+  t.mock.method(fs, "writeFileSync", (file, ...args) => {
+    writes.push(String(file));
+    return write(file, ...args);
+  });
+  syncBuiltinESMExports();
+  try {
+    assert.equal(admitPublishedHostBuildGeneration(root, build), published);
+    assert.equal(publishHostBuildGeneration(root, build), published);
+    assert.ok(
+      reads.every((file) =>
+        ["current-source.json", "host-build-fingerprint.json", HOST_PREPARATION_RECIPES].includes(
+          path.basename(file)
+        )
+      )
+    );
+    assert.ok(writes.every((file) => path.basename(file) === "owner"));
+    assert.equal(
+      reads.some((file) => file.endsWith("prepare-workspace-templates.mjs")),
+      false
+    );
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("admits absence only when no existing publication is corrupt", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "absent-host-generation-"));
+  const build = { kind: "source", mode: "development", fingerprint: "a".repeat(64), inputCount: 1 };
+  try {
+    assert.equal(admitPublishedHostBuildGeneration(root, build), null);
+    const generations = path.join(root, "dist/host-generations");
+    fs.mkdirSync(generations, { recursive: true });
+    assert.equal(admitPublishedHostBuildGeneration(root, build), null);
+    fs.writeFileSync(
+      path.join(generations, "current-source.json"),
+      JSON.stringify({ version: 2, ...build, root: `source-${build.fingerprint}` })
+    );
+    assert.throws(() => admitPublishedHostBuildGeneration(root, build), { code: "ENOENT" });
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+for (const corruption of ["receipt", "pointer", "recipe", "payload"])
+  test(`fails ${corruption} corruption rather than rebuilding a sealed generation`, () => {
+    const { root, build, published } = admittedSourceFixture();
+    try {
+      if (corruption === "receipt") {
+        const { kind: _kind, ...identity } = build;
+        fs.writeFileSync(
+          path.join(published, "host-build-fingerprint.json"),
+          JSON.stringify({ version: 1, ...identity, inputCount: 2 })
+        );
+      }
+      if (corruption === "pointer")
+        fs.writeFileSync(path.join(root, "dist/host-generations/current-source.json"), "{}");
+      if (corruption === "recipe")
+        fs.writeFileSync(path.join(published, HOST_PREPARATION_RECIPES), "{}");
+      if (corruption === "payload") fs.rmSync(path.join(published, "browserTransport.js"));
+      assert.throws(
+        () => admitPublishedHostBuildGeneration(root, build),
+        /receipt|invalid|incomplete/u
+      );
+      assert.throws(() => publishHostBuildGeneration(root, build), /receipt|invalid|incomplete/u);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+test("selects an existing proven generation when its pointer is legitimately absent", () => {
+  const { root, build, published } = admittedSourceFixture();
+  try {
+    const pointer = path.join(root, "dist/host-generations/current-source.json");
+    fs.rmSync(pointer);
+    assert.equal(admitPublishedHostBuildGeneration(root, build), published);
+    assert.equal(readCurrentHostBuildGeneration(root, "source"), published);
+    releaseHostBuildGeneration(published);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("only the requested generation is an admission dependency", () => {
+  const { root, build, published } = admittedSourceFixture();
+  const pointer = path.join(root, "dist/host-generations/current-source.json");
+  try {
+    const older = { ...build, fingerprint: "b".repeat(64) };
+    fs.writeFileSync(
+      pointer,
+      JSON.stringify({ version: 2, ...older, root: `source-${older.fingerprint}` })
+    );
+    assert.equal(admitPublishedHostBuildGeneration(root, build), published);
+    fs.writeFileSync(pointer, JSON.stringify({ version: 1, root: "/legacy/checkout" }));
+    assert.equal(admitPublishedHostBuildGeneration(root, build), published);
+    const missing = { ...build, fingerprint: "c".repeat(64) };
+    assert.equal(admitPublishedHostBuildGeneration(root, missing), null);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("validates host payload before its completion receipt is written", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-build-payload-"));
@@ -100,13 +238,13 @@ test("publishes immutable complete generations and leaves the prior one readable
     fs.writeFileSync(path.join(root, "dist/panelPreload.cjs"), "preload-a");
     fs.writeFileSync(path.join(root, "dist/workerd-programs/router.mjs"), "router-a");
     writeSourcePrerequisites(root, "a");
-    const first = publishHostBuildGeneration(root, {
+    const first = publishFixtureGeneration(root, {
       kind: "desktop",
       mode: "development",
       fingerprint: "a".repeat(64),
       inputCount: 1,
     });
-    const source = publishHostBuildGeneration(root, {
+    const source = publishFixtureGeneration(root, {
       kind: "source",
       mode: "development",
       fingerprint: "b".repeat(64),
@@ -166,7 +304,7 @@ test("publishes immutable complete generations and leaves the prior one readable
     fs.writeFileSync(path.join(root, "dist/main.cjs"), "main-b");
     fs.writeFileSync(path.join(root, "dist/panelPreload.cjs"), "preload-b");
     fs.writeFileSync(path.join(root, "dist/workerd-programs/router.mjs"), "router-b");
-    const second = publishHostBuildGeneration(root, {
+    const second = publishFixtureGeneration(root, {
       kind: "desktop",
       mode: "development",
       fingerprint: "b".repeat(64),
@@ -260,13 +398,13 @@ test("relocated source and desktop generations resolve relative to the new check
     populateOutput(restoredRoot, "restored");
     const desktopFingerprint = "c".repeat(64);
     const sourceFingerprint = "d".repeat(64);
-    const originalDesktop = publishHostBuildGeneration(originalRoot, {
+    const originalDesktop = publishFixtureGeneration(originalRoot, {
       kind: "desktop",
       mode: "production",
       fingerprint: desktopFingerprint,
       inputCount: 3,
     });
-    publishHostBuildGeneration(originalRoot, {
+    publishFixtureGeneration(originalRoot, {
       kind: "source",
       mode: "production",
       fingerprint: sourceFingerprint,
@@ -322,7 +460,7 @@ test("relocated source and desktop generations resolve relative to the new check
       );
     }
 
-    const nextDesktop = publishHostBuildGeneration(restoredRoot, {
+    const nextDesktop = publishFixtureGeneration(restoredRoot, {
       kind: "desktop",
       mode: "production",
       fingerprint: "e".repeat(64),
@@ -412,7 +550,7 @@ test("refuses an incomplete generation without replacing current", () => {
       fs.writeFileSync(path.join(root, "dist", entry), entry);
     fs.mkdirSync(path.join(root, "dist/headless-host"));
     writeSourcePrerequisites(root, "failure");
-    const first = publishHostBuildGeneration(root, {
+    const first = publishFixtureGeneration(root, {
       kind: "source",
       mode: "development",
       fingerprint: "a".repeat(64),
@@ -421,7 +559,7 @@ test("refuses an incomplete generation without replacing current", () => {
     fs.rmSync(path.join(root, "dist/browserTransport.js"));
     assert.throws(
       () =>
-        publishHostBuildGeneration(root, {
+        publishFixtureGeneration(root, {
           kind: "source",
           mode: "development",
           fingerprint: "b".repeat(64),
@@ -434,7 +572,7 @@ test("refuses an incomplete generation without replacing current", () => {
     fs.rmSync(path.join(root, "dist", NATIVE_WORKSPACE_ENTRIES.extensionChild));
     assert.throws(
       () =>
-        publishHostBuildGeneration(root, {
+        publishFixtureGeneration(root, {
           kind: "source",
           mode: "development",
           fingerprint: "b".repeat(64),

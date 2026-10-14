@@ -34,6 +34,35 @@ function functionCalls(name) {
   return calls;
 }
 
+test("warm host reuse runs publication checks only when the canonical generation is absent", () => {
+  for (const name of ["build", "buildSourceServerPrerequisites"]) {
+    const declaration = buildAst.program.body.find(
+      (node) => node.type === "FunctionDeclaration" && node.id?.name === name
+    );
+    const statements = declaration.body.body.find((node) => node.type === "TryStatement").block
+      .body;
+    const warm = statements.find(
+      (node) =>
+        node.type === "IfStatement" &&
+        node.test.type === "CallExpression" &&
+        node.test.callee.name === "sameHostBuildFingerprint"
+    );
+    assert.ok(warm);
+    const admission = warm.consequent.body.find((node) => node.type === "IfStatement");
+    assert.equal(admission.test.type, "UnaryExpression");
+    assert.equal(admission.test.operator, "!");
+    assert.equal(admission.test.argument.callee.name, "admitPublishedHostBuildGeneration");
+    const guarded = buildSource.slice(admission.consequent.start, admission.consequent.end);
+    assert.match(guarded, /publishHostBuildGeneration/u);
+    if (name === "build") assert.match(guarded, /await checkBuildArtifacts\(\)/u);
+    const outside = warm.consequent.body
+      .filter((node) => node !== admission)
+      .map((node) => buildSource.slice(node.start, node.end))
+      .join("\n");
+    assert.doesNotMatch(outside, /checkBuildArtifacts|publishHostBuildGeneration/u);
+  }
+});
+
 test("the SQL.js runtime payload is part of source host prerequisites", () => {
   assert.ok(SOURCE_SERVER_PREREQUISITE_ARTIFACTS.includes("dist/sql-wasm.wasm"));
 
