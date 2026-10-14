@@ -175,8 +175,10 @@ async function createHarness(
   // Construct the manager first (getServerUrl reads the port lazily via the
   // holder) so the gateway closure can reference a `const` manager.
   const portHolder = { value: 0 };
+  const statePath = mkdtempSync(join(tmpdir(), "vibestudio-dwh-state-"));
   const deps: WorkerdManagerDeps = {
     schemaProbeEnvironment: schemaProbeEnvironmentForFixture(compiledWorkerdPrograms),
+    schemaProbeReleaseRoot: join(statePath, "installed-resources"),
     tokenManager,
     fsService: { closeHandlesForCaller: () => {} } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
@@ -184,7 +186,7 @@ async function createHarness(
     workerdPrograms: compiledWorkerdPrograms,
     getInternalDoEnv: () => ({}),
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-dwh-ws-")),
-    statePath: mkdtempSync(join(tmpdir(), "vibestudio-dwh-state-")),
+    statePath,
     getProxyPort: () => 1,
     getSharedEgressPort: () => Promise.resolve(egressPort),
     registerEgressCaller: () => {},

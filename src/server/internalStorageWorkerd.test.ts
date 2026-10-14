@@ -146,6 +146,7 @@ async function createWorkerdHarness(
   activeFixtureRoots.push(workspacePath, statePath);
   const manager = new WorkerdManager({
     schemaProbeEnvironment: schemaProbeEnvironmentForFixture(compiledWorkerdPrograms),
+    schemaProbeReleaseRoot: join(statePath, "installed-resources"),
     tokenManager,
     fsService: {
       closeHandlesForCaller: () => {},

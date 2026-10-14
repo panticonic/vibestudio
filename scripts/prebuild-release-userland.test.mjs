@@ -14,7 +14,9 @@ import {
   runInstalledRpcBatch,
   verifyPreparedReleaseUserland,
   withStandaloneReleaseSession,
+  verifyAndPublishSchemaEvidence,
 } from "./prebuild-release-userland.mjs";
+import { schemaProbeComponentPath } from "./lib/schema-evidence-publication.mjs";
 import {
   createConnectDeepLink,
   createConnectPairUrl,
@@ -27,6 +29,125 @@ async function fixture() {
   roots.push(root);
   return root;
 }
+
+test("installed schema publication joins the genuine verifier owner before advertising its component", async () => {
+  const root = await fixture();
+  const records = verificationRecords();
+  const context = await verificationFixture(root, records);
+  const installation = {
+    hostBuild: { version: 1, mode: "production", fingerprint: "a".repeat(64), inputCount: 1 },
+    compilerProtocol: {
+      cacheVersion: "test-protocol",
+      panelEntryProtocolFingerprint: "b".repeat(64),
+    },
+    appDependencyFingerprint: "c".repeat(64),
+  };
+  await fs.writeFile(
+    path.join(context.resources, "userland-builds/release.json"),
+    JSON.stringify({
+      builds: records,
+      ...installation,
+      platform: process.platform,
+      arch: process.arch,
+    })
+  );
+  for (const record of records) {
+    const directory = path.join(context.resources, "userland-builds", record.buildKey);
+    await fs.mkdir(directory);
+    await fs.writeFile(
+      path.join(directory, "metadata.json"),
+      JSON.stringify({ execution: { artifactDigest: "d".repeat(64) } })
+    );
+  }
+  // This boundary receives an already-proven compiled-runner artifact, never
+  // interprets its schema contract or invokes another probe implementation.
+  const component = {
+    format: "vibestudio-installed-schema-evidence/1",
+    installation,
+    platform: process.platform,
+    arch: process.arch,
+    inventory: [],
+    receipts: [],
+  };
+  let retire;
+  const retirement = new Promise((resolve) => {
+    retire = resolve;
+  });
+  let admitted;
+  const stageReady = new Promise((resolve) => {
+    admitted = resolve;
+  });
+  const cli = async (args) => (args[1] === "create-workspace" ? { name: "base-workspace" } : {});
+  const runBuildBatch = async (sources, evidence) => {
+    if (evidence)
+      await fs.writeFile(evidence.stagingPath, JSON.stringify(component), { flag: "wx" });
+    return {
+      outcomes: sources.map((source) => ({
+        status: "fulfilled",
+        source,
+        buildKey: records.find((record) => record.source === source).buildKey,
+      })),
+      schemaEvidenceStaging: evidence?.stagingPath,
+    };
+  };
+  const publication = verifyAndPublishSchemaEvidence(async (operation) => {
+    await operation({
+      ...context,
+      cli,
+      runBuildBatch,
+    });
+    admitted();
+    await retirement;
+  });
+  await stageReady;
+  await assert.rejects(fs.stat(schemaProbeComponentPath(context.resources)), { code: "ENOENT" });
+  retire();
+  await publication;
+  const published = JSON.parse(
+    await fs.readFile(schemaProbeComponentPath(context.resources), "utf8")
+  );
+  assert.deepEqual(published, component);
+  assert.deepEqual(
+    (await fs.readdir(context.resources)).filter((name) => name.includes(".tmp.")),
+    []
+  );
+});
+
+test("failed verifier serving retirement leaves no schema component or staged proof", async () => {
+  const root = await fixture();
+  const records = verificationRecords();
+  const context = await verificationFixture(root, records);
+  const original = new Error("independent serving retirement failure");
+  const cli = async (args) => (args[1] === "create-workspace" ? { name: "base-workspace" } : {});
+  const runBuildBatch = async (sources, evidence) => {
+    if (evidence)
+      await fs.writeFile(
+        evidence.stagingPath,
+        JSON.stringify({ format: "owned-compiled-proof-fixture" }),
+        { flag: "wx" }
+      );
+    return {
+      outcomes: sources.map((source) => ({
+        status: "fulfilled",
+        source,
+        buildKey: records.find((record) => record.source === source).buildKey,
+      })),
+      schemaEvidenceStaging: evidence?.stagingPath,
+    };
+  };
+  await assert.rejects(
+    verifyAndPublishSchemaEvidence(async (operation) => {
+      await operation({ ...context, cli, runBuildBatch });
+      throw original;
+    }),
+    (error) => error === original
+  );
+  await assert.rejects(fs.stat(schemaProbeComponentPath(context.resources)), { code: "ENOENT" });
+  assert.deepEqual(
+    (await fs.readdir(context.resources)).filter((name) => name.includes(".tmp.")),
+    []
+  );
+});
 afterEach(async () => {
   mock.restoreAll();
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });

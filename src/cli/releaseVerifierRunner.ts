@@ -4,6 +4,8 @@ import { pathToFileURL } from "node:url";
 import { deserializeRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
 import type { BuildBundleResult, BuildResultWire } from "@vibestudio/service-schemas/build";
 import type { RpcClient } from "./rpcClient.js";
+import { stageInstalledSchemaProbeEvidence } from "../../scripts/lib/schema-probe-evidence.mjs";
+import { assertSchemaProbeStagingPath } from "../../scripts/lib/schema-evidence-publication.mjs";
 
 const RESULT_PREFIX = "VIBESTUDIO_RELEASE_RPC_RESULT:";
 const CONCURRENCY = 6;
@@ -57,6 +59,7 @@ async function run(inputPath: string): Promise<void> {
   let cancellationClose: Promise<void> | undefined;
   let client: RpcClient | undefined;
   let release: (() => Promise<void>) | undefined;
+  let schemaEvidence: { resources: string; stagingPath: string } | undefined;
   const onMessage = (message: unknown) => {
     if (
       typeof message !== "object" ||
@@ -83,11 +86,13 @@ async function run(inputPath: string): Promise<void> {
     >;
     operationFailure?: unknown;
     cleanupFailure?: unknown;
+    schemaEvidenceStaging?: string;
   } = {};
   try {
     const input = JSON.parse(await fs.readFile(inputPath, "utf8")) as {
       cliEntry: string;
       sources: string[];
+      schemaEvidence?: { resources: string; stagingPath: string };
     };
     if (
       typeof input.cliEntry !== "string" ||
@@ -97,6 +102,13 @@ async function run(inputPath: string): Promise<void> {
       throw new Error("Invalid release verifier runner input");
 
     if (cancellation.signal.aborted) throw cancellationFailure;
+    if (input.schemaEvidence) {
+      assertSchemaProbeStagingPath(
+        input.schemaEvidence.stagingPath,
+        input.schemaEvidence.resources
+      );
+      schemaEvidence = input.schemaEvidence;
+    }
     const cli = (await import(
       pathToFileURL(path.resolve(input.cliEntry)).href
     )) as ClientFactoryModule;
@@ -119,7 +131,6 @@ async function run(inputPath: string): Promise<void> {
   } catch (error) {
     results.operationFailure = cancellationFailure ?? error;
   }
-  process.off("message", onMessage);
   if (release) {
     try {
       await release();
@@ -129,9 +140,25 @@ async function run(inputPath: string): Promise<void> {
   } else if (cancellationClose) {
     await cancellationClose;
   }
+  if (
+    schemaEvidence &&
+    results.operationFailure === undefined &&
+    results.cleanupFailure === undefined &&
+    results.outcomes?.every((outcome) => outcome.status === "fulfilled")
+  ) {
+    try {
+      results.schemaEvidenceStaging = await stageReleaseSchemaEvidence(
+        schemaEvidence,
+        cancellation.signal
+      );
+    } catch (error) {
+      results.operationFailure = error;
+    }
+  }
   if (cancellationFailure !== undefined && results.operationFailure === undefined) {
     results.operationFailure = cancellationFailure;
   }
+  process.off("message", onMessage);
 
   const fatal =
     results.operationFailure && results.cleanupFailure
@@ -151,8 +178,48 @@ async function run(inputPath: string): Promise<void> {
     ...(results.operationFailure === undefined && results.cleanupFailure !== undefined
       ? { cleanupFailure: serializeRpcFailure(results.cleanupFailure) }
       : {}),
+    ...(results.schemaEvidenceStaging
+      ? { schemaEvidenceStaging: results.schemaEvidenceStaging }
+      : {}),
   };
   process.stdout.write(`${RESULT_PREFIX}${JSON.stringify(serialized)}\n`);
+}
+
+/** This compiled installed consumer shares the same receipt contract as admission. */
+export async function stageReleaseSchemaEvidence(
+  input: { resources: string; stagingPath: string },
+  signal?: AbortSignal
+): Promise<string> {
+  const manifest = JSON.parse(
+    await fs.readFile(path.join(input.resources, "userland-builds/release.json"), "utf8")
+  );
+  const artifacts = [];
+  for (const record of manifest.builds) {
+    const metadata = JSON.parse(
+      await fs.readFile(
+        path.join(input.resources, "userland-builds", record.buildKey, "metadata.json"),
+        "utf8"
+      )
+    );
+    artifacts.push({ source: record.source, artifactDigest: metadata.execution?.artifactDigest });
+  }
+  const { getSharedDerivedDataPath } = await import("@vibestudio/env-paths");
+  const staging = await stageInstalledSchemaProbeEvidence({
+    source: path.join(getSharedDerivedDataPath(), "schema-probes"),
+    output: input.resources,
+    stagingPath: input.stagingPath,
+    installation: {
+      hostBuild: manifest.hostBuild,
+      compilerProtocol: manifest.compilerProtocol,
+      appDependencyFingerprint: manifest.appDependencyFingerprint,
+    },
+    platform: manifest.platform,
+    arch: manifest.arch,
+    artifacts,
+    signal,
+  });
+  // Ownership transfers to the parent publication operation at this exact path.
+  return staging.path;
 }
 
 async function main(): Promise<void> {

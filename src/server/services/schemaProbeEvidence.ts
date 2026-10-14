@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createHash, randomUUID } from "node:crypto";
-import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
-import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import {
   DerivedCacheCoordinator,
@@ -13,93 +11,39 @@ import {
 } from "@vibestudio/shared/derivedCache";
 import { SharedBuildCoordinator } from "../buildV2/sharedBuildCoordinator.js";
 import { BuildPriorityOwner } from "../buildV2/builderLifetime.js";
-import type { WorkspaceReleaseIdentity } from "../preparedWorkspaceRelease.js";
+import {
+  schemaProbeIdentitySchema as identitySchema,
+  schemaProbeDescriptorSchema as descriptorSchema,
+  admitSchemaProbeReceipt,
+  schemaProbeKey,
+  type InstalledSchemaProbeEvidence,
+  type SchemaProbeIdentity,
+  type SchemaProbeDescriptor,
+} from "../../../scripts/lib/schema-probe-evidence.mjs";
+export { readInstalledSchemaProbeEvidence } from "../../../scripts/lib/schema-probe-evidence.mjs";
+export type {
+  SchemaProbeIdentity,
+  SchemaProbeDescriptor,
+  InstalledSchemaProbeEvidence,
+} from "../../../scripts/lib/schema-probe-evidence.mjs";
 import { runWithOwnedCleanup, runOwnedCleanupSteps } from "../../../scripts/lib/owned-cleanup.mjs";
-
-const digest = z.string().regex(/^[a-f0-9]{64}$/u);
-const identitySchema = z
-  .object({
-    artifactDigest: digest,
-    source: z.string().min(1),
-    className: z.string().min(1),
-    protocol: z.number().int().positive(),
-    platform: z.string().min(1),
-    arch: z.string().min(1),
-    compatibility: z
-      .object({
-        compatibilityDate: z.string().min(1),
-        compatibilityFlags: z.array(z.string()),
-        mainModule: z.string().min(1),
-      })
-      .strict(),
-    installation: z
-      .object({
-        appDependencyFingerprint: digest,
-        hostBuild: z
-          .object({
-            version: z.literal(1),
-            mode: z.enum(["development", "production"]),
-            fingerprint: digest,
-            inputCount: z.number().int().positive(),
-          })
-          .strict(),
-        compilerProtocol: z
-          .object({ cacheVersion: z.string().min(1), panelEntryProtocolFingerprint: digest })
-          .strict(),
-      })
-      .strict(),
-  })
-  .strict();
-export interface SchemaProbeIdentity {
-  readonly artifactDigest: string;
-  readonly source: string;
-  readonly className: string;
-  readonly protocol: number;
-  readonly platform: string;
-  readonly arch: string;
-  readonly compatibility: {
-    readonly compatibilityDate: string;
-    readonly compatibilityFlags: readonly string[];
-    readonly mainModule: string;
-  };
-  readonly installation: WorkspaceReleaseIdentity;
-}
-export interface SchemaProbeDescriptor {
-  readonly className: string;
-  readonly version: number;
-  readonly freshSchemaFingerprint: string;
-  readonly durableWorkQueues: readonly DurableWorkQueue[];
-  readonly nativeOwner: boolean;
-}
-const descriptorSchema = z
-  .object({
-    className: z.string().min(1),
-    version: z.number().int().positive(),
-    freshSchemaFingerprint: z.string().min(1),
-    nativeOwner: z.boolean(),
-    durableWorkQueues: z.unknown().transform((value) => parseDurableWorkReady(value)),
-  })
-  .strict();
-const receiptSchema = z
-  .object({
-    format: z.literal("vibestudio-schema-probe/1"),
-    identity: identitySchema,
-    descriptor: descriptorSchema,
-  })
-  .strict();
 
 /** Share only the immutable result of the existing executable probe. No SQL,
  * activation identity, credential or grant enters this publication. The full
  * published installation binds the serving engine/loader and trusted npm realm. */
 export async function acquireSchemaProbeEvidence(
-  input: { readonly identity: SchemaProbeIdentity; readonly signal: AbortSignal },
+  input: {
+    readonly identity: SchemaProbeIdentity;
+    readonly signal: AbortSignal;
+    readonly installed?: InstalledSchemaProbeEvidence;
+  },
   probe: () => Promise<SchemaProbeDescriptor>
 ): Promise<SchemaProbeDescriptor> {
   input.signal.throwIfAborted();
   const identity = identitySchema.parse(input.identity);
-  const key = createHash("sha256")
-    .update(canonicalJson({ format: "vibestudio-schema-probe/1", identity }))
-    .digest("hex");
+  const key = schemaProbeKey(identity);
+  const installed = input.installed?.get(key);
+  if (installed) return admitSchemaProbeReceipt(installed, key).descriptor;
   const root = path.join(getSharedDerivedDataPath(), "schema-probes");
   const target = path.join(root, key);
   const read = async (): Promise<SchemaProbeDescriptor | null> => {
@@ -116,7 +60,7 @@ export async function acquireSchemaProbeEvidence(
       }
       throw new Error("Schema probe publication is incomplete");
     }
-    const receipt = receiptSchema.parse(JSON.parse(bytes));
+    const receipt = admitSchemaProbeReceipt(JSON.parse(bytes), key);
     if (
       canonicalJson(receipt.identity) !== canonicalJson(identity) ||
       receipt.descriptor.className !== identity.className

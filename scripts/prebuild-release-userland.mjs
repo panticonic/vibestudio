@@ -15,6 +15,11 @@ import {
   runWithOwnedCleanup,
 } from "./lib/owned-cleanup.mjs";
 import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
+import {
+  schemaProbeStagingPath,
+  publishSchemaProbeComponent,
+  retireSchemaProbeStaging,
+} from "./lib/schema-evidence-publication.mjs";
 
 const RELEASE_VERIFIER_RESULT_PREFIX = "VIBESTUDIO_RELEASE_RPC_RESULT:";
 
@@ -475,12 +480,13 @@ async function withReleaseConsumerSession(
           scratch,
           resources,
           env,
-          runBuildBatch: (sources) =>
+          runBuildBatch: (sources, schemaEvidence) =>
             runInstalledRpcBatch({
               executable,
               runnerEntry: path.join(path.dirname(cliEntry), "releaseVerifierRunner.mjs"),
               cliEntry,
               sources,
+              schemaEvidence,
               env,
               scratch,
               signal: cancellation.signal,
@@ -640,10 +646,41 @@ export async function prebuildReleaseUserland(context) {
 
 /** A clean consumer must reuse the producer's exact immutable records. */
 export async function verifyReleaseUserland(context) {
-  await withInstalledReleaseSession(context, verifyPreparedReleaseUserland);
+  await verifyAndPublishSchemaEvidence((operation) =>
+    withInstalledReleaseSession(context, operation)
+  );
 }
 
-export async function verifyPreparedReleaseUserland({ cli, pair, resources, env, runBuildBatch }) {
+/** npm and Electron share the genuine serving verifier and final evidence gate. */
+export async function verifyStandaloneReleaseUserland(appRoot, executable, scratchParent) {
+  await verifyAndPublishSchemaEvidence((operation) =>
+    withStandaloneReleaseSession(appRoot, executable, scratchParent, operation)
+  );
+}
+
+export async function verifyAndPublishSchemaEvidence(openSession) {
+  let staged;
+  let resources;
+  await runWithOwnedCleanup(
+    async () => {
+      await openSession(async (session) => {
+        resources = session.resources;
+        staged = schemaProbeStagingPath(resources);
+        await verifyPreparedReleaseUserland(session, { resources, stagingPath: staged });
+      });
+      // openSession joins server/probe retirement and private scratch removal.
+      // Failed retirement never publishes an installed evidence component.
+      await publishSchemaProbeComponent(staged, resources);
+    },
+    () => (staged ? retireSchemaProbeStaging(staged, resources) : undefined),
+    "Installed schema evidence verification/publication and retirement failed"
+  );
+}
+
+export async function verifyPreparedReleaseUserland(
+  { cli, pair, resources, env, runBuildBatch },
+  schemaEvidence
+) {
   const manifest = JSON.parse(
     await fsp.readFile(path.join(resources, "userland-builds/release.json"), "utf8")
   );
@@ -663,7 +700,11 @@ export async function verifyPreparedReleaseUserland({ cli, pair, resources, env,
     if (records.length === 0) throw new Error(`Release has no prepared artifacts for ${kind}`);
     for (const record of records)
       console.log(`[release-builds] Verifying ${kind}: ${record.source}`);
-    const batch = await runBuildBatch(records.map((record) => record.source));
+    const capture = kind === "personal" ? schemaEvidence : undefined;
+    const batch = await runBuildBatch(
+      records.map((record) => record.source),
+      capture
+    );
     const failures = [];
     for (const [index, record] of records.entries()) {
       const outcome = batch.outcomes[index];
@@ -711,6 +752,10 @@ export async function verifyPreparedReleaseUserland({ cli, pair, resources, env,
         )
       );
     if (batch.cleanupFailure) failures.push(batch.cleanupFailure);
+    if (capture && batch.schemaEvidenceStaging !== capture.stagingPath)
+      failures.push(
+        new Error("Release verifier did not produce its exact schema evidence component")
+      );
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1)
       throw new AggregateError(failures, "Release artifact verification failed", {
@@ -729,9 +774,12 @@ export async function runInstalledRpcBatch({
   env,
   scratch,
   signal,
+  schemaEvidence,
 }) {
   const inputPath = path.join(scratch, "release-verifier-input.json");
-  await fsp.writeFile(inputPath, JSON.stringify({ cliEntry, sources }), { mode: 0o600 });
+  await fsp.writeFile(inputPath, JSON.stringify({ cliEntry, sources, schemaEvidence }), {
+    mode: 0o600,
+  });
   let result;
   let primaryFailure;
   try {
@@ -844,6 +892,7 @@ export async function runInstalledRpcBatch({
       });
     result = {
       outcomes,
+      schemaEvidenceStaging: payload.schemaEvidenceStaging,
     };
   } catch (error) {
     primaryFailure = error;

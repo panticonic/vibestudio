@@ -2,8 +2,7 @@
 import { joinChildProcess } from "./lib/join-child-process.mjs";
 import {
   prepareInstalledTemplateRelease,
-  withStandaloneReleaseSession,
-  verifyPreparedReleaseUserland,
+  verifyStandaloneReleaseUserland,
 } from "./prebuild-release-userland.mjs";
 import spawn from "cross-spawn";
 // Stage the one publishable npm package from a completed `pnpm build`:
@@ -69,6 +68,7 @@ const SERVER_PACKAGE_FILES = [
   "build-resources",
   "workspace-templates",
   "userland-builds",
+  "schema-evidence.json",
   "native/node/distribution.json",
   ".nvmrc",
 ];
@@ -203,12 +203,7 @@ async function prepareServerTemplateRelease(root) {
         entry: path.join(root, "dist/prepare-workspace-templates.mjs"),
         scratchParent: outRoot,
       });
-      await withStandaloneReleaseSession(
-        root,
-        process.execPath,
-        outRoot,
-        verifyPreparedReleaseUserland
-      );
+      await verifyStandaloneReleaseUserland(root, process.execPath, outRoot);
     },
     [
       () => rmrf(path.join(root, "node_modules")),

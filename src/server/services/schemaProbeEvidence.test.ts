@@ -5,7 +5,12 @@ import {
   acquireSchemaProbeEvidence,
   type SchemaProbeIdentity,
   type SchemaProbeDescriptor,
+  readInstalledSchemaProbeEvidence,
 } from "./schemaProbeEvidence.js";
+import {
+  stageInstalledSchemaProbeEvidence,
+  schemaProbeComponentPath,
+} from "../../../scripts/lib/schema-probe-evidence.mjs";
 import {
   schemaProbeEnvironmentForFixture,
   useSchemaProbeFixtureCache,
@@ -44,6 +49,161 @@ const published = async () =>
   (await fs.readdir(cacheRoot())).filter((entry) => !entry.startsWith("."));
 
 describe("immutable schema probe evidence", () => {
+  const stage = async () => {
+    const output = path.join(cacheRoot(), "..", "installed");
+    await fs.mkdir(output, { recursive: true });
+    const publication = await stageInstalledSchemaProbeEvidence({
+      source: cacheRoot(),
+      output,
+      installation: identity.installation,
+      artifacts: [{ source: identity.source, artifactDigest: identity.artifactDigest }],
+    });
+    return { output, publication };
+  };
+
+  it("snapshots only advertised receipts while an owned publication is held", async () => {
+    const rename = fs.rename.bind(fs);
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let entered!: () => void;
+    const publicationEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const spy = vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(from).startsWith(cacheRoot()) && String(from).includes(".tmp.")) {
+        entered();
+        await held;
+      }
+      return rename(from, to);
+    });
+    const producer = acquire(async () => descriptor);
+    await publicationEntered;
+    let staged;
+    try {
+      staged = await stage();
+      await staged.publication.publish();
+      expect(
+        (await readInstalledSchemaProbeEvidence(staged.output, identity.installation)).size
+      ).toBe(0);
+    } finally {
+      release();
+      await producer;
+      await staged?.publication.close();
+      spy.mockRestore();
+    }
+    expect(await published()).toHaveLength(1);
+  });
+
+  it("rejects unknown cache entries instead of treating arbitrary private-looking paths as misses", async () => {
+    await acquire(async () => descriptor);
+    await fs.mkdir(path.join(cacheRoot(), ".foreign"));
+    await expect(stage()).rejects.toThrow(/foreign/);
+  });
+
+  it("publishes only proven immutable descriptors and reuses them without a mutable cache or probe", async () => {
+    await acquire(async () => descriptor);
+    const { output, publication } = await stage();
+    try {
+      expect(await readInstalledSchemaProbeEvidence(output, identity.installation)).toHaveProperty(
+        "size",
+        0
+      );
+      await publication.publish();
+      const installed = await readInstalledSchemaProbeEvidence(output, identity.installation);
+      await fs.rm(cacheRoot(), { recursive: true });
+      const probe = vi.fn(async () => descriptor);
+      expect(
+        await acquireSchemaProbeEvidence(
+          { identity, installed, signal: new AbortController().signal },
+          probe
+        )
+      ).toEqual(descriptor);
+      expect(probe).not.toHaveBeenCalled();
+      await expect(fs.stat(cacheRoot())).rejects.toMatchObject({ code: "ENOENT" });
+      const component = JSON.parse(await fs.readFile(schemaProbeComponentPath(output), "utf8"));
+      expect(component.receipts).toHaveLength(1);
+      expect(component.receipts[0]).toEqual({
+        format: "vibestudio-schema-probe/1",
+        identity,
+        descriptor,
+      });
+      await expect(publication.publish()).rejects.toMatchObject({ code: "EEXIST" });
+    } finally {
+      await publication.close();
+    }
+  });
+
+  it("uses the canonical mutable producer for an unadvertised changed artifact", async () => {
+    await acquire(async () => descriptor);
+    const { output, publication } = await stage();
+    try {
+      await publication.publish();
+      const installed = await readInstalledSchemaProbeEvidence(output, identity.installation);
+      const probe = vi.fn(async () => descriptor);
+      await acquireSchemaProbeEvidence(
+        {
+          identity: { ...identity, artifactDigest: "b".repeat(64) },
+          installed,
+          signal: new AbortController().signal,
+        },
+        probe
+      );
+      expect(probe).toHaveBeenCalledOnce();
+    } finally {
+      await publication.close();
+    }
+  });
+
+  it.each(["missing", "duplicate", "class", "installation", "malformed"])(
+    "rejects %s advertised installed evidence without reprobe",
+    async (corruption) => {
+      await acquire(async () => descriptor);
+      const { output, publication } = await stage();
+      try {
+        await publication.publish();
+        const filename = schemaProbeComponentPath(output);
+        const component = JSON.parse(await fs.readFile(filename, "utf8"));
+        if (corruption === "missing") component.receipts = [];
+        if (corruption === "duplicate") component.receipts.push(component.receipts[0]);
+        if (corruption === "class") component.receipts[0].descriptor.className = "OtherDO";
+        if (corruption === "installation")
+          component.installation.appDependencyFingerprint = "b".repeat(64);
+        await fs.writeFile(
+          filename,
+          corruption === "malformed" ? "not-json" : JSON.stringify(component)
+        );
+        await expect(
+          readInstalledSchemaProbeEvidence(output, identity.installation)
+        ).rejects.toThrow();
+      } finally {
+        await publication.close();
+      }
+    }
+  );
+
+  it("cancels staged installed publication without advertising evidence", async () => {
+    await acquire(async () => descriptor);
+    const output = path.join(cacheRoot(), "..", "installed");
+    await fs.mkdir(output);
+    const cancellation = new AbortController();
+    const publication = await stageInstalledSchemaProbeEvidence({
+      source: cacheRoot(),
+      output,
+      installation: identity.installation,
+      artifacts: [{ source: identity.source, artifactDigest: identity.artifactDigest }],
+      signal: cancellation.signal,
+    });
+    const reason = new Error("release retired");
+    cancellation.abort(reason);
+    try {
+      await expect(publication.publish()).rejects.toBe(reason);
+    } finally {
+      await publication.close();
+    }
+    expect(await fs.readdir(output)).toEqual([]);
+  });
   it("reuses one exact descriptor without persisting workspace SQL or grants", async () => {
     const probe = vi.fn(async () => descriptor);
     expect(await acquire(probe)).toEqual(descriptor);

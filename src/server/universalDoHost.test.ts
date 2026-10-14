@@ -257,9 +257,11 @@ async function createHarness(
   // Construct the manager first (its getServerUrl reads the port lazily via the
   // holder) so the gateway closure below can reference a `const` manager.
   const portHolder = { value: 0 };
+  const statePath = mkdtempSync(join(tmpdir(), "vibestudio-udo-state-"));
 
   const deps: WorkerdManagerDeps = {
     schemaProbeEnvironment: schemaProbeEnvironmentForFixture(compiledWorkerdPrograms),
+    schemaProbeReleaseRoot: join(statePath, "installed-resources"),
     tokenManager,
     fsService: { closeHandlesForCaller: () => {} } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
@@ -267,7 +269,7 @@ async function createHarness(
     workerdPrograms: compiledWorkerdPrograms,
     getInternalDoEnv: () => ({}),
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-ws-")),
-    statePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-state-")),
+    statePath,
     getProxyPort: () => 1,
     getSharedEgressPort: () => Promise.resolve(portHolder.value),
     registerEgressCaller: () => {},
@@ -1018,7 +1020,19 @@ describe("UniversalDO facet host (real workerd)", () => {
   });
   it("probes a candidate schema in workerd and destroys its reserved scratch storage", async () => {
     const source = "workers/schema-probe";
-    const build = doBuild(source, "ev-probe", SCHEMA_PROBE_DO);
+    const candidate = doBuild(source, "ev-probe", SCHEMA_PROBE_DO);
+    const artifact = runtimeArtifact(source, "candidate");
+    const build: BuildResult = {
+      ...candidate,
+      buildKey: artifact.buildKey,
+      metadata: {
+        ...candidate.metadata,
+        buildKey: artifact.buildKey,
+        execution: artifact,
+        ev: artifact.sourceState.effectiveVersion,
+        sourceState: artifact.sourceState.state,
+      },
+    };
     active = await createHarness({ [source]: build });
 
     const descriptor = await active.manager.probeDurableObjectSchema(
