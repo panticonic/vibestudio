@@ -388,7 +388,9 @@ export class BuildProcessOwner {
       released = true;
       entry.borrowers--;
       if (entry.borrowers === 0 && !entry.settled && !entry.controller.signal.aborted) {
-        entry.controller.abort(new Error("All shared build requesters withdrew"));
+        entry.controller.abort(
+          signal.aborted ? signal.reason : new Error("All shared build requesters withdrew")
+        );
       }
     };
     if (signal.aborted) {
@@ -5118,10 +5120,16 @@ async function buildExtension(
         },
         artifacts: smokeArtifacts,
       };
-      await smokeTestExtensionBuild(session, smokeResult, node, {
-        dependencyDiagnostics,
-        runtimeNodeModulesDir: runtimeDeps.nodeModulesDir,
-      });
+      await smokeTestExtensionBuild(
+        session,
+        smokeResult,
+        node,
+        {
+          dependencyDiagnostics,
+          runtimeNodeModulesDir: runtimeDeps.nodeModulesDir,
+        },
+        signal
+      );
 
       const result = await storeSimpleBuild(
         session,
@@ -5182,8 +5190,12 @@ async function smokeTestExtensionBuild(
   details: {
     dependencyDiagnostics: ExtensionDependencyDiagnostics;
     runtimeNodeModulesDir: string;
-  }
+  },
+  signal: AbortSignal
 ): Promise<void> {
+  // This exact flight, not a borrowing role's lifetime, owns admission. Once
+  // admitted, the job is joined before its executor can be retired.
+  signal.throwIfAborted();
   try {
     await session.runNativeJob({
       script: generateExtensionSmokeScript(

@@ -204,14 +204,34 @@ describe("extension runtime dependency publication", () => {
 
     await expect(
       ensureExternalDeps({ "compile-dependency-prepare-failure-test": "1.0.0" })
-    ).rejects.toMatchObject({
-      message: "Failed to install external dependencies: content preparation failed",
-      cause: failure,
-    });
+    ).rejects.toBe(failure);
     expect(prepareDependencyContent).toHaveBeenCalledOnce();
     const [stagingDir, cacheDir] = vi.mocked(prepareDependencyContent).mock.calls[0]!;
     expect(fs.existsSync(cacheDir)).toBe(false);
     expect(fs.existsSync(stagingDir)).toBe(false);
+  });
+
+  it("joins installer cancellation and staging cleanup without replacing the owner's reason", async () => {
+    const controller = new AbortController();
+    const reason = Object.assign(new Error("dependency owner cancelled"), { code: "ECANCELLED" });
+    let staging = "";
+    vi.mocked(runNpmInstall).mockImplementationOnce(async (cwd, options) => {
+      staging = cwd;
+      controller.abort(reason);
+      options!.signal!.throwIfAborted();
+    });
+    await expect(
+      acquireExternalDeps(
+        { "cancelled-install-test": "1.0.0" },
+        {},
+        {
+          appRoot: process.cwd(),
+          signal: controller.signal,
+        }
+      )
+    ).rejects.toBe(reason);
+    expect(staging).not.toBe("");
+    expect(fs.existsSync(staging)).toBe(false);
   });
 
   it("routes CAS cleanup after an actual cache prune to the maintenance owner", async () => {

@@ -290,10 +290,9 @@ describe("Build V2 process and role ownership", () => {
     try {
       await entered.promise;
       requester.abort(new Error("Only requester canceled"));
-      await expect(work).rejects.toThrow("Only requester canceled");
-      await expect(admitted.entry.flight.promise).rejects.toThrow(
-        "All shared build requesters withdrew"
-      );
+      await expect(work).rejects.toBe(requester.signal.reason);
+      await expect(admitted.entry.flight.promise).rejects.toBe(requester.signal.reason);
+      expect(sharedSignal?.reason).toBe(requester.signal.reason);
       expect(sharedSignal?.aborted).toBe(true);
     } finally {
       await Promise.allSettled([work, admitted.entry.flight.promise]);

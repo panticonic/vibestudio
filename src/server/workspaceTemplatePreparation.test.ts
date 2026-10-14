@@ -27,6 +27,9 @@ const stage = vi.hoisted(() => ({
   sourceClose: vi.fn(),
   native: vi.fn(),
   publish: vi.fn(),
+  processShutdown: vi.fn(),
+  buildShutdown: vi.fn(),
+  runtimeBuilds: vi.fn(),
   fullHit: false,
   root: "",
   sourceRoot: "",
@@ -66,18 +69,20 @@ vi.mock("./services/hostGitHttpClient.js", () => ({
 }));
 vi.mock("./buildV2/builder.js", () => ({
   createBuildProcessOwner: () => ({
-    shutdown: async () => {},
+    shutdown: stage.processShutdown,
     withWorkers: async (work: () => Promise<unknown>) => work(),
   }),
 }));
 vi.mock("./nativeWorkspaceRuntime.js", () => ({ startNativeWorkspaceRuntime: stage.native }));
 vi.mock("./buildV2/index.js", () => ({
   initBuildSystemV2: async () => ({
-    shutdown: async () => {},
+    shutdown: stage.buildShutdown,
     getGraph: () => ({ allNodes: () => [] }),
   }),
 }));
-vi.mock("./workspaceTemplateBuilds.js", () => ({ prepareWorkspaceRuntimeBuilds: async () => [] }));
+vi.mock("./workspaceTemplateBuilds.js", () => ({
+  prepareWorkspaceRuntimeBuilds: stage.runtimeBuilds,
+}));
 vi.mock("./vcsHost/workspaceVcs.js", () => ({ WorkspaceVcs: class {} }));
 vi.mock("./services/protectedRefStore.js", () => ({ createProtectedRefStore: () => ({}) }));
 
@@ -100,6 +105,9 @@ beforeEach(async () => {
   stage.sourceRoot = path.join(root, "source-cache");
   stage.sourcePublished = false;
   stage.fullHit = false;
+  stage.processShutdown.mockResolvedValue(undefined);
+  stage.buildShutdown.mockResolvedValue(undefined);
+  stage.runtimeBuilds.mockResolvedValue([]);
   stage.snapshots.clear();
   for (const role of roles) {
     const manifest = canonicalTemplateYaml({
@@ -204,17 +212,87 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-function launch(name: string, onSourcesPrepared?: (root: string) => Promise<void>) {
+function launch(
+  name: string,
+  onSourcesPrepared?: (root: string) => Promise<void>,
+  signal?: AbortSignal
+) {
   return prepareWorkspaceTemplates({
     appRoot: root,
     output: path.join(root, name, "runtime"),
     sourceOutput: path.join(root, name, "ready"),
     scratch: path.join(root, name, "scratch"),
     onSourcesPrepared,
+    signal,
   });
 }
 
 describe("workspace source preparation ownership", () => {
+  it("retains every role resource until withdrawn process-owned compiler jobs join", async () => {
+    const controller = new AbortController();
+    const reason = Object.assign(new Error("producer cancelled"), { code: "ECANCELLED" });
+    let entered!: () => void;
+    const rolesEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let joinStarted!: () => void;
+    const joining = new Promise<void>((resolve) => {
+      joinStarted = resolve;
+    });
+    let finishJobs!: () => void;
+    const jobs = new Promise<void>((resolve) => {
+      finishJobs = resolve;
+    });
+    let admitted = 0;
+    stage.runtimeBuilds.mockImplementation(async () => {
+      admitted++;
+      if (admitted === 3) entered();
+      await new Promise<void>((_resolve, reject) => {
+        controller.signal.addEventListener("abort", () => reject(controller.signal.reason), {
+          once: true,
+        });
+      });
+      return [];
+    });
+    stage.processShutdown.mockImplementation(async () => {
+      joinStarted();
+      await jobs;
+    });
+    const stop = vi.fn(async () => ({ launcherExited: true }));
+    stage.native.mockResolvedValue({ stop, runJob: vi.fn(), admitDependencies: vi.fn() });
+    const work = launch("cancel-shared", undefined, controller.signal);
+    const outcome = work.catch((error: unknown) => error);
+    await rolesEntered;
+    controller.abort(reason);
+    await joining;
+    expect(stop).not.toHaveBeenCalled();
+    expect(stage.buildShutdown).not.toHaveBeenCalled();
+    finishJobs();
+    const failure = (await outcome) as AggregateError;
+    expect(failure.errors).toEqual([reason, reason, reason]);
+    expect(stage.buildShutdown).toHaveBeenCalledTimes(3);
+    expect(stop).toHaveBeenCalledTimes(3);
+    expect(stage.sourceClose).toHaveBeenCalledOnce();
+  });
+
+  it("retains independent retirement failures and attempts every role after compiler join fails", async () => {
+    const compilerFailure = new Error("compiler join failed");
+    const buildFailure = new Error("role shutdown failed");
+    stage.processShutdown.mockRejectedValueOnce(compilerFailure);
+    stage.buildShutdown.mockRejectedValueOnce(buildFailure);
+    const stop = vi.fn(async () => ({ launcherExited: false }));
+    stage.native.mockResolvedValue({ stop, runJob: vi.fn(), admitDependencies: vi.fn() });
+    const failure = (await launch("retirement-failures").catch(
+      (error: unknown) => error
+    )) as AggregateError;
+    expect(failure.errors[0]).toBe(compilerFailure);
+    expect(stage.buildShutdown).toHaveBeenCalledTimes(3);
+    expect(stop).toHaveBeenCalledTimes(3);
+    expect(JSON.stringify(failure, ["errors", "cause", "message", "code"])).toContain("EOWNERSHIP");
+    expect(JSON.stringify(failure, ["errors", "cause", "message", "code"])).toContain(
+      buildFailure.message
+    );
+  });
   it("captures once, publishes pure cached sources, and retains cold role states for runtime continuation", async () => {
     const ready = vi.fn(async (sourceRoot: string) => {
       expect(stage.native).not.toHaveBeenCalled();

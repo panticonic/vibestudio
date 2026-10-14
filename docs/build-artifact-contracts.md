@@ -134,6 +134,13 @@ Development launch can start its consumer once exact template sources and their
 captured compiler inputs are materialized. The same owned producer continues
 building every runtime in the background. Demand compilation joins the exact-key
 shared build coordinator; it does not start a second compiler for the same build.
+Cancellation joins all role requests, then process-owned shared compiler flights,
+before retiring any role's build workers, store/source resources, or native smoke
+executor. A withdrawn role borrower does not establish completion of its shared
+compiler flight. The last withdrawing requester supplies its authoritative abort
+reason; dependency installation preserves that reason after joining its process
+and staging cleanup. Independent failures remain failures, including unconfirmed
+resource ownership, and are retained alongside cancellation.
 A source-ready notification is not a completed runtime release. Only joined
 production and full publication proof may seal `userland-builds/release.json`.
 Installed launches consume that complete release. Keep cold source artifact

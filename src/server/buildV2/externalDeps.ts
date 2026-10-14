@@ -1636,10 +1636,9 @@ async function ensureDepsInstalledOnce(
         { reason: error.reason, packages }
       );
     }
-    throw new Error(
-      `Failed to install external dependencies: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error }
-    );
+    // The joined installer owns the original failure, including the exact
+    // cancellation reason. Context must not invent a different terminal event.
+    throw error;
   }
 }
 

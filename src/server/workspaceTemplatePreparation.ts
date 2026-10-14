@@ -547,6 +547,7 @@ async function produceWorkspaceTemplates(
     appNodeModules: getExistingAppNodeModulesRoots(input.appRoot),
   });
   const releaseBuilds: PreparedWorkspaceReleaseBuild[] = [];
+  const roleRetirements: Array<() => Promise<void>> = [];
   let operationFailure: unknown;
   let operationFailed = false;
   try {
@@ -591,47 +592,23 @@ async function produceWorkspaceTemplates(
           let builds: Awaited<ReturnType<typeof initBuildSystemV2>> | undefined;
           let retirement: ReturnType<typeof native.stop> | undefined;
           const retireNative = () => (retirement ??= native.stop());
-          const cancelled = () => {
-            void retireNative().catch(() => {});
-          };
-          input.signal?.addEventListener("abort", cancelled, { once: true });
-          if (input.signal?.aborted) cancelled();
-          const retireResources = async () => {
-            const failures: unknown[] = [];
-            const buildOutcome = await Promise.allSettled([builds?.shutdown()]);
-            failures.push(
-              ...buildOutcome.flatMap((outcome) =>
-                outcome.status === "rejected" ? [outcome.reason] : []
-              )
-            );
-            const nativeOutcome = await Promise.allSettled([
-              retireNative().then((stopped) => {
-                if (!stopped.launcherExited) {
-                  throw Object.assign(
-                    new Error("Template preparation still owns a native executor"),
-                    {
-                      code: "EOWNERSHIP",
-                    }
-                  );
-                }
-              }),
-            ]);
-            failures.push(
-              ...nativeOutcome.flatMap((outcome) =>
-                outcome.status === "rejected" ? [outcome.reason] : []
-              )
-            );
-            if (failures.length > 0) {
-              if (failures.length === 1) throw failures[0];
-              throw new AggregateError(
-                failures,
-                "Template preparation resource retirement failed",
-                {
-                  cause: failures[0],
-                }
-              );
+          const retireExecutor = async () => {
+            const stopped = await retireNative();
+            if (!stopped.launcherExited) {
+              throw Object.assign(new Error("Template preparation still owns a native executor"), {
+                code: "EOWNERSHIP",
+              });
             }
           };
+          // Cancellation belongs to the requests. The process-owned shared
+          // flight may retain this role's store, workers, and native executor
+          // after its last role borrower has withdrawn.
+          roleRetirements.push(() =>
+            runOwnedCleanupSteps(
+              [() => builds?.shutdown(), retireExecutor],
+              "Template preparation resource retirement failed"
+            )
+          );
           let operationFailure: unknown;
           let operationFailed = false;
           try {
@@ -704,20 +681,6 @@ async function produceWorkspaceTemplates(
             operationFailure = error;
             operationFailed = true;
           }
-          try {
-            await retireResources();
-          } catch (retirementFailure) {
-            if (operationFailed) {
-              throw new AggregateError(
-                [operationFailure, retirementFailure],
-                "Template preparation and resource retirement failed",
-                { cause: operationFailure }
-              );
-            }
-            throw retirementFailure;
-          } finally {
-            input.signal?.removeEventListener("abort", cancelled);
-          }
           if (operationFailed) throw operationFailure;
           record.builds = preparedBuilds;
           const recordPath = path.join(directory, "template.json");
@@ -744,10 +707,26 @@ async function produceWorkspaceTemplates(
     operationFailed = true;
   }
   const retirementFailures: unknown[] = [];
+  // A role can withdraw from a shared flight before that process-owned flight
+  // settles. All role borrowers are now joined; retain every role resource
+  // until the process owner has joined the compiler flights themselves.
   for (const retirement of [
+    () => processOwner.shutdown(),
+    async () => {
+      // The three role lifetimes are independent once their shared owner joins.
+      // Admit all cleanup, and retain every failure rather than short-circuiting.
+      const outcomes = await Promise.allSettled(roleRetirements.map((retire) => retire()));
+      const failures = outcomes.flatMap((outcome) =>
+        outcome.status === "rejected" ? [outcome.reason] : []
+      );
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1)
+        throw new AggregateError(failures, "Template role retirement failed", {
+          cause: failures[0],
+        });
+    },
     () => drainExternalDependencyPruning(),
     () => drainDependencyContentMaintenance(),
-    () => processOwner.shutdown(),
   ]) {
     try {
       await retirement();
