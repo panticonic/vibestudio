@@ -77,7 +77,10 @@ async function createPackageArchive({ packageRoot, tarballPath, archiveEntries }
     {
       cwd: packageRoot,
       file: tarballPath,
-      gzip: { mtime: 0 },
+      // The server package embeds its prepared offline runtime. Maximum gzip
+      // compression keeps the single registry upload below slow-link failure
+      // windows without changing the installed bytes.
+      gzip: { level: 9, mtime: 0 },
       mtime: new Date("1985-10-26T08:15:00.000Z"),
       noDirRecurse: true,
       portable: true,
