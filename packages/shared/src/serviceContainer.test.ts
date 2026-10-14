@@ -353,6 +353,100 @@ describe("ServiceContainer", () => {
     expect(report?.totalDurationMs).toBeGreaterThanOrEqual(0);
   });
 
+  it("emits one complete native timing packet for each successful readiness boundary", async () => {
+    const container = new ServiceContainer();
+    const secret = "private service configuration must not be captured";
+    const core = createService("core", [], { secret });
+    container.registerManaged(core);
+    container.registerManaged(createService("background", ["core"]));
+    vi.stubEnv("VIBESTUDIO_LOG_LEVEL", "info");
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    const marker = "; startupReport=";
+    const packets = () =>
+      output.mock.calls
+        .map(([message]) =>
+          typeof message === "string" &&
+          /^\[ServiceContainer\] \d+ services ready; startupReport=/u.test(message)
+            ? message.slice(message.indexOf(marker) + marker.length)
+            : null
+        )
+        .filter((message): message is string => message !== null);
+    try {
+      await container.startRequired(["core"]);
+      expect(packets()).toHaveLength(1);
+      expect(
+        output.mock.calls.some(
+          ([message]) =>
+            typeof message === "string" &&
+            message.startsWith("[ServiceContainer] 1 services ready; startupReport=")
+        )
+      ).toBe(true);
+      expect(JSON.parse(packets()[0]!)).toEqual(container.getStartupReport());
+      expect(
+        JSON.parse(packets()[0]!).services.map((service: { name: string }) => service.name)
+      ).toEqual(["core"]);
+      await container.startAll();
+      expect(packets()).toHaveLength(2);
+      const latest = JSON.parse(packets()[1]!);
+      expect(latest).toEqual(container.getStartupReport());
+      expect(latest.services.map((service: { name: string }) => service.name)).toEqual([
+        "core",
+        "background",
+      ]);
+      expect(latest.criticalPath).toEqual(["core", "background"]);
+      expect(core.start).toHaveBeenCalledOnce();
+      expect(packets().every((packet) => !packet.includes(secret) && !packet.includes("\n"))).toBe(
+        true
+      );
+      expect(Object.keys(latest).sort()).toEqual(["criticalPath", "services", "totalDurationMs"]);
+      expect(Object.keys(latest.services[0]).sort()).toEqual([
+        "actualStartMs",
+        "completionMs",
+        "criticalPredecessor",
+        "dependencies",
+        "dependencyReadyMs",
+        "durationMs",
+        "name",
+        "queueDelayMs",
+      ]);
+    } finally {
+      await container.stopAll();
+      output.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("does not emit a successful startup packet for a failed background extension", async () => {
+    const container = new ServiceContainer();
+    container.registerManaged(createService("core"));
+    const failure = new Error("background failed");
+    container.registerManaged({
+      name: "background",
+      dependencies: ["core"],
+      start: async () => {
+        throw failure;
+      },
+    });
+    vi.stubEnv("VIBESTUDIO_LOG_LEVEL", "info");
+    const output = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await container.startRequired(["core"]);
+      const report = container.getStartupReport();
+      await expect(container.startAll()).rejects.toBe(failure);
+      const packets = output.mock.calls.filter(
+        ([message]) =>
+          typeof message === "string" &&
+          /^\[ServiceContainer\] \d+ services ready; startupReport=/u.test(message)
+      );
+      expect(packets).toHaveLength(1);
+      expect(container.getStartupReport()).toBe(report);
+    } finally {
+      await container.stopAll();
+      output.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("resolves dependency instances in start()", async () => {
     const container = new ServiceContainer();
 
