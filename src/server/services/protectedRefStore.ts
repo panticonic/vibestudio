@@ -489,6 +489,11 @@ export function createProtectedRefStore(deps: ProtectedRefStoreDeps): ProtectedR
     acknowledgePublication(publicationId) {
       const publication = publications.get(publicationId);
       if (!publication) return;
+      if (publication.observersAppliedAt === null) {
+        throw new RefValidationError(
+          `Protected-main publication ${publicationId} cannot be acknowledged before its observers complete`
+        );
+      }
       const acknowledged = { ...publication, semanticAcknowledgedAt: now() };
       const nextPublications = new Map(publications).set(publicationId, acknowledged);
       for (const [id, evidence] of nextPublications) {

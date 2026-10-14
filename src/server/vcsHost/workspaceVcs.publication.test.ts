@@ -4,7 +4,19 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { hostRefBasisDigest } from "@vibestudio/shared/vcs/publication";
-import { ensureLayout, mirrorWorktreeTree, putBytes } from "../services/blobstoreService.js";
+import {
+  ensureLayout,
+  mirrorWorktreeTree,
+  putBytes,
+  readFileAtTree,
+  getBytes,
+} from "../services/blobstoreService.js";
+import {
+  readWorkspaceHostLaunchRecord,
+  writeWorkspaceHostLaunchRecord,
+} from "@vibestudio/workspace/hostLaunchRecord";
+import { parseWorkspaceSystemEpochEnvelope } from "@vibestudio/workspace/configParser";
+import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import { createProtectedRefStore } from "../services/protectedRefStore.js";
 import { createWorkspaceSemanticPort } from "../workspaceSourceProvider.js";
 import { WorkspaceVcs } from "./workspaceVcs.js";
@@ -16,6 +28,158 @@ describe("WorkspaceVcs protected publication notification", () => {
     vi.restoreAllMocks();
     if (root) await fsp.rm(root, { recursive: true, force: true });
     root = undefined;
+  });
+
+  async function interruptedPublication(semanticAcknowledged: boolean) {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "vcs-launch-recovery-"));
+    const blobsDir = path.join(root, "blobs");
+    const statePath = path.join(root, "state");
+    const refsPath = path.join(statePath, "refs");
+    ensureLayout(blobsDir);
+    const contentHash = (
+      await putBytes(blobsDir, Buffer.from(`systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\n`))
+    ).digest;
+    const meta = (
+      await mirrorWorktreeTree(blobsDir, [{ path: "vibestudio.yml", contentHash, mode: 0o100644 }])
+    ).stateHash;
+    const original = createProtectedRefStore({ statePath: refsPath, gate: async () => undefined });
+    const interruption = new Error("publication observer interrupted");
+    original.onRefsChanged(() => {
+      throw interruption;
+    });
+    const input = {
+      entries: [{ repoPath: "meta", expectedOld: null, next: meta }],
+      evidence: {
+        publicationId: "publication:launch",
+        previousEventId: "event:genesis",
+        publishedEventId: "event:main",
+        hostRefsBasisDigest: hostRefBasisDigest([]),
+      },
+    };
+    await expect(original.updateMains(input)).rejects.toBe(interruption);
+    if (semanticAcknowledged) {
+      // The historical host defect persisted acknowledgement before observers.
+      // Model that exact existing v6 journal, not a synthesized launch record.
+      const file = path.join(refsPath, "protected-publication-state.json");
+      const journal = JSON.parse(await fsp.readFile(file, "utf8"));
+      journal.appliedPublications[0].semanticAcknowledgedAt = 84;
+      await fsp.writeFile(file, JSON.stringify(journal));
+    }
+    const gate = vi.fn(async () => undefined);
+    const refs = createProtectedRefStore({ statePath: refsPath, gate });
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test",
+      blobsDir,
+      workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, "contexts"),
+      buildSourcesRoot: path.join(root, "build-sources"),
+      refs,
+    });
+    const effect = {
+      effectId: input.evidence.publicationId,
+      scopeKind: "context",
+      scopeId: "workspace-initialization:workspace:test",
+      commandId: "command:initial",
+      kind: "publish-main",
+      payload: {
+        previousEventId: "event:genesis",
+        publishedEventId: "event:main",
+        repositories: [],
+      },
+      payloadDigest: "digest:initial",
+      status: "pending",
+      receipt: null,
+      createdAt: "2026-07-16T12:00:00.000Z",
+    };
+    let pending = !semanticAcknowledged;
+    const dispatch = vi.fn(async (_target: unknown, method: string) => {
+      if (method === "vcsPendingSemanticEffects") return pending ? [effect] : [];
+      if (method === "vcsSemanticEffectAck") {
+        expect(readWorkspaceHostLaunchRecord(statePath)).not.toBeNull();
+        expect(refs.readHeadPublication()?.observersAppliedAt).not.toBeNull();
+        pending = false;
+        return { kind: "complete", result: null };
+      }
+      throw new Error(`unexpected semantic method ${method}`);
+    });
+    await vcs.attachGad(
+      createWorkspaceSemanticPort({ dispatch } as never, {
+        source: "test/provider",
+        className: "TestProvider",
+        objectKey: "test",
+      })
+    );
+    const writeLaunch = async (event: ProtectedPublicationEvent) => {
+      const file = await readFileAtTree(blobsDir, event.workspaceStateHash, "meta/vibestudio.yml");
+      if (!file) throw new Error("published manifest is missing");
+      const manifest = await getBytes(blobsDir, file.contentHash);
+      if (!manifest) throw new Error("published manifest bytes are missing");
+      writeWorkspaceHostLaunchRecord(statePath, {
+        version: 1,
+        workspaceId: "workspace:test",
+        stateHash: event.workspaceStateHash,
+        publicationId: event.publicationId,
+        systemEpoch: parseWorkspaceSystemEpochEnvelope(manifest.toString("utf8")),
+      });
+    };
+    return { refs, vcs, statePath, gate, dispatch, writeLaunch };
+  }
+
+  for (const acknowledged of [false, true]) {
+    it(`replays and joins the durable launch observer before semantic recovery completes (already acknowledged=${acknowledged})`, async () => {
+      const { refs, vcs, statePath, gate, dispatch, writeLaunch } =
+        await interruptedPublication(acknowledged);
+      let enter!: () => void;
+      const entered = new Promise<void>((resolve) => {
+        enter = resolve;
+      });
+      let release!: () => void;
+      const join = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const observer = vi.fn(async (event: ProtectedPublicationEvent) => {
+        enter();
+        await join;
+        await writeLaunch(event);
+      });
+      vcs.onProtectedPublication(observer);
+      const recovery = vcs.recoverPendingSemanticEffects();
+      try {
+        expect(await Promise.race([entered.then(() => true), recovery.then(() => false)])).toBe(
+          true
+        );
+        expect(readWorkspaceHostLaunchRecord(statePath)).toBeNull();
+        expect(dispatch).not.toHaveBeenCalledWith(
+          expect.anything(),
+          "vcsSemanticEffectAck",
+          expect.anything()
+        );
+      } finally {
+        release();
+      }
+      await expect(recovery).resolves.toBe(acknowledged ? 0 : 1);
+      expect(observer).toHaveBeenCalledOnce();
+      expect(gate).not.toHaveBeenCalled();
+      expect(readWorkspaceHostLaunchRecord(statePath)).toMatchObject({
+        publicationId: refs.readHeadPublication()?.publicationId,
+        systemEpoch: WORKSPACE_SYSTEM_EPOCH,
+      });
+      await expect(vcs.recoverPendingSemanticEffects()).resolves.toBe(0);
+      expect(observer).toHaveBeenCalledOnce();
+    });
+  }
+
+  it("preserves observer failure and never acknowledges an incomplete launch publication", async () => {
+    const { refs, vcs, statePath, dispatch } = await interruptedPublication(false);
+    const failure = new Error("durable launch observer failed");
+    vcs.onProtectedPublication(() => {
+      throw failure;
+    });
+    await expect(vcs.recoverPendingSemanticEffects()).rejects.toBe(failure);
+    expect(refs.readHeadPublication()?.observersAppliedAt).toBeNull();
+    expect(refs.readHeadPublication()?.semanticAcknowledgedAt).toBeNull();
+    expect(readWorkspaceHostLaunchRecord(statePath)).toBeNull();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("emits the complete CAS batch even when source mirroring fails", async () => {

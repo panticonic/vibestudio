@@ -862,6 +862,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   /** Drain the semantic outbox independently of the request that created it. */
   async recoverPendingSemanticEffects(): Promise<number> {
+    // Ref commit, host observers, and semantic acknowledgement are separate
+    // durable phases. Older/interrupted hosts may already have acknowledged a
+    // committed head before its observers finished; recover that exact head
+    // even when its semantic outbox is empty.
+    await this.mutateProtectedMain(async () => {
+      const head = this.deps.refs.readHeadPublication();
+      if (head) await this.replayPublicationObservers(head);
+    });
     let recovered = 0;
     for (let step = 0; step < 1_000; step += 1) {
       const effects = await this.gad().pendingSemanticEffects();
@@ -911,6 +919,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         // Recovery owns the same fence but may not have its original public
         // mutation result, so the next read must acquire an exact receipt.
         if (effect.scopeKind === "context") this.contextHeads.delete(effect.scopeId);
+        if (publication) {
+          await this.mutateProtectedMain(() => this.replayPublicationObservers(publication));
+        }
         const receipt: Record<string, unknown> = publication
           ? {
               applied: true,
@@ -934,6 +945,22 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (didRecover) recovered += 1;
     }
     throw new Error("semantic outbox recovery exceeded the host-effect drain limit");
+  }
+
+  private async replayPublicationObservers(publication: AppliedPublication): Promise<void> {
+    if (publication.observersAppliedAt !== null) return;
+    // Re-enter the existing exact-evidence replay admission. It checks the
+    // committed identity and current ref basis, never grants publication
+    // authority, and joins the original host observers before returning.
+    await this.deps.refs.updateMains({
+      entries: publication.entries,
+      evidence: {
+        publicationId: publication.publicationId,
+        previousEventId: publication.previousEventId,
+        publishedEventId: publication.publishedEventId,
+        hostRefsBasisDigest: publication.hostRefsBasisDigest,
+      },
+    });
   }
 
   private async executeSemanticEffect(

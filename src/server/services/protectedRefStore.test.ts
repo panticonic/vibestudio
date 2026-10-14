@@ -269,6 +269,12 @@ describe("ProtectedRefStore", () => {
     expect(
       store.readAppliedPublication(input.evidence.publicationId)?.observersAppliedAt
     ).toBeNull();
+    expect(() => store.acknowledgePublication(input.evidence.publicationId)).toThrow(
+      /cannot be acknowledged before its observers complete/u
+    );
+    expect(
+      store.readAppliedPublication(input.evidence.publicationId)?.semanticAcknowledgedAt
+    ).toBeNull();
 
     const reopened = createProtectedRefStore({
       statePath,
