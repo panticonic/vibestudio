@@ -107,6 +107,21 @@ void test("gives the producer its one operation-scoped build budget", async () =
   );
 });
 
+void test("owns a distinct source-phase root for standalone publication and switches only after completion", async () => {
+  await withProducer(
+    `const fs=require("fs"); const output=process.argv[process.argv.indexOf("--output")+1]; const source=process.argv[process.argv.indexOf("--source-output")+1]; fs.writeFileSync("selected-source",source); process.send({kind:"sources-ready",root:source},()=>{const finish=()=>{if(fs.existsSync("allow-completion")){watcher.close();process.send({kind:"completed"},()=>process.disconnect());}}; const watcher=fs.watch(".",finish);finish();});`,
+    async (owner, root, env) => {
+      await owner.sourcesReady;
+      const source = path.join(root, "scratch/source-ready-root");
+      assert.equal(await fs.readFile(path.join(root, "selected-source"), "utf8"), source);
+      assert.equal(env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT, source);
+      await fs.writeFile(path.join(root, "allow-completion"), "yes");
+      await owner.completed;
+      assert.equal(env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT, root);
+    }
+  );
+});
+
 void test("rejects missing declared releases before starting a producer", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-release-missing-"));
   try {

@@ -75,7 +75,11 @@ export function resolveReleaseBuildConcurrency({
 export function prepareWorkspaceRelease(input) {
   const declaredOutput = input.env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"];
   const output = path.resolve(declaredOutput ?? input.output);
-  const sourceOutput = input.sourceOutput ? path.resolve(input.sourceOutput) : undefined;
+  // Every producer has two distinct publication roots. A live consumer owns
+  // its source root explicitly; otherwise the source phase belongs to scratch.
+  const sourceOutput = path.resolve(
+    input.sourceOutput ?? path.join(input.scratch, "source-ready-root")
+  );
   // A supplied release is a required input. Missing or partial artifacts must
   // never be mistaken for a new producer-owned output directory.
   if (declaredOutput) {
@@ -94,7 +98,8 @@ export function prepareWorkspaceRelease(input) {
       input.appRoot,
       "--output",
       output,
-      ...(sourceOutput ? ["--source-output", sourceOutput] : []),
+      "--source-output",
+      sourceOutput,
       "--scratch",
       input.scratch,
     ],
@@ -106,7 +111,9 @@ export function prepareWorkspaceRelease(input) {
         // Interactive source launches share the canonical host admission
         // budget with live workspaces. A standalone packager owns its batch
         // allowance and has no competing application-startup consumer.
-        ...(!sourceOutput ? { VIBESTUDIO_MAX_CONCURRENT_BUILDS: String(buildConcurrency) } : {}),
+        ...(!input.sourceOutput
+          ? { VIBESTUDIO_MAX_CONCURRENT_BUILDS: String(buildConcurrency) }
+          : {}),
       },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     }
@@ -134,7 +141,7 @@ export function prepareWorkspaceRelease(input) {
   child.on("message", (message) => {
     if (message?.kind === "sources-ready") {
       const root = typeof message.root === "string" ? path.resolve(message.root) : null;
-      const allowedRoots = new Set([output, ...(sourceOutput ? [sourceOutput] : [])]);
+      const allowedRoots = new Set([output, sourceOutput]);
       if (sourcesReadyReceipt || completedReceipt || failure || !root || !allowedRoots.has(root)) {
         const invalidReceipt = new Error(
           "Workspace release producer sent an invalid source-ready receipt"
