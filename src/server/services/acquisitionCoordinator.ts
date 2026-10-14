@@ -1823,12 +1823,18 @@ export class AcquisitionCoordinator {
     const retire = (requestKey: string): boolean => {
       const record = this.deps.grantStore.acquisitions.current(requestKey, owner);
       if (!record) return true;
-      if (record.state === "failed") return false;
+      const recordInputs = restoreInvocationInputs(record);
+      // A joined unit review is the original invocation's authority route. Its
+      // application failure must remain canonical for that invocation instead
+      // of being replaced by a second prompt. Ordinary presentation failures
+      // own no such decision and an explicit retry supersedes their cycle.
+      if (record.state === "failed" && recordInputs.some((input) => input.pendingReview))
+        return false;
       if (record.state === "decided") {
         const outcome = invocationAcquisitionSettlement(record);
         if (outcome.state === "decided" && outcome.decision === "deny") return false;
       }
-      const info = invocationAcquisitionInfo(record, restoreInvocationInputs(record));
+      const info = invocationAcquisitionInfo(record, recordInputs);
       if (info.cooldownUntil && info.cooldownUntil > Date.now()) return false;
       this.deps.grantStore.acquisitions.supersede(requestKey, owner);
       return true;

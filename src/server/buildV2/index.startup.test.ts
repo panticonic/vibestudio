@@ -683,7 +683,7 @@ describe("BuildSystemV2 startup", () => {
     );
 
     const info = await prepareBuildRootConfig({ appRoot, workspaceRoot: dependencyWorkspaceRoot });
-    const workspacePackage = info.files.find((file) => file.file === "workspace/package.json");
+    const workspacePackage = info.files.find((file) => file.file === "workspace:package.json");
     expect(info.root).toBe(appRoot);
     expect(info.rootSource).toBe("injected");
     expect(workspacePackage?.present).toBe(false);
