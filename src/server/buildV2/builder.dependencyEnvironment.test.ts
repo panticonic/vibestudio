@@ -4,7 +4,10 @@ import * as path from "node:path";
 import * as esbuild from "esbuild";
 import { describe, expect, it, vi } from "vitest";
 import { composePreparedDependencyPlugins as composePlugins } from "./preparedDependencyPlugins.js";
-import { prepareDependencyResolution } from "./preparedDependencyResolution.js";
+import {
+  prepareDependencyResolution,
+  preparedDependencyDirectoryIdentity,
+} from "./preparedDependencyResolution.js";
 import { collectExternalDependencyClosure } from "./externalDeps.js";
 import { unownedPeerRefusal } from "./dependencyAudit.js";
 import { PackageGraph, type GraphNode } from "./packageGraph.js";
@@ -1024,8 +1027,10 @@ describe("dependency-environment resolver", () => {
         'import "missing-peer"; export const marker = "child";'
       );
       const prepared = prepareDependencyResolution([modules], ["parent"]);
-      expect(prepared.absentOptionalImports.get(parent)?.has("missing-peer")).toBe(true);
-      expect(prepared.absentOptionalImports.get(child)?.size).toBe(0);
+      const parentIdentity = preparedDependencyDirectoryIdentity(prepared, parent);
+      const childIdentity = preparedDependencyDirectoryIdentity(prepared, child);
+      expect(prepared.absentOptionalImports.get(parentIdentity!)?.has("missing-peer")).toBe(true);
+      expect(prepared.absentOptionalImports.get(childIdentity!)?.size).toBe(0);
       await expect(
         esbuild.build({
           entryPoints: [path.join(parent, "index.js")],

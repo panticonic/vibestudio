@@ -6,6 +6,8 @@ export interface PreparedDependencyResolution {
   nodePaths: readonly string[];
   absentOptionalImports: ReadonlyMap<string, ReadonlySet<string>>;
   packageDirectories: ReadonlySet<string>;
+  /** Every observed logical or physical package location mapped to one physical identity. */
+  packageDirectoryIdentities: ReadonlyMap<string, string>;
 }
 
 type PackageManifest = {
@@ -25,12 +27,31 @@ export function prepareDependencyResolution(
   nodePaths: readonly string[],
   packageNames: readonly string[]
 ): PreparedDependencyResolution {
+  const normalizedNodePaths = nodePaths.map((root) => path.resolve(root));
   const absentOptionalImports = new Map<string, ReadonlySet<string>>();
   const manifests = new Map<string, PackageManifest>();
   const packagesByLocation = new Map<string, string>();
+  const locationsByPackage = new Map<string, Set<string>>();
   const missingLocations = new Set<string>();
-  const installationRoots = nodePaths.map((root) => fs.realpathSync.native(root));
+  const installationRoots = normalizedNodePaths.map((root) => fs.realpathSync.native(root));
   const resolvedPackages = new Map<string, string>();
+  const locationKey = (directory: string): string => {
+    const normalized = path.resolve(directory);
+    return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  };
+  const recordLocation = (physical: string, candidate: string, from?: string): void => {
+    const locations = locationsByPackage.get(physical) ?? new Set<string>();
+    locations.add(physical);
+    locations.add(path.resolve(candidate));
+    if (from) {
+      const relative = path.relative(from, candidate);
+      for (const alias of locationsByPackage.get(from) ?? []) {
+        locations.add(path.resolve(alias, relative));
+      }
+    }
+    locationsByPackage.set(physical, locations);
+    for (const location of locations) packagesByLocation.set(locationKey(location), physical);
+  };
   const resolvePackage = (name: string, from?: string): string | undefined => {
     const key = `${from ?? ""}\0${name}`;
     const captured = resolvedPackages.get(key);
@@ -63,26 +84,27 @@ export function prepareDependencyResolution(
         directory = parent;
       }
     }
-    for (const root of [...localPaths, ...nodePaths]) {
+    for (const root of [...localPaths, ...normalizedNodePaths]) {
       const candidate = path.join(root, ...name.split("/"));
-      const known = packagesByLocation.get(candidate);
+      const candidateKey = locationKey(candidate);
+      const known = packagesByLocation.get(candidateKey);
       if (known) {
         resolvedPackages.set(key, known);
         return known;
       }
-      if (missingLocations.has(candidate)) continue;
+      if (missingLocations.has(candidateKey)) continue;
       try {
         const manifest = JSON.parse(
           fs.readFileSync(path.join(candidate, "package.json"), "utf8")
         ) as PackageManifest;
         const physical = fs.realpathSync.native(candidate);
         if (!manifests.has(physical)) manifests.set(physical, manifest);
-        packagesByLocation.set(candidate, physical);
+        recordLocation(physical, candidate, from);
         resolvedPackages.set(key, physical);
         return physical;
       } catch (error) {
         if (["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) {
-          missingLocations.add(candidate);
+          missingLocations.add(candidateKey);
           continue;
         }
         throw error;
@@ -119,5 +141,26 @@ export function prepareDependencyResolution(
     }
     absentOptionalImports.set(directory, absent);
   }
-  return { nodePaths: [...nodePaths], absentOptionalImports, packageDirectories: visited };
+  const packageDirectoryIdentities = new Map<string, string>();
+  for (const physical of visited) {
+    for (const location of locationsByPackage.get(physical) ?? [physical]) {
+      packageDirectoryIdentities.set(locationKey(location), physical);
+    }
+  }
+  return {
+    nodePaths: normalizedNodePaths,
+    absentOptionalImports,
+    packageDirectories: visited,
+    packageDirectoryIdentities,
+  };
+}
+
+/** Resolve an observed path spelling without consulting the filesystem during compilation. */
+export function preparedDependencyDirectoryIdentity(
+  prepared: PreparedDependencyResolution,
+  directory: string
+): string | undefined {
+  const normalized = path.resolve(directory);
+  const key = process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  return prepared.packageDirectoryIdentities.get(key);
 }

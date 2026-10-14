@@ -1,7 +1,10 @@
 import path from "node:path";
 import { isBuiltin } from "node:module";
 import type * as esbuild from "esbuild";
-import type { PreparedDependencyResolution } from "./preparedDependencyResolution.js";
+import {
+  preparedDependencyDirectoryIdentity,
+  type PreparedDependencyResolution,
+} from "./preparedDependencyResolution.js";
 
 const SELECTED_INSTALLATION = Symbol("selected-installation-resolution");
 
@@ -34,7 +37,10 @@ export function composePreparedDependencyPlugins(
     );
   const optionalFor = (directory: string, name: string): boolean => {
     for (;;) {
-      const optional = prepared?.absentOptionalImports.get(directory);
+      const identity = prepared
+        ? preparedDependencyDirectoryIdentity(prepared, directory)
+        : undefined;
+      const optional = identity ? prepared?.absentOptionalImports.get(identity) : undefined;
       if (optional) return optional.has(name);
       const parent = path.dirname(directory);
       if (parent === directory) return false;
@@ -43,7 +49,7 @@ export function composePreparedDependencyPlugins(
   };
   const installedPackage = (directory: string): boolean => {
     for (;;) {
-      if (prepared?.packageDirectories.has(directory)) return true;
+      if (prepared && preparedDependencyDirectoryIdentity(prepared, directory)) return true;
       const parent = path.dirname(directory);
       if (parent === directory) return false;
       directory = parent;
