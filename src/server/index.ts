@@ -5129,13 +5129,10 @@ async function main() {
     | null = null;
   const { resolveIrohRelayUrls } = await import("./irohRelayConfig.js");
   const workspaceRelayUrls = resolveIrohRelayUrls(process.env["VIBESTUDIO_IROH_RELAYS"]);
+  const { workspaceIrohReach } = await import("./workspaceIrohReach.js");
+  const getWorkspaceIrohReach = () => workspaceIrohReach(irohIngress, workspaceRelayUrls);
   const currentIrohReach = (): import("@vibestudio/iroh-transport").IrohReach | null =>
-    irohIngress?.isOnline ? irohIngress.endpoint.reach(workspaceRelayUrls) : null;
-  const waitForIrohReach = async (): Promise<import("@vibestudio/iroh-transport").IrohReach> => {
-    if (!irohIngress) throw new Error("Workspace Iroh ingress is not ready");
-    const onlineEndpoint = await irohIngress.waitUntilOnline();
-    return onlineEndpoint.reach(workspaceRelayUrls);
-  };
+    irohIngress?.isOnline ? getWorkspaceIrohReach() : null;
   // Persisted peers can reconnect as soon as the endpoint binds. Their RPC
   // admission must wait for the same completed startup reported to new peers.
   let settleWorkspaceReadyForPeers!: (ready: boolean) => void;
@@ -5988,7 +5985,7 @@ async function main() {
             return;
           }
           try {
-            respond(200, await waitForIrohReach());
+            respond(200, getWorkspaceIrohReach());
           } catch (error) {
             respond(503, {
               error: serializeRpcFailure(error, "transport"),
@@ -8314,7 +8311,7 @@ async function main() {
   requestShutdown = () => void shutdown();
   const stoppedBeforeReady = process.send ? registerParentShutdown(requestShutdown) : false;
   if (stoppedBeforeReady || isShuttingDown) return;
-  const pairing = args.readyFile && irohIngress ? await waitForIrohReach() : null;
+  const pairing = args.readyFile && irohIngress ? getWorkspaceIrohReach() : null;
   if (isShuttingDown) return;
 
   // Readiness guarantees the parent-owned stop callback has been installed.
