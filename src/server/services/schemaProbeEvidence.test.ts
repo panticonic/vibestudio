@@ -122,9 +122,7 @@ describe("immutable schema probe evidence", () => {
       })
     ).rejects.toBe(failure);
     expect(await published()).toEqual([]);
-    expect((await fs.readdir(cacheRoot())).filter((entry) => entry.includes("publishing"))).toEqual(
-      []
-    );
+    expect((await fs.readdir(cacheRoot())).filter((entry) => entry.includes(".tmp."))).toEqual([]);
   });
 
   it("joins admitted cancellation and does not publish the cancelled descriptor", async () => {

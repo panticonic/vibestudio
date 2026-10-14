@@ -150,7 +150,9 @@ export async function acquireSchemaProbeEvidence(
             input.signal.throwIfAborted();
             return result;
           });
-          const staging = `${target}.publishing.${randomUUID()}`;
+          // Derived-cache scanners reserve `.tmp.` names for private producer
+          // state. Only the atomic rename destination is a cache entry.
+          const staging = `${target}.tmp.${randomUUID()}`;
           await runWithOwnedCleanup(
             async () => {
               await fs.mkdir(staging);
