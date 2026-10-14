@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Store the npm publish token used by scripts/publish-npm.mjs.
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
+import { npmTokenFilePath, parseNpmToken, readNpmAuthToken } from "./lib/npm-auth.mjs";
 
 try {
   await main();
@@ -114,6 +114,7 @@ commands also prefer those environment variables over the saved file.
 
   pnpm setup:npm-token
   pnpm setup:npm-token --check
+  pnpm npm:authenticated whoami
   pnpm publish:server-npm
 
 For publishing without recurring stored-token renewal, configure npm trusted
@@ -125,12 +126,7 @@ are not supported by npm. See docs/npm-publish-authentication.md.
 async function checkSavedToken(tokenFile) {
   if (!fs.existsSync(tokenFile))
     throw new Error(`No saved token at ${tokenFile}. Run pnpm setup:npm-token first.`);
-  const token = parseToken(fs.readFileSync(tokenFile, "utf8"));
-  if (!token) throw new Error(`Saved token is empty: ${tokenFile}`);
-  if (!/^[\x21-\x7e]+$/.test(token))
-    throw new Error(
-      "Saved token contains invalid characters; replace it with pnpm setup:npm-token."
-    );
+  const token = readNpmAuthToken({ savedOnly: true }).value;
   let response;
   try {
     response = await fetch("https://registry.npmjs.org/-/whoami", {
@@ -161,23 +157,12 @@ async function checkSavedToken(tokenFile) {
 }
 
 async function readToken(options) {
-  if (options.stdin) return parseToken(fs.readFileSync(0, "utf8"));
+  if (options.stdin) return parseNpmToken(fs.readFileSync(0, "utf8"));
 
   const envToken = process.env.NODE_AUTH_TOKEN || process.env.NPM_TOKEN;
-  if (envToken?.trim()) return envToken.trim();
+  if (envToken?.trim()) return parseNpmToken(envToken);
 
   return promptHidden("NPM_TOKEN: ");
-}
-
-function parseToken(input) {
-  const line =
-    input
-      .split(/\r?\n/)
-      .map((entry) => entry.trim())
-      .find((entry) => entry && !entry.startsWith("#")) ?? "";
-  const match = /^(?:NPM_TOKEN|NODE_AUTH_TOKEN)\s*=\s*(.*)$/.exec(line);
-  const value = match ? match[1].trim() : line;
-  return value.replace(/^['"]|['"]$/g, "");
 }
 
 function promptHidden(prompt) {
@@ -230,20 +215,4 @@ function promptHidden(prompt) {
     stdin.resume();
     stdin.on("data", onData);
   });
-}
-
-function npmTokenFilePath() {
-  if (process.env.VIBESTUDIO_NPM_TOKEN_FILE) {
-    return path.resolve(expandHome(process.env.VIBESTUDIO_NPM_TOKEN_FILE));
-  }
-  const configHome = process.env.XDG_CONFIG_HOME
-    ? path.resolve(expandHome(process.env.XDG_CONFIG_HOME))
-    : path.join(os.homedir(), ".config");
-  return path.join(configHome, "vibestudio", "npm-publish-token");
-}
-
-function expandHome(value) {
-  if (value === "~") return os.homedir();
-  if (value.startsWith("~/")) return path.join(os.homedir(), value.slice(2));
-  return value;
 }
