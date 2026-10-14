@@ -13,6 +13,7 @@ const countAnonymousStartup = createAnonymousStartupCounter();
 import { DisplayCapturePicker } from "./services/displayCapturePicker.js";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createNativePanelHost } from "./nativePanelHost.js";
+import { closeWorkspaceSession } from "./workspaceSessionShutdown.js";
 import { bindProcessLifetimeToParent } from "../../scripts/owned-process-tree.mjs";
 if (process.send) bindProcessLifetimeToParent();
 import { parseWorkspaceNativeViewId } from "./workspaceNativeViews.js";
@@ -3513,69 +3514,61 @@ app.on("will-quit", (event) => {
       localHubStopConfirmed = false;
     }
 
-    const cleanupThenClose = (async () => {
-      const cleanupFailures: unknown[] = [];
+    const cleanupThenClose = closeWorkspaceSession({
       // Exit receipts are server RPCs too. Let the executor finish them before
       // the session is closed, otherwise an in-flight heartbeat/receipt races
       // teardown and reports a misleading connection failure.
-      await catalogClose;
-      await developmentExecutorClose;
+      joinCatalog: async () => {
+        await catalogClose;
+      },
+      joinExecutor: async () => {
+        await developmentExecutorClose;
+      },
+      closeRuntimes: async () => {
+        const runtimes = [...desktopWorkspaceRuntimes.values()];
+        desktopWorkspaceRuntimes.clear();
+        openNativeControllers.clear();
+        const unregister = Promise.allSettled(
+          runtimes.map(async (runtime) => (await runtime).close())
+        ).then((results) => {
+          systemRuntime = null;
+          const errors = results.flatMap((result) =>
+            result.status === "rejected" ? [result.reason] : []
+          );
+          if (errors.length) throw new AggregateError(errors, "Workspace runtime cleanup failed");
+        });
 
-      const runtimes = [...desktopWorkspaceRuntimes.values()];
-      desktopWorkspaceRuntimes.clear();
-      openNativeControllers.clear();
-      const unregister = Promise.allSettled(
-        runtimes.map(async (runtime) => (await runtime).close())
-      ).then((results) => {
-        systemRuntime = null;
-        const errors = results.flatMap((result) =>
-          result.status === "rejected" ? [result.reason] : []
-        );
-        if (errors.length) throw new AggregateError(errors, "Workspace runtime cleanup failed");
-      });
-
-      try {
         await unregister;
-      } catch (error) {
-        console.error("[App] Failed to unregister runtime client:", formatUnknownError(error));
-        cleanupFailures.push(error);
-      }
+      },
 
       // All server-side cleanup is complete. Close the transports before
       // stopping or detaching the hub; the producers that could issue new RPCs
       // were stopped above, so this no longer races any required cleanup.
-      const close = session.close();
-      try {
-        await close;
-      } catch (error) {
-        console.error("[App] Session close error:", error);
-        cleanupFailures.push(error);
-      }
-
-      if (stopServer) {
-        // No more server RPCs are needed. Stop the owned hub only after the
-        // desktop session is closed, while still ensuring a close failure cannot
-        // leave the user-requested server alive.
-        localHubStopPromise = (async () => {
-          const result = await assertPresent(session.hubProcessManager).stopTree();
-          if (!result.gone) throw new Error("The local hub process tree is still running");
-          localHubStopConfirmed = true;
-          console.log(
-            result.escalated
-              ? "[App] Hub process tree stopped after escalation"
-              : "[App] Hub stopped"
-          );
-        })();
-        await assertPresent(localHubStopPromise);
-      } else {
-        // Keep: leave the detached process running; the attachment record stays
-        // so the next launch reattaches instantly.
-        session.hubProcessManager?.detach();
-        if (session.hubProcessManager) console.log("[App] Hub left running (detached)");
-      }
-      if (cleanupFailures.length)
-        throw new AggregateError(cleanupFailures, "Workspace session cleanup failed");
-    })();
+      closeTransport: () => session.close(),
+      retireServer: async () => {
+        if (stopServer) {
+          // No more server RPCs are needed. Stop the owned hub only after the
+          // desktop session is closed, while still ensuring a close failure cannot
+          // leave the user-requested server alive.
+          localHubStopPromise = (async () => {
+            const result = await assertPresent(session.hubProcessManager).stopTree();
+            if (!result.gone) throw new Error("The local hub process tree is still running");
+            localHubStopConfirmed = true;
+            console.log(
+              result.escalated
+                ? "[App] Hub process tree stopped after escalation"
+                : "[App] Hub stopped"
+            );
+          })();
+          await assertPresent(localHubStopPromise);
+        } else {
+          // Keep: leave the detached process running; the attachment record stays
+          // so the next launch reattaches instantly.
+          session.hubProcessManager?.detach();
+          if (session.hubProcessManager) console.log("[App] Hub left running (detached)");
+        }
+      },
+    });
     joinShutdown("workspace sessions", cleanupThenClose);
   }
 
