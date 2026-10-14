@@ -181,6 +181,17 @@ identity under a retained lease, not each immutable blob's metadata again.
 Projection and actual reads propagate missing-file errors at their owning
 boundary; admission never silently rebuilds a damaged publication.
 
+`schema-probes` stores immutable evidence from the ordinary disposable schema
+probe, not workspace databases, activation identities, credentials, or grants.
+Its key binds executable artifact bytes, source/class, probe protocol and
+compatibility settings, platform/architecture, and the admitted host/SDK
+installation. Publication follows successful probe **and** facet retirement;
+exact-key consumers coalesce that same probe. Each workspace records the result
+against its own execution identity and still validates actual storage schema
+and activation authority. Clean-room runs use their private derived root.
+Manager shutdown cancels owned probe requests, joins their retirement, then
+stops native workerd; unrelated failures remain observable.
+
 Dependency metadata resolution and the operation's one current host SDK capture
 run independently and join before either cache lookup. The metadata resolver
 admits manifest epochs, repository ownership, overrides, and exact transitive
