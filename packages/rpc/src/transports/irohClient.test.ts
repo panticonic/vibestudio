@@ -12,6 +12,8 @@ import {
   writeChunked,
   writeFrame,
   writeIrohStreamPreamble,
+  type IrohPhysicalBiStream,
+  type IrohPhysicalConnection,
 } from "@vibestudio/iroh-transport";
 import {
   bindNodeEndpoint,
@@ -226,6 +228,88 @@ describe("Iroh RPC client over real local QUIC", () => {
     expect(connection.close).toHaveBeenCalledOnce();
     expect(connection.openBi).not.toHaveBeenCalled();
     // Vitest treats a rejected, unobserved private handshake as a test failure.
+  });
+
+  it("joins admitted native stream reads before pipe shutdown completes", async () => {
+    const serverEndpoint = await bind();
+    const clientEndpoint = await bind();
+    const incomingPromise = serverEndpoint.acceptNext();
+    const connecting = clientEndpoint.connect(serverEndpoint.addr(), [...VIBESTUDIO_IROH_ALPN]);
+    const incoming = await incomingPromise;
+    if (!incoming) throw new Error("Server closed before connection");
+    const accepting = await incoming.accept();
+    const [serverNative, clientNative] = await Promise.all([accepting.connect(), connecting]);
+    configureNodeConnection(serverNative);
+    configureNodeConnection(clientNative);
+    const server = new NodePhysicalConnection(serverNative);
+    const client = new NodePhysicalConnection(clientNative);
+
+    let readStarted!: () => void;
+    const reading = new Promise<void>((resolve) => {
+      readStarted = resolve;
+    });
+    let releaseRead!: () => void;
+    const readRetirement = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const ownedClient: IrohPhysicalConnection = {
+      peerEndpointId: client.peerEndpointId,
+      openBi: () => client.openBi(),
+      acceptBi: async (): Promise<IrohPhysicalBiStream> => {
+        const stream = await client.acceptBi();
+        return {
+          send: stream.send,
+          recv: {
+            read: (maximumBytes) => stream.recv.read(maximumBytes),
+            readExact: async (length) => {
+              readStarted();
+              try {
+                return await stream.recv.readExact(length);
+              } finally {
+                await readRetirement;
+              }
+            },
+            stop: (code) => stream.recv.stop(code),
+            receivedReset: () => stream.recv.receivedReset(),
+          },
+        };
+      },
+      close: (code, reason) => client.close(code, reason),
+      closed: () => client.closed(),
+    };
+    const pipe = createIrohClientPipe(ownedClient);
+    const serving = (async () => {
+      const control = await server.acceptBi();
+      await readIrohStreamPreamble(control.recv);
+      const hello = decodeIrohSessionControlFrame(
+        await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES)
+      );
+      if (hello.t !== IROH_SESSION_HELLO) throw new Error("Expected client hello");
+      await writeFrame(control.send, encodeIrohSessionControlFrame(hello), MAX_CONTROL_FRAME_BYTES);
+      // Leave a peer-opened stream before its preamble. The client owns the
+      // native header read until physical shutdown cancels it.
+      await server.openBi();
+    })();
+    try {
+      await pipe.ready();
+      await serving;
+      await reading;
+      let closed = false;
+      const closing = pipe.close().then(() => {
+        closed = true;
+      });
+      try {
+        for (let index = 0; index < 10; index++) await Promise.resolve();
+        expect(closed).toBe(false);
+      } finally {
+        releaseRead();
+        await closing;
+      }
+    } finally {
+      releaseRead();
+      await Promise.allSettled([pipe.close(), serving]);
+      server.close(0n, new TextEncoder().encode("test complete"));
+    }
   });
 
   it.each(["pipe", "session"] as const)(

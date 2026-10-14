@@ -816,6 +816,7 @@ class ClientPipe implements IrohClientPipe {
   private controlWriter: SerializedControlWriter | null = null;
   private startPromise: Promise<void> | null = null;
   private closePromise: Promise<void> | null = null;
+  private readonly lifecycleOperations = new Set<Promise<void>>();
   private helloResolve!: () => void;
   private helloReject!: (error: Error) => void;
   private readonly helloPromise = new Promise<void>((resolve, reject) => {
@@ -923,11 +924,23 @@ class ClientPipe implements IrohClientPipe {
         .then(() => {
           console.info(`${prefix} Shutdown control writer completed`);
         });
-      await Promise.all([...retirements, control]);
+      // Native reads keep N-API promise references alive until they settle.
+      // The connection close releases each one; retain and join their JS
+      // owners before Electron may tear down the N-API environment.
+      const settled = await Promise.allSettled([
+        ...retirements,
+        control,
+        this.startPromise?.catch(() => undefined),
+        ...this.lifecycleOperations,
+      ]);
       this.sessions.clear();
       this.diagnosticsChanged();
       this.diagnosticsListeners.clear();
       this.statusListeners.clear();
+      const failures = settled.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (failures.length) throw new AggregateError(failures, "Iroh client pipe cleanup failed");
       console.info(`${prefix} Shutdown complete`);
     })());
   }
@@ -976,11 +989,13 @@ class ClientPipe implements IrohClientPipe {
       protocolVersion: IROH_WIRE_VERSION,
       contractVersion: RPC_CONTRACT_VERSION,
     });
-    void this.readControl(control).catch((error) => this.failPipe(asError(error)));
-    void this.acceptStreams().catch((error) => this.failPipe(asError(error)));
-    void this.connection.closed().then(
-      (reason) => this.failPipe(new Error(reason)),
-      (error) => this.failPipe(asError(error))
+    this.ownLifecycle(this.readControl(control).catch((error) => this.failPipe(asError(error))));
+    this.ownLifecycle(this.acceptStreams().catch((error) => this.failPipe(asError(error))));
+    this.ownLifecycle(
+      this.connection.closed().then(
+        (reason) => this.failPipe(new Error(reason)),
+        (error) => this.failPipe(asError(error))
+      )
     );
     await this.helloPromise;
     this.setStatus("connected");
@@ -1015,28 +1030,35 @@ class ClientPipe implements IrohClientPipe {
 
   private async acceptStreams(): Promise<void> {
     const pendingHeaders = new Set<Promise<void>>();
-    while (this.statusValue !== "disconnected") {
-      if (pendingHeaders.size >= IROH_CATASTROPHIC_PENDING_STREAM_HEADER_CEILING) {
-        await Promise.race(pendingHeaders);
-        continue;
+    try {
+      while (this.statusValue !== "disconnected") {
+        if (pendingHeaders.size >= IROH_CATASTROPHIC_PENDING_STREAM_HEADER_CEILING) {
+          await Promise.race(pendingHeaders);
+          continue;
+        }
+        const stream = await this.connection.acceptBi();
+        // QUIC streams are independent. Never wait for one peer-opened stream's
+        // preamble or envelope in the admission loop: a stalled stream would
+        // otherwise head-of-line block every later server event despite QUIC's
+        // multiplexing. The native replenishing MAX_STREAMS window is the one
+        // finite resource boundary; rejecting a later valid stream because an
+        // unrelated header is slow recreates head-of-line blocking above QUIC.
+        const work = this.acceptStream(stream)
+          .catch(async () => {
+            // A peer-created request stream is an isolation boundary. Reject only
+            // this malformed stream; the control stream and unrelated sessions
+            // remain healthy. The cleanup calls are native async work too, so the
+            // pipe retains them through shutdown.
+            await Promise.all([
+              stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined),
+              stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined),
+            ]);
+          })
+          .finally(() => pendingHeaders.delete(work));
+        pendingHeaders.add(work);
       }
-      const stream = await this.connection.acceptBi();
-      // QUIC streams are independent. Never wait for one peer-opened stream's
-      // preamble or envelope in the admission loop: a stalled stream would
-      // otherwise head-of-line block every later server event despite QUIC's
-      // multiplexing. The native replenishing MAX_STREAMS window is the one
-      // finite resource boundary; rejecting a later valid stream because an
-      // unrelated header is slow recreates head-of-line blocking above QUIC.
-      const work = this.acceptStream(stream)
-        .catch(() => {
-          // A peer-created request stream is an isolation boundary. Reject only
-          // this malformed stream; the control stream and unrelated
-          // sessions remain healthy.
-          void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-          void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-        })
-        .finally(() => pendingHeaders.delete(work));
-      pendingHeaders.add(work);
+    } finally {
+      await Promise.allSettled([...pendingHeaders]);
     }
   }
 
@@ -1055,10 +1077,7 @@ class ClientPipe implements IrohClientPipe {
       return;
     }
     if (preamble.k === "message") {
-      void this.acceptMessage(session, stream).catch(() => {
-        void stream.recv.stop(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-        void stream.send.reset(IROH_PROTOCOL_CLOSE_CODE).catch(() => undefined);
-      });
+      await this.acceptMessage(session, stream);
       return;
     }
     const value = decodeEnvelopeFrame(await readFrame(stream.recv, MAX_ENVELOPE_FRAME_BYTES));
@@ -1080,6 +1099,13 @@ class ClientPipe implements IrohClientPipe {
     this.pendingOpens.clear();
     for (const session of this.sessions.values()) void session.fail(error);
     this.connection.close(IROH_PROTOCOL_CLOSE_CODE, new TextEncoder().encode(error.message));
+  }
+
+  private ownLifecycle(operation: Promise<void>): void {
+    this.lifecycleOperations.add(operation);
+    void operation
+      .finally(() => this.lifecycleOperations.delete(operation))
+      .catch(() => undefined);
   }
 
   private setStatus(status: RpcConnectionStatus): void {
