@@ -31,6 +31,7 @@ import {
   preparedWorkspaceTemplatePath,
   preparedWorkspaceTemplateSchema,
   installPreparedWorkspaceTemplate,
+  readPreparedWorkspaceTemplate,
   type PreparedWorkspaceTemplate,
 } from "./preparedWorkspaceTemplate.js";
 import {
@@ -284,14 +285,17 @@ export async function prepareWorkspaceTemplates(input: PreparationInput): Promis
               await preparedRoles;
             }
           );
-          preparedRoles ??= materializeTemplateSources({
-            input,
-            pins,
-            plans,
-            acquireFor,
-            preparedRoot: sourceHandle.root,
+          // Source readiness consumes the sealed immutable descriptors, not a
+          // private runtime checkout. Warm hydration belongs to the background
+          // producer only if this operation wins complete-build admission.
+          const preparedCacheRoot = sourceHandle.root;
+          const prepared = roles.map((role) => {
+            const directory = preparedWorkspaceTemplatePath(preparedCacheRoot, pins[role], "use");
+            return {
+              record: readPreparedWorkspaceTemplate(directory, pins[role], "use"),
+              blobsDir: path.join(directory, "blobs"),
+            };
           });
-          const prepared = await preparedRoles;
           const sourceRoot = input.sourceOutput ?? path.join(input.scratch, "source-ready-root");
           if (path.resolve(sourceRoot) === path.resolve(input.output))
             throw new Error("Source-ready resources must be separate from runtime publication");
@@ -311,8 +315,15 @@ export async function prepareWorkspaceTemplates(input: PreparationInput): Promis
             prepareSources,
           },
           async (captured) => {
-            if (!preparedRoles)
+            if (!sourceHandle)
               throw new Error("Runtime preparation has no owned source preparation");
+            preparedRoles ??= materializeTemplateSources({
+              input,
+              pins,
+              plans,
+              acquireFor,
+              preparedRoot: sourceHandle.root,
+            });
             await produceWorkspaceTemplates(
               input,
               captured.identity,
@@ -355,7 +366,7 @@ export async function prepareWorkspaceTemplates(input: PreparationInput): Promis
 }
 
 async function projectPreparedRoleRecords(
-  prepared: readonly PreparedRole[],
+  prepared: readonly Pick<PreparedRole, "record" | "blobsDir">[],
   output: string,
   operation?: WorkspaceReleaseOperation
 ): Promise<void> {

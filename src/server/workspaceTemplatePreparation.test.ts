@@ -15,6 +15,7 @@ import {
 } from "./buildV2/effectiveVersion.js";
 import { readHostBuildFingerprint, resolveRequiredHostArtifactRoot } from "./appRoot.js";
 import { prepareWorkspaceTemplates } from "./workspaceTemplatePreparation.js";
+import { WorkspaceRootTemplateBootstrap } from "./workspaceRootTemplateBootstrap.js";
 
 const stage = vi.hoisted(() => ({
   identity: vi.fn(),
@@ -271,6 +272,93 @@ describe("workspace source preparation ownership", () => {
     expect(stage.indexes).not.toHaveBeenCalled();
     expect(stage.materialize).not.toHaveBeenCalled();
     expect(stage.native).not.toHaveBeenCalled();
+  });
+
+  it("publishes warm source readiness before admitting private runtime hydration", async () => {
+    await launch("cold");
+    stage.native.mockClear();
+    let readyObserved!: () => void;
+    let readySettles!: () => void;
+    let hydrationObserved!: () => void;
+    let hydrate!: () => void;
+    const readyStarted = new Promise<void>((resolve) => {
+      readyObserved = resolve;
+    });
+    const readyGate = new Promise<void>((resolve) => {
+      readySettles = resolve;
+    });
+    const hydrationStarted = new Promise<void>((resolve) => {
+      hydrationObserved = resolve;
+    });
+    const hydrationGate = new Promise<void>((resolve) => {
+      hydrate = resolve;
+    });
+    const original = WorkspaceRootTemplateBootstrap.prototype.prepareSource;
+    const preparation = vi
+      .spyOn(WorkspaceRootTemplateBootstrap.prototype, "prepareSource")
+      .mockImplementation(async function (this: WorkspaceRootTemplateBootstrap) {
+        hydrationObserved();
+        await hydrationGate;
+        return original.call(this);
+      });
+    const ready = vi.fn(async (sourceRoot: string) => {
+      expect(preparation).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.join(root, "warm", "scratch", "workspaces"))).toBe(false);
+      expect(
+        readPreparedWorkspaceTemplate(
+          preparedWorkspaceTemplatePath(sourceRoot, pins.base, "use"),
+          pins.base,
+          "use"
+        ).compilationInput
+      ).toBeDefined();
+      readyObserved();
+      await readyGate;
+    });
+    const pending = launch("warm", ready);
+    try {
+      await Promise.race([
+        readyStarted,
+        hydrationStarted.then(() => {
+          throw new Error("Runtime hydration started before source-ready publication");
+        }),
+        pending.then(() => {
+          throw new Error("Preparation completed without source readiness");
+        }),
+      ]);
+      expect(preparation).not.toHaveBeenCalled();
+      readySettles();
+      await hydrationStarted;
+      expect(ready).toHaveBeenCalledOnce();
+      expect(stage.native).not.toHaveBeenCalled();
+      expect(stage.sourceClose).toHaveBeenCalledTimes(1);
+      hydrate();
+      await pending;
+      expect(stage.sourceClose).toHaveBeenCalledTimes(2);
+    } finally {
+      readySettles();
+      hydrate();
+      await Promise.allSettled([pending]);
+      preparation.mockRestore();
+    }
+  });
+
+  it("does not hydrate warm runtime inputs if a concurrent producer supplies completion", async () => {
+    await launch("cold");
+    stage.native.mockClear();
+    const preparation = vi.spyOn(WorkspaceRootTemplateBootstrap.prototype, "prepareSource");
+    stage.fullCache.mockImplementationOnce(async (input: { prepareSources(): Promise<void> }) => {
+      await input.prepareSources();
+    });
+    try {
+      const ready = vi.fn(async () => {});
+      await launch("late-full-hit", ready);
+      expect(ready).toHaveBeenCalledOnce();
+      expect(preparation).not.toHaveBeenCalled();
+      expect(stage.native).not.toHaveBeenCalled();
+      expect(stage.sourceClose).toHaveBeenCalledTimes(2);
+    } finally {
+      preparation.mockRestore();
+    }
   });
 
   it("closes source ownership and removes private state after an original runtime failure", async () => {
