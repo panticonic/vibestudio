@@ -16,7 +16,13 @@ import {
   withStandaloneReleaseSession,
   verifyAndPublishSchemaEvidence,
 } from "./prebuild-release-userland.mjs";
-import { schemaProbeComponentPath } from "./lib/schema-evidence-publication.mjs";
+import {
+  schemaProbeComponentPath,
+  schemaProbeStagingPath,
+  publishSchemaProbeComponent,
+  retireSchemaProbeStaging,
+} from "./lib/schema-evidence-publication.mjs";
+import { runWithOwnedCleanup } from "./lib/owned-cleanup.mjs";
 import {
   createConnectDeepLink,
   createConnectPairUrl,
@@ -78,9 +84,15 @@ test("installed schema publication joins the genuine verifier owner before adver
     admitted = resolve;
   });
   const cli = async (args) => (args[1] === "create-workspace" ? { name: "base-workspace" } : {});
+  let pendingProof;
   const runBuildBatch = async (sources, evidence) => {
-    if (evidence)
-      await fs.writeFile(evidence.stagingPath, JSON.stringify(component), { flag: "wx" });
+    if (evidence) {
+      pendingProof = evidence.stagingPath;
+      await fs.writeFile(evidence.stagingPath, JSON.stringify(component), {
+        flag: "wx",
+        mode: 0o600,
+      });
+    }
     return {
       outcomes: sources.map((source) => ({
         status: "fulfilled",
@@ -100,6 +112,7 @@ test("installed schema publication joins the genuine verifier owner before adver
     await retirement;
   });
   await stageReady;
+  if (process.platform !== "win32") assert.equal((await fs.stat(pendingProof)).mode & 0o777, 0o600);
   await assert.rejects(fs.stat(schemaProbeComponentPath(context.resources)), { code: "ENOENT" });
   retire();
   await publication;
@@ -107,6 +120,8 @@ test("installed schema publication joins the genuine verifier owner before adver
     await fs.readFile(schemaProbeComponentPath(context.resources), "utf8")
   );
   assert.deepEqual(published, component);
+  if (process.platform !== "win32")
+    assert.equal((await fs.stat(schemaProbeComponentPath(context.resources))).mode & 0o777, 0o644);
   assert.deepEqual(
     (await fs.readdir(context.resources)).filter((name) => name.includes(".tmp.")),
     []
@@ -147,6 +162,60 @@ test("failed verifier serving retirement leaves no schema component or staged pr
     (await fs.readdir(context.resources)).filter((name) => name.includes(".tmp.")),
     []
   );
+});
+
+test("immutable schema publisher admits identical bytes and retains divergence with staging cleanup failure", async () => {
+  const root = await fixture();
+  const original = schemaProbeStagingPath(root);
+  await fs.writeFile(original, "sealed-public-component", { mode: 0o600 });
+  await publishSchemaProbeComponent(original, root);
+  await retireSchemaProbeStaging(original, root);
+  const repeated = schemaProbeStagingPath(root);
+  await fs.writeFile(repeated, "sealed-public-component", { mode: 0o600 });
+  await publishSchemaProbeComponent(repeated, root);
+  await retireSchemaProbeStaging(repeated, root);
+  const conflicting = schemaProbeStagingPath(root);
+  await fs.writeFile(conflicting, "changed-component", { mode: 0o600 });
+  const cleanupFailure = new Error("owned schema staging retirement failed");
+  const rm = fs.rm;
+  mock.method(fs, "rm", async (target, options) => {
+    if (target === conflicting) throw cleanupFailure;
+    return rm(target, options);
+  });
+  await assert.rejects(
+    runWithOwnedCleanup(
+      () => publishSchemaProbeComponent(conflicting, root),
+      () => retireSchemaProbeStaging(conflicting, root),
+      "Schema publication and retirement failed"
+    ),
+    (failure) => {
+      assert.ok(failure instanceof AggregateError);
+      assert.match(failure.errors[0].message, /immutable schema component cannot be changed/);
+      assert.equal(failure.errors[0].cause.code, "EEXIST");
+      assert.equal(failure.errors[1], cleanupFailure);
+      return true;
+    }
+  );
+  assert.equal(
+    await fs.readFile(schemaProbeComponentPath(root), "utf8"),
+    "sealed-public-component"
+  );
+});
+
+test("schema publication preserves the original filesystem failure", async () => {
+  const root = await fixture();
+  const staging = schemaProbeStagingPath(root);
+  await fs.writeFile(staging, "proof", { mode: 0o600 });
+  const original = Object.assign(new Error("owned publication IO failed"), { code: "EIO" });
+  mock.method(fs, "link", async () => {
+    throw original;
+  });
+  await assert.rejects(
+    publishSchemaProbeComponent(staging, root),
+    (failure) => failure === original
+  );
+  await retireSchemaProbeStaging(staging, root);
+  await assert.rejects(fs.stat(schemaProbeComponentPath(root)), { code: "ENOENT" });
 });
 afterEach(async () => {
   mock.restoreAll();

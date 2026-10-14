@@ -162,11 +162,26 @@ export async function stageInstalledSchemaProbeEvidence({
   installation = schemaProbeInstallationSchema.parse(installation);
   const receipts = [];
   let entries;
+  let installed;
   try {
-    entries = await fs.readdir(source, { withFileTypes: true });
+    installed = await fs.lstat(schemaProbeComponentPath(output));
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
+  }
+  if (installed) {
+    // Re-verification inherits the already-sealed inventory. New incidental
+    // probes belong to the mutable cache, never to a retroactive installation.
+    receipts.push(
+      ...(await readInstalledSchemaProbeEvidence(output, installation, platform, arch)).values()
+    );
     entries = [];
+  } else {
+    try {
+      entries = await fs.readdir(source, { withFileTypes: true });
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+      entries = [];
+    }
   }
   for (const entry of entries) {
     // Only the existing coordinator and this publisher's exact private naming
@@ -193,6 +208,9 @@ export async function stageInstalledSchemaProbeEvidence({
       JSON.parse(await fs.readFile(path.join(directory, "receipt.json"), "utf8")),
       entry.name
     );
+    receipts.push(receipt);
+  }
+  for (const receipt of receipts) {
     if (
       !artifacts.some(
         (artifact) =>
@@ -201,7 +219,6 @@ export async function stageInstalledSchemaProbeEvidence({
       )
     )
       throw new Error("Schema evidence does not belong to a published runtime artifact");
-    receipts.push(receipt);
   }
   receipts.sort((a, b) => schemaProbeKey(a.identity).localeCompare(schemaProbeKey(b.identity)));
   const component = {

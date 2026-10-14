@@ -112,6 +112,11 @@ describe("immutable schema probe evidence", () => {
       );
       await publication.publish();
       const installed = await readInstalledSchemaProbeEvidence(output, identity.installation);
+      if (process.platform !== "win32") {
+        const source = path.join(cacheRoot(), (await published())[0]!, "receipt.json");
+        expect((await fs.stat(source)).mode & 0o777).toBe(0o600);
+        expect((await fs.stat(schemaProbeComponentPath(output))).mode & 0o777).toBe(0o644);
+      }
       await fs.rm(cacheRoot(), { recursive: true });
       const probe = vi.fn(async () => descriptor);
       expect(
@@ -129,7 +134,7 @@ describe("immutable schema probe evidence", () => {
         identity,
         descriptor,
       });
-      await expect(publication.publish()).rejects.toMatchObject({ code: "EEXIST" });
+      await expect(publication.publish()).resolves.toBeUndefined();
     } finally {
       await publication.close();
     }
@@ -154,6 +159,42 @@ describe("immutable schema probe evidence", () => {
     } finally {
       await publication.close();
     }
+  });
+
+  it("re-verifies the sealed installed inventory without a mutable cache or incidental expansion", async () => {
+    await acquire(async () => descriptor);
+    const first = await stage();
+    try {
+      await first.publication.publish();
+    } finally {
+      await first.publication.close();
+    }
+    const original = await fs.readFile(schemaProbeComponentPath(first.output));
+    // An additional valid proof is not a request to mutate this installation.
+    await acquire(async () => descriptor, { ...identity, artifactDigest: "b".repeat(64) });
+    const repeat = await stage();
+    try {
+      await repeat.publication.publish();
+    } finally {
+      await repeat.publication.close();
+    }
+    expect(await fs.readFile(schemaProbeComponentPath(first.output))).toEqual(original);
+    await fs.rm(cacheRoot(), { recursive: true });
+    const withoutCache = await stage();
+    try {
+      await withoutCache.publication.publish();
+    } finally {
+      await withoutCache.publication.close();
+    }
+    expect(await fs.readFile(schemaProbeComponentPath(first.output))).toEqual(original);
+    await expect(
+      stageInstalledSchemaProbeEvidence({
+        source: cacheRoot(),
+        output: first.output,
+        installation: identity.installation,
+        artifacts: [],
+      })
+    ).rejects.toThrow(/published runtime artifact/);
   });
 
   it.each(["missing", "duplicate", "class", "installation", "malformed"])(
