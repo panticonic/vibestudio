@@ -16,12 +16,18 @@ import {
 const roots: string[] = [];
 const executors: CurrentHostDevelopmentClientExecutor[] = [];
 
+/** This controlled fixture supplies only the ReadStream readable contract
+ * consumed by hashing; it deliberately has no file descriptor or file path. */
+function controlledExecutableStream(stream: PassThrough): ReturnType<typeof fs.createReadStream> {
+  return stream as unknown as ReturnType<typeof fs.createReadStream>;
+}
+
 describe("diagnostic executor startup ownership", () => {
   it("does not fingerprint in the constructor and keeps the event loop available during streamed startup", async () => {
     const stream = new PassThrough();
     const read = vi
       .spyOn(fs, "createReadStream")
-      .mockReturnValue(stream as ReturnType<typeof fs.createReadStream>);
+      .mockReturnValue(controlledExecutableStream(stream));
     const call = vi.fn(async () => ({ leaseExpiresAt: Date.now() + 60_000 }));
     const executor = new CurrentHostDevelopmentClientExecutor({
       client: { call } as never,
@@ -62,7 +68,7 @@ describe("diagnostic executor startup ownership", () => {
     const stream = new PassThrough();
     const read = vi
       .spyOn(fs, "createReadStream")
-      .mockReturnValue(stream as ReturnType<typeof fs.createReadStream>);
+      .mockReturnValue(controlledExecutableStream(stream));
     const executor = new CurrentHostDevelopmentClientExecutor({
       client: { call: vi.fn() } as never,
       stateRoot: "/unused-diagnostic-state",
@@ -80,7 +86,7 @@ describe("diagnostic executor startup ownership", () => {
     const stream = new PassThrough();
     const read = vi
       .spyOn(fs, "createReadStream")
-      .mockReturnValue(stream as ReturnType<typeof fs.createReadStream>);
+      .mockReturnValue(controlledExecutableStream(stream));
     const failure = new Error("registration rejected");
     let reject!: (error: Error) => void;
     const call = vi.fn(
