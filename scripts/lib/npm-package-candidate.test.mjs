@@ -99,6 +99,43 @@ void test("creates the same archive from the same staged bytes regardless of sou
   }
 });
 
+void test("stores hard-linked staged files as independent regular archive entries", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "npm-package-candidate-hard-links-"));
+  try {
+    const packageRoot = path.join(root, "package");
+    const outputDirectory = path.join(root, "candidate");
+    fs.mkdirSync(path.join(packageRoot, "blobs"), { recursive: true });
+    fs.writeFileSync(
+      path.join(packageRoot, "package.json"),
+      JSON.stringify({ name: "@example/no-links", version: "1.0.0", files: ["blobs"] })
+    );
+    fs.writeFileSync(path.join(packageRoot, "blobs/first"), "shared bytes\n");
+    fs.linkSync(path.join(packageRoot, "blobs/first"), path.join(packageRoot, "blobs/second"));
+
+    const produced = await packNpmPackageCandidate({
+      packageRoot,
+      outputDirectory,
+      sourceSha: "a".repeat(40),
+    });
+    const entries = [];
+    await listTarArchive({
+      file: produced.tarballPath,
+      onReadEntry(entry) {
+        entries.push({ path: entry.path, type: entry.type, size: entry.size });
+      },
+    });
+    assert.deepEqual(
+      entries.filter((entry) => entry.path.startsWith("package/blobs/")),
+      [
+        { path: "package/blobs/first", type: "File", size: 13 },
+        { path: "package/blobs/second", type: "File", size: 13 },
+      ]
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 void test("removes a partial archive while preserving an archive creation failure", async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "npm-package-candidate-pack-failure-"));
   try {

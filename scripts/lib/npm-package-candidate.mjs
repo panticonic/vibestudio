@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { createReadStream } from "node:fs";
 import { valid as validSemver } from "semver";
-import { create as createTarArchive } from "tar";
+import { create as createTarArchive, list as listTarArchive } from "tar";
 
 export async function packNpmPackageCandidate({
   packageRoot,
@@ -60,6 +60,19 @@ export async function packNpmPackageCandidate({
 }
 
 async function createPackageArchive({ packageRoot, tarballPath, archiveEntries }) {
+  const statCache = new Map();
+  for (const relative of archiveEntries) {
+    const absolute = path.resolve(packageRoot, relative);
+    const stat = fs.lstatSync(absolute);
+    // npm's registry rejects tar hard-link records. The prepared template CAS
+    // deliberately deduplicates equal blobs with filesystem hard links, but an
+    // npm archive is a transport boundary and must carry every path as a regular
+    // file. Supplying the already-owned stat with nlink normalized preserves the
+    // bytes while preventing tar from converting repeated inodes into links.
+    if (stat.isFile()) stat.nlink = 1;
+    statCache.set(absolute, stat);
+    statCache.set(absolute.replaceAll("\\", "/"), stat);
+  }
   await createTarArchive(
     {
       cwd: packageRoot,
@@ -69,6 +82,7 @@ async function createPackageArchive({ packageRoot, tarballPath, archiveEntries }
       noDirRecurse: true,
       portable: true,
       prefix: "package/",
+      statCache,
       strict: true,
     },
     archiveEntries
@@ -157,10 +171,12 @@ export async function readVerifiedNpmPackageCandidate(receiptPath, expected) {
     sourceSha: receipt.sourceSha,
     packageName: receipt.packageName,
     packageVersion: receipt.packageVersion,
+    validateArchive: false,
   });
   if (actual.byteLength !== receipt.byteLength || actual.sha256 !== receipt.sha256) {
     throw new Error("npm candidate archive does not match its receipt integrity values");
   }
+  await assertRegistryArchiveEntries(tarballPath);
   return { receipt, receiptPath: path.resolve(receiptPath), tarballPath };
 }
 
@@ -182,11 +198,13 @@ async function createNpmPackageCandidateReceipt({
   sourceSha,
   packageName,
   packageVersion,
+  validateArchive = true,
 }) {
   const stat = fs.lstatSync(tarballPath);
   if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0) {
     throw new Error("npm candidate archive must be a nonempty regular file");
   }
+  if (validateArchive) await assertRegistryArchiveEntries(tarballPath);
   const hash = createHash("sha256");
   let byteLength = 0;
   for await (const chunk of createReadStream(tarballPath)) {
@@ -203,6 +221,22 @@ async function createNpmPackageCandidateReceipt({
     byteLength,
     sha256: hash.digest("hex"),
   };
+}
+
+async function assertRegistryArchiveEntries(tarballPath) {
+  const hardLinks = [];
+  await listTarArchive({
+    file: tarballPath,
+    strict: true,
+    onReadEntry(entry) {
+      if (entry.type === "Link") hardLinks.push(entry.path);
+    },
+  });
+  if (hardLinks.length > 0) {
+    throw new Error(
+      `npm candidate archive contains registry-forbidden hard links: ${hardLinks.slice(0, 3).join(", ")}`
+    );
+  }
 }
 
 function readJson(filePath) {
