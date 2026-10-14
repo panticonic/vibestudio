@@ -2555,15 +2555,16 @@ app.on("ready", async () => {
           log.warn(`[development] client stop failed: ${formatUnknownError(error)}`);
         });
       });
-      await currentHostDevelopmentExecutor.start().catch((error: unknown) => {
-        log.warn(`[development] current-device executor unavailable: ${formatUnknownError(error)}`);
-        currentHostDevelopmentExecutor = null;
-      });
       const developmentLaunchRequest = process.env["VIBESTUDIO_DEVELOPMENT_LAUNCH_REQUEST"];
-      if (developmentLaunchRequest) {
-        await serverClientRef.call("developmentClientExecutor", "attest", [
-          { requestId: developmentLaunchRequest },
-        ]);
+      // An executor-only client and an attested diagnostic launch are actual
+      // consumers of registration. Ordinary desktop presentation is not.
+      if (IS_DEVELOPMENT_CLIENT_EXECUTOR || developmentLaunchRequest) {
+        await currentHostDevelopmentExecutor.start();
+        if (developmentLaunchRequest) {
+          await serverClientRef.call("developmentClientExecutor", "attest", [
+            { requestId: developmentLaunchRequest },
+          ]);
+        }
       }
     }
     workspaceId = serverSession.workspaceId;
@@ -2918,6 +2919,12 @@ app.on("ready", async () => {
     );
 
     deferredStartupWork = () => {
+      // Hosted adapter readiness is not a paint fence. This diagnostic service
+      // still uses asynchronous, bounded file reads so it cannot block the
+      // renderer's subsequent layout/IPC; its lifetime remains shutdown-owned.
+      void currentHostDevelopmentExecutor?.start().catch((error: unknown) => {
+        log.warn(`[development] current-device executor unavailable: ${formatUnknownError(error)}`);
+      });
       releaseUpdateController?.start();
       // These are useful background services, but neither belongs on the path
       // to the first usable workspace frame.
