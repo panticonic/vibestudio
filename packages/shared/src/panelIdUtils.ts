@@ -2,11 +2,12 @@
  * Panel ID generation utilities.
  *
  * Shared between shell and server panel lifecycle code.
- * These functions are pure — no Electron or Node.js-specific dependencies
- * beyond `crypto.randomBytes`.
+ * No Electron, Node.js, or WebCrypto dependency. Nonces use the platform's
+ * cryptographic random values; deterministic identities use portable SHA-256.
  */
 
 import { panelPrincipalId } from "./principalIds.js";
+import { sha256HexSyncText } from "@vibestudio/content-addressing";
 
 /**
  * Validate and sanitize a panel ID segment (e.g., a user-provided name).
@@ -140,13 +141,7 @@ export async function derivePanelOperationIdentity(
     input.parentId ?? "",
     input.ref ?? "latest",
   ].join("\u0000");
-  const digest = await globalThis.crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(material)
-  );
-  const hash = Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0"))
-    .join("")
-    .slice(0, 24);
+  const hash = sha256HexSyncText(material).slice(0, 24);
   const operationSegment = `op-${hash}`;
   return { operationSegment, entryKey: `nav-${operationSegment}` };
 }

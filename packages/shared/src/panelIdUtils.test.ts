@@ -7,7 +7,10 @@ import {
   panelIdSegmentFromName,
   generatePanelNonce,
   computePanelId,
+  derivePanelOperationIdentity,
+  type PanelOperationIdentityInput,
 } from "./panelIdUtils.js";
+import { createHash } from "node:crypto";
 
 beforeEach(() => {
   vi.stubGlobal("crypto", {
@@ -20,6 +23,66 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("derivePanelOperationIdentity", () => {
+  const vectors: Array<{ input: PanelOperationIdentityInput; hash: string }> = [
+    {
+      input: { operationId: "operation-1", source: "panels/chat" },
+      hash: "9a89b23aa4f8888d76f1bbd3",
+    },
+    {
+      input: {
+        operationId: "réessayer😀",
+        source: "panels/会話",
+        contextId: "ctx:ä",
+        parentId: "panel:tree/parent",
+        ref: "event:abc",
+      },
+      hash: "65b29e78e7fdfd600957286d",
+    },
+  ];
+  it.each(vectors)(
+    "preserves UTF-8 SHA-256 identity without native WebCrypto: $hash",
+    async ({ input, hash }) => {
+      // The actual mobile platform supplies randomness, but not crypto.subtle.
+      expect(globalThis.crypto.subtle).toBeUndefined();
+      const material = [
+        input.operationId,
+        input.source,
+        input.contextId ?? "",
+        input.parentId ?? "",
+        input.ref ?? "latest",
+      ].join("\u0000");
+      expect(createHash("sha256").update(material, "utf8").digest("hex").slice(0, 24)).toBe(hash);
+      await expect(derivePanelOperationIdentity(input)).resolves.toEqual({
+        operationSegment: `op-${hash}`,
+        entryKey: `nav-op-${hash}`,
+      });
+    }
+  );
+
+  it("preserves absent-coordinate defaults and distinguishes every explicit coordinate", async () => {
+    const input = { operationId: "operation-1", source: "panels/chat" };
+    const identity = await derivePanelOperationIdentity(input);
+    await expect(
+      derivePanelOperationIdentity({ ...input, contextId: null, parentId: "", ref: "latest" })
+    ).resolves.toEqual(identity);
+    const variants = [
+      { operationId: "operation-2" },
+      { source: "panels/other" },
+      { contextId: "ctx:other" },
+      { parentId: "panel:tree/other" },
+      { ref: "event:other" },
+      { ref: "" },
+    ];
+    const identities = await Promise.all(
+      variants.map((variant) => derivePanelOperationIdentity({ ...input, ...variant }))
+    );
+    expect(new Set([identity, ...identities].map((value) => value.operationSegment)).size).toBe(
+      variants.length + 1
+    );
+  });
 });
 
 describe("sanitizePanelIdSegment", () => {
