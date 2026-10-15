@@ -47,6 +47,9 @@ gpg --verify "$test_root/site/apt/dists/stable/InRelease"
 gpg --verify "$test_root/site/rpm/repodata/repomd.xml.asc" "$test_root/site/rpm/repodata/repomd.xml"
 test -z "$(find "$test_root/site/rpm" -name '*.rpm' -print)"
 same_release_epoch=$SOURCE_DATE_EPOCH
+# A second artifact download has a different filesystem timestamp. Repository
+# identity must still derive from the release and package bytes alone.
+touch --date="@$((SOURCE_DATE_EPOCH + 30))" "$test_root/release/"*.rpm
 bash "$SCRIPT_DIR/build-linux-repos.sh" "$test_root/release" "$test_root/site-repeat" https://example.invalid "$assets_url"
 cmp "$test_root/site/rpm/repodata/repomd.xml" "$test_root/site-repeat/rpm/repodata/repomd.xml"
 cmp "$test_root/site/rpm/repodata/repomd.xml.asc" "$test_root/site-repeat/rpm/repodata/repomd.xml.asc"

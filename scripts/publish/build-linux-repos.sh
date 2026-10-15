@@ -115,6 +115,13 @@ while IFS= read -r -d '' rpm_file; do
 done < <(find "$RELEASE_DIR" -maxdepth 1 -type f -name '*.rpm' -print0)
 
 if [ "$rpm_count" -gt 0 ]; then
+  # primary.xml records each package file's mtime. Artifact downloads and local
+  # copies assign transport-dependent mtimes even when the signed RPM bytes are
+  # identical, which would make the repository identity vary between retries.
+  # Bind that metadata to the immutable release timestamp before createrepo_c
+  # reads the packages.
+  find "$RPM_ROOT" -maxdepth 1 -type f -name '*.rpm' \
+    -exec touch --date="@$SOURCE_DATE_EPOCH" {} +
   require createrepo_c
   require rpm
   bash "$SCRIPT_ROOT/scripts/publish/verify-rpm-signatures.sh" "$RPM_ROOT"
