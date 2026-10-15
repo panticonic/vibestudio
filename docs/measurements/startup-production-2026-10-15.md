@@ -111,7 +111,10 @@ existing RPC metadata dependency instead of falling back to a local filesystem.
 Two mobile RPC descriptor imports also reached server implementations through
 type-only worker contracts. Mobile now consumes the public channel ABI. Quickfire's
 descriptor belongs beside its existing platform-neutral client interface in Base;
-the worker implements that same interface and re-exports the same descriptor.
+the worker implements that same interface and clients import the public
+descriptor directly. The obsolete worker contract re-export is removed, and the
+desktop shell also consumes the public channel client ABI rather than its
+worker's implementation contract.
 Consequently the exact checked Base release must be published before the final
 System release can consume its new public export. Both releases retain their
 normal review and publication gates. These prerequisite fixes are not startup
@@ -128,6 +131,18 @@ regression files pass 226 tests; the three affected System terminal files pass
 no PTY package, while the current catalog test tooling already required it;
 that instance was stopped and its temporary state retired. None of these
 correctness checks establishes a startup latency improvement.
+
+The canonical native build subsequently produced both Android and iOS bundles
+without diagnostics, and an immediate verification reused the same build key.
+Both the profile context and its client retired successfully. The existing
+per-file native ownership policy declares the actual globals initializer; it
+does not admit arbitrary callers. Neither the development Metro config nor the
+installed provider retains a fake-filesystem alias. A genuinely cold source
+producer also exposed a publication-stage ownership inversion: recipe records
+were required before their publisher created them. The pre-seal check now
+validates producer payloads, while final sealed-generation validation still
+requires the publication records. Fifteen focused generation tests and the real
+cold source build pass.
 
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
