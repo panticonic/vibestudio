@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import fs from "node:fs";
+import { createHash } from "node:crypto";
 import { syncBuiltinESMExports } from "node:module";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -33,6 +34,7 @@ function publishFixtureGeneration(root, build) {
 
 function writeSourcePrerequisites(root, prefix) {
   for (const artifact of SOURCE_SERVER_PREREQUISITE_ARTIFACTS) {
+    if (artifact === `dist/${HOST_PREPARATION_RECIPES}`) continue;
     const file = path.join(root, artifact);
     fs.mkdirSync(path.dirname(file), { recursive: true });
     if (!fs.existsSync(file)) fs.writeFileSync(file, `${prefix}:${path.basename(file)}`);
@@ -174,7 +176,7 @@ test("only the requested generation is an admission dependency", () => {
   }
 });
 
-test("validates host payload before its completion receipt is written", () => {
+test("validates executable payload before publication-owned records are written", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-build-payload-"));
   try {
     writeSourcePrerequisites(root, "fixture");
@@ -188,6 +190,7 @@ test("validates host payload before its completion receipt is written", () => {
       /Cannot publish incomplete source host generation: missing sql-wasm\.wasm/u
     );
     assert.equal(fs.existsSync(receipt), false);
+    assert.equal(fs.existsSync(path.join(root, "dist", HOST_PREPARATION_RECIPES)), false);
 
     fs.writeFileSync(wasm, "wasm payload");
     assert.doesNotThrow(() => assertHostBuildPayloadComplete(root, "source"));
@@ -198,6 +201,44 @@ test("validates host payload before its completion receipt is written", () => {
     assert.throws(
       () => assertHostBuildPayloadComplete(root, "source"),
       /Cannot publish incomplete source host generation: missing assets\/brand\/favicon\.ico/u
+    );
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("cold source publication creates and requires its own sealed preparation recipe", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "host-cold-source-publication-"));
+  try {
+    fs.writeFileSync(path.join(root, "package.json"), '{"name":"fixture"}');
+    fs.mkdirSync(path.join(root, "node_modules"));
+    writeSourcePrerequisites(root, "fresh-source");
+    const recipePath = path.join(root, "dist", HOST_PREPARATION_RECIPES);
+    assert.equal(fs.existsSync(recipePath), false);
+    assert.doesNotThrow(() => assertHostBuildPayloadComplete(root, "source"));
+    const build = {
+      kind: "source",
+      mode: "development",
+      fingerprint: "d".repeat(64),
+      inputCount: 1,
+    };
+    const published = publishFixtureGeneration(root, build);
+    const expectedRecipe = createHash("sha256")
+      .update(fs.readFileSync(path.join(root, "dist/prepare-workspace-templates.mjs")))
+      .digest("hex");
+    assert.equal(
+      readHostPreparationRecipe(published, "prepare-workspace-templates.mjs"),
+      expectedRecipe
+    );
+    assert.equal(
+      readHostPreparationRecipe(path.join(root, "dist"), "prepare-workspace-templates.mjs"),
+      expectedRecipe
+    );
+    assert.equal(admitPublishedHostBuildGeneration(root, build), published);
+    fs.rmSync(path.join(published, HOST_PREPARATION_RECIPES));
+    assert.throws(
+      () => admitPublishedHostBuildGeneration(root, build),
+      /incomplete: missing host-preparation-recipes\.json/u
     );
   } finally {
     fs.rmSync(root, { recursive: true, force: true });

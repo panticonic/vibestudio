@@ -37,6 +37,8 @@ const REQUIRED = {
 };
 const COMPLETION_RECEIPT = "host-build-fingerprint.json";
 export const HOST_PREPARATION_RECIPES = "host-preparation-recipes.json";
+// Created by the publication lifecycle, not by the executable payload producer.
+const PUBLICATION_RECORDS = new Set([COMPLETION_RECEIPT, HOST_PREPARATION_RECIPES]);
 const PREPARATION_ENTRIES = ["prepare-workspace-templates.mjs", "prepare-workspace-templates.cjs"];
 
 /** Capture executable recipe bytes at publication, never at consumer startup. */
@@ -285,7 +287,7 @@ export function assertHostBuildPayloadComplete(cwd, kind) {
   if (!(kind in REQUIRED)) throw new Error(`Unknown host generation kind: ${kind}`);
   const dist = path.resolve(cwd, "dist");
   for (const artifact of REQUIRED[kind]) {
-    if (artifact === COMPLETION_RECEIPT) continue;
+    if (PUBLICATION_RECORDS.has(artifact)) continue;
     if (!fs.existsSync(path.join(dist, artifact))) {
       throw new Error(`Cannot publish incomplete ${kind} host generation: missing ${artifact}`);
     }
