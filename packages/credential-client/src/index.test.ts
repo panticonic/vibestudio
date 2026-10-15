@@ -1,4 +1,4 @@
-import { schemaRpcCaller } from "@vibestudio/rpc/internal";
+import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { createCredentialClient } from "@vibestudio/service-schemas/clients/credentialClient";
 
@@ -7,7 +7,7 @@ describe("credential client HTTP mediation", () => {
     const call = vi.fn(async (_target, method) =>
       method === "credentials.openWebSocketScope" ? { scopeId: "owned-scope" } : null
     );
-    const client = createCredentialClient(schemaRpcCaller({ call, stream: vi.fn() }));
+    const client = createCredentialClient(schemaRpcMock({ call }));
     const input = { url: "wss://provider.test/model", credentialId: "selected" };
     const scope = await client.openWebSocketScope(input);
     await client.closeWebSocketScope(scope.scopeId);
@@ -27,7 +27,7 @@ describe("credential client HTTP mediation", () => {
       expect(body).toContain('name="manifest"');
       return new Response("ok");
     });
-    const rpc = schemaRpcCaller({ call: vi.fn(), stream });
+    const rpc = schemaRpcMock({ call: vi.fn(), stream });
     const form = new FormData();
     form.set("manifest", "{}");
 
@@ -39,7 +39,7 @@ describe("credential client HTTP mediation", () => {
 
   it("sends publication intent separately and retains the caller audience ceiling", async () => {
     const stream = vi.fn(async () => new Response("ok"));
-    const rpc = schemaRpcCaller({ call: vi.fn(), stream });
+    const rpc = schemaRpcMock({ call: vi.fn(), stream });
     const publication = {
       operationId: "publish-1",
       artifactDigest: `sha256:${"a".repeat(64)}`,

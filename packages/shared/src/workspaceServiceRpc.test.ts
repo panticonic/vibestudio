@@ -29,9 +29,6 @@ function rpcCall(
 ): RpcCallerLike["call"] {
   return schemaRpcCaller({
     call: mock,
-    stream: async () => {
-      throw new Error("Unexpected stream");
-    },
   }).call;
 }
 function resolvedTarget(targetId: string) {
@@ -52,13 +49,15 @@ function resolvedTarget(targetId: string) {
 
 describe("createDurableObjectServiceClient", () => {
   it("omits trailing undefined arguments before JSON transport", async () => {
-    const call = vi.fn(async (target: string, method: string, _args: unknown[]): Promise<unknown> => {
-      if (target === "main" && method === "workers.resolveService") {
-        return resolvedTarget("do:vcs");
+    const call = vi.fn(
+      async (target: string, method: string, _args: unknown[]): Promise<unknown> => {
+        if (target === "main" && method === "workers.resolveService") {
+          return resolvedTarget("do:vcs");
+        }
+        if (target === "do:vcs" && method === "search") return [];
+        throw new Error(`unexpected call ${target}.${method}`);
       }
-      if (target === "do:vcs" && method === "search") return [];
-      throw new Error(`unexpected call ${target}.${method}`);
-    });
+    );
     const client = createDurableObjectServiceClient(
       { call: rpcCall(call) },
       "vcs",

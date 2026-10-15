@@ -1,4 +1,4 @@
-import { schemaRpcStream } from "@vibestudio/rpc/internal";
+import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { createGitHttpClient } from "@vibestudio/service-schemas/clients/credentialClient";
 
@@ -11,7 +11,7 @@ describe("createGitHttpClient", () => {
       .fn()
       .mockResolvedValueOnce(response(401, "Unauthorized"))
       .mockResolvedValueOnce(response());
-    const client = createGitHttpClient({ call: vi.fn(), stream: schemaRpcStream(stream) });
+    const client = createGitHttpClient(schemaRpcMock({ call: vi.fn(), stream }));
 
     await client.request({
       url: "https://github.com/octocat/Hello-World.git/info/refs",
@@ -35,7 +35,7 @@ describe("createGitHttpClient", () => {
 
   it("does not consult credentials when anonymous Git succeeds", async () => {
     const stream = vi.fn(async () => response());
-    const client = createGitHttpClient({ call: vi.fn(), stream: schemaRpcStream(stream) });
+    const client = createGitHttpClient(schemaRpcMock({ call: vi.fn(), stream }));
 
     await client.request({
       url: "https://github.com/octocat/Hello-World.git/info/refs",
@@ -52,12 +52,9 @@ describe("createGitHttpClient", () => {
 
   it("preserves an explicitly anonymous credential selection across RPC", async () => {
     const stream = vi.fn(async () => response());
-    const client = createGitHttpClient(
-      { call: vi.fn(), stream: schemaRpcStream(stream) },
-      {
-        credentialId: null,
-      }
-    );
+    const client = createGitHttpClient(schemaRpcMock({ call: vi.fn(), stream }), {
+      credentialId: null,
+    });
 
     await client.request({
       url: "https://github.com/octocat/Hello-World.git/info/refs",
@@ -77,12 +74,9 @@ describe("createGitHttpClient", () => {
       name: "company-git",
       remoteUrl: "https://git.example.test/acme/repo.git",
     };
-    const client = createGitHttpClient(
-      { call: vi.fn(), stream: schemaRpcStream(stream) },
-      {
-        logicalCredential,
-      }
-    );
+    const client = createGitHttpClient(schemaRpcMock({ call: vi.fn(), stream }), {
+      logicalCredential,
+    });
 
     await client.request({
       url: "https://git.example.test/acme/repo.git/info/refs?service=git-upload-pack",
@@ -103,16 +97,13 @@ describe("createGitHttpClient", () => {
 
   it("rejects mixing a logical declaration with a call-scoped concrete override", () => {
     expect(() =>
-      createGitHttpClient(
-        { call: vi.fn(), stream: vi.fn() },
-        {
-          credentialId: "concrete",
-          logicalCredential: {
-            name: "company-git",
-            remoteUrl: "https://git.example.test/acme/repo.git",
-          },
-        }
-      )
+      createGitHttpClient(schemaRpcMock({ call: vi.fn() }), {
+        credentialId: "concrete",
+        logicalCredential: {
+          name: "company-git",
+          remoteUrl: "https://git.example.test/acme/repo.git",
+        },
+      })
     ).toThrow("either logicalCredential or credentialId");
   });
 });

@@ -7,9 +7,6 @@ it("validates portable service calls through the original transport owner across
   const wireCall = vi.fn(async () => "accepted");
   const rpc = owner.schemaRpcCaller({
     call: wireCall,
-    stream: async () => {
-      throw new Error("Unexpected stream");
-    },
   });
 
   vi.resetModules();

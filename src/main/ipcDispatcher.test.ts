@@ -119,6 +119,13 @@ function makeDispatcher(opts: {
     callAs: opts.callAs ?? vi.fn(async () => ({ ok: "app" })),
     sendAs: opts.sendAs ?? vi.fn(async () => undefined),
     stream: opts.stream ?? vi.fn(async () => new Response()),
+    streamReadable: vi.fn(async () => ({
+      status: 200,
+      statusText: "OK",
+      headers: [],
+      finalUrl: "",
+      body: new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
+    })),
     streamAs: opts.streamAs ?? vi.fn(async () => new Response()),
     addMessageListener: opts.addMessageListener ?? vi.fn(() => vi.fn()),
     openPanelSession:

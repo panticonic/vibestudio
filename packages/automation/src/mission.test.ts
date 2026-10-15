@@ -102,9 +102,6 @@ describe("author-side missions client", () => {
       createMissionsClient(
         schemaRpcCaller({
           call,
-          stream: async () => {
-            throw new Error("Unexpected stream");
-          },
         })
       ).observeChanges({
         afterVersion: "old",
@@ -124,9 +121,6 @@ describe("author-side missions client", () => {
     await createMissionsClient(
       schemaRpcCaller({
         call,
-        stream: async () => {
-          throw new Error("Unexpected stream");
-        },
       })
     ).launch({ name: "Backup", charter: charter() }, { idempotencyKey: "request-1" });
     expect(call.mock.calls.map((args) => args[1])).toEqual([
@@ -159,9 +153,6 @@ describe("author-side missions client", () => {
       createMissionsClient(
         schemaRpcCaller({
           call,
-          stream: async () => {
-            throw new Error("Unexpected stream");
-          },
         })
       ).launch({ name: "Backup", charter: charter() })
     ).rejects.toBe(original);
@@ -179,9 +170,6 @@ describe("author-side missions client", () => {
     const client = createMissionsClient(
       schemaRpcCaller({
         call,
-        stream: async () => {
-          throw new Error("Unexpected stream");
-        },
       })
     );
     await client.edit("mission-1", { name: "Renamed" });
