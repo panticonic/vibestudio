@@ -349,3 +349,29 @@ acceptable optimization.
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
 release artifacts or a reason to retain workspace databases and dependency trees.
+
+## Main integration and release preparation
+
+The release branch includes intervening main commits `139f390744` and
+`fd9e1f03d6`, and prepares application version 0.1.106. Full CI exposed further
+contract mismatches that focused startup checks had not covered:
+
+- Panel merge/diff helpers now have no eager validator dependency. The
+  authoritative merge-and-validate operation lives with the validator; workspace
+  state writes still validate against the active build's schema.
+- The terminal module download uses the canonical typed gateway contract.
+- Desktop smoke automation treats server pairing and workspace-code review as
+  distinct real UI actions, binding pairing to its owned invite's endpoint.
+- Base connection replacement joins retirement without inheriting a preceding
+  caller's primary failure. Independent cleanup failures, including an undefined
+  rejection, remain observable and block replacement. Streaming fixtures deliver
+  the actual ordered replay boundary and join their cancellation work.
+
+These Base changes were checked through the host-owned projection and published
+normally as Base 0.3.94 (`06ad008d3dae6feb789b5d573a5e173332d9634a`). The
+published tree exactly matches the reviewed source. Personal and System declare
+the Base dependency by URL; the host release's exact Base pin composes the new
+Base with their unchanged published releases.
+
+The timing tables above remain evidence for their explicitly recorded earlier
+artifacts, not fresh timing measurements of the integrated 0.1.106 release.
