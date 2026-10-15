@@ -169,6 +169,16 @@ remain. Earlier diagnostic instances and scratch are retired; the release
 operation currently owns one isolated instance for the dependent reviews.
 Inherited shared caches remain intact.
 
+The subsequent Personal 0.3.73 and System 0.3.99 publication reviews are complete
+against upstreams `87cd767a679a4824fe095307cd69b78e67450195` and
+`28f01934943c088141f4b1c480aa7fa221d40d57`, respectively. Their exact seven and
+32 changed-path inventories, source bytes, and modes match checked commits
+`0925929c200af16bf83c88027fea451dfa972dd3` and
+`4fe21fe9e99dbf86af034c93a721304828dc7a73`. Both normal authoring setups resolved
+the actual published Base commit, not its earlier development-source identity.
+Neither dependent release is published yet; exact-release approval remains
+required before freezing production pins and measuring the final installed app.
+
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
 release artifacts or a reason to retain workspace databases and dependency trees.
