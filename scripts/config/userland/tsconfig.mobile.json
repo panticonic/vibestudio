@@ -1,0 +1,21 @@
+{
+  "//": "The shipped app runs in Hermes, not the Node/Jest test harness. Check it without browser or Node globals and with the real native package entries.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "lib": ["ES2022"],
+    "types": ["react", "react-native"],
+    "customConditions": ["react-native"],
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true
+  },
+  "include": ["apps/mobile/**/*.ts", "apps/mobile/**/*.tsx", "packages/mobile-navigation/**/*.ts"],
+  "exclude": [
+    "node_modules",
+    "../node_modules",
+    "**/dist",
+    "**/node_modules",
+    "**/*.test.ts",
+    "**/*.test.tsx",
+    "apps/mobile/jest.setup.ts"
+  ]
+}

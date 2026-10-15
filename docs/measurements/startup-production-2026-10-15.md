@@ -29,6 +29,9 @@ The dependency edges are:
 - Workerd's immutable program capture precedes configuration and process spawn.
   HTTP readiness precedes semantic attachment. Separate internal services keep
   separate isolates, storage namespaces, and authority.
+- Internal executable publication proves the catalog-derived per-class outputs
+  once. Installed metadata admission does not initialize the producer's hash or
+  dependency-policy work; the full producer and final artifact gates remain.
 - A protected-main publication's host observers must finish before semantic
   acknowledgement. Recovery replays the same durable publication, including a
   previously acknowledged head whose observers did not finish. It does not
@@ -77,6 +80,42 @@ the whole emitted bundle grew 45,668 bytes. These are byte-attribution results,
 not an end-to-end speedup claim. Both comparison contexts, its private local Git
 clone, and its client were retired. Final published-pin installed measurements
 are still required.
+
+## Native publication prerequisite
+
+Normal System composition verification exposed a real native runtime API defect
+before publication. The former checkout-wide mobile check covered the
+Node/Jest test environment but lacked a separate Hermes app program, masking
+unsupported cancellation methods. The corrected check validates the actual app
+without browser or Node globals and with native conditional package exports;
+Node/Jest tests keep their own real runtime's types. SDK consumers resolve real
+package exports rather than the host implementation's source aliases.
+The runtime repair belongs to the existing mobile platform initialization shared
+by the installed bootstrap and downloaded shell, not individual call sites.
+That boundary now also owns a standards-compliant streaming/fatal UTF-8 decoder;
+the earlier minimal decoder ignored those options. Native declarations describe
+the APIs actually supplied by Hermes and the installed polyfills, not an assumed
+browser environment. Portable report and panel-operation identity hashing use
+the existing content digest implementation rather than requiring unavailable
+native WebCrypto, preserving the same digest bytes. The obsolete mobile
+filesystem stub and its bundler aliases are removed: unsupported imports must
+fail the real native build, not pretend that the filesystem is empty.
+
+Channel and event consumers use the existing portable readable-body RPC primitive;
+React Native's `Response` is not a streaming-body adapter. Caller projections must
+preserve that primitive through the same schema validation and owned lifecycle.
+Host and template callers change together; no old-contract compatibility layer or
+version-bump detour is retained. The shared panel core likewise requires its
+existing RPC metadata dependency instead of falling back to a local filesystem.
+
+Two mobile RPC descriptor imports also reached server implementations through
+type-only worker contracts. Mobile now consumes the public channel ABI. Quickfire's
+descriptor belongs beside its existing platform-neutral client interface in Base;
+the worker implements that same interface and re-exports the same descriptor.
+Consequently the exact checked Base release must be published before the final
+System release can consume its new public export. Both releases retain their
+normal review and publication gates. These prerequisite fixes are not startup
+speed measurements.
 
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
