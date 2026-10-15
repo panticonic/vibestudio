@@ -188,6 +188,24 @@ fetched normally and admitted through the canonical source-cache boundary from
 local Git, without retargeting original source branches. Final installed
 production measurements remain required; publication is not a speedup claim.
 
+The first post-publication dev diagnostic did not reach hosted-shell readiness:
+the default shell was offered a workspace-code trust review. This is not a
+valid latency sample or a reason to approve away the wait. Default native apps
+are supposed to be admitted from exact host-build provenance; that evidence
+boundary must be diagnosed. The diagnostic expired, joined its launcher and
+inspector, and its private fixture was removed after an external zero-process-
+reference audit. Shared caches and bounded failure evidence are retained.
+
+Package production now borrows the normal canonical content cache instead of
+overriding its location with disposable scratch. Its workspace state, process
+owner, and installed SDK boundary remain private/exact; cache hits are not
+release proof. The subsequent verifier still owns an empty derived cache and
+isolated environment. Thirty focused release tests pass, including actual child
+environment checks for producer cache selection and verifier server/CLI
+isolation, cancellation, identity mismatch rejection, and cleanup. The rejected
+external cache-copy watcher was never run and is removed: the producer alone
+owns and joins cache users before retirement.
+
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
 release artifacts or a reason to retain workspace databases and dependency trees.

@@ -614,7 +614,7 @@ test("installed session joins its server and listeners after operation and shutd
   assert.deepEqual(await fs.readdir(scratchParent), []);
 });
 
-test("installed verification carries the supported build concurrency into server and CLI", async () => {
+test("installed verification keeps fresh state isolated while carrying the build budget", async () => {
   const root = await fixture();
   const appRoot = path.join(root, "app");
   const scratchParent = path.join(root, "scratch");
@@ -661,16 +661,21 @@ test("installed verification carries the supported build concurrency into server
      const readyArg = process.argv.indexOf("--ready-file");
      fs.writeFileSync(process.argv[readyArg + 1], ${JSON.stringify(JSON.stringify(ready))});
      fs.writeFileSync(process.env.VIBESTUDIO_INSTANCE_ROOT + "/build-concurrency", process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS ?? "missing");
+     fs.writeFileSync(process.env.VIBESTUDIO_INSTANCE_ROOT + "/consumer-environment", JSON.stringify({ derived: process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR, profile: process.env.VIBESTUDIO_PROFILE_ROOT ?? null, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME }));
      process.on("message", message => { if (message?.type === "vibestudio:parent-owned-stop") process.exit(0); });
      setInterval(() => {}, 1000);`
   );
   await fs.writeFile(
     cliEntry,
-    `console.log(JSON.stringify({ concurrency: process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS ?? "missing" }));`
+    `console.log(JSON.stringify({ concurrency: process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS ?? "missing", derived: process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR, profile: process.env.VIBESTUDIO_PROFILE_ROOT ?? null, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME }));`
   );
 
   const priorConcurrency = process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS;
+  const priorDerived = process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR;
+  const priorProfile = process.env.VIBESTUDIO_PROFILE_ROOT;
   process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS = "6";
+  process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR = path.join(root, "inherited-cache");
+  process.env.VIBESTUDIO_PROFILE_ROOT = path.join(root, "inherited-profile");
   try {
     await withStandaloneReleaseSession(
       appRoot,
@@ -679,15 +684,39 @@ test("installed verification carries the supported build concurrency into server
       async ({ cli, env }) => {
         assert.equal(env.VIBESTUDIO_MAX_CONCURRENT_BUILDS, "6");
         assert.equal(
+          env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR,
+          path.join(path.dirname(env.VIBESTUDIO_INSTANCE_ROOT), "derived")
+        );
+        assert.notEqual(
+          env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR,
+          process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR
+        );
+        assert.equal(env.HOME, path.join(path.dirname(env.VIBESTUDIO_INSTANCE_ROOT), "home"));
+        assert.deepEqual(await fs.readdir(env.VIBESTUDIO_INSTANCE_ROOT), ["build-concurrency", "consumer-environment"]);
+        assert.equal(await fs.stat(env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR).then(
+          () => true, (error) => { if (error.code === "ENOENT") return false; throw error; }
+        ), false);
+        assert.equal(
           await fs.readFile(path.join(env.VIBESTUDIO_INSTANCE_ROOT, "build-concurrency"), "utf8"),
           "6"
         );
-        assert.deepEqual(await cli(["environment"]), { concurrency: "6" });
+        const expectedEnvironment = {
+          derived: env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR,
+          profile: null, home: env.HOME, config: env.XDG_CONFIG_HOME,
+        };
+        assert.deepEqual(JSON.parse(await fs.readFile(
+          path.join(env.VIBESTUDIO_INSTANCE_ROOT, "consumer-environment"), "utf8"
+        )), expectedEnvironment);
+        assert.deepEqual(await cli(["environment"]), { concurrency: "6", ...expectedEnvironment });
       }
     );
   } finally {
     if (priorConcurrency === undefined) delete process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS;
     else process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS = priorConcurrency;
+    if (priorDerived === undefined) delete process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR;
+    else process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR = priorDerived;
+    if (priorProfile === undefined) delete process.env.VIBESTUDIO_PROFILE_ROOT;
+    else process.env.VIBESTUDIO_PROFILE_ROOT = priorProfile;
   }
   assert.deepEqual(await fs.readdir(scratchParent), []);
 });
@@ -999,6 +1028,49 @@ test("installed producer ignores an inherited borrowed release root", async () =
   } finally {
     if (previous === undefined) delete process.env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT;
     else process.env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT = previous;
+  }
+});
+
+for (const configured of [true, false]) test(`installed producer preserves ${configured ? "configured" : "profile-default"} cache selection and retires workspace state`, async () => {
+  const root = await fixture();
+  const entry = path.join(root, "producer.mjs");
+  const receipt = path.join(root, "producer-environment.json");
+  const shared = path.join(root, "shared-cache");
+  await fs.mkdir(shared);
+  await fs.writeFile(path.join(shared, "retained-content"), "cached content");
+  await fs.writeFile(entry, `import fs from "node:fs";
+    fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({
+      derived: process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR,
+      profile: process.env.VIBESTUDIO_PROFILE_ROOT,
+      instance: process.env.VIBESTUDIO_INSTANCE_ROOT,
+      tmp: process.env.TMPDIR
+    }));
+    const root = process.argv[process.argv.indexOf("--output") + 1];
+    process.send({ kind: "sources-ready", root }, () =>
+      process.send({ kind: "completed" }, () => process.exit(0)));`);
+  const prior = process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR;
+  const priorProfile = process.env.VIBESTUDIO_PROFILE_ROOT;
+  const profile = path.join(root, "producer-profile");
+  process.env.VIBESTUDIO_PROFILE_ROOT = profile;
+  if (configured) process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR = shared;
+  else delete process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR;
+  try {
+    await prepareInstalledTemplateRelease({
+      appRoot: root, resources: root, executable: process.execPath,
+      entry, scratchParent: root,
+    });
+    const env = JSON.parse(await fs.readFile(receipt, "utf8"));
+    assert.equal(env.derived, configured ? shared : undefined);
+    assert.equal(env.profile, profile);
+    assert.equal(path.basename(path.dirname(env.instance)).startsWith(".template-release-"), true);
+    assert.equal(path.dirname(env.tmp), path.dirname(env.instance));
+    await assert.rejects(fs.stat(path.dirname(env.instance)), { code: "ENOENT" });
+    assert.equal(await fs.readFile(path.join(shared, "retained-content"), "utf8"), "cached content");
+  } finally {
+    if (prior === undefined) delete process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR;
+    else process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR = prior;
+    if (priorProfile === undefined) delete process.env.VIBESTUDIO_PROFILE_ROOT;
+    else process.env.VIBESTUDIO_PROFILE_ROOT = priorProfile;
   }
 });
 

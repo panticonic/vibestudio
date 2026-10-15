@@ -582,11 +582,13 @@ export async function prepareInstalledTemplateRelease({
     ...(electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
     VIBESTUDIO_HOST_ARTIFACT_ROOT: path.join(appRoot, "dist"),
     VIBESTUDIO_INSTANCE_ROOT: path.join(scratch, "instance"),
-    VIBESTUDIO_SHARED_DERIVED_CACHE_DIR: path.join(scratch, "derived"),
     TMPDIR: path.join(scratch, "tmp"),
     TMP: path.join(scratch, "tmp"),
     TEMP: path.join(scratch, "tmp"),
   };
+  // The release producer borrows the normal cache through canonical acquisition;
+  // workspace state and process ownership remain private to this producer.
+  // The fresh consumer below independently owns an empty cache and environment.
   // Installed release pins and dependencies are the producer's complete input;
   // developer template selection must never enter a product artifact.
   for (const key of [
