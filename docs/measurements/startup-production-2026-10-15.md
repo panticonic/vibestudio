@@ -166,8 +166,10 @@ was fetched normally and the canonical source cache admitted that published
 snapshot from a private local clone, which was then retired. Dependent
 Personal/System release reviews and final installed production measurements
 remain. Earlier diagnostic instances and scratch are retired; the release
-operation currently owns one isolated instance for the dependent reviews.
-Inherited shared caches remain intact.
+operation used one isolated instance for the dependent reviews. That instance
+has now stopped and joined; an external process audit found no remaining
+references. Its ephemeral root, owned alias directory, and regenerable local
+published-source clone are removed. Inherited shared caches remain intact.
 
 The subsequent Personal 0.3.73 and System 0.3.99 publication reviews are complete
 against upstreams `87cd767a679a4824fe095307cd69b78e67450195` and
