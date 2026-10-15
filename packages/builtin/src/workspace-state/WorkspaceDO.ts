@@ -37,9 +37,9 @@ import {
 import { mintHistoryEntryKey } from "@vibestudio/shared/panel/idValues";
 import {
   decodePanelStateArgs,
-  mergeValidateStateArgs,
   PanelStateArgsConflictError,
 } from "@vibestudio/shared/panelStateArgs";
+import { mergeValidateStateArgs } from "@vibestudio/shared/stateArgsValidator";
 import type { StateArgsSchema } from "@vibestudio/shared/stateArgs";
 import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 import { computePanelId, SlotIdentityCollisionError } from "@vibestudio/shared/panelIdUtils";

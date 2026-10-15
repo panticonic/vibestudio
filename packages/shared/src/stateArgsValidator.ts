@@ -1,6 +1,18 @@
 import type { JSONSchema7, JSONSchema7Definition, JSONSchema7TypeName } from "json-schema";
 import type { StateArgsSchema, StateArgsValue, StateArgsValidation } from "./stateArgs.js";
 import { normalizeStateArgs } from "./stateArgsSerialization.js";
+import { applyStateArgsMergePatch } from "./panelStateArgs.js";
+
+/** Apply a panel state patch through the active build's authoritative schema. */
+export function mergeValidateStateArgs(
+  current: Record<string, unknown>,
+  patch: Record<string, unknown>,
+  schema: StateArgsSchema | undefined
+): Record<string, unknown> {
+  const validation = validateStateArgs(applyStateArgsMergePatch(current, patch), schema);
+  if (!validation.success) throw new Error(`Invalid stateArgs: ${validation.error}`);
+  return validation.data as Record<string, unknown>;
+}
 
 /**
  * Interpreted draft-07 validator for panel state args.

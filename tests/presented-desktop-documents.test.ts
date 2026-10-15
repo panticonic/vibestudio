@@ -225,8 +225,11 @@ it("starts only the same presented review card through the serialized current DO
 it("distinguishes an actionable review, its in-flight decision, and bootstrap without review", async () => {
   const bootstrap = new Contents(1, "file:///owned/index.html", new Button("Start"), "bootstrap");
   const runtime = electron([window(bootstrap)]);
-  const snapshot = async () =>
-    (await inspectPresentedDesktopDocuments(runtime, { kind: "snapshots" }))[0];
+  const snapshot = async () => {
+    const snapshots = await inspectPresentedDesktopDocuments(runtime, { kind: "snapshots" });
+    if (!Array.isArray(snapshots)) throw new Error("Expected presented desktop snapshots");
+    return snapshots[0];
+  };
   expect((await snapshot()).launchGateReview?.actionable).toBe(true);
   bootstrap.button.disabled = true;
   Object.defineProperty(bootstrap.button, "textContent", { value: "Starting..." });

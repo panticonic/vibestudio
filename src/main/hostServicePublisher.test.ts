@@ -69,13 +69,12 @@ describe("desktop host-service publication", () => {
   });
 
   it("rejects direct workspace callers before entering a published host method", async () => {
-    let exposed: ((request: RpcRequestContext) => unknown | Promise<unknown>) | undefined;
     const rpc = wireClientFor(schemaRpcClientMock({ call: vi.fn() }, "main"));
-    rpc.expose = (_method, handler) => {
-      exposed = handler;
-    };
+    const publication = vi.spyOn(rpc, "expose");
     const handler = vi.fn(() => "ok");
     exposeServerOriginatedHostMethod(rpc, "desktopProbe.inspect", handler);
+    expect(publication).toHaveBeenCalledOnce();
+    const exposed = publication.mock.calls[0]![1];
 
     const request = (callerId: string, callerKind: "server" | "worker") =>
       ({

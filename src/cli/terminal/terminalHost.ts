@@ -21,6 +21,11 @@ import { CliError } from "../output.js";
 import { shellCallerId, type PrincipalTransport, type RpcClient } from "../rpcClient.js";
 import { guardTerminal } from "./ttyRestore.js";
 import { createTerminalFiles } from "./terminalFiles.js";
+import { gatewayMethods } from "@vibestudio/service-schemas/gateway";
+import {
+  createTypedServiceClient,
+  qualifyServiceMethod,
+} from "@vibestudio/shared/typedServiceClient";
 
 /** Requests the device's terminal-app principal over the CLI's own connection. */
 export async function requestTerminalAppGrant(
@@ -53,12 +58,10 @@ export async function loadTerminalBrowserModule(
       `The terminal app ${app.source} has no single ESM entry module in build ${app.buildKey}.`
     );
   }
-  const response = await device.stream(
-    "main",
-    "gateway.fetch",
-    [{ path: entry[0]!.route, method: "GET" }],
-    options
+  const gateway = createTypedServiceClient("gateway", gatewayMethods, (service, method, args) =>
+    device.stream("main", qualifyServiceMethod(service, method), args, options)
   );
+  const response = await gateway.fetch({ path: entry[0]!.route, method: "GET" });
   if (!response.ok) {
     throw new CliError(
       `Could not download the terminal app (${app.source}): HTTP ${response.status} ` +
