@@ -276,8 +276,38 @@ has one idempotent close owner shared by ordinary shutdown and failed startup
 acquisition cleanup. Seventy-two focused hub cases pass; the real streaming-HTTP
 and upgraded-connection case verifies termination, client error propagation,
 closed-listener refusal, and joined socket events. All four host typecheck
-programs and the rebuilt production artifact/native contracts pass. A new
-canonical package and unchanged-pin UI/shutdown comparison are still required.
+programs and the rebuilt production artifact/native contracts pass. The final
+canonical package passed all 111 exact fresh-install runtime checks and admitted
+all 18 schema receipts against production fingerprint
+`64087b3cb4c77af3ea79fee62f1150bb2642cf5eb2c10837d76556130f718776`.
+The installed dependency fingerprint is unchanged from the corrected package;
+the actual host fingerprint changed with the gateway repair. Its ASAR is
+38,984,963 bytes and retains the same clean packaging inventory boundary.
+
+Two final unchanged-artifact comparisons used private empty initial state,
+credentials and derived caches, then the same state for an immediate restart.
+No unrelated heavy work overlapped the timed intervals. Both Personal and
+System semantic activation receipts and the actual restored desktop layout are
+required; a splash, listening server or rendered shell alone does not qualify.
+
+| Boundary | First comparison | Exit-receipted repeat |
+| --- | ---: | ---: |
+| First-use actionable native review | 5.908 s | 5.884 s |
+| Scripted Start to healthy restored UI | 2.952 s | 2.465 s |
+| Existing-state process to healthy restored UI | 5.762 s | 5.651 s |
+
+The first-use review was accepted only as an explicit scripted fixture action
+through its ordinary DOM Start button. Its inspection/setup interval is
+reported separately; these are not automatic first-use readiness claims.
+The respective full first-use intervals were 9.076 s and 8.605 s, including
+scripted consent and setup. Neither comparison needed a shutdown intervention.
+The repeat also records both native application exits as code 0 with no signal;
+its outer owner joined and independently audited zero fixture references.
+Both private fixtures and the regenerable installed test package are retired;
+bounded profiles, receipts and screenshots remain. Shared caches are preserved.
+The old baseline had failed semantic activation and cannot establish a
+before/after healthy-startup speedup percentage. Existing-state production
+readiness now falls within the requested 5–10 second range on this host.
 
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
