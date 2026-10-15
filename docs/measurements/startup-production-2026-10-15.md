@@ -189,12 +189,19 @@ local Git, without retargeting original source branches. Final installed
 production measurements remain required; publication is not a speedup claim.
 
 The first post-publication dev diagnostic did not reach hosted-shell readiness:
-the default shell was offered a workspace-code trust review. This is not a
-valid latency sample or a reason to approve away the wait. Default native apps
-are supposed to be admitted from exact host-build provenance; that evidence
-boundary must be diagnosed. The diagnostic expired, joined its launcher and
-inspector, and its private fixture was removed after an external zero-process-
-reference audit. Shared caches and bounded failure evidence are retained.
+the default shell was offered a workspace-code launch review. This is not a
+valid automatic-UI latency sample. Investigation established that host-build
+provenance and native activation consent are distinct decisions in current main:
+the exact shell EV was host-admitted and its inventory vouched for the local
+tree, while its activation approval store was absent. The explicit seeded-app
+regression expects a prompt. Creation and native participants can share one
+startup review; a creation packet containing the shell does not prove stale
+code. No trust policy was changed. The failed diagnostic and two subsequent
+owned investigations were stopped and joined; their private state was removed
+after zero-process-reference audits. Shared caches and bounded evidence remain.
+First-use actionable review, post-scripted-fixture-consent UI, and later
+existing-state startup must be reported separately, never combined into an
+automatic fresh-workspace readiness claim.
 
 Package production now borrows the normal canonical content cache instead of
 overriding its location with disposable scratch. Its workspace state, process
@@ -205,6 +212,18 @@ environment checks for producer cache selection and verifier server/CLI
 isolation, cancellation, identity mismatch rejection, and cleanup. The rejected
 external cache-copy watcher was never run and is removed: the producer alone
 owns and joins cache users before retirement.
+
+The canonical production build and Linux x64 application package now pass using
+all three published pins. Build contracts report 32 checks, four import smokes,
+one executable smoke, and three native-runtime contracts. The genuine isolated
+consumer reused all 111 exact runtime records (26 Base, 41 Personal, 44 System;
+59 unique artifact keys). After its owners joined, the installed schema
+component was published mode 0644 with 18 receipts; the canonical installed
+reader admits all 18 against host fingerprint
+`52a120a0a9ce3275986002c178c31b134246f90f93d9abcb5dbbc7393ff06846`.
+The normal packaging wrapper consumed its after-pack completion witness and
+retired its staging tree. No external cache-copy job or verifier-cache seeding
+was used. This verifies release production and reuse, not launch latency.
 
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
