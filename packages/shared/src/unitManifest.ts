@@ -102,39 +102,6 @@ export function parseExtensionMethodAuthority(
   return Object.freeze(result);
 }
 
-/**
- * Optional worker manifest fields for terminal-renderable workers.
- *
- * Workers are not centrally validated (their manifests are read ad-hoc by the
- * builder), so these are lightweight typed shapes + predicates shared by the
- * build pipeline (`buildWorker`) and the workerd config generator
- * (`workerdManager`). A terminal worker renders with Ink inside workerd; the
- * build aliases `yoga-layout` to the terminal-shim loader and emits a
- * `yoga.wasm` artifact, and workerd is given that wasm as a module binding.
- */
-export interface WorkerTerminalConfig {
-  /** Only "ink" is supported for now. */
-  renderer: "ink";
-  /** Optional default viewport hint (host is authoritative at runtime). */
-  viewport?: { columns: number; rows: number };
-}
-
-/** Read the `vibestudio.terminal` block from a worker manifest, if present. */
-export function workerTerminalConfig(
-  vibestudio: Record<string, unknown> | undefined | null
-): WorkerTerminalConfig | null {
-  const terminal = vibestudio?.["terminal"];
-  if (!terminal || typeof terminal !== "object" || Array.isArray(terminal)) return null;
-  const renderer = (terminal as Record<string, unknown>)["renderer"];
-  if (renderer !== "ink") return null;
-  return terminal as WorkerTerminalConfig;
-}
-
-/** A worker whose `vibestudio.terminal.renderer` is "ink" renders inside workerd via Ink. */
-export function isTerminalWorker(vibestudio: Record<string, unknown> | undefined | null): boolean {
-  return workerTerminalConfig(vibestudio) !== null;
-}
-
 type NativeAppHost = "electron" | "react-native";
 
 interface AppCapabilityDescriptor {
@@ -515,22 +482,6 @@ function validateAppBlock(
       `Terminal app ${options.unitName} cannot declare vibestudio.app.startupModules`,
       "MANIFEST_APP_STARTUP_MODULES_TARGET"
     );
-  }
-
-  // Interactive (TUI) terminal apps get the real TTY (stdio inherit) at launch.
-  if (appRecord["interactive"] !== undefined) {
-    if (typeof appRecord["interactive"] !== "boolean") {
-      throw new UnitManifestError(
-        `App ${options.unitName} vibestudio.app.interactive must be a boolean`,
-        "MANIFEST_APP_INTERACTIVE"
-      );
-    }
-    if (target !== "terminal" && appRecord["interactive"] === true) {
-      throw new UnitManifestError(
-        `App ${options.unitName} vibestudio.app.interactive is only supported for terminal apps`,
-        "MANIFEST_APP_INTERACTIVE_TARGET"
-      );
-    }
   }
 
   for (const forbidden of ["main", "preload", "window"]) {

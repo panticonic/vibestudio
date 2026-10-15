@@ -775,3 +775,68 @@ describe("PanelRuntimeCoordinator attempt state machine", () => {
     expect(coordinator.observeSlotLifecycle("panel:tree/a").build).toBeUndefined();
   });
 });
+
+describe("host-held panel runtimes (terminal apps in workspace PTYs)", () => {
+  function held() {
+    const eventService = { emit: vi.fn() };
+    const coordinator = new PanelRuntimeCoordinator({ eventService: eventService as never });
+    const changes = vi.fn();
+    coordinator.onLeaseChanged(changes);
+    coordinator.holdEntityForHost({
+      runtimeEntityId: "panel:nav-term-1",
+      connectionId: "pty-route-1",
+      authorizedBy: "shell:laptop",
+      holderLabel: "terminal session",
+    });
+    return { coordinator, changes, eventService };
+  }
+
+  it("admits exactly the launched connection, authorized by the launching person", () => {
+    const { coordinator } = held();
+    expect(
+      coordinator.authorizePanelConnection("panel:nav-term-1", "pty-route-1", "shell:laptop")
+    ).toEqual({
+      ok: true,
+    });
+    expect(coordinator.authorizePanelConnection("panel:nav-term-1", "other-route")).toMatchObject({
+      ok: false,
+    });
+    expect(
+      coordinator.authorizePanelConnection("panel:nav-term-1", "pty-route-1", "shell:intruder")
+    ).toMatchObject({ ok: false });
+    expect(coordinator.resolveAuthorizerForRuntime("panel:nav-term-1")).toBe("shell:laptop");
+    // Toward Durable Objects it acts as itself (it has no slot).
+    expect(coordinator.panelIdentityForRuntime("panel:nav-term-1")).toBe("panel:nav-term-1");
+    expect(coordinator.resolvePresentationCallerForRuntime("panel:nav-term-1")).toBeNull();
+  });
+
+  it("routes to the program, stays out of slot leases and events, and survives disconnects", () => {
+    vi.useFakeTimers();
+    try {
+      const { coordinator, changes, eventService } = held();
+      coordinator.markConnected("panel:nav-term-1", "pty-route-1");
+      expect(coordinator.resolveRouteConnection("panel:nav-term-1")).toBe("pty-route-1");
+      expect(coordinator.resolveRouteRuntimeEntityId("panel:nav-term-1")).toBe("panel:nav-term-1");
+      coordinator.markDisconnected("panel:nav-term-1", "pty-route-1");
+      vi.advanceTimersByTime(24 * 60 * 60_000);
+      expect(coordinator.getHostHeldLease("panel:nav-term-1")).not.toBeNull();
+      expect(coordinator.authorizePanelConnection("panel:nav-term-1", "pty-route-1").ok).toBe(true);
+      expect(coordinator.getSnapshot().leases).toEqual([]);
+      expect(coordinator.getLease("panel:nav-term-1")).toBeNull();
+      expect(changes).not.toHaveBeenCalled();
+      expect(eventService.emit).not.toHaveBeenCalled();
+      coordinator.unregisterClientsForCaller("shell:laptop");
+      expect(coordinator.getHostHeldLease("panel:nav-term-1")).not.toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is retired with its runtime entity", () => {
+    const { coordinator } = held();
+    coordinator.retireRuntimeEntity("panel:nav-term-1");
+    expect(coordinator.getHostHeldLease("panel:nav-term-1")).toBeNull();
+    expect(coordinator.authorizePanelConnection("panel:nav-term-1", "pty-route-1").ok).toBe(false);
+    expect(coordinator.resolveRouteConnection("panel:nav-term-1")).toBeNull();
+  });
+});

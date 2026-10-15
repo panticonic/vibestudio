@@ -76,6 +76,7 @@ describe("workerd bootstrap policy", () => {
       resolveEgressCaller: (caller) => caller,
       ensureUserlandDoReady: vi.fn(async () => undefined),
       ensureUserlandDoPrepared: vi.fn(async () => undefined),
+      withdrawDecisionWaits: vi.fn(),
       onManagerStarted: vi.fn(),
       publishSourceBuild: vi.fn(async () => undefined),
     });
@@ -141,6 +142,7 @@ describe("workerd bootstrap policy", () => {
       resolveEgressCaller: (caller) => caller,
       ensureUserlandDoReady: vi.fn(async () => undefined),
       ensureUserlandDoPrepared: vi.fn(async () => undefined),
+      withdrawDecisionWaits: vi.fn(),
       onManagerStarted: vi.fn(),
       publishSourceBuild: vi.fn(async () => undefined),
     });
@@ -235,6 +237,7 @@ describe("workerd bootstrap policy", () => {
       resolveEgressCaller: (caller) => caller,
       ensureUserlandDoReady: vi.fn(async () => undefined),
       ensureUserlandDoPrepared: vi.fn(async () => undefined),
+      withdrawDecisionWaits: vi.fn(),
       onManagerStarted: vi.fn(),
       publishSourceBuild,
     });

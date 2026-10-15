@@ -33,7 +33,9 @@ export function createAppUnitDriver(input: {
       release: { kind: "app", releaseId: entityId },
       source: record.source.repoPath,
       ...(row?.displayName ? { displayName: row.displayName } : {}),
-      status: row?.lastError ? "error" : "running",
+      // An app with a recorded error still runs its adopted build; the error
+      // belongs to a newer build that was not adopted.
+      status: "running",
       lastError: row?.lastError ?? record.error ?? null,
       artifact: {
         effectiveVersion: record.source.effectiveVersion,
@@ -86,7 +88,7 @@ export function createAppUnitDriver(input: {
       );
       return {
         entity,
-        state: entity.lastError ? "unhealthy" : "healthy",
+        state: entity.lastError ? "degraded" : "healthy",
         summary: entity.lastError,
         logs: snapshot.logs,
         errors: snapshot.errors,
@@ -115,7 +117,11 @@ export function createAppUnitDriver(input: {
     },
     activation: {
       activate: async (_ctx, releaseId) => {
-        await host().ensureActivated(releaseId);
+        // An unreviewed app has its review open by now; the client shows it
+        // and activates again once it resolves.
+        if ((await host().ensureActivated(releaseId)) === "approval-required") {
+          return { status: "approval-required" };
+        }
         return { status: "ready", entity: requireDescription(releaseId) };
       },
       prepare: async (_ctx, releaseId, ref) => {

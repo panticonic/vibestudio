@@ -2,6 +2,7 @@ import type { ExtensionHost } from "@vibestudio/extension-host";
 import type {
   RuntimeSupervisionDescription,
   RuntimeSupervisionLogRecord,
+  RuntimeSupervisionReleaseVersion,
 } from "@vibestudio/service-schemas/runtime";
 import type { UnitDriver, UnitLogQuery } from "./unitSupervisor.js";
 import type { RuntimeDiagnosticsStore } from "../runtimeDiagnosticsStore.js";
@@ -26,7 +27,9 @@ export function createExtensionUnitDriver(
     release: { kind: "extension", releaseId: row.name },
     source: row.source,
     displayName: row.displayName,
-    status: row.lastError ? "error" : "running",
+    // A running extension with an error is still running its adopted build; the
+    // error belongs to a newer build that was not adopted.
+    status: "running",
     lastError: row.lastError,
     artifact: {
       effectiveVersion: row.activeEv ?? row.ev ?? null,
@@ -35,7 +38,7 @@ export function createExtensionUnitDriver(
     },
     facets: {
       activation: true,
-      release: false,
+      release: true,
       inspector: row.inspectorUrl !== null,
     },
   });
@@ -77,7 +80,7 @@ export function createExtensionUnitDriver(
           reported === "healthy" || reported === "degraded" || reported === "unhealthy"
             ? reported
             : row.lastError
-              ? "unhealthy"
+              ? "degraded"
               : "unknown",
         summary: row.lastError,
         logs: snapshot.logs,
@@ -92,6 +95,32 @@ export function createExtensionUnitDriver(
     // ExtensionHost owns that generation and validates it against its process
     // table; the supervisor's public list intentionally contains only ready
     // entities, so using that projection here creates a startup deadlock.
+    releases: {
+      versions: (releaseId) => {
+        const versions = host().listVersions(releaseId);
+        const version = (
+          value: NonNullable<typeof versions.current>
+        ): RuntimeSupervisionReleaseVersion => ({
+          releaseId,
+          version: value.version,
+          buildKey: value.activeBundleKey,
+          effectiveVersion: value.activeEv,
+          activatedAt: value.activatedAt,
+        });
+        return {
+          current: versions.current ? version(versions.current) : null,
+          previous: versions.previous.map(version),
+          retentionLimit: versions.retentionLimit,
+        };
+      },
+      rollback: async (_ctx, releaseId, buildKey) => {
+        const entry = await host().rollback(releaseId, buildKey);
+        if (!entry.activeBundleKey) {
+          throw new Error(`Rolled-back extension ${releaseId} has no active build`);
+        }
+        return { releaseId, activeBuildKey: entry.activeBundleKey };
+      },
+    },
     reportReady: (ctx, _entityId, report) => host().reportActivation(ctx, report),
     reportHealth: (ctx, _entityId, report) => host().reportHealth(ctx, report.state, report.detail),
     appendLog: (ctx, _entityId, report) =>

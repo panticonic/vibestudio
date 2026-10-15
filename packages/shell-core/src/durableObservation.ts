@@ -1,3 +1,5 @@
+import { isRpcAbortedBy } from "@vibestudio/rpc";
+
 export class DurableObservationStoppedError extends Error {
   constructor() {
     super("Durable observation stopped");
@@ -11,7 +13,7 @@ export interface DurableObservation {
   /** Request and await a projection generation at least this recent. */
   refresh(): Promise<void>;
   /** Retire local and remote ownership, and join admitted and in-flight work. */
-  stop(): Promise<void>;
+  stop(reason?: unknown): Promise<void>;
 }
 
 /**
@@ -36,10 +38,8 @@ export function observeDurableProjection<T>(input: {
   let settled = 0;
   let running: Promise<void> | null = null;
   let stopping: Promise<void> | null = null;
-  const receipts = new Map<
-    number,
-    { resolve(): void; reject(error: unknown): void }
-  >();
+  let retirementReason: unknown = new DurableObservationStoppedError();
+  const receipts = new Map<number, { resolve(): void; reject(error: unknown): void }>();
 
   const settleThrough = (generation: number, error?: unknown) => {
     settled = Math.max(settled, generation);
@@ -61,7 +61,10 @@ export function observeDurableProjection<T>(input: {
         input.apply(value);
         settleThrough(generation);
       } catch (error) {
-        if (!active) return;
+        if (!active) {
+          if (isRpcAbortedBy(error, retirementReason)) return;
+          throw error;
+        }
         if (generation !== requested) continue;
         input.error(error);
         settleThrough(generation, error);
@@ -83,7 +86,7 @@ export function observeDurableProjection<T>(input: {
   };
 
   const refresh = (): Promise<void> => {
-    if (!active) return Promise.reject(new DurableObservationStoppedError());
+    if (!active) return Promise.reject(retirementReason);
     const generation = ++requested;
     const receipt = new Promise<void>((resolve, reject) => {
       receipts.set(generation, { resolve, reject });
@@ -93,14 +96,12 @@ export function observeDurableProjection<T>(input: {
     return receipt;
   };
 
-  const unlisten = input.listen(() =>
-    active ? refresh() : Promise.resolve(),
-  );
+  const unlisten = input.listen(() => (active ? refresh() : Promise.resolve()));
   const admission = input.admit ? input.admit() : Promise.resolve();
   const ready = admission.then(
     async () => {
       admitted = true;
-      if (!active) throw new DurableObservationStoppedError();
+      if (!active) throw retirementReason;
       await refresh();
     },
     (error: unknown) => {
@@ -109,49 +110,63 @@ export function observeDurableProjection<T>(input: {
         settleThrough(requested, error);
       }
       throw error;
-    },
+    }
   );
   void ready.catch(() => undefined);
 
   return {
     ready,
     refresh,
-    stop() {
+    stop(reason = retirementReason) {
       if (stopping) return stopping;
       active = false;
-      unlisten();
-      const stopped = new DurableObservationStoppedError();
-      for (const receipt of receipts.values()) receipt.reject(stopped);
+      retirementReason = reason;
+      const localFailures: unknown[] = [];
+      try {
+        unlisten();
+      } catch (error) {
+        localFailures.push(error);
+      }
+      for (const receipt of receipts.values()) receipt.reject(retirementReason);
       receipts.clear();
+      // Capture the admitted read now: its completion clears `running`, but
+      // cannot erase the receipt this retirement must join.
+      const reading = running;
       stopping = (async () => {
-        let admissionError: unknown;
-        try {
-          await admission;
-        } catch (error) {
-          admissionError = error;
-        }
-        let leaveError: unknown;
-        if (input.leave) {
+        const leaving = (async () => {
+          // Leave must follow remote admission, including partial failure.
           try {
-            await input.leave();
-          } catch (error) {
-            leaveError = error;
+            await admission;
+          } catch {
+            /* Joined independently below. */
           }
-        }
-        await running;
-        if (admissionError !== undefined && leaveError !== undefined) {
-          const failure = new AggregateError(
-            [admissionError, leaveError],
-            "Durable observation admission and retirement failed",
-          );
+          await input.leave?.();
+        })();
+        const outcomes = await Promise.allSettled([admission, reading, leaving]);
+        const failures = [
+          ...new Set([
+            ...localFailures.filter((failure) => !isRpcAbortedBy(failure, retirementReason)),
+            ...outcomes.flatMap((outcome) =>
+              outcome.status === "rejected" && !isRpcAbortedBy(outcome.reason, retirementReason)
+                ? [outcome.reason as unknown]
+                : []
+            ),
+          ]),
+        ];
+        if (!failures.length) return;
+        const failure =
+          failures.length === 1
+            ? failures[0]
+            : new AggregateError(failures, "Durable observation retirement failed");
+        try {
           input.error(failure);
-          throw failure;
+        } catch (observerFailure) {
+          throw new AggregateError(
+            [failure, observerFailure],
+            "Durable observation retirement and failure reporting failed"
+          );
         }
-        if (leaveError !== undefined) {
-          input.error(leaveError);
-          throw leaveError;
-        }
-        if (admissionError !== undefined) throw admissionError;
+        throw failure;
       })();
       void stopping.catch(() => undefined);
       return stopping;

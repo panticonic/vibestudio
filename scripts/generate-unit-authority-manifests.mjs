@@ -134,11 +134,15 @@ const REVIEWED_INTRINSIC_CAPABILITIES = new Map([
   ["incoming-pair-links", "gated"],
   ["internal-model-runtime.use", "gated"],
   ["keychain", "gated"],
+  // Device media permission for dictation; the host prompts per use.
+  ["microphone", "gated"],
   ["native-menus", "gated"],
   ["notifications", "gated"],
   ["open-external", "gated"],
   ["panel-hosting", "gated"],
   ["window-management", "gated"],
+  // Main-advance publication gate (mainAdvanceApproval.ts authorizes it gated).
+  ["workspace.publish", "gated"],
   ["workspace-repo-delete", "critical"],
 ]);
 for (const [capability, tier] of REVIEWED_INTRINSIC_CAPABILITIES) {
@@ -387,10 +391,21 @@ for (const pkg of packages.values()) {
       definition.tier,
       `${source} authority.provides`
     );
+    // A unit may also request a capability by its bare provided name (for
+    // example the conversation panel requesting channel.members.remove): the
+    // provider's reviewed declaration is the tier.
+    recordCapabilityTier(definition.name, definition.tier, `${source} authority.provides`);
   }
 }
 
-const EXECUTABLE_UNIT_ROOTS = new Set(["about", "apps", "extensions", "panels", "workers"]);
+const EXECUTABLE_UNIT_ROOTS = new Set([
+  "about",
+  "apps",
+  "extensions",
+  "panels",
+  "terminal-apps",
+  "workers",
+]);
 
 /**
  * Authority is part of every executable artifact's source contract. Requiring
@@ -495,6 +510,35 @@ function workspacePackageForSpecifier(specifier) {
   );
 }
 
+const moduleImportCache = new Map();
+/** A module's source and its import specifiers; units share most of their closure. */
+function moduleImports(absolute) {
+  const cached = moduleImportCache.get(absolute);
+  if (cached) return cached;
+  const source = fs.readFileSync(absolute, "utf8");
+  const parsed = parseSource(absolute, source);
+  const specifiers = [];
+  const inspect = (node) => {
+    if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
+      if (!ts.isImportDeclaration(node) || node.importClause?.isTypeOnly !== true) {
+        specifiers.push(node.moduleSpecifier.text);
+      }
+    } else if (
+      ts.isCallExpression(node) &&
+      (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
+        (ts.isIdentifier(node.expression) && node.expression.text === "require")) &&
+      ts.isStringLiteralLikeNode(node.arguments[0])
+    ) {
+      specifiers.push(node.arguments[0].text);
+    }
+    node.forEachChild(inspect);
+  };
+  inspect(parsed);
+  const entry = { source, specifiers };
+  moduleImportCache.set(absolute, entry);
+  return entry;
+}
+
 function reachablePackageModules(pkg) {
   const entry = packageEntry(pkg);
   if (!entry)
@@ -505,26 +549,8 @@ function reachablePackageModules(pkg) {
     const absolute = path.resolve(file);
     if (seen.has(absolute)) return;
     seen.add(absolute);
-    const source = fs.readFileSync(absolute, "utf8");
+    const { source, specifiers } = moduleImports(absolute);
     files.push({ file: absolute, source });
-    const parsed = parseSource(absolute, source);
-    const specifiers = [];
-    const inspect = (node) => {
-      if ((ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) && node.moduleSpecifier) {
-        if (!ts.isImportDeclaration(node) || node.importClause?.isTypeOnly !== true) {
-          specifiers.push(node.moduleSpecifier.text);
-        }
-      } else if (
-        ts.isCallExpression(node) &&
-        (node.expression.kind === ts.SyntaxKind.ImportKeyword ||
-          (ts.isIdentifier(node.expression) && node.expression.text === "require")) &&
-        ts.isStringLiteralLikeNode(node.arguments[0])
-      ) {
-        specifiers.push(node.arguments[0].text);
-      }
-      node.forEachChild(inspect);
-    };
-    inspect(parsed);
     for (const specifier of specifiers) {
       let resolved = null;
       if (specifier.startsWith(".")) {
@@ -578,20 +604,44 @@ function ownerPackageForFile(file) {
   );
 }
 
-function inferCapabilities(pkg) {
-  const modules = reachablePackageModules(pkg);
-  const source = modules
-    .filter(({ file }) => {
-      const owner = ownerPackageForFile(file);
-      return !owner || !EFFECT_IMPLEMENTATION_PACKAGES.has(owner.manifest.name);
-    })
-    .map(({ source: moduleSource }) => moduleSource)
-    .join("\n");
-  const capabilities = inferUnitTransportCapabilities(source, {
+function effectModules(pkg) {
+  return reachablePackageModules(pkg).filter(({ file }) => {
+    const owner = ownerPackageForFile(file);
+    return !owner || !EFFECT_IMPLEMENTATION_PACKAGES.has(owner.manifest.name);
+  });
+}
+
+function transportCapabilities(source) {
+  return inferUnitTransportCapabilities(source, {
     hostCapabilities,
     serviceMethods,
     workspaceServiceSelectors,
   });
+}
+
+/** The reachable modules whose own source implies `capability`, for a mismatch report. */
+function evidenceFiles(pkg, capability) {
+  return effectModules(pkg)
+    .filter(({ source }) => {
+      const found = transportCapabilities(source);
+      found.delete("context.boundary"); // the inference baseline is not evidence
+      expandCapabilityDependencies(found, methodCapabilityDependencies);
+      return [...found].some((candidate) => toManifestCapability(candidate) === capability);
+    })
+    .map(({ file }) => path.relative(workspaceRoot, file));
+}
+
+function inferCapabilities(pkg) {
+  const source = effectModules(pkg)
+    .map(({ source: moduleSource }) => moduleSource)
+    .join("\n");
+  const capabilities = transportCapabilities(source);
+  // Mirror exact-state build admission (src/server/buildV2/authorityFold.ts):
+  // the inference baseline `context.boundary` belongs only to a mobile app
+  // package. Any other unit owes it only when an explicit host call depends on
+  // it, which the dependency expansion below adds.
+  if (pkg.manifest.vibestudio?.app?.target !== "react-native")
+    capabilities.delete("context.boundary");
 
   for (const capability of pkg.manifest.vibestudio?.app?.capabilities ?? []) {
     if (typeof capability === "string") capabilities.add(capability);
@@ -608,18 +658,20 @@ for (const pkg of [...packages.values()].sort((a, b) => a.file.localeCompare(b.f
   if (!isExecutableUnitPackage(pkg)) continue;
   const capabilities = inferCapabilities(pkg);
   const authority = pkg.manifest.vibestudio?.authority;
+  // The manifest's shape is owned by parseUnitAuthorityManifest: `provides` and
+  // `requests` are mandatory, `serviceRequests` optional, nothing else is known.
   const authorityKeys =
     authority && typeof authority === "object" && !Array.isArray(authority)
-      ? Object.keys(authority).sort()
+      ? Object.keys(authority)
       : [];
   if (
     !authority ||
-    authorityKeys.join(",") !== "provides,requests" ||
+    authorityKeys.some((key) => !["provides", "requests", "serviceRequests"].includes(key)) ||
     !Array.isArray(authority.requests) ||
     !Array.isArray(authority.provides)
   ) {
     console.error(
-      `${path.relative(root, pkg.file)} must explicitly contain exactly authority.provides and authority.requests`
+      `${path.relative(root, pkg.file)} must explicitly contain authority.provides and authority.requests (and optionally authority.serviceRequests)`
     );
     invalid = true;
     continue;
@@ -649,7 +701,9 @@ for (const pkg of [...packages.values()].sort((a, b) => a.file.localeCompare(b.f
     }
     if (JSON.stringify(request) !== JSON.stringify(normalized)) {
       console.error(
-        `${path.relative(root, pkg.file)} authority request ${index} has stale tier/evidence metadata`
+        `${path.relative(root, pkg.file)} authority request ${index} has stale tier/evidence metadata: ` +
+          `${request.capability} declares tier ${request.tier} / evidence ${request.evidence}, ` +
+          `reviewed ${normalized.tier} / ${normalized.evidence}`
       );
       invalid = true;
     }
@@ -664,7 +718,10 @@ for (const pkg of [...packages.values()].sort((a, b) => a.file.localeCompare(b.f
   // automatic capability revoker or approver.
   if (missing.length) {
     console.error(`${path.relative(root, pkg.file)} authority request mismatch`);
-    for (const capability of missing) console.error(`  missing explicit request: ${capability}`);
+    for (const capability of missing) {
+      console.error(`  missing explicit request: ${capability}`);
+      for (const file of evidenceFiles(pkg, capability)) console.error(`    implied by ${file}`);
+    }
     invalid = true;
   }
 }

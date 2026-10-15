@@ -1,0 +1,16 @@
+#!/bin/sh
+# Public native-package entrypoint. Desktop launchers keep using the Electron
+# executable; shell commands use the same bundled CLI as every other client.
+set -eu
+launcher_path=$(readlink -f "$0")
+app_directory=$(dirname "$(dirname "$launcher_path")")
+if [ "$#" -eq 0 ]; then
+  exec "$app_directory/vibestudio"
+fi
+case "$1" in
+  vibestudio://*) exec "$app_directory/vibestudio" "$@" ;;
+esac
+export VIBESTUDIO_APP_ROOT="$app_directory/resources/app.asar"
+export VIBESTUDIO_HOST_ARTIFACT_ROOT="$app_directory/resources/app.asar.unpacked/dist"
+export ELECTRON_RUN_AS_NODE=1
+exec "$app_directory/vibestudio" "$VIBESTUDIO_HOST_ARTIFACT_ROOT/cli/client.mjs" "$@"

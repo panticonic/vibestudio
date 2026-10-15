@@ -49,6 +49,7 @@ Authority principals: `host`, `user`
 | `auth.grantConnection` | Mint a short-lived connection token for a panel/app caller (requires the panel-hosting capability), granting it access to the gateway. |
 | `auth.getConnectionInfo` | Report how clients should reach this gateway: server/connect URLs, protocol, server identity, and current workspace. |
 | `auth.getMobileAppBootstrap` | Return the approved React Native app manifest to the authenticated mobile shell. |
+| `auth.grantAppPrincipal` | Activate the calling device's principal for an approved, running device-run app (the mobile app or the terminal browser) and mint a one-use connection grant for it, bound to the caller's transport endpoint. Returns the grant and the exact app artifacts the principal is bound to. |
 
 ## `authority`
 
@@ -589,6 +590,22 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `shellPresence.heartbeat` | Mark the calling shell active and return the current active-shell count. |
+
+## `terminalApps`
+
+Terminal apps in workspace PTYs and each person's terminal sessions
+
+Authority principals: `code`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `terminalApps.list` | The calling person's terminal sessions in this workspace (apps and shells), most recently active first. |
+| `terminalApps.launch` | Start a terminal app (`source` = terminal-apps/<name>) or, without a source, a shell, in a new terminal session sized cols×rows. A shell runs the person's login shell, or `command` with `args`, in `cwd` (inside its context's folder) and `contextId` (default: a fresh context for the session). Returns the session; attach to its shellSessionId. |
+| `terminalApps.resume` | Return a session; when its program is no longer running, start it again in the same session (an app keeps its state and context). |
+| `terminalApps.restart` | Stop a session's running program (if any) and start it again in a new PTY of the same session: same program, context and folder (an app keeps its state). |
+| `terminalApps.close` | End a terminal session for good: its program is terminated and the session is forgotten. |
+| `terminalApps.getSettings` | The calling person's terminal settings (prefix key, bell, mouse, …). |
+| `terminalApps.setSettings` | Replace the calling person's terminal settings (at most 4 KB of JSON). |
 
 ## `vcs`
 

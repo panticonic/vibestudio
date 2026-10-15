@@ -6,7 +6,14 @@ import { parseUnitAuthorityManifest } from "../packages/shared/src/authorityMani
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const workspaceRoot = developmentTemplateConfig.requireDevelopmentTemplateCheckout(root, "base");
-const executableRoots = new Set(["about", "apps", "extensions", "panels", "workers"]);
+const executableRoots = new Set([
+  "about",
+  "apps",
+  "extensions",
+  "panels",
+  "terminal-apps",
+  "workers",
+]);
 const failures = [];
 
 for (const rootName of executableRoots) {

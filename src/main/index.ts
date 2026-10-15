@@ -1,3 +1,4 @@
+import { workspaceLabel } from "../node/workspaceLabel.js";
 import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import { RpcBoundaryError } from "@vibestudio/rpc/errors";
@@ -35,6 +36,8 @@ import * as fs from "node:fs";
 import { randomUUID } from "node:crypto";
 process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = __dirname;
 import { EventService } from "@vibestudio/shared/eventsService";
+import type { SupervisionChange } from "@vibestudio/shared/events";
+import type { ApprovalResolvedEvent } from "@vibestudio/shared/governance/types";
 import { SHELL_SURFACE_KINDS, type ShellSurfaceDescriptor } from "@vibestudio/shared/shellSurface";
 // Silence Electron security warnings in dev; panels run in isolated webviews.
 process.env["ELECTRON_DISABLE_SECURITY_WARNINGS"] = "true";
@@ -224,10 +227,8 @@ import {
 } from "./services/remoteCredService.js";
 import type { ServerClient } from "./serverClient.js";
 import { resolveGatewayRouteUrl } from "@vibestudio/shared/appArtifacts";
-import type { ServerHostTargetChangeEvent } from "./serverEventBridge.js";
 import { createApprovalAttention, type ApprovalAttention } from "./approvalAttention.js";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
-import { filterBootstrapApprovalsForTarget } from "@vibestudio/shared/bootstrapApprovals";
 
 import {
   createHostCaller,
@@ -1365,76 +1366,59 @@ function resolveElectronAppArtifactRoute(route: string): string | null {
   }
 }
 
-function resolveElectronAppAvailablePayload(payload: unknown): unknown | null {
-  const record = recordFromUnknown(payload);
-  if (!record) return payload;
-  const target = record["target"];
-  if (target !== undefined && target !== "electron") return payload;
-  if (target !== "electron") {
-    log.warn("[apps] Ignoring app availability without an explicit Electron target");
+/** The Electron adoption a supervision change announces, or null if it announces none. */
+function electronAdoptionFromChange(change: SupervisionChange): AppAvailableEvent | null {
+  const app = change.app;
+  if (change.identity.kind !== "app" || app?.target !== "electron") return null;
+  if (change.change !== "adopted" && change.change !== "rolled-back") return null;
+  const route = app.artifactRoute;
+  if (!route || !isAppArtifactRoute(route) || !app.authority || !change.artifact.buildKey) {
+    log.warn("[apps] Ignoring Electron app adoption without an app artifact route and authority");
     return null;
   }
-  const artifactRoute =
-    typeof record["artifactRoute"] === "string" && isAppArtifactRoute(record["artifactRoute"])
-      ? record["artifactRoute"]
-      : null;
-  if (!artifactRoute) {
-    log.warn("[apps] Ignoring Electron app availability without an app artifact route");
-    return null;
-  }
-  const resolvedUrl = resolveElectronAppArtifactRoute(artifactRoute);
-  if (!resolvedUrl) return null;
-  const resolved: Record<string, unknown> = {
-    ...record,
-    url: resolvedUrl,
-    artifactRoute,
-  };
-  const artifacts = record["artifacts"];
-  if (Array.isArray(artifacts)) {
-    resolved["artifacts"] = artifacts.map((artifact) => {
-      const artifactRecord = recordFromUnknown(artifact);
-      if (!artifactRecord) return artifact;
-      const route = typeof artifactRecord["route"] === "string" ? artifactRecord["route"] : null;
-      if (!route) return artifactRecord;
-      const url = resolveElectronAppArtifactRoute(route);
-      return url ? { ...artifactRecord, url } : artifactRecord;
-    });
-  }
-  return resolved;
-}
-
-function electronHostTargetKeyFromPayload(payload: unknown): string | null {
-  const record = recordFromUnknown(payload);
-  if (!record) return null;
-  if (record["target"] !== undefined && record["target"] !== "electron") return null;
-  if (record["selectedForHost"] === false) return null;
-  const appId = record["appId"];
-  const source = record["source"];
-  const url = record["url"];
-  if (typeof appId !== "string" || typeof source !== "string" || typeof url !== "string") {
-    return null;
-  }
-  return [
-    appId,
-    source,
+  const url = resolveElectronAppArtifactRoute(route);
+  if (!url) return null;
+  return {
+    appId: change.identity.entityId,
+    source: change.source,
+    target: "electron",
     url,
-    typeof record["buildKey"] === "string" ? record["buildKey"] : "",
-    typeof record["effectiveVersion"] === "string" ? record["effectiveVersion"] : "",
-  ].join("\u001f");
+    artifactRoute: route,
+    capabilities: app.capabilities as AppCapability[],
+    effectiveVersion: change.artifact.effectiveVersion,
+    buildKey: change.artifact.buildKey,
+    executionDigest: change.artifact.executionDigest,
+    authority: app.authority,
+    adoptionPolicy: change.adoption ?? "immediate",
+  };
 }
 
-function shouldSyncElectronHostTargetForChange(change: ServerHostTargetChangeEvent): boolean {
-  const payload = recordFromUnknown(change.payload);
-  const target = payload?.["target"];
-  if (target !== undefined && target !== "electron") return false;
-
-  if (change.event === "apps:available") {
-    const launchKey = electronHostTargetKeyFromPayload(change.payload);
-    if (launchKey) return appliedElectronHostTargetKey !== launchKey;
-    return appliedElectronHostTargetKey === null;
+function shouldSyncElectronHostTargetForChange(
+  change: SupervisionChange,
+  adoption: AppAvailableEvent | null
+): boolean {
+  if (change.app && change.app.target !== "electron") return false;
+  // An update that asks first is queued by the orchestrator; syncing would
+  // activate and take it immediately, so only an immediate adoption moves the
+  // applied target.
+  if (adoption?.adoptionPolicy === "immediate") {
+    return appliedElectronHostTargetKey !== electronHostTargetKey(adoption);
   }
-
   return appliedElectronHostTargetKey === null;
+}
+
+/** Adopt Electron apps through the launch coordinator and retry host-target launch. */
+async function handleSupervisionChange(change: SupervisionChange): Promise<void> {
+  const adoption = electronAdoptionFromChange(change);
+  if (shouldSyncElectronHostTargetForChange(change, adoption)) {
+    electronHostTargetSyncLoop?.request();
+  }
+  if (!adoption) return;
+  if (adoption.adoptionPolicy === "prompt") {
+    await applicationWindow.appOrchestrator?.applyAppAvailable(adoption);
+  } else {
+    await applyReadyElectronLaunchEvent(adoption);
+  }
 }
 
 async function drainPendingReadyElectronLaunch(): Promise<void> {
@@ -1578,14 +1562,19 @@ function startElectronHostTargetLaunchLoop(serverClient: Pick<ServerClient, "cal
   electronHostTargetSyncLoop.start();
 }
 
-function retryElectronHostTargetLaunchAfterApprovalChange(pending: PendingApproval[]): void {
+/**
+ * A launch that stopped for a review continues when that review is accepted and
+ * stands down when it is declined: reopening a declined review is the person's
+ * next explicit open, not this loop's next turn.
+ */
+function continueElectronHostTargetLaunchAfterReview(resolved: ApprovalResolvedEvent): void {
   if (!electronHostLaunchBlockedByApproval) return;
-  if (filterBootstrapApprovalsForTarget(pending, "electron").length > 0) return;
-  electronHostTargetSyncLoop?.request();
-}
-
-function retryElectronHostTargetLaunchAfterAppEvent(change: ServerHostTargetChangeEvent): void {
-  if (!shouldSyncElectronHostTargetForChange(change)) return;
+  if (resolved.approvalKind !== "unit-install-review") return;
+  if (!resolved.granted) {
+    electronHostLaunchBlockedByApproval = false;
+    log.info("[apps] The Electron host target review was declined; the app was not started");
+    return;
+  }
   electronHostTargetSyncLoop?.request();
 }
 
@@ -2262,12 +2251,7 @@ app.on("ready", async () => {
             return [
               runtime.serverClient.call("shellApproval", "listPending", []).then((pending) => ({
                 workspaceId: member.workspaceId,
-                workspaceLabel:
-                  member.privateRole === "personal"
-                    ? "Personal"
-                    : member.privateRole === "system"
-                      ? "System"
-                      : member.name,
+                workspaceLabel: workspaceLabel(member),
                 pending: pending as PendingApproval[],
               })),
             ];
@@ -2348,7 +2332,7 @@ app.on("ready", async () => {
           onApprovalPendingChanged: (pending) =>
             approvalAttention?.handlePendingChanged({
               workspaceId: id,
-              workspaceLabel: membership.privateRole === "personal" ? "Personal" : membership.name,
+              workspaceLabel: workspaceLabel(membership),
               pending,
             }),
         },
@@ -2410,20 +2394,18 @@ app.on("ready", async () => {
       typeof import("./workspaceRuntimeController.js").createDesktopWorkspaceRuntime
     >[0]["events"]
   > = {
-    applyAppAvailable: applyReadyElectronLaunchEvent,
     onAttentionRequired: handleAttentionRequired,
     onNotificationAction: (id, actionId) =>
       releaseUpdateController?.handleNotificationAction(id, actionId),
-    onAppHostTargetChanged: retryElectronHostTargetLaunchAfterAppEvent,
-    resolveAppAvailableEvent: resolveElectronAppAvailablePayload,
+    onSupervisionChanged: handleSupervisionChange,
     onApprovalPendingChanged: (pending) => {
       approvalAttention?.handlePendingChanged({
         workspaceId: assertPresent(serverSession).workspaceId,
         workspaceLabel: "System",
         pending,
       });
-      retryElectronHostTargetLaunchAfterApprovalChange(pending);
     },
+    onApprovalResolved: continueElectronHostTargetLaunchAfterReview,
   };
 
   try {

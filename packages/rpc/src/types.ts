@@ -633,8 +633,18 @@ export interface RpcClientConfig {
   authorityAcquisition?: "wait" | "return";
 }
 
+/** Creator-owned transformation of a borrowed client. A view never acquires or
+ * retires a transport; its original owner retains schema and operation admission. */
+export interface RpcClientViewOptions {
+  mapOptions(options?: RpcCallOptions | RpcStreamOptions): RpcCallOptions & RpcStreamOptions;
+  enter?<T>(operation: () => T): T;
+}
+
 export interface RpcClient extends RpcCaller {
   readonly selfId: string;
+  /** Portable across separately bundled consumers: only the creator constructs
+   * transport views; consumers never recover the private wire dispatcher. */
+  createView(options: RpcClientViewOptions): RpcClient;
   expose<TArgs extends unknown[], TReturn>(
     method: string,
     handler: RpcContextHandler<TArgs, TReturn>,

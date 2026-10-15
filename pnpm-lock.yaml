@@ -778,13 +778,13 @@ importers:
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../workspace-contracts
       sql.js:
         specifier: ^1.14.1
         version: 1.14.1
     devDependencies:
-      '@vibestudio/workspace-contracts':
-        specifier: workspace:*
-        version: link:../workspace-contracts
       zod:
         specifier: ^3.25.76
         version: 3.25.76

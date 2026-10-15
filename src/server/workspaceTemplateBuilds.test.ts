@@ -94,6 +94,7 @@ describe("prepareWorkspaceRuntimeBuilds", () => {
       progress
     );
     expect(progress.mock.calls).toEqual([
+      [{ type: "planned", count: 1 }],
       [{ type: "started", source: "workers/first" }],
       [
         expect.objectContaining({
@@ -102,7 +103,7 @@ describe("prepareWorkspaceRuntimeBuilds", () => {
         }),
       ],
     ]);
-    expect(progress.mock.calls[1]?.[0].durationMs).toEqual(expect.any(Number));
+    expect(progress.mock.calls[2]?.[0].durationMs).toEqual(expect.any(Number));
   });
 
   it("reports whether a runtime failed during build or publication", async () => {
@@ -120,6 +121,7 @@ describe("prepareWorkspaceRuntimeBuilds", () => {
       )
     ).rejects.toBe(buildError);
     expect(buildProgress.mock.calls.map(([event]) => event)).toEqual([
+      { type: "planned", count: 1 },
       { type: "started", source: "workers/build-failure" },
       {
         type: "failed",
@@ -143,6 +145,7 @@ describe("prepareWorkspaceRuntimeBuilds", () => {
       )
     ).rejects.toBe(publishError);
     expect(publishProgress.mock.calls.map(([event]) => event)).toEqual([
+      { type: "planned", count: 1 },
       { type: "started", source: "workers/publish-failure" },
       {
         type: "failed",

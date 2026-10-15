@@ -4,10 +4,36 @@ name: Publish verified headless server to npm
 # run that passed the release gate. A registry failure can therefore resume
 # without rebuilding any desktop or server artifact.
 on:
+  workflow_call:
+    inputs:
+      release-tag:
+        description: Existing draft or public GitHub release tag
+        type: string
+        required: true
+      release-id:
+        description: Exact numeric GitHub release ID
+        type: string
+        required: true
+      source-sha:
+        description: Full release source commit
+        type: string
+        required: true
+      candidate-run-id:
+        description: Successful protected-main CI run that produced the npm candidate
+        type: string
+        required: true
+    secrets:
+      NPM_TOKEN:
+        description: Granular npm package publication token
+        required: true
   workflow_dispatch:
     inputs:
       release-tag:
-        description: Existing public GitHub release tag (for example v0.2.0)
+        description: Existing draft or public GitHub release tag (for example v0.2.0)
+        type: string
+        required: true
+      release-id:
+        description: Exact numeric GitHub release ID
         type: string
         required: true
       source-sha:
@@ -22,7 +48,10 @@ on:
 permissions: {}
 
 concurrency:
-  group: npm-server-publish-${{ inputs.release-tag }}
+  # npm versions are immutable, but dist-tags are package-wide mutable pointers.
+  # Serialize every release of this package so an older delayed publication
+  # cannot race a newer release while reconciling `latest`.
+  group: npm-server-publish-vibestudio-server
   cancel-in-progress: false
 
 jobs:
@@ -38,6 +67,7 @@ jobs:
       npm-digest: ${{ steps.candidate.outputs.npm-digest }}
     env:
       RELEASE_TAG: ${{ inputs.release-tag }}
+      RELEASE_ID: ${{ inputs.release-id }}
       SOURCE_SHA: ${{ inputs.source-sha }}
       CANDIDATE_RUN_ID: ${{ inputs.candidate-run-id }}
     steps:
@@ -53,12 +83,13 @@ jobs:
         run: |
           test "$WORKFLOW_REF" = refs/heads/main
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$RELEASE_ID" =~ ^[1-9][0-9]*$ ]]
           [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
           [[ "$CANDIDATE_RUN_ID" =~ ^[1-9][0-9]*$ ]]
 
-          release_json="$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,tagName)"
-          test "$(jq -r '.tagName' <<<"$release_json")" = "$RELEASE_TAG"
-          test "$(jq -r '.isDraft' <<<"$release_json")" = false
+          release_json="$(gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID")"
+          test "$(jq -r '.tag_name' <<<"$release_json")" = "$RELEASE_TAG"
+          test "$(jq -r '.prerelease' <<<"$release_json")" = false
 
           ref_json="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$RELEASE_TAG")"
           object_type="$(jq -r '.object.type' <<<"$ref_json")"

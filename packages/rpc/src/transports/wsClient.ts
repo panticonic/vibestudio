@@ -524,9 +524,9 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
     try {
       await config.prepareConnection?.(attemptAdmissionController.signal);
       attemptAdmissionController.signal.throwIfAborted();
-      token = config.prepareConnection
-        ? await config.adapter.getAuthToken()
-        : (authToken ?? (await config.adapter.getAuthToken()));
+      // Credential lifetime belongs to its issuer. In particular, principal
+      // admission grants are one-use and cannot be cached across connections.
+      token = await config.adapter.getAuthToken(attemptAdmissionController.signal);
       authToken = token;
     } catch (error) {
       if (admissionAbortController === attemptAdmissionController) admissionAbortController = null;

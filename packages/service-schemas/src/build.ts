@@ -112,7 +112,7 @@ export type BuildBundleResult = z.infer<typeof buildBundleResultSchema>;
 export const buildArtifactSchema = z
   .object({
     path: z.string(),
-    role: z.enum(["primary", "asset", "html", "css", "shared-style", "map", "wasm"]),
+    role: z.enum(["primary", "asset", "html", "css", "shared-style", "map"]),
     contentType: z.string(),
     encoding: z.enum(["utf8", "base64"]),
     byteLength: z.number().int().nonnegative().optional(),
@@ -224,6 +224,17 @@ export const buildMetadataDetailsSchema = z.discriminatedUnion("kind", [
         .object({ mode: z.literal("child-process"), passed: z.boolean() })
         .strict()
         .optional(),
+    })
+    .strict(),
+  z
+    .object({
+      /** A terminal app: a panel hosted by terminals, built as a Node program. */
+      kind: z.literal("terminal"),
+      runtimeDepsKey: z.string().nullable(),
+      externalDeps: z.record(z.string()),
+      dependencyOverrides: z.record(z.string()),
+      dependencyPatches: z.array(extensionDependencyPatchSchema),
+      classifiedDeps: z.array(extensionClassifiedDependencySchema),
     })
     .strict(),
   z

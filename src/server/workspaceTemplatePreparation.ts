@@ -62,6 +62,7 @@ import { runWithOwnedCleanup, runOwnedCleanupSteps } from "../../scripts/lib/own
 import { forEachOwnedConcurrent } from "../../scripts/lib/owned-concurrency.mjs";
 import {
   publishPreparedWorkspaceRelease,
+  validateExistingPreparedWorkspaceRelease,
   workspaceReleaseIdentity,
   type WorkspaceReleaseOperation,
   type WorkspaceReleaseIdentity,
@@ -72,6 +73,14 @@ import { prepareCachedWorkspaceRelease } from "./preparedWorkspaceReleaseCache.j
 import { acquirePreparedWorkspaceSources } from "./preparedWorkspaceSourceCache.js";
 import { readHostPreparationRecipe } from "../../scripts/host-build-generations.mjs";
 import { resolveRequiredHostArtifactRoot } from "./appRoot.js";
+
+/** Source supervisors need immutable source only; packagers also seal runtimes. */
+export type WorkspacePreparationScope = "sources" | "release";
+
+/** Facts emitted only after the corresponding owned work completes. */
+export type WorkspacePreparationProgress =
+  | { phase: "sources"; done: number; total: number; item: string }
+  | { phase: "runtimes"; done: number; total: number | null; item: string };
 
 const roles = ["base", "personal", "system"] as const;
 type WorkspaceRole = (typeof roles)[number];
@@ -89,7 +98,10 @@ interface PreparationInput {
   output: string;
   sourceOutput?: string;
   scratch: string;
+  /** Defaults to the complete release; source supervisors request sources explicitly. */
+  scope?: WorkspacePreparationScope;
   signal?: AbortSignal;
+  onProgress?: (progress: WorkspacePreparationProgress) => void;
   onSourcesPrepared?: (root: string) => void | Promise<void>;
 }
 
@@ -292,17 +304,50 @@ export async function prepareWorkspaceTemplates(input: PreparationInput): Promis
           const prepared = roles.map((role) => {
             const directory = preparedWorkspaceTemplatePath(preparedCacheRoot, pins[role], "use");
             return {
+              role,
               record: readPreparedWorkspaceTemplate(directory, pins[role], "use"),
               blobsDir: path.join(directory, "blobs"),
             };
           });
-          const sourceRoot = input.sourceOutput ?? path.join(input.scratch, "source-ready-root");
-          if (path.resolve(sourceRoot) === path.resolve(input.output))
+          const sourceRoot =
+            input.scope === "sources"
+              ? input.output
+              : (input.sourceOutput ?? path.join(input.scratch, "source-ready-root"));
+          if (input.scope !== "sources" && path.resolve(sourceRoot) === path.resolve(input.output))
             throw new Error("Source-ready resources must be separate from runtime publication");
-          await projectPreparedRoleRecords(prepared, sourceRoot, operation);
+          let completedSources = 0;
+          await projectPreparedRoleRecords(prepared, sourceRoot, operation, (role) => {
+            input.onProgress?.({
+              phase: "sources",
+              done: ++completedSources,
+              total: roles.length,
+              item: role,
+            });
+          });
           input.signal?.throwIfAborted();
           await input.onSourcesPrepared?.(sourceRoot);
         };
+        // Both scopes consume the same immutable source phase. Only complete
+        // publication admits the exhaustive runtime continuation and its cache.
+        if (input.scope === "sources") {
+          if (
+            await validateExistingPreparedWorkspaceRelease(
+              {
+                appRoot: input.appRoot,
+                output: input.output,
+                templates: pins,
+                layers,
+              },
+              operation.identity
+            )
+          ) {
+            input.signal?.throwIfAborted();
+            await input.onSourcesPrepared?.(input.output);
+            return;
+          }
+          await prepareSources();
+          return;
+        }
         await prepareCachedWorkspaceRelease(
           {
             appRoot: input.appRoot,
@@ -366,14 +411,15 @@ export async function prepareWorkspaceTemplates(input: PreparationInput): Promis
 }
 
 async function projectPreparedRoleRecords(
-  prepared: readonly Pick<PreparedRole, "record" | "blobsDir">[],
+  prepared: readonly Pick<PreparedRole, "role" | "record" | "blobsDir">[],
   output: string,
-  operation?: WorkspaceReleaseOperation
+  operation?: WorkspaceReleaseOperation,
+  onProjected?: (role: WorkspaceRole) => void
 ): Promise<void> {
   const fingerprint = operation
     ? captureRootDependencyFingerprint(operation.rootFingerprint)
     : undefined;
-  await forEachOwnedConcurrent(prepared, 3, async ({ record, blobsDir }) => {
+  await forEachOwnedConcurrent(prepared, 3, async ({ role, record, blobsDir }) => {
     const directory = preparedWorkspaceTemplatePath(output, record.pin, "use");
     await forEachOwnedConcurrent(record.blobs, 16, async (blob) => {
       await linkReconstructableBlobFile(
@@ -400,6 +446,7 @@ async function projectPreparedRoleRecords(
     const recordPath = path.join(directory, "template.json");
     fs.writeFileSync(`${recordPath}.publishing`, JSON.stringify(published));
     fs.renameSync(`${recordPath}.publishing`, recordPath);
+    onProjected?.(role);
   });
 }
 
@@ -547,6 +594,9 @@ async function produceWorkspaceTemplates(
     appNodeModules: getExistingAppNodeModulesRoots(input.appRoot),
   });
   const releaseBuilds: PreparedWorkspaceReleaseBuild[] = [];
+  let plannedRoles = 0;
+  let plannedRuntimes = 0;
+  let completedRuntimes = 0;
   const roleRetirements: Array<() => Promise<void>> = [];
   let operationFailure: unknown;
   let operationFailed = false;
@@ -645,12 +695,21 @@ async function produceWorkspaceTemplates(
                   ),
                 input.signal,
                 (event) => {
-                  if (event.type === "started") {
+                  if (event.type === "planned") {
+                    plannedRoles += 1;
+                    plannedRuntimes += event.count;
+                  } else if (event.type === "started") {
                     console.log(`[workspace-release] Runtime ${role}/${event.source}: queued`);
                   } else if (event.type === "completed") {
                     console.log(
                       `[workspace-release] Runtime ${role}/${event.source}: completed in ${Math.round(event.durationMs)}ms`
                     );
+                    input.onProgress?.({
+                      phase: "runtimes",
+                      done: ++completedRuntimes,
+                      total: plannedRoles === roles.length ? plannedRuntimes : null,
+                      item: `${role}/${event.source}`,
+                    });
                   } else {
                     const detail =
                       event.error instanceof Error ? event.error.message : String(event.error);

@@ -14,7 +14,7 @@ function fixture() {
     stderr: null,
     pid: 123,
   });
-  const channel = new ProcessSessionChannel(proc as ProcessAdapter, "launch-token");
+  const channel = new ProcessSessionChannel(proc as ProcessAdapter);
   return { proc, channel };
 }
 
@@ -70,7 +70,6 @@ describe("process RPC session retirement", () => {
       "message",
       JSON.stringify({
         type: "ws:auth",
-        token: "launch-token",
         contractVersion: RPC_CONTRACT_VERSION,
       })
     );

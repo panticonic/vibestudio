@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TypeCheckService } from "@vibestudio/typecheck";
+import { HOST_AUTHORITY_METHODS } from "@vibestudio/shared/authority/hostAuthorityCatalog.generated";
 import { authorityDiagnosticsForProgram } from "./authorityFold.js";
 import { createExactWorkspaceAuthorityEnvironment } from "./userlandAuthority.js";
 
@@ -441,33 +442,60 @@ describe("userland authority fold", () => {
     expect(diagnostics).toEqual([]);
   });
 
-  it("still charges a library for an explicit context-bearing host call", async () => {
-    const { root, project } = programFor(
-      `export const method = "workspace-state.slot.commitPreparedNavigation";`
-    );
+  it.each(["terminal", "electron", "react-native"] as const)(
+    "keeps the automatic context baseline only for the mobile host contract (%s)",
+    async (target) => {
+      const { root, project } = programFor("export const entry = true;");
+      const diagnostics = await authorityDiagnosticsForProgram({
+        project,
+        sourceRoot: root,
+        unitRelativePath: ".",
+        units: [{ name: "consumer", relativePath: "." }],
+        manifest: { app: { target }, authority: { requests: [], provides: [] } },
+      });
+      expect(diagnostics).toEqual(
+        target === "react-native"
+          ? [
+              expect.objectContaining({
+                message: expect.stringContaining("capability 'context.boundary'"),
+              }),
+            ]
+          : []
+      );
+    }
+  );
 
-    const diagnostics = await authorityDiagnosticsForProgram({
-      project,
-      sourceRoot: root,
-      unitRelativePath: ".",
-      units: [{ name: "@workspace/library", relativePath: "." }],
-      manifest: {
-        authority: {
-          requests: [],
-          serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
-          provides: [],
+  it.each([undefined, "terminal", "electron", "react-native"] as const)(
+    "charges an explicit context-bearing call independently of the host contract (%s)",
+    async (target) => {
+      const { root, project } = programFor(
+        `export const method = "workspace-state.slot.commitPreparedNavigation";`
+      );
+
+      const diagnostics = await authorityDiagnosticsForProgram({
+        project,
+        sourceRoot: root,
+        unitRelativePath: ".",
+        units: [{ name: "@workspace/library", relativePath: "." }],
+        manifest: {
+          ...(target ? { app: { target } } : {}),
+          authority: {
+            requests: [],
+            serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],
+            provides: [],
+          },
         },
-      },
-    });
+      });
 
-    expect(diagnostics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          message: expect.stringContaining("capability 'context.boundary'"),
-        }),
-      ])
-    );
-  });
+      expect(diagnostics).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            message: expect.stringContaining("capability 'context.boundary'"),
+          }),
+        ])
+      );
+    }
+  );
 
   it("does not treat trusted runtime dispatch plumbing as consumer service intent", async () => {
     const { root, project } = programFor("export const entry = true;");
@@ -788,5 +816,32 @@ describe("userland authority fold", () => {
       environment,
     });
     expect(diagnostics).toEqual([]);
+  });
+
+  it("admits an open host method without a manifest request but requires one for a gated method", async () => {
+    // credentials.configureClient is a host-owned protected-input prompt: the
+    // reviewed tier is open, which waives the unit request and grant. Install
+    // code that calls it must build with no authority.requests entry.
+    expect(HOST_AUTHORITY_METHODS["credentials.configureClient"].tier.tier).toBe("open");
+    const gated = (
+      Object.entries(HOST_AUTHORITY_METHODS) as Array<
+        [string, { tier: { tier: string }; capability?: string }]
+      >
+    ).find(([, row]) => row.tier.tier === "gated" && row.capability);
+    expect(gated).toBeDefined();
+    const diagnose = async (method: string) => {
+      const { root, project } = programFor(`export const method = ${JSON.stringify(method)};`);
+      return authorityDiagnosticsForProgram({
+        project,
+        sourceRoot: root,
+        unitRelativePath: ".",
+        units: [{ name: "consumer", relativePath: "." }],
+        manifest: { authority: { requests: [], provides: [] } },
+      });
+    };
+    expect(await diagnose("credentials.configureClient")).toEqual([]);
+    expect(await diagnose(gated![0])).toEqual([
+      expect.objectContaining({ message: expect.stringContaining(gated![1].capability!) }),
+    ]);
   });
 });

@@ -1,8 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  DurableObservationStoppedError,
-  observeDurableProjection,
-} from "./durableObservation.js";
+import { rpcCallerAbortedError } from "@vibestudio/rpc";
+import { DurableObservationStoppedError, observeDurableProjection } from "./durableObservation.js";
 
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
@@ -15,6 +13,93 @@ function deferred<T>() {
 }
 
 describe("observeDurableProjection", () => {
+  it.each(["admission", "read"] as const)(
+    "uses the exact retiring owner's reason through pending %s",
+    async (phase) => {
+      const admission = deferred<void>();
+      const read = deferred<string>();
+      const reading = deferred<void>();
+      const reason = new Error("browser quit");
+      const observation = observeDurableProjection({
+        listen: () => () => {},
+        admit: () => admission.promise,
+        read: () => {
+          reading.resolve();
+          return read.promise;
+        },
+        apply: vi.fn(),
+        error: vi.fn(),
+      });
+      const ready = expect(observation.ready).rejects.toBe(reason);
+      if (phase === "read") {
+        admission.resolve();
+        await reading.promise;
+      }
+      const stopped = observation.stop(reason);
+      admission.resolve();
+      read.resolve("late snapshot");
+      await stopped;
+      await ready;
+      await expect(observation.refresh()).rejects.toBe(reason);
+    }
+  );
+
+  it("joins an owned read cancellation without misclassifying it as a cleanup failure", async () => {
+    const read = deferred<string>();
+    const reading = deferred<void>();
+    const reason = new Error("browser quit");
+    const error = vi.fn();
+    const observation = observeDurableProjection({
+      listen: () => () => {},
+      read: () => {
+        reading.resolve();
+        return read.promise;
+      },
+      apply: vi.fn(),
+      error,
+      leave: async () => {
+        throw rpcCallerAbortedError(reason);
+      },
+    });
+    await reading.promise;
+    const ready = expect(observation.ready).rejects.toBe(reason);
+    const stopped = observation.stop(reason);
+    read.reject(rpcCallerAbortedError(reason));
+    await stopped;
+    await ready;
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("retains independent read, leave and listener failures after authoritative stop", async () => {
+    const read = deferred<string>();
+    const reading = deferred<void>();
+    const reason = new Error("browser quit");
+    const readFailure = new Error("snapshot failed independently");
+    const leaveFailure = new Error("remote leave failed");
+    const localFailure = new Error("local listener failed to retire");
+    const observation = observeDurableProjection({
+      listen: () => () => {
+        throw localFailure;
+      },
+      read: () => {
+        reading.resolve();
+        return read.promise;
+      },
+      apply: vi.fn(),
+      error: vi.fn(),
+      leave: async () => {
+        throw leaveFailure;
+      },
+    });
+    await reading.promise;
+    const ready = expect(observation.ready).rejects.toBe(reason);
+    const rejected = expect(observation.stop(reason)).rejects.toMatchObject({
+      errors: [localFailure, readFailure, leaveFailure],
+    });
+    read.reject(readFailure);
+    await rejected;
+    await ready;
+  });
   it("admits before reading and discards a read superseded by an event", async () => {
     const admitted = deferred<void>();
     const first = deferred<string>();
@@ -100,7 +185,7 @@ describe("observeDurableProjection", () => {
     });
     await Promise.resolve();
     const stoppedReady = expect(observation.ready).rejects.toBeInstanceOf(
-      DurableObservationStoppedError,
+      DurableObservationStoppedError
     );
     const stopping = observation.stop();
     let retired = false;
@@ -150,7 +235,7 @@ describe("observeDurableProjection", () => {
     const second = observation.stop();
     expect(first).toBe(second);
     const stoppedReady = expect(observation.ready).rejects.toBeInstanceOf(
-      DurableObservationStoppedError,
+      DurableObservationStoppedError
     );
     admitted.resolve();
     await first;

@@ -1,7 +1,14 @@
 import { residentChannelRpcMethods } from "@vibestudio/shared/residentSession";
+import { APPROVAL_WAIT_CANCELLED_CODE } from "@vibestudio/shared/approvals";
 import { schemaRpcClient } from "@vibestudio/rpc/internal";
 import { mainRpcMethod, mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
-import { wireClientFor, registerRpcWireClient, createRpcPeer } from "@vibestudio/rpc/internal";
+import {
+  wireClientFor,
+  registerRpcWireClient,
+  createRpcPeer,
+  createRpcWireView,
+  ownRpcOperation,
+} from "@vibestudio/rpc/internal";
 import { type RpcWireClient } from "@vibestudio/rpc/internal";
 import {
   DurableObjectBase,
@@ -821,9 +828,19 @@ export class EvalDO extends DurableObjectBase {
     const ownerId = base.selfId;
     const ownerGeneration = this.kernelIncarnationId;
     const mergeOptions = <T extends RpcCallOptions | RpcStreamOptions>(value?: T): T => {
+      // The execution's cancellation and the caller's own both end the call: a
+      // caller that passes a signal (to stop a watch, say) must not lose it to
+      // the execution's.
+      const executionSignal =
+        signal && (cleanupPhase?.active !== true || cleanupPhase.revoked) ? signal : undefined;
+      const callerSignal = value?.signal ?? undefined;
+      const combinedSignal =
+        callerSignal && executionSignal
+          ? AbortSignal.any([callerSignal, executionSignal])
+          : (callerSignal ?? executionSignal);
       const options = {
         ...(value ?? {}),
-        ...(signal && (cleanupPhase?.active !== true || cleanupPhase.revoked) ? { signal } : {}),
+        ...(combinedSignal ? { signal: combinedSignal } : {}),
         ...(readOnly ? { readOnly: true } : {}),
       };
       if (causalParent) options.causalParent = causalParent;
@@ -939,6 +956,8 @@ export class EvalDO extends DurableObjectBase {
 
     const rpc: RpcWireClient = registerRpcWireClient(
       Object.freeze({
+        createView: (options: import("@vibestudio/rpc").RpcClientViewOptions) =>
+          createRpcWireView(rpc, options),
         selfId: base.selfId,
         expose: base.expose.bind(base),
         exposeAll: base.exposeAll.bind(base),
@@ -960,7 +979,8 @@ export class EvalDO extends DurableObjectBase {
         ready: base.ready.bind(base),
         onStatusChange: base.onStatusChange.bind(base),
         onRecovery: base.onRecovery.bind(base),
-      })
+      }),
+      (operation) => ownRpcOperation(base, operation)
     );
     const callMainService = (service: string, method: string, args: unknown[]) =>
       rpc.call("main", `${service}.${method}`, args);
@@ -1803,13 +1823,14 @@ export class EvalDO extends DurableObjectBase {
       const cancelled = currentStatus === "cancelling" || currentStatus === "cancelled";
       const errorCode = errorCodeInChain(err);
       const approvalRouteLost = errorCode === "EAPPROVALROUTELOST";
+      const approvalWaitCancelled = errorCode === APPROVAL_WAIT_CANCELLED_CODE;
       const executionAdmissionLost =
         errorCode === "EVALUATED_EXECUTION_SESSION_NOT_ACTIVE" ||
         errorCode === "EVALUATED_EXECUTION_SESSION_STALE" ||
         errorCode === "INVOCATION_AUTHORITY_PARENT_NOT_ACTIVE";
       if (approvalRouteLost) {
         console.warn(`[EvalDO] approval route lost for run ${runId}`);
-      } else if (!deadlineExceeded && !cancelled) {
+      } else if (!deadlineExceeded && !cancelled && !approvalWaitCancelled) {
         const log = deadlineFired ? console.warn : console.error;
         log(
           `[EvalDO] run ${runId} failed`,
@@ -1832,43 +1853,52 @@ export class EvalDO extends DurableObjectBase {
             failureCode: "eval_deadline_exceeded",
             kernel: kernel ?? this.kernelStatusForRun(),
           }
-        : {
-            success: false,
-            console: "",
-            error: serializeRpcFailure(
-              approvalRouteLost
-                ? new Error(
-                    "Attached-host approval route was lost; restart this eval on a live attached run",
-                    { cause: err }
-                  )
-                : err
-            ),
-            failureKind: "infrastructure",
-            failureCode: approvalRouteLost
-              ? "approval-route-lost"
-              : executionAdmissionLost
-                ? evalLifecycleFailureCodes.executionAdmissionLost
-                : "eval_host_failed",
-            ...(executionAdmissionLost
-              ? {
-                  error: {
-                    ...serializeRpcFailure(err),
-                    errorData: {
-                      retry: {
-                        policy: "reobserve",
-                        commandIdPolicy: "use-new-after-reobserve",
-                      },
-                      recovery: {
-                        action: "reobserve",
-                        instruction:
-                          "Inspect the effects and current state reached by this eval, then issue a new eval for only the unfinished work; the runtime creates a fresh execution admission automatically.",
+        : approvalWaitCancelled
+          ? {
+              success: false,
+              console: "",
+              error: serializeRpcFailure(err),
+              failureKind: "cancelled",
+              failureCode: "eval_cancelled",
+              kernel: kernel ?? this.kernelStatusForRun(),
+            }
+          : {
+              success: false,
+              console: "",
+              error: serializeRpcFailure(
+                approvalRouteLost
+                  ? new Error(
+                      "Attached-host approval route was lost; restart this eval on a live attached run",
+                      { cause: err }
+                    )
+                  : err
+              ),
+              failureKind: "infrastructure",
+              failureCode: approvalRouteLost
+                ? "approval-route-lost"
+                : executionAdmissionLost
+                  ? evalLifecycleFailureCodes.executionAdmissionLost
+                  : "eval_host_failed",
+              ...(executionAdmissionLost
+                ? {
+                    error: {
+                      ...serializeRpcFailure(err),
+                      errorData: {
+                        retry: {
+                          policy: "reobserve",
+                          commandIdPolicy: "use-new-after-reobserve",
+                        },
+                        recovery: {
+                          action: "reobserve",
+                          instruction:
+                            "Inspect the effects and current state reached by this eval, then issue a new eval for only the unfinished work; the runtime creates a fresh execution admission automatically.",
+                        },
                       },
                     },
-                  },
-                }
-              : {}),
-            kernel: kernel ?? this.kernelStatusForRun(),
-          };
+                  }
+                : {}),
+              kernel: kernel ?? this.kernelStatusForRun(),
+            };
     } finally {
       if (timer) clearTimeout(timer);
       this.runPendingAuthorityRequests.delete(runId);
@@ -3974,8 +4004,10 @@ export class EvalDO extends DurableObjectBase {
     const emit = (targetId: string, event: string, payload: unknown, options?: RpcCallOptions) =>
       this.requireActiveEvalExecution().rpc.emit(targetId, event, payload, options);
 
-    const wire = registerRpcWireClient(
+    const wire: RpcWireClient & ResidentSessionRegistrar = registerRpcWireClient(
       Object.freeze({
+        createView: (options: import("@vibestudio/rpc").RpcClientViewOptions) =>
+          createRpcWireView(wire, options),
         selfId: this.rpc.selfId,
         registerResidentSession: (
           channelId: string,
@@ -4064,7 +4096,8 @@ export class EvalDO extends DurableObjectBase {
         ready: this.rpc.ready.bind(this.rpc),
         onStatusChange: this.rpc.onStatusChange.bind(this.rpc),
         onRecovery: this.rpc.onRecovery.bind(this.rpc),
-      })
+      }),
+      async (operation) => ownRpcOperation(this.requireActiveEvalExecution().rpc, operation)
     );
     const rpc = Object.assign(schemaRpcClient(wire), {
       registerResidentSession: wire.registerResidentSession,

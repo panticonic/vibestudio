@@ -18,9 +18,11 @@ import { RELEASES_FEED, macReleaseDownload } from "@vibestudio/shared/releaseDow
  *            downloads the release and installs it on quit.
  *   macOS    The same, for a signed build whose Homebrew cask declares
  *            `auto_updates true` and therefore defers to this updater.
- *   Linux    deb/rpm/pacman belong to the system package manager, which is the
- *            right owner and the wrong thing to drive silently from a GUI. We
- *            run the upgrade with explicit authorization, or offer the command.
+ *   Linux    apt and dnf repositories belong to the system package manager,
+ *            which is the right owner and the wrong thing to drive silently
+ *            from a GUI. We run the upgrade with explicit authorization, or
+ *            offer the command. Arch is a direct release asset until it has a
+ *            repository, so those installations receive an announcement only.
  */
 const STARTUP_DELAY_MS = 30_000;
 const CHECK_INTERVAL_MS = 6 * 60 * 60_000;
@@ -43,8 +45,8 @@ export interface LinuxUpgrade {
 /**
  * How this installation can be moved to a newer release.
  *
- * `command` is whatever package manager owns this copy — apt/dnf/pacman as
- * root through polkit, or Homebrew as the user. `announce-only` is a packaged
+ * `command` is the configured package repository that owns this copy — apt or
+ * dnf as root through polkit, or Homebrew as the user. `announce-only` is a packaged
  * build whose upgrade we cannot drive: saying a release exists is still worth
  * more than silence, which is what the retired npm updater left every
  * non-npm install with.
@@ -137,10 +139,10 @@ export function linuxUpgradeCommandFor(owner: LinuxPackageOwner | null): LinuxUp
         argv: ["dnf", "upgrade", "--refresh", "-y", owner.name],
       };
     case "pacman":
-      return {
-        display: `sudo pacman -Syu ${name}`,
-        argv: ["pacman", "-Syu", "--noconfirm", owner.name],
-      };
+      // The release carries a native Arch package, but Vibestudio does not yet
+      // publish a pacman repository. Owning the installed files does not imply
+      // that `pacman -Syu` has a remote package to resolve.
+      return null;
     default:
       return null;
   }

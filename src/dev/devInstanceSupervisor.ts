@@ -42,7 +42,12 @@ function waitForExit(child: ChildProcess): Promise<number> {
   });
 }
 
-async function waitForReady(
+/**
+ * Observe a server's ready-file handoff for one exact child generation. The
+ * child's exit before readiness is the authoritative failure; there is no
+ * deadline unless a caller passes one.
+ */
+export async function waitForReady(
   file: string,
   child: ChildProcess,
   timeoutMs: number | undefined,

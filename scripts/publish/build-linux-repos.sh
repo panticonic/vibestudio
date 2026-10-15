@@ -17,9 +17,13 @@ RELEASE_DIR=${1:?usage: build-linux-repos.sh <release-dir> <output-dir> <base-ur
 OUTPUT_DIR=${2:?usage: build-linux-repos.sh <release-dir> <output-dir> <base-url>}
 BASE_URL=${3:?usage: build-linux-repos.sh <release-dir> <output-dir> <base-url>}
 PACKAGE_BASE_URL=${4:?usage: build-linux-repos.sh <release-dir> <output-dir> <base-url> <release-assets-url>}
+PREVIOUS_RPM_ROOT=${5:-}
 SIGNING_KEY=${SIGNING_KEY:-packages@vibestudio.app}
+SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:?SOURCE_DATE_EPOCH must identify the immutable release}
+DEPLOYMENT_EPOCH=${DEPLOYMENT_EPOCH:?DEPLOYMENT_EPOCH must identify this Pages deployment}
 SUITE=${SUITE:-stable}
 COMPONENT=main
+RPM_RETENTION_SECONDS=86400
 
 log() { printf '[linux-repos] %s\n' "$1" >&2; }
 
@@ -59,6 +63,7 @@ log "staged $deb_count deb(s)"
 # paths are what apt fetches, so it must run from the repository root.
 bash "$SCRIPT_ROOT/scripts/publish/build-apt-indices.sh" "$APT_ROOT" "$SUITE"
 
+release_file="$APT_ROOT/Release.new"
 apt-ftparchive \
   -o "APT::FTPArchive::Release::Origin=Vibestudio" \
   -o "APT::FTPArchive::Release::Label=Vibestudio" \
@@ -66,8 +71,30 @@ apt-ftparchive \
   -o "APT::FTPArchive::Release::Codename=$SUITE" \
   -o "APT::FTPArchive::Release::Architectures=amd64 arm64" \
   -o "APT::FTPArchive::Release::Components=$COMPONENT" \
+  -o "APT::FTPArchive::Release::Acquire-By-Hash=yes" \
   -o "APT::FTPArchive::Release::Description=Vibestudio desktop and server packages" \
-  release "$APT_ROOT/dists/$SUITE" > "$APT_ROOT/dists/$SUITE/Release"
+  release "$APT_ROOT/dists/$SUITE" > "$release_file"
+mv "$release_file" "$APT_ROOT/dists/$SUITE/Release"
+
+# A Pages deployment and its CDN caches do not become visible as one atomic
+# filesystem update. If apt fetched Packages by its stable name, a fresh
+# InRelease could therefore be paired with the preceding Packages response.
+# Acquire-By-Hash makes the checksum from Release part of the index URL, so a
+# cache can return only the exact bytes described by the signed metadata.
+#
+# Create these objects after Release: apt-ftparchive must checksum only the
+# canonical indexes, otherwise each publication would recursively index the
+# by-hash objects produced by the preceding publication.
+while read -r digest _ relative_path; do
+  index="$APT_ROOT/dists/$SUITE/$relative_path"
+  by_hash_dir="$(dirname "$index")/by-hash/SHA256"
+  mkdir -p "$by_hash_dir"
+  cp "$index" "$by_hash_dir/$digest"
+done < <(awk '
+  /^SHA256:$/ { in_sha256=1; next }
+  /^[^ ]/ { in_sha256=0 }
+  in_sha256 { print $1, $2, $3 }
+' "$APT_ROOT/dists/$SUITE/Release")
 
 # InRelease is the inline-signed index modern apt prefers; Release.gpg keeps
 # older clients working against the same tree.
@@ -88,14 +115,24 @@ while IFS= read -r -d '' rpm_file; do
 done < <(find "$RELEASE_DIR" -maxdepth 1 -type f -name '*.rpm' -print0)
 
 if [ "$rpm_count" -gt 0 ]; then
+  # primary.xml records each package file's mtime. Artifact downloads and local
+  # copies assign transport-dependent mtimes even when the signed RPM bytes are
+  # identical, which would make the repository identity vary between retries.
+  # Bind that metadata to the immutable release timestamp before createrepo_c
+  # reads the packages.
+  find "$RPM_ROOT" -maxdepth 1 -type f -name '*.rpm' \
+    -exec touch --date="@$SOURCE_DATE_EPOCH" {} +
   require createrepo_c
   require rpm
   bash "$SCRIPT_ROOT/scripts/publish/verify-rpm-signatures.sh" "$RPM_ROOT"
   # DNF reads the signed index here and fetches the exact, already signed release
   # assets. Hosting a second copy would exceed GitHub Pages' 1 GB site limit.
-  createrepo_c --quiet --baseurl "${PACKAGE_BASE_URL%/}/" "$RPM_ROOT"
-  gpg --batch --yes --local-user "$SIGNING_KEY" \
+  createrepo_c --quiet --baseurl "${PACKAGE_BASE_URL%/}/" \
+    --revision "$SOURCE_DATE_EPOCH" --set-timestamp-to-revision "$RPM_ROOT"
+  gpg --batch --yes --faked-system-time "$SOURCE_DATE_EPOCH!" --local-user "$SIGNING_KEY" \
     --detach-sign --armor "$RPM_ROOT/repodata/repomd.xml"
+  python3 "$SCRIPT_ROOT/scripts/publish/retain-rpm-repodata.py" \
+    "$RPM_ROOT" "$PREVIOUS_RPM_ROOT" "$DEPLOYMENT_EPOCH" "$RPM_RETENTION_SECONDS"
   rm "$RPM_ROOT"/*.rpm
   log "signed dnf metadata"
 else
@@ -259,12 +296,12 @@ cat > "$OUTPUT_DIR/index.html" <<HTML
          <div class="step-label">Run in Terminal</div>
          <pre><code>sudo install -d -m 0755 /etc/apt/keyrings
 curl -fsSL $BASE_URL/gpg.key | sudo tee /etc/apt/keyrings/vibestudio.asc > /dev/null
-echo "deb [signed-by=/etc/apt/keyrings/vibestudio.asc] $BASE_URL/apt $SUITE $COMPONENT" \\
+echo "deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/vibestudio.asc] $BASE_URL/apt $SUITE $COMPONENT" \\
   | sudo tee /etc/apt/sources.list.d/vibestudio.list
 sudo apt update &amp;&amp; sudo apt install vibestudio</code></pre>
        </article>
        <article class="card">
-         <div class="card-head"><div class="os-icon" aria-hidden="true">F</div><h2>Fedora, RHEL &amp; openSUSE</h2></div>
+         <div class="card-head"><div class="os-icon" aria-hidden="true">F</div><h2>Fedora &amp; RHEL</h2></div>
          <p>Register the signed repository, then use DNF to install and receive updates.</p>
          <div class="step-label">Run in Terminal</div>
          <pre><code>sudo rpm --import $BASE_URL/gpg.key
@@ -280,7 +317,7 @@ REPO
 sudo dnf install Vibestudio</code></pre>
        </article>
      </div>
-     <aside class="arch"><strong>Arch Linux</strong><p>Download the Arch package attached to the <a href="https://github.com/panticonic/vibestudio/releases">latest GitHub release</a>.</p></aside>
+     <aside class="arch"><strong>openSUSE, Arch Linux, and other distributions</strong><p>Download the matching package attached to the <a href="https://github.com/panticonic/vibestudio/releases">latest GitHub release</a>.</p></aside>
    </section>
  </main>
  <footer class="wrap"><a href="https://vibestudio.app/" data-carry-theme>Vibestudio</a><span>Questions or issues? <a href="https://github.com/panticonic/vibestudio/issues">Get help on GitHub</a></span></footer>

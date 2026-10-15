@@ -17,9 +17,11 @@ if type update-alternatives >/dev/null 2>&1; then
     if [ -L '/usr/bin/${executable}' -a -e '/usr/bin/${executable}' -a "`readlink '/usr/bin/${executable}'`" != '/etc/alternatives/${executable}' ]; then
         rm -f '/usr/bin/${executable}'
     fi
-    update-alternatives --install '/usr/bin/${executable}' '${executable}' '/opt/${sanitizedProductName}/${executable}' 100 || ln -sf '/opt/${sanitizedProductName}/${executable}' '/usr/bin/${executable}'
+    update-alternatives --install '/usr/bin/${executable}' '${executable}' '/opt/${sanitizedProductName}/resources/vibestudio-cli' 100 || ln -sf '/opt/${sanitizedProductName}/resources/vibestudio-cli' '/usr/bin/${executable}'
+    # Retire the previous desktop-only alternative during the package upgrade.
+    update-alternatives --remove '${executable}' '/opt/${sanitizedProductName}/${executable}'
 else
-    ln -sf '/opt/${sanitizedProductName}/${executable}' '/usr/bin/${executable}'
+    ln -sf '/opt/${sanitizedProductName}/resources/vibestudio-cli' '/usr/bin/${executable}'
 fi
 
 # Check if user namespaces are supported by the kernel and working with a quick test:

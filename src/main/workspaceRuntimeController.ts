@@ -121,10 +121,9 @@ export function createDesktopWorkspaceRuntime(deps: {
   dispatcher?: ServiceDispatcher;
   events?: Pick<
     ServerEventBridgeDeps,
-    | "applyAppAvailable"
-    | "onAppHostTargetChanged"
-    | "resolveAppAvailableEvent"
+    | "onSupervisionChanged"
     | "onApprovalPendingChanged"
+    | "onApprovalResolved"
     | "onAttentionRequired"
     | "onNotificationAction"
   >;
@@ -959,11 +958,10 @@ export function createDesktopWorkspaceRuntime(deps: {
           "panel:executionActivated",
           "panel:executionFailed",
           "shell-approval:pending-changed",
+          ...(deps.events?.onApprovalResolved ? (["shell-approval:resolved"] as const) : []),
           "external-open:open",
           "browser-panel:open",
-          ...(deps.events?.applyAppAvailable
-            ? (["apps:available", "apps:status", "extensions:status"] as const)
-            : []),
+          ...(deps.events?.onSupervisionChanged ? (["supervision:changed"] as const) : []),
         ]);
         assertOpen();
         await initializePanelTree();

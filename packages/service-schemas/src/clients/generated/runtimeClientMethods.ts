@@ -20,6 +20,7 @@ export const RUNTIME_METHOD_NAMES = [
   "resolveContext",
   "listContexts",
   "setTitle",
+  "patchEntityStateArgs",
   "createContext",
   "cloneContext",
   "rebindAgentChannel",

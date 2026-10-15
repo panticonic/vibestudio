@@ -160,7 +160,6 @@ interface SchemaProbeBuild {
   className: string;
   version: string;
   modules: Record<string, string>;
-  wasmModules?: Record<string, string>;
 }
 
 /** Diagnostic env vars forwarded from the host process into every worker's
@@ -2338,9 +2337,6 @@ export class WorkerdManager {
     compatibilityFlags: string[];
     mainModule: string;
     modules: Record<string, string>;
-    /** Extra pre-compiled wasm modules, base64 (e.g. terminal/Ink `yoga.wasm`).
-     *  The UniversalDO host decodes these to ArrayBuffers for the loader. */
-    wasmModules?: Record<string, string>;
     env: Record<string, unknown>;
   } | null> {
     const probe = objectKey ? this.schemaProbeBuilds.get(objectKey) : undefined;
@@ -2356,7 +2352,6 @@ export class WorkerdManager {
         ...USER_CODE_COMPATIBILITY,
         compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
         modules: probe.modules,
-        ...(probe.wasmModules ? { wasmModules: probe.wasmModules } : {}),
         env: {
           WORKER_SOURCE: source,
           WORKER_CLASS_NAME: className,
@@ -2392,19 +2387,6 @@ export class WorkerdManager {
     const modules = await workerJavaScriptModules(
       buildResult,
       workspaceProvider.readBuildArtifactContent
-    );
-    // Terminal (Ink) DOs import a pre-compiled `yoga.wasm` module — it must be
-    // loaded alongside the JS bundle (the only way to run WASM in workerd).
-    const wasmModules: Record<string, string> = {};
-    await Promise.all(
-      buildResult.artifacts
-        .filter((artifact) => artifact.role === "wasm")
-        .map(async (artifact) => {
-          wasmModules[artifact.path] = await workspaceProvider.readBuildArtifactContent(
-            buildResult,
-            artifact
-          );
-        })
     );
 
     // Service-level token shared by all instances of this source:className;
@@ -2446,7 +2428,6 @@ export class WorkerdManager {
       ...USER_CODE_COMPATIBILITY,
       compatibilityFlags: [...USER_CODE_COMPATIBILITY.compatibilityFlags],
       modules,
-      ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
       env,
       version,
       egressIdentity,
@@ -2500,7 +2481,7 @@ export class WorkerdManager {
       if (!builtin) {
         throw new Error(`Internal Durable Object ${className} has no builtin catalog entry`);
       }
-      // Internal DOs ship as a single pre-built bundle (no wasm artifacts).
+      // Each internal DO selects its own pre-built catalog program.
       const internalBundle = this.internalDOPrograms().get(className);
       const bundleContent = internalBundle.bundle;
       doService.buildKey = internalBundle.buildKey;
@@ -2795,8 +2776,7 @@ export class WorkerdManager {
   private toCapnpText(config: Record<string, unknown>): string {
     this.bundleFileCounter = 0;
     this.pendingConfigWrites = [];
-    this.configModuleFiles.esModule.clear();
-    this.configModuleFiles.wasm.clear();
+    this.configModuleFiles.clear();
     this.configModuleReferenceCount = 0;
     this.configModuleReferenceBytes = 0;
     this.configModulePayloadBytes = 0;
@@ -2805,7 +2785,7 @@ export class WorkerdManager {
   }
 
   /**
-   * Flush bundle/wasm files collected during `toCapnpText` to disk asynchronously.
+   * Flush bundle files collected during `toCapnpText` to disk asynchronously.
    * (Serialization stays sync for the recursion; the heavy IO is async so it
    * never blocks the relay event loop during a (re)start.)
    */
@@ -2818,11 +2798,8 @@ export class WorkerdManager {
   }
 
   private bundleFileCounter = 0;
-  private pendingConfigWrites: Array<{ filename: string; content: string | Buffer }> = [];
-  private readonly configModuleFiles = {
-    esModule: new Map<string, { filename: string; bytes: number }>(),
-    wasm: new Map<string, { filename: string; bytes: number }>(),
-  };
+  private pendingConfigWrites: Array<{ filename: string; content: string }> = [];
+  private readonly configModuleFiles = new Map<string, { filename: string; bytes: number }>();
   private configModuleReferenceCount = 0;
   private configModuleReferenceBytes = 0;
   private configModulePayloadBytes = 0;
@@ -2830,15 +2807,14 @@ export class WorkerdManager {
   /** Equal module payloads share one embed file in this exact configuration.
    * Service bindings, module names, and durable storage identities remain
    * distinct. No executable identity is recalculated at runtime. */
-  private configModuleFile(kind: "esModule" | "wasm", value: string): string {
-    const files = this.configModuleFiles[kind];
+  private configModuleFile(value: string): string {
+    const files = this.configModuleFiles;
     let module = files.get(value);
     if (!module) {
-      const filename = `${kind === "esModule" ? "bundle" : "module"}-${this.bundleFileCounter++}.${kind === "esModule" ? "js" : "wasm"}`;
-      const content = kind === "esModule" ? value : Buffer.from(value, "base64");
-      module = { filename, bytes: Buffer.byteLength(content) };
+      const filename = `bundle-${this.bundleFileCounter++}.js`;
+      module = { filename, bytes: Buffer.byteLength(value) };
       files.set(value, module);
-      this.pendingConfigWrites.push({ filename, content });
+      this.pendingConfigWrites.push({ filename, content: value });
       this.configModulePayloadBytes += module.bytes;
     }
     this.configModuleReferenceCount++;
@@ -2871,12 +2847,7 @@ export class WorkerdManager {
       const fields = entries.map(([k, v]) => {
         // esModule bundles: collect for async flush, reference via embed.
         if (k === "esModule" && typeof v === "string") {
-          const filename = this.configModuleFile("esModule", v);
-          return `${indent}${k} = embed "${filename}",`;
-        }
-        // wasm module bindings: value is base64; decode to binary + embed.
-        if (k === "wasm" && typeof v === "string") {
-          const filename = this.configModuleFile("wasm", v);
+          const filename = this.configModuleFile(v);
           return `${indent}${k} = embed "${filename}",`;
         }
         return `${indent}${k} = ${this.capnpValue(v, depth + 1)},`;
@@ -4386,20 +4357,12 @@ export class WorkerdManager {
           signal: this.schemaAdmissionLifetime.signal,
         },
         async () => {
-          const wasmModules: Record<string, string> = {};
-          for (const artifact of build.artifacts) {
-            if (artifact.role === "wasm")
-              wasmModules[artifact.path] = await this.requireWorkspaceProvider(
-                "DO schema probe"
-              ).readBuildArtifactContent(build, artifact);
-          }
           return this.probeSchemaExecutable(source, className, {
             version: `${build.metadata.ev}:${build.buildKey}`,
             modules: await workerJavaScriptModules(
               build,
               this.requireWorkspaceProvider("DO schema probe").readBuildArtifactContent
             ),
-            ...(Object.keys(wasmModules).length > 0 ? { wasmModules } : {}),
           });
         }
       );

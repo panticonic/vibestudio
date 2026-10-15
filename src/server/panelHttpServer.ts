@@ -1,6 +1,4 @@
 import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
-import { writeHttpBytes } from "./httpStreamWrite.js";
-import { ArtifactBodyCache } from "./artifactBodyCache.js";
 /**
  * PanelHttpServer — source/ref-keyed static panel asset server.
  *
@@ -10,8 +8,6 @@ import { ArtifactBodyCache } from "./artifactBodyCache.js";
 
 import * as fs from "fs";
 import * as path from "path";
-import * as zlib from "node:zlib";
-import { createHash } from "node:crypto";
 import { WebSocketServer } from "ws";
 import { CDP_WEBSOCKET_MAX_PAYLOAD_BYTES } from "./ingressLimits.js";
 import { createDevLogger } from "@vibestudio/dev-log";
@@ -20,10 +16,14 @@ import type {
   BuildMetadata,
   StoredBuildResult,
 } from "./buildV2/buildStore.js";
-import { encodeBlobRecord } from "@vibestudio/shared/panel/blobBundle";
 import type { CdpBridge } from "./cdpBridge.js";
 import { assertPresent } from "../lintHelpers";
 import { TransportDerivativeCache } from "./buildV2/transportDerivativeCache.js";
+import {
+  BuildArtifactTransport,
+  preferredContentEncoding,
+  type TransportBuild,
+} from "./buildArtifactTransport.js";
 import type { ResolvedUnitIcon } from "./buildV2/index.js";
 import { resolveRequiredHostArtifactRoot } from "./appRoot.js";
 import { getPanelRuntimeHelperSet } from "./panelRuntimeHelpers.js";
@@ -154,42 +154,15 @@ function isPanelAssetRequest(resource: string): boolean {
   );
 }
 
-type PanelContentEncoding = "br" | "gzip";
+/** An app document may load only its own origin's scripts, styles and images. */
+const APP_DOCUMENT_CSP =
+  "default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:";
 
-function preferredContentEncoding(
-  value: string | string[] | undefined
-): PanelContentEncoding | null {
-  if (!value) return null;
-  const accepted = (Array.isArray(value) ? value.join(",") : value)
-    .split(",")
-    .map((part) => {
-      const [name, ...parameters] = part.trim().toLowerCase().split(";");
-      const q = parameters
-        .map((parameter) => parameter.trim())
-        .find((parameter) => parameter.startsWith("q="));
-      return { name, quality: q ? Number(q.slice(2)) : 1 };
-    })
-    .filter(({ quality }) => Number.isFinite(quality) && quality > 0);
-  const quality = (encoding: PanelContentEncoding) =>
-    Math.max(0, ...accepted.filter(({ name }) => name === encoding).map(({ quality }) => quality));
-  const brotliQuality = quality("br");
-  const gzipQuality = quality("gzip");
-  if (brotliQuality === 0 && gzipQuality === 0) return null;
-  return brotliQuality >= gzipQuality ? "br" : "gzip";
-}
-
-function compressArtifact(body: Buffer, encoding: PanelContentEncoding): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const callback = (error: Error | null, result: Buffer) => {
-      if (error) reject(error);
-      else resolve(result);
-    };
-    if (encoding === "br") {
-      zlib.brotliCompress(body, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 4 } }, callback);
-      return;
-    }
-    zlib.gzip(body, { level: zlib.constants.Z_BEST_SPEED }, callback);
-  });
+/** `enc=gzip` asks for each text-like record of a bundle in its compressed form. */
+function bundleWantsGzip(req: import("http").IncomingMessage): boolean {
+  return (
+    new URL(req.url ?? "/", "http://build-artifacts.invalid").searchParams.get("enc") === "gzip"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -198,10 +171,13 @@ function compressArtifact(body: Buffer, encoding: PanelContentEncoding): Promise
 
 export class PanelHttpServer {
   private readonly runtimeHelperSet = getPanelRuntimeHelperSet();
-  // The measured five-app artifact working set is about 32 MiB. Historical
-  // builds share this budget; disk remains the authority after eviction.
-  private readonly artifactBodies = new ArtifactBodyCache(32 * 1024 * 1024);
-  constructor(private readonly transportDerivativeCache = new TransportDerivativeCache()) {}
+  private readonly transport: BuildArtifactTransport;
+  constructor(transportDerivativeCache = new TransportDerivativeCache()) {
+    this.transport = new BuildArtifactTransport(
+      () => this.requireCallbacks(),
+      transportDerivativeCache
+    );
+  }
 
   private buildDescriptorBytes(build: CachedBuild): number {
     const reader = this.callbacks?.buildDescriptorBytes;
@@ -343,7 +319,7 @@ export class PanelHttpServer {
     this.servingCache.set(this.buildCacheKey(source, ref), cachedBuild);
     this.activatedBuildCache.set(buildResult.buildKey, cachedBuild);
     this.registerSharedStyles(cachedBuild);
-    this.scheduleTransportDerivatives(cachedBuild);
+    this.transport.warm(cachedBuild);
 
     log.info(`Stored build: ${this.buildCacheKey(source, ref)}`);
 
@@ -399,7 +375,7 @@ export class PanelHttpServer {
     }
 
     try {
-      await this.transportDerivativeCache.close();
+      await this.transport.close();
     } finally {
       this.port = null;
     }
@@ -560,11 +536,14 @@ export class PanelHttpServer {
       // of server work against ~560ms observed) asks for the inventory once and
       // then for exactly what it lacks, once.
       if (resource === "/__manifest.json") {
-        this.servePanelBuildManifest(res, build);
+        this.transport.writeManifest(res, build, this.runtimeHelperSet);
         return;
       }
       if (resource === "/__bundle" || resource.startsWith("/__bundle?")) {
-        await this.servePanelBuildBundle(req, res, build);
+        await this.transport.writeBundle(req, res, build, {
+          gzip: bundleWantsGzip(req),
+          runtimeHelpers: this.runtimeHelperSet,
+        });
         return;
       }
       await this.servePanelResource(req, res, build, resource);
@@ -746,7 +725,7 @@ export class PanelHttpServer {
     const encoding =
       helper.body.length >= 1_024 ? preferredContentEncoding(req.headers["accept-encoding"]) : null;
     const encoded = encoding
-      ? await this.compressedContent(
+      ? await this.transport.compressed(
           `sha256-${helper.integrity}`,
           helper.path,
           helper.body,
@@ -856,9 +835,48 @@ export class PanelHttpServer {
       };
       this.activatedBuildCache.set(buildKey, build);
       this.registerSharedStyles(build);
-      this.scheduleTransportDerivatives(build);
+      this.transport.warm(build);
     }
     return build;
+  }
+
+  /**
+   * Serve one file of an immutable app build: `/_a/<buildKey>/<path>`, its
+   * inventory, or its bundle. The caller has already decided the build is one
+   * this host serves. The bytes follow the same protocol as a panel build's.
+   */
+  async serveAppArtifact(
+    req: import("http").IncomingMessage,
+    res: import("http").ServerResponse,
+    buildKey: string,
+    remainderPath: string
+  ): Promise<void> {
+    if (req.method !== "GET" && req.method !== "HEAD") {
+      res.writeHead(405, { "Content-Type": "text/plain" });
+      res.end("Method Not Allowed");
+      return;
+    }
+    const build = await this.requireCallbacks().getBuildByKey(buildKey);
+    const clean = decodeURIComponent(remainderPath.replace(/^\/+/, "")) || "index.html";
+    const artifactPath =
+      path.isAbsolute(clean) || clean.split(/[\\/]/).includes("..")
+        ? "__invalid__"
+        : clean.replace(/\\/g, "/");
+    if (build && artifactPath === "__manifest.json") {
+      this.transport.writeManifest(res, build);
+      return;
+    }
+    if (build && artifactPath === "__bundle") {
+      await this.transport.writeBundle(req, res, build, { gzip: bundleWantsGzip(req) });
+      return;
+    }
+    const artifact = build?.artifacts.find((entry) => entry.path === artifactPath);
+    if (!build || !artifact) {
+      res.writeHead(404, { "Content-Type": "text/plain" });
+      res.end("App artifact not found");
+      return;
+    }
+    await this.writeArtifact(req, res, build, artifact, true);
   }
 
   private async serveActivatedPanelResource(
@@ -1009,183 +1027,7 @@ export class PanelHttpServer {
       "Cache-Control": "no-store",
       "X-Vibestudio-Build-Revision": String(build.revision),
     });
-    res.end(await this.readArtifactBytes(build, build.htmlArtifact));
-  }
-
-  /**
-   * The build's inventory: one JSON body listing every artifact a client could
-   * need, so it can decide what it lacks WITHOUT a request per file.
-   *
-   * Costs one already-parsed manifest and no file reads — `buildStore.get`
-   * returns lazy content getters, and nothing here touches `.content`.
-   * `integrity` is the sha256 of the artifact's raw bytes and doubles as the
-   * record identity in the bundle below.
-   *
-   * `initial` marks the artifacts a FIRST paint actually needs, and it is the
-   * difference between this being an optimization and a regression. A real build
-   * measured 35.8 MB across 364 artifacts while the panel's cold load touched
-   * 1.4 MB of it — lazy route chunks, source maps and images make up the rest and
-   * may never be requested at all. A client that prefetched everything it lacked
-   * would move 25× more bytes than the round trips it saved were worth. This is
-   * the same set `scheduleTransportDerivatives` warms (the bundle report's
-   * initial outputs, plus shared styles, which every panel loads).
-   */
-  private servePanelBuildManifest(res: import("http").ServerResponse, build: CachedBuild): void {
-    const initialArtifacts = new Set(build.metadata.bundleReport?.initialArtifacts ?? []);
-    const artifacts = build.artifacts.map((artifact) => ({
-      path: artifact.path,
-      contentType: artifact.contentType,
-      ...(artifact.byteLength === undefined ? {} : { byteLength: artifact.byteLength }),
-      ...(artifact.integrity === undefined ? {} : { integrity: artifact.integrity }),
-      ...(artifact.role === "shared-style" || initialArtifacts.has(artifact.path)
-        ? { initial: true }
-        : {}),
-    }));
-    const runtimeHelpers = this.runtimeHelperSet.helpers.map((helper) => ({
-      path: helper.path,
-      version: this.runtimeHelperSet.version,
-      contentType: helper.contentType,
-      byteLength: helper.body.byteLength,
-      integrity: `sha256-${helper.integrity}`,
-      initial: true,
-    }));
-    const body = JSON.stringify({ artifacts, runtimeHelpers });
-    res.writeHead(200, {
-      "content-type": "application/json; charset=utf-8",
-      // The inventory is a pure function of an immutable build key, so it is as
-      // cacheable as the artifacts it describes.
-      "cache-control": "public, max-age=31536000, immutable",
-      "content-length": String(Buffer.byteLength(body)),
-    });
-    res.end(body);
-  }
-
-  /**
-   * Stream the requested artifacts as one framed blob bundle.
-   *
-   * Selection is by INDEX into the manifest above, not by path: a client asking
-   * for ~90 files would otherwise put several kilobytes of repeated path text in
-   * a query string, and the manifest order is already a shared vocabulary both
-   * ends agree on. Out-of-range or duplicate indices are ignored rather than
-   * failing the transfer — a partially-stale client should still get the bytes
-   * it can use.
-   *
-   * `enc=gzip` frames the gzip derivative of each artifact instead of its raw
-   * bytes — the same derivative `writeArtifact` already serves per request, from
-   * the same warm cache, so it costs no new compression. A receiver that cannot
-   * inflate cheaply (a JS engine on a phone) can still take it: it stores the
-   * compressed bytes and marks the entry gzipped, exactly as the per-asset path
-   * does, and the WebView inflates natively. Without it a client trades one
-   * round trip for roughly four times the bytes, which on a low-latency link is
-   * a loss — measured at 4.2 s to first paint against 1.9 s.
-   *
-   * The record still NAMES the artifact by its raw digest, so an entry lands
-   * under the same key either way; the encoded digest travels alongside it so
-   * the receiver's integrity check survives compression.
-   */
-  private async servePanelBuildBundle(
-    req: import("http").IncomingMessage,
-    res: import("http").ServerResponse,
-    build: CachedBuild
-  ): Promise<void> {
-    const query = new URL(req.url ?? "/", "http://panel-gateway.invalid").searchParams;
-    const gzip = query.get("enc") === "gzip";
-    const wanted = (query.get("want") ?? "")
-      .split(",")
-      .map((raw) => Number.parseInt(raw, 10))
-      .filter((index) => Number.isInteger(index) && index >= 0 && index < build.artifacts.length);
-    const unique = [...new Set(wanted)];
-    const wantedHelpers = (query.get("helpers") ?? "")
-      .split(",")
-      .map((raw) => Number.parseInt(raw, 10))
-      .filter(
-        (index) =>
-          Number.isInteger(index) && index >= 0 && index < this.runtimeHelperSet.helpers.length
-      );
-    const uniqueHelpers = [...new Set(wantedHelpers)];
-
-    res.writeHead(200, {
-      "content-type": "application/octet-stream",
-      "cache-control": "no-store",
-      // Answers `want` for want, so a client always knows what it received —
-      // a request for gzip that the derivative cache could not satisfy comes
-      // back as identity rather than as a body the client mislabels.
-      "x-vibestudio-bundle-encoding": gzip ? "gzip" : "identity",
-    });
-    for (const index of unique) {
-      const artifact = build.artifacts[index]!;
-      if (!artifact.integrity) continue;
-      const digest = artifact.integrity.replace(/^sha256-/u, "");
-      // `.content` re-verifies integrity on first read (buildStore), so a
-      // corrupt build fails here rather than shipping bad bytes to a device
-      // that will cache them under a digest they do not match.
-      const raw = await this.readArtifactBytes(build, artifact);
-      // Compression is decided PER RECORD, on the same terms writeArtifact uses
-      // (text only, and only once it is worth the header): a build's PNGs are
-      // already compressed and gzipping them again just costs both ends.
-      //
-      // The record says which it is without a new field. An identity record's
-      // two digests are equal by construction, while a gzip payload cannot hash
-      // to the digest of the bytes it encodes — so a mixed response is readable
-      // and, unlike a whole-response encoding flag, cannot mislabel anything.
-      const encoded =
-        gzip && artifact.encoding !== "base64" && raw.length >= 1_024
-          ? await this.compressedContent(artifact.integrity, artifact.path, raw)
-          : null;
-      const record = encoded
-        ? encodeBlobRecord(
-            digest,
-            new Uint8Array(encoded),
-            createHash("sha256").update(encoded).digest("hex")
-          )
-        : encodeBlobRecord(digest, new Uint8Array(raw));
-      await writeHttpBytes(res, record);
-    }
-    for (const index of uniqueHelpers) {
-      const helper = this.runtimeHelperSet.helpers[index]!;
-      const encoded =
-        gzip && helper.body.byteLength >= 1_024
-          ? await this.compressedContent(`sha256-${helper.integrity}`, helper.path, helper.body)
-          : null;
-      const record = encoded
-        ? encodeBlobRecord(
-            helper.integrity,
-            new Uint8Array(encoded),
-            createHash("sha256").update(encoded).digest("hex")
-          )
-        : encodeBlobRecord(helper.integrity, new Uint8Array(helper.body));
-      await writeHttpBytes(res, record);
-    }
-    res.end();
-  }
-
-  /**
-   * The content's compressed form: the warm derivative if there is one, else
-   * compressed once and kept within the shared HTTP byte budget.
-   *
-   * Shared by the per-asset route and the bundle so a device receives the same
-   * bytes either way, and so one panel open cannot compress the same artifact
-   * twice. Returns null when compression fails — the caller sends identity.
-   */
-  private async compressedContent(
-    integrity: string | undefined,
-    name: string,
-    body: Buffer,
-    encoding: PanelContentEncoding = "gzip"
-  ): Promise<Buffer | null> {
-    const cacheKey = `encoded:${encoding}:${integrity ?? createHash("sha256").update(body).digest("hex")}`;
-    try {
-      return await this.artifactBodies.get(cacheKey, async () => {
-        if (integrity) {
-          const derivative = await this.transportDerivativeCache.get(integrity, encoding);
-          if (derivative) return derivative;
-        }
-        return compressArtifact(body, encoding);
-      });
-    } catch (error) {
-      log.warn(`Failed to ${encoding}-compress panel content ${name}: ${String(error)}`);
-      return null;
-    }
+    res.end(await this.transport.readBytes(build, build.htmlArtifact));
   }
 
   private resolvePanelArtifact(
@@ -1218,29 +1060,20 @@ export class PanelHttpServer {
     }
   }
 
-  private scheduleTransportDerivatives(build: CachedBuild): void {
-    const initialArtifacts = new Set(build.metadata.bundleReport?.initialArtifacts ?? []);
-    for (const artifact of build.artifacts) {
-      if (
-        artifact.role === "html" ||
-        artifact.encoding !== "utf8" ||
-        (artifact.byteLength ?? 0) < 1_024 ||
-        (artifact.role !== "shared-style" && !initialArtifacts.has(artifact.path)) ||
-        !artifact.integrity
-      ) {
-        continue;
-      }
-      this.transportDerivativeCache.scheduleFile(
-        artifact.integrity,
-        this.requireCallbacks().artifactFilePath({ dir: build.dir }, artifact)
-      );
-    }
-  }
-
+  /**
+   * The one way build-pinned bytes leave this server, for panels and apps.
+   *
+   * The representation is chosen by `Accept-Encoding` (br, gzip or identity;
+   * bodies under 1 KiB stay identity) and is the same canonical bytes on every
+   * request. That makes a byte `Range` taken from one response valid against the
+   * next, so a client on a flaky link resumes with `Range` (and `If-Range` to
+   * guard against a changed representation) instead of a private header: the
+   * range applies to the selected, encoded representation, as HTTP defines it.
+   */
   private async writeArtifact(
     req: import("http").IncomingMessage,
     res: import("http").ServerResponse,
-    build: CachedBuild,
+    build: TransportBuild & { revision?: number },
     artifact: BuildArtifactManifestEntry,
     immutableDocument = false,
     contentOverride?: string | Buffer
@@ -1251,42 +1084,100 @@ export class PanelHttpServer {
       artifact.role === "html" && !immutableDocument
         ? "no-store"
         : "public, max-age=31536000, immutable";
-    const body =
+    const identity =
       contentOverride === undefined
-        ? await this.readArtifactBytes(build, artifact)
+        ? await this.transport.readBytes(build, artifact)
         : Buffer.isBuffer(contentOverride)
           ? contentOverride
           : Buffer.from(contentOverride);
     const encoding =
-      body.length >= 1_024 ? preferredContentEncoding(req.headers["accept-encoding"]) : null;
-    const compressedBody = encoding
-      ? await this.compressedContent(
+      identity.length >= 1_024 ? preferredContentEncoding(req.headers["accept-encoding"]) : null;
+    const encoded = encoding
+      ? await this.transport.compressed(
           contentOverride === undefined ? artifact.integrity : undefined,
           artifact.path,
-          body,
+          identity,
           encoding
         )
       : null;
-    res.writeHead(200, {
+    const body = encoded ?? identity;
+    const headers: Record<string, string | number> = {
       "Content-Type": artifact.contentType,
-      "Content-Length": compressedBody?.length ?? body.length,
       "Cache-Control": cacheControl,
-      ...(encoding && compressedBody
-        ? { "Content-Encoding": encoding, Vary: "Accept-Encoding" }
-        : {}),
-      "X-Vibestudio-Build-Revision": String(build.revision),
-    });
-    res.end(compressedBody ?? (artifact.encoding === "utf8" ? body.toString("utf8") : body));
+      Vary: "Accept-Encoding",
+      "Accept-Ranges": "bytes",
+      ...(encoded && encoding ? { "Content-Encoding": encoding } : {}),
+      ...(build.revision === undefined ? {} : { "X-Vibestudio-Build-Revision": build.revision }),
+    };
+    // Only the build's own bytes carry a digest identity; a rewritten document does not.
+    const etag =
+      contentOverride === undefined && artifact.integrity
+        ? `"${artifact.integrity}${encoded && encoding ? `;${encoding}` : ""}"`
+        : null;
+    if (etag && artifact.integrity) {
+      headers["ETag"] = etag;
+      headers["X-Vibestudio-Content-Digest"] = artifact.integrity;
+    }
+    if (artifact.role === "html" && build.metadata.kind === "app") {
+      headers["Content-Security-Policy"] = APP_DOCUMENT_CSP;
+    }
+
+    const range = this.requestedRange(req, etag, body.length);
+    if (range === "unsatisfiable") {
+      res.writeHead(416, {
+        ...headers,
+        "Content-Range": `bytes */${body.length}`,
+        "Content-Length": 0,
+      });
+      res.end();
+      return;
+    }
+    if (range) {
+      const partial = body.subarray(range.start, range.end + 1);
+      res.writeHead(206, {
+        ...headers,
+        "Content-Range": `bytes ${range.start}-${range.end}/${body.length}`,
+        "Content-Length": partial.length,
+      });
+      res.end(req.method === "HEAD" ? undefined : partial);
+      return;
+    }
+    res.writeHead(200, { ...headers, "Content-Length": body.length });
+    res.end(
+      req.method === "HEAD"
+        ? undefined
+        : encoded
+          ? encoded
+          : artifact.encoding === "utf8"
+            ? identity.toString("utf8")
+            : identity
+    );
   }
 
-  private readArtifactBytes(
-    build: CachedBuild,
-    artifact: BuildArtifactManifestEntry
-  ): Promise<Buffer> {
-    const key = `identity:${build.dir}:${artifact.path}:${artifact.integrity ?? ""}`;
-    return this.artifactBodies.get(key, () =>
-      this.requireCallbacks().readArtifactBytes(build, artifact)
-    );
+  /** A single byte range over the selected representation, if one was asked for and still applies. */
+  private requestedRange(
+    req: import("http").IncomingMessage,
+    etag: string | null,
+    size: number
+  ): { start: number; end: number } | "unsatisfiable" | null {
+    const header = req.headers.range;
+    if (typeof header !== "string") return null;
+    // If-Range ties the range to the representation the client already holds; a
+    // different one is sent whole rather than spliced onto the old bytes.
+    const ifRange = req.headers["if-range"];
+    if (typeof ifRange === "string" && ifRange !== etag) return null;
+    const match = /^bytes=(\d+)-(\d*)$/u.exec(header);
+    const start = match ? Number(match[1]) : Number.NaN;
+    const requestedEnd = match?.[2] ? Number(match[2]) : size - 1;
+    if (
+      !Number.isSafeInteger(start) ||
+      !Number.isSafeInteger(requestedEnd) ||
+      requestedEnd < start ||
+      start >= size
+    ) {
+      return "unsatisfiable";
+    }
+    return { start, end: Math.min(requestedEnd, size - 1) };
   }
 
   private requireCallbacks(): PanelHttpCallbacks {
@@ -1301,7 +1192,7 @@ export class PanelHttpServer {
     if (artifact.encoding !== "utf8") {
       throw new Error(`Artifact ${artifact.path} is not UTF-8 text`);
     }
-    return (await this.readArtifactBytes(build, artifact)).toString("utf8");
+    return (await this.transport.readBytes(build, artifact)).toString("utf8");
   }
 
   // =========================================================================

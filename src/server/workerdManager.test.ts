@@ -341,14 +341,14 @@ describe("WorkerdManager", () => {
       configModulePayloadBytes: number;
     };
     const script = "export default { fetch() { return new Response('π'); } };";
-    const wasm = Buffer.from([0, 97, 115, 109]);
+    const helperScript = "export const value = 'λ';";
     const config = {
       services: ["first", "second"].map((name) => ({
         name,
         worker: {
           modules: [
             { name: `${name}.js`, esModule: script },
-            { name: `${name}.wasm`, wasm: wasm.toString("base64") },
+            { name: `${name}-helper.js`, esModule: helperScript },
           ],
           bindings: [{ name: "OWNER", text: name }],
         },
@@ -360,19 +360,22 @@ describe("WorkerdManager", () => {
       await serializer.flushConfigWrites();
       expect(write).toHaveBeenCalledTimes(2);
       const files = [...text.matchAll(/embed "([^"]+)"/gu)].map((match) => match[1]);
-      expect(files).toEqual(["bundle-0.js", "module-1.wasm", "bundle-0.js", "module-1.wasm"]);
+      expect(files).toEqual(["bundle-0.js", "bundle-1.js", "bundle-0.js", "bundle-1.js"]);
       for (const name of ["first", "second"]) {
         expect(text).toContain(`name = "${name}.js"`);
+        expect(text).toContain(`name = "${name}-helper.js"`);
         expect(text).toContain(`text = "${name}"`);
       }
       const directory = stateLayout(deps.statePath).workerdConfigDir;
       expect(fs.readFileSync(path.join(directory, files[0]!), "utf8")).toBe(script);
-      expect(fs.readFileSync(path.join(directory, files[1]!))).toEqual(wasm);
+      expect(fs.readFileSync(path.join(directory, files[1]!), "utf8")).toBe(helperScript);
       expect(serializer.configModuleReferenceCount).toBe(4);
       expect(serializer.configModuleReferenceBytes).toBe(
-        2 * (Buffer.byteLength(script) + wasm.length)
+        2 * (Buffer.byteLength(script) + Buffer.byteLength(helperScript))
       );
-      expect(serializer.configModulePayloadBytes).toBe(Buffer.byteLength(script) + wasm.length);
+      expect(serializer.configModulePayloadBytes).toBe(
+        Buffer.byteLength(script) + Buffer.byteLength(helperScript)
+      );
       write.mockClear();
       // Each generation owns its own complete payload; no stale-file reuse.
       const next = serializer.toCapnpText({

@@ -1,7 +1,6 @@
 import { encodeRpcJson, decodeRpcJson } from "./wireJson.js";
 import {
   schemaRpcClient,
-  wireClientFor,
   registerRpcWireClient,
   ownRpcOperation,
   registerRpcOperationOwner,
@@ -19,6 +18,7 @@ import type {
   RpcCallOptions,
   RpcCausalParent,
   RpcClientConfig,
+  RpcClientViewOptions,
   RpcConnectionStatus,
   RpcContextMethods,
   RpcContextStreamingHandler,
@@ -329,8 +329,12 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         .finally(() => config.lifetime!.removeEventListener("abort", onAbort));
     });
   };
-  const responseWithinLifetime = (response: Response, release: () => void): Response => {
-    if (!config.lifetime) {
+  const responseWithinLifetime = (
+    response: Response,
+    release: () => void,
+    signal?: AbortSignal | null
+  ): Response => {
+    if (!config.lifetime && !signal) {
       release();
       return response;
     }
@@ -343,37 +347,64 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       statusText: response.statusText,
       headers: [...response.headers.entries()],
       finalUrl: response.url,
-      body: bodyWithinLifetime(response.body, release),
+      body: bodyWithinLifetime(response.body, release, signal),
     });
   };
   const bodyWithinLifetime = (
     body: ReadableStream<Uint8Array>,
-    release: () => void = () => {}
+    release: () => void = () => {},
+    signal?: AbortSignal | null
   ): ReadableStream<Uint8Array> => {
-    if (!config.lifetime) {
+    if (!config.lifetime && !signal) {
       release();
       return body;
     }
     const lifetime = config.lifetime;
     let reader: ReadableStreamDefaultReader<Uint8Array>;
     let ended = false;
-    let onAbort: () => void;
+    let onLifetimeAbort: () => void;
+    let onCallAbort: () => void;
     const cleanup = (): void => {
-      lifetime.removeEventListener("abort", onAbort);
+      lifetime?.removeEventListener("abort", onLifetimeAbort);
+      signal?.removeEventListener("abort", onCallAbort);
+      reader.releaseLock();
       release();
     };
     return new ReadableStream<Uint8Array>({
       start(controller) {
         reader = body.getReader();
-        onAbort = () => {
+        const abort = (reason: unknown) => {
           if (ended) return;
           ended = true;
-          void reader.cancel(retiredError()).catch(() => {});
-          controller.error(retiredError());
-          cleanup();
+          // cancel() on an already-errored body rejects with its stored error
+          // without admitting source teardown. Otherwise the reader closes
+          // before the source cancel algorithm runs: a rejection then is an
+          // actual teardown failure, which must survive the owner's reason.
+          const closed = reader.closed;
+          void Promise.allSettled([closed, reader.cancel(reason)]).then(
+            ([terminal, cancellation]) => {
+              const teardownFailed =
+                cancellation.status === "rejected" &&
+                !(terminal.status === "rejected" && terminal.reason === cancellation.reason);
+              cleanup();
+              controller.error(
+                teardownFailed && cancellation.status === "rejected"
+                  ? new AggregateError(
+                      [reason, cancellation.reason],
+                      "RPC stream cancellation failed",
+                      { cause: reason }
+                    )
+                  : reason
+              );
+            }
+          );
         };
-        lifetime.addEventListener("abort", onAbort, { once: true });
-        if (lifetime.aborted) onAbort();
+        onLifetimeAbort = () => abort(retiredError());
+        onCallAbort = () => abort(signal!.reason);
+        lifetime?.addEventListener("abort", onLifetimeAbort, { once: true });
+        signal?.addEventListener("abort", onCallAbort, { once: true });
+        if (signal?.aborted) onCallAbort();
+        else if (lifetime?.aborted) onLifetimeAbort();
       },
       async pull(controller) {
         if (ended) return;
@@ -397,8 +428,11 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       async cancel(reason) {
         if (ended) return;
         ended = true;
-        cleanup();
-        await reader.cancel(reason);
+        try {
+          await reader.cancel(reason);
+        } finally {
+          cleanup();
+        }
       },
     });
   };
@@ -421,6 +455,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       /** Envelope target — drives the direct-server vs routed rejection policy (§3.4). */
       target: string;
       destination?: RpcDestination;
+      /** Destination and invocation parent a cancel envelope must carry. */
+      cancelOptions?: RpcCallOptions;
     }
   >();
   const pendingStreams = new Map<
@@ -520,6 +556,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         : options;
     const scoped: RpcWireClient = {
       ...client,
+      createView: (options) => createRpcWireView(scoped, options),
       call: (targetId, method, args, options) =>
         observeOutbound(
           callWithProvenance(scopedProvenance, targetId, method, args, inheritedOptions(options))
@@ -671,6 +708,23 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
     }
   }
 
+  /**
+   * Options for a cancel envelope: the request's destination and its invocation
+   * parent. A receiver registers an active handler under the caller the request
+   * was delivered as (the invocation parent's caller when one is bound), and
+   * honours a cancel only from that same caller, so a cancel sent as the bare
+   * transport identity would be ignored.
+   */
+  function cancelOptionsFor(
+    options: { destination?: RpcDestination } | undefined
+  ): RpcCallOptions | undefined {
+    const parent = invocationParentFor(options as RpcCallOptions | undefined);
+    if (!options?.destination && !parent) return undefined;
+    const cancel: RpcCallOptions = options?.destination ? { destination: options.destination } : {};
+    if (parent) bindInvocationParent(cancel, parent);
+    return cancel;
+  }
+
   function requestPendingCancellation(
     requestId: string,
     pending: {
@@ -680,6 +734,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       timeout: ReturnType<typeof setTimeout> | null;
       target: string;
       destination?: RpcDestination;
+      cancelOptions?: RpcCallOptions;
     },
     reason: Error,
     provenance: AuthenticatedCaller[]
@@ -691,11 +746,10 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       clearTimeout(pending.timeout);
       pending.timeout = null;
     }
-    const options = pending.destination ? { destination: pending.destination } : undefined;
     const cancellation = send(
       pending.target,
       { type: "request-cancel", requestId, fromId: config.selfId },
-      options,
+      pending.cancelOptions,
       provenance
     );
     pending.cancellationSend = cancellation;
@@ -1139,6 +1193,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         responseSettling: false,
         target: targetId,
         ...(options?.destination ? { destination: options.destination } : {}),
+        ...(cancelOptionsFor(options) ? { cancelOptions: cancelOptionsFor(options)! } : {}),
       };
       // No implicit deadline: callers opt in with a positive timeoutMs when a
       // specific operation should be time-bounded.
@@ -1291,7 +1346,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         ),
         (late) => void late.body?.cancel(retiredError()).catch(() => {})
       )
-        .then((response) => responseWithinLifetime(response, operation.cleanup))
+        .then((response) => responseWithinLifetime(response, operation.cleanup, options?.signal))
         .catch((error) => {
           operation.cleanup();
           throw error;
@@ -1322,7 +1377,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
           config.transport.streamBody(envelope, operation.signal, bodyWithinLifetime(options.body)),
           (late) => void late.body?.cancel(retiredError()).catch(() => {})
         )
-          .then((response) => responseWithinLifetime(response, operation.cleanup))
+          .then((response) => responseWithinLifetime(response, operation.cleanup, options?.signal))
           .catch((error) => {
             operation.cleanup();
             throw error;
@@ -1383,11 +1438,10 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       (late) => void late.body.cancel(retiredError()).catch(() => {})
     )
       .then((response) => {
-        if (!config.lifetime) {
-          operation.cleanup();
-          return response;
-        }
-        return { ...response, body: bodyWithinLifetime(response.body, operation.cleanup) };
+        return {
+          ...response,
+          body: bodyWithinLifetime(response.body, operation.cleanup, options?.signal),
+        };
       })
       .catch((error) => {
         operation.cleanup();
@@ -1444,7 +1498,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
     });
     let bodyController: ReadableStreamDefaultController<Uint8Array> | null = null;
     const sendCancel = (): void => {
-      const cancelOptions = options?.destination ? { destination: options.destination } : undefined;
+      const cancelOptions = cancelOptionsFor(options);
       const envelope = makeEnvelope(
         targetId,
         { type: "stream-cancel", requestId, fromId: config.selfId },
@@ -1526,6 +1580,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
   }
 
   const client: RpcWireClient = {
+    createView: (options) => createRpcWireView(client, options),
     selfId: config.selfId,
     expose(method, handler, website): void {
       requireActive();
@@ -1758,12 +1813,13 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
 }
 
 /** One client view path: peers must retain the same options as direct effects. */
-function withCallOptions(
+export function createRpcWireView(
   base: RpcWireClient,
-  map: (options?: RpcCallOptions | RpcStreamOptions) => RpcCallOptions & RpcStreamOptions,
-  enter: <T>(operation: () => T) => T = (operation) => operation()
+  options: RpcClientViewOptions
 ): RpcWireClient {
+  const { mapOptions: map, enter = (operation) => operation() } = options;
   const view: RpcWireClient = {
+    createView: (options) => createRpcWireView(view, options),
     selfId: base.selfId,
     expose: base.expose.bind(base),
     exposeAll: base.exposeAll.bind(base),
@@ -1790,12 +1846,10 @@ function withCallOptions(
 
 function clientView<Client extends import("./types.js").RpcClient | RpcWireClient>(
   base: Client,
-  map: Parameters<typeof withCallOptions>[1],
-  enter?: Parameters<typeof withCallOptions>[2]
+  mapOptions: RpcClientViewOptions["mapOptions"],
+  enter?: RpcClientViewOptions["enter"]
 ): Client {
-  const wire = wireClientFor(base);
-  const view = withCallOptions(wire, map, enter);
-  return (wire === base ? view : schemaRpcClient(view)) as Client;
+  return base.createView({ mapOptions, ...(enter ? { enter } : {}) }) as Client;
 }
 
 /** Enter the owning async context for every outbound effect, including peer calls.

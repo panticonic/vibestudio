@@ -245,12 +245,12 @@ function stringTargets(value) {
  * the source extension.
  * @param {string} packageDirectory
  * @param {string} repositoryRoot
- * @param {{ jsxRuntime?: string, runtimeModuleSpecifiers?: string[] }} [options]
+ * @param {{ jsxRuntime?: string }} [options]
  */
 export async function collectPackageManifestImportFindings(
   packageDirectory,
   repositoryRoot,
-  { jsxRuntime, runtimeModuleSpecifiers = [] } = {}
+  { jsxRuntime } = {}
 ) {
   const manifestPath = path.join(packageDirectory, "package.json");
   const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8"));
@@ -301,7 +301,6 @@ export async function collectPackageManifestImportFindings(
       throw new Error(`Could not analyze production imports in ${file}`, { cause: error });
     }
     for (const { specifier, kind } of references) {
-      if (runtimeModuleSpecifiers.includes(specifier)) continue;
       if (specifier.startsWith("#")) {
         const targets = packageImportTargets(specifier, manifest.imports);
         if (targets.length === 0) {

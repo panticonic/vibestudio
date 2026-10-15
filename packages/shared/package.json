@@ -14,6 +14,7 @@
     "./mediaRecording": "./src/mediaRecording.ts",
     "./webAddress": "./src/webAddress.ts",
     "./webSearch": "./src/webSearch.ts",
+    "./terminalSessions": "./src/terminalSessions.ts",
     "./agentInspection": "./src/agentInspection.ts",
     "./appArtifacts": "./src/appArtifacts.ts",
     "./approvalContract": "./src/approvalContract.ts",

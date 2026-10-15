@@ -9,7 +9,8 @@ import {
   saveCliCredentials,
   type CliCredentials,
 } from "../credentialStore.js";
-import { pairRemoteServer, selectRemoteWorkspace } from "../remoteClient.js";
+import { workspaceLabel } from "../../node/workspaceLabel.js";
+import { listRemoteWorkspaces, pairRemoteServer, selectRemoteWorkspace } from "../remoteClient.js";
 import { RpcClient } from "../rpcClient.js";
 import {
   deleteAgentSession,
@@ -223,13 +224,22 @@ async function status(inv: ParsedInvocation): Promise<number> {
         `session ${name} is stale: entity ${session.entityId} no longer exists`
       );
     }
+    // Only a paired device may list workspaces; an agent profile is bound to a
+    // single workspace and has only its internal name.
+    const entry =
+      creds.kind === "device"
+        ? (await listRemoteWorkspaces(creds)).find(
+            (candidate) => candidate.workspaceId === session.workspaceId
+          )
+        : undefined;
+    const workspace = entry ? workspaceLabel(entry) : session.workspaceName;
     printResult(
       { ...session, live },
       {
         json,
         human: () => {
           console.log(`session: ${session.name}`);
-          console.log(`server: ${session.serverId}/${session.workspaceName}`);
+          console.log(`server: ${session.serverId}/${workspace}`);
           console.log(`entity: ${session.entityId}`);
           console.log(`context: ${session.contextId}`);
           console.log("status: live");
@@ -532,7 +542,16 @@ async function diag(inv: ParsedInvocation): Promise<number> {
     console.log(
       `${result.entity.identity.entityId} (${result.entity.identity.kind}) — status: ${result.entity.status}`
     );
-    if (result.entity.lastError) console.log(`last error: ${result.entity.lastError}`);
+    if (result.entity.lastError) {
+      // A running unit with a recorded error is still on its previous build: the
+      // error belongs to the newer version that could not be adopted.
+      const keptRunning = result.entity.status === "running";
+      console.log(
+        keptRunning
+          ? `update not adopted: ${result.entity.lastError}\nThe previous version keeps running. Fix the error, then push the change again.`
+          : `last error: ${result.entity.lastError}`
+      );
+    }
     if (result.errors.length > 0) {
       console.log("\nrecent errors:");
       for (const entry of result.errors.slice(-20)) {

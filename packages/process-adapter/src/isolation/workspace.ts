@@ -288,9 +288,6 @@ export class WorkspaceRuntime {
   ): ProcessAdapter {
     if (!this.running || this.stopping)
       throw new IsolationError("Workspace runtime is not running");
-    if (options.stdio === "inherit") {
-      throw new IsolationError("Interactive TTYs must be opened through the workspace runtime");
-    }
     if (this.commands.size >= 256) {
       throw new IsolationError("Workspace command admission limit");
     }

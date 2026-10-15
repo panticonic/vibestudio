@@ -1,8 +1,9 @@
 import type { EventService } from "@vibestudio/shared/eventsService";
-import type { EventName } from "@vibestudio/shared/events";
+import type { EventName, SupervisionChange } from "@vibestudio/shared/events";
 import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
 import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
+import type { ApprovalResolvedEvent } from "@vibestudio/shared/governance/types";
 import {
   credentialsMethods,
   type CredentialCaptureCompletion,
@@ -11,7 +12,6 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 import { serializeRpcFailure } from "@vibestudio/rpc";
 import type { ServerClient } from "./serverClient.js";
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
-import type { AppAvailableEvent } from "./appOrchestrator.js";
 import {
   handleExternalOpenPayload,
   type ExternalOpenPayload,
@@ -20,8 +20,6 @@ import {
 export interface ServerEventBridgeDeps {
   eventService: EventService;
   getPanelOrchestrator(): PanelOrchestrator | null;
-  /** Apply an Electron app through the host's single launch/adoption coordinator. */
-  applyAppAvailable?(event: AppAvailableEvent): Promise<void | boolean>;
   getServerClient(): ServerClient | null;
   openExternal(url: string): Promise<void>;
   warn(message: string): void;
@@ -29,12 +27,15 @@ export interface ServerEventBridgeDeps {
   onAttentionRequired?(title: string, message: string): void;
   /** OS-level attention (badge/flash/notification) for pending approvals. */
   onApprovalPendingChanged?(pending: PendingApproval[]): void;
-  /** Host-target apps changed state; desktop bootstrap can retry launch. */
-  onAppHostTargetChanged?(event: ServerHostTargetChangeEvent): void;
+  /** A review was answered. Launches that waited on it continue or stand down. */
+  onApprovalResolved?(resolved: ApprovalResolvedEvent): void;
+  /**
+   * A supervised unit changed. The desktop host adopts Electron apps through its
+   * single launch coordinator and retries host-target launch from this.
+   */
+  onSupervisionChanged?(change: SupervisionChange): Promise<void> | void;
   /** Retain the latest level-triggered tree reset for newly opened shell watches. */
   onPanelTreeInvalidated?(event: PanelTreeInvalidation): void;
-  /** Resolve server app artifact route references for this Electron connection. */
-  resolveAppAvailableEvent?(payload: unknown): unknown | null;
   /**
    * The server asked the shell to run an interactive session credential
    * capture. The handler answers with `credentials.completeCapture`.
@@ -42,11 +43,6 @@ export interface ServerEventBridgeDeps {
   onCredentialCaptureRequest?(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
   /** Apply actions whose implementation is owned by this desktop host. */
   onNotificationAction?(id: string, actionId: string): void | Promise<void>;
-}
-
-export interface ServerHostTargetChangeEvent {
-  event: "apps:available" | "apps:status" | "extensions:status";
-  payload: unknown;
 }
 
 const HOST_DIRECT_EVENT_NAMES = [
@@ -341,23 +337,16 @@ export function createServerEventBridge(
       return;
     }
 
-    if (bareEvent === "apps:available") {
-      const appPayload = deps.resolveAppAvailableEvent
-        ? deps.resolveAppAvailableEvent(payload)
-        : payload;
-      if (appPayload === null) return;
-      deps.onAppHostTargetChanged?.({ event: "apps:available", payload: appPayload });
-      void deps.applyAppAvailable?.(appPayload as AppAvailableEvent).catch((err: unknown) => {
-        const message = err instanceof Error ? err.message : String(err);
-        deps.warn(`[apps] failed to apply app availability: ${message}`);
-        deps.notifyError?.("App availability could not be updated", message);
-      });
-      emitNormalized(bareEvent, appPayload);
+    if (bareEvent === "supervision:changed") {
+      void Promise.resolve(deps.onSupervisionChanged?.(payload as SupervisionChange)).catch(
+        (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          deps.warn(`[supervision] failed to apply unit change: ${message}`);
+          deps.notifyError?.("App update could not be applied", message);
+        }
+      );
+      emitNormalized(bareEvent, payload);
       return;
-    }
-
-    if (bareEvent === "apps:status" || bareEvent === "extensions:status") {
-      deps.onAppHostTargetChanged?.({ event: bareEvent, payload });
     }
 
     if (bareEvent === "extensions:error") {
@@ -377,6 +366,11 @@ export function createServerEventBridge(
       deps.onPanelTreeInvalidated?.(payload as PanelTreeInvalidation);
       emitNormalized(bareEvent, payload);
       return;
+    }
+
+    if (bareEvent === "shell-approval:resolved") {
+      deps.onApprovalResolved?.(payload as ApprovalResolvedEvent);
+      // Fall through - the approval bar renders the same event.
     }
 
     if (bareEvent === "shell-approval:pending-changed") {

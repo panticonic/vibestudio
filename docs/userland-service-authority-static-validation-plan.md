@@ -180,7 +180,7 @@ The design deliberately composes existing mechanisms:
 | `src/server/buildV2/index.ts` | Produces build reports and computes protected-publication affected units. |
 | `packages/shared/src/authorityManifest.ts` | Parses requests, provider definitions, wildcard families, tiers, and resource scopes. |
 | `packages/shared/src/unitAuthorityInference.mjs` | Shared inference entry used by checkout auditing and exact-state builds. |
-| `scripts/generate-unit-authority-manifests.mjs` | Offline proposal/audit path; never runs as an authority-granting build mutation. |
+| `scripts/generate-unit-authority-manifests.mjs` | Audit path (`--check`, part of `check:unit-authority`, so pre-commit, `quality:check` and CI); `--apply` is an offline proposal that never runs as an authority-granting build mutation. |
 
 `workspaceRpcCatalog` currently describes itself as discovery-only and not an
 authority input. That remains correct for runtime authorization: catalog data

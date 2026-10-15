@@ -24,6 +24,7 @@ export { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "./authority.js";
 export {
   createInternalRpcClient,
   createRpcPeer,
+  createRpcWireView,
   withExecutionAdmission,
   type InternalRpcClientConfig,
 } from "./client-core.js";
@@ -66,3 +67,5 @@ export { schemaRpcClient, schemaRpcCaller, schemaRpcStream } from "./schemaClien
 export { wireClientFor, registerRpcWireClient } from "./schemaClient.js";
 
 export { wireCallerFor } from "./schemaClient.js";
+/** Creator-only admission inheritance for host-owned dispatch instrumentation. */
+export { ownRpcOperation } from "./schemaClient.js";

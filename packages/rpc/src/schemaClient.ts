@@ -119,6 +119,7 @@ export function schemaRpcClient(wire: RpcWireClient): RpcClient {
   const client: RpcClient = {
     ...wire,
     ...schemaRpcCaller(wire),
+    createView: (options) => schemaRpcClient(wire.createView(options)),
   };
   registerRpcWireClient(wire);
   schemaClients.set(wire, client);

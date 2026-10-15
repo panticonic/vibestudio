@@ -36,6 +36,7 @@ import type {
   LifecycleCloneInput,
 } from "@vibestudio/shared/doDispatcher";
 import { AmbiguousDoDispatchError, isDoAlarmDispatchResult } from "@vibestudio/shared/doDispatcher";
+import { approvalWaitCancelledError } from "@vibestudio/shared/approvals";
 import { assertPresent } from "../lintHelpers";
 import { isInternalDOSource } from "./internalDOs/internalDoLoader.js";
 import {
@@ -544,6 +545,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
   private preparingTargetReady:
     | ((ref: DORef, witness: LifecycleCloneInput) => Promise<void>)
     | null = null;
+  private withdrawDecisionWaits: ((callerId: string, reason: unknown) => void) | null = null;
   constructor(private readonly ensureUserlandTargetReady: (ref: DORef) => Promise<void>) {
     if (typeof ensureUserlandTargetReady !== "function") {
       throw new Error("DODispatch requires a userland Durable Object readiness barrier");
@@ -623,6 +625,17 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
 
   setWorkReadyObserver(observer: ((hint: DurableWorkReadyHint) => void) | null): void {
     this.workReadyObserver = observer;
+  }
+
+  /**
+   * Withdraw the decisions a Durable Object is waiting on from a person. The
+   * quiesce phase of any lifecycle release (retirement, planned restart,
+   * shutdown) joins the object's in-flight work, and work blocked on a pending
+   * approval can only finish once that approval is withdrawn: waiting for the
+   * person would make the release wait for something the release itself ends.
+   */
+  setDecisionWaitWithdrawal(withdraw: ((callerId: string, reason: unknown) => void) | null): void {
+    this.withdrawDecisionWaits = withdraw;
   }
 
   /**
@@ -861,6 +874,13 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     arg: unknown
   ): Promise<unknown> {
     const lifecycleMethod = `__lifecycle/${method}`;
+    if (method === "prepare" && (arg as LifecyclePrepareInput).phase === "quiesce") {
+      const input = arg as LifecyclePrepareInput;
+      this.withdrawDecisionWaits?.(
+        doTargetId(ref),
+        approvalWaitCancelledError(new Error(input.reason))
+      );
+    }
     if (method === "initializeClone") {
       if (!this.preparingTargetReady) throw new Error("Clone preparation readiness is unavailable");
       if (!this.tokenManager || !this.getWorkerdUrl || !this.getWorkerdGatewayToken) {

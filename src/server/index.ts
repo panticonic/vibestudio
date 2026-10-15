@@ -1973,16 +1973,27 @@ async function main() {
     });
     await staging;
   });
-  const ensureHostTargetExtensions = async (
+  const prepareHostTarget = async (
     target: import("@vibestudio/shared/hostTargets").HostTarget
   ): Promise<void> => {
     const extensionHost = extensionHostForGateway;
     if (!extensionHost) throw new Error("Extension host is not available");
     // A host target can be demanded before the background startup reconciliation
-    // reaches its host-build admission pass. Admit the exact trusted extension
-    // builds at this boundary before staging makes them activatable.
+    // reaches its host-build admission pass. Admit the exact trusted builds the
+    // target needs — its required extensions and its own app — at this boundary
+    // before staging makes them activatable.
     const requiredExtensions = resolveHostTargetRequiredExtensions(workspaceConfig, target);
     admitSeedTrustedUnits(await extensionHost.seedTrustedDeclared(requiredExtensions));
+    const targetApp = resolveHostTargetDecl(workspaceConfig, target);
+    if (targetApp && appHostForGateway) {
+      admitSeedTrustedUnits(
+        await appHostForGateway.seedTrustedDeclared(
+          resolveDeclaredApps(workspaceConfig).filter(
+            (declaration) => declaration.source === targetApp.appSource
+          )
+        )
+      );
+    }
     await hostTargetStaging.ensure(target);
   };
   // Optional artifact warming shares the explicit activation owner.
@@ -2623,7 +2634,7 @@ async function main() {
           };
         },
         ensureBuildProvider: async (target) => {
-          await ensureHostTargetExtensions(target);
+          await prepareHostTarget(target);
           const host = assertPresent(extensionHostForGateway);
           await host.whenReconciled();
           for (const declaration of resolveHostTargetRequiredExtensions(workspaceConfig, target)) {
@@ -2642,56 +2653,22 @@ async function main() {
             buildKeys() {
               const appHost = appHostForGateway;
               if (!appHost) throw new Error("App registry is not available");
-              return appHost.registry
-                .list()
-                .filter((entry) => entry.target !== "terminal")
-                .flatMap((entry) => [
-                  ...(entry.activeBundleKey
-                    ? [
-                        {
-                          ownerId: entry.name,
-                          buildKey: entry.activeBundleKey,
-                          reason: "active" as const,
-                        },
-                      ]
-                    : []),
-                  ...entry.previousVersions.map((version) => ({
-                    ownerId: entry.name,
-                    buildKey: version.activeBundleKey,
-                    reason: "rollback" as const,
-                  })),
-                ]);
-            },
-            resolve: async ({ buildKey }) => {
-              const build = await buildSystemInstance?.peekBuildByKey(buildKey);
-              return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
-            },
-          }),
-          buildKeyRootProvider({
-            id: "terminal-app",
-            owner: "terminal-app",
-            buildKeys() {
-              const appHost = appHostForGateway;
-              if (!appHost) throw new Error("App registry is not available");
-              return appHost.registry
-                .list()
-                .filter((entry) => entry.target === "terminal")
-                .flatMap((entry) => [
-                  ...(entry.activeBundleKey
-                    ? [
-                        {
-                          ownerId: entry.name,
-                          buildKey: entry.activeBundleKey,
-                          reason: "active" as const,
-                        },
-                      ]
-                    : []),
-                  ...entry.previousVersions.map((version) => ({
-                    ownerId: entry.name,
-                    buildKey: version.activeBundleKey,
-                    reason: "rollback" as const,
-                  })),
-                ]);
+              return appHost.registry.list().flatMap((entry) => [
+                ...(entry.activeBundleKey
+                  ? [
+                      {
+                        ownerId: entry.name,
+                        buildKey: entry.activeBundleKey,
+                        reason: "active" as const,
+                      },
+                    ]
+                  : []),
+                ...entry.previousVersions.map((version) => ({
+                  ownerId: entry.name,
+                  buildKey: version.activeBundleKey,
+                  reason: "rollback" as const,
+                })),
+              ]);
             },
             resolve: async ({ buildKey }) => {
               const build = await buildSystemInstance?.peekBuildByKey(buildKey);
@@ -2847,6 +2824,25 @@ async function main() {
     },
     async stop(instance: import("./buildV2/index.js").BuildSystemV2) {
       await instance?.shutdown();
+    },
+  });
+
+  // Unit-set changes are a workspace event: clients that list launchable units
+  // (agent galleries, recovery of installed agents) re-read on this instead of
+  // polling. The build system reports one change per unit; a publication's
+  // changes are coalesced into one event per turn.
+  container.registerManaged({
+    name: "buildUnitEvents",
+    dependencies: ["buildSystem"],
+    async start(resolve) {
+      const { forwardUnitChanges } = await import("./buildUnitEvents.js");
+      return forwardUnitChanges(
+        assertPresent(resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")),
+        (payload) => eventService.emit("workspace:units-changed", payload)
+      );
+    },
+    async stop(unsubscribe: (() => void) | undefined) {
+      unsubscribe?.();
     },
   });
 
@@ -3363,21 +3359,9 @@ async function main() {
             },
           ];
         },
-        "apps:status": async () => [
-          {
-            snapshot: true,
-            apps:
-              (await appHostForGateway?.listWorkspaceUnits())?.map((entry) => ({
-                name: entry.name,
-                status: entry.status,
-                error: entry.lastError,
-                errorDetails: entry.lastErrorDetails ?? null,
-                buildKey: entry.activeBundleKey ?? null,
-                effectiveVersion: entry.activeEv ?? null,
-                canRollback: entry.canRollback,
-                target: entry.target,
-              })) ?? [],
-          },
+        "supervision:changed": () => [
+          ...(appHostForGateway?.supervisionSnapshot() ?? []),
+          ...(extensionHostForGateway?.supervisionSnapshot() ?? []),
         ],
       },
     })
@@ -3608,6 +3592,8 @@ async function main() {
     },
     getAuthorizingShell: (principalId) =>
       rpcServerForGateway?.getAuthorizingShell(principalId) ?? null,
+    presentsOwnBrowserHandoff: (principalId) =>
+      panelRuntimeCoordinator.getHostHeldLease(principalId) !== null,
     hasAppCapability: (callerId, capability) =>
       appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
     resolveNativeInvocation,
@@ -4892,6 +4878,14 @@ async function main() {
           contextBoundary: contextBoundaryDeps,
           hasAppCapability: (callerId, capability) =>
             appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+          stateArgsSchemaForBuild: async (buildKey) => {
+            const build = await container
+              .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+              ?.getBuildByKey(buildKey);
+            if (!build)
+              throw new Error(`Build ${buildKey} is unavailable; cannot validate stateArgs`);
+            return build.metadata.stateArgsSchema;
+          },
           setEntityTitle: async (entityId, title, options) => {
             const slotId = (await dispatcher.dispatch(
               { caller: createHostCaller("server") },
@@ -5161,6 +5155,92 @@ async function main() {
       );
     },
   });
+  // ── Terminal apps: panels hosted by terminals, run in workspace PTYs ──
+  let terminalAppsForShutdown: { stop(): Promise<void> } | null = null;
+  container.registerManaged({
+    name: "terminalApps",
+    dependencies: ["buildSystem", "nativeWorkspace"],
+    async start(resolve) {
+      const { createTerminalAppsService } = await import("./services/terminalAppsService.js");
+      const buildSystem = assertPresent(
+        resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+      );
+      const nativeWorkspace = assertPresent(
+        resolve<
+          Awaited<
+            ReturnType<typeof import("./nativeWorkspaceRuntime.js").startNativeWorkspaceRuntime>
+          >
+        >("nativeWorkspace")
+      );
+      const runtime = () => {
+        if (!runtimeServiceInternal) throw new Error("Runtime service is not available");
+        return runtimeServiceInternal;
+      };
+      const service = createTerminalAppsService({
+        workspaceLabel: () => {
+          // The account's private pair is named by role; stored names are ids.
+          const role = identityDb.getPrivateWorkspaceOwner(workspaceId)?.role;
+          return role === "personal" ? "Personal" : role === "system" ? "System" : workspaceName;
+        },
+        registryPath: path.join(statePath, "terminal-sessions.json"),
+        launchDirectory: path.join(nativeWorkspace.home, ".vibestudio", "terminal-launch"),
+        nodeExecutable: () => nativeWorkspace.nodeExecutable,
+        gatewayUrl: () => getLocalGatewayUrl("terminal app launch"),
+        resolveUnit: async (source) => {
+          const units = await buildSystem.listBuildUnits(undefined, ["panel"]);
+          const unit = units.find((candidate) => candidate.unitPath === source);
+          if (!unit) return null;
+          const manifest = unit.manifest as { title?: unknown; icon?: unknown } | undefined;
+          const icon = typeof manifest?.icon === "string" ? manifest.icon : undefined;
+          return {
+            source,
+            title: typeof manifest?.title === "string" ? manifest.title : unit.unitName,
+            ...(icon && (await import("@vibestudio/shared/panel/icon")).isSemanticEmoji(icon)
+              ? { icon }
+              : {}),
+            effectiveVersion: unit.effectiveVersion,
+          };
+        },
+        createEntity: (caller, spec) => runtime().createEntity(caller, spec),
+        retireEntity: (id) => runtime().retireEntity(id),
+        createContext: async (caller) => (await runtime().createContext({ caller }, {})).contextId,
+        entityStateArgs: async (id) => {
+          const record = await entityStoreInstance?.resolveRecord(id);
+          const stateArgs = record?.stateArgs;
+          return stateArgs && typeof stateArgs === "object" && !Array.isArray(stateArgs)
+            ? (stateArgs as Record<string, unknown>)
+            : null;
+        },
+        primaryArtifactPath: async (buildKey) => {
+          const build = await buildSystem.getBuildByKey(buildKey);
+          const primary = build?.artifacts.find(
+            (artifact) => artifact.role === "primary" && !artifact.platform
+          );
+          if (!build || !primary) throw new Error(`Build ${buildKey} has no primary program`);
+          return buildSystem.getBuildArtifactPath(build, primary);
+        },
+        grantConnection: (principalId, issuedBy, subject) =>
+          connectionGrants.grant(principalId, issuedBy, { subject }).token,
+        holdLease: (input) => panelRuntimeCoordinator.holdEntityForHost(input),
+        dispatch: (ctx, service, method, args) => dispatcher.dispatch(ctx, service, method, args),
+        // Watched delivery (events.watch), projected to the person's own watches.
+        emitToUser: (userId, event, payload) =>
+          eventService.emitProjected(event, (owner) =>
+            owner.userId === userId ? payload : undefined
+          ),
+        log: (level, message, fields) => console[level](`[TerminalApps] ${message}`, fields ?? ""),
+      });
+      terminalAppsForShutdown = service;
+      return service;
+    },
+    stop: (service: { stop(): Promise<void> }) => service.stop(),
+    getServiceDefinition(
+      instance?: import("@vibestudio/shared/serviceDefinition").ServiceDefinition
+    ) {
+      return instance ?? container.get("terminalApps");
+    },
+  });
+
   const { reconcilePanelPresentationChange } = await import("./panelPresentationReconciler.js");
   const { PanelExecutionReconciler } = await import("./panelExecutionReconciler.js");
   const panelLifecycleCaller = createHostCaller("server");
@@ -5268,7 +5348,7 @@ async function main() {
           // grace in RpcServer is the lifecycle boundary for these callers;
           // once it expires, pending approvals and open fs handles must not
           // survive an abandoned client.
-          approvalQueue.cancelForCaller(callerId);
+          approvalQueue.cancelForCaller(callerId, new Error("RPC caller disconnected"));
           panelRuntimeCoordinator.unregisterClientsForCaller(callerId);
           return fsService.closeHandlesForCaller(callerId);
         },
@@ -6251,14 +6331,11 @@ async function main() {
   // ── Extension host RPC service ──
   container.registerManaged({
     name: "extensionHost",
-    dependencies: ["buildSystem", "tokenManager", "nativeWorkspace"],
+    dependencies: ["buildSystem", "nativeWorkspace"],
     async start(resolve) {
       const { ExtensionHost } = await import("@vibestudio/extension-host");
       const buildSystemInst = assertPresent(
         resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-      );
-      const tokenManagerInst = assertPresent(
-        resolve<import("@vibestudio/shared/tokenManager").TokenManager>("tokenManager")
       );
       const nativeWorkspace = assertPresent(
         resolve<
@@ -6276,7 +6353,6 @@ async function main() {
         workspaceId,
         buildSystem: buildSystemInst,
         executionPublicationPort: executionPublicationJournal,
-        tokenManager: tokenManagerInst,
         eventService,
         approvalQueue,
         openUnitReviewFor: unitReviewLookup.forUnavailableCode,
@@ -6315,10 +6391,10 @@ async function main() {
           gitInterop: ["cloneRepo", "remoteDefaultBranch", "reconcileUpstreams"],
         },
         extensionTransport: {
-          attachProcess(proc, credential) {
+          attachProcess(proc, name) {
             const rpcServer = rpcServerForGateway;
             if (!rpcServer) throw new Error("RPC server is not initialized");
-            return rpcServer.attachNativeProcess(proc, credential);
+            return rpcServer.attachNativeProcess(proc, { callerId: name, callerKind: "extension" });
           },
           call(name, method, args, options) {
             const rpcServer = rpcServerForGateway;
@@ -6429,17 +6505,15 @@ async function main() {
         openUnitReviewFor: unitReviewLookup.forUnavailableCode,
         notificationService: notificationResult.internal,
         entityCache,
-        connectionGrants,
         readWorkspaceFileAtState,
         describeCapability,
-        getGatewayUrl: () => getLocalGatewayUrl("app startup"),
         getReactNativeAppArtifactBaseUrl: () => getLocalGatewayUrl("React Native app artifact"),
         getTerminalAppArtifactBaseUrl: () => getLocalGatewayUrl("Terminal app artifact"),
         // Manifest-declared preferred app per host target (meta/vibestudio.yml
         // hostTargets.*). Read live from workspaceConfig so meta-change
         // reloads are reflected without an AppHost restart.
         getHostTargetDecl: (target) => resolveHostTargetDecl(workspaceConfig, target),
-        ensureHostTargetExtensions,
+        prepareHostTarget,
       });
       await host.initialize();
       appHostForGateway = host;
@@ -6740,6 +6814,7 @@ async function main() {
     },
     ensureUserlandDoPrepared: (ref, witness) =>
       durableObjectExecutionReadiness.ensurePrepared(ref, witness),
+    withdrawDecisionWaits: (callerId, reason) => approvalQueue.cancelForCaller(callerId, reason),
     republishStorageOwner: async (ref) => {
       const id = canonicalEntityId({
         kind: "do",
@@ -7237,7 +7312,7 @@ async function main() {
               (declaration) => declaration.source === node.relativePath
             )
           ) {
-            await ensureHostTargetExtensions(target);
+            await prepareHostTarget(target);
           }
         }
         await extensionHostForGateway?.whenDeclarationsStaged();
@@ -7446,11 +7521,8 @@ async function main() {
             },
           getMobileAppBootstrap: async (source) =>
             appHostForGateway?.reactNative.getBootstrap(source) ?? null,
-          registerMobileAppPrincipal: (deviceId, source) =>
-            appHostForGateway?.reactNative.registerPrincipal(deviceId, source) ?? null,
-          retireMobileAppPrincipal: (deviceId) => {
-            appHostForGateway?.reactNative.retirePrincipal(deviceId);
-          },
+          registerDevicePrincipal: async (target, deviceId, source) =>
+            (await appHostForGateway?.registerDevicePrincipal(target, deviceId, source)) ?? null,
           resolveRuntimeEntity: (id) => getEntityStore().resolveActiveRecord(id),
         }),
         routeRegistry
@@ -7478,7 +7550,23 @@ async function main() {
       ).server;
     },
     getExtensionHttpHandler: () => extensionHostForGateway,
-    getAppArtifactHandler: () => appHostForGateway,
+    getAppArtifactHandler: () => {
+      const apps = appHostForGateway;
+      if (!apps || !container.has("panelHttpServer")) return null;
+      const { server } = container.get<{
+        server: import("./panelHttpServer.js").PanelHttpServer;
+      }>("panelHttpServer");
+      return {
+        handleAppArtifactRequest: async (req, res, buildKey, remainderPath) => {
+          if (!(await apps.servesBuild(buildKey))) {
+            res.writeHead(404, { "Content-Type": "text/plain" });
+            res.end("App artifact not active");
+            return;
+          }
+          await server.serveAppArtifact(req, res, buildKey, remainderPath);
+        },
+      };
+    },
     getWorkerdPort: () => workerdManagerForGateway?.getPort() ?? null,
     getWorkerHost: () => workerdManagerForGateway,
     ensureDORoute: async (source, className, objectKey) => {
@@ -8241,6 +8329,16 @@ async function main() {
       irohIngress = null;
     }
 
+    // The terminal launch service waits on the shell extension for each PTY's
+    // exit. It owns those invocations, so it releases them before the
+    // extension host drains its in-flight work.
+    await shutdownStage("terminal-apps-release", async () => {
+      await terminalAppsForShutdown?.stop();
+    }).catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] Terminal launch service shutdown failed:", error);
+    });
+
     // Extension child cancellation and drain use the authenticated process RPC
     // route. Close that owner before global quiescence retires its route; the
     // service-container stop below joins this same shutdown flight.
@@ -8305,6 +8403,10 @@ async function main() {
     } catch (error) {
       console.error("[Server] Identity DB shutdown error:", error);
     }
+    await runtimeDiagnostics.flush().catch((error) => {
+      shutdownErrors.push(error);
+      console.error("[Server] Runtime diagnostics could not be persisted:", error);
+    });
     console.log(
       shutdownErrors.length
         ? "[Server] Shutdown completed with errors"

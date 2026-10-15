@@ -49,7 +49,9 @@ class FakeSocket implements WsLike {
   }
 }
 
-function createTransportHarness() {
+function createTransportHarness(
+  getAuthToken: (signal?: AbortSignal) => Promise<string> = async () => "token"
+) {
   const sockets: FakeSocket[] = [];
   const socketProtocols: string[][] = [];
   const admissionRequests: string[] = [];
@@ -67,7 +69,7 @@ function createTransportHarness() {
         sockets.push(socket);
         return socket;
       },
-      getAuthToken: async () => "token",
+      getAuthToken,
       now: () => Date.now(),
     },
     getWsUrl: () => "wss://server.example/rpc",
@@ -81,6 +83,50 @@ async function flushAsyncWork(): Promise<void> {
 }
 
 describe("wsClientTransport", () => {
+  it("asks the credential owner for a fresh one-use token on every reconnect", async () => {
+    let issued = 0;
+    const token = vi.fn(async () => `one-use-${++issued}`);
+    const { transport, sockets, admissionRequests } = createTransportHarness(token);
+    const connected = transport.connectAndWait();
+    await flushAsyncWork();
+    sockets[0]!.open();
+    sockets[0]!.authenticate();
+    await connected;
+    sockets[0]!.close(1006, "transport interrupted");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flushAsyncWork();
+    expect(admissionRequests).toEqual(["one-use-1", "one-use-2"]);
+    expect(token).toHaveBeenCalledTimes(2);
+    await transport.close();
+  });
+  it("cancels and joins credential acquisition with its connection-attempt owner", async () => {
+    let tokenSignal: AbortSignal | undefined;
+    let entered!: () => void;
+    const tokenEntered = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const transport = wsClientTransport({
+      selfId: "panel:token-owner",
+      getWsUrl: () => "wss://server.example/rpc",
+      adapter: {
+        now: () => Date.now(),
+        createSocket: () => {
+          throw new Error("must not open a socket after cancellation");
+        },
+        getAuthToken: (signal) =>
+          new Promise<string>((_resolve, reject) => {
+            tokenSignal = signal;
+            signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+            entered();
+          }),
+      },
+    });
+    const rejected = expect(transport.connectAndWait()).rejects.toThrow("RPC client closed");
+    await tokenEntered;
+    await transport.close();
+    await rejected;
+    expect(tokenSignal?.aborted).toBe(true);
+  });
   beforeEach(() => {
     vi.useFakeTimers();
   });

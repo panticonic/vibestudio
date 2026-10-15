@@ -94,7 +94,7 @@ describe("workspace approval CLI", () => {
       expect(await run("resolve", id, "once")).toBe(1);
       expect(console.error).toHaveBeenCalledWith(expect.stringContaining("No pending approval"));
     } finally {
-      queue.cancelForCaller(base.callerId);
+      queue.cancelForCaller(base.callerId, new Error("test cleanup"));
       await waiting;
     }
   });

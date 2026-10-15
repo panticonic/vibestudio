@@ -68,7 +68,8 @@ const CREDS = {
 };
 
 const PAIRED_CREDS = {
-  schemaVersion: 5 as const,
+  schemaVersion: 6 as const,
+  phase: "workspace" as const,
   kind: "device" as const,
   url: `iroh://${"bb".repeat(32)}/_workspace/dev`,
   workspaceId: "ws_dev",
@@ -128,6 +129,86 @@ function rpcError(error: string, errorCode?: string, errorData?: unknown): strin
 }
 
 describe("rpcClient", () => {
+  it.each(["shell", "agent"])(
+    "preserves cancellation while reading a %s refresh body",
+    async (kind) => {
+      const owner = new AbortController();
+      const reason = new Error("refresh cancelled");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => ({
+          ok: true,
+          json: async () => {
+            owner.abort(reason);
+            throw new Error("body stream closed");
+          },
+        }))
+      );
+      const refreshing =
+        kind === "shell"
+          ? refreshShell(CREDS, { signal: owner.signal })
+          : refreshAgent({ url: CREDS.url, token: "agent:test:token" }, { signal: owner.signal });
+      await expect(refreshing).rejects.toBe(reason);
+    }
+  );
+  it("propagates caller cancellation through the auth fetch without reporting a network outage", async () => {
+    const controller = new AbortController();
+    const original = new Error("user cancelled authentication");
+    let entered!: () => void;
+    const fetching = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        (_url, init: RequestInit) =>
+          new Promise<Response>((_resolve, reject) => {
+            entered();
+            init.signal?.addEventListener("abort", () => reject(init.signal!.reason), {
+              once: true,
+            });
+          })
+      )
+    );
+    const client = new RpcClient(CREDS, { signal: controller.signal });
+    const running = client.call("hubControl.listWorkspaces", []);
+    const cancelled = expect(running).rejects.toBe(original);
+    await fetching;
+    controller.abort(original);
+    await cancelled;
+    await client.close();
+  });
+
+  it("propagates cancellation to an admitted HTTP RPC and joins its dispatcher", async () => {
+    const controller = new AbortController();
+    const original = new Error("user cancelled operation");
+    let entered!: () => void;
+    const posted = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValueOnce(new Response(refreshShellResult("token")))
+        .mockImplementationOnce(
+          (_url, init: RequestInit) =>
+            new Promise<Response>((_resolve, reject) => {
+              entered();
+              init.signal?.addEventListener("abort", () => reject(init.signal!.reason), {
+                once: true,
+              });
+            })
+        )
+    );
+    const client = new RpcClient(CREDS, { signal: controller.signal });
+    const running = client.call("hubControl.listWorkspaces", []);
+    const cancelled = expect(running).rejects.toBe(original);
+    await posted;
+    controller.abort(original);
+    await cancelled;
+    await client.close();
+  });
   beforeEach(() => {
     clearShellTokenCache();
     localTransportMocks.resolve.mockReset().mockResolvedValue(null);

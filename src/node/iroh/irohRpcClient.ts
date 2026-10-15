@@ -11,11 +11,16 @@ import {
   type NodePhysicalConnection,
   type NodePhysicalEndpoint,
 } from "@vibestudio/iroh-transport/node";
-import { type RpcStreamOptions, type DecodedFramedStream } from "@vibestudio/rpc";
+import {
+  type RpcStreamOptions,
+  type RpcCallOptions,
+  type DecodedFramedStream,
+} from "@vibestudio/rpc";
 import {
   createIrohClientPipe,
   type IrohClientPipe,
   type IrohClientSession,
+  type IrohClientSessionOptions,
 } from "@vibestudio/rpc/transports/irohClient";
 import { createReconnectingIrohClientPipe } from "@vibestudio/rpc/transports/reconnectingIrohClient";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
@@ -31,7 +36,7 @@ export interface IrohRpcClientOptions {
   endpointSecret: Uint8Array;
   callerId: string;
   callerKind?: CallerKind;
-  getToken(): string | Promise<string>;
+  getToken(signal?: AbortSignal): string | Promise<string>;
   connectionId?: string;
   clientLabel?: string;
   clientPlatform?: "desktop" | "headless" | "mobile";
@@ -40,6 +45,7 @@ export interface IrohRpcClientOptions {
   onTerminalClose?(error: Error): void;
   overallDialDeadlineMs?: number;
   perRelayDeadlineMs?: number;
+  signal?: AbortSignal;
 }
 
 interface Connected {
@@ -56,17 +62,55 @@ export class IrohRpcClient {
     NodePhysicalEndpoint
   >;
   private connected: Promise<Connected> | null = null;
+  private pipe: IrohClientPipe | null = null;
+  private pipeRetirement: Promise<void> | null = null;
+  private closePromise: Promise<void> | null = null;
   private closed = false;
   private readonly recoveryListeners = new Set<(kind: RecoveryKind) => void | Promise<void>>();
+  /** A peer client borrows its parent's endpoint; only the owner closes it. */
+  private readonly ownsEndpoint: boolean;
 
-  constructor(private readonly options: IrohRpcClientOptions) {
+  constructor(
+    private readonly options: IrohRpcClientOptions,
+    sharedEndpoint?: EndpointGenerationOwner<NodePhysicalConnection, NodePhysicalEndpoint>
+  ) {
     assertIrohReach(options.reach);
+    if (sharedEndpoint) {
+      this.endpointOwner = sharedEndpoint;
+      this.ownsEndpoint = false;
+      options.signal?.addEventListener("abort", this.cancel, { once: true });
+      return;
+    }
     if (options.endpointSecret.byteLength !== 32) {
       throw new Error("Iroh endpoint secret must contain exactly 32 bytes");
     }
     const secretKey = loadIrohNodeBinding().SecretKey.fromBytes([...options.endpointSecret]);
     this.endpointOwner = new EndpointGenerationOwner(
       createNodeEndpointBinding({ secretKey, relayUrls: options.reach.relays })
+    );
+    this.ownsEndpoint = true;
+    options.signal?.addEventListener("abort", this.cancel, { once: true });
+  }
+  private readonly cancel = () => {
+    void this.close().catch(() => undefined);
+  };
+
+  /**
+   * A client for another peer (for example the hub control endpoint next to a
+   * workspace endpoint) dialed from this client's endpoint identity. A device
+   * holds one endpoint per credential; peers share it instead of binding the
+   * same Endpoint ID twice. The peer closes its own connection; the endpoint
+   * stays owned by this client.
+   */
+  peer(options: Omit<IrohRpcClientOptions, "endpointSecret">): IrohRpcClient {
+    if (this.closed) throw new Error("Iroh RPC client is closed");
+    return new IrohRpcClient(
+      {
+        ...options,
+        signal: options.signal ?? this.options.signal,
+        endpointSecret: this.options.endpointSecret,
+      },
+      this.endpointOwner
     );
   }
 
@@ -78,13 +122,23 @@ export class IrohRpcClient {
     return (await this.ensureConnected()).callerId;
   }
 
-  async call(method: QualifiedServiceMethod, args: unknown[] = []): Promise<unknown> {
-    return this.callTarget("main", method, args);
+  async call(
+    method: QualifiedServiceMethod,
+    args: unknown[] = [],
+    options?: RpcCallOptions
+  ): Promise<unknown> {
+    return this.callTarget("main", method, args, options);
   }
 
-  async callTarget(target: string, method: string, args: unknown[] = []): Promise<unknown> {
+  async callTarget(
+    target: string,
+    method: string,
+    args: unknown[] = [],
+    options?: RpcCallOptions
+  ): Promise<unknown> {
+    options?.signal?.throwIfAborted();
     if (target === "main") requireQualifiedServiceMethod(method);
-    return (await this.ensureConnected()).rpc.call(target, method, args);
+    return (await this.ensureConnected()).rpc.call(target, method, args, options);
   }
 
   async stream(
@@ -122,16 +176,88 @@ export class IrohRpcClient {
     return () => this.recoveryListeners.delete(handler);
   }
 
-  async close(): Promise<void> {
-    if (this.closed) return;
+  /**
+   * Open another authenticated logical session on this client's connection,
+   * for a second principal of the same device (for example the app principal
+   * a terminal client runs). The session shares the physical QUIC connection
+   * and the endpoint identity, so grants bound to this endpoint redeem on it.
+   * The caller owns the returned session and closes it.
+   */
+  async openSession(
+    options: Omit<IrohClientSessionOptions, "onPaired" | "connectionId"> & {
+      connectionId?: string;
+      signal?: AbortSignal;
+    }
+  ): Promise<IrohClientSession> {
+    options.signal?.throwIfAborted();
+    const { pipe } = await this.ensureConnected();
+    const session = pipe.openSession({
+      ...options,
+      connectionId: options.connectionId ?? randomUUID(),
+    });
+    const closeSession = session.close.bind(session);
+    let retirement: Promise<void> | undefined;
+    const close = () => (retirement ??= closeSession());
+    const cancel = () => {
+      void close().catch(() => undefined);
+    };
+    options.signal?.addEventListener("abort", cancel, { once: true });
+    if (options.signal?.aborted) cancel();
+    try {
+      await session.ready?.();
+      options.signal?.throwIfAborted();
+    } catch (error) {
+      const failure = options.signal?.aborted ? options.signal.reason : error;
+      options.signal?.removeEventListener("abort", cancel);
+      try {
+        await close();
+      } catch (cleanup) {
+        throw new AggregateError(
+          [failure, cleanup],
+          "Iroh session admission and retirement failed",
+          {
+            cause: failure,
+          }
+        );
+      }
+      throw failure;
+    }
+    return Object.assign(session, {
+      close: async () => {
+        options.signal?.removeEventListener("abort", cancel);
+        await close();
+      },
+    });
+  }
+
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
     this.closed = true;
+    this.options.signal?.removeEventListener("abort", this.cancel);
     const connected = this.connected;
-    this.connected = null;
-    if (connected) await (await connected).pipe.close().catch(() => undefined);
-    await this.endpointOwner.close();
+    // The pipe owns acquisition already, even while authentication is pending.
+    // Closing it retires session I/O and the owned endpoint before joining ready.
+    const retirement = this.retirePipe();
+    return (this.closePromise = (async () => {
+      const results = await Promise.allSettled([retirement, connected?.catch(() => undefined)]);
+      this.connected = null;
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (errors.length === 1) throw errors[0];
+      if (errors.length) throw new AggregateError(errors, "Iroh RPC client retirement failed");
+    })());
+  }
+
+  private retirePipe(): Promise<void> {
+    const pipe = this.pipe;
+    return (this.pipeRetirement ??= Promise.resolve().then(() =>
+      pipe ? pipe.close() : this.ownsEndpoint ? this.endpointOwner.close() : undefined
+    ));
   }
 
   private ensureConnected(): Promise<Connected> {
+    this.options.signal?.throwIfAborted();
     if (this.closed) return Promise.reject(new Error("Iroh RPC client is closed"));
     return (this.connected ??= this.connect().catch((error) => {
       this.connected = null;
@@ -150,8 +276,10 @@ export class IrohRpcClient {
         });
         return createIrohClientPipe(dialed.connection, dialed);
       },
-      closeEndpoint: () => this.endpointOwner.close(),
+      closeEndpoint: () => (this.ownsEndpoint ? this.endpointOwner.close() : Promise.resolve()),
     });
+    this.pipe = pipe;
+    this.pipeRetirement = null;
     const connectionId = this.options.connectionId ?? randomUUID();
     const session = pipe.openSession({
       connectionId,
@@ -165,7 +293,21 @@ export class IrohRpcClient {
       },
       onTerminalClose: this.options.onTerminalClose,
     });
-    await session.ready?.();
+    try {
+      await session.ready?.();
+    } catch (error) {
+      const failure = this.options.signal?.aborted ? this.options.signal.reason : error;
+      try {
+        await this.retirePipe();
+      } catch (cleanup) {
+        throw new AggregateError([failure, cleanup], "Iroh authentication and retirement failed", {
+          cause: failure,
+        });
+      }
+      throw failure;
+    }
+    this.options.signal?.throwIfAborted();
+    if (this.closed) throw new Error("Iroh RPC client is closed");
     const callerId = session.callerId() ?? this.options.callerId;
     const rpc = createInternalRpcClient({
       selfId: callerId,

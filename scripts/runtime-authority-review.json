@@ -1,6 +1,18 @@
 {
-  "censusDigest": "sha256:0b855dfbe63fd32df86b7cda770cb70176dc81cfdffcb724bf29f76ccd318601",
+  "censusDigest": "sha256:cfda71bafbd0951fb4c8547fa5e4bdba5068919f2ff963468f7bf292f82343a6",
   "decisions": {
+    "host:terminalApps.launch": {
+      "review": "single-prepared-terminal-program-consent",
+      "change": "Opens only the transport; the exact prepared terminal-apps.run leaf remains gated for user and code callers. Declared code authority and approved prepared state are still required before a program starts."
+    },
+    "host:terminalApps.restart": {
+      "review": "single-prepared-owned-terminal-restart-consent",
+      "change": "Opens only the transport; restarting still requires one exact prepared gated terminal-apps.run leaf. Preparation validates session ownership before revealing program details; no foreign session or undeclared code authority is admitted."
+    },
+    "host:terminalApps.resume": {
+      "review": "single-prepared-owned-terminal-resume-consent",
+      "change": "Opens only the transport; resuming still requires one exact prepared gated terminal-apps.run leaf. Preparation validates session ownership before revealing program details; no foreign session or undeclared code authority is admitted."
+    },
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:getCookiesForOrigin": {
       "review": "host-only-exact-origin-cookie-read",
       "change": "The host-owned cookie projection and credential-session adapter may read one canonical origin after deriving the vault from the authenticated user/workspace. Workspace code has no receiver or host-service route to plaintext cookies."
@@ -160,6 +172,10 @@
     "host:attachedHosts.presentApproval": {
       "review": "parent-presented-exact-child-approval",
       "change": "Adds the host-only parent presentation of one verified signed child challenge. The acquisition request is derived from the canonical invocation snapshot and prepared operation, and the signed terminal decision cannot authorize a different request."
+    },
+    "host:auth.grantAppPrincipal": {
+      "review": "device-shell-own-app-principal-grant",
+      "change": "Replaces the public /refresh-principal-grant HTTP route. Only an authenticated device shell may call it, and only for its own device: it activates that device's principal for an approved, running client app (react-native or terminal) and mints a one-use connection grant bound to the caller's transport endpoint and the app's exact execution identity. It grants no authority beyond the app's admitted manifest."
     },
     "host:auth.mintAgentCredential": {
       "review": "reviewed-subagent-launch-agent-login",
@@ -927,15 +943,15 @@
     },
     "host:hubControl.deleteWorkspace": {
       "review": "workspace-membership-owned-deletion",
-      "change": "Keeps the critical capability tier while enforcing the selected workspace’s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
+      "change": "Keeps the critical capability tier while enforcing the selected workspace\u2019s explicit administrator role instead of server-wide destructive sensitivity. A server operator cannot substitute for target workspace membership; private ownership restrictions remain receiver-enforced."
     },
     "host:hubControl.ensureUserWorkspaces": {
       "review": "authenticated-private-workspace-pair",
-      "change": "Idempotently creates only the authenticated active account’s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
+      "change": "Idempotently creates only the authenticated active account\u2019s designated Personal and System workspaces from host-selected exact source pins. Existing IDs and state are retained; private membership cannot be shared and designation confers no server administrator role."
     },
     "host:hubControl.getWorkspaceRpcPolicy": {
       "review": "explicit-workspace-administrator-policy-read",
-      "change": "Reads the selected workspace’s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
+      "change": "Reads the selected workspace\u2019s host-owned hard RPC policy only for a live member with its explicit workspace administrator role, or the designated private workspace owner. The separate policy-read capability does not enumerate services or authorize application calls."
     },
     "host:hubControl.observeDevices": {
       "review": "caller-visible-device-readiness-observation",
@@ -975,7 +991,7 @@
     },
     "host:notification.pushUserInbox": {
       "review": "code-owned-inbox-escalation-device-push",
-      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan §4.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
+      "change": "Adds a code-and-host-only device push for one durable userland inbox entry (messaging plan \u00a74.5). The host stores nothing: it forwards a title, an optional body, a priority, and channel/message deep-link ids to the exact addressed account's own registered devices, restricted to members of this child's workspace. It grants no inbox mutation and no read of the entry; acknowledgement happens through the existing acknowledgeUserNotification path when the person opens it."
     },
     "host:notification.showToUser": {
       "review": "code-owned-addressed-transient-notification",

@@ -1,5 +1,4 @@
 import readline from "node:readline/promises";
-import { stdin as input, stdout as output } from "node:process";
 import {
   formatLaunchGateForTerminal,
   targetLabel,
@@ -8,19 +7,52 @@ import {
 import type { HostTarget } from "@vibestudio/shared/hostTargets";
 import {
   HostLaunchClient,
+  type HostLaunchProgress,
   type HostLaunchResult,
 } from "@vibestudio/service-schemas/clients/hostLaunchClient";
-import { RpcClient, type DeviceCredential } from "./rpcClient.js";
-import type { CliStoredPairing } from "./credentialStore.js";
-import { TimeoutError } from "./output.js";
-import { qualifyServiceMethod } from "@vibestudio/shared/typedServiceClient";
+import {
+  qualifyServiceMethod,
+  type QualifiedServiceMethod,
+} from "@vibestudio/shared/typedServiceClient";
+import { CliError, UsageError } from "./output.js";
+
+/** Conventional exit status for a SIGINT-terminated command. */
+export const EXIT_INTERRUPTED = 130;
 
 export interface TerminalLaunchGateOptions {
   target?: HostTarget;
+  /** Approve each startup approval once without prompting. */
   yes?: boolean;
-  json?: boolean;
-  /** Optional deadline for this CLI's wait; startup remains owned by the workspace supervisor. */
-  timeoutMs?: number;
+  input?: NodeJS.ReadStream;
+  output?: NodeJS.WriteStream;
+  /** Concise progress lines (build/activation status) for the user. */
+  onProgress?(line: string): void;
+  /**
+   * The owner's termination request. It ends an open approval prompt and the
+   * wait for activation, so a hang-up or SIGTERM never leaves the prompt
+   * holding the terminal after the server it asks about is gone.
+   */
+  signal?: AbortSignal;
+}
+
+/** What the server is doing to bring the app up, in the person's words. */
+function describeLaunchProgress(progress: HostLaunchProgress): string | null {
+  if (progress.state === "complete") return null;
+  const detail = progress.detail ? `: ${progress.detail}` : "";
+  switch (progress.phase) {
+    case "resolve-target":
+      return progress.state === "failed" ? `Could not find the app to start${detail}` : null;
+    case "start-units":
+      return progress.state === "blocked"
+        ? "Waiting for your approval of the extensions it needs"
+        : `Starting the extensions it needs${detail}`;
+    case "prepare-app":
+      return progress.state === "blocked"
+        ? "Waiting for your approval of the app"
+        : progress.state === "failed"
+          ? `The app could not be prepared${detail}`
+          : `Building and starting the app${detail}`;
+  }
 }
 
 export interface TerminalLaunchGateResult {
@@ -30,70 +62,61 @@ export interface TerminalLaunchGateResult {
   launch?: HostLaunchResult;
 }
 
+/** Minimal RPC surface the gate needs: the CLI's own authenticated device client. */
+export interface LaunchGateRpc {
+  call(method: QualifiedServiceMethod, args?: unknown[]): Promise<unknown>;
+}
+
+/**
+ * Resolve, approve, and activate the workspace's host-target app before any
+ * client takes over the terminal. Approval prompts are line-mode questions on
+ * the real terminal; they stay open until the user answers.
+ *
+ * Activation (build + admission) is owned by the workspace supervisor. While it
+ * reports `preparing`, the gate asks again once a second and reports each new
+ * status line, so the user sees build progress instead of a silent wait.
+ */
 export async function runTerminalLaunchGate(
-  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken"> & {
-    workspacePairing?: CliStoredPairing;
-    endpointSecret?: string;
-  },
+  rpc: LaunchGateRpc,
   options: TerminalLaunchGateOptions = {}
 ): Promise<TerminalLaunchGateResult> {
   const target = options.target ?? "terminal";
-  const rpc = new RpcClient(creds);
-  const launchClient = new HostLaunchClient((service, method, args) =>
-    rpc.call(qualifyServiceMethod(service, method), args)
+  const output = options.output ?? process.stdout;
+  let lastLaunchProgress = "";
+  const launchClient = new HostLaunchClient(
+    (service, method, args) => rpc.call(qualifyServiceMethod(service, method), args),
+    (progress) => {
+      const line = describeLaunchProgress(progress);
+      if (line && line !== lastLaunchProgress) options.onProgress?.(line);
+      lastLaunchProgress = line ?? "";
+    }
   );
-  const startedAt = Date.now();
-  // Building and starting the terminal can legitimately take a while; only an
-  // explicit `--timeout` bounds this CLI's wait. Activation is owned by the
-  // workspace supervisor and may continue after this client disconnects.
-  const timeoutMs = options.timeoutMs ?? Number.POSITIVE_INFINITY;
   let approvalsResolved = 0;
   let lastProgress = "";
 
-  try {
-    for (;;) {
-      const launch = await launchClient.launch(target);
-      if (launch.status === "ready" || launch.status === "unavailable") {
-        return { target, status: launch.status, approvalsResolved, launch };
-      }
-      if (launch.status === "approval-required") {
-        if (!options.json) {
-          output.write(`${formatLaunchGateForTerminal(launch.approvals, target)}\n\n`);
-        }
-        const decision = await getDecision(target, options);
-        await launchClient.resolveApprovals(launch.approvals, decision);
-        if (decision === "deny") {
-          return { target, status: "denied", approvalsResolved };
-        }
-        approvalsResolved += launch.approvals.length;
-        lastProgress = "";
-        continue;
-      }
-
-      const elapsed = Date.now() - startedAt;
-      if (elapsed >= timeoutMs) {
-        throw new TimeoutError(
-          `terminal startup timed out after ${formatElapsed(elapsed)}; last status: ${launch.reason}. ` +
-            "Run `vibestudio agent diag <unit>` for build/runtime details."
-        );
-      }
-      if (!options.json && launch.reason !== lastProgress) {
-        output.write(`${launch.reason}\n`);
-        lastProgress = launch.reason;
-      }
-      await new Promise((resolve) => setTimeout(resolve, Math.min(1_000, timeoutMs - elapsed)));
+  for (;;) {
+    options.signal?.throwIfAborted();
+    const launch = await launchClient.launch(target);
+    if (launch.status === "ready" || launch.status === "unavailable") {
+      return { target, status: launch.status, approvalsResolved, launch };
     }
-  } finally {
-    await rpc.close();
+    if (launch.status === "approval-required") {
+      output.write(`\n${formatLaunchGateForTerminal(launch.approvals, target)}\n\n`);
+      const decision = await getDecision(target, options);
+      await launchClient.resolveApprovals(launch.approvals, decision);
+      if (decision === "deny") {
+        return { target, status: "denied", approvalsResolved };
+      }
+      approvalsResolved += launch.approvals.length;
+      lastProgress = "";
+      continue;
+    }
+    if (launch.reason !== lastProgress) {
+      options.onProgress?.(launch.reason);
+      lastProgress = launch.reason;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
-}
-
-function formatElapsed(ms: number): string {
-  const seconds = Math.max(1, Math.round(ms / 1_000));
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const remainder = seconds % 60;
-  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
 async function getDecision(
@@ -101,21 +124,40 @@ async function getDecision(
   options: TerminalLaunchGateOptions
 ): Promise<BootstrapDecision> {
   if (options.yes) return "once";
+  const input = options.input ?? process.stdin;
+  const output = options.output ?? process.stdout;
   if (!input.isTTY || !output.isTTY) {
-    throw new Error(
-      `${targetLabel(target)} startup approval requires an interactive terminal. ` +
-        "Re-run with --yes to approve once non-interactively."
+    throw new UsageError(
+      `${targetLabel(target)} startup needs your approval, but this is not an interactive ` +
+        "terminal. Re-run in a terminal, or pass --yes to approve once."
     );
   }
   const rl = readline.createInterface({ input, output });
+  // Ctrl-C at the prompt ends startup; without a listener readline only pauses.
+  // So does the owner's termination request.
+  const interrupted = new AbortController();
+  rl.on("SIGINT", () => interrupted.abort());
+  const ownerSignal = options.signal;
+  const stopOnOwner = () => interrupted.abort();
+  if (ownerSignal?.aborted) interrupted.abort();
+  else ownerSignal?.addEventListener("abort", stopOnOwner, { once: true });
   try {
     for (;;) {
-      const answer = (await rl.question("Trust and start? [y/N] ")).trim().toLowerCase();
+      const answer = (await rl.question("Trust and start? [y/N] ", { signal: interrupted.signal }))
+        .trim()
+        .toLowerCase();
       if (answer === "y" || answer === "yes") return "once";
       if (answer === "" || answer === "n" || answer === "no") return "deny";
       output.write("Please answer y or n.\n");
     }
+  } catch (error) {
+    if (interrupted.signal.aborted) {
+      output.write("\n");
+      throw new CliError("Startup interrupted; nothing was approved.", EXIT_INTERRUPTED);
+    }
+    throw error;
   } finally {
+    ownerSignal?.removeEventListener("abort", stopOnOwner);
     rl.close();
   }
 }

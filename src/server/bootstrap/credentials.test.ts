@@ -31,6 +31,7 @@ describe("wireCredentialService", () => {
       isPersonalWorkspaceOwner: () => false,
       getAuthorizingShell: () => null,
       hasAppCapability: () => false,
+      presentsOwnBrowserHandoff: () => false,
     });
 
     expect(service.name).toBe("credentials");

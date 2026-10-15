@@ -78,7 +78,10 @@ describe("cleanupRuntimeEntity", () => {
     expect(d.panelRuntimeCoordinator.retireRuntimeEntity).toHaveBeenCalledWith("panel:one");
     expect(d.workerdManager.retireEgressCaller).toHaveBeenCalledWith("panel:one");
     expect(d.egressProxy.dropCaller).toHaveBeenCalledWith("panel:one");
-    expect(d.approvalQueue.cancelForCaller).toHaveBeenCalledWith("panel:one");
+    expect(d.approvalQueue.cancelForCaller).toHaveBeenCalledWith(
+      "panel:one",
+      expect.objectContaining({ message: "Runtime entity panel:one retired" })
+    );
     expect(d.credentialSessionGrantStore.dropForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.connectionGrants.revokeForPrincipal).toHaveBeenCalledWith("panel:one");
     expect(d.fsService.closeHandlesForCaller).toHaveBeenCalledWith("panel:one");

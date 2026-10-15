@@ -48,7 +48,8 @@ function writeCredentials(tmpDir: string, overrides: Record<string, unknown> = {
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
     JSON.stringify({
-      schemaVersion: 5,
+      schemaVersion: 6,
+      phase: "workspace",
       kind: "device",
       transport: "iroh",
       endpointSecret: "E".repeat(43),
@@ -328,9 +329,26 @@ describe("vibestudio agent commands", () => {
 
     stubServer((body) => {
       if (body.method === "runtime.listEntities") return [LIVE_SESSION_ROW];
+      // The label is the person-facing name the hub lists the workspace under.
+      if (body.method === "hubControl.listWorkspaces")
+        return [
+          {
+            workspaceId: "ws_dev",
+            name: "personal-ws_dev",
+            privateRole: "personal",
+            lastOpened: 1,
+            running: true,
+            pendingApprovalCount: 0,
+          },
+        ];
       throw new Error(`unexpected method ${body.method}`);
     });
     await expect(main(["agent", "status", "work", "--json"])).resolves.toBe(0);
+    vi.mocked(console.log).mockClear();
+    await expect(main(["agent", "status", "work", "--plain"])).resolves.toBe(0);
+    expect(vi.mocked(console.log).mock.calls.map((call) => String(call[0]))).toContain(
+      `server: srv_${"S".repeat(24)}/Personal`
+    );
 
     stubServer(() => []);
     await expect(main(["agent", "status", "work", "--json"])).resolves.toBe(5);

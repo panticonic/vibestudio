@@ -47,15 +47,6 @@ export interface ProcessAdapter {
 export interface ProcessAdapterOptions {
   execArgv?: string[];
   preferNode?: boolean;
-  /**
-   * Stdio mode. "pipe" (default) captures the child's stdout/stderr for log
-   * collection. "inherit" gives the child the parent's real terminal (stdin +
-   * stdout + stderr) — required for an INTERACTIVE terminal app (TUI). IPC is
-   * retained in both modes so `postMessage` shutdown still works. "inherit"
-   * only yields a usable TTY when the parent (server) itself runs attached to
-   * an interactive terminal.
-   */
-  stdio?: "pipe" | "inherit";
 }
 
 function isClosedIpcError(error: unknown): boolean {
@@ -95,13 +86,9 @@ export function createNodeProcessAdapter(
     ...env,
     ...(process.versions["electron"] ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
   };
-  // Keep the IPC channel in both modes so postMessage-based shutdown works.
-  const stdio: Array<"pipe" | "inherit" | "ipc"> =
-    options.stdio === "inherit"
-      ? ["inherit", "inherit", "inherit", "ipc"]
-      : ["pipe", "pipe", "pipe", "ipc"];
+  // stdout/stderr are captured for log collection; IPC carries control messages.
   const proc = nodeFork(bundlePath, [], {
-    stdio,
+    stdio: ["pipe", "pipe", "pipe", "ipc"],
     env: childEnv as NodeJS.ProcessEnv,
     execArgv: options.execArgv,
   });
@@ -177,7 +164,7 @@ export function createProcessAdapter(
         options?: {
           env?: NodeJS.ProcessEnv;
           execArgv?: string[];
-          stdio?: "pipe" | "inherit" | "ignore";
+          stdio?: "pipe";
         }
       ): any;
     };
@@ -185,7 +172,7 @@ export function createProcessAdapter(
   const proc = utilityProcess.fork(bundlePath, [], {
     env: env as NodeJS.ProcessEnv,
     execArgv: options.execArgv,
-    stdio: options.stdio ?? "pipe",
+    stdio: "pipe",
   });
   const adapter: ProcessAdapter = {
     postMessage: (msg) => {

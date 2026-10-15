@@ -1,3 +1,4 @@
+import { traceInvocation } from "./invocationTrace.js";
 import { createCredentialClient } from "@vibestudio/service-schemas/clients/credentialClient";
 import {
   createMainRpcCaller,
@@ -66,7 +67,7 @@ function runOwnedLifecycle<T>(
 ): Promise<T> {
   const extension = process.env["VIBESTUDIO_EXTENSION_NAME"] ?? "unknown";
   const flight = lifecycle.run(signal, async (ownedSignal) => {
-    console.info("[ExtensionRuntime] invocation started", {
+    traceInvocation("[ExtensionRuntime] invocation started", {
       extension,
       owner,
     });
@@ -74,7 +75,7 @@ function runOwnedLifecycle<T>(
   });
   return flight.then(
     (value) => {
-      console.info("[ExtensionRuntime] invocation completed", {
+      traceInvocation("[ExtensionRuntime] invocation completed", {
         extension,
         owner,
       });
@@ -581,7 +582,6 @@ function getRuntimeBridge(): RpcWireClient {
 }
 
 async function connectRuntimeBridge(): Promise<RpcWireClient> {
-  const token = requiredEnv("VIBESTUDIO_EXTENSION_RPC_TOKEN");
   const extensionName = requiredEnv("VIBESTUDIO_EXTENSION_NAME");
   if (!process.send || !process.connected)
     throw new Error("Extension requires its launcher's IPC channel");
@@ -710,10 +710,11 @@ async function connectRuntimeBridge(): Promise<RpcWireClient> {
     );
   });
   try {
+    // The launcher authenticated this IPC channel when it started the process;
+    // the auth frame only negotiates the contract and names the connection.
     await send({
       type: "ws:auth",
       contractVersion: RPC_CONTRACT_VERSION,
-      token,
       connectionId: `extension:${extensionName}`,
     });
     await authenticated;

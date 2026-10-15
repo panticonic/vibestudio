@@ -12,7 +12,7 @@ import {
   extensionRuntimeDepsProjected,
   materializeExtensionRuntimeDeps,
   populateExtensionRuntimeDeps,
-  refreshCachedExtensionRuntimeDeps,
+  refreshCachedNodeProgramRuntimeDeps,
 } from "./builder.js";
 import { createBuilderTestSession } from "./builderTestSession.js";
 import { extensionRuntimeDependencyKey } from "./externalDeps.js";
@@ -210,7 +210,7 @@ describe("buildUnit extension builds", () => {
     const retained = (await session.store.getByExecution(key, originalDigest))!;
     expect(retained.metadata.execution?.executionDigest).toBe(originalDigest);
 
-    await refreshCachedExtensionRuntimeDeps(session, retained);
+    await refreshCachedNodeProgramRuntimeDeps(session, retained);
 
     expect(retained.metadata.execution?.executionDigest).toBe(originalDigest);
     expect(retained.sourceStateHash).toBe(originalState);

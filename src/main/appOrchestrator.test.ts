@@ -318,12 +318,12 @@ describe("AppOrchestrator", () => {
     }
   });
 
-  it("ignores terminal app process availability for desktop view adoption", async () => {
+  it("ignores terminal app availability for desktop view adoption", async () => {
     const panelView = createPanelView();
     const orchestrator = new AppOrchestrator({ getPanelView: () => panelView });
 
     await orchestrator.applyAppAvailable({
-      appId: "@workspace-apps/remote-cli",
+      appId: "@workspace-apps/terminal-browser",
       target: "terminal",
       url: "http://localhost/app.mjs",
       adoptionPolicy: "immediate",

@@ -34,7 +34,8 @@ import {
   shellCallerId,
   type AuthConnectionInfo,
 } from "../hostCore/auth/model.js";
-import { refreshPrincipalGrantResponse } from "../hostCore/auth/principalGrants.js";
+import { grantAppPrincipal } from "../hostCore/auth/principalGrants.js";
+import type { DeviceAppPrincipal } from "../deviceAppPrincipals.js";
 import { sendAuthError } from "../hostCore/auth/httpErrors.js";
 import { authError, authErrorCode } from "../hostCore/auth/errors.js";
 import { createCapabilityAuthorizer, type CapabilityAuthorizer } from "./capabilityAuthorizer.js";
@@ -52,10 +53,6 @@ export const RefreshShellBodySchema = z
   })
   .strict();
 
-export const RefreshPrincipalGrantBodySchema = RefreshShellBodySchema.extend({
-  principal: z.string().min(1).max(128).optional(),
-  source: z.string().min(1).max(256).optional(),
-}).strict();
 export const RefreshAgentBodySchema = z
   .object({
     // The full presentable credential: `agent:<agentId>:<secret>`.
@@ -322,11 +319,11 @@ export function createAuthService(deps: {
     approvals?: PendingUnitInstallReviewApproval[];
   }>;
   getMobileAppBootstrap?: (source?: string | null) => unknown | null | Promise<unknown | null>;
-  registerMobileAppPrincipal?: (
+  registerDevicePrincipal?: (
+    target: import("@vibestudio/shared/unitManifest").WorkspaceAppTarget,
     deviceId: string,
-    source?: string | null
-  ) => string | null | Promise<string | null>;
-  retireMobileAppPrincipal?: (deviceId: string) => void;
+    source: string | null
+  ) => Promise<DeviceAppPrincipal | null>;
   resolveRuntimeEntity?: (id: string) => Promise<EntityRecord | null>;
 }): ServiceWithRoutes {
   const capabilityAuthorizer =
@@ -374,6 +371,38 @@ export function createAuthService(deps: {
     }
   }
 
+  /** The paired device behind an authenticated device-shell connection. */
+  function requireDeviceShell(
+    ctx: { caller: import("@vibestudio/shared/serviceDispatcher").VerifiedCaller },
+    method: string,
+    purpose: string
+  ): { deviceId: string; subject: NonNullable<typeof ctx.caller.subject> } {
+    const callerId = ctx.caller.runtime.id;
+    if (ctx.caller.runtime.kind !== "shell" || !callerId.startsWith("shell:")) {
+      throw new ServiceError(
+        "auth",
+        method,
+        `${purpose} requires an authenticated device shell`,
+        "EACCES",
+        undefined,
+        "access"
+      );
+    }
+    const deviceId = callerId.slice("shell:".length);
+    const subject = ctx.caller.subject;
+    if (!subject || deps.deviceAuthStore.userFor(deviceId) !== subject.userId) {
+      throw new ServiceError(
+        "auth",
+        method,
+        "Authenticated shell is not bound to a live device account",
+        "EACCES",
+        undefined,
+        "access"
+      );
+    }
+    return { deviceId, subject };
+  }
+
   const definition: ServiceDefinition = {
     name: "auth",
     description: "Gateway authentication bootstrap routes",
@@ -410,31 +439,7 @@ export function createAuthService(deps: {
         ...(ctx.caller.agentBinding ? { agentBinding: ctx.caller.agentBinding } : {}),
       }),
       getMobileAppBootstrap: async (ctx, [source]) => {
-        const callerId = ctx.caller.runtime.id;
-        if (ctx.caller.runtime.kind !== "shell" || !callerId.startsWith("shell:")) {
-          throw new ServiceError(
-            "auth",
-            "getMobileAppBootstrap",
-            "Mobile app bootstrap requires an authenticated device shell",
-            "EACCES",
-            undefined,
-            "access"
-          );
-        }
-        const deviceId = callerId.slice("shell:".length);
-        if (
-          !ctx.caller.subject ||
-          deps.deviceAuthStore.userFor(deviceId) !== ctx.caller.subject.userId
-        ) {
-          throw new ServiceError(
-            "auth",
-            "getMobileAppBootstrap",
-            "Authenticated shell is not bound to a live device account",
-            "EACCES",
-            undefined,
-            "access"
-          );
-        }
+        requireDeviceShell(ctx, "getMobileAppBootstrap", "Mobile app bootstrap");
         if (!deps.getMobileAppBootstrap) {
           throw new ServiceError(
             "auth",
@@ -476,6 +481,33 @@ export function createAuthService(deps: {
           workspaceId: deps.getWorkspaceId(),
           bootstrap: bootstrap as Record<string, unknown>,
         };
+      },
+      grantAppPrincipal: async (ctx, [request]) => {
+        const { deviceId, subject } = requireDeviceShell(
+          ctx,
+          "grantAppPrincipal",
+          "An app principal grant"
+        );
+        return grantAppPrincipal(
+          {
+            getServerId: () => deps.deviceAuthStore.getServerId(),
+            getServerBootId: deps.getServerBootId,
+            getWorkspaceId: deps.getWorkspaceId,
+            connectionGrants: deps.connectionGrants,
+            ensureMobileAppReady: deps.ensureMobileAppReady,
+            registerDevicePrincipal: deps.registerDevicePrincipal,
+          },
+          {
+            principal: request.principal,
+            source: request.source ?? null,
+            deviceId,
+            subject,
+            issuedBy: ctx.caller.runtime.id,
+            ...(ctx.caller.remoteEndpointId
+              ? { remoteEndpointId: ctx.caller.remoteEndpointId }
+              : {}),
+          }
+        );
       },
       mintAgentCredential: async (ctx, [input]) => {
         if (!deps.agentCredentialWriter) throw new Error("Hub identity writer is not configured");
@@ -586,20 +618,6 @@ export function createAuthService(deps: {
               workspaceId: deps.getWorkspaceId(),
             })
           );
-        } catch (error) {
-          sendAuthError(res, error, 400);
-        }
-      },
-    },
-    {
-      serviceName: "auth",
-      path: "/refresh-principal-grant",
-      methods: ["POST"],
-      auth: "public",
-      handler: async (req, res) => {
-        try {
-          const body = RefreshPrincipalGrantBodySchema.parse(await readJson(req));
-          sendJson(res, 200, await refreshPrincipalGrantResponse(deps, body));
         } catch (error) {
           sendAuthError(res, error, 400);
         }

@@ -323,12 +323,12 @@ describe("buildUnit app builds", () => {
       "-m",
       "initial rpc package",
     ]);
-    const appDir = path.join(workspaceRoot, "apps", "remote-cli");
+    const appDir = path.join(workspaceRoot, "apps", "terminal-browser");
     fs.mkdirSync(appDir, { recursive: true });
     fs.writeFileSync(
       path.join(appDir, "package.json"),
       JSON.stringify({
-        name: "@workspace-apps/remote-cli",
+        name: "@workspace-apps/terminal-browser",
         version: "0.1.0",
         private: true,
         vibestudio: {
@@ -351,7 +351,7 @@ describe("buildUnit app builds", () => {
         "import WebSocket from 'ws';",
         "export function main() {",
         "  const registry = createHandlerRegistry();",
-        "  return { label: 'remote-cli', hasWs: typeof WebSocket === 'function', registry };",
+        "  return { label: 'terminal-browser', hasWs: typeof WebSocket === 'function', registry };",
         "}",
         "",
       ].join("\n")
@@ -371,7 +371,7 @@ describe("buildUnit app builds", () => {
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       session,
-      graph.get("@workspace-apps/remote-cli"),
+      graph.get("@workspace-apps/terminal-browser"),
       "b".repeat(64),
       graph,
       workspaceRoot,
@@ -596,6 +596,153 @@ describe("buildUnit app builds", () => {
         SOURCE_STATE_HASH
       )
     ).rejects.toThrow(/streamed artifact ios\/main\.hbc with integrity .* expected/);
+  });
+
+  describe("app artifact contract at build time", () => {
+    function commitReactNativeApp(): void {
+      const appDir = path.join(workspaceRoot, "apps", "mobile");
+      fs.mkdirSync(appDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(appDir, "package.json"),
+        JSON.stringify({
+          name: "@workspace-apps/mobile",
+          version: "0.1.0",
+          private: true,
+          vibestudio: {
+            app: {
+              target: "react-native",
+              renderer: "index.tsx",
+              rnComponentName: "VibestudioMobile",
+              rnHostAbi: "rn-host-2",
+            },
+          },
+        })
+      );
+      fs.writeFileSync(
+        path.join(appDir, "index.tsx"),
+        "export default function App() { return null; }\n"
+      );
+      git(appDir, ["init", "-b", "main"]);
+      git(appDir, ["add", "."]);
+      git(appDir, [
+        "-c",
+        "user.name=Vibestudio Test",
+        "-c",
+        "user.email=test@example.invalid",
+        "commit",
+        "-m",
+        "initial app",
+      ]);
+    }
+
+    async function buildMobileWith(
+      ensureBuildProvider: (target: "react-native") => Promise<void>
+    ): Promise<unknown> {
+      commitReactNativeApp();
+      await closeSession();
+      const context = await createBuilderTestSession({
+        appRoot: path.resolve(__dirname, "../../.."),
+        workspaceRoot,
+        stateRoot: path.join(root, "state"),
+        runNativeJob: runIsolatedBuildJob,
+        ensureBuildProvider,
+      });
+      session = context.session;
+      closeSession = context.close;
+      const graph = discoverPackageGraph(workspaceRoot);
+      return buildUnit(
+        session,
+        graph.get("@workspace-apps/mobile"),
+        "d".repeat(64),
+        graph,
+        workspaceRoot,
+        SOURCE_STATE_HASH
+      );
+    }
+
+    function registerProviderReturning(output: {
+      artifacts: Array<{ platform?: "ios" | "android"; path: string }>;
+      metadata: { rnHostAbi?: string; platform?: "ios" | "android" };
+    }) {
+      return async () => {
+        registerBuildProvider({
+          name: "@workspace-extensions/react-native-provider",
+          target: "react-native",
+          contractVersion: "1",
+          activeEv: "ev-provider",
+          activeBuildKey: "provider-build",
+          build: async () => ({
+            artifacts: output.artifacts.map((artifact) => ({
+              ...artifact,
+              role: "primary" as const,
+              contentType: "application/octet-stream",
+              content: "bundle",
+            })),
+            metadata: output.metadata,
+          }),
+        });
+      };
+    }
+
+    it("rejects a React Native build whose provider reports no host ABI", async () => {
+      await expect(
+        buildMobileWith(
+          registerProviderReturning({
+            artifacts: [{ path: "ios/main.hbc", platform: "ios" }],
+            metadata: { platform: "ios" },
+          })
+        )
+      ).rejects.toThrow(
+        /React Native app @workspace-apps\/mobile build is missing signed RN metadata/u
+      );
+    });
+
+    it("rejects a React Native build with two primary artifacts for one platform", async () => {
+      await expect(
+        buildMobileWith(
+          registerProviderReturning({
+            artifacts: [
+              { path: "ios/a.hbc", platform: "ios" },
+              { path: "ios/b.hbc", platform: "ios" },
+            ],
+            metadata: { rnHostAbi: "rn-host-2", platform: "ios" },
+          })
+        )
+      ).rejects.toThrow(/multiple primary artifacts for ios/u);
+      // The rejected artifact stays in the store; a repeat must not slip through the cache.
+      const graph = discoverPackageGraph(workspaceRoot);
+      await expect(
+        buildUnit(
+          session,
+          graph.get("@workspace-apps/mobile"),
+          "d".repeat(64),
+          graph,
+          workspaceRoot,
+          SOURCE_STATE_HASH
+        )
+      ).rejects.toThrow(/multiple primary artifacts for ios/u);
+    });
+
+    it("rejects a React Native build whose primary artifact has no platform", async () => {
+      await expect(
+        buildMobileWith(
+          registerProviderReturning({
+            artifacts: [{ path: "main.hbc" }],
+            metadata: { rnHostAbi: "rn-host-2" },
+          })
+        )
+      ).rejects.toThrow(/primary artifact main\.hbc is missing a mobile platform/u);
+    });
+
+    it("fails clearly when the React Native build provider is unavailable", async () => {
+      await expect(
+        buildMobileWith(async () => {
+          throw new Error("Required build extension is unavailable: extensions/rn-provider");
+        })
+      ).rejects.toThrow(
+        /React Native app @workspace-apps\/mobile cannot be built because its build provider is unavailable: Required build extension is unavailable/u
+      );
+    });
   });
 
   it("builds panel bundles that import fs through the runtime-backed shim", async () => {

@@ -52,6 +52,7 @@ import {
 } from "@vibestudio/mobile-iroh";
 import { launchGateView } from "@vibestudio/shared/bootstrapLaunchGate";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
+import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { mainRpcMethod } from "@vibestudio/service-schemas/mainRpc";
 import { name as appName } from "./app.json";
 import { createSuccessfulConnectCoalescer, routeIncomingConnectLink } from "./connectLinkRouter";
@@ -231,6 +232,58 @@ function StepIndicator({ activeStep }) {
   );
 }
 
+const REVIEW_DECLINED_STATUS =
+  "You chose not to start the workspace app. Nothing from it was run. Tap Retry to review it again.";
+
+/**
+ * Follow the answers to reviews through the server's own resolution event, so a
+ * review answered on a desktop or terminal advances this phone without asking
+ * the server again on a timer. Answers that land before anyone is waiting are
+ * kept, so subscribing ahead of the launch loses none.
+ */
+function watchReviewAnswers(rpc) {
+  const events = new EventsClient(rpc);
+  const answered = new Map();
+  const waiters = new Set();
+  const stop = events.on("shell-approval:resolved", (event) => {
+    if (event.approvalKind !== "unit-install-review") return;
+    answered.set(event.approvalId, event.granted);
+    for (const check of [...waiters]) check();
+  });
+  return {
+    ready: events.subscribe("shell-approval:resolved"),
+    /** The answer to any of these approvals; null once `signal` aborts. */
+    answer(approvalIds, signal) {
+      return new Promise((resolve) => {
+        if (signal.aborted) {
+          resolve(null);
+          return;
+        }
+        const check = () => {
+          const id = approvalIds.find((candidate) => answered.has(candidate));
+          if (id === undefined) return;
+          waiters.delete(check);
+          resolve({ granted: answered.get(id) });
+        };
+        waiters.add(check);
+        signal.addEventListener(
+          "abort",
+          () => {
+            waiters.delete(check);
+            resolve(null);
+          },
+          { once: true }
+        );
+        check();
+      });
+    },
+    async close() {
+      stop();
+      await events.unsubscribeAll().catch(() => undefined);
+    },
+  };
+}
+
 function formatLaunchSessionStatus(session) {
   if (!session) return "Preparing secure workspace access";
   if (session.status === "approval-required") return "Review workspace app access";
@@ -295,6 +348,7 @@ function VibestudioMobileHostBootstrap() {
   const [approvals, setApprovals] = useState([]);
   const [openApprovalIds, setOpenApprovalIds] = useState(() => new Set());
   const launchGateGeneration = useRef(0);
+  const launchGateAbort = useRef(null);
   const scannerLastValueRef = useRef(null);
   const acceptedConnectLinksRef = useRef(new Set());
   const cameraDevice = useCameraDevice("back");
@@ -302,15 +356,20 @@ function VibestudioMobileHostBootstrap() {
   const runLaunchGate = useCallback(async (grant) => {
     const generation = ++launchGateGeneration.current;
     const isCurrent = () => generation === launchGateGeneration.current;
+    launchGateAbort.current?.abort();
+    const abort = new AbortController();
+    launchGateAbort.current = abort;
     const launchClient = new HostLaunchClient((service, method, args) =>
       grant.rpc.call("main", mainRpcMethod(`${service}.${method}`), args)
     );
+    const reviews = watchReviewAnswers(grant.rpc);
     setBusy(true);
     setApprovals([]);
     setOpenApprovalIds(new Set());
     setLaunchGrant(grant);
     setStatus("Preparing your workspace...");
     try {
+      await reviews.ready;
       for (;;) {
         const launch = await launchClient.launch("react-native");
         if (!isCurrent()) return;
@@ -328,14 +387,24 @@ function VibestudioMobileHostBootstrap() {
         if (launch.status === "approval-required") {
           smokePhase("embedded-host-target-approval-required");
           setApprovals(launch.approvals);
-          // Approval may be resolved on the already-running desktop/server rather
-          // than on this phone. Keep observing the canonical launch state so an
-          // externally approved request advances without requiring another tap.
-          // Leave the local buttons enabled while waiting; a local decision starts
-          // a new launch-gate generation and naturally retires this poller.
           setBusy(false);
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          if (!isCurrent()) return;
+          // The review may be answered here or on the already-running desktop or
+          // terminal. Either way its resolution is the event that continues the
+          // launch; a local answer starts a new gate and retires this wait.
+          const answer = await reviews.answer(
+            launch.approvals.map((approval) => approval.approvalId),
+            abort.signal
+          );
+          if (!isCurrent() || answer === null) return;
+          if (!answer.granted) {
+            setLaunchSession(null);
+            setApprovals([]);
+            setStatus(REVIEW_DECLINED_STATUS);
+            return;
+          }
+          setBusy(true);
+          setApprovals([]);
+          setStatus("Workspace app approved. Preparing bundle...");
           continue;
         }
         if (launch.status === "preparing") {
@@ -355,6 +424,8 @@ function VibestudioMobileHostBootstrap() {
         }`
       );
       throw error;
+    } finally {
+      await reviews.close();
     }
   }, []);
 
@@ -366,6 +437,7 @@ function VibestudioMobileHostBootstrap() {
       // awaiting the RPC so it cannot republish the same approval and re-enable
       // the buttons while the decision is still landing.
       launchGateGeneration.current += 1;
+      launchGateAbort.current?.abort();
       smokePhase("embedded-host-target-approval-submitted");
       setBusy(true);
       setStatus(decision === "once" ? "Approving workspace app..." : "Denying workspace app...");
@@ -382,7 +454,7 @@ function VibestudioMobileHostBootstrap() {
         } else {
           setLaunchSession(null);
           setApprovals([]);
-          setStatus("Workspace app approval denied.");
+          setStatus(REVIEW_DECLINED_STATUS);
           setBusy(false);
         }
       } catch (error) {
@@ -702,10 +774,7 @@ function VibestudioMobileHostBootstrap() {
                           <Text style={styles.unitMeta}>{source.firstEncounterLine}</Text>
                         ) : null}
                         {source.units.map((unit) => (
-                          <View
-                            key={unit.identityKey}
-                            style={styles.unitRow}
-                          >
+                          <View key={unit.identityKey} style={styles.unitRow}>
                             <Text style={styles.unitRowName}>{unit.name}</Text>
                             <Text style={styles.unitMeta}>{unit.notable || unit.purpose}</Text>
                           </View>

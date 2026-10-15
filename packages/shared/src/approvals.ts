@@ -13,6 +13,18 @@ import type { AuthorityPromptCardType } from "./authority/promptRegistry.js";
 import type { ServiceBindingFact } from "./authority/unitInstallReview.js";
 import type { WorkspaceServiceReviewFact } from "./authority/unitInstallReview.js";
 
+/** A pending human decision was withdrawn because its owning operation ended. */
+export const APPROVAL_WAIT_CANCELLED_CODE = "APPROVAL_WAIT_CANCELLED" as const;
+
+/** Preserve the lifecycle cause while distinguishing withdrawal from a human denial. */
+export function approvalWaitCancelledError(
+  cause: unknown
+): Error & { code: typeof APPROVAL_WAIT_CANCELLED_CODE } {
+  return Object.assign(new Error("Approval wait cancelled", { cause }), {
+    code: APPROVAL_WAIT_CANCELLED_CODE,
+  });
+}
+
 export type ApprovalDecision = ApprovalDecisionId;
 export type ApprovalConfigFieldType = "text" | "secret" | "select";
 export type ApprovalDetailFormat = "plain" | "markdown" | "code" | "tree";

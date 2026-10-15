@@ -82,12 +82,14 @@ export type ChannelProtocolBootstrapSnapshot =
       }>;
       ts: number;
     }
-  | { kind: "receipt-snapshot"; events: ChannelProtocolEvent[]; ts: number };
+  /** Projection observations retain identity but do not manufacture a durable sequence. */
+  | { kind: "receipt-snapshot"; events: Array<Omit<ChannelProtocolEvent, "id">>; ts: number };
 export interface ChannelProtocolReplayReady {
   contextId?: string;
   channelConfig?: ChannelConfig;
   totalCount: number;
   envelopeCount: number;
+  /** First durable envelope in this returned replay window, not the owner's global history start. */
   firstEnvelopeSeq?: number;
   replayFromId?: number;
   replayToId?: number;

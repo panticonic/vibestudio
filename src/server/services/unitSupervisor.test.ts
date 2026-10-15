@@ -233,9 +233,9 @@ describe("UnitSupervisor", () => {
   });
 
   it("fans describe and logs out from a release key to that release's live entities", async () => {
-    const release = { kind: "app" as const, releaseId: "remote-cli" };
-    const first = { ...description("app", "remote-cli#a"), release };
-    const second = { ...description("app", "remote-cli#b"), release };
+    const release = { kind: "app" as const, releaseId: "terminal-browser" };
+    const first = { ...description("app", "terminal-browser#a"), release };
+    const second = { ...description("app", "terminal-browser#b"), release };
     const other = {
       ...description("app", "shell"),
       release: { kind: "app" as const, releaseId: "shell" },
@@ -247,7 +247,7 @@ describe("UnitSupervisor", () => {
       message,
     });
     const logs = vi.fn((entityId: string) =>
-      entityId === "remote-cli#a"
+      entityId === "terminal-browser#a"
         ? [record(entityId, 1, "a1"), record(entityId, 3, "a3")]
         : [record(entityId, 2, "b2")]
     );
@@ -258,8 +258,8 @@ describe("UnitSupervisor", () => {
 
     await expect(supervisor.describe(release)).resolves.toEqual([first, second]);
     await expect(supervisor.logs(release, { limit: 2 })).resolves.toEqual([
-      record("remote-cli#b", 2, "b2"),
-      record("remote-cli#a", 3, "a3"),
+      record("terminal-browser#b", 2, "b2"),
+      record("terminal-browser#a", 3, "a3"),
     ]);
     expect(logs).not.toHaveBeenCalledWith("shell", expect.anything());
     await expect(supervisor.describe({ kind: "app", releaseId: "missing" })).resolves.toEqual([]);

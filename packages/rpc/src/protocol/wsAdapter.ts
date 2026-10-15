@@ -20,7 +20,7 @@ export interface WsTransportAdapter {
     request: RpcWebSocketAdmissionRequest,
     options?: { signal?: AbortSignal }
   ): Promise<RpcWebSocketAdmissionResponse>;
-  getAuthToken(): Promise<string>;
+  getAuthToken(signal?: AbortSignal): Promise<string>;
   refreshAuthToken?(): Promise<string>;
   now(): number;
 }

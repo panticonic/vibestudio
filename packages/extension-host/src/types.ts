@@ -17,8 +17,6 @@ export interface ExtensionProcessState {
   version: string;
   bundlePath: string;
   storageDir: string;
-  gatewayUrl: string;
-  rpcToken: string;
 }
 
 export interface ExtensionUserlandCaller {

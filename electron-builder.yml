@@ -149,6 +149,8 @@ linux:
   artifactName: vibestudio-${version}-${arch}.${ext}
   # Preserve only the selected stock distribution, independent of app.asar.
   extraResources:
+    - from: "build-resources/linux/vibestudio-cli"
+      to: "vibestudio-cli"
     - from: "dist/node-payload"
       to: "app.asar.unpacked/dist/node"
       filter:

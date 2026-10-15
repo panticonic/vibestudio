@@ -146,7 +146,6 @@ export interface PackageManifest {
   agent?: { displayName?: string; description?: string };
   /** Named service contracts exported by this repository. Workspace wiring selects source/name. */
   services?: import("@vibestudio/workspace-contracts/types").WorkspaceServiceExport[];
-
 }
 
 export type WorkspaceTestRuntime = "browser" | "workerd" | "native";

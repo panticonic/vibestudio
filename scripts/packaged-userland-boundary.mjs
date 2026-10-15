@@ -13,6 +13,7 @@ const FORBIDDEN_TOP_LEVEL = new Set([
   "projects",
   "skills",
   "templates",
+  "terminal-apps",
   "types",
   "workers",
   "workspace",

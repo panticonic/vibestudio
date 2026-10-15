@@ -1,3 +1,4 @@
+import { isTerminalAppLocation } from "@vibestudio/workspace-contracts/sourceDirs";
 import { logVerbose } from "@vibestudio/dev-log";
 import {
   PANEL_CONDITIONS,
@@ -54,7 +55,6 @@ import {
   appUnitManifestDescriptor,
   extensionUnitManifestDescriptor,
   validateUnitManifest,
-  isTerminalWorker,
   parseExtensionMethodAuthority,
 } from "@vibestudio/shared/unitManifest";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
@@ -93,18 +93,11 @@ import { EXTENSION_RUNTIME_ABI_VERSION } from "@vibestudio/shared/extensionRunti
 import { getAdapter } from "./adapters/index.js";
 import type { FrameworkAdapter } from "./adapters/types.js";
 import { resolveTemplate } from "./templateResolver.js";
-import {
-  RUNTIME_MODULE,
-  TERMINAL_SHIM_YOGA,
-  TERMINAL_SHIM_SIGNAL_EXIT,
-  TERMINAL_SHIM_TERMINAL_SIZE,
-  TERMINAL_YOGA_WASM_MODULE,
-  TERMINAL_WORKER_RUNTIME_EXTERNALS,
-  WORKER_RUNTIME_COMPANION_MODULES,
-} from "./platformModules.js";
+import { RUNTIME_MODULE, WORKER_RUNTIME_COMPANION_MODULES } from "./platformModules.js";
 import { resolveExportSubpath } from "@vibestudio/typecheck/workspace";
 import { assertPresent } from "../../lintHelpers";
 import { resolveBuildProvider } from "./buildProviderRegistry.js";
+import { validateAppBuildContract } from "./appBuildContract.js";
 import { peerConflictRefusal, unownedPeerRefusal } from "./dependencyAudit.js";
 import { createBuildScratchDir } from "./buildScratch.js";
 import { prepareBuildProviderResources } from "./buildProviderResources.js";
@@ -585,7 +578,7 @@ function admitSessionBuild(
               // ownership admission. Validate and bind that result before compiling.
               const cached = await session.store.getOrHydrate(buildKey, sourceStateHash);
               if (cached) {
-                await ensureExtensionBuildReady(session, cached);
+                await ensureNodeProgramBuildReady(session, cached);
                 return cached;
               }
               return sharedBuildContext.run(coordinator, async () => {
@@ -603,7 +596,7 @@ function admitSessionBuild(
           const hydrated = await session.store.getOrHydrate(buildKey, sourceStateHash);
           if (!hydrated)
             throw new Error(`Shared build ${buildKey} completed without a validated cache result`);
-          await ensureExtensionBuildReady(session, hydrated);
+          await ensureNodeProgramBuildReady(session, hydrated);
           return hydrated;
         } finally {
           lease.release();
@@ -628,7 +621,7 @@ function admitSessionBuild(
           `Shared build ${buildKey} completed without a hydratable result in this role store`
         );
       }
-      await ensureExtensionBuildReady(session, hydrated);
+      await ensureNodeProgramBuildReady(session, hydrated);
       return hydrated;
     } finally {
       adopter.clearQueuedPromotion();
@@ -2402,6 +2395,34 @@ export async function buildUnitStored(
   stateRef: string,
   options?: BuildUnitOptions
 ): Promise<StoredBuildResult> {
+  const stored = await buildUnitStoredUnchecked(
+    session,
+    node,
+    ev,
+    graph,
+    workspaceRoot,
+    stateRef,
+    options
+  );
+  // An app target's artifact contract is part of its build, whether the bytes
+  // were just produced, found in the store or installed with a release: a
+  // candidate that could never be activated fails the protected-main build gate
+  // instead of landing and failing at activation.
+  if (node.kind === "app" && !options?.library && !options?.test && !options?.website) {
+    validateAppBuildContract(node.name, appTargetOf(node), stored);
+  }
+  return stored;
+}
+
+async function buildUnitStoredUnchecked(
+  session: BuilderSession,
+  node: GraphNode,
+  ev: string,
+  graph: PackageGraph,
+  workspaceRoot: string,
+  stateRef: string,
+  options?: BuildUnitOptions
+): Promise<StoredBuildResult> {
   const capturedOptions = captureBuildUnitOptions(options);
   const sourcemap = buildSourcemapForNode(node, capturedOptions);
   let provider: BuildProvider | null = null;
@@ -2419,8 +2440,16 @@ export async function buildUnitStored(
   ) {
     // The provider is an input to the artifact, so resolve it before cache
     // lookup, coalescing, or taking a compilation slot.
-    await session.ensureBuildProvider?.("react-native");
-    provider = resolveBuildProvider("react-native");
+    try {
+      await session.ensureBuildProvider?.("react-native");
+      provider = resolveBuildProvider("react-native");
+    } catch (error) {
+      throw new Error(
+        `React Native app ${node.name} cannot be built because its build provider is unavailable: ${error instanceof Error ? error.message : String(error)}. ` +
+          "Install and enable the extension that contributes the react-native build target, then push again.",
+        { cause: error }
+      );
+    }
     buildKey = computeBuildKey(
       session.rootFingerprint,
       node.name,
@@ -2442,7 +2471,7 @@ export async function buildUnitStored(
     cached = await session.store.rebindSourceState(cached, stateRef);
   }
   if (cached) {
-    await ensureExtensionBuildReady(session, cached);
+    await ensureNodeProgramBuildReady(session, cached);
     return cached;
   }
 
@@ -2687,6 +2716,19 @@ async function doBuild(
         // panel. Falling through to buildPanel would produce a bogus artifact.
         throw new Error(
           `package ${node.name} cannot be built as a runtime unit; build it as a library (options.library + libraryTarget)`
+        );
+      } else if (isTerminalAppLocation(node.relativePath)) {
+        return await buildTerminalProgram(
+          session,
+          node,
+          ev,
+          buildKey,
+          graph,
+          workspaceRoot,
+          extracted.sourceRoot,
+          stateRef,
+          authority,
+          signal
         );
       } else {
         return await buildPanel(
@@ -4041,109 +4083,6 @@ export const createInterface = stubFn;
   };
 }
 
-// ---------------------------------------------------------------------------
-// Terminal-worker (Ink) build support
-// ---------------------------------------------------------------------------
-
-interface YogaPaths {
-  wasmEsm: string;
-  wrapAssembly: string;
-  enums: string;
-}
-
-/**
- * Locate yoga-layout's internal files from the worker's resolve dir. yoga's
- * `exports` map blocks deep imports, so we resolve the package main and derive
- * the sibling paths (`<root>/dist/src/index.js` → `<root>/dist/...`).
- */
-function resolveYogaPaths(resolveDir: string): YogaPaths {
-  const req = createRequire(path.join(resolveDir, "__terminal_resolve__.js"));
-  const main = req.resolve("yoga-layout"); // <root>/dist/src/index.js
-  const root = path.resolve(path.dirname(main), "../..");
-  return {
-    wasmEsm: path.join(root, "dist", "binaries", "yoga-wasm-base64-esm.js"),
-    wrapAssembly: path.join(root, "dist", "src", "wrapAssembly.js"),
-    enums: path.join(root, "dist", "src", "generated", "YGEnums.js"),
-  };
-}
-
-/**
- * Build plugin for Ink terminal workers. Routes Ink's `import Yoga from
- * 'yoga-layout'` to the terminal-shim sync loader, resolves that loader's deep
- * yoga imports (which yoga's exports map blocks), shims the two npm packages
- * that break in workerd, and marks the terminal wasm binding external (workerd supplies it as
- * a module binding). Register BEFORE the workspace plugin so these intercepts win.
- */
-function createTerminalWorkerAliasPlugin(resolveDir: string): esbuild.Plugin {
-  const yoga = resolveYogaPaths(resolveDir);
-  return {
-    name: "terminal-worker-alias",
-    setup(build) {
-      // Ink's `yoga-layout` default import → the terminal-shim sync loader.
-      build.onResolve({ filter: /^yoga-layout$/ }, async (args) => {
-        const r = await build.resolve(TERMINAL_SHIM_YOGA, {
-          kind: args.kind,
-          resolveDir,
-        });
-        if (r.errors.length > 0) return r;
-        return { path: r.path, external: r.external };
-      });
-      // The loader's deep yoga imports (blocked by yoga's exports map).
-      build.onResolve({ filter: /^yoga-layout\/dist\// }, (args) => {
-        if (args.path.endsWith("yoga-wasm-base64-esm.js")) return { path: yoga.wasmEsm };
-        if (args.path.endsWith("wrapAssembly.js")) return { path: yoga.wrapAssembly };
-        if (args.path.endsWith("YGEnums.js")) return { path: yoga.enums };
-        return null;
-      });
-      // npm packages that break in workerd → terminal-shim replacements.
-      build.onResolve({ filter: /^signal-exit$/ }, async (args) => {
-        const r = await build.resolve(TERMINAL_SHIM_SIGNAL_EXIT, {
-          kind: args.kind,
-          resolveDir,
-        });
-        return r.errors.length > 0 ? r : { path: r.path, external: r.external };
-      });
-      build.onResolve({ filter: /^terminal-size$/ }, async (args) => {
-        const r = await build.resolve(TERMINAL_SHIM_TERMINAL_SIZE, {
-          kind: args.kind,
-          resolveDir,
-        });
-        return r.errors.length > 0 ? r : { path: r.path, external: r.external };
-      });
-      // Provided by workerd as a pre-compiled wasm module binding.
-      build.onResolve({ filter: /.*/ }, (args) =>
-        args.path === TERMINAL_YOGA_WASM_MODULE
-          ? { path: TERMINAL_YOGA_WASM_MODULE, external: true }
-          : null
-      );
-    },
-  };
-}
-
-// yoga.wasm is identical for a given yoga-layout install; extract once per path.
-const yogaWasmCache = new Map<string, Buffer>();
-
-/** Yoga's raw wasm bytes, decoded from its base64-inlined emscripten module. */
-async function extractYogaWasm(resolveDir: string): Promise<Buffer> {
-  const { wasmEsm } = resolveYogaPaths(resolveDir);
-  const cached = yogaWasmCache.get(wasmEsm);
-  if (cached) return cached;
-  // yoga-layout's base64 ESM binary inlines its module as exactly one
-  // `data:application/octet-stream;base64,` literal; read it from the source.
-  const source = await fs.promises.readFile(wasmEsm, "utf8");
-  const payloads = [
-    ...source.matchAll(/"data:application\/octet-stream;base64,([A-Za-z0-9+/=]+)"/g),
-  ];
-  const wasm = payloads.length === 1 ? Buffer.from(payloads[0]![1]!, "base64") : null;
-  if (!wasm || wasm.subarray(0, 4).toString("binary") !== "\0asm") {
-    throw new Error(
-      `terminal worker build: ${wasmEsm} does not inline exactly one yoga.wasm module`
-    );
-  }
-  yogaWasmCache.set(wasmEsm, wasm);
-  return wasm;
-}
-
 /**
  * Node built-in modules that must stay external in the worker bundle so that
  * workerd's `nodejs_compat` compat flag satisfies them at runtime. Registry
@@ -4283,7 +4222,6 @@ async function buildWorker(
   const rpcCatalogReadyAt = Date.now();
   const exposeModules = normalizeManifestSpecList(extractedManifest.exposeModules);
   const dedupePackages = normalizeManifestSpecList(extractedManifest.dedupeModules);
-  const terminalWorker = isTerminalWorker(extractedManifest);
 
   // Generate the expose entry (always — even with empty exposeModules, this
   // sets up __vibestudioRequire__/__vibestudioModuleMap__ so eval has a working
@@ -4306,9 +4244,6 @@ async function buildWorker(
   fs.writeFileSync(wrapperPath, wrapperCode);
 
   const plugins: esbuild.Plugin[] = [
-    // Terminal (Ink) workers: intercept yoga-layout / signal-exit / terminal-size
-    // BEFORE the workspace resolver so these aliases win. No-op for other workers.
-    ...(terminalWorker ? [createTerminalWorkerAliasPlugin(resolveDir)] : []),
     createWorkspaceResolvePlugin(graph, sourceRoot, WORKER_CONDITIONS),
     createTsExtensionPlugin(sourceRoot),
     createWorkerBufferShimPlugin(resolveDir, session.processOwner.appNodeModules),
@@ -4326,15 +4261,11 @@ async function buildWorker(
   if (dedupePlugin) {
     plugins.push(dedupePlugin);
   }
-  const workerExternals = [
-    ...WORKER_RUNTIME_EXTERNALS,
-    ...(terminalWorker ? TERMINAL_WORKER_RUNTIME_EXTERNALS : []),
-  ];
   const preparedPlugins = composePreparedDependencyPlugins(
     plugins,
     nodePaths,
     [sourceRoot, outdir],
-    workerExternals,
+    WORKER_RUNTIME_EXTERNALS,
     env.dependencyResolution
   );
   const configureReadyAt = Date.now();
@@ -4370,15 +4301,11 @@ async function buildWorker(
       // createWorkerNodeStubPlugin plugin and replaced with throwing
       // stubs — transitively imported by aws-sdk/proxy-agent/etc. from
       // dead code paths we never reach at runtime.
-      // Terminal workers import "yoga.wasm" — workerd provides it as a
-      // pre-compiled wasm module binding, so it stays external.
-      external: [
-        ...WORKER_RUNTIME_EXTERNALS,
-        ...(terminalWorker ? TERMINAL_WORKER_RUNTIME_EXTERNALS : []),
-      ],
+      external: [...WORKER_RUNTIME_EXTERNALS],
       plugins: preparedPlugins,
       nodePaths,
-      tsconfigRaw: { compilerOptions: {} },
+      // Same automatic JSX runtime the userland type-check and panel builds use.
+      tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
     });
     const compileReadyAt = Date.now();
     const executableModules = executableModulesFromMetafile(
@@ -4419,49 +4346,6 @@ async function buildWorker(
       });
     };
 
-    if (terminalWorker) {
-      // Emit the JS bundle plus the extracted yoga.wasm so workerdManager can
-      // attach it as a module binding for this DO. Mirrors buildPanel's
-      // multi-artifact pattern.
-      const yogaWasm = await extractYogaWasm(resolveDir);
-      const artifacts: BuildArtifacts = {
-        entries: [
-          ...workerArtifacts.entries,
-          {
-            path: TERMINAL_YOGA_WASM_MODULE,
-            role: "wasm",
-            contentType: "application/wasm",
-            encoding: "base64",
-            content: yogaWasm.toString("base64"),
-          },
-        ],
-      };
-      const metadata: BuildMetadata = {
-        kind: runtimeTest ? "worker" : (node.kind as BuildMetadata["kind"]),
-        name: node.name,
-        buildKey,
-        sourcePath: node.relativePath,
-        ev,
-        sourceStateHash,
-        sourcemap,
-        authority,
-        workspaceRpcCatalog,
-        executableModules,
-        details: runtimeTest
-          ? {
-              kind: "test",
-              suite: runtimeTest.suite,
-              runtime: runtimeTest.runtime,
-              selectedFiles: runtimeTest.selectedFiles,
-            }
-          : { kind: "generic" },
-        builtAt: new Date().toISOString(),
-      };
-      const stored = await session.store.putStored(buildKey, artifacts, metadata);
-      logProfile(Date.now());
-      return stored;
-    }
-
     const stored = await storeSimpleBuild(
       session,
       buildKey,
@@ -4499,6 +4383,57 @@ async function buildWorker(
 // App Build
 // ---------------------------------------------------------------------------
 
+function appTargetOf(node: GraphNode): "electron" | "react-native" | "terminal" {
+  const target = node.manifest.app?.target;
+  if (!target) throw new Error(`App ${node.name} manifest must declare vibestudio.app.target`);
+  return target;
+}
+
+/** Everything a target adapter needs to turn one app unit into stored artifacts. */
+interface AppBuildInput {
+  session: BuilderSession;
+  node: GraphNode;
+  ev: string;
+  buildKey: string;
+  graph: PackageGraph;
+  workspaceRoot: string;
+  sourcemap: boolean;
+  sourceRoot: string;
+  sourceStateHash: string;
+  authority: UnitAuthorityManifest;
+  provider: BuildProvider | null;
+  signal: AbortSignal;
+  /** The unit's validated `vibestudio` manifest and its `app` section. */
+  manifest: Record<string, unknown>;
+  appManifest: Record<string, unknown>;
+}
+
+/**
+ * One adapter per app target. Each owns how its artifacts are produced; the
+ * artifact contract every adapter must satisfy is `validateAppBuildContract`,
+ * enforced where builds leave the builder.
+ */
+const APP_TARGET_ADAPTERS: Record<
+  "electron" | "react-native" | "terminal",
+  (input: AppBuildInput) => Promise<StoredBuildResult>
+> = {
+  electron: (input) =>
+    buildPanel(
+      input.session,
+      input.node,
+      input.ev,
+      input.buildKey,
+      input.graph,
+      input.workspaceRoot,
+      input.sourcemap,
+      input.sourceRoot,
+      input.sourceStateHash,
+      input.authority
+    ),
+  terminal: buildTerminalApp,
+  "react-native": buildReactNativeApp,
+};
+
 async function buildApp(
   session: BuilderSession,
   node: GraphNode,
@@ -4514,113 +4449,12 @@ async function buildApp(
   signal: AbortSignal
 ): Promise<StoredBuildResult> {
   const appSourcePath = path.join(sourceRoot, node.relativePath);
-  const extractedPkgPath = path.join(appSourcePath, "package.json");
-  const extractedPkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8")) as {
-    vibestudio?: Record<string, unknown>;
-  };
-  const extractedManifest = extractedPkg.vibestudio ?? {};
-  validateUnitManifest(appUnitManifestDescriptor, extractedManifest, { unitName: node.name });
-
-  const appManifest = extractedManifest["app"] as Record<string, unknown>;
-  if (appManifest["target"] === "terminal") {
-    return buildTerminalApp(
-      session,
-      node,
-      ev,
-      buildKey,
-      graph,
-      workspaceRoot,
-      sourcemap,
-      sourceRoot,
-      appManifest,
-      sourceStateHash,
-      authority,
-      signal
-    );
-  }
-  if (appManifest["target"] === "react-native") {
-    if (!provider) throw new Error("React Native build identity has no resolved provider");
-    const env = await prepareBuildEnv(
-      session,
-      node,
-      buildKey,
-      graph,
-      workspaceRoot,
-      sourceRoot,
-      "runtime-root",
-      signal
-    );
-    let dependencies: Awaited<ReturnType<typeof acquireExternalDeps>> | undefined;
-    let resources: Awaited<ReturnType<typeof prepareBuildProviderResources>> | undefined;
-    try {
-      // A provider executes in the workspace native domain. Its npm input must
-      // be the exact declared closure, never the host-wide resolution fallback.
-      dependencies = await acquireExternalDeps(env.externalDeps, env.dependencyOverrides, {
-        appRoot: session.processOwner.appRoot,
-        patches: env.dependencyPatches,
-        signal,
-      });
-      const input: BuildProviderInput = {
-        target: "react-native",
-        unitName: node.name,
-        sourcePath: appSourcePath,
-        dependencyProjection: {
-          nodeModulesPath: dependencies.nodeModulesDir || null,
-          modules: collectBuildProviderModules(session, node, graph, sourceRoot, env.outdir),
-        },
-        effectiveVersion: ev,
-        manifest: extractedManifest,
-      };
-      const worker = session.processOwner.immutableTreeWorker;
-      resources = await prepareBuildProviderResources({
-        inputsRoot: stateLayout(session.store.stateRoot).buildProviderInputsDir,
-        sourceRoot,
-        input,
-        materialize: (source, destination) => worker.materialize(source, destination),
-      });
-      const providerInput = resources.input;
-      const output = await provider.build(providerInput);
-      const entries = await materializeBuildProviderArtifacts(
-        provider,
-        providerInput,
-        output.artifacts
-      );
-      const metadata: BuildMetadata = {
-        kind: "app",
-        name: node.name,
-        buildKey,
-        sourcePath: node.relativePath,
-        ev,
-        sourceStateHash,
-        sourcemap,
-        authority,
-        details: {
-          kind: "app",
-          target: "react-native",
-          platform: output.metadata?.platform,
-          integrity: null,
-          rnHostAbi: output.metadata?.rnHostAbi ?? null,
-          provider: {
-            name: provider.name,
-            activeEv: provider.activeEv,
-            activeBuildKey: provider.activeBuildKey,
-            contractVersion: provider.contractVersion,
-          },
-        },
-        builtAt: new Date().toISOString(),
-      };
-      return session.store.putStored(buildKey, { entries }, metadata);
-    } finally {
-      try {
-        await resources?.dispose();
-      } finally {
-        dependencies?.release();
-        await env.cleanup();
-      }
-    }
-  }
-
-  return buildPanel(
+  const extractedPkg = JSON.parse(
+    fs.readFileSync(path.join(appSourcePath, "package.json"), "utf-8")
+  ) as { vibestudio?: Record<string, unknown> };
+  const manifest = extractedPkg.vibestudio ?? {};
+  validateUnitManifest(appUnitManifestDescriptor, manifest, { unitName: node.name });
+  return APP_TARGET_ADAPTERS[appTargetOf(node)]({
     session,
     node,
     ev,
@@ -4630,8 +4464,110 @@ async function buildApp(
     sourcemap,
     sourceRoot,
     sourceStateHash,
-    authority
+    authority,
+    provider,
+    signal,
+    manifest,
+    appManifest: manifest["app"] as Record<string, unknown>,
+  });
+}
+
+async function buildReactNativeApp(input: AppBuildInput): Promise<StoredBuildResult> {
+  const {
+    session,
+    node,
+    ev,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourcemap,
+    sourceRoot,
+    sourceStateHash,
+    authority,
+    provider,
+    signal,
+    manifest: extractedManifest,
+  } = input;
+  const appSourcePath = path.join(sourceRoot, node.relativePath);
+  if (!provider) throw new Error("React Native build identity has no resolved provider");
+  const env = await prepareBuildEnv(
+    session,
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    "runtime-root",
+    signal
   );
+  let dependencies: Awaited<ReturnType<typeof acquireExternalDeps>> | undefined;
+  let resources: Awaited<ReturnType<typeof prepareBuildProviderResources>> | undefined;
+  try {
+    // A provider executes in the workspace native domain. Its npm input must
+    // be the exact declared closure, never the host-wide resolution fallback.
+    dependencies = await acquireExternalDeps(env.externalDeps, env.dependencyOverrides, {
+      appRoot: session.processOwner.appRoot,
+      patches: env.dependencyPatches,
+      signal,
+    });
+    const request: BuildProviderInput = {
+      target: "react-native",
+      unitName: node.name,
+      sourcePath: appSourcePath,
+      dependencyProjection: {
+        nodeModulesPath: dependencies.nodeModulesDir || null,
+        modules: collectBuildProviderModules(session, node, graph, sourceRoot, env.outdir),
+      },
+      effectiveVersion: ev,
+      manifest: extractedManifest,
+    };
+    const worker = session.processOwner.immutableTreeWorker;
+    resources = await prepareBuildProviderResources({
+      inputsRoot: stateLayout(session.store.stateRoot).buildProviderInputsDir,
+      sourceRoot,
+      input: request,
+      materialize: (source, destination) => worker.materialize(source, destination),
+    });
+    const providerInput = resources.input;
+    const output = await provider.build(providerInput);
+    const entries = await materializeBuildProviderArtifacts(
+      provider,
+      providerInput,
+      output.artifacts
+    );
+    const metadata: BuildMetadata = {
+      kind: "app",
+      name: node.name,
+      buildKey,
+      sourcePath: node.relativePath,
+      ev,
+      sourceStateHash,
+      sourcemap,
+      authority,
+      details: {
+        kind: "app",
+        target: "react-native",
+        platform: output.metadata?.platform,
+        integrity: null,
+        rnHostAbi: output.metadata?.rnHostAbi ?? null,
+        provider: {
+          name: provider.name,
+          activeEv: provider.activeEv,
+          activeBuildKey: provider.activeBuildKey,
+          contractVersion: provider.contractVersion,
+        },
+      },
+      builtAt: new Date().toISOString(),
+    };
+    return session.store.putStored(buildKey, { entries }, metadata);
+  } finally {
+    try {
+      await resources?.dispose();
+    } finally {
+      dependencies?.release();
+      await env.cleanup();
+    }
+  }
 }
 
 function collectBuildProviderModules(
@@ -4705,20 +4641,21 @@ function collectBuildProviderModules(
   );
 }
 
-async function buildTerminalApp(
-  session: BuilderSession,
-  node: GraphNode,
-  ev: string,
-  buildKey: string,
-  graph: PackageGraph,
-  workspaceRoot: string,
-  sourcemap: boolean,
-  sourceRoot: string,
-  appManifest: Record<string, unknown>,
-  sourceStateHash: string,
-  authority: UnitAuthorityManifest,
-  signal: AbortSignal
-): Promise<StoredBuildResult> {
+async function buildTerminalApp(input: AppBuildInput): Promise<StoredBuildResult> {
+  const {
+    session,
+    node,
+    ev,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourcemap,
+    sourceRoot,
+    appManifest,
+    sourceStateHash,
+    authority,
+    signal,
+  } = input;
   const env = await prepareBuildEnv(
     session,
     node,
@@ -4768,7 +4705,8 @@ async function buildTerminalApp(
       ),
       nodePaths,
       absWorkingDir: resolveDir,
-      tsconfigRaw: { compilerOptions: {} },
+      // Same automatic JSX runtime the userland type-check and panel builds use.
+      tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
     });
     const bundle = fs.readFileSync(path.join(outdir, "index.mjs"), "utf8");
     return session.store.putStored(
@@ -4959,6 +4897,134 @@ function sealedExtensionMethodAuthority(
   return result;
 }
 
+/**
+ * A Node program bundled to run from its build directory inside the workspace
+ * native runtime: one ESM bundle plus the npm dependencies that cannot be
+ * bundled (native bindings, WASM assets), acquired here and projected next to
+ * the bundle once it is stored. Extensions and terminal apps are both built
+ * this way. Callers must `release()` the acquired runtime dependencies.
+ */
+interface NodeProgramBundle {
+  bundle: string;
+  dependencyDiagnostics: ExtensionDependencyDiagnostics;
+  runtimeExternalDeps: Record<string, string>;
+  runtimeDependencyPatches: ReturnType<typeof dependencyPatchesForExternalRoots>;
+  dependencyOverrides: Record<string, string>;
+  runtimeDeps: Awaited<ReturnType<typeof ensureExtensionRuntimeDeps>>;
+}
+
+async function bundleNodeProgram(
+  session: BuilderSession,
+  env: Awaited<ReturnType<typeof prepareBuildEnv>>,
+  graph: PackageGraph,
+  sourceRoot: string,
+  input: {
+    entryFile: string;
+    conditions: readonly string[];
+    dependencyMode: ExtensionDependencyMode;
+    dedupeModules: string[];
+  },
+  signal: AbortSignal
+): Promise<NodeProgramBundle> {
+  const { outdir, nodePaths, resolveDir } = env;
+  const dependencyDiagnostics = await analyzeExtensionDependencies(
+    env.externalDeps,
+    nodePaths,
+    input.dependencyMode
+  );
+  const { classifiedDeps, runtimeExternalDeps } = dependencyDiagnostics;
+  const runtimeDependencyPatches = dependencyPatchesForExternalRoots(
+    env.dependencyPatches,
+    runtimeExternalDeps
+  );
+  const plugins: esbuild.Plugin[] = [
+    createWorkspaceResolvePlugin(graph, sourceRoot, input.conditions),
+    createTsExtensionPlugin(sourceRoot),
+  ];
+  const cjsShimPlugin = createExtensionCjsShimPlugin(outdir, classifiedDeps);
+  if (cjsShimPlugin) plugins.push(cjsShimPlugin);
+  const dedupePlugin = createDedupePlugin(resolveDir, input.dedupeModules);
+  if (dedupePlugin) plugins.push(dedupePlugin);
+  const externals = [
+    ...KNOWN_NATIVE_EXTERNALS,
+    ...NODE_BUILTIN_EXTERNALS,
+    ...expandExternalSpecifiers(runtimeExternalDeps),
+  ];
+  await buildWithEsbuild({
+    entryPoints: [input.entryFile],
+    bundle: true,
+    platform: "node",
+    target: "node20",
+    format: "esm",
+    splitting: false,
+    outfile: path.join(outdir, "bundle.js"),
+    banner: {
+      js: [
+        "import { createRequire as __vibestudioCreateRequire } from 'node:module';",
+        "import { fileURLToPath as __vibestudioFileURLToPath } from 'node:url';",
+        "import { dirname as __vibestudioDirname } from 'node:path';",
+        "const require = __vibestudioCreateRequire(import.meta.url);",
+        "const __filename = __vibestudioFileURLToPath(import.meta.url);",
+        "const __dirname = __vibestudioDirname(__filename);",
+      ].join("\n"),
+    },
+    sourcemap: "inline",
+    metafile: true,
+    logLevel: "warning",
+    conditions: [...input.conditions],
+    mainFields: ["module", "main"],
+    external: [...KNOWN_NATIVE_EXTERNALS, ...expandExternalSpecifiers(runtimeExternalDeps)],
+    plugins: composePreparedDependencyPlugins(
+      plugins,
+      nodePaths,
+      [sourceRoot, outdir],
+      externals,
+      env.dependencyResolution
+    ),
+    nodePaths,
+    // Same automatic JSX runtime the userland type-check and panel builds use.
+    tsconfigRaw: { compilerOptions: { jsx: "react-jsx" } },
+  });
+  const runtimeDeps = await ensureExtensionRuntimeDeps(
+    session.processOwner.appRoot,
+    runtimeExternalDeps,
+    env.dependencyOverrides,
+    runtimeDependencyPatches,
+    signal
+  );
+  return {
+    bundle: fs.readFileSync(path.join(outdir, "bundle.js"), "utf-8"),
+    dependencyDiagnostics,
+    runtimeExternalDeps,
+    runtimeDependencyPatches,
+    dependencyOverrides: env.dependencyOverrides,
+    runtimeDeps,
+  };
+}
+
+/**
+ * Stage a Node program's runtime dependencies inside its build directory
+ * before the build is published, so a stored program is complete from the
+ * moment it exists.
+ */
+function nodeProgramRuntimePopulation(
+  session: BuilderSession,
+  program: NodeProgramBundle,
+  name: string
+): ((temporaryDirectory: string) => Promise<void>) | undefined {
+  const nodeModulesDir = program.runtimeDeps.nodeModulesDir;
+  if (!nodeModulesDir) return undefined;
+  return (temporaryDirectory) =>
+    populateExtensionRuntimeDeps(
+      session,
+      path.join(temporaryDirectory, "node_modules"),
+      nodeModulesDir,
+      name,
+      program.runtimeExternalDeps,
+      program.runtimeDeps.key
+    );
+}
+
 async function buildExtension(
   session: BuilderSession,
   node: GraphNode,
@@ -4981,7 +5047,7 @@ async function buildExtension(
     "runtime-root",
     signal
   );
-  const { outdir, nodePaths, resolveDir } = env;
+  const { outdir } = env;
   const entryFile = await resolveEntryPoint(node, env.sourcePath, {
     conditions: EXTENSION_CONDITIONS,
   });
@@ -5001,85 +5067,26 @@ async function buildExtension(
     authority
   );
   const dependencyMode = normalizeExtensionDependencyMode(extensionManifest?.["dependencyMode"]);
-  const dependencyDiagnostics = await analyzeExtensionDependencies(
-    env.externalDeps,
-    nodePaths,
-    dependencyMode
-  );
-  const { classifiedDeps, runtimeExternalDeps } = dependencyDiagnostics;
-  const runtimeDependencyPatches = dependencyPatchesForExternalRoots(
-    env.dependencyPatches,
-    runtimeExternalDeps
-  );
-  const dedupePackages = normalizeManifestSpecList(
-    extractedManifest["dedupeModules"] as string[] | undefined
-  );
-
-  const plugins: esbuild.Plugin[] = [
-    createWorkspaceResolvePlugin(graph, sourceRoot, EXTENSION_CONDITIONS),
-    createTsExtensionPlugin(sourceRoot),
-  ];
-  const cjsShimPlugin = createExtensionCjsShimPlugin(outdir, classifiedDeps);
-  if (cjsShimPlugin) {
-    plugins.push(cjsShimPlugin);
-  }
-  const dedupePlugin = createDedupePlugin(resolveDir, dedupePackages);
-  if (dedupePlugin) {
-    plugins.push(dedupePlugin);
-  }
-  const extensionExternals = [
-    ...KNOWN_NATIVE_EXTERNALS,
-    ...NODE_BUILTIN_EXTERNALS,
-    ...expandExternalSpecifiers(runtimeExternalDeps),
-  ];
-  const preparedPlugins = composePreparedDependencyPlugins(
-    plugins,
-    nodePaths,
-    [sourceRoot, outdir],
-    extensionExternals,
-    env.dependencyResolution
-  );
-
   try {
-    await buildWithEsbuild({
-      entryPoints: [entryFile],
-      bundle: true,
-      platform: "node",
-      target: "node20",
-      format: "esm",
-      splitting: false,
-      outfile: path.join(outdir, "bundle.js"),
-      banner: {
-        js: [
-          "import { createRequire as __vibestudioCreateRequire } from 'node:module';",
-          "import { fileURLToPath as __vibestudioFileURLToPath } from 'node:url';",
-          "import { dirname as __vibestudioDirname } from 'node:path';",
-          "const require = __vibestudioCreateRequire(import.meta.url);",
-          "const __filename = __vibestudioFileURLToPath(import.meta.url);",
-          "const __dirname = __vibestudioDirname(__filename);",
-        ].join("\n"),
+    const program = await bundleNodeProgram(
+      session,
+      env,
+      graph,
+      sourceRoot,
+      {
+        entryFile,
+        conditions: EXTENSION_CONDITIONS,
+        dependencyMode,
+        dedupeModules: normalizeManifestSpecList(
+          extractedManifest["dedupeModules"] as string[] | undefined
+        ),
       },
-      sourcemap: "inline",
-      metafile: true,
-      logLevel: "warning",
-      conditions: [...EXTENSION_CONDITIONS],
-      mainFields: ["module", "main"],
-      external: [...KNOWN_NATIVE_EXTERNALS, ...expandExternalSpecifiers(runtimeExternalDeps)],
-      plugins: preparedPlugins,
-      nodePaths,
-      tsconfigRaw: { compilerOptions: {} },
-    });
-
-    const runtimeDeps = await ensureExtensionRuntimeDeps(
-      session.processOwner.appRoot,
-      runtimeExternalDeps,
-      env.dependencyOverrides,
-      runtimeDependencyPatches,
       signal
     );
+    const { bundle, dependencyDiagnostics, runtimeExternalDeps, runtimeDependencyPatches } =
+      program;
+    const { classifiedDeps } = dependencyDiagnostics;
     try {
-      const bundlePath = path.join(outdir, "bundle.js");
-      const bundle = fs.readFileSync(bundlePath, "utf-8");
       const extensionArtifacts = bundleArtifacts(bundle);
       const iconArtifact = manifestIconArtifact(extractedManifest, extensionSourcePath);
       if (iconArtifact) extensionArtifacts.entries.push(iconArtifact);
@@ -5090,6 +5097,18 @@ async function buildExtension(
         })
       );
       fs.writeFileSync(path.join(outdir, "package.json"), '{"type":"module"}');
+      const details = {
+        kind: "extension" as const,
+        runtimeDepsKey: program.runtimeDeps.key,
+        runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
+        providerContracts,
+        methodAuthority,
+        dependencyMode,
+        externalDeps: runtimeExternalDeps,
+        dependencyOverrides: program.dependencyOverrides,
+        dependencyPatches: runtimeDependencyPatches,
+        classifiedDeps,
+      };
       const smokeResult: BuildResult = {
         dir: outdir,
         buildKey,
@@ -5103,18 +5122,7 @@ async function buildExtension(
           sourceStateHash,
           sourcemap: true,
           authority,
-          details: {
-            kind: "extension",
-            runtimeDepsKey: runtimeDeps.key,
-            runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
-            providerContracts,
-            methodAuthority,
-            dependencyMode,
-            externalDeps: runtimeExternalDeps,
-            dependencyOverrides: env.dependencyOverrides,
-            dependencyPatches: runtimeDependencyPatches,
-            classifiedDeps,
-          },
+          details,
           builtAt: new Date().toISOString(),
         },
         artifacts: smokeArtifacts,
@@ -5125,7 +5133,7 @@ async function buildExtension(
         node,
         {
           dependencyDiagnostics,
-          runtimeNodeModulesDir: runtimeDeps.nodeModulesDir,
+          runtimeNodeModulesDir: program.runtimeDeps.nodeModulesDir,
         },
         signal
       );
@@ -5139,43 +5147,105 @@ async function buildExtension(
         true,
         sourceStateHash,
         authority,
-        {
-          details: {
-            kind: "extension",
-            runtimeDepsKey: runtimeDeps.key,
-            runtimeAbi: EXTENSION_RUNTIME_ABI_VERSION,
-            providerContracts,
-            methodAuthority,
-            dependencyMode,
-            externalDeps: runtimeExternalDeps,
-            dependencyOverrides: env.dependencyOverrides,
-            dependencyPatches: runtimeDependencyPatches,
-            classifiedDeps,
-            smokeTest: { mode: "child-process", passed: true },
-          },
-        },
+        { details: { ...details, smokeTest: { mode: "child-process", passed: true } } },
         extensionArtifacts,
-        runtimeDeps.nodeModulesDir
-          ? (temporaryDirectory) =>
-              populateExtensionRuntimeDeps(
-                session,
-                path.join(temporaryDirectory, "node_modules"),
-                runtimeDeps.nodeModulesDir,
-                node.name,
-                runtimeExternalDeps,
-                runtimeDeps.key
-              )
-          : undefined
+        nodeProgramRuntimePopulation(session, program, node.name)
       );
-      if (runtimeDeps.nodeModulesDir) {
-        // A concurrent writer can win the immutable build key. Verify the
-        // returned directory too; older published builds may need repair.
-        await refreshCachedExtensionRuntimeDeps(session, result);
-      }
-
+      // A concurrent writer can win the immutable build key. Verify the
+      // returned directory too; older published builds may need repair.
+      await refreshCachedNodeProgramRuntimeDeps(session, result);
       return result;
     } finally {
-      runtimeDeps.release();
+      program.runtimeDeps.release();
+    }
+  } finally {
+    await env.cleanup();
+  }
+}
+
+/**
+ * Build a terminal app: a panel hosted by terminals, run as a Node program in
+ * a workspace PTY. It is bundled exactly like an extension (runtime
+ * dependencies projected next to the bundle so it runs from `builds/` inside
+ * the native runtime) and stored as a panel build.
+ */
+async function buildTerminalProgram(
+  session: BuilderSession,
+  node: GraphNode,
+  ev: string,
+  buildKey: string,
+  graph: PackageGraph,
+  workspaceRoot: string,
+  sourceRoot: string,
+  sourceStateHash: string,
+  authority: UnitAuthorityManifest,
+  signal: AbortSignal
+): Promise<StoredBuildResult> {
+  const env = await prepareBuildEnv(
+    session,
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    "runtime-root",
+    signal
+  );
+  try {
+    const entryFile = await resolveEntryPoint(node, env.sourcePath, {
+      conditions: NODE_CONDITIONS,
+    });
+    const sourcePath = path.join(sourceRoot, node.relativePath);
+    const manifest =
+      (
+        JSON.parse(fs.readFileSync(path.join(sourcePath, "package.json"), "utf-8")) as {
+          vibestudio?: Record<string, unknown>;
+        }
+      ).vibestudio ?? {};
+    const program = await bundleNodeProgram(
+      session,
+      env,
+      graph,
+      sourceRoot,
+      {
+        entryFile,
+        conditions: NODE_CONDITIONS,
+        dependencyMode: "auto",
+        dedupeModules: normalizeManifestSpecList(manifest["dedupeModules"] as string[] | undefined),
+      },
+      signal
+    );
+    try {
+      const artifacts = bundleArtifacts(program.bundle);
+      const result = await storeSimpleBuild(
+        session,
+        buildKey,
+        program.bundle,
+        node,
+        ev,
+        true,
+        sourceStateHash,
+        authority,
+        {
+          ...(manifest["stateArgs"]
+            ? { stateArgsSchema: manifest["stateArgs"] as BuildMetadata["stateArgsSchema"] }
+            : {}),
+          details: {
+            kind: "terminal",
+            runtimeDepsKey: program.runtimeDeps.key,
+            externalDeps: program.runtimeExternalDeps,
+            dependencyOverrides: program.dependencyOverrides,
+            dependencyPatches: program.runtimeDependencyPatches,
+            classifiedDeps: program.dependencyDiagnostics.classifiedDeps,
+          },
+        },
+        artifacts,
+        nodeProgramRuntimePopulation(session, program, node.name)
+      );
+      await refreshCachedNodeProgramRuntimeDeps(session, result);
+      return result;
+    } finally {
+      program.runtimeDeps.release();
     }
   } finally {
     await env.cleanup();
@@ -5232,22 +5302,25 @@ async function smokeTestExtensionBuild(
   }
 }
 
-export async function ensureExtensionBuildReady(
+/** A cached Node program (extension or terminal app) gets its runtime dependencies verified or re-projected. */
+export async function ensureNodeProgramBuildReady(
   session: BuilderSession,
   result: StoredBuildResult
 ): Promise<void> {
-  if (result.metadata.kind !== "extension") return;
+  const kind = result.metadata.details.kind;
+  if (kind !== "extension" && kind !== "terminal") return;
   // The process owns an admitted shared projection, while this session keeps
   // its store alive until any metadata repair it initiated has settled.
-  await session.lifetime.run(() => refreshCachedExtensionRuntimeDeps(session, result));
+  await session.lifetime.run(() => refreshCachedNodeProgramRuntimeDeps(session, result));
 }
 
-export async function refreshCachedExtensionRuntimeDeps(
+export async function refreshCachedNodeProgramRuntimeDeps(
   session: BuilderSession,
   result: StoredBuildResult
 ): Promise<void> {
+  const details = result.metadata.details;
   const extensionDetails =
-    result.metadata.details.kind === "extension" ? result.metadata.details : null;
+    details.kind === "extension" || details.kind === "terminal" ? details : null;
   const deps = extensionDetails?.externalDeps ?? {};
   if (Object.keys(deps).length === 0) return;
   const currentKey = extensionRuntimeDependencyKey(
@@ -5262,7 +5335,10 @@ export async function refreshCachedExtensionRuntimeDeps(
     // A retained execution has its own source state and execution digest. Only
     // the canonical build record owns the mutable host-runtime projection key.
     const canonical = await session.store.readBuildMetadata(result.dir);
-    if (canonical.buildKey !== result.buildKey || canonical.details.kind !== "extension")
+    if (
+      canonical.buildKey !== result.buildKey ||
+      (canonical.details.kind !== "extension" && canonical.details.kind !== "terminal")
+    )
       throw new Error(
         `Extension build metadata changed during runtime projection: ${result.buildKey}`
       );
@@ -5320,7 +5396,10 @@ export async function refreshCachedExtensionRuntimeDeps(
   // descriptor. Reconcile only runtime readiness; retained execution identity
   // must remain the exact variant requested by this caller.
   const canonical = await session.store.readBuildMetadata(result.dir);
-  if (canonical.buildKey !== result.buildKey || canonical.details.kind !== "extension")
+  if (
+    canonical.buildKey !== result.buildKey ||
+    (canonical.details.kind !== "extension" && canonical.details.kind !== "terminal")
+  )
     throw new Error(
       `Extension build metadata changed during runtime projection: ${result.buildKey}`
     );

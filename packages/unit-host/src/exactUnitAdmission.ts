@@ -40,14 +40,14 @@ export function requireExactUnitAdmission(input: {
     });
   }
 
-  const reason = `The exact ${input.unitLabel} build ${input.repoPath}@${input.effectiveVersion} has not been accepted to run.`;
+  const reason = `This version of ${input.name} (${input.repoPath}@${input.effectiveVersion}) needs your review before it can run.`;
   throw new ServiceAccessError(input.service, input.operation, reason, "EACCES", {
     authorityFailure: {
       reasonCode: "approval-required",
       reason,
       remediation: {
         kind: "request-user-approval",
-        message: `Accept ${input.name} in the workspace launch review, then retry.`,
+        message: `Review ${input.name} in the approvals list, accept it if you trust it, then open it again.`,
       },
     },
   });

@@ -4,6 +4,7 @@ import type { ContextCloneResult } from "@vibestudio/shared/runtime/contextEdges
  */
 
 import { z } from "zod";
+import { JsonObjectSchema } from "@vibestudio/shared/wireValues";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type {
   MethodAccessDescriptor,
@@ -1075,6 +1076,26 @@ export const runtimeMethods = defineServiceMethods({
     authority: { principals: ["code", "website"] },
     access: TITLE_ACCESS,
     examples: [{ args: ["Workspace Shell", { explicit: true }] }],
+  },
+  patchEntityStateArgs: {
+    website: {
+      kind: "closed",
+      reason: "Per-instance state belongs to a workspace panel runtime itself.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "codeOnly",
+      residency: "supervision",
+      family: "runtime.mutate",
+      rationale:
+        "Open bias: a panel runtime writes only its own per-instance state; §2 durable code identity",
+    },
+    description:
+      "Apply an RFC 7386 JSON merge patch (null deletes a key) to the calling panel runtime's own stateArgs, validated against its active build's schema. For panels not presented in a view, such as terminal apps hosted in a workspace PTY; a panel shown in a slot patches its slot's current entry instead. Returns the resulting stateArgs.",
+    args: z.tuple([JsonObjectSchema.describe("Merge patch.")]),
+    returns: JsonObjectSchema,
+    authority: { principals: ["code"] },
+    access: { sensitivity: "write" },
   },
   createContext: {
     website: {

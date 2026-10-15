@@ -20,10 +20,10 @@
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
+    "@vibestudio/workspace-contracts": "workspace:*",
     "sql.js": "^1.14.1"
   },
   "devDependencies": {
-    "@vibestudio/workspace-contracts": "workspace:*",
     "zod": "^3.25.76"
   }
 }

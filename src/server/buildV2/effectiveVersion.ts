@@ -250,9 +250,11 @@ export async function persistEvState(
 // "34": module registries distinguish owned exports from missing and inherited entries.
 // "35": owned dependency resolution preserves esbuild's guarded optional imports.
 // "36": worker entries expose constructor-free preparation of exact executable units.
+// "37": worker and terminal app builds compile TSX with the automatic JSX runtime.
 // Native esbuild resolution replaces the guarded virtual-file namespace.
 // Its output recipe must not borrow artifacts emitted by that old resolver.
-const BUILD_CACHE_VERSION = "37";
+// "38": combines the native resolver with automatic JSX for terminal programs.
+const BUILD_CACHE_VERSION = "38";
 
 /** Development borrows the host's installation; production prepares its own.
  * This selection is also an input to the build key, not a compiler guard. */

@@ -49,7 +49,8 @@ const CRASH_WINDOW_MS = 60_000;
 
 export interface ExtensionProcessManagerDeps {
   launch(environment: Record<string, string>): ProcessAdapter;
-  attachProcess(proc: ProcessAdapter, credential: string): () => void;
+  /** Attach the launched process's IPC channel as extension `name`'s RPC session. */
+  attachProcess(proc: ProcessAdapter, name: string): () => void;
   onStatus(name: string, status: "running" | "stopped" | "error", error?: string | null): void;
   onError?(name: string, error: string, attempts: number): void;
   onHealth(name: string, health: ExtensionHealth): void;
@@ -83,12 +84,12 @@ export class ExtensionProcessManager {
       VIBESTUDIO_EXTENSION_VERSION: state.version,
       VIBESTUDIO_EXTENSION_BUNDLE_PATH: state.bundlePath,
       VIBESTUDIO_EXTENSION_STORAGE_DIR: state.storageDir,
-      VIBESTUDIO_EXTENSION_GATEWAY_URL: state.gatewayUrl,
-      VIBESTUDIO_EXTENSION_RPC_TOKEN: state.rpcToken,
     });
     let retireRpc: () => void;
     try {
-      retireRpc = this.deps.attachProcess(proc, state.rpcToken);
+      // The process's IPC channel is its authentication: the identity is
+      // bound at launch, so no credential is placed in its environment.
+      retireRpc = this.deps.attachProcess(proc, state.name);
     } catch (error) {
       proc.kill();
       throw error;

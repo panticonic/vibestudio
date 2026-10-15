@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { RuntimeDiagnosticsStore } from "./runtimeDiagnosticsStore.js";
 
 function tempStatePath(): string {
@@ -9,7 +9,7 @@ function tempStatePath(): string {
 }
 
 describe("RuntimeDiagnosticsStore", () => {
-  it("persists bounded diagnostics with a separate error buffer", () => {
+  it("persists bounded diagnostics with a separate error buffer", async () => {
     const statePath = tempStatePath();
     const store = new RuntimeDiagnosticsStore({
       statePath,
@@ -39,6 +39,7 @@ describe("RuntimeDiagnosticsStore", () => {
       source: "console",
     });
 
+    await store.flush();
     const reloaded = new RuntimeDiagnosticsStore({
       statePath,
       entryCapacity: 2,
@@ -87,7 +88,7 @@ describe("RuntimeDiagnosticsStore", () => {
     expect(history.errors.map((entry) => entry.message)).toEqual(["error"]);
   });
 
-  it("stamps monotonic per-entity seq and resumes exactly via sinceSeq", () => {
+  it("stamps monotonic per-entity seq and resumes exactly via sinceSeq", async () => {
     const statePath = tempStatePath();
     const store = new RuntimeDiagnosticsStore({ statePath, entryCapacity: 10, errorCapacity: 10 });
 
@@ -111,6 +112,7 @@ describe("RuntimeDiagnosticsStore", () => {
     expect(afterSecond.entries.map((entry) => entry.message)).toEqual(["c"]);
 
     // Seq continues across reload instead of restarting.
+    await store.flush();
     const reloaded = new RuntimeDiagnosticsStore({
       statePath,
       entryCapacity: 10,
@@ -163,7 +165,7 @@ describe("RuntimeDiagnosticsStore", () => {
     expect(older.entries.map((entry) => entry.seq)).toEqual([1]);
   });
 
-  it("uses a fixed-size storage key for arbitrarily long entity IDs", () => {
+  it("uses a fixed-size storage key for arbitrarily long entity IDs", async () => {
     const statePath = tempStatePath();
     const store = new RuntimeDiagnosticsStore({ statePath });
     const entityId = `panel:tree/${"about~new/nested-panel/".repeat(100)}`;
@@ -176,6 +178,7 @@ describe("RuntimeDiagnosticsStore", () => {
       source: "lifecycle",
     });
 
+    await store.flush();
     const diagnosticsDir = path.join(statePath, "runtime-diagnostics");
     const files = fs.readdirSync(diagnosticsDir);
     expect(files).toEqual([expect.stringMatching(/^sha256-[0-9a-f]{64}\.json$/)]);
@@ -185,5 +188,56 @@ describe("RuntimeDiagnosticsStore", () => {
     expect(reloaded.history(entityId).entries.map((entry) => entry.message)).toEqual([
       "deep panel mounted",
     ]);
+  });
+
+  it("persists a burst of records with one write per entity", async () => {
+    const statePath = tempStatePath();
+    const store = new RuntimeDiagnosticsStore({ statePath });
+    const writes = vi.spyOn(fs.promises, "writeFile");
+    try {
+      for (let index = 0; index < 50; index += 1) {
+        store.record({
+          entityId: "extensions/shell",
+          kind: "extension",
+          level: "info",
+          message: `line ${index}`,
+          source: "stdout",
+        });
+      }
+      // Nothing is rewritten per line; the history is still served at once.
+      expect(writes).not.toHaveBeenCalled();
+      expect(store.history("extensions/shell").entries).toHaveLength(50);
+      await store.flush();
+      expect(writes).toHaveBeenCalledTimes(1);
+      const reloaded = new RuntimeDiagnosticsStore({ statePath });
+      expect(reloaded.history("extensions/shell").entries).toHaveLength(50);
+    } finally {
+      writes.mockRestore();
+    }
+  });
+
+  it("keeps history that failed to persist for the next flush", async () => {
+    const statePath = tempStatePath();
+    const store = new RuntimeDiagnosticsStore({ statePath });
+    store.record({
+      entityId: "workers/demo",
+      kind: "worker",
+      level: "info",
+      message: "kept",
+      source: "console",
+    });
+    const failure = new Error("disk full");
+    const writes = vi.spyOn(fs.promises, "writeFile").mockRejectedValueOnce(failure);
+    try {
+      await expect(store.flush()).rejects.toBe(failure);
+    } finally {
+      writes.mockRestore();
+    }
+    await store.flush();
+    expect(
+      new RuntimeDiagnosticsStore({ statePath })
+        .history("workers/demo")
+        .entries.map((entry) => entry.message)
+    ).toEqual(["kept"]);
   });
 });

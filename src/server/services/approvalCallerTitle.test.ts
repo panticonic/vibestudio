@@ -24,6 +24,41 @@ function record(
 }
 
 describe("resolveApprovalCallerTitle", () => {
+  it("uses the declared source when the runtime entity projection is unavailable", () => {
+    const requester = resolveApprovalRequester(
+      { entityCache: new EntityCache(), getTitle: () => undefined },
+      {
+        callerId: "panel:nav-term-482a297c",
+        callerKind: "panel",
+        repoPath: "terminal-apps/chat",
+        effectiveVersion: "hash-1",
+      }
+    );
+    expect(requester.title).toBe("chat");
+    expect(requester.breadcrumbs[0]?.label).toBe("chat");
+    expect(requester.id).toBe("panel:nav-term-482a297c");
+  });
+
+  it("uses a semantic requester label when neither title nor source is available", () => {
+    expect(
+      resolveApprovalCallerTitle(
+        { entityCache: new EntityCache(), getTitle: () => undefined },
+        "panel:nav-term-482a297c"
+      )
+    ).toBe("Vibestudio");
+    const requester = resolveApprovalRequester(
+      { entityCache: new EntityCache(), getTitle: () => undefined },
+      {
+        callerId: "panel:nav-term-482a297c",
+        callerKind: "panel",
+        repoPath: "",
+        effectiveVersion: "",
+      }
+    );
+    expect(requester.title).toBe("Workspace panel");
+    expect(requester.breadcrumbs[0]?.label).toBe("Workspace panel");
+  });
+
   it("promotes the owning panel title for worker and DO callers", () => {
     const entityCache = new EntityCache();
     entityCache._onActivate(record("panel:nav-chat", "panel"));

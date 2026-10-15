@@ -27,6 +27,7 @@ const stage = vi.hoisted(() => ({
   sourceClose: vi.fn(),
   native: vi.fn(),
   publish: vi.fn(),
+  existingRelease: vi.fn(),
   processShutdown: vi.fn(),
   buildShutdown: vi.fn(),
   runtimeBuilds: vi.fn(),
@@ -48,6 +49,7 @@ vi.mock("./preparedWorkspaceRelease.js", async (original) => ({
   ...(await original<typeof import("./preparedWorkspaceRelease.js")>()),
   workspaceReleaseIdentity: stage.identity,
   publishPreparedWorkspaceRelease: stage.publish,
+  validateExistingPreparedWorkspaceRelease: stage.existingRelease,
 }));
 vi.mock("./preparedWorkspaceReleaseCache.js", () => ({
   prepareCachedWorkspaceRelease: stage.fullCache,
@@ -105,6 +107,7 @@ beforeEach(async () => {
   stage.sourceRoot = path.join(root, "source-cache");
   stage.sourcePublished = false;
   stage.fullHit = false;
+  stage.existingRelease.mockResolvedValue(false);
   stage.processShutdown.mockResolvedValue(undefined);
   stage.buildShutdown.mockResolvedValue(undefined);
   stage.runtimeBuilds.mockResolvedValue([]);
@@ -228,6 +231,127 @@ function launch(
 }
 
 describe("workspace source preparation ownership", () => {
+  it("completes explicit source-only publication without admitting any runtime resources", async () => {
+    const output = path.join(root, "sources-only", "output");
+    const sourceOutput = path.join(root, "sources-only", "early");
+    const scratch = path.join(root, "sources-only", "scratch");
+    const progress = vi.fn();
+    const ready = vi.fn(async (published: string) => {
+      expect(published).toBe(output);
+      for (const role of roles) {
+        const record = readPreparedWorkspaceTemplate(
+          preparedWorkspaceTemplatePath(published, pins[role], "use"),
+          pins[role],
+          "use"
+        );
+        expect(record.compilationInput).toBeDefined();
+        expect(record.builds).toEqual([]);
+      }
+    });
+    await prepareWorkspaceTemplates({
+      appRoot: root,
+      output,
+      sourceOutput,
+      scratch,
+      scope: "sources",
+      onProgress: progress,
+      onSourcesPrepared: ready,
+    });
+    expect(ready).toHaveBeenCalledOnce();
+    expect(progress.mock.calls.map(([event]) => event)).toEqual(
+      expect.arrayContaining(
+        roles.map((item) => expect.objectContaining({ phase: "sources", total: 3, item }))
+      )
+    );
+    expect(progress.mock.calls.map(([event]) => event.done)).toEqual([1, 2, 3]);
+    expect(stage.fullCache).not.toHaveBeenCalled();
+    expect(stage.native).not.toHaveBeenCalled();
+    expect(stage.runtimeBuilds).not.toHaveBeenCalled();
+    expect(stage.processShutdown).not.toHaveBeenCalled();
+    expect(stage.buildShutdown).not.toHaveBeenCalled();
+    expect(stage.publish).not.toHaveBeenCalled();
+    expect(stage.sourceClose).toHaveBeenCalledOnce();
+    expect(fs.existsSync(scratch)).toBe(false);
+    expect(fs.existsSync(sourceOutput)).toBe(false);
+    expect(fs.existsSync(path.join(output, "userland-builds", "release.json"))).toBe(false);
+  });
+
+  it("projects warm source-only cache records without private runtime hydration or Git reads", async () => {
+    const prepare = (name: string) =>
+      prepareWorkspaceTemplates({
+        appRoot: root,
+        output: path.join(root, name, "output"),
+        scratch: path.join(root, name, "scratch"),
+        scope: "sources",
+      });
+    await prepare("sources-cold");
+    stage.materialize.mockClear();
+    stage.indexes.mockClear();
+    const hydrate = vi.spyOn(WorkspaceRootTemplateBootstrap.prototype, "prepareSource");
+    try {
+      await prepare("sources-warm");
+      expect(hydrate).not.toHaveBeenCalled();
+      expect(stage.materialize).not.toHaveBeenCalled();
+      expect(stage.indexes).not.toHaveBeenCalled();
+      expect(stage.fullCache).not.toHaveBeenCalled();
+      expect(stage.native).not.toHaveBeenCalled();
+      expect(stage.runtimeBuilds).not.toHaveBeenCalled();
+      expect(stage.sourceClose).toHaveBeenCalledTimes(2);
+      for (const role of roles) {
+        expect(
+          readPreparedWorkspaceTemplate(
+            preparedWorkspaceTemplatePath(
+              path.join(root, "sources-warm", "output"),
+              pins[role],
+              "use"
+            ),
+            pins[role],
+            "use"
+          ).builds
+        ).toEqual([]);
+      }
+    } finally {
+      hydrate.mockRestore();
+    }
+  });
+
+  it("borrows an already verified complete release without replacing it with source-only records", async () => {
+    const output = path.join(root, "borrowed-release");
+    const scratch = path.join(root, "borrowed-scratch");
+    const marker = path.join(output, "userland-builds", "release.json");
+    const template = path.join(output, "workspace-templates", "retained-template.json");
+    fs.mkdirSync(path.dirname(marker), { recursive: true });
+    fs.mkdirSync(path.dirname(template), { recursive: true });
+    fs.writeFileSync(marker, "existing verified release inventory");
+    fs.writeFileSync(template, "existing source and runtime bindings");
+    // Inventory validity is the canonical validator's responsibility. This
+    // boundary test proves that a positive receipt never admits new production.
+    stage.existingRelease.mockResolvedValueOnce(true);
+    const ready = vi.fn(async () => {});
+    await prepareWorkspaceTemplates({
+      appRoot: root,
+      output,
+      scratch,
+      scope: "sources",
+      onSourcesPrepared: ready,
+    });
+    expect(stage.existingRelease).toHaveBeenCalledWith(
+      expect.objectContaining({ appRoot: root, output, templates: pins }),
+      expect.objectContaining({ compilerProtocol: buildCompilerProtocolIdentity() })
+    );
+    expect(ready).toHaveBeenCalledExactlyOnceWith(output);
+    expect(fs.readFileSync(marker, "utf8")).toBe("existing verified release inventory");
+    expect(fs.readFileSync(template, "utf8")).toBe("existing source and runtime bindings");
+    expect(stage.sources).not.toHaveBeenCalled();
+    expect(stage.fullCache).not.toHaveBeenCalled();
+    expect(stage.materialize).not.toHaveBeenCalled();
+    expect(stage.indexes).not.toHaveBeenCalled();
+    expect(stage.native).not.toHaveBeenCalled();
+    expect(stage.runtimeBuilds).not.toHaveBeenCalled();
+    expect(stage.publish).not.toHaveBeenCalled();
+    expect(fs.existsSync(scratch)).toBe(false);
+  });
+
   it("retains every role resource until withdrawn process-owned compiler jobs join", async () => {
     const controller = new AbortController();
     const reason = Object.assign(new Error("producer cancelled"), { code: "ECANCELLED" });

@@ -67,19 +67,6 @@ const GOVERNED_RUNTIME_PACKAGES = new Set([
   "@panticonic/pi-durable",
 ]);
 
-export function runtimeImportPolicyForUnit(
-  unit,
-  { isTerminalWorker, terminalShimModule, terminalWorkerExternals }
-) {
-  if (
-    unit.name === terminalShimModule ||
-    (unit.kind === "worker" && isTerminalWorker(unit.manifest))
-  ) {
-    return terminalWorkerExternals;
-  }
-  return [];
-}
-
 export function collectExactUserlandDependencyPins(userlandRoot, appRoot = defaultAppRoot) {
   const root = path.resolve(userlandRoot);
   const hostManifest = JSON.parse(fs.readFileSync(path.join(appRoot, "package.json"), "utf8"));
@@ -286,9 +273,6 @@ export async function collectTemplateImportManifestFindings(appRoot) {
   const { auditWorkspaceDependencies } = await import("../src/server/buildV2/dependencyAudit.js");
   const { resolveTemplate } = await import("../src/server/buildV2/templateResolver.js");
   const { getAdapter } = await import("../src/server/buildV2/adapters/index.js");
-  const { isTerminalWorker } = await import("../packages/shared/src/unitManifest.ts");
-  const { TERMINAL_SHIM_MODULE, TERMINAL_WORKER_RUNTIME_EXTERNALS } =
-    await import("../src/server/buildV2/platformModules.ts");
   const { composeDevelopmentTemplateCheckouts } =
     await import("../src/dev/developmentTemplateComposition.ts");
   const findings = [];
@@ -340,14 +324,7 @@ export async function collectTemplateImportManifestFindings(appRoot) {
         const unitFindings = await collectPackageManifestImportFindings(
           unit.path,
           composition.root,
-          {
-            jsxRuntime,
-            runtimeModuleSpecifiers: runtimeImportPolicyForUnit(unit, {
-              isTerminalWorker,
-              terminalShimModule: TERMINAL_SHIM_MODULE,
-              terminalWorkerExternals: TERMINAL_WORKER_RUNTIME_EXTERNALS,
-            }),
-          }
+          { jsxRuntime }
         );
         findings.push(
           ...unitFindings.map((finding) => ({

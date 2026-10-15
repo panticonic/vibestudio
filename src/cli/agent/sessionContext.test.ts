@@ -46,7 +46,8 @@ function inv(flags: Record<string, string | boolean> = {}) {
   return { positionals: [], flags, flagsMulti: () => [] };
 }
 const deviceCreds = {
-  schemaVersion: 5 as const,
+  schemaVersion: 6 as const,
+  phase: "workspace" as const,
   kind: "device" as const,
   transport: "iroh" as const,
   endpointSecret: "E".repeat(43),

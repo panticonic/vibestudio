@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { RESUMABLE_GZIP_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 
 vi.mock("react-native", () => ({
@@ -83,7 +82,7 @@ describe("mobile bundle delivery over Iroh", () => {
         path: "/bundle",
         method: "GET",
         gzip: true,
-        headers: { [RESUMABLE_GZIP_HEADER]: "1", Range: "bytes=0-" },
+        headers: { "Accept-Encoding": "gzip", Range: "bytes=0-" },
       },
     ]);
     expect(host.appendBundleChunk).toHaveBeenNthCalledWith(
@@ -228,5 +227,22 @@ describe("complete native app artifact delivery", () => {
       "build",
       artifacts[0]!.integrity
     );
+  });
+  it("reports a bootstrap the server cannot provide instead of waiting for it", async () => {
+    const unavailable = Object.assign(new Error("React Native app is not ready"), {
+      code: "MOBILE_APP_UNAVAILABLE",
+    });
+    const rpc = {
+      call: vi.fn(async () => {
+        throw unavailable;
+      }),
+      streamReadable: vi.fn(),
+    } as unknown as BundleDeliveryRpc;
+    const transport = { rpc, close: vi.fn(async () => undefined) };
+
+    await expect(
+      activateApprovedWorkspaceApp(transport, { nativeHost: nativeHost() })
+    ).rejects.toBe(unavailable);
+    expect(rpc.call).toHaveBeenCalledTimes(1);
   });
 });

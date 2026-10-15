@@ -168,6 +168,12 @@ export interface CredentialServiceDeps {
       clientPlatform?: "desktop" | "headless" | "mobile";
       oauthCallbackMode?: OAuthCallbackMode;
     } | null;
+    /**
+     * A panel runtime hosted by a trusted server-side host rather than a view
+     * (a terminal app in a workspace PTY) presents its browser handoffs itself:
+     * the URL goes to its own connection, not to a view host.
+     */
+    presentsOwnBrowserHandoff?(principalId: string): boolean;
   };
   egressProxy?: Pick<
     EgressProxy,

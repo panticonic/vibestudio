@@ -312,6 +312,26 @@
         "capability": null,
         "presentation": null
       },
+      "grantAppPrincipal": {
+        "authority": {
+          "principals": [
+            "host",
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "admin"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "identity",
+          "family": "auth.read",
+          "rationale": "An authenticated device shell obtains the device-scoped identity of an approved app it runs itself; the app's authority was admitted at its launch gate."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "grantConnection": {
         "authority": {
           "principals": [
@@ -14218,6 +14238,25 @@
         "capability": null,
         "presentation": null
       },
+      "patchEntityStateArgs": {
+        "authority": {
+          "principals": [
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "codeOnly",
+          "residency": "supervision",
+          "family": "runtime.mutate",
+          "rationale": "Open bias: a panel runtime writes only its own per-instance state; §2 durable code identity"
+        },
+        "capability": null,
+        "presentation": null
+      },
       "rebindAgentChannel": {
         "authority": {
           "principals": [
@@ -16992,6 +17031,540 @@
           "residency": "supervision",
           "family": "shellPresence.control",
           "rationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family"
+        },
+        "capability": null,
+        "presentation": null
+      }
+    }
+  },
+  "terminalApps": {
+    "service": {
+      "principals": [
+        "user",
+        "code"
+      ]
+    },
+    "methods": {
+      "close": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "terminal-apps.control",
+          "rationale": "Controls only the calling person's own terminal sessions"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "getSettings": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "terminal-apps.control",
+          "rationale": "Controls only the calling person's own terminal sessions"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "launch": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "terminal-apps.run"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "terminal-apps.run"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "terminal-apps.run"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "terminal-apps.run"
+          },
+          "prepared": {
+            "resolver": "terminalApps.run",
+            "leaves": [
+              {
+                "capability": "terminal-apps.run",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "terminal-apps.run"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "terminal-apps.run"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "terminal-apps.run"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write",
+          "approval": [
+            {
+              "capability": "terminal-apps.run",
+              "tier": "gated",
+              "operation": {
+                "kind": "unknown",
+                "verb": "Run terminal app"
+              },
+              "grantScopes": [
+                "once",
+                "session",
+                "version"
+              ],
+              "reason": "A terminal app runs native code in the workspace runtime as you."
+            }
+          ]
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "terminal-apps.run",
+          "rationale": "The transport is open; user and code callers receive one prepared gated terminal-apps.run leaf naming the exact program and workspace"
+        },
+        "capability": "terminal-apps.run",
+        "presentation": {
+          "title": "Run a terminal app",
+          "action": "run a terminal app or shell in this workspace",
+          "description": "Start a program in a terminal in this workspace, as you.",
+          "group": "computer",
+          "authorityCategory": {
+            "domain": "computer",
+            "verb": "act"
+          }
+        }
+      },
+      "list": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "terminal-apps.control",
+          "rationale": "Controls only the calling person's own terminal sessions"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "restart": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "terminal-apps.run"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "terminal-apps.run"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "terminal-apps.run"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "terminal-apps.run"
+          },
+          "prepared": {
+            "resolver": "terminalApps.run",
+            "leaves": [
+              {
+                "capability": "terminal-apps.run",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "terminal-apps.run"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "terminal-apps.run"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "terminal-apps.run"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write",
+          "approval": [
+            {
+              "capability": "terminal-apps.run",
+              "tier": "gated",
+              "operation": {
+                "kind": "unknown",
+                "verb": "Run terminal app"
+              },
+              "grantScopes": [
+                "once",
+                "session",
+                "version"
+              ],
+              "reason": "A terminal app runs native code in the workspace runtime as you."
+            }
+          ]
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "terminal-apps.run",
+          "rationale": "The transport is open; user and code callers receive one prepared gated terminal-apps.run leaf naming the exact program and workspace"
+        },
+        "capability": "terminal-apps.run",
+        "presentation": {
+          "title": "Run a terminal app",
+          "action": "run a terminal app or shell in this workspace",
+          "description": "Start a program in a terminal in this workspace, as you.",
+          "group": "computer",
+          "authorityCategory": {
+            "domain": "computer",
+            "verb": "act"
+          }
+        }
+      },
+      "resume": {
+        "authority": {
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "terminal-apps.run"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "terminal-apps.run"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "terminal-apps.run"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "terminal-apps.run"
+          },
+          "prepared": {
+            "resolver": "terminalApps.run",
+            "leaves": [
+              {
+                "capability": "terminal-apps.run",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "terminal-apps.run"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "terminal-apps.run"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "terminal-apps.run"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "write",
+          "approval": [
+            {
+              "capability": "terminal-apps.run",
+              "tier": "gated",
+              "operation": {
+                "kind": "unknown",
+                "verb": "Run terminal app"
+              },
+              "grantScopes": [
+                "once",
+                "session",
+                "version"
+              ],
+              "reason": "A terminal app runs native code in the workspace runtime as you."
+            }
+          ]
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "terminal-apps.run",
+          "rationale": "The transport is open; user and code callers receive one prepared gated terminal-apps.run leaf naming the exact program and workspace"
+        },
+        "capability": "terminal-apps.run",
+        "presentation": {
+          "title": "Run a terminal app",
+          "action": "run a terminal app or shell in this workspace",
+          "description": "Start a program in a terminal in this workspace, as you.",
+          "group": "computer",
+          "authorityCategory": {
+            "domain": "computer",
+            "verb": "act"
+          }
+        }
+      },
+      "setSettings": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "terminal-apps.control",
+          "rationale": "Controls only the calling person's own terminal sessions"
         },
         "capability": null,
         "presentation": null

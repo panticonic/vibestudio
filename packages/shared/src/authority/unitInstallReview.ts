@@ -917,6 +917,9 @@ export function installPartGroup(
 ): Omit<InstallPartGroup, "parts" | "hasNotablePart"> {
   const directory = part.repoPath.split("/").filter(Boolean)[0] ?? "other";
   if (directory === "panels") return { key: "app-panels", title: "App panels", order: 0 };
+  if (directory === "terminal-apps") {
+    return { key: "terminal-apps", title: "Terminal apps", order: 0.5 };
+  }
   if (directory === "workers" && part.label !== "Service") {
     return {
       key: "agents-and-background-tasks",

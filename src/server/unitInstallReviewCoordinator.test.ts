@@ -446,7 +446,7 @@ describe("UnitInstallReviewCoordinator", () => {
 
     const pending = coordinator.enqueue({
       trigger: "startup",
-      entries: [unit("app", "remote-cli")],
+      entries: [unit("app", "terminal-browser")],
       applyApproved: applyApp,
       applyDenied: vi.fn(),
     });

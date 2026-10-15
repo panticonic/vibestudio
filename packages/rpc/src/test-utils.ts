@@ -1,6 +1,6 @@
 import type { RpcCaller, RpcReadableCaller } from "./types.js";
 import type { RpcWireCaller } from "./internal-types.js";
-import { createRpcPeer } from "./client-core.js";
+import { createRpcPeer, createRpcWireView } from "./client-core.js";
 import { schemaRpcClient, registerRpcWireClient, schemaRpcCaller } from "./schemaClient.js";
 
 type MockProperties<F> = Pick<F, keyof F>;
@@ -59,6 +59,7 @@ export function schemaRpcClientMock(
   selfId: string
 ): import("./types.js").RpcClient {
   const client: import("./internal-types.js").RpcWireClient = {
+    createView: (options) => createRpcWireView(client, options),
     selfId,
     call: wire.call.bind(wire),
     stream:

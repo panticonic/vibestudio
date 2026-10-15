@@ -7,6 +7,9 @@ const option = (name: string) => {
   if (!process.argv.includes(name) || !value) throw new Error(`${name} is required`);
   return path.resolve(value);
 };
+const scope = process.argv[process.argv.indexOf("--scope") + 1];
+if (scope !== "sources" && scope !== "release")
+  throw new Error(`--scope must be "sources" or "release", not ${scope}`);
 const optionalOption = (name: string) => {
   if (!process.argv.includes(name)) return undefined;
   const value = process.argv[process.argv.indexOf(name) + 1];
@@ -55,6 +58,13 @@ void (async () => {
       output: option("--output"),
       sourceOutput: optionalOption("--source-output"),
       scratch: option("--scratch"),
+      scope,
+      onProgress: (progress) => {
+        // Progress is a courtesy to a launcher that is showing it; a closed
+        // channel must never fail the preparation it describes.
+        if (typeof process.send === "function" && process.connected)
+          process.send({ kind: "progress", progress }, () => {});
+      },
       signal: cancellation.signal,
       onSourcesPrepared: async (root) => {
         console.log(`[workspace-release] Template sources ready at ${root}`);

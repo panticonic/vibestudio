@@ -38,6 +38,7 @@ let typecheckDiagnostics: (unitRelativePath: string) => Array<{
 let typecheckCalls = 0;
 let typecheckInputs: Array<{
   unitRelativePath: string;
+  internalDeps: Array<{ name: string; relativePath: string }>;
   moduleConditions: readonly string[];
   authority?: unknown;
 }> = [];
@@ -114,6 +115,7 @@ async function loadWithMocks(
     isolatedExports?: unknown;
     invalidPanelManifest?: boolean;
     resolvedBuildKey?: string;
+    compilerOnlyDependency?: boolean;
   } = {}
 ): Promise<{
   buildSystem: BuildSystemV2;
@@ -141,6 +143,17 @@ async function loadWithMocks(
   writeUnit(workspaceRoot, "panels/app", "@workspace-panels/app", {
     "@workspace/mid": "workspace:*",
   });
+  if (options.compilerOnlyDependency) {
+    writeUnit(workspaceRoot, "extensions/shell", "@workspace-extensions/shell");
+    const extensionPath = path.join(workspaceRoot, "extensions/shell/package.json");
+    const extensionManifest = JSON.parse(fs.readFileSync(extensionPath, "utf8"));
+    extensionManifest.vibestudio.extension = {};
+    fs.writeFileSync(extensionPath, JSON.stringify(extensionManifest));
+    const manifestPath = path.join(workspaceRoot, "panels/app/package.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.devDependencies = { "@workspace-extensions/shell": "workspace:*" };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+  }
   if (options.blockingAuthorityConsumer) {
     const libraryManifestPath = path.join(workspaceRoot, "packages/lib/package.json");
     const libraryManifest = JSON.parse(fs.readFileSync(libraryManifestPath, "utf8"));
@@ -175,6 +188,7 @@ async function loadWithMocks(
     TypecheckWorkerClient: class {
       async check(input: {
         unitRelativePath: string;
+        internalDeps: Array<{ name: string; relativePath: string }>;
         moduleConditions: readonly string[];
         authority?: unknown;
       }) {
@@ -382,6 +396,21 @@ describe("BuildSystemV2 — explicit build reports", () => {
         authority: expect.any(Object),
       }),
     ]);
+  });
+
+  it("validates declared type-only workspace dependencies without adding runtime builds", async () => {
+    env = await loadWithMocks({ compilerOnlyDependency: true });
+    const report = await env.buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW);
+    expect(report.status).toBe("ok");
+    expect(typecheckInputs[0]?.internalDeps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "@workspace-extensions/shell",
+          relativePath: "extensions/shell",
+        }),
+      ])
+    );
+    expect(buildCalls.some((call) => call.name === "@workspace-extensions/shell")).toBe(false);
   });
 
   it("validates package source once per execution environment across all six exports", async () => {

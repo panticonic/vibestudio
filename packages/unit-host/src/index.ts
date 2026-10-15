@@ -15,8 +15,37 @@ import {
   type ExecutionPublicationPort,
 } from "@vibestudio/shared/execution/retention";
 
-import type { UnitKind, UnitRegistryEntryBase, UnitRegistryStatus, UnitSource } from "./types.js";
-export type { UnitKind, UnitRegistryEntryBase, UnitRegistryStatus, UnitSource } from "./types.js";
+import {
+  UNIT_ROLLBACK_HISTORY_LIMIT,
+  type UnitKind,
+  type UnitRegistryEntryBase,
+  type UnitRegistryStatus,
+  type UnitSource,
+  type UnitVersionRecord,
+} from "./types.js";
+export { normalizeUnitRepoPath } from "./repoPath.js";
+export { observeUnitSupervision, unitSupervisionChange } from "./supervisionChange.js";
+import { normalizeUnitRepoPath } from "./repoPath.js";
+export {
+  UNIT_ROLLBACK_HISTORY_LIMIT,
+  type UnitKind,
+  type UnitRegistryEntryBase,
+  type UnitRegistryStatus,
+  type UnitSource,
+  type UnitVersionRecord,
+} from "./types.js";
+
+function dedupeVersions<Version extends UnitVersionRecord>(versions: Version[]): Version[] {
+  const seen = new Set<string>();
+  const history: Version[] = [];
+  for (const version of versions) {
+    if (seen.has(version.activeBundleKey)) continue;
+    seen.add(version.activeBundleKey);
+    history.push(version);
+    if (history.length >= UNIT_ROLLBACK_HISTORY_LIMIT) break;
+  }
+  return history;
+}
 
 function unitErrorMessage(error: unknown): string {
   return formatRpcFailure(error);
@@ -47,6 +76,11 @@ export interface UnitDescriptor<Kind extends UnitKind = UnitKind> {
     nativeCode: boolean;
   };
   seedTrustEligible: boolean;
+  /**
+   * Entry fields recorded with each retained version and restored when it is
+   * selected again, because they describe how that build runs.
+   */
+  versionedFields?: readonly string[];
 }
 
 export interface UnitBuildIdentity<Kind extends UnitKind = UnitKind> {
@@ -275,11 +309,7 @@ export interface UnitRuntimeApplyOptions<
   node: Node;
   decl: Decl;
   validateBeforeApply?: (node: Node, decl: Decl) => void;
-  validateBeforeActivateCurrent?: (
-    entry: Entry,
-    node: Node,
-    decl: Decl
-  ) => void | Promise<void>;
+  validateBeforeActivateCurrent?: (entry: Entry, node: Node, decl: Decl) => void | Promise<void>;
   needsBuildRefresh: (entry: Entry, node: Node, decl: Decl) => boolean | Promise<boolean>;
   /**
    * Leave a trusted declaration unbuilt until its owning runtime operation
@@ -288,7 +318,7 @@ export interface UnitRuntimeApplyOptions<
    */
   deferBuild?: (node: Node, decl: Decl) => boolean;
   buildAndActivate: (node: Node, decl: Decl) => Promise<void>;
-  activateCurrent: (entry: Entry, node: Node, decl: Decl) => Promise<void>;
+  activateCurrent?: (entry: Entry, node: Node, decl: Decl) => Promise<void>;
   onError?: (node: Node, decl: Decl, message: string) => void;
 }
 
@@ -342,7 +372,7 @@ export interface UnitHostOptions<
   /** Lower groups settle before higher groups; units within one group run concurrently. */
   applyGroup?(node: Node, decl: Decl): number;
   removeUndeclared(entry: Entry): Promise<void>;
-  emitRemoved(entry: Entry): void;
+  emitRemoved?(entry: Entry): void;
   notifyUnresolved(sources: string[]): void;
   validateBeforeApproval?: (node: Node, decl: Decl) => void;
   onApprovalCandidateError?: (node: Node, decl: Decl, message: string) => void;
@@ -356,10 +386,12 @@ export interface UnitHostOptions<
     trigger: UnitReconcileTrigger
   ): Promise<UnitApprovalDecision>;
   approvalCoordinator?: UnitApprovalCoordinator<ApprovalEntry>;
-  onApprovalDenied(items: Array<ResolvedUnitDeclaration<Decl, Node>>): void;
+  onApprovalDenied?(items: Array<ResolvedUnitDeclaration<Decl, Node>>): void;
   onBackgroundError(error: unknown): void;
 }
 
+/** How a review was answered. */
+export type UnitReviewOutcome = "accepted" | "declined";
 export type UnitReconcileTrigger = "startup" | "meta-change";
 /** A unit review reports whether its exact parts were accepted, not a grant scope. */
 export type UnitApprovalDecision = "accepted" | "deny" | "dismiss";
@@ -378,6 +410,8 @@ export interface UnitReconcileOptions {
 }
 
 export interface UnitApprovalCoordinator<ApprovalEntry> {
+  /** Open every request waiting on `trigger` now rather than at its own pace. */
+  publishPending?(trigger: UnitReconcileTrigger): Promise<void>;
   enqueue(request: {
     entries: ApprovalEntry[];
     trigger: UnitReconcileTrigger;
@@ -524,13 +558,6 @@ export interface InstalledUnit<Entry extends UnitRegistryEntryBase, Node extends
   node: Node;
 }
 
-export function normalizeUnitRepoPath(repoPath: string): string {
-  return repoPath
-    .replace(/^\/+/, "")
-    .replace(/^workspace\//, "")
-    .replace(/\/+$/, "");
-}
-
 export function normalizeUnitRef(ref: string): string {
   return ref.replace(/^refs\/heads\//, "");
 }
@@ -558,7 +585,8 @@ export class UnitHost<
   private preapprovedTrust = new Set<string>();
   private preapprovedTrustRevision = 0;
   private readonly preapprovedTrustRevisions = new Map<string, number>();
-  private pendingApprovalIdentityKeys = new Set<string>();
+  /** Reviews in flight, by the exact build identity each one decides. */
+  private reviewFlows = new Map<string, Promise<UnitReviewOutcome>>();
   private readonly trustResolver: UnitTrustResolver<Entry>;
 
   constructor(private readonly opts: UnitHostOptions<Entry, Decl, Node, ApprovalEntry>) {
@@ -749,6 +777,7 @@ export class UnitHost<
 
   async applyRuntimeDeclaration(opts: UnitRuntimeApplyOptions<Entry, Decl, Node>): Promise<void> {
     const { node, decl } = opts;
+    let adopting = false;
     try {
       opts.validateBeforeApply?.(node, decl);
       const entry = this.opts.registry.get(node.name);
@@ -756,7 +785,7 @@ export class UnitHost<
       if (
         !entry ||
         trust.decision !== "user-approved" ||
-        await opts.needsBuildRefresh(entry, node, decl)
+        (await opts.needsBuildRefresh(entry, node, decl))
       ) {
         if (!entry) {
           this.opts.registry.upsert(this.opts.makePendingEntry(node, decl, true));
@@ -768,16 +797,20 @@ export class UnitHost<
           } as Partial<Entry>);
           return;
         }
+        adopting = true;
         await opts.buildAndActivate(node, decl);
         return;
       }
 
       await opts.validateBeforeActivateCurrent?.(entry, node, decl);
-      await opts.activateCurrent(entry, node, decl);
+      await opts.activateCurrent?.(entry, node, decl);
     } catch (err) {
       const message = formatRpcFailure(err);
       try {
-        this.markError(node.name, message);
+        // A failed candidate never demotes the build that is already adopted;
+        // a current build that itself cannot be validated or activated does.
+        if (adopting) this.markUpdateRejected(node.name, message);
+        else this.markError(node.name, message);
         opts.onError?.(node, decl, message);
       } catch (reconciliationError) {
         throw new AggregateError(
@@ -790,8 +823,23 @@ export class UnitHost<
     }
   }
 
+  /**
+   * Adopt a build. The build it supersedes joins the rollback history here, so
+   * every unit kind that adopts builds gets retention and rollback from the one
+   * place that changes what is adopted.
+   */
   activateBuild(opts: UnitBuildActivationOptions<Entry>): Entry {
+    const activeBundleKey = path.basename(opts.buildDir);
+    const previous = this.opts.registry.get(opts.name);
+    const retained = (previous?.previousVersions ?? []).filter(
+      (version) => version.activeBundleKey !== activeBundleKey
+    );
+    const history =
+      previous?.activeBundleKey && previous.activeBundleKey !== activeBundleKey
+        ? [this.currentVersion(previous), ...retained]
+        : retained;
     return this.opts.registry.patch(opts.name, {
+      previousVersions: dedupeVersions(history),
       ...opts.extra,
       source: {
         kind: "workspace-repo",
@@ -801,13 +849,78 @@ export class UnitHost<
       version: opts.version,
       activeEv: opts.effectiveVersion,
       activeSourceHash: opts.activeSourceHash,
-      activeBundleKey: path.basename(opts.buildDir),
+      activeBundleKey,
       activeDependencyEvs: opts.dependencyEvs,
       activeExternalDeps: opts.externalDeps,
       activeRuntimeDepsKey: opts.runtimeDepsKey ?? null,
       status: opts.status ?? "running",
       lastError: null,
     } as Partial<Entry>);
+  }
+
+  /**
+   * Make a retained version the adopted build again. The build it replaces
+   * becomes the newest retained version, so selecting is reversible.
+   */
+  selectVersion(
+    name: string,
+    selected: UnitVersionRecord,
+    patch: { status: UnitRegistryStatus } & Partial<Entry>
+  ): Entry {
+    const entry = this.opts.registry.get(name);
+    if (!entry) throw new Error(`Unit is not installed: ${name}`);
+    const remaining = entry.previousVersions.filter(
+      (candidate) => candidate.activeBundleKey !== selected.activeBundleKey
+    );
+    const current = entry.activeBundleKey ? [this.currentVersion(entry)] : [];
+    const versioned = Object.fromEntries(
+      (this.opts.descriptor.versionedFields ?? []).map((field) => [
+        field,
+        (selected as unknown as Record<string, unknown>)[field],
+      ])
+    );
+    return this.opts.registry.patch(name, {
+      ...versioned,
+      version: selected.version,
+      activeEv: selected.activeEv,
+      activeSourceHash: selected.activeSourceHash,
+      activeBundleKey: selected.activeBundleKey,
+      activeExecutionDigest: selected.executionDigest,
+      activeDependencyEvs: selected.activeDependencyEvs,
+      activeExternalDeps: selected.activeExternalDeps,
+      activeRuntimeDepsKey: selected.activeRuntimeDepsKey,
+      lastError: null,
+      previousVersions: dedupeVersions([...current, ...remaining]),
+      ...patch,
+    } as Partial<Entry>);
+  }
+
+  /** The adopted build, as a record of the same shape as the retained versions. */
+  currentVersion(entry: Entry): Entry["previousVersions"][number] {
+    if (!entry.activeBundleKey) throw new Error(`Unit ${entry.name} has no adopted build`);
+    if (!entry.activeExecutionDigest) {
+      throw new Error(
+        `Unit ${entry.name} has no verified execution identity for ${entry.activeBundleKey}`
+      );
+    }
+    const entryFields = entry as unknown as Record<string, unknown>;
+    return {
+      version: entry.version,
+      activeEv: entry.activeEv,
+      activeSourceHash: entry.activeSourceHash,
+      activeBundleKey: entry.activeBundleKey,
+      executionDigest: entry.activeExecutionDigest,
+      activeDependencyEvs: { ...entry.activeDependencyEvs },
+      activeExternalDeps: { ...entry.activeExternalDeps },
+      activeRuntimeDepsKey: entry.activeRuntimeDepsKey ?? null,
+      activatedAt: Date.now(),
+      ...Object.fromEntries(
+        (this.opts.descriptor.versionedFields ?? []).map((field) => {
+          const value = entryFields[field];
+          return [field, Array.isArray(value) ? [...value] : value];
+        })
+      ),
+    };
   }
 
   activeSourceMatches(entry: Entry, sourceRepo: string, ref: string): boolean {
@@ -835,11 +948,47 @@ export class UnitHost<
     } as Partial<Entry>);
   }
 
-  markError(name: string, message: string): Entry | null {
+  markError(name: string, message: string, extra?: Partial<Entry>): Entry | null {
     if (!this.opts.registry.has(name)) return null;
     return this.opts.registry.patch(name, {
       status: "error",
       lastError: message,
+      ...extra,
+    } as Partial<Entry>);
+  }
+
+  /**
+   * Record that an update was not adopted. A working build is never demoted by
+   * a candidate that failed: when the unit already runs (or is ready to run) an
+   * adopted build, only `lastError` is recorded and the status stays, so its
+   * capabilities and principals survive. A unit with nothing adopted has
+   * nothing to protect and becomes "error".
+   */
+  markUpdateRejected(name: string, message: string, extra?: Partial<Entry>): Entry | null {
+    const entry = this.opts.registry.get(name);
+    if (!entry) return null;
+    const adopted =
+      !!entry.activeBundleKey && (entry.status === "running" || entry.status === "available");
+    if (!adopted) return this.markError(name, message, extra);
+    return this.opts.registry.patch(name, { lastError: message, ...extra } as Partial<Entry>);
+  }
+
+  /**
+   * A candidate failed after it began replacing `previous`. Put the previous
+   * adopted build back exactly as it was and record why the update was not
+   * adopted; without a previous build there is nothing to restore.
+   */
+  rejectUpdate(
+    name: string,
+    previous: Entry | null,
+    message: string,
+    extra?: Partial<Entry>
+  ): Entry | null {
+    if (!previous?.activeBundleKey) return this.markError(name, message, extra);
+    return this.opts.registry.patch(name, {
+      ...previous,
+      lastError: message,
+      ...extra,
     } as Partial<Entry>);
   }
 
@@ -954,7 +1103,7 @@ export class UnitHost<
         continue;
       }
       if (!entry) this.opts.registry.upsert(this.opts.makePendingEntry(node, decl));
-      if (!this.pendingApprovalIdentityKeys.has(trust.identityKey)) {
+      if (!this.reviewFlows.has(trust.identityKey)) {
         needsApproval.push({ node, decl, identityKey: trust.identityKey });
       }
     }
@@ -965,28 +1114,12 @@ export class UnitHost<
         await this.opts.removeUndeclared(entry);
         this.opts.registry.delete(entry.name);
         this.applications.delete(entry.name);
-        this.opts.emitRemoved(entry);
+        this.opts.emitRemoved?.(entry);
       }
     }
 
     if (needsApproval.length > 0) {
-      for (const item of needsApproval) {
-        this.pendingApprovalIdentityKeys.add(item.identityKey);
-      }
-      const startApproval = () =>
-        this.promptAndApply(needsApproval, opts.trigger, opts.maxConcurrentApplies);
-      const flow = this.backgroundFlow ? this.backgroundFlow.then(startApproval) : startApproval();
-      const tracked = flow
-        .catch((err) => this.opts.onBackgroundError(err))
-        .finally(() => {
-          for (const item of needsApproval) {
-            this.pendingApprovalIdentityKeys.delete(item.identityKey);
-          }
-          if (this.backgroundFlow === tracked) {
-            this.backgroundFlow = null;
-          }
-        });
-      this.backgroundFlow = tracked;
+      this.beginReview(needsApproval, opts.trigger, opts.maxConcurrentApplies);
     }
 
     const applyTrusted = this.prepareTrustedApplications(trusted, opts.maxConcurrentApplies);
@@ -1000,21 +1133,120 @@ export class UnitHost<
     await applyTrusted();
   }
 
+  /**
+   * Put a review in front of the person for these units, chained after any
+   * review already in flight. Its identities stay "pending" until the review
+   * resolves, so the same build is never offered twice at once.
+   */
+  private beginReview(
+    items: Array<ResolvedUnitDeclaration<Decl, Node> & { identityKey: string }>,
+    trigger: UnitReconcileTrigger,
+    maxConcurrentApplies?: number,
+    publishNow = false
+  ): { staged: Promise<void>; outcome: Promise<UnitReviewOutcome> } {
+    let staged!: { resolve(): void; reject(error: unknown): void };
+    const whenStaged = new Promise<void>((resolve, reject) => {
+      staged = { resolve, reject };
+    });
+    const startApproval = () =>
+      this.promptAndApply(items, trigger, maxConcurrentApplies, () => {
+        if (publishNow) {
+          void this.opts.approvalCoordinator?.publishPending?.(trigger).catch(() => undefined);
+        }
+        staged.resolve();
+      });
+    const flow = this.backgroundFlow ? this.backgroundFlow.then(startApproval) : startApproval();
+    for (const item of items) this.reviewFlows.set(item.identityKey, flow);
+    const tracked: Promise<void> = flow
+      .then(
+        () => undefined,
+        (err: unknown) => {
+          staged.reject(err);
+          this.opts.onBackgroundError(err);
+        }
+      )
+      .finally(() => {
+        for (const item of items) this.reviewFlows.delete(item.identityKey);
+        if (this.backgroundFlow === tracked) {
+          this.backgroundFlow = null;
+        }
+      });
+    this.backgroundFlow = tracked;
+    return { staged: whenStaged, outcome: flow };
+  }
+
+  /**
+   * Make sure the person has been asked about this exact declaration: a unit
+   * that needs review and has none open gets one now. Returns whether the
+   * build still waits on a review. The review's resolution, not the caller,
+   * applies an accepted build, so a caller that asked only needs to run again
+   * once the review resolves.
+   */
+  async requestReview(node: Node, decl: Decl): Promise<"reviewing" | "reviewed"> {
+    const trust = this.trustForCandidate(node, decl, this.opts.registry.get(node.name));
+    if (trust.decision !== "needs-approval") return "reviewed";
+    if (!this.reviewFlows.has(trust.identityKey)) {
+      if (!this.opts.registry.has(node.name)) {
+        this.opts.registry.upsert(this.opts.makePendingEntry(node, decl));
+      }
+      // Returns once the review is in front of the person, so the caller can
+      // report it as open rather than racing its publication.
+      await this.beginReview(
+        [{ node, decl, identityKey: trust.identityKey }],
+        "meta-change",
+        undefined,
+        true
+      ).staged;
+    }
+    return "reviewing";
+  }
+
+  /**
+   * Settle on the person's answer about this exact declaration, asking if no
+   * review is open. Resolves "accepted" once the accepted build has been
+   * applied (or when no review is needed and the unit has finished applying),
+   * and "declined" if the person declined. It waits on the review's own
+   * resolution, so there is nothing to poll; a failed apply rejects.
+   */
+  async whenReviewed(node: Node, decl: Decl): Promise<UnitReviewOutcome> {
+    const trust = this.trustForCandidate(node, decl, this.opts.registry.get(node.name));
+    if (trust.decision !== "needs-approval") {
+      await this.whenApplied(node.name);
+      return "accepted";
+    }
+    const open = this.reviewFlows.get(trust.identityKey);
+    if (open) return open;
+    if (!this.opts.registry.has(node.name)) {
+      this.opts.registry.upsert(this.opts.makePendingEntry(node, decl));
+    }
+    const review = this.beginReview(
+      [{ node, decl, identityKey: trust.identityKey }],
+      "meta-change",
+      undefined,
+      true
+    );
+    await review.staged;
+    return review.outcome;
+  }
+
   private async promptAndApply(
     items: Array<ResolvedUnitDeclaration<Decl, Node>>,
     trigger: UnitReconcileTrigger,
-    maxConcurrentApplies?: number
-  ): Promise<void> {
+    maxConcurrentApplies?: number,
+    onStaged?: () => void
+  ): Promise<UnitReviewOutcome> {
     if (this.opts.approvalCoordinator) {
+      let outcome: UnitReviewOutcome = "declined";
       const entries = await Promise.all(
         items.map(({ node, decl }) => this.opts.approvalEntry(node, decl))
       );
       const origins = await this.opts.approvalOrigins?.(entries);
-      await this.opts.approvalCoordinator.enqueue({
+      const resolved = this.opts.approvalCoordinator.enqueue({
         entries,
         trigger,
         ...(origins ? { origins } : {}),
         applyApproved: async () => {
+          outcome = "accepted";
           // Acceptance is the state transition from "waiting for a human"
           // to "work is in flight". Publish it for the whole accepted batch
           // before any member waits for an apply/build slot.
@@ -1022,21 +1254,25 @@ export class UnitHost<
           this.markAcceptedItemsBuilding(items);
           await apply();
         },
-        applyDenied: () => this.opts.onApprovalDenied(items),
+        applyDenied: () => this.opts.onApprovalDenied?.(items),
       });
-      return;
+      onStaged?.();
+      await resolved;
+      return outcome;
     }
+    onStaged?.();
     const entries = await Promise.all(
       items.map(({ node, decl }) => this.opts.approvalEntry(node, decl))
     );
     const decision = await this.opts.requestApproval(entries, trigger);
     if (decision === "deny" || decision === "dismiss") {
-      this.opts.onApprovalDenied(items);
-      return;
+      this.opts.onApprovalDenied?.(items);
+      return "declined";
     }
     const apply = this.prepareTrustedApplications(items, maxConcurrentApplies);
     this.markAcceptedItemsBuilding(items);
     await apply();
+    return "accepted";
   }
 
   private markAcceptedItemsBuilding(items: Array<ResolvedUnitDeclaration<Decl, Node>>): void {
@@ -1210,6 +1446,8 @@ export function createPendingUnitRegistryEntry<Kind extends UnitKind>(opts: {
     activeDependencyEvs: {},
     activeExternalDeps: {},
     activeRuntimeDepsKey: null,
+    activeExecutionDigest: null,
+    previousVersions: [],
     status: opts.building ? "building" : "pending-approval",
     lastError: null,
   };
@@ -1241,10 +1479,11 @@ export interface UnitRegistryOptions<Entry extends UnitRegistryEntryBase> {
   unitKind: Entry["unitKind"];
   isEntry?: (value: unknown) => value is Entry;
   normalizeEntry?: (entry: Entry) => Entry;
+  /**
+   * Retains the adopted build and every retained version of each entry, so a
+   * rollback target is never collected out from under its history.
+   */
   publicationPort?: ExecutionPublicationPort;
-  publicationForEntry?: (entry: Entry) => ExecutionPublication | null;
-  /** Cheap durable-pointer fingerprint; avoids artifact I/O on status-only patches. */
-  publicationKeyForEntry?: (entry: Entry) => string;
 }
 
 export interface UnitIdentityApprovalStore {
@@ -1376,18 +1615,17 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
   private readonly isEntry: (value: unknown) => value is Entry;
   private readonly normalizeEntry: (entry: Entry) => Entry;
   private readonly publicationPort: ExecutionPublicationPort | undefined;
-  private readonly publicationForEntry: ((entry: Entry) => ExecutionPublication | null) | undefined;
-  private readonly publicationKeyForEntry: ((entry: Entry) => string) | undefined;
 
   constructor(opts: UnitRegistryOptions<Entry>) {
     this.unitKind = opts.unitKind;
     this.filePath = path.join(opts.statePath, "units", this.unitKind, "registry.json");
     this.isEntry =
       opts.isEntry ?? ((value): value is Entry => isUnitRegistryEntry(value, this.unitKind));
-    this.normalizeEntry = opts.normalizeEntry ?? ((entry) => normalizeUnitRegistryEntry(entry));
+    this.normalizeEntry = (entry) => {
+      const normalized = normalizeUnitRegistryEntry(entry);
+      return opts.normalizeEntry ? opts.normalizeEntry(normalized) : normalized;
+    };
     this.publicationPort = opts.publicationPort;
-    this.publicationForEntry = opts.publicationForEntry;
-    this.publicationKeyForEntry = opts.publicationKeyForEntry;
     this.load();
   }
 
@@ -1481,24 +1719,49 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
   }
 
   private writeEntry(previous: Entry | null, entry: Entry, mutate: () => void): void {
-    const changed = this.publicationKeyForEntry
-      ? this.publicationKeyForEntry(entry) !==
-        (previous ? this.publicationKeyForEntry(previous) : "")
-      : true;
-    const publication =
-      changed && this.publicationPort ? (this.publicationForEntry?.(entry) ?? null) : null;
+    // Status-only patches leave the durable pointers alone and skip artifact I/O.
+    const changed = this.retainedBuilds(entry) !== (previous ? this.retainedBuilds(previous) : "");
     publishExecutionOwner(
       changed ? this.publicationPort : undefined,
-      publication ?? {
+      {
         owner: this.unitKind === "app" ? "app-generation" : "extension-generation",
         ownerId: entry.name,
-        artifacts: [],
+        artifacts: changed && this.publicationPort ? this.publishedArtifacts(entry) : [],
       },
       () => {
         mutate();
         this.save();
       }
     );
+  }
+
+  private retainedBuilds(entry: Entry): string {
+    return JSON.stringify([
+      entry.activeBundleKey,
+      entry.activeExecutionDigest,
+      ...entry.previousVersions.flatMap((version) => [
+        version.activeBundleKey,
+        version.executionDigest,
+      ]),
+    ]);
+  }
+
+  private publishedArtifacts(entry: Entry): ExecutionPublication["artifacts"] {
+    const builds = [
+      ...(entry.activeBundleKey
+        ? [{ buildKey: entry.activeBundleKey, executionDigest: entry.activeExecutionDigest }]
+        : []),
+      ...entry.previousVersions.map((version) => ({
+        buildKey: version.activeBundleKey,
+        executionDigest: version.executionDigest,
+      })),
+    ];
+    return builds.map(({ buildKey, executionDigest }) => {
+      if (!executionDigest) {
+        throw new Error(`${this.unitKind} ${entry.name} references unverifiable build ${buildKey}`);
+      }
+      return { buildKey, executionDigest };
+    });
   }
 
   private assertUnitKind(entry: Entry): void {
@@ -1515,6 +1778,8 @@ export function normalizeUnitRegistryEntry<Entry extends UnitRegistryEntryBase>(
     ...entry,
     activeDependencyEvs: entry.activeDependencyEvs ?? {},
     activeExternalDeps: entry.activeExternalDeps ?? {},
+    activeExecutionDigest: entry.activeExecutionDigest ?? null,
+    previousVersions: entry.previousVersions ?? [],
   };
 }
 

@@ -419,6 +419,30 @@ describe("compositional authority", () => {
     ).toBe("request-user-approval");
   });
 
+  it("admits installed code to an open capability without a request or grant", () => {
+    // credentials.configureClient (account-providers.configure) is reviewed open:
+    // its host-owned protected-input prompt is the only consent.
+    const open = evaluateAuthority({
+      context: codeContext(),
+      requirement: capability("code", "account-providers.configure"),
+      resourceKey: "account-providers.configure",
+      grants: [],
+      tier: "open",
+      now: 100,
+    });
+    expect(open.allowed).toBe(true);
+    expect(
+      evaluateAuthority({
+        context: codeContext(),
+        requirement: capability("code", "account-providers.configure"),
+        resourceKey: "account-providers.configure",
+        grants: [],
+        tier: "gated",
+        now: 100,
+      }).allowed
+    ).toBe(false);
+  });
+
   it("intersects installed-code grants with the sealed explicit request", () => {
     expect(
       evaluateAuthority({

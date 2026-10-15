@@ -149,7 +149,6 @@ export interface WorkerHostCodeProvider {
     compatibilityFlags: string[];
     mainModule: string;
     modules: Record<string, string>;
-    wasmModules?: Record<string, string>;
     env: Record<string, unknown>;
   } | null>;
 }

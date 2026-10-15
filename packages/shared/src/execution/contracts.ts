@@ -1,7 +1,9 @@
 /** Portable execution identity and artifact contracts. */
 
 /** Full SHA-256 values are the only executable/security identifiers. */
-export interface Sha256Brand { readonly __sha256: unique symbol }
+export interface Sha256Brand {
+  readonly __sha256: unique symbol;
+}
 export type Sha256 = string & Sha256Brand;
 
 export interface SourceRevisionRef {
@@ -87,7 +89,6 @@ export type ExecutionOwnerKind =
   | "panel-history"
   | "app-generation"
   | "extension-generation"
-  | "terminal-app"
   | "runtime-image"
   | "eval-run"
   | "development-run"

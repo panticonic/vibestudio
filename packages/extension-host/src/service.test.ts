@@ -348,7 +348,6 @@ async function makeHost(
     workspacePath: path.join(statePath, "source"),
     workspaceId: "workspace-test",
     buildSystem,
-    tokenManager: { ensureToken: vi.fn() } as any,
     eventService: eventService as any,
     approvalQueue,
     openUnitReviewFor: overrides.openUnitReviewFor ?? (() => null),
@@ -404,6 +403,7 @@ async function makeHost(
             : ACTIVE_BUILD_KEY
           : overrides.activeBundleKey,
       activeExecutionDigest: null,
+      previousVersions: [],
       activeDependencyEvs: {
         "@workspace/runtime": overrides.activeDepEv ?? overrides.depEv ?? "ev-runtime",
       },
@@ -942,11 +942,14 @@ describe("ExtensionHost reconcileDeclared", () => {
           lastError: failure.lastError,
         })
       );
-      expect(eventService.emit).toHaveBeenCalledWith("extensions:status", {
-        name: extensionNode.name,
-        status: "error",
-        error: failure.lastError,
-      });
+      expect(eventService.emit).toHaveBeenCalledWith(
+        "supervision:changed",
+        expect.objectContaining({
+          identity: { kind: "extension", entityId: extensionNode.name },
+          status: "error",
+          lastError: failure.lastError,
+        })
+      );
       await expect(
         host.invoke(panelCtx(), extensionNode.name, "confirm", [])
       ).rejects.toMatchObject({
@@ -991,11 +994,14 @@ describe("ExtensionHost reconcileDeclared", () => {
     await host.whenSettled();
     const current = host.registry.get(extensionNode.name)!;
     expect(current).toEqual({ ...approved, lastError: expect.stringMatching(/website/) });
-    expect(eventService.emit).toHaveBeenCalledWith("extensions:status", {
-      name: extensionNode.name,
-      status: "running",
-      error: current.lastError,
-    });
+    expect(eventService.emit).toHaveBeenCalledWith(
+      "supervision:changed",
+      expect.objectContaining({
+        identity: { kind: "extension", entityId: extensionNode.name },
+        status: "running",
+        lastError: current.lastError,
+      })
+    );
     await expect(host.invoke(panelCtx(), extensionNode.name, "confirm", [])).resolves.toBe(
       "approved image result"
     );
@@ -1588,6 +1594,70 @@ describe("ExtensionHost reconcileDeclared", () => {
       status: "error",
       lastError: "ready timeout",
     });
+  });
+
+  it("keeps the previous build running and records an update that failed to activate", async () => {
+    const { host, extensionNode } = await makeHost();
+    const approved = host.registry.get(extensionNode.name)!;
+    host.registry.patch(extensionNode.name, { status: "running" });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+    vi.spyOn(host.processes, "start")
+      .mockRejectedValueOnce(new Error("candidate failed to become ready"))
+      .mockImplementation(async (input: { name: string }) => {
+        // The process manager's status callback marks the restarted image ready.
+        host.registry.patch(input.name, { status: "running", lastError: null });
+      });
+
+    await expect(host["buildAndActivate"](extensionNode.name)).rejects.toThrow(
+      "candidate failed to become ready"
+    );
+
+    expect(host.registry.get(extensionNode.name)).toMatchObject({
+      activeBundleKey: approved.activeBundleKey,
+      activeEv: approved.activeEv,
+      status: "running",
+      lastError: "candidate failed to become ready",
+    });
+  });
+
+  it("rolls an extension back to its retained build and keeps the replaced one selectable", async () => {
+    const { host, extensionNode, buildSystem } = await makeHost();
+    const current = host.registry.get(extensionNode.name)!;
+    const active = (await buildSystem.getBuildByKey(ACTIVE_BUILD_KEY))!;
+    const older = (await buildSystem.getBuildByKey(CANDIDATE_BUILD_KEY))!;
+    const retained = {
+      version: "0.9.0",
+      activeEv: older.metadata.ev,
+      activeSourceHash: "old",
+      activeBundleKey: CANDIDATE_BUILD_KEY,
+      executionDigest: older.metadata.execution!.executionDigest,
+      activeDependencyEvs: {},
+      activeExternalDeps: {},
+      activeRuntimeDepsKey: null,
+      activatedAt: 1,
+    };
+    host.registry.patch(extensionNode.name, {
+      activeExecutionDigest: active.metadata.execution!.executionDigest,
+      previousVersions: [retained],
+    });
+    vi.spyOn(host.processes, "isRunning").mockReturnValue(true);
+    vi.spyOn(host.processes, "start").mockImplementation(async (input: { name: string }) => {
+      host.registry.patch(input.name, { status: "running", lastError: null });
+    });
+
+    const rolledBack = await host.rollback(extensionNode.name);
+
+    expect(rolledBack).toMatchObject({
+      activeBundleKey: CANDIDATE_BUILD_KEY,
+      activeEv: older.metadata.ev,
+      status: "running",
+    });
+    expect(host.listVersions(extensionNode.name).previous.map((v) => v.activeBundleKey)).toEqual([
+      current.activeBundleKey,
+    ]);
+    await expect(host.rollback(extensionNode.name, "f".repeat(64))).rejects.toThrow(
+      /No rollback version/u
+    );
   });
 
   it("rebuilds a declared ref change and persists the trusted ref", async () => {
@@ -2370,6 +2440,7 @@ describe("ExtensionHost activation", () => {
       activeSourceHash: null,
       activeBundleKey: null,
       activeExecutionDigest: null,
+      previousVersions: [],
       activeDependencyEvs: {},
       activeExternalDeps: {},
       activeRuntimeDepsKey: null,

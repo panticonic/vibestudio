@@ -1,3 +1,4 @@
+import { traceInvocation } from "./invocationTrace.js";
 import { websiteAuthorityIdentity } from "@vibestudio/shared/serviceDispatcher";
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
@@ -25,9 +26,8 @@ import {
   type VerifiedCodeIdentity,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
-import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { EventName } from "@vibestudio/shared/events";
-import type { NotificationPayload } from "@vibestudio/shared/events";
+import type { NotificationPayload, SupervisionChange } from "@vibestudio/shared/events";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import type { ExecutionPublicationPort } from "@vibestudio/shared/execution/retention";
@@ -67,7 +67,10 @@ import {
   normalizeUnitRepoPath as normalizeRepoPath,
   normalizeUnitRef as normalizeRef,
   requestUnitInstallReview,
+  observeUnitSupervision,
   requireExactUnitAdmission,
+  UNIT_ROLLBACK_HISTORY_LIMIT,
+  unitSupervisionChange,
   unitAuthorityManifestFromPackageJson,
   unitBuildIdentityFromRegistryEntry,
   type UnitDeclaration,
@@ -228,9 +231,10 @@ interface ExtensionReadyState {
 }
 
 interface ExtensionTransportLike {
+  /** Attach a launched extension process's IPC channel as extension `name`'s RPC session. */
   attachProcess(
     proc: import("@vibestudio/process-adapter").ProcessAdapter,
-    credential: string
+    name: string
   ): () => void;
   call(
     name: string,
@@ -291,7 +295,6 @@ export interface ExtensionHostDeps {
   describeCapability?: CapabilityPresentationResolver;
   buildSystem: BuildSystemLike;
   executionPublicationPort?: ExecutionPublicationPort;
-  tokenManager: TokenManager;
   eventService: EventService;
   approvalQueue: ApprovalQueueLike;
   openUnitReviewFor(code: { repoPath: string; effectiveVersion: string }): {
@@ -375,36 +378,16 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       statePath: deps.statePath,
       unitKind: EXTENSION_UNIT_DESCRIPTOR.kind,
       publicationPort: deps.executionPublicationPort,
-      normalizeEntry: (entry) => ({
-        ...entry,
-        activeExecutionDigest: entry.activeExecutionDigest ?? null,
-      }),
-      publicationKeyForEntry: (entry) =>
-        `${entry.activeBundleKey ?? ""}\0${entry.activeExecutionDigest ?? ""}`,
-      publicationForEntry: (entry) => {
-        if (!entry.activeBundleKey) {
-          return { owner: "extension-generation", ownerId: entry.name, artifacts: [] };
-        }
-        const executionDigest = entry.activeExecutionDigest;
-        if (!executionDigest) {
-          throw new Error(
-            `Extension ${entry.name} references unverifiable build ${entry.activeBundleKey}`
-          );
-        }
-        return {
-          owner: "extension-generation",
-          ownerId: entry.name,
-          artifacts: [{ buildKey: entry.activeBundleKey, executionDigest }],
-        };
-      },
     });
+    observeUnitSupervision(this.registry, (change) =>
+      this.deps.eventService.emit("supervision:changed", change)
+    );
     this.extensionTrustResolver = new UnitTrustResolver<RegistryEntry>({
       entryIdentity: (entry) => this.registryEntryBuildIdentity(entry),
     });
     this.processes = new ExtensionProcessManager({
       launch: this.deps.launchNativeExtension,
-      attachProcess: (proc, credential) =>
-        this.deps.extensionTransport.attachProcess(proc, credential),
+      attachProcess: (proc, name) => this.deps.extensionTransport.attachProcess(proc, name),
       onStatus: (name, status, error) => {
         if (status === "running") {
           this.extensionErrorHistory.delete(name);
@@ -412,7 +395,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         if (this.registry.has(name)) {
           this.registry.patch(name, { status, lastError: error ?? null });
         }
-        this.deps.eventService.emit("extensions:status", { name, status, error: error ?? null });
         this.deps.onWorkspaceUnitsChanged?.("extension-status");
       },
       onError: (name, error, attempts) => {
@@ -458,11 +440,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       },
       onInspectorUrl: (name, inspectorUrl) => {
         this.inspectorUrls.set(name, inspectorUrl);
-        this.deps.eventService.emit("extensions:status", {
-          name,
-          status: this.registry.get(name)?.status ?? "running",
-          inspectorUrl,
-        });
         this.deps.onWorkspaceUnitsChanged?.("extension-status");
       },
     });
@@ -500,14 +477,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         await this.processes.stop(entry.name);
         this.unregisterBuildProvidersFor(entry.name);
       },
-      emitRemoved: (entry) => {
-        this.deps.eventService.emit("extensions:status", {
-          name: entry.name,
-          status: "stopped",
-          error: null,
-        });
-        this.deps.onWorkspaceUnitsChanged?.("extension-removed");
-      },
+      emitRemoved: () => this.deps.onWorkspaceUnitsChanged?.("extension-removed"),
       notifyUnresolved: (sources) => {
         this.deps.notificationService?.show({
           type: "error",
@@ -516,14 +486,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         });
       },
       validateBeforeApproval: (node) => this.validateExtensionManifestAtPath(node.path, node.name),
-      onApprovalCandidateError: (node, _decl, message) => {
-        this.deps.eventService.emit("extensions:status", {
-          name: node.name,
-          status: this.registry.get(node.name)!.status,
-          error: message,
-        });
-        this.deps.onWorkspaceUnitsChanged?.("extension-status");
-      },
+      onApprovalCandidateError: () => this.deps.onWorkspaceUnitsChanged?.("extension-status"),
       approvalEntry: (node, decl) => this.buildBatchEntry(node, decl.ref),
       approvalOrigins: (entries) =>
         this.resolveOriginsFor(entries.map((entry) => entry.source.repo)),
@@ -549,13 +512,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       approvalCoordinator: deps.approvalCoordinator,
       onApprovalDenied: (items) => {
         const names = items.map((item) => item.node.name);
-        for (const name of names) {
-          this.deps.eventService.emit("extensions:status", {
-            name,
-            status: "pending-approval",
-            error: null,
-          });
-        }
         this.deps.onWorkspaceUnitsChanged?.("extension-status");
         this.deps.notificationService?.show({
           type: "info",
@@ -1228,7 +1184,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     operation: "invoke" | "invokeProvider",
     call: (entry: RegistryEntry, invocation: ExtensionInvocation) => Promise<unknown>
   ): Promise<unknown> {
-    console.info("[ExtensionHost] invocation requested", {
+    traceInvocation("[ExtensionHost] invocation requested", {
       extension: name,
       method: invocationMethod,
     });
@@ -1238,13 +1194,13 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     // extension approval, which in turn can wedge eval/tool callers that are just awaiting an
     // extension-backed helper.
     const entry = await this.requireInvocationEntry(name, operation, ctx.signal);
-    console.info("[ExtensionHost] invocation target resolved", {
+    traceInvocation("[ExtensionHost] invocation target resolved", {
       extension: entry.name,
       method: invocationMethod,
     });
     await this.assertWebsiteMethod(ctx, entry, invocationMethod);
     await this.ensureTargetRunning(entry, ctx.signal, operation);
-    console.info("[ExtensionHost] invocation target ready", {
+    traceInvocation("[ExtensionHost] invocation target ready", {
       extension: entry.name,
       method: invocationMethod,
     });
@@ -1252,13 +1208,13 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     await this.assertWebsiteMethod(ctx, entry, invocationMethod);
     await this.assertAdmittedMethod(ctx, entry, invocationMethod);
     const invocation = this.createTrackedInvocation(ctx, entry.name, invocationMethod);
-    console.info("[ExtensionHost] invocation admitted", {
+    traceInvocation("[ExtensionHost] invocation admitted", {
       extension: entry.name,
       method: invocationMethod,
     });
     try {
       const result = await call(entry, invocation);
-      console.info("[ExtensionHost] invocation completed", {
+      traceInvocation("[ExtensionHost] invocation completed", {
         extension: entry.name,
         method: invocationMethod,
       });
@@ -1640,9 +1596,24 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.assertWebsiteMethodPolicy(ctx, method, build);
   }
 
+  /**
+   * The stored build an extension's active bundle key names. A build is
+   * content-addressed, so what is verified for a key stays true for that key; an
+   * invocation consults it half a dozen times (availability, website policy,
+   * admitted authority), and re-verifying the whole stored build for each is
+   * most of what a call costs. One build per extension is kept, replaced when
+   * its active key changes.
+   */
+  private readonly activeBuilds = new Map<string, StoredBuildResult>();
+
   private async readCurrentActiveBuild(entry: RegistryEntry): Promise<StoredBuildResult | null> {
     if (!entry.activeBundleKey || !entry.activeExecutionDigest) return null;
-    const build = await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey);
+    let build: StoredBuildResult | null | undefined = this.activeBuilds.get(entry.name);
+    if (build?.buildKey !== entry.activeBundleKey) {
+      build = await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey);
+      if (build) this.activeBuilds.set(entry.name, build);
+      else this.activeBuilds.delete(entry.name);
+    }
     if (
       !build ||
       build.buildKey !== entry.activeBundleKey ||
@@ -2652,10 +2623,10 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           if (this.activatesEagerly(node)) return;
         } catch (error) {
           if (error instanceof ServiceAccessError) throw error;
-          this.registry.patch(name, {
-            status: "error",
-            lastError: error instanceof Error ? error.message : String(error),
-          });
+          this.unitHost.markUpdateRejected(
+            name,
+            error instanceof Error ? error.message : String(error)
+          );
           throw error;
         }
       }
@@ -2682,15 +2653,12 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       isAdmitted: this.deps.isAdmitted,
       openReviewFor: this.deps.openUnitReviewFor,
     });
-    const token = this.deps.tokenManager.ensureToken(name, "extension");
     this.registry.patch(name, { status: "building", lastError: null });
     await this.processes.start({
       name,
       version: entry.version,
       bundlePath: extensionPrimaryArtifactPath(build),
       storageDir: this.storageDirFor(name),
-      gatewayUrl: this.deps.getGatewayUrl(),
-      rpcToken: token,
     });
     this.registerBuildProvidersFor(entry);
   }
@@ -2751,26 +2719,28 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       extra: { activeExecutionDigest: executionDigest },
     });
     if (!shouldRun) return;
+    await this.activateOrRestore(node.name, previous);
+  }
+
+  /**
+   * Start the adopted build. If it fails, the build it replaced is put back and
+   * started again, so a bad update never leaves the extension down while a
+   * working build exists; the failure stays recorded as an update not adopted.
+   */
+  private async activateOrRestore(name: string, previous: RegistryEntry | null): Promise<void> {
     try {
-      await this.activateOnce(node.name);
+      await this.activateOnce(name);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (previous?.activeBundleKey) {
-        this.registry.patch(node.name, {
-          activeEv: previous.activeEv,
-          activeSourceHash: previous.activeSourceHash,
-          activeBundleKey: previous.activeBundleKey,
-          activeExecutionDigest: previous.activeExecutionDigest,
-          activeDependencyEvs: previous.activeDependencyEvs,
-          activeExternalDeps: previous.activeExternalDeps ?? {},
-          activeRuntimeDepsKey: previous.activeRuntimeDepsKey,
-          status: "error",
-          lastError: message,
-        });
+        this.unitHost.rejectUpdate(name, previous, message);
         try {
-          await this.activateOnce(node.name);
+          await this.activateOnce(name);
+          // The previous build runs again; the status callback cleared the
+          // error, so record that the update was not adopted.
+          this.unitHost.markUpdateRejected(name, message);
         } catch (rollbackErr) {
-          this.registry.patch(node.name, {
+          this.registry.patch(name, {
             status: "error",
             lastError: `Activation failed: ${message}; rollback failed: ${
               rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)
@@ -2778,13 +2748,63 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           });
         }
       } else {
-        this.registry.patch(node.name, {
-          status: "error",
-          lastError: message,
-        });
+        this.registry.patch(name, { status: "error", lastError: message });
       }
       throw err;
     }
+  }
+
+  /** Current state of every extension, for clients that start watching late. */
+  supervisionSnapshot(): SupervisionChange[] {
+    return this.registry.list().map((entry) => unitSupervisionChange(entry, null));
+  }
+
+  /** Retained builds of an extension, newest first. */
+  listVersions(name: string): {
+    current: RegistryEntry["previousVersions"][number] | null;
+    previous: RegistryEntry["previousVersions"];
+    retentionLimit: number;
+  } {
+    const entry = this.registry.get(this.findExtensionNode(name).name);
+    return {
+      current: entry?.activeBundleKey ? this.unitHost.currentVersion(entry) : null,
+      previous: entry?.previousVersions ?? [],
+      retentionLimit: UNIT_ROLLBACK_HISTORY_LIMIT,
+    };
+  }
+
+  /** Select a retained build again (the newest by default) and run it. */
+  async rollback(name: string, buildKey?: string): Promise<RegistryEntry> {
+    await this.initialize();
+    this.shutdownSignal.signal.throwIfAborted();
+    const node = this.findExtensionNode(name);
+    await this.runActivationExclusive(node.name, async () => {
+      const previous = this.registry.get(node.name);
+      if (!previous) throw new Error(`Unknown extension: ${name}`);
+      const selected = buildKey
+        ? previous.previousVersions.find((version) => version.activeBundleKey === buildKey)
+        : previous.previousVersions[0];
+      if (!selected) {
+        throw new Error(
+          buildKey
+            ? `No rollback version ${buildKey} is available for extension ${node.name}`
+            : `No rollback version is available for extension ${node.name}`
+        );
+      }
+      if (!(await this.deps.buildSystem.getBuildByKey(selected.activeBundleKey))) {
+        throw new Error(
+          `Rollback extension build is missing from the build store: ${selected.activeBundleKey}`
+        );
+      }
+      const shouldRun = this.activatesEagerly(node) || this.processes.isRunning(node.name);
+      this.unitHost.selectVersion(node.name, selected, {
+        status: shouldRun ? "building" : "available",
+      });
+      if (shouldRun) await this.activateOrRestore(node.name, previous);
+    });
+    const adopted = this.registry.get(node.name);
+    if (!adopted) throw new Error(`Extension ${node.name} disappeared during rollback`);
+    return adopted;
   }
 
   private async prepareBuild(
@@ -2851,10 +2871,10 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     try {
       await this.buildAndActivate(installed.entry.name, installed.entry.source.ref);
     } catch (err) {
-      this.registry.patch(installed.entry.name, {
-        status: "error",
-        lastError: err instanceof Error ? err.message : String(err),
-      });
+      this.unitHost.markUpdateRejected(
+        installed.entry.name,
+        err instanceof Error ? err.message : String(err)
+      );
       this.deps.eventService.emit("extensions:error", {
         name: installed.entry.name,
         error: err instanceof Error ? err.message : String(err),

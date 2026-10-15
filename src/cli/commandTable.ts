@@ -35,9 +35,15 @@ export interface ParsedInvocation {
 
 export interface CliCommand {
   group: string;
+  /**
+   * Subcommand name. The empty name makes the group itself the command
+   * (`vibestudio terminal [flags]`); such a group has no other commands.
+   */
   name: string;
   summary: string;
   usage?: string;
+  /** Extra help paragraphs printed after the flags. */
+  details?: string;
   flags?: FlagSpec[];
   /**
    * Script-runner commands forward argv verbatim to an external script and
@@ -109,7 +115,9 @@ export function parseInvocation(command: CliCommand, argv: string[]): ParsedInvo
           ? { name: "plain", takesValue: false, description: "Force readable output in a pipe" }
           : undefined);
       if (!effectiveSpec) {
-        throw new UsageError(`Unknown flag for ${command.group} ${command.name}: ${name}`);
+        throw new UsageError(
+          `Unknown flag for ${[command.group, command.name].filter(Boolean).join(" ")}: ${name}`
+        );
       }
       if (effectiveSpec.takesValue) {
         if (inlineValue !== undefined) {
@@ -140,8 +148,14 @@ export function parseInvocation(command: CliCommand, argv: string[]): ParsedInvo
 }
 
 /** Render per-command help: usage line plus declared flags. */
+function commandLine(command: CliCommand): string {
+  return command.name
+    ? `vibestudio ${command.group} ${command.name}`
+    : `vibestudio ${command.group}`;
+}
+
 export function renderCommandHelp(command: CliCommand): string {
-  const usage = command.usage ?? `vibestudio ${command.group} ${command.name}`;
+  const usage = command.usage ?? commandLine(command);
   const lines = [`${command.summary}`, "", `Usage: ${usage}`];
   const flags = command.flags ?? [];
   if (flags.length > 0) {
@@ -159,14 +173,14 @@ export function renderCommandHelp(command: CliCommand): string {
       "Value flags accept --flag value or --flag=value; boolean flags accept --flag or --flag=true|false."
     );
   }
+  if (command.details) lines.push("", command.details);
   return lines.join("\n");
 }
 
 /** Render usage lines for one group's commands. */
 export function renderGroupHelp(commands: CliCommand[], group: string): string {
-  const lines = groupCommands(commands, group).map((cmd) => {
-    const command = `vibestudio ${cmd.group} ${cmd.name}`;
-    return `  ${command.padEnd(36)} ${cmd.summary}`;
-  });
+  const lines = groupCommands(commands, group).map(
+    (cmd) => `  ${commandLine(cmd).padEnd(36)} ${cmd.summary}`
+  );
   return lines.join("\n");
 }

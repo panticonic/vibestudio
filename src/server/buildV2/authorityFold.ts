@@ -192,10 +192,10 @@ export async function authorityDiagnosticsForProgram(input: {
       transports.add(capability);
     }
   }
-  // A library package has no runtime/context boundary of its own. Its reachable
-  // effects are charged to the executable consumer; explicit host calls still
-  // add their semantic context dependency below.
-  if (!input.manifest.app) transports.delete("context.boundary");
+  // The mobile host contract includes a workspace context boundary. Other
+  // executable kinds owe it only when their explicit calls cross one; semantic
+  // dependency expansion below still charges those calls to their consumer.
+  if (input.manifest.app?.target !== "react-native") transports.delete("context.boundary");
   for (const capability of input.manifest.app?.capabilities ?? []) transports.add(capability);
   const required = semanticCapabilities(transports);
   const diagnostics = [...required]

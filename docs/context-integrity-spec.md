@@ -92,8 +92,8 @@ originating session's class (`session:` keys); P4b upgrades rows 18–20 to prec
 `write.ts` / `edit.ts` (write-side — stamping duty, §6.1, not ingestion);
 `credentialCaptureBridge.ts` (credentials are out-of-band, never context content);
 model outputs (excluded by D8 non-claims — the session latch already covers them);
-**terminal panels** (`terminal-host-protocol` / `terminal-shim` are a workerd runtime
-for Ink terminal-UI apps — a rendering environment, not an OS shell; there is no
+**terminal panels** (a rendering environment for terminal-UI apps, not an OS
+shell; there is no
 shell-command execution surface in the product, agent-facing or otherwise, and
 terminal-app network access rides the ordinary host bindings → rows 5/6. If a real
 host-shell tool is ever added, it must register a chokepoint row here first — the

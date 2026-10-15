@@ -8,7 +8,7 @@ describe("workspace-owned app trust", () => {
     expect(isAuthorizedChromeAppSource("apps/shell", GRANTS)).toBe(true);
     expect(isAuthorizedChromeAppSource("apps/mobile", GRANTS)).toBe(true);
     expect(isAuthorizedChromeAppSource("apps/evil", GRANTS)).toBe(false);
-    expect(isAuthorizedChromeAppSource("apps/remote-cli", GRANTS)).toBe(false);
+    expect(isAuthorizedChromeAppSource("apps/terminal-browser", GRANTS)).toBe(false);
     expect(isAuthorizedChromeAppSource("apps/shell", { chromeApps: [] })).toBe(false);
   });
 

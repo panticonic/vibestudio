@@ -8,6 +8,7 @@ export const WORKSPACE_SOURCE_DIRS = [
   "extensions",
   "skills",
   "about",
+  "terminal-apps",
   "templates",
   "projects",
 ] as const;
@@ -25,6 +26,7 @@ export const WORKSPACE_IMPORT_PARENT_DIRS = [
   "extensions",
   "skills",
   "about",
+  "terminal-apps",
   "templates",
   "projects",
 ] as const;
@@ -67,6 +69,20 @@ export interface BuildableUnitDir {
  */
 export const WORKSPACE_APP_PACKAGE_SCOPE = "@workspace-apps/" as const;
 export const WORKSPACE_EXTENSION_PACKAGE_SCOPE = "@workspace-extensions/" as const;
+export const WORKSPACE_TERMINAL_APP_PACKAGE_SCOPE = "@workspace-terminal-apps/" as const;
+
+/**
+ * Terminal apps are panels hosted by terminals instead of browser views: the
+ * same unit kind, build pipeline, admission, identity and per-instance state,
+ * built as a Node program that runs in a workspace PTY. Their location is what
+ * makes them terminal-hosted; the manifest never selects it.
+ */
+export const TERMINAL_APP_DIR = "terminal-apps" as const;
+
+/** Whether a panel unit at `relativePath` is hosted by terminals. */
+export function isTerminalAppLocation(relativePath: string): boolean {
+  return relativePath.replace(/\\/gu, "/").replace(/^\/+/u, "").split("/")[0] === TERMINAL_APP_DIR;
+}
 
 /**
  * Directories the build system scans for buildable units, in scan order, each
@@ -82,6 +98,7 @@ export const BUILDABLE_UNIT_DIRS: readonly BuildableUnitDir[] = [
   { dir: "panels", kind: "panel", scope: "@workspace-panels/" },
   { dir: "apps", kind: "app", scope: WORKSPACE_APP_PACKAGE_SCOPE },
   { dir: "about", kind: "panel", scope: "@workspace-about/" },
+  { dir: TERMINAL_APP_DIR, kind: "panel", scope: WORKSPACE_TERMINAL_APP_PACKAGE_SCOPE },
   { dir: "workers", kind: "worker", scope: "@workspace-workers/" },
   { dir: "extensions", kind: "extension", scope: WORKSPACE_EXTENSION_PACKAGE_SCOPE },
   { dir: "skills", kind: "package", scope: "@workspace-skills/" },

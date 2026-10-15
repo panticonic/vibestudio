@@ -5,8 +5,8 @@ import { runIsolatedBuildJob } from "./nativeJobTestFixture.js";
  * svelte adapters → esbuild, and asserts the resolved framework plus
  * framework-appropriate bundle markers.
  *
- * Modeled on builder.terminalWorker.test.ts (temp workspace, working-tree source
- * provider, `initBuilder([repo/node_modules])`).
+ * Uses a temp workspace, a working-tree source provider, and
+ * `initBuilder([repo/node_modules])`.
  *
  * REDUCTION (intentional, per task brief): rather than copying the *real*
  * `workspace/panels/hello-vanilla` / `hello-svelte` example panels and their

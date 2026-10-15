@@ -611,7 +611,7 @@ const executionRows = [
   ["panel", "selected-source-ref", "explicit-reload-or-navigation", "execution.panel"],
   ["electron-app", "resolved-exact-artifact", "load-update", "execution.electron-app"],
   ["react-native-app", "resolved-exact-artifact", "mobile-install", "execution.react-native-app"],
-  ["terminal-app", "resolved-exact-artifact", "process-restart", "execution.terminal-app"],
+  ["terminal-app", "resolved-exact-artifact", "client-relaunch", "execution.terminal-app"],
   ["extension", "resolved-exact-artifact", "supervised-restart", "execution.extension"],
 ].map(([surface, selector, adoption, testId]) => ({
   surface,

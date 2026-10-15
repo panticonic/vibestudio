@@ -19,7 +19,7 @@ esac
 # Delete the link to the binary. update-alternatives --remove takes the
 # registered alternative binary, not the generic symlink.
 if type update-alternatives >/dev/null 2>&1; then
-    update-alternatives --remove '${executable}' '/opt/${sanitizedProductName}/${executable}'
+    update-alternatives --remove '${executable}' '/opt/${sanitizedProductName}/resources/vibestudio-cli'
 else
     rm -f '/usr/bin/${executable}'
 fi

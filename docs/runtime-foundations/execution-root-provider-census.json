@@ -1,7 +1,10 @@
 {
   "version": 1,
   "providers": [
-    { "id": "runtime-entity", "backingSources": ["src/server/workspaceEntityStore.ts"] },
+    {
+      "id": "runtime-entity",
+      "backingSources": ["src/server/workspaceEntityStore.ts"]
+    },
     {
       "id": "panel-history",
       "backingSources": ["packages/builtin/src/workspace-state/WorkspaceDO.ts"],
@@ -11,14 +14,11 @@
       "id": "app-generation",
       "backingSources": ["src/server/appHost.ts", "packages/unit-host/src/index.ts"],
       "reviewedReaders": [
+        "packages/unit-host/src/supervisionChange.ts",
         "src/server/services/appUnitDriver.ts",
-        "src/server/services/buildUnitCatalog.ts"
+        "src/server/services/buildUnitCatalog.ts",
+        "src/server/deviceAppPrincipals.ts"
       ]
-    },
-    {
-      "id": "terminal-app",
-      "backingSources": ["src/server/appHost.ts"],
-      "reviewedReaders": ["src/server/terminalAppRuntime.ts"]
     },
     {
       "id": "runtime-image",
@@ -81,12 +81,18 @@
       "source": "src/server/executionPublicationJournal.ts",
       "reason": "Publication interlock metadata, not an owner."
     },
-    { "source": "src/server/index.ts", "reason": "Composition root that registers providers." },
+    {
+      "source": "src/server/index.ts",
+      "reason": "Composition root that registers providers."
+    },
     {
       "source": "src/server/reactNativeAppAdapter.ts",
       "reason": "Launch adapter reading app-generation state; AppHost remains the durable artifact owner."
     },
-    { "source": "src/main/appOrchestrator.ts", "reason": "Desktop observer of host-owned state." },
+    {
+      "source": "src/main/appOrchestrator.ts",
+      "reason": "Desktop observer of host-owned state."
+    },
     {
       "source": "src/main/index.ts",
       "reason": "Desktop bootstrap and observer, not an artifact owner."

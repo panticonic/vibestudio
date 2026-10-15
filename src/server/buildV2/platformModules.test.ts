@@ -13,10 +13,6 @@ import {
   RUNTIME_MODULE,
   CDP_CLIENT_MODULE,
   WORKER_RUNTIME_COMPANION_MODULES,
-  TERMINAL_SHIM_MODULE,
-  TERMINAL_SHIM_YOGA,
-  TERMINAL_SHIM_SIGNAL_EXIT,
-  TERMINAL_SHIM_TERMINAL_SIZE,
   FRAMEWORK_MODULES,
   REACT_FRAMEWORK_ENTRY_MODULE,
   SVELTE_FRAMEWORK_MODULE,
@@ -29,13 +25,6 @@ describe("platform module names (contract values)", () => {
     expect(RUNTIME_MODULE).toBe("@workspace/runtime");
     expect(CDP_CLIENT_MODULE).toBe("@workspace/cdp-client");
     expect(WORKER_RUNTIME_COMPANION_MODULES).toEqual(["@workspace/cdp-client"]);
-  });
-
-  it("declares the terminal-shim subpaths the builder substitutes", () => {
-    expect(TERMINAL_SHIM_MODULE).toBe("@workspace/terminal-shim");
-    expect(TERMINAL_SHIM_YOGA).toBe("@workspace/terminal-shim/yoga");
-    expect(TERMINAL_SHIM_SIGNAL_EXIT).toBe("@workspace/terminal-shim/node/signal-exit");
-    expect(TERMINAL_SHIM_TERMINAL_SIZE).toBe("@workspace/terminal-shim/node/terminal-size");
   });
 
   it("declares the framework auto-mount modules with their mount exports", () => {

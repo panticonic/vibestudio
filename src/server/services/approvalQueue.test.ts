@@ -404,6 +404,37 @@ describe("approvalQueue", () => {
     expect(queue.listPending()).toEqual([]);
   });
 
+  it("withdraws caller-owned waits as cancellation with the original cause", async () => {
+    const { queue } = createQueue();
+    const reason = Object.assign(new Error("runtime is quiescing"), {
+      code: "APPROVAL_WAIT_CANCELLED",
+    });
+    const waiting = queue.requestWithHandle!({
+      callerId: "worker:1",
+      callerKind: "worker",
+      requestedByUserId: "test-user",
+      repoPath: "/repo",
+      effectiveVersion: "hash-1",
+      allowedDecisions: ["once", "session", "version", "deny"],
+      credentialId: "cred-1",
+      credentialLabel: "GitHub",
+      audience: [{ url: "https://api.github.com/", match: "origin" }],
+      injection: {
+        type: "header",
+        name: "authorization",
+        valueTemplate: "Bearer {token}",
+      },
+      accountIdentity: { providerUserId: "user-1" },
+      scopes: ["repo"],
+    });
+
+    queue.cancelForCaller("worker:1", reason);
+
+    await expect(waiting.decision).rejects.toBe(reason);
+    await expect(waiting.resolution).rejects.toBe(reason);
+    expect(queue.listPending()).toEqual([]);
+  });
+
   it("includes credential audience in pending approvals", async () => {
     const { queue } = createQueue();
     const promise = queue.request({
@@ -1737,7 +1768,7 @@ describe("approvalQueue", () => {
       await vi.waitFor(() => expect(recordProvenance).toHaveBeenCalledTimes(1));
 
       abort.abort();
-      queue.cancelForCaller("panel-1");
+      queue.cancelForCaller("panel-1", new Error("test cleanup"));
       expect(queue.listPending().map((approval) => approval.approvalId)).toEqual([approvalId]);
 
       acknowledge();

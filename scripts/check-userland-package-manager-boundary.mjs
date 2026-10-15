@@ -109,6 +109,7 @@ function userlandUnitManifestPaths(userlandRoot) {
     "panels",
     "skills",
     "templates",
+    "terminal-apps",
     "workers",
   ]) {
     const sectionRoot = path.join(userlandRoot, section);

@@ -39,6 +39,7 @@ export type {
   EnvelopeRpcTransport,
   RpcClient,
   RpcClientConfig,
+  RpcClientViewOptions,
   RpcRequestContext,
   RpcEventContext,
   RpcContextHandler,

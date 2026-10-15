@@ -4,9 +4,9 @@
  *
  * The invariant this file enforces: host code must not scatter hardcoded
  * knowledge of workspace packages. Where the platform legitimately requires a
- * userland counterpart module (the runtime SDK, framework auto-mount helpers,
- * workerd shims), that requirement is declared HERE, once, with the exact
- * surface the host expects the module to provide and why the host needs it.
+ * userland counterpart module (the runtime SDK, framework auto-mount helpers),
+ * that requirement is declared HERE, once, with the exact surface the host
+ * expects the module to provide and why the host needs it.
  *
  * Renaming or replacing one of these packages in the workspace is a breaking
  * platform-contract change: update the constant here and every builder use
@@ -64,44 +64,6 @@ export const CDP_CLIENT_MODULE = "@workspace/cdp-client";
  * expose entry (after the manifest-declared modules).
  */
 export const WORKER_RUNTIME_COMPANION_MODULES: readonly string[] = [CDP_CLIENT_MODULE];
-
-// ---------------------------------------------------------------------------
-// Terminal (Ink) worker shims
-// ---------------------------------------------------------------------------
-
-/**
- * `@workspace/terminal-shim` — workerd-compatible replacements for npm
- * packages that break inside workerd, used by Ink terminal-worker builds
- * (see `createTerminalWorkerAliasPlugin`).
- *
- * Why the host requires it: Ink and its dependencies import `yoga-layout`,
- * `signal-exit`, and `terminal-size`, none of which work in a workerd isolate.
- * The builder rewrites those imports to this package's subpath exports.
- *
- * What the host expects it to export (subpaths declared in the package's
- * `exports` map, each drop-in compatible with the npm module it replaces):
- *   - `./yoga`               — synchronous yoga-layout loader (default export:
- *                              initialized Yoga instance, wasm supplied by
- *                              workerd as a `yoga.wasm` module binding).
- *   - `./node/signal-exit`   — `signal-exit`-shaped API (`onExit`, ...).
- *   - `./node/terminal-size` — `terminal-size`-shaped API.
- */
-export const TERMINAL_SHIM_MODULE = "@workspace/terminal-shim";
-
-/** Module binding supplied by workerd for terminal-worker bundles. */
-export const TERMINAL_YOGA_WASM_MODULE = "yoga.wasm";
-
-/** Modules supplied by workerd for terminal-worker bundles. */
-export const TERMINAL_WORKER_RUNTIME_EXTERNALS: readonly string[] = [TERMINAL_YOGA_WASM_MODULE];
-
-/** Subpath specifier the builder substitutes for Ink's `yoga-layout` import. */
-export const TERMINAL_SHIM_YOGA = `${TERMINAL_SHIM_MODULE}/yoga`;
-
-/** Subpath specifier the builder substitutes for `signal-exit`. */
-export const TERMINAL_SHIM_SIGNAL_EXIT = `${TERMINAL_SHIM_MODULE}/node/signal-exit`;
-
-/** Subpath specifier the builder substitutes for `terminal-size`. */
-export const TERMINAL_SHIM_TERMINAL_SIZE = `${TERMINAL_SHIM_MODULE}/node/terminal-size`;
 
 // ---------------------------------------------------------------------------
 // Framework auto-mount modules

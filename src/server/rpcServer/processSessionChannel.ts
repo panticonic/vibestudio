@@ -1,6 +1,5 @@
 import { EventEmitter } from "node:events";
 import type { ProcessAdapter } from "@vibestudio/process-adapter";
-import { constantTimeStringEqual } from "@vibestudio/shared/tokenManager";
 import {
   decodeRpcJson,
   encodeRpcJson,
@@ -15,9 +14,14 @@ import {
 import type { StreamFrame } from "../services/egressProxy.js";
 import { encodeWebSocketStreamFrame, type RpcSessionChannel } from "./sessionChannel.js";
 
-/** The existing RPC session protocol over a launcher-owned process pipe. This
- * grants no authority: the first auth frame must use the credential issued for
- * this exact launched connection, and the ordinary receiver resolves it. */
+/** The existing RPC session protocol over a launcher-owned process pipe.
+ *
+ * The pipe is authenticated by the launch: only the process the native
+ * lifecycle owner started holds this IPC channel (close-on-exec, so not even
+ * its own children inherit it), and the launcher binds the caller identity
+ * when it attaches the channel (`RpcServer.attachNativeProcess`). No bearer
+ * secret exists for the process, so nothing in its environment can be read
+ * by other code in the same runtime and replayed against the gateway. */
 export class ProcessSessionChannel implements RpcSessionChannel {
   readonly OPEN = 1;
   readonly transportBinding = { kind: "local" } as const;
@@ -25,10 +29,7 @@ export class ProcessSessionChannel implements RpcSessionChannel {
   private open = true;
   private first = true;
 
-  constructor(
-    private readonly process: ProcessAdapter,
-    private readonly credential: string
-  ) {
+  constructor(private readonly process: ProcessAdapter) {
     process.on("message", this.receive);
     process.on("exit", this.exited);
     process.on("disconnect", this.disconnected);
@@ -60,12 +61,8 @@ export class ProcessSessionChannel implements RpcSessionChannel {
       return;
     }
     if (this.first) {
-      if (
-        message.type !== "ws:auth" ||
-        typeof message.token !== "string" ||
-        !constantTimeStringEqual(message.token, this.credential)
-      ) {
-        this.close(4006, "RPC process credential does not match launch");
+      if (message.type !== "ws:auth") {
+        this.close(4005, "Expected ws:auth as first message");
         return;
       }
       this.first = false;

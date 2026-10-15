@@ -6,10 +6,11 @@ import {
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawn } from "node:child_process";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { getProfileDataPath } from "@vibestudio/env-paths";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
+import { LaunchTermination, joinProducer, runOwnedChild } from "./launchTermination.js";
+import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
 import { resolveDevelopmentTemplateSet } from "./developmentTemplateSet.js";
 import {
   assertProductDesktopArguments,
@@ -21,19 +22,6 @@ import {
   workspaceSourceFromCheckout,
 } from "../workspaceTemplateSource.js";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
-
-function run(command: string, args: string[], env: NodeJS.ProcessEnv): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { cwd: process.cwd(), env, stdio: "inherit" });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (signal) return reject(new Error(`${path.basename(command)} exited on ${signal}`));
-      if (code !== 0)
-        return reject(new Error(`${path.basename(command)} exited with code ${code}`));
-      resolve();
-    });
-  });
-}
 
 function profileHasWorkspace(): boolean {
   const centralData = new CentralDataManager({
@@ -52,6 +40,9 @@ async function main(): Promise<void> {
   const forwarded = templateOptions.forwarded;
 
   const repoRoot = fs.realpathSync(process.cwd());
+  // From here this launcher owns state; a termination request must reach the
+  // cleanup below, not end the process before it.
+  const termination = new LaunchTermination();
   const scratchParent = path.join(getProfileDataPath(), "source-launches");
   fs.mkdirSync(scratchParent, { recursive: true });
   const temporaryRoot = fs.mkdtempSync(path.join(scratchParent, "launch-"));
@@ -84,10 +75,14 @@ async function main(): Promise<void> {
       bootstrapSystem: needsInitialWorkspace,
       ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
     });
-    await run(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], env);
-    await run(process.execPath, ["scripts/ensure-host-build.mjs"], env);
+    await runOwnedChild(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], {
+      env,
+      termination,
+    });
+    await runOwnedChild(process.execPath, ["scripts/ensure-host-build.mjs"], { env, termination });
     env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(repoRoot, "desktop");
-    preparation = prepareWorkspaceRelease({
+    termination.signal.throwIfAborted();
+    const owned = prepareWorkspaceRelease({
       executable: process.execPath,
       entry: path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "prepare-workspace-templates.mjs"),
       appRoot: repoRoot,
@@ -95,9 +90,12 @@ async function main(): Promise<void> {
       scratch: path.join(temporaryRoot, "template-preparation"),
       env,
     });
-
-    await preparation.completed;
-    desktop = new DevInstanceSupervisor({
+    preparation = owned;
+    // The cleanup below joins the same stop and reports its failure.
+    termination.onRequest(() => void owned.stop().catch(() => {}));
+    await owned.completed;
+    termination.signal.throwIfAborted();
+    const supervisor = new DevInstanceSupervisor({
       sourceRoot: repoRoot,
       command: process.execPath,
       args: [
@@ -114,19 +112,26 @@ async function main(): Promise<void> {
       ],
       env,
       stdio: "inherit",
-      forwardParentSignals: true,
     });
-    await desktop.start();
+    desktop = supervisor;
+    termination.onRequest((signal) => void supervisor.stop(signal).catch(() => {}));
+    await supervisor.start();
     const foreground = desktop.wait();
     process.exitCode = await foreground;
   } catch (error) {
     retirementFailed = (error as NodeJS.ErrnoException)?.code === "EOWNERSHIP";
-    launchFailure = error;
+    if (termination.requested && !retirementFailed) {
+      // A requested stop is not a launch failure; the cleanup below still runs.
+      console.error("Interrupted.");
+      process.exitCode = signalExitCode(termination.requested);
+    } else {
+      launchFailure = error;
+    }
   } finally {
     try {
       // A failed retirement retains the source inputs for the still-owned
       // process. Deletion retries cannot establish that ownership has ended.
-      const retirement = await Promise.allSettled([desktop?.stop(), preparation?.stop()]);
+      const retirement = await Promise.allSettled([desktop?.stop(), joinProducer(preparation)]);
       const failure = retirement.find((result) => result.status === "rejected");
       if (!retirementFailed && !failure) fs.rmSync(temporaryRoot, { recursive: true, force: true });
       if (failure?.status === "rejected") retirementFailure = failure.reason;
@@ -138,6 +143,7 @@ async function main(): Promise<void> {
       } catch (error) {
         retirementFailure ??= error;
       }
+      termination.dispose();
     }
   }
   if (retirementFailure) {

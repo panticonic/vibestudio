@@ -3,9 +3,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadCliCredentials, saveCliCredentials } from "../cli/credentialStore.js";
-import { ConnectionError } from "../cli/output.js";
-import { bootstrapInstanceCli, bootstrapInstanceCliFromDevice } from "./bootstrapInstanceCli.js";
+import { loadCliCredentials, loadCliIdentity, saveCliCredentials } from "./credentialStore.js";
+import { ConnectionError } from "./output.js";
+import { pairLocalCli, pairLocalCliFromDevice } from "./localPairing.js";
 
 const roots: string[] = [];
 const reach = (byte: string) => ({
@@ -18,7 +18,85 @@ afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
 
-describe("bootstrapInstanceCliFromDevice", () => {
+describe("pairLocalCliFromDevice", () => {
+  it("persists redemption before cancelled navigation and resumes without an invite", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-cancel-pair-"));
+    roots.push(root);
+    const credentialFile = path.join(root, "credentials.json");
+    const serverId = `srv_${"S".repeat(24)}`;
+    const serverBootId = `boot_${"B".repeat(24)}`;
+    const owner = new AbortController();
+    const reason = new Error("user cancelled navigation");
+    const fetchMock = vi.fn(async () =>
+      Response.json({ deviceId: `dev_${"C".repeat(24)}`, refreshToken: "R".repeat(43) })
+    );
+    const ready = {
+      gatewayUrl: "http://127.0.0.1:5000",
+      serverId,
+      serverBootId,
+      mode: "hub",
+      gatewayPort: 5000,
+      pid: 1,
+      version: "0.1.33",
+      buildId: "a".repeat(64),
+      workspaces: [],
+      rootInvite: {
+        code: "D".repeat(21) + "A",
+        expiresInMs: 1000000,
+        expiresAt: Date.now() + 1000000,
+        serverId,
+        serverBootId,
+        reach: { status: "preparing" },
+      },
+    };
+    const cancelRpc = () => ({
+      call: async () => {
+        owner.abort(reason);
+        throw reason;
+      },
+      close: async () => {},
+    });
+    await expect(
+      pairLocalCli(ready, {
+        credentialFile,
+        fetch: fetchMock as typeof fetch,
+        rpcClient: cancelRpc,
+        signal: owner.signal,
+      })
+    ).rejects.toBe(reason);
+    expect(loadCliIdentity(credentialFile)).toMatchObject({
+      phase: "account",
+      deviceId: `dev_${"C".repeat(24)}`,
+    });
+    const call = vi.fn(async (method: string) =>
+      method === "hubControl.ensureUserWorkspaces"
+        ? { personal: { workspaceId: "ws_personal" }, system: { workspaceId: "ws_system" } }
+        : {
+            workspace: "system",
+            workspaceId: "ws_system",
+            running: true,
+            serverUrl: ready.gatewayUrl,
+            workspaceReach: reach("bb"),
+            serverId,
+            serverBootId,
+          }
+    );
+    await expect(
+      pairLocalCli(
+        { ...ready, rootInvite: null },
+        {
+          credentialFile,
+          fetch: fetchMock as typeof fetch,
+          rpcClient: () => ({ call, close: async () => {} }),
+        }
+      )
+    ).resolves.toMatchObject({ status: "existing", workspaceId: "ws_system" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(loadCliCredentials(credentialFile)).toMatchObject({
+      phase: "workspace",
+      deviceId: `dev_${"C".repeat(24)}`,
+    });
+  });
   it("routes a saved private identity without publishing it in hub readiness", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-cli-private-"));
     roots.push(root);
@@ -27,7 +105,8 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const serverBootId = `boot_${"B".repeat(24)}`;
     saveCliCredentials(
       {
-        schemaVersion: 5,
+        schemaVersion: 6,
+        phase: "workspace",
         kind: "device",
         transport: "local",
         pairedAt: 123,
@@ -57,7 +136,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
     });
     const close = vi.fn(async () => undefined);
     await expect(
-      bootstrapInstanceCli(
+      pairLocalCli(
         {
           gatewayUrl: "http://127.0.0.1:5000",
           serverId,
@@ -88,7 +167,8 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const existingDeviceId = `dev_${"C".repeat(24)}`;
     saveCliCredentials(
       {
-        schemaVersion: 5,
+        schemaVersion: 6,
+        phase: "workspace",
         kind: "device",
         url: "http://127.0.0.1:5000/_workspace/dev",
         workspaceId: "ws_dev_retired",
@@ -123,7 +203,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const fetchMock = vi.fn();
 
     await expect(
-      bootstrapInstanceCliFromDevice(
+      pairLocalCliFromDevice(
         {
           gatewayUrl: "http://127.0.0.1:5000",
           serverId,
@@ -198,7 +278,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
     const fetchMock = vi.fn(async (_input: string | URL, init?: RequestInit) => {
       expect(JSON.parse(String(init?.body))).toMatchObject({
         code: pairing.code,
-        label: "Vibestudio development CLI",
+        label: `Vibestudio CLI on ${os.hostname()}`,
       });
       return Response.json({
         deviceId: `dev_${"C".repeat(24)}`,
@@ -208,7 +288,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
     });
 
     await expect(
-      bootstrapInstanceCliFromDevice(
+      pairLocalCliFromDevice(
         {
           gatewayUrl: "http://127.0.0.1:5000",
           serverId,
@@ -297,7 +377,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
     );
 
     await expect(
-      bootstrapInstanceCli(
+      pairLocalCli(
         {
           gatewayUrl: "http://127.0.0.1:5000",
           serverId,
@@ -387,7 +467,7 @@ describe("bootstrapInstanceCliFromDevice", () => {
     );
 
     await expect(
-      bootstrapInstanceCliFromDevice(
+      pairLocalCliFromDevice(
         {
           gatewayUrl: "http://127.0.0.1:5000",
           serverId,

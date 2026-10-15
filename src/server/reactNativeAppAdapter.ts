@@ -1,30 +1,19 @@
-import { createHash } from "node:crypto";
 import type { UnitApprovalCoordinator } from "@vibestudio/unit-host";
 import { normalizeUnitRepoPath as normalizeRepoPath } from "@vibestudio/unit-host";
 import type { ReviewedUnit } from "@vibestudio/shared/approvals";
 import type { HostTargetCandidate } from "@vibestudio/shared/hostTargets";
 import { appArtifactRoute, appArtifactUrl } from "@vibestudio/shared/appArtifacts";
-import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
-import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { ActiveExecutionIdentity } from "./runtimeExecutionIdentity.js";
+import {
+  validateAppBuildContract,
+  type AppBuildProviderDetails,
+} from "./buildV2/appBuildContract.js";
 import type { AppBuildResultLike, AppRegistryEntry, WorkspaceAppDeclaration } from "./appHost.js";
-
-export interface AppBuildProviderDetails {
-  name: string;
-  activeEv: string | null;
-  activeBuildKey: string | null;
-  contractVersion: string;
-}
 
 interface ReactNativeRegistry {
   get(name: string): AppRegistryEntry | null;
   list(): AppRegistryEntry[];
 }
-
-type ReactNativeEntityCache = Pick<
-  EntityCache,
-  "resolve" | "listActive" | "_onActivate" | "_onRetire"
->;
 
 export interface ReactNativeAppBootstrap {
   appId: string;
@@ -74,7 +63,6 @@ export interface ReactNativeAppAdapterDeps {
     identity: ActiveExecutionIdentity;
   }>;
   approvalCoordinator?: UnitApprovalCoordinator<ReviewedUnit>;
-  entityCache?: ReactNativeEntityCache;
   getArtifactBaseUrl(): string;
   selectedSource(): string | null;
   listCandidates(): Promise<HostTargetCandidate[]>;
@@ -83,6 +71,8 @@ export interface ReactNativeAppAdapterDeps {
   ensureRequiredExtensions(): Promise<void>;
   whenDeclarationsStaged(): Promise<void>;
   whenReconciled(): Promise<void>;
+  /** Settles when the unit's queued or running application ends, preserving its failure. */
+  whenApplied(name: string): Promise<void>;
   reconcileDeclaration(
     declaration: WorkspaceAppDeclaration,
     options: { waitForApproval?: boolean }
@@ -92,10 +82,9 @@ export interface ReactNativeAppAdapterDeps {
     identityKeys: string[];
   }>;
   acceptPreapprovedTrust(keys: Iterable<string>): void;
-  emitStatus(appId: string, status: AppRegistryEntry["status"], error: string | null): void;
 }
 
-/** Owns the native-host artifact, readiness, approval, and device-principal lifecycle. */
+/** Owns the native-host artifact, readiness, and launch-approval lifecycle. */
 export class ReactNativeAppAdapter {
   private readonly pendingLaunchPreflightKeys = new Set<string>();
   private readonly approvedLaunchPreflights = new Map<string, WorkspaceAppDeclaration>();
@@ -118,42 +107,19 @@ export class ReactNativeAppAdapter {
     if (!entry?.activeBundleKey) return null;
     const activeBuild = await this.deps.resolveActiveBuild(entry);
     const build = activeBuild.build;
-    const details =
-      build?.metadata.details &&
-      build.metadata.details.kind === "app" &&
-      "rnHostAbi" in build.metadata.details
-        ? build.metadata.details
-        : null;
-    const rnHostAbi = details?.rnHostAbi;
-    const integrity = details?.integrity;
-    if (
-      !build ||
-      !details ||
-      typeof rnHostAbi !== "string" ||
-      rnHostAbi.length === 0 ||
-      typeof integrity !== "string" ||
-      integrity.length === 0 ||
-      !isBuildProviderDetailsLike(details.provider)
-    ) {
+    try {
+      validateAppBuildContract(entry.name, "react-native", build);
+    } catch {
       return null;
     }
-    const primaryArtifacts = (build.artifacts ?? []).filter(
-      (artifact) => artifact.role === "primary"
-    );
-    if (!hasMobilePrimaryArtifacts(primaryArtifacts)) return null;
+    const details = build.metadata.details;
+    if (details.kind !== "app" || !details.rnHostAbi || !details.integrity || !details.provider) {
+      return null;
+    }
+    const { rnHostAbi, integrity } = details;
     const platformArtifacts = (build.artifacts ?? []).filter(
       (artifact) => artifact.role === "primary" || artifact.role === "asset"
     );
-    if (
-      platformArtifacts.some(
-        (artifact) =>
-          typeof artifact.integrity !== "string" ||
-          artifact.integrity.length === 0 ||
-          (artifact.platform !== "android" && artifact.platform !== "ios")
-      )
-    ) {
-      return null;
-    }
     const buildKey = entry.activeBundleKey;
     const artifacts = platformArtifacts.map((artifact) => ({
       path: artifact.path,
@@ -241,43 +207,10 @@ export class ReactNativeAppAdapter {
       }
     }
     await this.deps.reconcileDeclaration(declared, options);
+    // Staging returns before the build it started finishes. Join that build so
+    // a caller is answered with the app's settled state, not asked to ask again.
+    await this.deps.whenApplied(candidate.name);
     return this.readinessSnapshot(candidate.source);
-  }
-
-  async registerPrincipal(deviceId: string, source?: string | null): Promise<string | null> {
-    const resolvedSource = source ?? this.deps.selectedSource();
-    if (!resolvedSource) return null;
-    const normalizedSource = normalizeRepoPath(resolvedSource);
-    const entry = this.deps.registry
-      .list()
-      .find(
-        (candidate) =>
-          candidate.target === "react-native" &&
-          candidate.status === "running" &&
-          !!candidate.activeEv &&
-          !!candidate.activeBundleKey &&
-          normalizeRepoPath(candidate.source.repo) === normalizedSource
-      );
-    if (!entry || !this.deps.entityCache) return null;
-    const activeBuild = await this.deps.resolveActiveBuild(entry);
-    return this.activatePrincipal(entry, deviceId, activeBuild);
-  }
-
-  retirePrincipal(deviceId: string): number {
-    let retired = 0;
-    for (const entry of this.deps.registry.list()) {
-      if (entry.target !== "react-native") continue;
-      if (this.retireEntity(mobileAppPrincipalId(entry.source.repo, deviceId))) retired++;
-    }
-    return retired;
-  }
-
-  retirePrincipalsForEntry(entry: AppRegistryEntry): void {
-    if (!this.deps.entityCache) return;
-    const prefix = `app:${normalizeRepoPath(entry.source.repo)}:`;
-    for (const record of this.deps.entityCache.listActive()) {
-      if (record.kind === "app" && record.id.startsWith(prefix)) this.retireEntity(record.id);
-    }
   }
 
   private async readinessSnapshot(source?: string | null): Promise<ReactNativeHostReadiness> {
@@ -380,9 +313,7 @@ export class ReactNativeAppAdapter {
         applyApproved: async () => {
           this.approvedLaunchPreflights.set(sourceKey, { ...declared });
         },
-        applyDenied: () => {
-          this.deps.emitStatus(candidate.name, "pending-approval", null);
-        },
+        applyDenied: () => undefined,
       })
       .catch((error) => {
         console.error(
@@ -413,62 +344,6 @@ export class ReactNativeAppAdapter {
     if (approval.identityKeys.length > 0) this.deps.acceptPreapprovedTrust(approval.identityKeys);
     this.approvedLaunchPreflights.delete(sourceKey);
   }
-
-  private activatePrincipal(
-    entry: AppRegistryEntry,
-    deviceId: string,
-    activeBuild: { buildKey: string; identity: ActiveExecutionIdentity }
-  ): string {
-    const entityCache = this.deps.entityCache;
-    if (!entityCache || !entry.activeEv) {
-      throw new Error("Cannot activate device-scoped app principal without an active app entity");
-    }
-    const sourceRepo = normalizeRepoPath(entry.source.repo);
-    const principalId = mobileAppPrincipalId(sourceRepo, deviceId);
-    const existing = entityCache.resolve(principalId);
-    const contextId = createHash("sha256")
-      .update(`${this.deps.workspaceId}\x00app-device\x00${sourceRepo}\x00${deviceId}`)
-      .digest("hex");
-    const record: EntityRecord = {
-      id: principalId,
-      kind: "app",
-      source: { repoPath: sourceRepo, effectiveVersion: entry.activeEv },
-      activeBuildKey: activeBuild.buildKey,
-      ...activeBuild.identity,
-      contextId,
-      key: principalId,
-      createdAt: existing?.createdAt ?? Date.now(),
-      status: "active",
-      cleanupComplete: true,
-    };
-    entityCache._onActivate(record);
-    return principalId;
-  }
-
-  private retireEntity(name: string): boolean {
-    const existing = this.deps.entityCache?.resolve(name);
-    if (!existing || existing.kind !== "app" || existing.status !== "active") return false;
-    this.deps.entityCache?._onRetire({
-      ...existing,
-      status: "retired",
-      retiredAt: Date.now(),
-      cleanupComplete: true,
-    });
-    return true;
-  }
-}
-
-export function isBuildProviderDetailsLike(value: unknown): value is AppBuildProviderDetails {
-  if (!value || typeof value !== "object") return false;
-  const candidate = value as Partial<AppBuildProviderDetails>;
-  return (
-    typeof candidate.name === "string" &&
-    candidate.name.length > 0 &&
-    (typeof candidate.activeEv === "string" || candidate.activeEv === null) &&
-    (typeof candidate.activeBuildKey === "string" || candidate.activeBuildKey === null) &&
-    typeof candidate.contractVersion === "string" &&
-    candidate.contractVersion.length > 0
-  );
 }
 
 function sameBuildProvider(
@@ -481,18 +356,4 @@ function sameBuildProvider(
     left.activeBuildKey === right.activeBuildKey &&
     left.contractVersion === right.contractVersion
   );
-}
-
-function hasMobilePrimaryArtifacts(artifacts: Array<{ platform?: string }>): boolean {
-  const seenPlatforms = new Set<string>();
-  for (const artifact of artifacts) {
-    if (artifact.platform !== "android" && artifact.platform !== "ios") return false;
-    if (seenPlatforms.has(artifact.platform)) return false;
-    seenPlatforms.add(artifact.platform);
-  }
-  return seenPlatforms.size > 0;
-}
-
-function mobileAppPrincipalId(repoPath: string, deviceId: string): string {
-  return `app:${normalizeRepoPath(repoPath)}:${deviceId}`;
 }

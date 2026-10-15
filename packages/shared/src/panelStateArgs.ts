@@ -1,3 +1,6 @@
+import type { StateArgsSchema } from "./stateArgs.js";
+import { validateStateArgs } from "./stateArgsValidator.js";
+
 export function decodePanelStateArgs(raw: string | null): Record<string, unknown> {
   if (raw === null) return {};
   const value: unknown = JSON.parse(raw);
@@ -95,6 +98,23 @@ export class PanelStateArgsConflictError extends Error {
     );
     this.name = "PanelStateArgsConflictError";
   }
+}
+
+/**
+ * Merge one patch into a panel's stateArgs and validate the result against the
+ * active build's schema (when it declares one). Every stateArgs write — a
+ * slot's current history entry, or a slotless panel entity such as a terminal
+ * app — goes through this one function.
+ */
+export function mergeValidateStateArgs(
+  current: Record<string, unknown>,
+  patch: Record<string, unknown>,
+  schema: StateArgsSchema | undefined
+): Record<string, unknown> {
+  const merged = applyStateArgsMergePatch(current, patch);
+  const validation = validateStateArgs(merged, schema);
+  if (!validation.success) throw new Error(`Invalid stateArgs: ${validation.error}`);
+  return validation.data as Record<string, unknown>;
 }
 
 /** Apply one merge patch to a panel's stateArgs object. */

@@ -79,12 +79,6 @@ export function createLiveCallerGate(deps: {
       if (caller.runtime.kind === "extension") {
         return deps.isLiveExtension(caller.runtime.id);
       }
-      if (caller.runtime.kind === "app" && authorizedBy === "server") {
-        return (
-          deps.entityCache.resolveActive(caller.runtime.id)?.kind === "app" &&
-          exactActiveCodeIncarnation()
-        );
-      }
       if (
         caller.runtime.kind === "panel" ||
         caller.runtime.kind === "worker" ||

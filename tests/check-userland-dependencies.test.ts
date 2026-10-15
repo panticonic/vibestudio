@@ -5,73 +5,10 @@ import {
   collectExactUserlandDependencyPins,
   collectHostReuseRangeFindings,
   collectStartupHostReuseFindings,
-  runtimeImportPolicyForUnit,
 } from "../scripts/check-userland-dependencies.mjs";
 import { collectPackageManifestImportFindings } from "../scripts/lib/package-import-audit.mjs";
-import {
-  TERMINAL_SHIM_MODULE,
-  TERMINAL_YOGA_WASM_MODULE,
-  TERMINAL_WORKER_RUNTIME_EXTERNALS,
-} from "../src/server/buildV2/platformModules.js";
 
 describe("collectPackageManifestImportFindings", () => {
-  it("allows the host terminal binding only for its declared runtime owner", async () => {
-    const isTerminalWorker = (manifest: { terminal?: boolean }) => manifest.terminal === true;
-    const terminalOwner = {
-      name: TERMINAL_SHIM_MODULE,
-      kind: "package",
-      manifest: {},
-    };
-    const terminalWorker = {
-      name: "@workspace-workers/terminal",
-      kind: "worker",
-      manifest: { terminal: true },
-    };
-    const unrelatedPackage = {
-      name: "@workspace/unrelated",
-      kind: "package",
-      manifest: {},
-    };
-    const policy = {
-      isTerminalWorker,
-      terminalShimModule: TERMINAL_SHIM_MODULE,
-      terminalWorkerExternals: TERMINAL_WORKER_RUNTIME_EXTERNALS,
-    };
-
-    expect(TERMINAL_WORKER_RUNTIME_EXTERNALS).toEqual([TERMINAL_YOGA_WASM_MODULE]);
-    expect(runtimeImportPolicyForUnit(terminalOwner, policy)).toEqual([TERMINAL_YOGA_WASM_MODULE]);
-    expect(runtimeImportPolicyForUnit(terminalWorker, policy)).toEqual([TERMINAL_YOGA_WASM_MODULE]);
-    expect(runtimeImportPolicyForUnit(unrelatedPackage, policy)).toEqual([]);
-
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-terminal-import-audit-"));
-    const packageRoot = path.join(root, "packages", "terminal-shim");
-    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
-    try {
-      fs.writeFileSync(
-        path.join(packageRoot, "package.json"),
-        JSON.stringify({ name: terminalOwner.name, exports: { ".": "./src/index.ts" } })
-      );
-      fs.writeFileSync(
-        path.join(packageRoot, "src", "index.ts"),
-        `import ${JSON.stringify(TERMINAL_YOGA_WASM_MODULE)};\n`
-      );
-      await expect(
-        collectPackageManifestImportFindings(packageRoot, root, {
-          runtimeModuleSpecifiers: runtimeImportPolicyForUnit(terminalOwner, policy),
-        })
-      ).resolves.toEqual([]);
-      await expect(
-        collectPackageManifestImportFindings(packageRoot, root, {
-          runtimeModuleSpecifiers: runtimeImportPolicyForUnit(unrelatedPackage, policy),
-        })
-      ).resolves.toEqual([
-        expect.objectContaining({ dependency: TERMINAL_YOGA_WASM_MODULE, typeOnly: false }),
-      ]);
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-  });
-
   it("checks production import forms at the nearest package manifest boundary", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-package-import-audit-"));
     const pkg = path.join(root, "packages", "fixture");

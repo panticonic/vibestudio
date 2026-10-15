@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  UNIT_ROLLBACK_HISTORY_LIMIT,
   UnitHost,
   UnitRegistry,
   UnitTrustResolver,
@@ -51,6 +52,8 @@ function entry(overrides: Partial<UnitRegistryEntryBase> = {}): UnitRegistryEntr
     activeDependencyEvs: {},
     activeExternalDeps: {},
     activeRuntimeDepsKey: null,
+    activeExecutionDigest: null,
+    previousVersions: [],
     status: "pending-approval",
     lastError: null,
     ...overrides,
@@ -91,17 +94,13 @@ describe("UnitRegistry", () => {
         },
         finalize() {},
       },
-      publicationKeyForEntry: (value) => value.activeBundleKey ?? "",
-      publicationForEntry: (value) => ({
-        owner: "extension-generation",
-        ownerId: value.name,
-        artifacts: [{ buildKey: value.activeBundleKey!, executionDigest: "e".repeat(64) }],
-      }),
     });
 
-    expect(() => registry.upsert(entry({ activeBundleKey: "b".repeat(64) }))).toThrow(
-      /identity mismatch/
-    );
+    expect(() =>
+      registry.upsert(
+        entry({ activeBundleKey: "b".repeat(64), activeExecutionDigest: "e".repeat(64) })
+      )
+    ).toThrow(/identity mismatch/);
     expect(registry.list()).toEqual([]);
   });
 
@@ -531,6 +530,7 @@ describe("UnitHost", () => {
       applyTrusted?: (node: TestNode) => Promise<void>;
       approvalCoordinator?: UnitApprovalCoordinator<TestApproval>;
       isAdmitted?: (repoPath: string, effectiveVersion: string) => boolean;
+      decision?: "accepted" | "deny";
       /** Stands in for the durable activation-trust file. */
       approvalStore?: {
         has(key: string): boolean;
@@ -623,7 +623,7 @@ describe("UnitHost", () => {
       approvalEntry: async (n, decl) => ({ name: n.name, ref: decl.ref }),
       requestApproval: async (entries) => {
         prompted.push(entries);
-        return "accepted";
+        return opts.decision ?? "accepted";
       },
       ...(opts.approvalCoordinator ? { approvalCoordinator: opts.approvalCoordinator } : {}),
       onApprovalDenied: (items) => {
@@ -635,6 +635,24 @@ describe("UnitHost", () => {
     });
     return { host, registry, applied, removed, prompted, denied, node };
   }
+
+  it("settles on the answer to the review it opens", async () => {
+    const accepted = makeHarness();
+    const decl = { source: accepted.node.relativePath, ref: "main" };
+    await expect(accepted.host.whenReviewed(accepted.node, decl)).resolves.toBe("accepted");
+    expect(accepted.prompted).toHaveLength(1);
+    expect(accepted.applied).toEqual([accepted.node.name]);
+
+    const declined = makeHarness({ decision: "deny" });
+    await expect(
+      declined.host.whenReviewed(declined.node, {
+        source: declined.node.relativePath,
+        ref: "main",
+      })
+    ).resolves.toBe("declined");
+    expect(declined.applied).toEqual([]);
+    expect(declined.denied).toEqual([declined.node.name]);
+  });
 
   it("does not inspect seed authority again for an admitted version", async () => {
     const isSeedTrusted = vi.fn(() => true);
@@ -1183,6 +1201,100 @@ describe("UnitHost", () => {
       lastError: "activation failed",
     });
     expect(errors).toEqual(["activation failed"]);
+  });
+
+  it("records a failed update without demoting the adopted build", async () => {
+    const { host, registry, node } = makeHarness({ active: true });
+    const original = new Error("candidate does not build");
+
+    await expect(
+      host.applyRuntimeDeclaration({
+        node,
+        decl: { source: node.relativePath, ref: "main" },
+        needsBuildRefresh: () => true,
+        buildAndActivate: async () => {
+          throw original;
+        },
+        activateCurrent: async () => undefined,
+      })
+    ).rejects.toBe(original);
+
+    expect(registry.get(node.name)).toMatchObject({
+      activeBundleKey: "bundle",
+      status: "running",
+      lastError: "candidate does not build",
+    });
+  });
+
+  it("restores the previous build when an update fails after replacing it", () => {
+    const { host, registry, node } = makeHarness({ active: true });
+    const previous = registry.get(node.name)!;
+    registry.patch(node.name, { activeBundleKey: "candidate", status: "building" });
+
+    host.rejectUpdate(node.name, previous, "activation failed");
+
+    expect(registry.get(node.name)).toMatchObject({
+      activeBundleKey: "bundle",
+      status: previous.status,
+      lastError: "activation failed",
+    });
+  });
+
+  it("retains superseded builds and selects one again reversibly", () => {
+    const { host, registry, node } = makeHarness({ active: true });
+    const activate = (key: string) =>
+      host.activateBuild({
+        name: node.name,
+        version: "1.0.0",
+        sourceRepo: node.relativePath,
+        ref: "main",
+        buildDir: `/builds/${key}`,
+        effectiveVersion: `ev-${key}`,
+        activeSourceHash: null,
+        dependencyEvs: {},
+        externalDeps: {},
+        extra: { activeExecutionDigest: key.repeat(64).slice(0, 64) },
+      });
+    registry.patch(node.name, { activeExecutionDigest: "e".repeat(64) });
+
+    activate("a");
+    const adopted = activate("b");
+    expect(adopted.previousVersions.map((version) => version.activeBundleKey)).toEqual([
+      "a",
+      "bundle",
+    ]);
+    // Re-adopting a retained build does not leave it in its own history.
+    expect(activate("a").previousVersions.map((version) => version.activeBundleKey)).toEqual([
+      "b",
+      "bundle",
+    ]);
+
+    const selected = host.selectVersion(node.name, registry.get(node.name)!.previousVersions[1]!, {
+      status: "running",
+    });
+    expect(selected.activeBundleKey).toBe("bundle");
+    expect(selected.previousVersions.map((version) => version.activeBundleKey)).toEqual(["a", "b"]);
+  });
+
+  it("bounds retained builds", () => {
+    const { host, registry, node } = makeHarness({ active: true });
+    registry.patch(node.name, { activeExecutionDigest: "d".repeat(64) });
+    let last = null as ReturnType<typeof host.activateBuild> | null;
+    for (let index = 0; index < UNIT_ROLLBACK_HISTORY_LIMIT + 3; index++) {
+      last = host.activateBuild({
+        name: node.name,
+        version: "1.0.0",
+        sourceRepo: node.relativePath,
+        ref: "main",
+        buildDir: `/builds/k${index}`,
+        effectiveVersion: `ev${index}`,
+        activeSourceHash: null,
+        dependencyEvs: {},
+        externalDeps: {},
+        extra: { activeExecutionDigest: "d".repeat(64) },
+      });
+    }
+    expect(last?.previousVersions).toHaveLength(UNIT_ROLLBACK_HISTORY_LIMIT);
   });
 
   it("compares active build state with shared source, EV, dependency, and runtime keys", () => {

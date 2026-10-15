@@ -538,15 +538,18 @@ export type ClientConfigApprovalResult =
 export type FieldInputApprovalResult = ClientConfigApprovalResult;
 interface QueueWaiter {
   resolve: (decision: ApprovalQueueDecision | BrowserPermissionApprovalDecision) => void;
+  reject: (reason: unknown) => void;
   resolveWithProvenance: (
     resolution: ApprovalQueueResolution<ApprovalQueueDecision | BrowserPermissionApprovalDecision>
   ) => void;
+  rejectWithProvenance: (reason: unknown) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
 }
 
 interface FieldInputQueueWaiter {
   resolve: (result: FieldInputApprovalResult) => void;
+  reject: (reason: unknown) => void;
   signal?: AbortSignal;
   onAbort?: () => void;
 }
@@ -678,8 +681,8 @@ export interface ApprovalQueue {
     resolver?: ApprovalResolver
   ): Promise<void>;
   listPending(): PendingApproval[];
-  /** Cleanup hook: cancel any pending approvals associated with a caller id. */
-  cancelForCaller(callerId: string): void;
+  /** Withdraw pending decisions for a caller, rejecting waiters with the owning cause. */
+  cancelForCaller(callerId: string, reason: unknown): void;
 }
 
 export interface ApprovalQueueRequestHandle<
@@ -1523,9 +1526,9 @@ export function createApprovalQueue(deps: {
     }
 
     const bound = entry;
-    return new Promise<FieldInputApprovalResult>((resolve) => {
+    return new Promise<FieldInputApprovalResult>((resolve, reject) => {
       const waiterId = bound.nextWaiterId++;
-      const waiter: FieldInputQueueWaiter = { resolve, signal: req.signal };
+      const waiter: FieldInputQueueWaiter = { resolve, reject, signal: req.signal };
 
       if (req.signal) {
         const onAbort = () => {
@@ -1725,24 +1728,34 @@ export function createApprovalQueue(deps: {
     let resolveDecision!: (
       decision: ApprovalQueueDecision | BrowserPermissionApprovalDecision
     ) => void;
+    let rejectDecision!: (reason: unknown) => void;
     let resolveWithProvenance!: (
       resolution: ApprovalQueueResolution<ApprovalQueueDecision | BrowserPermissionApprovalDecision>
     ) => void;
+    let rejectWithProvenance!: (reason: unknown) => void;
     const decision = new Promise<ApprovalQueueDecision | BrowserPermissionApprovalDecision>(
-      (resolve) => {
+      (resolve, reject) => {
         resolveDecision = resolve;
+        rejectDecision = reject;
       }
     );
     const resolution = new Promise<
       ApprovalQueueResolution<ApprovalQueueDecision | BrowserPermissionApprovalDecision>
-    >((resolve) => {
+    >((resolve, reject) => {
       resolveWithProvenance = resolve;
+      rejectWithProvenance = reject;
     });
+    // A caller may consume only one view. Observe both without changing the
+    // rejected promises returned to consumers.
+    void decision.catch(() => undefined);
+    void resolution.catch(() => undefined);
     {
       const waiterId = bound.nextWaiterId++;
       const waiter: QueueWaiter = {
         resolve: resolveDecision,
+        reject: rejectDecision,
         resolveWithProvenance,
+        rejectWithProvenance,
         signal: req.signal,
       };
 
@@ -2251,9 +2264,9 @@ export function createApprovalQueue(deps: {
       return Array.from(entriesById.values()).map((e) => e.approval);
     },
 
-    cancelForCaller(callerId) {
-      // Best-effort: dismiss every pending approval attributed to this caller.
-      // Called by `runtime.retireEntity` after the durable retire commits.
+    cancelForCaller(callerId, reason) {
+      // Withdrawal is an operation cancellation, not a human denial. Reject
+      // every waiter with the owning cause so downstream classifiers retain it.
       const matching = Array.from(entriesById.values()).filter(
         (entry) => !entry.settlement && entry.approval.callerId === callerId
       );
@@ -2266,15 +2279,15 @@ export function createApprovalQueue(deps: {
           if (waiter.signal && waiter.onAbort) {
             waiter.signal.removeEventListener("abort", waiter.onAbort);
           }
-          waiter.resolve("deny");
-          waiter.resolveWithProvenance({ decision: "deny" });
+          waiter.reject(reason);
+          waiter.rejectWithProvenance(reason);
         }
         entry.waiters.clear();
         for (const waiter of entry.fieldInputWaiters.values()) {
           if (waiter.signal && waiter.onAbort) {
             waiter.signal.removeEventListener("abort", waiter.onAbort);
           }
-          waiter.resolve({ decision: "deny" });
+          waiter.reject(reason);
         }
         entry.fieldInputWaiters.clear();
         for (const waiter of entry.deviceCodeWaiters.values()) {

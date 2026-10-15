@@ -1767,17 +1767,23 @@ export class RpcServer {
    * the network carriers, without requiring host-loopback access. */
   attachNativeProcess(
     process: import("@vibestudio/process-adapter").ProcessAdapter,
-    credential: string
+    identity: { callerId: string; callerKind: CallerKind }
   ): () => void {
     this.initHandlers();
-    const channel = new ProcessSessionChannel(process, credential);
-    this.handleConnection(channel);
+    const channel = new ProcessSessionChannel(process);
+    // The launch is the authentication: the identity is bound here, by the
+    // owner that created the process and its exclusive IPC channel.
+    this.handleConnection(channel, undefined, {
+      entry: { callerId: identity.callerId, callerKind: identity.callerKind },
+      isValidAtUpgrade: () => channel.readyState === channel.OPEN,
+    });
     return () => channel.close(1001, "Native lifecycle owner retired the session");
   }
 
   private handleConnection(
     ws: RpcSessionChannel,
-    upgradeAdmission?: RpcWebSocketAdmissionGrant
+    upgradeAdmission?: RpcWebSocketAdmissionGrant,
+    launched?: ResolvedRpcCredential
   ): void {
     if (this.isShuttingDown()) {
       ws.close(1001, "Server shutting down");
@@ -1855,7 +1861,7 @@ export class RpcServer {
         msg.clientSessionId,
         msg.clientPlatform,
         msg.oauthCallbackMode,
-        upgradeAdmission?.resolved
+        upgradeAdmission?.resolved ?? launched
       )
         .catch((error) => this.abortFailedAuthentication(ws, error))
         .finally(() => {
@@ -1881,9 +1887,8 @@ export class RpcServer {
     const authenticated = await this.resolveConnectionGrantIdentity(token, remoteEndpointId);
     if (
       authenticated?.caller.runtime.kind === "panel" &&
-      this.deps.runtimeCoordinator?.resolvePresentationCallerForRuntime(
-        authenticated.caller.runtime.id
-      ) !== authenticated.authorizedBy
+      this.deps.runtimeCoordinator?.resolveAuthorizerForRuntime(authenticated.caller.runtime.id) !==
+        authenticated.authorizedBy
     )
       return null;
     return authenticated;
@@ -4900,7 +4905,7 @@ export class RpcServer {
       const workerdDispatchSecret = this.workerdDispatchSecret;
       const callerPanelId =
         callerKind === "panel"
-          ? (this.deps.runtimeCoordinator?.getLease(callerId)?.slotId ?? undefined)
+          ? this.deps.runtimeCoordinator?.panelIdentityForRuntime(callerId)
           : undefined;
       const transportCaller = this.withLiveRuntimeRelationships(
         relayCallerScope?.authenticatedCaller ??
@@ -5060,7 +5065,7 @@ export class RpcServer {
     const authenticatedCaller = authenticatedCallerOf(caller);
     const callerPanelId =
       caller.runtime.kind === "panel"
-        ? (this.deps.runtimeCoordinator?.getLease(caller.runtime.id)?.slotId ?? undefined)
+        ? this.deps.runtimeCoordinator?.panelIdentityForRuntime(caller.runtime.id)
         : undefined;
     const authorization = await this.directDOAuthorization({
       caller: invocationCaller,

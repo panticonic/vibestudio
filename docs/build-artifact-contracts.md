@@ -390,11 +390,14 @@ The npm preflight retains its canonical `npm pack` archive after staging,
 dry-run, and fresh-install smoke checks succeed. Its artifact name includes the
 exact source SHA and run attempt; its receipt records package identity, archive
 length, and SHA-256. Publication may reuse that archive from the matching
-successful CI run after all release gates succeed. Run the `npm-server-publish`
-workflow with the release tag, source SHA, and successful candidate run ID. It
-revalidates the protected-main run and release tag, downloads the artifact by its
-GitHub ID and digest, and passes the receipt's explicit source and version to the
-shared publisher. A local recovery can use `pnpm publish:server-npm --
+successful CI run after all release gates succeed. The release workflow invokes
+`npm-server-publish` as soon as its exact draft exists, in parallel with platform
+asset attachment; final release publication waits for npm success. The reusable
+workflow validates the numeric release ID, tag, protected-main run, and source,
+downloads the artifact by its GitHub ID and digest, and passes the receipt's
+explicit source and version to the shared publisher. It can also be dispatched
+with those four identifiers to resume publication. A local recovery can use
+`pnpm publish:server-npm --
 --candidate-receipt PATH --candidate-source-sha SHA --candidate-version VERSION`
 with the same explicit identity. The publisher checks the archive length,
 SHA-256, link types, and installed package manifest.

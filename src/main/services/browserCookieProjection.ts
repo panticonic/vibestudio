@@ -340,10 +340,10 @@ export function createBrowserCookieProjectionService(deps: {
             log.error(`Browser recovery failed: ${messageOf(error)}`)
           );
       });
-      const stopExtension = events.on("extensions:status" as EventName, (payload) => {
-        const state = payload as { name?: string; status?: string } | undefined;
-        if (deps.brokerPackageName && state?.name !== deps.brokerPackageName) return;
-        if (state?.status === "running" || state?.status === "available")
+      const stopExtension = events.on("supervision:changed", (change) => {
+        if (change.identity.kind !== "extension") return;
+        if (deps.brokerPackageName && change.identity.entityId !== deps.brokerPackageName) return;
+        if (change.status === "running")
           void recoverAfterReadiness().catch((error) =>
             log.error(`Browser recovery failed: ${messageOf(error)}`)
           );
@@ -361,7 +361,7 @@ export function createBrowserCookieProjectionService(deps: {
         stopExtension();
         stopHealth();
       };
-      for (const event of ["extensions:status", "server-health"] as EventName[]) {
+      for (const event of ["supervision:changed", "server-health"] as EventName[]) {
         void events
           .subscribe(event)
           .catch((error) => log.warn(`Browser readiness watch unavailable: ${messageOf(error)}`));

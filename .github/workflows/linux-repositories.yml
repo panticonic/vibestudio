@@ -47,6 +47,8 @@ jobs:
             --pattern '*.deb' --pattern '*.rpm' --pattern '*.pkg.tar.zst' --pattern SHA256SUMS-linux
           printf 'Publishing repositories for %s\n' "$tag"
           printf 'assets_url=https://github.com/%s/releases/download/%s\n' "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_OUTPUT"
+          published_at=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json publishedAt --jq .publishedAt)
+          printf 'source_date_epoch=%s\n' "$(date --date="$published_at" +%s)" >> "$GITHUB_OUTPUT"
 
       - name: Verify published installer checksums
         working-directory: release
@@ -71,10 +73,24 @@ jobs:
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
         id: pages
 
+      - name: Preserve metadata reachable through cached DNF indexes
+        id: retention
+        run: |
+          set -euo pipefail
+          deployment_epoch=$(date +%s)
+          python3 scripts/publish/fetch-rpm-repodata.py \
+            "${{ steps.pages.outputs.base_url }}/rpm" previous-rpm "$deployment_epoch" 86400
+          if test -f previous-rpm/repodata/repomd.xml; then
+            gpg --verify previous-rpm/repodata/repomd.xml.asc previous-rpm/repodata/repomd.xml
+          fi
+          printf 'deployment_epoch=%s\n' "$deployment_epoch" >> "$GITHUB_OUTPUT"
+
       - name: Build signed apt and dnf repositories
         env:
           SIGNING_KEY: ${{ vars.LINUX_SIGNING_KEY_ID || 'packages@vibestudio.app' }}
-        run: bash scripts/publish/build-linux-repos.sh release site "${{ steps.pages.outputs.base_url }}" "${{ steps.release.outputs.assets_url }}"
+          SOURCE_DATE_EPOCH: ${{ steps.release.outputs.source_date_epoch }}
+          DEPLOYMENT_EPOCH: ${{ steps.retention.outputs.deployment_epoch }}
+        run: bash scripts/publish/build-linux-repos.sh release site "${{ steps.pages.outputs.base_url }}" "${{ steps.release.outputs.assets_url }}" previous-rpm
 
       - name: Upload the repository site
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0

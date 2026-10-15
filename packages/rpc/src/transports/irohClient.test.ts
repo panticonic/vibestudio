@@ -34,6 +34,7 @@ import {
   IROH_SESSION_OPEN,
   IROH_SESSION_OPEN_RESULT,
   IROH_SESSION_CLOSE,
+  IROH_SESSION_CLOSED,
 } from "../protocol/irohSession.js";
 import type { RpcEnvelope, RpcRequest } from "../types.js";
 import {
@@ -400,9 +401,15 @@ describe("Iroh RPC client over real local QUIC", () => {
     reader.releaseLock();
   });
 
-  it.each(["pipe", "session"] as const)(
-    "rejects session readiness when the %s closes during credential refresh",
-    async (owner) => {
+  it.each([
+    ["pipe", "resolve"],
+    ["session", "resolve"],
+    ["pipe", "cancel"],
+    ["session", "cancel"],
+    ["session", "failure"],
+  ] as const)(
+    "joins %s credential refresh through %s while rejecting readiness immediately",
+    async (owner, finish) => {
       const serverEndpoint = await bind();
       const clientEndpoint = await bind();
       const incomingPromise = serverEndpoint.acceptNext();
@@ -435,15 +442,22 @@ describe("Iroh RPC client over real local QUIC", () => {
       })();
       const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative));
       let releaseToken!: (value: string) => void;
+      let rejectToken!: (error: unknown) => void;
+      let tokenSignal: AbortSignal | undefined;
+      const credentialFailure = new Error("credential provider retirement failed");
       let requestedToken!: () => void;
       const tokenRequested = new Promise<void>((resolve) => {
         requestedToken = resolve;
       });
-      const token = new Promise<string>((resolve) => {
+      const token = new Promise<string>((resolve, reject) => {
         releaseToken = resolve;
+        rejectToken = reject;
       });
       const session = pipe.openSession({
-        getToken: () => {
+        getToken: (signal) => {
+          tokenSignal = signal;
+          if (finish === "cancel")
+            signal?.addEventListener("abort", () => rejectToken(signal.reason), { once: true });
           requestedToken();
           return token;
         },
@@ -451,7 +465,18 @@ describe("Iroh RPC client over real local QUIC", () => {
       const rejected = session.ready?.().catch((reason: unknown) => reason);
       try {
         await tokenRequested;
-        await (owner === "pipe" ? pipe : session).close();
+        const closing = (owner === "pipe" ? pipe : session).close();
+        const closed = vi.fn();
+        const joined = closing.then(
+          () => {
+            closed();
+            return { ok: true as const };
+          },
+          (error: unknown) => {
+            closed();
+            return { ok: false as const, error };
+          }
+        );
         // Readiness settles even while token retrieval remains pending. Vitest
         // also rejects any unhandled rejection from the pending open result.
         const error = await rejected;
@@ -464,6 +489,14 @@ describe("Iroh RPC client over real local QUIC", () => {
           code: "CONNECTION_LOST",
         });
         expect(isRpcConnectionLost(error)).toBe(true);
+        expect(tokenSignal?.aborted).toBe(true);
+        if (finish !== "cancel") expect(closed).not.toHaveBeenCalled();
+        if (finish === "failure") rejectToken(credentialFailure);
+        else releaseToken("expired-credential");
+        const result = await joined;
+        if (finish === "failure") expect(result).toEqual({ ok: false, error: credentialFailure });
+        else expect(result).toEqual({ ok: true });
+        expect(closed).toHaveBeenCalledOnce();
       } finally {
         releaseToken("expired-credential");
         await serverTask;
@@ -471,6 +504,97 @@ describe("Iroh RPC client over real local QUIC", () => {
       }
     }
   );
+
+  it("cancels and joins credential acquisition during logical-session reauthentication", async () => {
+    const serverEndpoint = await bind();
+    const clientEndpoint = await bind();
+    const incomingPromise = serverEndpoint.acceptNext();
+    const connecting = clientEndpoint.connect(serverEndpoint.addr(), [...VIBESTUDIO_IROH_ALPN]);
+    const incoming = await incomingPromise;
+    if (!incoming) throw new Error("server endpoint closed before connection");
+    const accepting = await incoming.accept();
+    const [serverNative, clientNative] = await Promise.all([accepting.connect(), connecting]);
+    configureNodeConnection(serverNative);
+    configureNodeConnection(clientNative);
+    const server = new NodePhysicalConnection(serverNative);
+    const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative));
+    let requestRefresh!: () => void;
+    const refreshing = new Promise<void>((resolve) => {
+      requestRefresh = resolve;
+    });
+    let tokenEntered!: () => void;
+    const tokenPending = new Promise<void>((resolve) => {
+      tokenEntered = resolve;
+    });
+    let refreshSignal: AbortSignal | undefined;
+    let calls = 0;
+    const serverTask = (async () => {
+      const control = await server.acceptBi();
+      await readIrohStreamPreamble(control.recv);
+      await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES);
+      await writeFrame(
+        control.send,
+        encodeIrohSessionControlFrame({
+          t: IROH_SESSION_HELLO,
+          protocolVersion: IROH_WIRE_VERSION,
+          contractVersion: RPC_CONTRACT_VERSION,
+        }),
+        MAX_CONTROL_FRAME_BYTES
+      );
+      const open = decodeIrohSessionControlFrame(
+        await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES)
+      );
+      if (open.t !== IROH_SESSION_OPEN) throw new Error("Expected session open");
+      await writeFrame(
+        control.send,
+        encodeIrohSessionControlFrame({
+          t: IROH_SESSION_OPEN_RESULT,
+          sid: open.sid,
+          success: true,
+          callerId: "terminal-test",
+        }),
+        MAX_CONTROL_FRAME_BYTES
+      );
+      await refreshing;
+      await writeFrame(
+        control.send,
+        encodeIrohSessionControlFrame({
+          t: IROH_SESSION_CLOSED,
+          sid: open.sid,
+          code: 1000,
+          terminal: false,
+          reason: "reauthenticate",
+        }),
+        MAX_CONTROL_FRAME_BYTES
+      );
+      expect(
+        decodeIrohSessionControlFrame(await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES))
+      ).toMatchObject({ t: IROH_SESSION_CLOSE, sid: open.sid });
+    })();
+    const session = pipe.openSession({
+      getToken: (signal) => {
+        if (++calls === 1) return "initial-token";
+        refreshSignal = signal;
+        tokenEntered();
+        return new Promise<string>((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        });
+      },
+    });
+    try {
+      await session.ready?.();
+      requestRefresh();
+      await tokenPending;
+      await session.close();
+      expect(refreshSignal?.aborted).toBe(true);
+      expect(calls).toBe(2);
+      await serverTask;
+    } finally {
+      requestRefresh();
+      await pipe.close();
+      await serverTask;
+    }
+  });
 
   it("exposes response-head timeouts as a structured transient transport error", () => {
     const error = new IrohResponseHeadTimeoutError(20_000);

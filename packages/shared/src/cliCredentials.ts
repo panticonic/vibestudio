@@ -22,7 +22,8 @@ export function parseAgentToken(token: string): ParsedAgentToken | null {
 export type CliStoredPairing = IrohReach;
 
 interface CliDeviceCredentialsBase {
-  schemaVersion: 5;
+  schemaVersion: 6;
+  phase: "workspace";
   kind: "device";
   url: string;
   workspaceId: string;
@@ -45,6 +46,32 @@ export interface CliLocalDeviceCredentials extends CliDeviceCredentialsBase {
 }
 
 export type CliDeviceCredentials = CliIrohDeviceCredentials | CliLocalDeviceCredentials;
+
+interface CliAccountDeviceCredentialsBase {
+  schemaVersion: 6;
+  kind: "device";
+  phase: "account";
+  /** Actual authenticated account-control endpoint, not a workspace route. */
+  url: string;
+  deviceId: string;
+  refreshToken: string;
+  pairedAt: number;
+}
+
+export interface CliLocalAccountCredentials extends CliAccountDeviceCredentialsBase {
+  transport: "local";
+  serverId: string;
+}
+
+export interface CliIrohAccountCredentials extends CliAccountDeviceCredentialsBase {
+  transport: "iroh";
+  endpointSecret: string;
+  controlPairing: CliStoredPairing;
+}
+
+export type CliAccountDeviceCredentials = CliLocalAccountCredentials | CliIrohAccountCredentials;
+export type CliDeviceIdentity = CliDeviceCredentials | CliAccountDeviceCredentials;
+export type CliIdentity = CliDeviceIdentity | CliAgentCredentials;
 
 /** One entity-scoped ordinary CLI login. It never contains or reuses a human
  * device refresh identity; an optional pairing contributes transport reach only. */
@@ -78,6 +105,7 @@ export type CliCredentials = CliDeviceCredentials | CliAgentCredentials;
 
 const DEVICE_KEYS = new Set([
   "schemaVersion",
+  "phase",
   "kind",
   "url",
   "workspaceId",
@@ -145,7 +173,8 @@ export function isCliDeviceCredentials(value: unknown): value is CliDeviceCreden
     workspacePairing?: unknown;
   };
   if (
-    candidate.schemaVersion !== 5 ||
+    candidate.schemaVersion !== 6 ||
+    (value as { phase?: unknown }).phase !== "workspace" ||
     candidate.kind !== "device" ||
     !commonWorkspaceIdentity(candidate) ||
     !isDeviceId(candidate.deviceId) ||
@@ -220,6 +249,81 @@ export function isCliAgentCredentials(value: unknown): value is CliAgentCredenti
 
 export function isCliCredentials(value: unknown): value is CliCredentials {
   return isCliDeviceCredentials(value) || isCliAgentCredentials(value);
+}
+
+export function isCliAccountDeviceCredentials(
+  value: unknown
+): value is CliAccountDeviceCredentials {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const candidate = value as Partial<CliAccountDeviceCredentialsBase> & {
+    transport?: unknown;
+    serverId?: unknown;
+    endpointSecret?: unknown;
+    controlPairing?: unknown;
+  };
+  const keys = new Set([
+    "schemaVersion",
+    "kind",
+    "phase",
+    "url",
+    "deviceId",
+    "refreshToken",
+    "pairedAt",
+    "transport",
+  ]);
+  if (candidate.transport === "local") keys.add("serverId");
+  else {
+    keys.add("endpointSecret");
+    keys.add("controlPairing");
+  }
+  if (
+    Object.keys(value).some((key) => !keys.has(key)) ||
+    candidate.schemaVersion !== 6 ||
+    candidate.kind !== "device" ||
+    candidate.phase !== "account" ||
+    !isDeviceId(candidate.deviceId) ||
+    !isDeviceRefreshToken(candidate.refreshToken) ||
+    !positiveSafeInteger(candidate.pairedAt) ||
+    typeof candidate.url !== "string"
+  )
+    return false;
+  if (candidate.transport === "local") {
+    try {
+      const url = new URL(candidate.url);
+      return (
+        isServerId(candidate.serverId) &&
+        (url.protocol === "http:" || url.protocol === "https:") &&
+        !url.username &&
+        !url.password &&
+        !url.search &&
+        !url.hash &&
+        url.pathname === "/"
+      );
+    } catch {
+      return false;
+    }
+  }
+  return (
+    candidate.transport === "iroh" &&
+    typeof candidate.endpointSecret === "string" &&
+    ENDPOINT_SECRET_PATTERN.test(candidate.endpointSecret) &&
+    isCliStoredPairing(candidate.controlPairing) &&
+    candidate.url === `iroh://${candidate.controlPairing.endpointId}`
+  );
+}
+
+export function isCliIdentity(value: unknown): value is CliIdentity {
+  return isCliCredentials(value) || isCliAccountDeviceCredentials(value);
+}
+
+/** The only old device format accepted is a fully validated routed v5 record. */
+export function migrateCliIdentity(value: unknown): CliIdentity | null {
+  if (isCliIdentity(value)) return value;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const old = value as Record<string, unknown>;
+  if (old["schemaVersion"] !== 5 || old["kind"] !== "device" || "phase" in old) return null;
+  const migrated = { ...old, schemaVersion: 6, phase: "workspace" };
+  return isCliDeviceCredentials(migrated) ? migrated : null;
 }
 
 export function cliCredentialJson(credentials: CliCredentials): string {

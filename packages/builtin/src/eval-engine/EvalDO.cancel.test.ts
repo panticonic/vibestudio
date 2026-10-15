@@ -18,13 +18,14 @@
  * verifies cleanup failures still reach a durable terminal result.
  */
 import { describe, expect, it, vi } from "vitest";
-import { serializeRpcFailure, type RpcFailure } from "@vibestudio/rpc";
+import { serializeRpcFailure, withRpcAbortSignal, type RpcFailure } from "@vibestudio/rpc";
 import { createTestDO, successfulTestRpcFetch } from "@vibestudio/durable/test-utils";
 import type { LifecyclePrepareInput } from "@vibestudio/durable";
 import type { RpcCallOptions, RpcCaller, RpcClient } from "@vibestudio/rpc";
 import {
   executionSessionNonceFor,
   registerRpcWireClient,
+  createRpcWireView,
   wireClientFor,
   type RpcWireClient,
 } from "@vibestudio/rpc/internal";
@@ -89,7 +90,8 @@ function ownedRpc(
   ) => Promise<unknown>,
   overrides: Partial<Pick<RpcWireClient, "stream" | "emit">> = {}
 ): RpcWireClient {
-  return registerRpcWireClient({
+  const client: RpcWireClient = {
+    createView: (options) => createRpcWireView(client, options),
     selfId: "do:test:EvalDO:test-key",
     call,
     stream:
@@ -112,7 +114,8 @@ function ownedRpc(
     ready: vi.fn(async () => undefined),
     onStatusChange: vi.fn(() => () => undefined),
     onRecovery: vi.fn(() => () => undefined),
-  });
+  };
+  return registerRpcWireClient(client);
 }
 
 function mockOwnedCall(
@@ -376,7 +379,10 @@ describe("EvalDO cancellation + forced recovery", () => {
       "activeEvalExecution"
     );
     const contract = { filesystem: { methods: { read: mainRpcMethods["fs.readFile"] } } };
-    for (const caller of [execution.rpc, retained]) {
+    const scope = new AbortController();
+    const executionView = execution.rpc.createView({ mapOptions: (options) => options ?? {} });
+    const retainedView = withRpcAbortSignal(retained, scope.signal);
+    for (const caller of [execution.rpc, retained, executionView, retainedView]) {
       const peer = caller.peer("main").withContract(contract, "filesystem");
       await expect(
         active.run(execution, () => peer.call.read("file.txt", "utf8"))
@@ -387,7 +393,57 @@ describe("EvalDO cancellation + forced recovery", () => {
       );
       result = 42;
     }
-    expect(dispatch).toHaveBeenCalledTimes(4);
+    expect(dispatch).toHaveBeenCalledTimes(8);
+  });
+
+  it("borrows the current cell through a retained view instead of capturing the creating cell", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const dispatch = vi.fn(
+      async (_target: string, _method: string, _args: unknown[], _options?: RpcCallOptions) =>
+        "contents"
+    );
+    mockOwnedCall(instance, dispatch);
+    const createExecution = priv<
+      (
+        input: { contextId: string; executionSessionNonce: string },
+        signal: AbortSignal
+      ) => { rpc: RpcWireClient }
+    >(instance, "createExecutionContext");
+    const first = new AbortController();
+    const second = new AbortController();
+    const initial = createExecution.call(
+      instance,
+      { contextId: "first", executionSessionNonce: "first-nonce" },
+      first.signal
+    );
+    const later = createExecution.call(
+      instance,
+      { contextId: "second", executionSessionNonce: "second-nonce" },
+      second.signal
+    );
+    const retained = priv<() => RpcClient>(instance, "createActiveRuntimeRpc").call(instance);
+    const view = withRpcAbortSignal(retained, new AbortController().signal);
+    const active = priv<{ run<T>(store: unknown, callback: () => T): T }>(
+      instance,
+      "activeEvalExecution"
+    );
+    await expect(
+      view.call("main", mainRpcMethods["fs.readFile"], ["file.txt", "utf8"])
+    ).rejects.toThrow("actively executing eval cell");
+    await expect(
+      active.run(initial, () =>
+        view.call("main", mainRpcMethods["fs.readFile"], ["file.txt", "utf8"])
+      )
+    ).resolves.toBe("contents");
+    first.abort(new Error("first cell completed"));
+    await expect(
+      active.run(later, () =>
+        view.call("main", mainRpcMethods["fs.readFile"], ["file.txt", "utf8"])
+      )
+    ).resolves.toBe("contents");
+    const [firstCall, secondCall] = dispatch.mock.calls;
+    expect(executionSessionNonceFor(firstCall?.[3])).toBe("first-nonce");
+    expect(executionSessionNonceFor(secondCall?.[3])).toBe("second-nonce");
   });
 
   it("injects resident delivery registration from the exact EvalDO activation", async () => {
@@ -1540,6 +1596,45 @@ describe("EvalDO cancellation + forced recovery", () => {
     ).toMatchObject({
       status: "approval-route-lost",
       result: { failureCode: "approval-route-lost" },
+    });
+  });
+
+  it("persists a withdrawn approval as cancellation with its lifecycle cause", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    setPriv(instance, "runLocked", () =>
+      Promise.reject(
+        Object.assign(
+          new Error("Approval wait cancelled", { cause: new Error("planned restart") }),
+          {
+            code: "APPROVAL_WAIT_CANCELLED",
+          }
+        )
+      )
+    );
+    seedPendingRun(sql, "approval-withdrawn-run");
+
+    const result = await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      instance,
+      "approval-withdrawn-run"
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      failureKind: "cancelled",
+      failureCode: "eval_cancelled",
+      error: {
+        code: "APPROVAL_WAIT_CANCELLED",
+        cause: expect.objectContaining({ message: "planned restart" }),
+      },
+    });
+    expect(
+      priv<(id: string) => { status: string; result?: RunResult }>(instance, "getRun").call(
+        instance,
+        "approval-withdrawn-run"
+      )
+    ).toMatchObject({
+      status: "done",
+      result: { failureKind: "cancelled", failureCode: "eval_cancelled" },
     });
   });
 

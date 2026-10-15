@@ -1669,6 +1669,31 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
+      entityPatchStateArgs: {
+        website: {
+          kind: "closed",
+          reason:
+            "Storage and lifecycle engine entry points are internal implementation authority.",
+        },
+        capability: "workspace.runtime-state.manage",
+        tier: "gated",
+        session: "family",
+        sensitivity: "write",
+        principals: ["host"],
+        presentation: null,
+        effect: {
+          kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "Storage and lifecycle engine entry points are internal implementation authority.",
+          },
+          capability: "workspace.runtime-state.manage",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
       entityRetire: {
         website: {
           kind: "closed",
