@@ -158,10 +158,16 @@ The prepared Base 0.3.93 publication review contains exactly 29 changed paths
 against upstream `8a7a1113d344baeb9846b5a0fc2de38d7265aa8d`. All 27 old and 28 new
 Git blobs and modes match checked source
 `f543603921778ba0852c5c361809138f206540c3`, including deletion of the obsolete
-Quickfire worker contract. No release has been published: exact release approval
-precedes Base publication, followed by dependent Personal/System releases and
-final installed production measurements. All diagnostic instances and owned
-scratch are retired while waiting; inherited shared caches remain intact.
+Quickfire worker contract. Following the user's exact-release approval, a fresh
+normal authoring review reproduced that same inventory, manifest, source blobs,
+and byte-identical diff before publication. Base 0.3.93 is published at
+`b6a28e2bfb9664059220ae85b64c958c987b32d9` (`refs/tags/v0.3.93`). Its real Git tag
+was fetched normally and the canonical source cache admitted that published
+snapshot from a private local clone, which was then retired. Dependent
+Personal/System release reviews and final installed production measurements
+remain. Earlier diagnostic instances and scratch are retired; the release
+operation currently owns one isolated instance for the dependent reviews.
+Inherited shared caches remain intact.
 
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
