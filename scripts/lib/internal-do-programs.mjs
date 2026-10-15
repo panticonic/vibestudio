@@ -9,11 +9,6 @@ export const INTERNAL_DO_PROGRAM_ENTRIES = Object.freeze(
 );
 const classes = INTERNAL_DO_PROGRAM_ENTRIES.map(({ className }) => className).sort();
 const digest = /^[a-f0-9]{64}$/u;
-const forbidden = [
-  '__require("process")',
-  'require("process")',
-  "throw Error('Dynamic require of \"",
-];
 
 function exactKeys(value, keys, label) {
   if (
@@ -50,6 +45,13 @@ export function readPublishedInternalDoPrograms(input) {
 
 /** The one producer proof, also used by final host artifact publication checks. */
 export function assertInternalDoProgramsPublication(input) {
+  // These checks belong to artifact production, not installed metadata admission.
+  // Keep their executable sentinels out of consumers of readPublishedInternalDoPrograms.
+  const forbidden = [
+    '__require("process")',
+    'require("process")',
+    "throw Error('Dynamic require of \"",
+  ];
   const capture = readPublishedInternalDoPrograms(input);
   for (const [className, program] of Object.entries(capture.programs)) {
     const actual = createHash("sha256").update(program.bundle).digest("hex");

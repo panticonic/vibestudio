@@ -100,6 +100,25 @@ test("immutable consumer admission copies exact finite metadata without a second
     /program collection/
   );
 });
+test("bundled installed admission does not retain producer-only dependency sentinels", async () => {
+  const result = await esbuild.build({
+    stdin: {
+      contents: 'export { readPublishedInternalDoPrograms } from "./internal-do-programs.mjs";',
+      resolveDir: new URL(".", import.meta.url).pathname,
+    },
+    platform: "node",
+    format: "cjs",
+    bundle: true,
+    minify: true,
+    write: false,
+  });
+  const executable = result.outputFiles[0].text;
+  // The unchanged CJS artifact gate must not find producer policy as live
+  // runtime data. Producer validation still rejects it in the tests above.
+  assert(!executable.includes("throw Error('Dynamic require of \""));
+  assert(!executable.includes("forbidden workerd runtime dependency"));
+  assert(executable.includes("Invalid internal DO"));
+});
 test("catalog entrypoints retain dependency-before-lockdown ordering and export one class", () => {
   for (const { className, implementation } of INTERNAL_DO_PROGRAM_ENTRIES) {
     const entry = internalDoEntrypointSource(className);
