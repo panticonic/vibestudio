@@ -1,5 +1,5 @@
 import { formatRpcFailure } from "@vibestudio/rpc";
-import * as path from "path";
+import { normalizePanelSource } from "@vibestudio/shared/pathUtils";
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type {
@@ -10,14 +10,12 @@ import type {
   ThemeAppearance,
 } from "@vibestudio/shared/types";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
-import { loadPanelManifest } from "@vibestudio/shared/panelTypes";
 import { validateStateArgs } from "@vibestudio/shared/stateArgsValidator";
 import { computePanelId, panelIdSegmentFromName } from "@vibestudio/shared/panelIdUtils";
 import {
   buildBootstrapConfig,
   browserSourceFromHostname,
   generateContextId,
-  resolveSource,
 } from "@vibestudio/shared/panelFactory";
 import {
   browserUrlFromPanelSource,
@@ -44,6 +42,7 @@ import { normalizePanelTitle } from "@vibestudio/shared/panel/title";
 import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 import type { PanelEntityId, PanelSlotId } from "@vibestudio/shared/panel/idValues";
 import type {
+  PanelMetadata,
   PanelMetadataClient,
   RuntimeClient,
   SlotHistoryRow,
@@ -56,6 +55,11 @@ import {
 import { aboutPanelSource, isAboutSource } from "@vibestudio/workspace-contracts/aboutNamespace";
 
 const log = createDevLogger("PanelManager");
+
+/** A source is a portable workspace identifier, not a local filesystem path. */
+function panelSourceLabel(source: string): string {
+  return source.replace(/\/+$/u, "").split("/").at(-1) ?? "";
+}
 
 /** A panel lifecycle failure with every causal error, portable to mobile
  * runtimes whose language baseline does not expose `AggregateError`. */
@@ -168,11 +172,10 @@ export interface PanelManagerDeps {
   workspaceState: WorkspaceStateClient;
   runtime: RuntimeClient;
   /** Exact-state panel manifests supplied by the workspace build graph. */
-  panelMetadata?: PanelMetadataClient;
+  panelMetadata: PanelMetadataClient;
   activationClient?: ActivationClient;
   viewState?: LocalPanelViewStateStore;
   serverInfo: PanelManagerServerInfo;
-  workspacePath: string;
   workspaceConfig?: WorkspaceConfig;
   allowMissingManifests?: boolean;
   /**
@@ -202,10 +205,7 @@ export class PanelManager {
   private readonly registry: PanelRegistry;
   private readonly workspaceState: WorkspaceStateClient;
   private readonly runtime: RuntimeClient;
-  private readonly panelMetadataByRef = new Map<
-    string,
-    { icon?: string; iconVersion?: string; iconState?: string } | null
-  >();
+  private readonly panelMetadataByRef = new Map<string, PanelMetadata | null>();
   private readonly panelMetadataFlights = new Map<string, Promise<void>>();
   /**
    * Durable panel detail reads mutate the resident projection. Keep those
@@ -214,11 +214,10 @@ export class PanelManager {
    * independent.
    */
   private readonly panelDetailTransactions = new Map<PanelSlotId, Promise<unknown>>();
-  private readonly panelMetadata?: PanelMetadataClient;
+  private readonly panelMetadata: PanelMetadataClient;
   private readonly activationClient?: ActivationClient;
   private readonly viewState?: LocalPanelViewStateStore;
   private readonly serverInfo: PanelManagerServerInfo;
-  private readonly workspacePath: string;
   private readonly workspaceConfig?: WorkspaceConfig;
   private readonly allowMissingManifests: boolean;
   private readonly grantConnectionImpl?: (panelId: PanelEntityId) => Promise<{ token: string }>;
@@ -263,7 +262,6 @@ export class PanelManager {
     this.activationClient = deps.activationClient;
     this.viewState = deps.viewState;
     this.serverInfo = deps.serverInfo;
-    this.workspacePath = deps.workspacePath;
     this.workspaceConfig = deps.workspaceConfig;
     this.allowMissingManifests = deps.allowMissingManifests ?? false;
     this.grantConnectionImpl = deps.grantConnection;
@@ -394,7 +392,7 @@ export class PanelManager {
     if (opts?.parentId) await this.requireStoredPanel(opts.parentId);
     const workspaceState = clients?.workspaceState ?? this.workspaceState;
     const runtime = clients?.runtime ?? this.runtime;
-    const { relativePath } = resolveSource(source, this.workspacePath);
+    const relativePath = normalizePanelSource(source);
     const allowMissing = Boolean(opts?.contextId) || this.allowMissingManifests;
     const manifest = await this.resolveManifest(
       relativePath,
@@ -1299,10 +1297,10 @@ export class PanelManager {
       try {
         return new URL(source.slice("browser:".length)).hostname;
       } catch {
-        return path.basename(source);
+        return panelSourceLabel(source);
       }
     }
-    return path.basename(source) || slotId;
+    return panelSourceLabel(source) || slotId;
   }
 
   private async replaceHistoryAtCurrent(
@@ -1404,7 +1402,7 @@ export class PanelManager {
       });
     }
 
-    const { relativePath } = resolveSource(source, this.workspacePath);
+    const relativePath = normalizePanelSource(source);
     const manifest = await this.resolveManifest(
       relativePath,
       this.allowMissingManifests,
@@ -1444,40 +1442,20 @@ export class PanelManager {
     privileged?: boolean;
     placement?: PanelPlacementHint;
   }> {
-    if (panelMetadata) {
-      const metadata = await panelMetadata.getPanelMetadata(relativePath, ref);
-      if (metadata) {
-        const manifest = {
-          title: metadata.title,
-          stateArgs: metadata.stateArgs,
-          autoArchiveWhenEmpty: metadata.autoArchiveWhenEmpty,
-          placement: metadata.placement,
-          privileged: isAboutSource(relativePath),
-        };
-        this.manifestCache.set(this.manifestCacheKey(relativePath, ref), manifest);
-        return manifest;
-      }
-      if (allowMissing) return { title: path.basename(relativePath) };
-      throw new Error(`Failed to load manifest for ${relativePath}: panel unit not found`);
-    }
-
-    try {
-      const { absolutePath } = resolveSource(relativePath, this.workspacePath);
-      const manifest = loadPanelManifest(absolutePath);
-      const resolved = {
-        ...manifest,
-        // Privileged is gated purely by location: any unit under about/. (No `shell`
-        // flag — an about page is a normal panel that lives in about/.)
+    const metadata = await panelMetadata.getPanelMetadata(relativePath, ref);
+    if (metadata) {
+      const manifest = {
+        title: metadata.title,
+        stateArgs: metadata.stateArgs,
+        autoArchiveWhenEmpty: metadata.autoArchiveWhenEmpty,
+        placement: metadata.placement,
         privileged: isAboutSource(relativePath),
       };
-      this.manifestCache.set(this.manifestCacheKey(relativePath, ref), resolved);
-      return resolved;
-    } catch (error) {
-      if (allowMissing) {
-        return { title: path.basename(relativePath) };
-      }
-      throw new Error(`Failed to load manifest for ${relativePath}: ${formatRpcFailure(error)}`);
+      this.manifestCache.set(this.manifestCacheKey(relativePath, ref), manifest);
+      return manifest;
     }
+    if (allowMissing) return { title: panelSourceLabel(relativePath) };
+    throw new Error(`Failed to load manifest for ${relativePath}: panel unit not found`);
   }
 
   private manifestCacheKey(source: string, ref?: string): string {
@@ -1489,18 +1467,7 @@ export class PanelManager {
     const cached = [...this.manifestCache.entries()].find(([key]) =>
       key.startsWith(`${source}\u0000`)
     )?.[1];
-    if (cached) return cached;
-    try {
-      const { absolutePath } = resolveSource(source, this.workspacePath);
-      const manifest = loadPanelManifest(absolutePath);
-      return {
-        ...manifest,
-        // Privileged is gated purely by location: any unit under about/.
-        privileged: isAboutSource(source),
-      };
-    } catch {
-      return null;
-    }
+    return cached ?? null;
   }
 
   private async resolveTitle(
@@ -1532,7 +1499,6 @@ export class PanelManager {
 
   /** Hydrate derived chrome without blocking panel reads or runtime startup. */
   refreshPanelDecoration(panelId: string): void {
-    if (!this.panelMetadata) return;
     const panel = this.registry.getPanel(panelId);
     if (!panel) return;
     const snapshot = getCurrentSnapshot(panel);
@@ -1557,13 +1523,10 @@ export class PanelManager {
     }
     if (this.panelMetadataFlights.has(key)) return;
 
-    const flight = this.panelMetadata!.getPanelMetadata(source, ref)
+    const flight = this.panelMetadata
+      .getPanelMetadata(source, ref)
       .then((value) => {
-        const metadata = (value ?? null) as {
-          icon?: string;
-          iconVersion?: string;
-          iconState?: string;
-        } | null;
+        const metadata = value ?? null;
         this.panelMetadataByRef.set(key, metadata);
         if (!metadata) return;
         // One manifest identity can decorate multiple slots. Apply the shared
@@ -1591,7 +1554,7 @@ export class PanelManager {
     source: string,
     ref: string,
     buildKey: string | null,
-    metadata: { icon?: string; iconVersion?: string; iconState?: string }
+    metadata: PanelMetadata
   ): void {
     this.applyPanelMetadata(panel.id, source, ref, buildKey, metadata);
     for (const child of panel.children)
@@ -1603,7 +1566,7 @@ export class PanelManager {
     source: string,
     ref: string,
     buildKey: string | null,
-    metadata: { icon?: string; iconVersion?: string; iconState?: string }
+    metadata: PanelMetadata
   ): void {
     const current = this.registry.getPanel(panelId);
     if (!current) return;
@@ -1611,6 +1574,16 @@ export class PanelManager {
     const currentRef = getPanelRef(current) ?? `ctx:${snapshot.contextId}`;
     if (snapshot.source !== source || currentRef !== ref || (current.buildKey ?? null) !== buildKey)
       return;
+    // Late metadata belongs to this exact active identity. Retain the full
+    // manifest for future lifecycle resolutions, without replacing the
+    // durable/custom display title owned by the current panel projection.
+    this.manifestCache.set(this.manifestCacheKey(source, ref), {
+      title: metadata.title,
+      stateArgs: metadata.stateArgs,
+      autoArchiveWhenEmpty: metadata.autoArchiveWhenEmpty,
+      placement: metadata.placement,
+      privileged: isAboutSource(source),
+    });
     this.registry.updateIconDecoration(panelId, metadata);
   }
 

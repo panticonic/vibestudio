@@ -52,7 +52,6 @@ export function createShellCore(deps: {
   call: ShellServiceCall;
   viewState?: LocalPanelViewStateStore;
   serverInfo: PanelManagerServerInfo;
-  workspacePath: string;
   workspaceConfig?: WorkspaceConfig;
   allowMissingManifests?: boolean;
   /** Optional Base composition of raw topology with workspace.presentation facts. */
@@ -75,7 +74,6 @@ export function createShellCore(deps: {
         },
       },
       viewState: deps.viewState,
-      workspacePath: deps.workspacePath,
       allowMissingManifests: deps.allowMissingManifests,
       workspaceConfig: deps.workspaceConfig,
       serverInfo: deps.serverInfo,

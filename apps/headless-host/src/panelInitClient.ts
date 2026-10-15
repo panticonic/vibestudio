@@ -54,7 +54,6 @@ export class PanelInitClient {
       runtime,
       viewState: { load: () => ({ collapsedIds: [] }), save: () => undefined },
       panelMetadata: createPanelMetadataClient(callService),
-      workspacePath: "",
       allowMissingManifests: true,
       serverInfo: { gatewayConfig: { serverUrl } },
       grantConnection: (entityId) =>

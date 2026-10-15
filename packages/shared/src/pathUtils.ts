@@ -10,6 +10,13 @@ export function normalizeRelativePanelPath(
   panelPath: string,
   workspaceRoot: string
 ): { relativePath: string; absolutePath: string } {
+  const relativePath = normalizePanelSource(panelPath);
+  const root = workspaceRoot.replaceAll("\\", "/").replace(/\/+$/u, "");
+  return { relativePath, absolutePath: `${root}/${relativePath}` };
+}
+
+/** Validate a workspace source identifier without requiring a disk checkout. */
+export function normalizePanelSource(panelPath: string): string {
   const portable = panelPath.replaceAll("\\", "/");
   if (portable.startsWith("/") || /^[A-Za-z]:\//u.test(portable)) {
     throw new Error("Panel path must be relative to the workspace root");
@@ -32,8 +39,5 @@ export function normalizeRelativePanelPath(
     throw new Error(`Invalid panel path (must stay within workspace): ${panelPath}`);
   }
 
-  const root = workspaceRoot.replaceAll("\\", "/").replace(/\/+$/u, "");
-  const absolutePath = `${root}/${normalized}`;
-
-  return { relativePath: normalized, absolutePath };
+  return normalized;
 }

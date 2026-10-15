@@ -4,7 +4,6 @@ import type { ServerClient } from "../serverClient.js";
 
 export function createElectronShellCore(deps: {
   workspaceId: string;
-  workspacePath: string;
   allowMissingManifests?: boolean;
   registry: PanelRegistry;
   serverClient: ServerClient;
@@ -14,7 +13,6 @@ export function createElectronShellCore(deps: {
   const { panelManager } = createShellCore({
     registry: deps.registry,
     call: (service, method, args) => deps.serverClient.call(service, method, args),
-    workspacePath: deps.workspacePath,
     allowMissingManifests: deps.allowMissingManifests,
     workspaceConfig: deps.workspaceConfig,
     serverInfo: {

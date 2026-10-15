@@ -2,9 +2,16 @@
  * Tests for normalizeRelativePanelPath.
  */
 
-import { normalizeRelativePanelPath } from "./pathUtils.js";
+import { normalizePanelSource, normalizeRelativePanelPath } from "./pathUtils.js";
 
 const WORKSPACE = "/home/user/workspace";
+
+it("normalizes source identity without a local workspace checkout", () => {
+  expect(normalizePanelSource("./panels\\nested/../chat/")).toBe("panels/chat");
+  for (const source of ["", ".", "/etc/passwd", "C:\\Windows", "../escape"]) {
+    expect(() => normalizePanelSource(source)).toThrow();
+  }
+});
 
 describe("normalizeRelativePanelPath", () => {
   it("normalizes a simple relative path", () => {

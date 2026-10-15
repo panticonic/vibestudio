@@ -3,6 +3,8 @@ import * as os from "os";
 import * as path from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
+import { loadPanelManifest } from "@vibestudio/shared/panelTypes";
+import { resolveSource } from "@vibestudio/shared/panelFactory";
 import { getCurrentSnapshot } from "@vibestudio/shared/panel/accessors";
 import { applyStateArgsMergePatch, decodePanelStateArgs } from "@vibestudio/shared/panelStateArgs";
 import { PanelLifecycleAggregateError, PanelManager } from "./panelManager.js";
@@ -318,9 +320,7 @@ function createWorkspaceMemory() {
     },
     async patchCurrentStateArgs(slotId, patch) {
       const slot = slots.get(slotId);
-      const row = (history.get(slotId) ?? []).find(
-        (r) => r.entry_key === slot?.current_entry_key
-      );
+      const row = (history.get(slotId) ?? []).find((r) => r.entry_key === slot?.current_entry_key);
       if (!row) throw new Error(`Panel not found: ${slotId}`);
       const next = applyStateArgsMergePatch(decodePanelStateArgs(row.state_args), patch);
       row.state_args = stringifyStateArgs(next);
@@ -497,7 +497,15 @@ function makeManagerDeps(workspacePath: string) {
     deps: {
       workspaceState: mem.workspaceState,
       runtime: mem.runtime,
-      workspacePath,
+      // A genuine host metadata adapter: filesystem ownership stays outside
+      // the platform-neutral panel lifecycle, just as RPC owns it in clients.
+      panelMetadata: {
+        async getPanelMetadata(source: string) {
+          const { absolutePath } = resolveSource(source, workspacePath);
+          if (!fs.existsSync(path.join(absolutePath, "package.json"))) return null;
+          return { ...loadPanelManifest(absolutePath), source };
+        },
+      },
       serverInfo: { gatewayConfig: { serverUrl: "http://127.0.0.1:42773" } },
       grantConnection: vi.fn(async (panelId: PanelEntityId) => ({ token: `rpc-${panelId}` })),
     } as const,
@@ -505,6 +513,66 @@ function makeManagerDeps(workspacePath: string) {
 }
 
 describe("PanelManager", () => {
+  it("retains late exact metadata for lifecycle titles without replacing durable custom titles", async () => {
+    const sourceRegistry = new PanelRegistry({ workspaceId: "workspace-test" });
+    const { deps } = makeManagerDeps("/unused");
+    const creator = new PanelManager({
+      registry: sourceRegistry,
+      ...deps,
+      allowMissingManifests: true,
+    });
+    const created = await creator.create("panels/chat", {
+      addAsRoot: true,
+      isRoot: true,
+      ref: "event:chat",
+    });
+    const originalGetDetail = deps.workspaceState.getPanelDetail.bind(deps.workspaceState);
+    let durableTitle: string | undefined = "My conversation";
+    vi.spyOn(deps.workspaceState, "getPanelDetail").mockImplementation(async (slotId) => {
+      const detail = await originalGetDetail(slotId);
+      return detail
+        ? { ...detail, slot: { ...detail.slot, current_entity_title: durableTitle } }
+        : null;
+    });
+    let complete!: (metadata: import("./workspaceStateClient.js").PanelMetadata) => void;
+    const getPanelMetadata = vi.fn(
+      () =>
+        new Promise<import("./workspaceStateClient.js").PanelMetadata>((resolve) => {
+          complete = resolve;
+        })
+    );
+    const registry = new PanelRegistry({ workspaceId: "workspace-test" });
+    const reader = new PanelManager({ registry, ...deps, panelMetadata: { getPanelMetadata } });
+
+    await reader.getPanel(created.panelId);
+    expect(registry.getPanel(created.panelId)?.title).toBe("My conversation");
+    complete({ source: "panels/chat", title: "Chat manifest", icon: "💬" });
+    await vi.waitFor(() => expect(registry.getPanel(created.panelId)?.icon).toBe("💬"));
+    expect(registry.getPanel(created.panelId)?.title).toBe("My conversation");
+    await reader.refreshPanel(created.panelId);
+    expect(registry.getPanel(created.panelId)?.title).toBe("My conversation");
+    durableTitle = undefined;
+    await reader.refreshPanel(created.panelId);
+    expect(registry.getPanel(created.panelId)?.title).toBe("Chat manifest");
+    expect(getPanelMetadata).toHaveBeenCalledTimes(1);
+  });
+
+  it("propagates the metadata owner's original failure even when missing manifests are allowed", async () => {
+    const { deps } = makeManagerDeps("/unused");
+    const failure = new Error("exact-state metadata unavailable");
+    const manager = new PanelManager({
+      registry: new PanelRegistry({ workspaceId: "workspace-test" }),
+      ...deps,
+      allowMissingManifests: true,
+      panelMetadata: {
+        getPanelMetadata: async () => {
+          throw failure;
+        },
+      },
+    });
+    await expect(manager.create("panels/chat", { isRoot: true })).rejects.toBe(failure);
+  });
+
   it("hydrates shared exact-reference icons without blocking reads or decorating a navigated slot", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test" });
     const { deps } = makeManagerDeps("/unused");
@@ -759,8 +827,7 @@ describe("PanelManager", () => {
     const detailRead = vi
       .spyOn(deps.workspaceState, "getPanelDetail")
       .mockImplementation(
-        () =>
-          new Promise<NonNullable<typeof durableDetail>>((resolve) => responses.push(resolve))
+        () => new Promise<NonNullable<typeof durableDetail>>((resolve) => responses.push(resolve))
       );
 
     const first = projectedManager.refreshPanel(created.panelId);
@@ -799,9 +866,7 @@ describe("PanelManager", () => {
       [firstPanel.panelId, await originalGetPanelDetail(firstPanel.panelId)],
       [secondPanel.panelId, await originalGetPanelDetail(secondPanel.panelId)],
     ]);
-    type PanelDetail = NonNullable<
-      Awaited<ReturnType<WorkspaceStateClient["getPanelDetail"]>>
-    >;
+    type PanelDetail = NonNullable<Awaited<ReturnType<WorkspaceStateClient["getPanelDetail"]>>>;
     const responses = new Map<PanelSlotId, (detail: PanelDetail) => void>();
     const detailRead = vi.spyOn(deps.workspaceState, "getPanelDetail").mockImplementation(
       (slotId) =>

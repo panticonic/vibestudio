@@ -36,7 +36,6 @@ export function createDesktopWorkspaceController(deps: {
   });
   const core = createElectronShellCore({
     workspaceId: connection.workspaceId,
-    workspacePath: connection.workspacePath,
     allowMissingManifests: connection.connectionMode === "remote",
     registry,
     serverClient: connection.serverClient,
