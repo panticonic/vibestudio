@@ -132,47 +132,6 @@ describe("CapabilityGrantStore agent authority", () => {
     grants.close();
   });
 
-  it("counts only exact prior interactive approvals for standing-scope eligibility", () => {
-    const grants = store("history");
-    const base = {
-      effect: "allow" as const,
-      capability: "workspace.gateway.access",
-      resource: { kind: "origin" as const, origin: "https://example.com" },
-      subject: "session:task-one" as const,
-      issuedBy: "user:alice",
-      provenance: "acquisition" as const,
-      constraints: {
-        sessionId: "task-one",
-        agentBindingId: "binding:news",
-      },
-    };
-    grants.issue({
-      ...base,
-      scope: "once",
-      constraints: { ...base.constraints, invocationDigest: "one" },
-    });
-    grants.issue({
-      ...base,
-      scope: "task",
-      constraints: { ...base.constraints, taskRef: "task:one" },
-    });
-    grants.issue({
-      ...base,
-      resource: { kind: "origin", origin: "https://other.example" },
-      scope: "once",
-      constraints: { ...base.constraints, invocationDigest: "other" },
-    });
-
-    expect(
-      grants.priorInteractiveApprovalCount({
-        agentBindingId: "binding:news",
-        capability: base.capability,
-        resource: base.resource,
-      })
-    ).toBe(2);
-    grants.close();
-  });
-
   it("suspends idle standing grants, restores them explicitly, and reports withdrawal", () => {
     const grants = store("hygiene");
     const withdrawn: string[] = [];

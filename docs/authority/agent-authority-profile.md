@@ -263,11 +263,11 @@ The `agent`-scope choice appears on a card when all hold:
   receiver contract, reviewed with the ledger);
 - the request's lineage class is `none`, **or** the card explicitly states
   the class the grant would cover (§3) — a lineage-bearing "Always" is
-  allowed but never ambient;
-- for methods of workspace services whose own manifest requests `sharing`,
-  `accounts`, or network-egress capability: the user has already approved
-  the same (capability, resource) at least twice
-  ([domain-vocabulary.md](domain-vocabulary.md) §5.9).
+  allowed but never ambient.
+
+Eligible sharing, account, and network requests offer this choice on the first
+explicit decision. Requiring repeated approvals before offering a reusable
+grant adds friction without changing the authority the user ultimately reviews.
 
 ## 6. Hygiene (grants must not outlive attention)
 

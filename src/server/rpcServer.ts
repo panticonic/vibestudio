@@ -4616,18 +4616,8 @@ export class RpcServer {
           : {}),
         irreversible: policyFor(leaf.capability).irreversible,
         agentScopeEligible: standingAgentScopeEligible({
-          capability: leaf.capability,
           tier: leaf.tier,
           policy: policyFor(leaf.capability),
-          domain: workspaceAuthority?.presentation.domain ?? "computer",
-          priorInteractiveApprovals:
-            leaf.context.executionSession?.agentBinding?.bindingId === undefined
-              ? 0
-              : (this.deps.capabilityGrantStore?.priorInteractiveApprovalCount({
-                  agentBindingId: leaf.context.executionSession.agentBinding.bindingId,
-                  capability: leaf.capability,
-                  resource: { kind: "exact", key: leaf.resourceKey },
-                }) ?? 0),
         }),
         executionMode:
           leaf.context.executionSession?.mode ?? (leaf.context.testPolicy ? "test" : undefined),

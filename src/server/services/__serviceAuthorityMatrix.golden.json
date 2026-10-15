@@ -5566,6 +5566,24 @@
                   ]
                 },
                 "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
             ]
           }
@@ -5972,6 +5990,24 @@
                   ]
                 },
                 "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
             ]
           }
@@ -6082,6 +6118,24 @@
                       "kind": "capability",
                       "principal": "website",
                       "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
                     },
                     {
                       "kind": "relationship",
@@ -6539,6 +6593,24 @@
                   ]
                 },
                 "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
             ]
           }
@@ -6767,6 +6839,24 @@
                       "kind": "capability",
                       "principal": "website",
                       "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
                     },
                     {
                       "kind": "relationship",
@@ -7291,6 +7381,24 @@
                       "kind": "capability",
                       "principal": "website",
                       "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
                     },
                     {
                       "kind": "relationship",
@@ -8033,6 +8141,24 @@
                       "kind": "capability",
                       "principal": "website",
                       "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
                     },
                     {
                       "kind": "relationship",
@@ -18666,6 +18792,24 @@
                   ]
                 },
                 "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
             ]
           }
@@ -18775,6 +18919,24 @@
                   ]
                 },
                 "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
             ]
           }
@@ -18876,6 +19038,24 @@
                       "kind": "capability",
                       "principal": "website",
                       "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
                     },
                     {
                       "kind": "relationship",
@@ -19918,6 +20098,24 @@
                   ]
                 },
                 "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
               }
             ]
           }
@@ -20237,6 +20435,24 @@
                       "kind": "capability",
                       "principal": "website",
                       "capability": "filesystem.list"
+                    },
+                    {
+                      "kind": "relationship",
+                      "name": "workspace-member"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              },
+              {
+                "capability": "filesystem.read",
+                "requirement": {
+                  "kind": "all",
+                  "requirements": [
+                    {
+                      "kind": "capability",
+                      "principal": "website",
+                      "capability": "filesystem.read"
                     },
                     {
                       "kind": "relationship",

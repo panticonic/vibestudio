@@ -168,11 +168,6 @@ export interface OrdinaryAuthorityAcquirer {
   }>;
   consume(grantId: string): boolean;
   touch?(grantId: string): boolean;
-  priorInteractiveApprovalCount?(input: {
-    agentBindingId: string;
-    capability: string;
-    resource: ResourceScope;
-  }): number;
   invalidate(inputs: readonly AttachedHostAcquisitionInput[]): void;
 }
 
@@ -217,15 +212,6 @@ export function attachedHostAwareAuthorityAcquirer(
       : {}),
     consume: (grantId) => ordinary.consume(grantId),
     ...(ordinary.touch ? { touch: (grantId: string) => ordinary.touch!(grantId) } : {}),
-    ...(ordinary.priorInteractiveApprovalCount
-      ? {
-          priorInteractiveApprovalCount: (input: {
-            agentBindingId: string;
-            capability: string;
-            resource: ResourceScope;
-          }) => ordinary.priorInteractiveApprovalCount!(input),
-        }
-      : {}),
     invalidate: (inputs) => ordinary.invalidate(inputs),
   };
 }

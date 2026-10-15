@@ -811,11 +811,6 @@ export type AuthorityAcquirer = {
   }>;
   consume(grantId: string): boolean;
   touch?(grantId: string): boolean;
-  priorInteractiveApprovalCount?(input: {
-    agentBindingId: string;
-    capability: string;
-    resource: ResourceScope;
-  }): number;
   invalidate(inputs: readonly AuthorityAcquisitionRequest[]): void;
 };
 
@@ -2026,18 +2021,8 @@ export class ServiceDispatcher {
           : {}),
         irreversible: receiverPolicy.irreversible,
         agentScopeEligible: standingAgentScopeEligible({
-          capability,
           tier: reviewedTier,
           policy: receiverPolicy,
-          domain: challenge?.authorityVocabulary?.domain,
-          priorInteractiveApprovals:
-            resolved.context.executionSession?.agentBinding?.bindingId === undefined
-              ? 0
-              : (this.authorityAcquirer?.priorInteractiveApprovalCount?.({
-                  agentBindingId: resolved.context.executionSession.agentBinding.bindingId,
-                  capability,
-                  resource: { kind: "exact", key: resourceKey },
-                }) ?? 0),
         }),
         executionMode:
           resolved.context.executionSession?.mode ??

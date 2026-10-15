@@ -133,6 +133,20 @@ describe("connected website file consent", () => {
     rmSync(root, { recursive: true, force: true });
   });
 
+  it("requests repository read consent for both filesystem browsing and file reads", async () => {
+    for (const [method, path] of [
+      ["readdir", "projects/demo/src"],
+      ["stat", "projects/demo/src/a.txt"],
+      ["readFile", "projects/demo/src/b.txt"],
+    ]) {
+      await expect(call(method!, [path])).rejects.toMatchObject({ code: "EACQUIRE" });
+      expect(requested.at(-1)).toMatchObject({
+        resource: { kind: "prefix", prefix: "workspace-path/projects/demo/" },
+        snapshot: { capability: "filesystem.read" },
+        presentation: { title: "Read /projects/demo/?" },
+      });
+    }
+  });
   it("asks separately for the workspace structure and file contents", async () => {
     await expect(call("readdir", ["/"])).rejects.toMatchObject({ code: "EACQUIRE" });
     expect(requested.at(-1)).toMatchObject({

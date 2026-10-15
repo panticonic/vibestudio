@@ -770,28 +770,6 @@ export class CapabilityGrantStore {
     ).map(rowToGrant);
   }
 
-  priorInteractiveApprovalCount(input: {
-    agentBindingId: string;
-    capability: string;
-    resource: ResourceScope;
-  }): number {
-    const row = this.db
-      .prepare(
-        `SELECT COUNT(*) AS count FROM authority_grants
-         WHERE effect='allow' AND provenance='acquisition'
-           AND agent_binding_id=? AND capability=?
-           AND resource_key=? AND resource_scope=?
-           AND scope IN ('once','task')`
-      )
-      .get(
-        input.agentBindingId,
-        input.capability,
-        resourceKeyOf(input.resource),
-        input.resource.kind
-      ) as { count: SQLOutputValue };
-    return Number(row.count);
-  }
-
   listActiveAuthorityGrants(now = Date.now()): AuthorityGrant[] {
     return (
       this.db
