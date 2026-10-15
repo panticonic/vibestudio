@@ -5,7 +5,7 @@ import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 export function createNativeModelScopeRpc() {
   const scopes = new Set<string>();
   const closed: string[] = [];
-  const rpc: RpcCaller = {
+  const rpc: Pick<RpcCaller, "call"> = {
     call: (target, method, args) =>
       method.invoke(args, async (parsed) => {
         if (target !== "main") throw new Error(`Unexpected scope target: ${target}`);
@@ -22,9 +22,6 @@ export function createNativeModelScopeRpc() {
         }
         throw new Error(`Unexpected model scope operation: ${method.name}`);
       }),
-    stream: async () => {
-      throw new Error("No model scope stream is expected");
-    },
   };
   return { rpc, inspect: () => ({ open: [...scopes], closed: [...closed] }) };
 }
