@@ -1,11 +1,12 @@
 import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
 import { describe, expect, it, vi } from "vitest";
 import { HeadlessHost } from "./headlessHost.js";
-import type { HeadlessHostConfig, HeadlessHostServerConnection } from "./config.js";
+import type { HeadlessHostConfig } from "./config.js";
 import { LeaseTracker } from "@vibestudio/shared/panel/leaseTracker";
 import type { PanelRuntimeLease } from "@vibestudio/shared/panel/panelLease";
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
-import { encodeEventWatchRecord } from "@vibestudio/shared/events";
+import { encodeEventWatchRecord, type EventName } from "@vibestudio/shared/events";
+import type { DecodedFramedStream } from "@vibestudio/rpc";
 
 function config(): HeadlessHostConfig {
   return {
@@ -126,27 +127,30 @@ describe("HeadlessHost lifecycle guards", () => {
         }
         return undefined;
       }),
-      stream: vi.fn(
+      streamReadable: vi.fn(
         async (
           _target: string,
           _method: string,
           args: unknown[],
           options?: { signal?: AbortSignal; bodyIdleTimeoutMs?: number | null }
-        ) =>
-          new Response(
-            new ReadableStream({
-              start(controller) {
-                controller.enqueue(
-                  encodeEventWatchRecord({
-                    kind: "watching",
-                    events: args[0] as never,
-                    epoch: "test-epoch",
-                  })
-                );
-                options?.signal?.addEventListener("abort", () => controller.close());
-              },
-            })
-          )
+        ): Promise<DecodedFramedStream> => ({
+          status: 200,
+          statusText: "OK",
+          headers: [],
+          finalUrl: "",
+          body: new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(
+                encodeEventWatchRecord({
+                  kind: "watching",
+                  events: args[0] as EventName[],
+                  epoch: "test-epoch",
+                })
+              );
+              options?.signal?.addEventListener("abort", () => controller.close());
+            },
+          }),
+        })
       ),
     });
     const close = vi.fn(async () => undefined);
@@ -154,7 +158,7 @@ describe("HeadlessHost lifecycle guards", () => {
       ...config(),
       auth: { kind: "injected" },
       connectionFactory: async () => ({
-        rpc: rpc as unknown as HeadlessHostServerConnection["rpc"],
+        rpc,
         getToken: () => "token",
         onResubscribe: (handler) => {
           recover = handler;
@@ -189,7 +193,7 @@ describe("HeadlessHost lifecycle guards", () => {
       [host.registration],
       undefined
     );
-    expect(rpc.stream).toHaveBeenCalledWith(
+    expect(rpc.streamReadable).toHaveBeenCalledWith(
       "main",
       "events.watch",
       [["panel:runtimeLeaseChanged", "runtime:contextRemoved"], expect.any(String)],
@@ -224,7 +228,7 @@ describe("HeadlessHost lifecycle guards", () => {
       [{ ...host.registration, loadOnLeaseAssignment: false }],
       undefined,
     ]);
-    expect(rpc.stream).toHaveBeenCalledTimes(2);
+    expect(rpc.streamReadable).toHaveBeenCalledTimes(2);
     expect(reconcile).toHaveBeenCalledTimes(2);
     await host.stop("test");
     expect(close).toHaveBeenCalled();

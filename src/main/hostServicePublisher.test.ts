@@ -1,4 +1,5 @@
-import { schemaRpcClient, type RpcWireClient as RpcClient } from "@vibestudio/rpc/internal";
+import { schemaRpcClient, wireClientFor } from "@vibestudio/rpc/internal";
+import { schemaRpcClientMock } from "@vibestudio/rpc/test-utils";
 import { StreamResponseSchema } from "@vibestudio/shared/streamResponse";
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
@@ -69,12 +70,10 @@ describe("desktop host-service publication", () => {
 
   it("rejects direct workspace callers before entering a published host method", async () => {
     let exposed: ((request: RpcRequestContext) => unknown | Promise<unknown>) | undefined;
-    const rpc = {
-      expose: (_method: string, handler: typeof exposed) => {
-        exposed = handler;
-      },
-      stream: vi.fn(),
-    } as unknown as RpcClient;
+    const rpc = wireClientFor(schemaRpcClientMock({ call: vi.fn() }, "main"));
+    rpc.expose = (_method, handler) => {
+      exposed = handler;
+    };
     const handler = vi.fn(() => "ok");
     exposeServerOriginatedHostMethod(rpc, "desktopProbe.inspect", handler);
 
@@ -136,12 +135,10 @@ describe("desktop host-service publication", () => {
     dispatcher.registerService(definition);
     dispatcher.markInitialized();
     let stream!: import("@vibestudio/rpc").RpcContextStreamingHandler;
-    const rpc = {
-      exposeStreaming: (_method: string, handler: typeof stream) => {
-        stream = handler;
-      },
-      stream: vi.fn(),
-    } as unknown as RpcClient;
+    const rpc = wireClientFor(schemaRpcClientMock({ call: vi.fn() }, "main"));
+    rpc.exposeStreaming = (_method, handler) => {
+      stream = handler;
+    };
     const exposeHostMethod = vi.fn();
     publishHostService(
       {
@@ -180,12 +177,10 @@ describe("desktop host-service publication", () => {
 
   it("cancels the underlying progress stream on transport cancellation", async () => {
     let stream!: import("@vibestudio/rpc").RpcContextStreamingHandler;
-    const rpc = {
-      exposeStreaming: (_method: string, handler: typeof stream) => {
-        stream = handler;
-      },
-      stream: vi.fn(),
-    } as unknown as RpcClient;
+    const rpc = wireClientFor(schemaRpcClientMock({ call: vi.fn() }, "main"));
+    rpc.exposeStreaming = (_method, handler) => {
+      stream = handler;
+    };
     const cancel = vi.fn();
     exposeServerOriginatedHostStream(
       rpc,

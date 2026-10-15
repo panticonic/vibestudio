@@ -37,6 +37,69 @@ export async function inspectPresentedDesktopDocuments({ BaseWindow, BrowserWind
       .filter(({ contents, presented }) => presented() && ready(contents))
       .map(({ contents }) => ({ id: contents.id, url: contents.getURL() }));
 
+  // Serialized once into the presented renderer for both observation and action.
+  // The static bootstrap marker alone is not a pending review.
+  const launchGate = (expectedHtml) => {
+    const card = document.querySelector(
+      'main[data-bootstrap-mode="approval"] #approvals .approval[role="group"][aria-labelledby="launch-gate-title"]'
+    );
+    if (
+      !card ||
+      card.querySelector("#launch-gate-title")?.textContent !== "Start this workspace?" ||
+      !card.querySelector("#launch-gate-summary")?.textContent?.trim()
+    )
+      return null;
+    const button = card.querySelector("button.primary");
+    const review = {
+      html: card.outerHTML,
+      actionable:
+        button instanceof HTMLButtonElement &&
+        !button.disabled &&
+        button.textContent?.trim() === "Start",
+    };
+    if (expectedHtml !== undefined) {
+      if (!review.actionable || review.html !== expectedHtml) return { ...review, clicked: false };
+      button.click();
+      return { ...review, clicked: true };
+    }
+    return review;
+  };
+
+  const pairingConfirmation = (expected) => {
+    const card = [
+      ...document.querySelectorAll(
+        'main[data-bootstrap-mode="connection"] #approvals .connection-option.connection-form'
+      ),
+    ].find((item) => item.querySelector(".title")?.textContent === "Connect to this server?");
+    if (!card) return null;
+    const endpointId = card
+      .querySelector("code")
+      ?.textContent?.replaceAll(":", "")
+      .trim()
+      .toLowerCase();
+    if (!/^[a-f0-9]{64}$/u.test(endpointId ?? "")) return null;
+    const button = card.querySelector("button.primary");
+    const review = {
+      html: card.outerHTML,
+      endpointId,
+      actionable:
+        button instanceof HTMLButtonElement &&
+        !button.disabled &&
+        button.textContent?.trim() === "Trust and connect",
+    };
+    if (expected) {
+      if (
+        !review.actionable ||
+        review.html !== expected.html ||
+        review.endpointId !== expected.endpointId
+      )
+        return { ...review, clicked: false };
+      button.click();
+      return { ...review, clicked: true };
+    }
+    return review;
+  };
+
   const read = async ({ contents, presented }, script) => {
     if (!presented() || !ready(contents)) return undefined;
     const url = contents.getURL();
@@ -62,6 +125,17 @@ export async function inspectPresentedDesktopDocuments({ BaseWindow, BrowserWind
     }
   };
 
+  if (request.kind === "start-launch-gate" || request.kind === "confirm-pairing") {
+    const candidate = candidates.get(request.id);
+    if (!candidate || candidate.contents.getURL() !== request.url) return false;
+    const expression =
+      request.kind === "start-launch-gate"
+        ? `(${launchGate.toString()})(${JSON.stringify(request.html)})`
+        : `(${pairingConfirmation.toString()})(${JSON.stringify({ html: request.html, endpointId: request.endpointId })})`;
+    const result = await read(candidate, expression);
+    return result?.clicked === true;
+  }
+
   if (request.kind === "snapshots") {
     const snapshots = [];
     for (const candidate of candidates.values()) {
@@ -71,14 +145,15 @@ export async function inspectPresentedDesktopDocuments({ BaseWindow, BrowserWind
         const text = document.body?.innerText ?? "";
         const buttons = Array.from(document.querySelectorAll("button"))
           .map((button) => button.textContent?.trim() ?? "").filter(Boolean);
-        const hasLaunchGateApproval = Boolean(document.querySelector('[data-bootstrap-launch-gate="true"]'))
-          && buttons.some((label) => /^(Trust and (start|connect)|Approve and (start|connect)|Deny)$/i.test(label));
+        const launchGateReview = (${launchGate.toString()})();
+        const hasLaunchGateApproval = Boolean(launchGateReview);
+        const pairingReview = (${pairingConfirmation.toString()})();
         const hasHostedShellChrome = Boolean(
           document.querySelector('[data-shell-top-chrome="titlebar"]')
           || document.querySelector(".titlebar-breadcrumb-scroll")
           || document.querySelector('[aria-label="Menu"]')
           || document.querySelector('[data-hosted-shell="true"]'));
-        return {text: text.slice(0, 3000), buttons, hasLaunchGateApproval, hasHostedShellChrome};
+        return {text: text.slice(0, 3000), buttons, hasLaunchGateApproval, launchGateReview, pairingReview, hasHostedShellChrome};
       })()`
       );
       if (dom !== undefined) {
@@ -98,7 +173,7 @@ export async function inspectPresentedDesktopDocuments({ BaseWindow, BrowserWind
     const priority = await read(
       candidate,
       `(() => {
-      if (document.querySelector('[data-bootstrap-launch-gate="true"]')) return 0;
+      if ((${launchGate.toString()})()) return 0;
       if (document.querySelector('[data-shell-top-chrome="titlebar"]')
         || document.querySelector(".titlebar-breadcrumb-scroll")
         || document.querySelector('[aria-label="Menu"]')) return 2;

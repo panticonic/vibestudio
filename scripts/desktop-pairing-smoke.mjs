@@ -769,10 +769,11 @@ async function readMainProcessErrors(app) {
   );
 }
 
-async function waitForDesktopShell(app, timeoutMs) {
+async function waitForDesktopShell(app, timeoutMs, pairingEndpointId = null) {
   const deadlineMs = Date.now() + timeoutMs;
   let lastSnapshots = [];
   let clickedApprovals = 0;
+  let paired = false;
   while (Date.now() < deadlineMs) {
     const snapshots = await collectShellSnapshots(app);
     lastSnapshots = snapshots;
@@ -792,10 +793,37 @@ async function waitForDesktopShell(app, timeoutMs) {
       return { snapshots, hostView, clickedApprovals };
     }
 
-    if (snapshots.some((snapshot) => snapshot.hasLaunchGateApproval)) {
-      const clicked = await clickDesktopButton(
+    const pairing = snapshots.find((snapshot) => snapshot.pairingReview?.actionable);
+    if (pairing && !paired) {
+      if (!pairingEndpointId || pairing.pairingReview.endpointId !== pairingEndpointId)
+        throw new Error("Desktop pairing confirmation does not match this smoke's owned invite");
+      paired = await evaluateElectron(
         app,
-        /^(Trust and (start|connect)|Approve and (start|connect))$/i
+        inspectPresentedDesktopDocuments,
+        {
+          kind: "confirm-pairing",
+          id: pairing.id,
+          url: pairing.url,
+          html: pairing.pairingReview.html,
+          endpointId: pairingEndpointId,
+        },
+        "confirming the owned desktop server invite"
+      );
+      if (paired)
+        console.log("[desktop-smoke] Confirmed the owned Iroh server through the pairing UI");
+    }
+    const review = snapshots.find((snapshot) => snapshot.launchGateReview?.actionable);
+    if (review && clickedApprovals === 0) {
+      const clicked = await evaluateElectron(
+        app,
+        inspectPresentedDesktopDocuments,
+        {
+          kind: "start-launch-gate",
+          id: review.id,
+          url: review.url,
+          html: review.launchGateReview.html,
+        },
+        "starting the reviewed desktop workspace"
       );
       if (clicked) {
         clickedApprovals += 1;
@@ -2803,7 +2831,11 @@ async function main(parentOwnerSignal) {
       desktopEnvironment,
       registerDesktopApp
     );
-    const result = await waitForDesktopShell(electronApp, options.launchTimeoutMs);
+    const result = await waitForDesktopShell(
+      electronApp,
+      options.launchTimeoutMs,
+      parsed.endpointId
+    );
     const panels = await getPanelTree(electronApp).catch(() => []);
     const dismissedRemotePane = await dismissConnectionDialog(electronApp);
     if (dismissedRemotePane) console.log("[desktop-smoke] Dismissed Remote server pane");
@@ -3064,6 +3096,8 @@ async function main(parentOwnerSignal) {
       await runSharedMemberRevocation({
         ownerApp: electronApp,
         launchMember: async (memberDeepLink) => {
+          const memberInvite = parseConnectLink(memberDeepLink);
+          if (memberInvite.kind !== "ok") throw new Error("Shared member invite is invalid");
           const memberRoot = await fsp.mkdtemp(path.join(tempRoot, "member-"));
           const environment =
             process.platform === "darwin"
@@ -3082,7 +3116,11 @@ async function main(parentOwnerSignal) {
             environment,
             registerDesktopApp
           );
-          await waitForDesktopShell(member, Math.max(1000, deadlineMs - Date.now()));
+          await waitForDesktopShell(
+            member,
+            Math.max(1000, deadlineMs - Date.now()),
+            memberInvite.endpointId
+          );
           await dismissConnectionDialog(member);
           await waitForShellOverlayCleared(member, Math.max(1000, deadlineMs - Date.now()));
           return member;

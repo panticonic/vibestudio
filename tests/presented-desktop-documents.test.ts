@@ -25,6 +25,11 @@ class Contents extends EventEmitter {
   destroyed = false;
   loading = false;
   reads = 0;
+  reviewMode = "approval";
+  reviewTitle = "Start this workspace?";
+  reviewSummary = "Vibestudio needs to run 1 program on this computer";
+  reviewHtml = '<article class="approval">checked source</article>';
+  endpointId = "a".repeat(64);
   fail: (() => never) | undefined;
   constructor(
     readonly id: number,
@@ -54,12 +59,44 @@ class Contents extends EventEmitter {
       HTMLButtonElement: Button,
       document: {
         body: { innerText: this.surface },
-        querySelector: (selector: string) =>
-          (this.surface === "bootstrap" && selector.includes("data-bootstrap-launch-gate")) ||
-          (this.surface === "shell" && selector.includes("data-shell-top-chrome"))
-            ? {}
-            : null,
-        querySelectorAll: () => [this.button],
+        querySelector: (selector: string) => {
+          if (
+            this.surface === "bootstrap" &&
+            this.reviewMode === "approval" &&
+            selector.includes('main[data-bootstrap-mode="approval"]')
+          )
+            return {
+              outerHTML: this.reviewHtml,
+              querySelector: (inner: string) => {
+                if (inner === "#launch-gate-title") return { textContent: this.reviewTitle };
+                if (inner === "#launch-gate-summary") return { textContent: this.reviewSummary };
+                if (inner === "button.primary") return this.button;
+                return null;
+              },
+            };
+          return this.surface === "shell" && selector.includes("data-shell-top-chrome") ? {} : null;
+        },
+        querySelectorAll: (selector: string) => {
+          if (selector === "button") return [this.button];
+          if (
+            this.surface === "pairing" &&
+            this.reviewMode === "connection" &&
+            selector.includes('main[data-bootstrap-mode="connection"]')
+          )
+            return [
+              {
+                outerHTML: this.reviewHtml,
+                querySelector: (inner: string) => {
+                  if (inner === ".title") return { textContent: this.reviewTitle };
+                  if (inner === "code")
+                    return { textContent: this.endpointId.match(/.{1,2}/g)?.join(":") };
+                  if (inner === "button.primary") return this.button;
+                  return null;
+                },
+              },
+            ];
+          return [];
+        },
       },
     });
   }
@@ -129,7 +166,7 @@ it("never executes the blank window or hidden/prewarmed/unattached documents whi
 });
 
 it("includes real bootstrap BrowserWindow, shell, panel, and nested overlay exactly once in serializable snapshots", async () => {
-  const bootstrap = new Contents(1, "data:text/html,bootstrap", new Button("Deny"), "bootstrap");
+  const bootstrap = new Contents(1, "file:///owned/index.html", new Button("Start"), "bootstrap");
   const shell = new Contents(2, "https://shell.invalid", new Button("Menu"), "shell");
   const panel = new Contents(5, "https://panel.invalid");
   const overlay = new Contents(7, "https://overlay.invalid");
@@ -161,6 +198,117 @@ it("preserves bootstrap review priority and does not click the covered panel fir
     )
   ).toBe(true);
   expect(bootstrap.button.clicks).toBe(1);
+  expect(panel.button.clicks).toBe(0);
+});
+
+it("starts only the same presented review card through the serialized current DOM action", async () => {
+  const bootstrap = new Contents(1, "file:///owned/index.html", new Button("Start"), "bootstrap");
+  const panel = new Contents(2, "https://panel.invalid", new Button("Start"));
+  const runtime = electron([window(undefined, [view(panel)]), window(bootstrap)]);
+  const serialized = runInNewContext(`(${inspectPresentedDesktopDocuments.toString()})`);
+  const snapshots = await serialized(runtime, { kind: "snapshots" });
+  const review = snapshots.find((item: { id: number }) => item.id === bootstrap.id);
+  expect(review.launchGateReview.actionable).toBe(true);
+  expect(
+    await serialized(runtime, {
+      kind: "start-launch-gate",
+      id: review.id,
+      url: review.url,
+      html: review.launchGateReview.html,
+    })
+  ).toBe(true);
+  expect(bootstrap.button.clicks).toBe(1);
+  expect(panel.button.clicks).toBe(0);
+  expect(bootstrap.listenerCount("did-start-navigation")).toBe(0);
+});
+
+it("distinguishes an actionable review, its in-flight decision, and bootstrap without review", async () => {
+  const bootstrap = new Contents(1, "file:///owned/index.html", new Button("Start"), "bootstrap");
+  const runtime = electron([window(bootstrap)]);
+  const snapshot = async () =>
+    (await inspectPresentedDesktopDocuments(runtime, { kind: "snapshots" }))[0];
+  expect((await snapshot()).launchGateReview?.actionable).toBe(true);
+  bootstrap.button.disabled = true;
+  Object.defineProperty(bootstrap.button, "textContent", { value: "Starting..." });
+  expect((await snapshot()).hasLaunchGateApproval).toBe(true);
+  expect((await snapshot()).launchGateReview?.actionable).toBe(false);
+  bootstrap.reviewMode = "connection";
+  expect((await snapshot()).hasLaunchGateApproval).toBe(false);
+});
+
+it.each([
+  "matching invite",
+  "other endpoint",
+  "changed card",
+  "changed URL",
+  "disabled",
+  "approval mode",
+  "wrong title",
+])("pairs only the owned current server confirmation: %s", async (change) => {
+  const pairing = new Contents(
+    1,
+    "file:///owned/index.html",
+    new Button("Trust and connect"),
+    "pairing"
+  );
+  pairing.reviewMode = "connection";
+  pairing.reviewTitle = "Connect to this server?";
+  const panel = new Contents(2, "https://panel.invalid", new Button("Trust and connect"));
+  const runtime = electron([window(pairing), window(undefined, [view(panel)])]);
+  const serialized = runInNewContext(`(${inspectPresentedDesktopDocuments.toString()})`);
+  const snapshot = (await serialized(runtime, { kind: "snapshots" }))[0];
+  expect(snapshot.hasLaunchGateApproval).toBe(false);
+  expect(snapshot.pairingReview.endpointId).toBe(pairing.endpointId);
+  const request = {
+    kind: "confirm-pairing",
+    id: pairing.id,
+    url: pairing.url,
+    html: snapshot.pairingReview.html,
+    endpointId: pairing.endpointId,
+  };
+  if (change === "other endpoint") request.endpointId = "b".repeat(64);
+  if (change === "changed card") pairing.reviewHtml = "changed server";
+  if (change === "changed URL") pairing.url = "file:///other/index.html";
+  if (change === "disabled") pairing.button.disabled = true;
+  if (change === "approval mode") pairing.reviewMode = "approval";
+  if (change === "wrong title") pairing.reviewTitle = "Unrelated consent";
+  expect(await serialized(runtime, request)).toBe(change === "matching invite");
+  expect(pairing.button.clicks).toBe(change === "matching invite" ? 1 : 0);
+  expect(panel.button.clicks).toBe(0);
+  expect(pairing.listenerCount("did-start-navigation")).toBe(0);
+});
+
+it.each([
+  "changed card",
+  "changed URL",
+  "disabled",
+  "starting",
+  "wrong title",
+  "missing summary",
+  "connection",
+  "unpresented",
+])("never falls through to another Start button for a %s review", async (change) => {
+  const bootstrap = new Contents(1, "file:///owned/index.html", new Button("Start"), "bootstrap");
+  const panel = new Contents(2, "https://panel.invalid", new Button("Start"));
+  const bootstrapWindow = window(bootstrap);
+  const runtime = electron([window(undefined, [view(panel)]), bootstrapWindow]);
+  const request = {
+    kind: "start-launch-gate",
+    id: bootstrap.id,
+    url: bootstrap.url,
+    html: bootstrap.reviewHtml,
+  };
+  if (change === "changed card") bootstrap.reviewHtml = "different source";
+  if (change === "changed URL") bootstrap.url = "file:///other/index.html";
+  if (change === "disabled") bootstrap.button.disabled = true;
+  if (change === "starting")
+    Object.defineProperty(bootstrap.button, "textContent", { value: "Starting..." });
+  if (change === "wrong title") bootstrap.reviewTitle = "Unrelated approval";
+  if (change === "missing summary") bootstrap.reviewSummary = "";
+  if (change === "connection") bootstrap.reviewMode = "connection";
+  if (change === "unpresented") bootstrapWindow.isVisible = () => false;
+  expect(await inspectPresentedDesktopDocuments(runtime, request)).toBe(false);
+  expect(bootstrap.button.clicks).toBe(0);
   expect(panel.button.clicks).toBe(0);
 });
 
