@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   internalDOExecutionArtifacts,
   internalDOExecutionIdentity,
   INTERNAL_DO_CLASSES,
+  InternalDOPrograms,
 } from "./internalDoLoader.js";
 import { verifyExecutionArtifactRef } from "@vibestudio/shared/execution/retention";
 import { internalDoProgramsForFixture } from "../../../tests/fixtures/internalDoPrograms.js";
@@ -10,6 +11,38 @@ import { internalDoProgramsForFixture } from "../../../tests/fixtures/internalDo
 const bundle = internalDoProgramsForFixture;
 
 describe("internalDOExecutionIdentity", () => {
+  it("fixture publication restores the existing global after consumer failure", () => {
+    const descriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "__VIBESTUDIO_INTERNAL_DO_PROGRAMS__"
+    );
+    const failure = new Error("original installed admission failure");
+    const read = vi.spyOn(InternalDOPrograms, "readInstalled").mockImplementation(() => {
+      throw failure;
+    });
+    try {
+      expect(() => bundle()).toThrow(failure);
+      expect(
+        Object.getOwnPropertyDescriptor(globalThis, "__VIBESTUDIO_INTERNAL_DO_PROGRAMS__")
+      ).toEqual(descriptor);
+    } finally {
+      read.mockRestore();
+    }
+  });
+
+  it("fixture publication cannot replace an active hub snapshot coordinate", () => {
+    const key = "VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH";
+    const prior = process.env[key];
+    process.env[key] = "/owned/hub/internal-do-programs.json";
+    try {
+      expect(() => bundle()).toThrow(/cannot replace an active hub snapshot/);
+      expect(process.env[key]).toBe("/owned/hub/internal-do-programs.json");
+    } finally {
+      if (prior === undefined) delete process.env[key];
+      else process.env[key] = prior;
+    }
+  });
+
   it("seals exact bundle bytes, class entrypoint, and reviewed authority", () => {
     const evalDo = internalDOExecutionIdentity(bundle(), "EvalDO");
     const workspace = internalDOExecutionIdentity(bundle(), "WorkspaceDO");

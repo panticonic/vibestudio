@@ -7,9 +7,7 @@ import { domainHash, parseSha256 } from "@vibestudio/shared/execution/identity";
 import {
   INTERNAL_DO_PROGRAMS_FILE,
   readPublishedInternalDoPrograms,
-  captureInternalDoPrograms,
   type PublishedInternalDoPrograms,
-  type CompiledInternalDoProgram,
 } from "../../../scripts/lib/internal-do-programs.mjs";
 import {
   executionArtifactDigest,
@@ -104,13 +102,6 @@ export class InternalDOPrograms {
         )
       )
     );
-  }
-
-  /** Producer/test fixtures enter through the same compiler-output proof. */
-  static fromCompiler(
-    compiled: Readonly<Record<string, CompiledInternalDoProgram>>
-  ): InternalDOPrograms {
-    return new InternalDOPrograms(captureInternalDoPrograms(compiled));
   }
 
   get(className: string): InternalDOProgram {

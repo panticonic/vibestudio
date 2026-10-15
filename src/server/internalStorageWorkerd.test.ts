@@ -13,7 +13,8 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import { DODispatch } from "./doDispatch.js";
-import { INTERNAL_DO_SOURCE, InternalDOPrograms } from "./internalDOs/internalDoLoader.js";
+import { INTERNAL_DO_SOURCE, type InternalDOPrograms } from "./internalDOs/internalDoLoader.js";
+import { internalDoProgramsFromCompiler } from "../../tests/fixtures/internalDoPrograms.js";
 import {
   internalDoBuildOptions,
   internalDoCompilerOutputs,
@@ -106,7 +107,7 @@ beforeAll(async () => {
     esbuild.build({ ...internalDoBuildOptions(), logLevel: "silent" }),
     buildWorkerdPrograms({ write: false }),
   ]);
-  compiledInternalDOPrograms = InternalDOPrograms.fromCompiler(
+  compiledInternalDOPrograms = internalDoProgramsFromCompiler(
     internalDoCompilerOutputs(internalDoBuild)
   );
   compiledWorkerdPrograms = programs;

@@ -20,6 +20,37 @@ const compiled = () =>
     ])
   );
 
+test("the actual installed CJS loader excludes producer-only payload proof and dependency policy", async () => {
+  const result = await esbuild.build({
+    entryPoints: ["src/server/internalDOs/internalDoLoader.ts"],
+    bundle: true,
+    platform: "node",
+    format: "cjs",
+    target: "node24",
+    external: ["electron"],
+    write: false,
+    minify: true,
+    logLevel: "silent",
+  });
+  const source = result.outputFiles[0].text;
+  for (const producerOnly of [
+    "must export only its reviewed class",
+    "compiler output inventory",
+    "forbidden workerd runtime dependency",
+    "does not match its exact bytes",
+    'Dynamic require of \\"',
+    'require("process")',
+  ])
+    assert(
+      !source.includes(producerOnly),
+      `Installed loader retained producer-only code: ${producerOnly}`
+    );
+  assert(
+    source.includes("vibestudio/internal-do-recipe/v1"),
+    "Canonical class-bound runtime identity remains present"
+  );
+});
+
 test("the real host compiler recipe publishes exactly the four isolated class entrypoints", async () => {
   const [options] = groupBuildArtifacts([internalDoBuildOptions({ minify: true })]);
   const result = await esbuild.build(options);
