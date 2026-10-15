@@ -225,6 +225,29 @@ The normal packaging wrapper consumed its after-pack completion witness and
 retired its staging tree. No external cache-copy job or verifier-cache seeding
 was used. This verifies release production and reuse, not launch latency.
 
+Archive inventory inspection then found a packaging-boundary defect before
+timing the installed app. The first resulting application occupied 13 GB;
+its ASAR contained 10,335,872,742 packed bytes from archived host generations
+alone. The runtime-script closure transform had converted each ordered string
+pattern into an independent electron-builder FileSet, turning exclusions into
+separate union members. Explicit exclusions therefore did not remove archived
+host generations or source Node distributions. A separate source-package
+projection also copied a nested development Electron installation. Root
+dependency-store leakage was investigated but was not the cause: the actual
+ASAR inventory contained no root `.pnpm` subtree. These are measured packaging
+contents, not evidence of startup latency. The corrected transform preserves
+the original string rules across both packaging passes and adds discovered
+script dependencies to that same matcher. A mapped source-package projection
+excludes nested development installs; the ordinary production collector still
+owns dependency versions and destinations. Thirty-two focused cases pass,
+including the real builder's matchers and linked-SDK copy logic, genuine nested
+production dependencies, source/type exports, architecture exclusions, and
+second-pass idempotence. The oversized diagnostic application was retired after
+all archive readers joined and an independent process-reference audit passed;
+its bounded inventory and original release proof remain. The corrected package
+must pass the normal complete release-consumer gate before the final installed
+measurement.
+
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
 release artifacts or a reason to retain workspace databases and dependency trees.
