@@ -82,8 +82,8 @@ describe("update delivery", () => {
     ).toBeNull();
   });
 
-  it("runs each package manager as root without a nested privilege prefix", () => {
-    for (const owner of ["deb", "rpm", "pacman"] as const) {
+  it("runs each configured repository manager as root without a nested privilege prefix", () => {
+    for (const owner of ["deb", "rpm"] as const) {
       const command = linuxUpgradeCommandFor({
         manager: owner,
         name: owner === "rpm" ? "Vibestudio" : "vibestudio",
@@ -95,6 +95,10 @@ describe("update delivery", () => {
       expect(command.argv.join(" ")).toMatch(/-y|--noconfirm/u);
     }
     expect(linuxUpgradeCommandFor(null)).toBeNull();
+  });
+
+  it("does not invent an update channel for a directly installed Arch package", () => {
+    expect(linuxUpgradeCommandFor({ manager: "pacman", name: "vibestudio" })).toBeNull();
   });
 
   it("targets the installed RPM identity without changing its case", () => {

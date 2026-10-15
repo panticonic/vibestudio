@@ -2,10 +2,10 @@ name: Release
 
 # Dispatch against an exact commit and requested version. Every enabled native
 # candidate and its acceptance must pass before the workflow creates the tag.
-# Nothing here publishes to npm; the headless server uses the separately
-# dispatched npm-server-publish workflow after this release is public. That
-# workflow consumes this run's exact protected candidate, so registry failures
-# resume without rebuilding unrelated application artifacts.
+# The headless server publishes from this run's exact protected npm candidate in
+# parallel with installer attachment. The release remains a draft until npm and
+# every enabled platform publication succeed. The same reusable workflow can be
+# dispatched independently to resume a failed registry operation without rebuilds.
 #   - vars.RELEASE_LINUX = 'true'  → deb/rpm/pacman, plus the signed apt and
 #     dnf repositories on GitHub Pages after this workflow succeeds
 #     (needs build-resources icons and LINUX_SIGNING_KEY)
@@ -32,6 +32,10 @@ on:
 # Jobs opt into only the token authority they need. Artifact upload/download uses
 # GitHub's run-scoped artifact token, not a repository-write GITHUB_TOKEN.
 permissions: {}
+
+concurrency:
+  group: release-${{ inputs.release-tag }}
+  cancel-in-progress: false
 
 jobs:
   validate-release-input:
@@ -157,16 +161,24 @@ jobs:
             sudo install -d -m 0755 /etc/apt/keyrings
             curl -fsSL https://panticonic.github.io/vibestudio/gpg.key \
               | sudo tee /etc/apt/keyrings/vibestudio.asc > /dev/null
-            echo "deb [signed-by=/etc/apt/keyrings/vibestudio.asc] https://panticonic.github.io/vibestudio/apt stable main" \
+            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/vibestudio.asc] https://panticonic.github.io/vibestudio/apt stable main" \
               | sudo tee /etc/apt/sources.list.d/vibestudio.list
             sudo apt update && sudo apt install vibestudio
             ```
 
-            **Fedora / RHEL / openSUSE** — updates arrive with `dnf upgrade`.
+            **Fedora / RHEL** — updates arrive with `dnf upgrade`.
 
             ```sh
             sudo rpm --import https://panticonic.github.io/vibestudio/gpg.key
-            sudo dnf config-manager --add-repo https://panticonic.github.io/vibestudio/rpm
+            sudo tee /etc/yum.repos.d/vibestudio.repo <<'REPO'
+            [vibestudio]
+            name=Vibestudio
+            baseurl=https://panticonic.github.io/vibestudio/rpm
+            enabled=1
+            gpgcheck=1
+            repo_gpgcheck=1
+            gpgkey=https://panticonic.github.io/vibestudio/gpg.key
+            REPO
             sudo dnf install Vibestudio
             ```
 
@@ -193,7 +205,7 @@ jobs:
             if the package repository is still behind, the app tells you instead of
             claiming the update succeeded. After a package upgrade, choose **Restart now**.
 
-            **Arch, or any distro without a repository** — the `.pkg.tar.zst`, `.rpm` and
+            **openSUSE, Arch, or any distro without a repository** — the `.pkg.tar.zst`, `.rpm` and
             `.deb` files below install directly. Every packaged format carries the AppArmor
             profile that a workspace sandbox needs on Ubuntu 24.04+.
 
@@ -272,6 +284,14 @@ jobs:
         working-directory: release
         run: sha256sum --check SHA256SUMS-macos
 
+      - name: Verify updater metadata binds the published macOS artifacts
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: >-
+          node scripts/verify-electron-updater-metadata.mjs
+          --receipt release/updater-metadata-macos.json
+          release/latest-mac.yml "$RELEASE_TAG" release/*.dmg release/*.zip
+
       - name: Download Darwin process observer candidate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -326,6 +346,13 @@ jobs:
       - name: Verify installer checksums
         working-directory: release
         run: sha256sum --check SHA256SUMS-windows
+      - name: Verify updater metadata binds the published Windows installer
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: >-
+          node scripts/verify-electron-updater-metadata.mjs
+          --receipt release/updater-metadata-windows.json
+          release/latest.yml "$RELEASE_TAG" release/*.exe
       - name: Attach installer to the release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
@@ -336,14 +363,30 @@ jobs:
             release/latest.yml
             release/SHA256SUMS-windows
 
+  publish-npm:
+    name: Publish verified headless server to npm
+    needs: [github-release, validate-release-input]
+    uses: ./.github/workflows/npm-server-publish.yml
+    with:
+      release-tag: ${{ inputs.release-tag }}
+      release-id: ${{ needs.github-release.outputs.release-id }}
+      source-sha: ${{ inputs.source-sha }}
+      candidate-run-id: ${{ inputs.candidate-run-id }}
+    secrets:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    permissions:
+      actions: read
+      contents: read
+
   publish-release:
     name: Publish the verified release
-    needs: [github-release, publish-linux, publish-macos, publish-windows]
+    needs: [github-release, publish-linux, publish-macos, publish-windows, publish-npm]
     if: >-
       ${{ !cancelled() && needs.github-release.result == 'success'
         && (vars.RELEASE_LINUX != 'true' || needs.publish-linux.result == 'success')
         && (vars.RELEASE_MAC != 'true' || needs.publish-macos.result == 'success')
-        && (vars.RELEASE_WINDOWS != 'true' || needs.publish-windows.result == 'success') }}
+        && (vars.RELEASE_WINDOWS != 'true' || needs.publish-windows.result == 'success')
+        && needs.publish-npm.result == 'success' }}
     runs-on: ubuntu-24.04
     concurrency:
       group: release-latest-promotion

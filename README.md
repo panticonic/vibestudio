@@ -85,16 +85,24 @@ app, replace it in Applications, then reopen it. Homebrew installs offer to run
 sudo install -d -m 0755 /etc/apt/keyrings
 curl -fsSL https://panticonic.github.io/vibestudio/gpg.key \
   | sudo tee /etc/apt/keyrings/vibestudio.asc > /dev/null
-echo "deb [signed-by=/etc/apt/keyrings/vibestudio.asc] https://panticonic.github.io/vibestudio/apt stable main" \
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/vibestudio.asc] https://panticonic.github.io/vibestudio/apt stable main" \
   | sudo tee /etc/apt/sources.list.d/vibestudio.list
 sudo apt update && sudo apt install vibestudio
 ```
 
-**Fedora / RHEL / openSUSE**, updated with `dnf upgrade`:
+**Fedora / RHEL**, updated with `dnf upgrade`:
 
 ```bash
 sudo rpm --import https://panticonic.github.io/vibestudio/gpg.key
-sudo dnf config-manager --add-repo https://panticonic.github.io/vibestudio/rpm
+sudo tee /etc/yum.repos.d/vibestudio.repo <<'REPO'
+[vibestudio]
+name=Vibestudio
+baseurl=https://panticonic.github.io/vibestudio/rpm
+enabled=1
+gpgcheck=1
+repo_gpgcheck=1
+gpgkey=https://panticonic.github.io/vibestudio/gpg.key
+REPO
 sudo dnf install Vibestudio
 ```
 
@@ -102,7 +110,7 @@ sudo dnf install Vibestudio
 [releases page](https://github.com/panticonic/vibestudio/releases/latest). It
 isn't code-signed yet, so SmartScreen will warn you the first time.
 
-**Arch, or any other distro**: the `.pkg.tar.zst`, `.rpm` and `.deb` files on
+**openSUSE, Arch, or any other distro**: the `.pkg.tar.zst`, `.rpm` and `.deb` files on
 the [releases page](https://github.com/panticonic/vibestudio/releases/latest)
 install directly. Every package includes the AppArmor profile the workspace
 sandbox needs on Ubuntu 24.04 and later. `vibestudio remote doctor` tells you
@@ -133,8 +141,10 @@ it. The notification stays until dismissed; a dismissed release stays quiet for
 the rest of that session. On Windows and Developer ID signed macOS builds it
 downloads the release, installs it and restarts. Ad-hoc signed Mac builds offer
 a DMG download or upgrade through Homebrew when Homebrew owns the app. On
-Linux it asks the package manager that owns the installation (`apt`, `dnf` or
-`pacman`) through the system's own password prompt, then offers to restart.
+Linux it asks a configured repository manager that owns the installation
+(`apt` or `dnf`) through the system's own password prompt, then offers to restart.
+Directly installed Arch packages receive the release announcement without an
+invented Pacman repository command.
 Package-manager installs also offer **Copy upgrade command** if you prefer to
 run the upgrade yourself; that remains available when the desktop cannot ask
 for permission. Linux upgrades refresh repository metadata first. Vibestudio

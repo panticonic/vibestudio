@@ -9,6 +9,49 @@ import { execFileSync } from "node:child_process";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+test("APT repository instructions restrict downloads to the native architecture", async () => {
+  const instructionFiles = [
+    "README.md",
+    ".github/workflows/release.yml",
+    "scripts/publish/build-linux-repos.sh",
+  ];
+  let repositoryLines = 0;
+  for (const fileName of instructionFiles) {
+    const source = await fs.readFile(path.join(repositoryRoot, fileName), "utf8");
+    const lines = source
+      .split("\n")
+      .filter(
+        (line) =>
+          line.includes("deb [") &&
+          /(?:panticonic\.github\.io\/vibestudio|\$BASE_URL)\/apt/u.test(line)
+      );
+    assert.equal(lines.length, 1, `${fileName} must contain one APT repository instruction`);
+    assert.match(
+      lines[0],
+      /deb \[arch=\\?\$\(dpkg --print-architecture\) signed-by=\/etc\/apt\/keyrings\/vibestudio\.asc\]/u,
+      `${fileName} must prevent APT from probing configured foreign architectures`
+    );
+    repositoryLines += lines.length;
+  }
+  assert.equal(repositoryLines, instructionFiles.length);
+});
+
+test("RPM repository instructions enable package and metadata signature checks", async () => {
+  const instructionFiles = [
+    "README.md",
+    ".github/workflows/release.yml",
+    "scripts/publish/build-linux-repos.sh",
+  ];
+  for (const fileName of instructionFiles) {
+    const source = await fs.readFile(path.join(repositoryRoot, fileName), "utf8");
+    assert.match(source, /baseurl=(?:https:\/\/panticonic\.github\.io\/vibestudio|\$BASE_URL)\/rpm/u);
+    assert.match(source, /(?:^|\n)\s*gpgcheck=1(?:\n|$)/u);
+    assert.match(source, /(?:^|\n)\s*repo_gpgcheck=1(?:\n|$)/u);
+    assert.match(source, /gpgkey=(?:https:\/\/panticonic\.github\.io\/vibestudio|\$BASE_URL)\/gpg\.key/u);
+    assert.doesNotMatch(source, /config-manager --add-repo/u);
+  }
+});
+
 test("Linux candidate checksums admit native package architecture names and reject incomplete sets", async () => {
   const workflow = await readWorkflow("linux-installer.yml");
   const command = workflow.jobs.candidate.steps
@@ -74,10 +117,17 @@ test("npm publication resumes from the exact protected-main CI artifact", async 
   const workflow = await readWorkflow("npm-server-publish.yml");
   assert.deepEqual(Object.keys(workflow.on.workflow_dispatch.inputs).sort(), [
     "candidate-run-id",
+    "release-id",
     "release-tag",
     "source-sha",
   ]);
+  assert.deepEqual(
+    Object.keys(workflow.on.workflow_call.inputs).sort(),
+    Object.keys(workflow.on.workflow_dispatch.inputs).sort()
+  );
+  assert.equal(workflow.on.workflow_call.secrets.NPM_TOKEN.required, true);
   assert.deepEqual(workflow.permissions, {});
+  assert.equal(workflow.concurrency.group, "npm-server-publish-vibestudio-server");
   assert.equal(workflow.concurrency["cancel-in-progress"], false);
   assert.deepEqual(dependenciesOf(workflow.jobs.publish), ["validate"]);
   assert.deepEqual(workflow.jobs.validate.permissions, { actions: "read", contents: "read" });
@@ -86,6 +136,12 @@ test("npm publication resumes from the exact protected-main CI artifact", async 
     (step) => step.name === "Validate protected-main candidate and exact artifact"
   );
   assert.match(validation.run, /verify-release-ci-run\.mjs/u);
+  assert.equal(validation.env.RELEASE_ARTIFACT_SCOPE, "npm");
+  const releaseIdentity = workflow.jobs.validate.steps.find(
+    (step) => step.name === "Validate immutable release identity"
+  );
+  assert.match(releaseIdentity.run, /releases\/\$RELEASE_ID/u);
+  assert.doesNotMatch(releaseIdentity.run, /isDraft|\.draft/u);
   const download = workflow.jobs.publish.steps.find(
     (step) => step.name === "Download exact CI candidate artifact"
   );
@@ -642,14 +698,27 @@ test("native artifact consumers wait for their exact producers without unrelated
   assert.match(windowsPackage.run, /--prepackaged release\/win-unpacked/);
   assert.doesNotMatch(windowsPackage.run, /pnpm build/);
   const windowsChecksum = windowsSteps.find((step) => step.name === "Generate installer checksums");
+  const windowsUpdaterMetadata = windowsSteps.find(
+    (step) => step.name === "Verify updater metadata binds the Windows installer"
+  );
   const windowsUpload = windowsSteps.find(
     (step) => step.name === "Upload immutable Windows release candidate"
   );
   assert.ok(windowsSteps.indexOf(windowsPackage) < windowsSteps.indexOf(windowsChecksum));
+  assert.ok(windowsSteps.indexOf(windowsPackage) < windowsSteps.indexOf(windowsUpdaterMetadata));
+  assert.ok(windowsSteps.indexOf(windowsUpdaterMetadata) < windowsSteps.indexOf(windowsUpload));
+  assert.match(windowsUpdaterMetadata.run, /verify-electron-updater-metadata\.mjs/u);
+  assert.match(
+    windowsUpdaterMetadata.run,
+    /--write-receipt release\/updater-metadata-windows\.json/u
+  );
+  assert.match(windowsUpdaterMetadata.run, /release\/latest\.yml/u);
+  assert.match(windowsUpdaterMetadata.run, /release\/\*\.exe/u);
   assert.ok(windowsSteps.indexOf(windowsChecksum) < windowsSteps.indexOf(windowsUpload));
   assert.match(windowsChecksum.run, /latest\.yml/);
   assert.match(windowsChecksum.run, /SHA256SUMS-windows/);
   assert.equal(windowsUpload.with.name, "vibestudio-windows-\${{ github.sha }}");
+  assert.match(windowsUpload.with.path, /release\/updater-metadata-windows\.json/u);
   assert.equal(windowsUpload.with["if-no-files-found"], "error");
   assert.doesNotMatch(JSON.stringify(windowsInstaller), /\$\{\{\s*secrets\./);
   assert.doesNotMatch(JSON.stringify(windowsInstaller), /softprops\/action-gh-release/);
@@ -834,7 +903,10 @@ test("native artifact consumers wait for their exact producers without unrelated
     "the universal npm candidate must consume all prepared platform inputs"
   );
   assert.ok(producerJobs.includes("native-input-darwin-arm64"));
-  const releaseJobs = (await readWorkflow("release.yml")).jobs;
+  const releaseWorkflow = await readWorkflow("release.yml");
+  const releaseJobs = releaseWorkflow.jobs;
+  assert.equal(releaseWorkflow.concurrency["cancel-in-progress"], false);
+  assert.match(releaseWorkflow.concurrency.group, /inputs\.release-tag/u);
   assert.equal(
     releaseJobs["release-quality"],
     undefined,
@@ -931,6 +1003,13 @@ test("native artifact consumers wait for their exact producers without unrelated
   assert.ok(
     macSteps.some((step) => step.name === "Restore and verify the exact tested application")
   );
+  const macUpdaterMetadata = macSteps.find(
+    (step) => step.name === "Verify updater metadata binds the macOS artifacts"
+  );
+  assert.match(macUpdaterMetadata.run, /verify-electron-updater-metadata\.mjs/u);
+  assert.match(macUpdaterMetadata.run, /--write-receipt release\/updater-metadata-macos\.json/u);
+  assert.match(macUpdaterMetadata.run, /release\/latest-mac\.yml/u);
+  assert.match(macUpdaterMetadata.run, /release\/\*\.dmg release\/\*\.zip/u);
   assert.doesNotMatch(JSON.stringify(macSteps), /pnpm build(?:\s|$)/u);
   assert.ok(
     macSteps.some((step) => step.name === "Download source-attested Darwin process observers")
@@ -993,8 +1072,41 @@ test("native artifact consumers wait for their exact producers without unrelated
       `${publisher} must skip when a required dependency fails or is cancelled`
     );
   }
+  for (const [publisher, metadata, artifacts] of [
+    ["publish-windows", "latest.yml", "release/*.exe"],
+    ["publish-macos", "latest-mac.yml", "release/*.dmg release/*.zip"],
+  ]) {
+    const verification = releaseJobs[publisher].steps.find((step) =>
+      step.name?.startsWith("Verify updater metadata binds the published")
+    );
+    assert.equal(verification.env.RELEASE_TAG, "${{ inputs.release-tag }}");
+    assert.match(verification.run, /verify-electron-updater-metadata\.mjs/u);
+    assert.match(verification.run, /--receipt release\/updater-metadata-(?:windows|macos)\.json/u);
+    assert.ok(verification.run.includes(`release/${metadata}`));
+    assert.ok(verification.run.includes(artifacts));
+  }
+
+  const npmPublisher = releaseJobs["publish-npm"];
+  assert.deepEqual(dependenciesOf(npmPublisher), ["github-release", "validate-release-input"]);
+  assert.equal(npmPublisher.uses, "./.github/workflows/npm-server-publish.yml");
+  assert.deepEqual(npmPublisher.with, {
+    "release-tag": "${{ inputs.release-tag }}",
+    "release-id": "${{ needs.github-release.outputs.release-id }}",
+    "source-sha": "${{ inputs.source-sha }}",
+    "candidate-run-id": "${{ inputs.candidate-run-id }}",
+  });
+  assert.deepEqual(npmPublisher.permissions, { actions: "read", contents: "read" });
+  assert.equal(npmPublisher.secrets.NPM_TOKEN, "${{ secrets.NPM_TOKEN }}");
+  for (const platformPublisher of ["publish-linux", "publish-windows", "publish-macos"]) {
+    assert.ok(
+      !transitiveDependencies(releaseJobs, "publish-npm").has(platformPublisher),
+      `npm publication must run independently of ${platformPublisher}`
+    );
+  }
 
   assert.ok(transitiveDependencies(releaseJobs, "publish-release").has("validate-release-input"));
+  assert.ok(dependenciesOf(releaseJobs["publish-release"]).includes("publish-npm"));
+  assert.match(releaseJobs["publish-release"].if, /needs\.publish-npm\.result == 'success'/u);
   const releasePublication = releaseJobs["publish-release"].steps.find(
     (step) => step.name === "Make the complete release public and latest"
   );

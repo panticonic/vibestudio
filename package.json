@@ -76,7 +76,7 @@
     "check:vcs-skill-release": "node --import tsx scripts/generate-vcs-skill-release.mjs --check",
     "check:build-artifacts": "node scripts/check-build-artifacts.mjs",
     "check:native-host-dependencies": "node scripts/native-host-dependencies.mjs",
-    "check:workflows": "node scripts/check-desktop-runtime-script-closure.mjs && node scripts/check-workflows.mjs && node --test scripts/ci-critical-path.test.mjs scripts/ci-host-build-inputs.test.mjs scripts/iroh-nightly-inputs.test.mjs scripts/check-release-version.test.mjs scripts/compare-release-tags.test.mjs scripts/release-app-candidate.test.mjs scripts/verify-release-ci-run.test.mjs",
+    "check:workflows": "node scripts/check-desktop-runtime-script-closure.mjs && node scripts/check-workflows.mjs && node --test scripts/ci-critical-path.test.mjs scripts/ci-host-build-inputs.test.mjs scripts/iroh-nightly-inputs.test.mjs scripts/check-release-version.test.mjs scripts/compare-release-tags.test.mjs scripts/release-app-candidate.test.mjs scripts/verify-electron-updater-metadata.test.mjs scripts/verify-release-ci-run.test.mjs",
     "prepare:darwin-process-observers": "node scripts/prepare-darwin-process-observers.mjs",
     "check:host-boundary": "node scripts/check-host-workspace-imports.mjs",
     "check:package-dependencies": "node scripts/check-package-dependencies.mjs",
