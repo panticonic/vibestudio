@@ -309,6 +309,43 @@ The old baseline had failed semantic activation and cannot establish a
 before/after healthy-startup speedup percentage. Existing-state production
 readiness now falls within the requested 5–10 second range on this host.
 
+## Final developer measurement and remaining gap
+
+The final `pnpm dev` comparison used the same clean configured local template
+checkouts, one immutable development host generation, an isolated display and
+profile, the inherited canonical shared cache, and two separately provisioned
+fresh ephemeral instances. Both reused the same verified complete runtime
+release; these are warm-content-cache measurements, not cold producers or
+existing-workspace restarts. Each native Start was an explicit scripted fixture
+action, reported separately from first actionable UI and healthy readiness.
+
+| Boundary | First fresh workspace | Second fresh workspace |
+| --- | ---: | ---: |
+| Actionable native review | 10.156 s | 10.573 s |
+| Start to healthy restored UI | 3.540 s | 3.821 s |
+| Full interval, including scripted consent/setup | 13.864 s | 14.546 s |
+
+Both Personal and System emitted successful semantic activation reports and the
+desktop restored its real workspace layout. Both supervisors and inspector
+connections joined; both ephemeral roots disappeared before completing their
+samples. The outer owner audited zero remaining fixture references and removed
+the private diagnostic profile, input aliases, local published-source clone and
+temporary compiler caches. The inherited shared cache and committed source
+worktrees remain intact.
+
+Dev has **not** reached the requested 5–10 second target. The launcher's actual
+phase reports attribute 2.882/3.231 s to input readiness, including approximately
+1 s concurrent prerequisite/checkpoint work followed by 1.836/2.099 s preparing
+workspace sources. Fresh semantic snapshot import takes 1.68–2.01 s per workspace;
+the two workspace imports run independently and must not be added together.
+Their source scan, source hash/blob-ingestion and CAS-tree mirror fields are
+zero. Native startup reports a further 5.20/5.53 s server-spawn interval and
+3.40/3.68 s desktop mount interval. These nested phase reports are attribution,
+not additive independent savings estimates. The remaining work is launcher
+source preparation and fresh semantic/UI initialization, not missing runtime
+build-cache reuse. Retaining workspace state to disguise that cost is not an
+acceptable optimization.
+
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
 release artifacts or a reason to retain workspace databases and dependency trees.
