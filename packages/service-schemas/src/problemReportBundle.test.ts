@@ -1,7 +1,23 @@
-import { describe, expect, it } from "vitest";
-import { ProblemReportBundleSchema, ReportProblemSchema } from "./problemReportBundle";
+import { createHash } from "node:crypto";
+import { describe, expect, it, vi } from "vitest";
+import { ProblemReportBundleSchema, ReportProblemSchema, reportDigest } from "./problemReportBundle";
 
 describe("problem report authoring diagnostics", () => {
+  it("hashes exact report bytes without requiring native WebCrypto", async () => {
+    vi.stubGlobal("crypto", undefined);
+    try {
+      for (const text of ["", "abc", "Report: € — 🦊"]) {
+        const expected = createHash("sha256").update(text).digest("hex");
+        await expect(reportDigest(text)).resolves.toBe(expected);
+        await expect(reportDigest(new TextEncoder().encode(text))).resolves.toBe(expected);
+      }
+      await expect(reportDigest(new Uint8Array([255, 97, 98, 99, 255]).subarray(1, 4))).resolves.toBe(
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
   it("explains product tokens rather than reporting an unexplained regex refusal", () => {
     const problem = {
       category: "runtime",

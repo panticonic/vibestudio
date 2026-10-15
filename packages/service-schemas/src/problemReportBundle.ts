@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { canonicalJson } from "@vibestudio/content-addressing";
+import { canonicalJson, sha256Hex } from "@vibestudio/content-addressing";
 
 export const REPORT_POLICY = {
   version: "problem-reporting.v2",
@@ -263,8 +263,7 @@ export function encodeReport(value: unknown): string {
 }
 export async function reportDigest(bytes: Uint8Array | string): Promise<string> {
   const data = typeof bytes === "string" ? new TextEncoder().encode(bytes) : bytes;
-  const digest = await crypto.subtle.digest("SHA-256", new Uint8Array(data));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return sha256Hex(data);
 }
 /** Only user-editable content crosses the draft update boundary. The host owns identity, revisions, consent and environment. */
 export const ReportDraftContentSchema = ProblemReportBundleSchema.innerType()
