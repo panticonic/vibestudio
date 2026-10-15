@@ -178,8 +178,15 @@ against upstreams `87cd767a679a4824fe095307cd69b78e67450195` and
 `0925929c200af16bf83c88027fea451dfa972dd3` and
 `4fe21fe9e99dbf86af034c93a721304828dc7a73`. Both normal authoring setups resolved
 the actual published Base commit, not its earlier development-source identity.
-Neither dependent release is published yet; exact-release approval remains
-required before freezing production pins and measuring the final installed app.
+The user authorized both releases. Fresh normal authoring reviews reproduced
+the exact approved content before publication, including byte-identical diffs.
+Personal 0.3.73 is published at
+`50789363f02e2ff442f7753d5e8c165196f81adf`; System 0.3.99 is published at
+`25fa8a5e0fbea99f249754dea74dde987ce9b5a8`. The canonical release-pin generator
+adopted all three real publication receipts together. Published Git tags were
+fetched normally and admitted through the canonical source-cache boundary from
+local Git, without retargeting original source branches. Final installed
+production measurements remain required; publication is not a speedup claim.
 
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
