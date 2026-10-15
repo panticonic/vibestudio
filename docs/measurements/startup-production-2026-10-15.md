@@ -245,8 +245,21 @@ production dependencies, source/type exports, architecture exclusions, and
 second-pass idempotence. The oversized diagnostic application was retired after
 all archive readers joined and an independent process-reference audit passed;
 its bounded inventory and original release proof remain. The corrected package
-must pass the normal complete release-consumer gate before the final installed
-measurement.
+subsequently passed the normal complete release-consumer gate: all 111 exact
+records reused in an isolated fresh installation and all 18 installed schema
+receipts admitted against production fingerprint
+`4b2456cf0b8c852d3b1256dca414e708d8db9fda488beece329b86fe98ee669f`.
+Its ASAR is 38,984,448 bytes (57,725 files); the archive inventory contains none
+of the forbidden historical, stock-Node, nested source-package npm, or
+wrong-architecture paths. The whole unpacked application is approximately
+2 GB. The dependency fingerprint legitimately changed with the corrected
+installed dependency boundary; all release artifacts were produced and checked
+against that actual new identity. No older receipt was substituted.
+
+The first corrected-package latency attempt was interrupted by the host X
+display disconnecting; it is not a valid latency sample. Its application joined
+and private state was retired after an external zero-reference audit. Subsequent
+attempts use an owned isolated virtual display/session, not the user's desktop.
 
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
