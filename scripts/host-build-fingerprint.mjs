@@ -26,6 +26,8 @@ const INPUT_FILES = [
   "scripts/native-isolation-artifacts.mjs",
   "scripts/clean-host-build-output.mjs",
   "scripts/build-workerd-programs.mjs",
+  "scripts/internal-do-build.mjs",
+  "scripts/lib/internal-do-programs.mjs",
   "scripts/collectWorkers.mjs",
   "scripts/ensure-host-build.mjs",
   "scripts/generate-connect-grammar.mjs",

@@ -47,10 +47,10 @@ import {
 } from "@vibestudio/shared/runtimePaths";
 import {
   INTERNAL_DO_SOURCE,
-  getInternalDOBundle,
+  getInternalDOPrograms,
   internalDOExecutionIdentity,
   isInternalDOSource,
-  type InternalDOBundle,
+  type InternalDOPrograms,
 } from "./internalDOs/internalDoLoader.js";
 import { encodeUniversalKey } from "./doDispatch.js";
 import { doExecutableHeaders, type DoExecutableAdmission } from "./doExecutableDispatch.js";
@@ -497,7 +497,7 @@ export interface WorkerdManagerDeps {
    * the build artifact; tests inject an in-memory build so they cannot replace
    * a concurrently running source server's authority program on disk.
    */
-  readonly internalDOBundle?: InternalDOBundle;
+  readonly internalDOPrograms?: InternalDOPrograms;
   /** Host-owned environment for immutable internal Durable Object programs. */
   getInternalDoEnv(className: string): Record<string, string>;
   /** Workspace source root — used for WORKER_SOURCE binding. */
@@ -633,8 +633,8 @@ const WORKERD_DYNAMIC_ISOLATE_COMPACTION_COUNT = 16;
 // ---------------------------------------------------------------------------
 
 export class WorkerdManager {
-  private internalDOBundle(): InternalDOBundle {
-    return this.deps.internalDOBundle ?? getInternalDOBundle();
+  private internalDOPrograms(): InternalDOPrograms {
+    return this.deps.internalDOPrograms ?? getInternalDOPrograms();
   }
 
   private instances = new Map<string, WorkerInstance>();
@@ -1002,7 +1002,7 @@ export class WorkerdManager {
   }
 
   private persistInternalRuntimeImage(imageId: string, className: string): RuntimeImageRecord {
-    const identity = internalDOExecutionIdentity(this.internalDOBundle(), className);
+    const identity = internalDOExecutionIdentity(this.internalDOPrograms(), className);
     return this.runtimeImages.upsert({
       id: imageId,
       source: identity.source,
@@ -1239,7 +1239,7 @@ export class WorkerdManager {
       // Internal classes execute in their host-bundle service. The entity
       // ledger seals that service identity directly; it does not need a second
       // object-shaped runtime-image record that can drift from the service.
-      const identity = internalDOExecutionIdentity(this.internalDOBundle(), record.className);
+      const identity = internalDOExecutionIdentity(this.internalDOPrograms(), record.className);
       if (
         identity.artifact.buildKey !== record.activeBuildKey ||
         identity.artifact.executionDigest !== record.activeExecutionDigest ||
@@ -2501,7 +2501,7 @@ export class WorkerdManager {
         throw new Error(`Internal Durable Object ${className} has no builtin catalog entry`);
       }
       // Internal DOs ship as a single pre-built bundle (no wasm artifacts).
-      const internalBundle = this.internalDOBundle();
+      const internalBundle = this.internalDOPrograms().get(className);
       const bundleContent = internalBundle.bundle;
       doService.buildKey = internalBundle.buildKey;
 
@@ -2517,7 +2517,7 @@ export class WorkerdManager {
       // Don't grep this string expecting to find a registered principal.
       const serviceCallerId = `do-service:${serviceKey}`;
       const serviceToken = this.ensureWorkerBearer(serviceCallerId);
-      const serviceIdentity = internalDOExecutionIdentity(internalBundle, className);
+      const serviceIdentity = internalBundle.identity;
 
       const serviceCaller = createVerifiedCaller(serviceCallerId, "worker", {
         callerId: serviceCallerId,
@@ -4184,8 +4184,8 @@ export class WorkerdManager {
       return;
     const admission = (async () => {
       if (isInternalDOSource(image.source)) {
-        const bundle = this.internalDOBundle();
-        const identity = internalDOExecutionIdentity(bundle, className);
+        const bundle = this.internalDOPrograms().get(className);
+        const identity = bundle.identity;
         if (identity.executionDigest !== image.artifact.executionDigest) {
           throw new RuntimeImageUnavailableError(
             `Internal Durable Object ${image.source}:${className} schema executable failed sealed identity verification`
@@ -4300,7 +4300,7 @@ export class WorkerdManager {
     if (!/^[a-f0-9]{64}$/.test(executionDigest))
       throw new Error("Durable work registration requires an exact execution digest");
     if (isInternalDOSource(source)) {
-      const identity = internalDOExecutionIdentity(this.internalDOBundle(), className);
+      const identity = internalDOExecutionIdentity(this.internalDOPrograms(), className);
       if (identity.executionDigest !== executionDigest)
         throw new RuntimeImageUnavailableError(
           "Internal durable work declaration does not match the admitted executable"

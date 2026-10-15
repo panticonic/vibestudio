@@ -16,7 +16,7 @@ flow. This is separate from the server's content-addressed
 | `pnpm server`                            | Run the already-built standalone `dist/server.mjs`.                                                                                 |
 | `pnpm server:live`                       | Run `src/server/index.ts`; callers must first build source-server prerequisites.                                                    |
 | `node build.mjs --source-server-prereqs` | Rebuild infrastructure packages, `dist/headless-host`, browser transport, and the embedded internal DO for live source-server runs. |
-| `node build.mjs --internal-do-only`      | Rebuild only `dist/internal-do.bundle.mjs`.                                                                                         |
+| `node build.mjs --internal-do-only`      | Rebuild the catalog-derived per-class programs in `dist/internal-do-programs.json`.                                                 |
 
 The CLI's live-server launcher runs `--source-server-prereqs` automatically so
 source host code does not run with stale RPC, headless-host, or internal-DO
@@ -46,16 +46,16 @@ The host build performs these dependency-ordered stages:
 
 Principal outputs include:
 
-| Output                                          | Consumer                                 |
-| ----------------------------------------------- | ---------------------------------------- |
-| `dist/main.cjs`                                 | Electron main process                    |
-| `dist/server-electron.cjs`                      | Electron workspace utility process       |
-| `dist/server.mjs`                               | Standalone server / npm server package   |
-| `dist/cli/client.mjs`                           | `vibestudio` CLI                         |
-| `dist/*Preload.cjs`, `dist/*OverlayPreload.cjs` | Electron renderer boundaries             |
-| `dist/browserTransport.js`                      | Host-injected browser/panel transport    |
-| `dist/internal-do.bundle.mjs`                   | Embedded internal Durable Object program |
-| `dist/headless-host/`                           | Spawned standalone Chromium panel host   |
+| Output                                          | Consumer                                          |
+| ----------------------------------------------- | ------------------------------------------------- |
+| `dist/main.cjs`                                 | Electron main process                             |
+| `dist/server-electron.cjs`                      | Electron workspace utility process                |
+| `dist/server.mjs`                               | Standalone server / npm server package            |
+| `dist/cli/client.mjs`                           | `vibestudio` CLI                                  |
+| `dist/*Preload.cjs`, `dist/*OverlayPreload.cjs` | Electron renderer boundaries                      |
+| `dist/browserTransport.js`                      | Host-injected browser/panel transport             |
+| `dist/internal-do-programs.json`                | Sealed per-class internal Durable Object programs |
+| `dist/headless-host/`                           | Spawned standalone Chromium panel host            |
 
 The build itself is a clean full rebuild. Integration and smoke scripts call
 `scripts/ensure-host-build.mjs`, which reuses a completed build only when its

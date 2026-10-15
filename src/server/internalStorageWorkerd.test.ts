@@ -13,7 +13,11 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import { DODispatch } from "./doDispatch.js";
-import { INTERNAL_DO_SOURCE, type InternalDOBundle } from "./internalDOs/internalDoLoader.js";
+import { INTERNAL_DO_SOURCE, InternalDOPrograms } from "./internalDOs/internalDoLoader.js";
+import {
+  internalDoBuildOptions,
+  internalDoCompilerOutputs,
+} from "../../scripts/internal-do-build.mjs";
 import { postToDurableObject, type DORef } from "./workerdRpcRelay.js";
 import {
   schemaProbeEnvironmentForFixture,
@@ -71,7 +75,7 @@ import {
 } from "../../tests/helpers/storedBuildFixture.js";
 
 let compiledWorkerdPrograms: WorkerdProgramSources;
-let compiledInternalDOBundle: InternalDOBundle;
+let compiledInternalDOPrograms: InternalDOPrograms;
 
 function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
   const contentRoots = [
@@ -99,26 +103,12 @@ function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
 
 beforeAll(async () => {
   const [internalDoBuild, programs] = await Promise.all([
-    esbuild.build({
-      entryPoints: ["src/server/internalDOs/index.ts"],
-      bundle: true,
-      platform: "browser",
-      target: "es2022",
-      format: "esm",
-      outfile: "internal-do.bundle.mjs",
-      conditions: ["worker", "browser"],
-      external: ["node:*", "electron"],
-      logLevel: "silent",
-      write: false,
-    }),
+    esbuild.build({ ...internalDoBuildOptions(), logLevel: "silent" }),
     buildWorkerdPrograms({ write: false }),
   ]);
-  const bundle = internalDoBuild.outputFiles?.[0]?.text;
-  if (!bundle) throw new Error("Internal DO test bundle did not produce an in-memory output");
-  compiledInternalDOBundle = {
-    bundle,
-    buildKey: createHash("sha256").update(bundle).digest("hex"),
-  };
+  compiledInternalDOPrograms = InternalDOPrograms.fromCompiler(
+    internalDoCompilerOutputs(internalDoBuild)
+  );
   compiledWorkerdPrograms = programs;
 });
 
@@ -154,7 +144,7 @@ async function createWorkerdHarness(
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
     workspaceId: "workspace:internal-workerd-test",
     workerdPrograms: compiledWorkerdPrograms,
-    internalDOBundle: compiledInternalDOBundle,
+    internalDOPrograms: compiledInternalDOPrograms,
     getInternalDoEnv: () => ({}),
     workspacePath,
     statePath,

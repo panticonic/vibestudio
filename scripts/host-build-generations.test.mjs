@@ -229,7 +229,7 @@ test("publishes immutable complete generations and leaves the prior one readable
       "fs-disk-worker.cjs",
       ...Object.values(NATIVE_WORKSPACE_ENTRIES),
       "dependency-content-maintenance.cjs",
-      "internal-do.bundle.mjs",
+      "internal-do-programs.json",
       "host-build-fingerprint.json",
     ])
       fs.writeFileSync(path.join(root, "dist", entry), entry);
@@ -290,7 +290,7 @@ test("publishes immutable complete generations and leaves the prior one readable
       "fs-disk-worker.cjs",
       ...Object.values(NATIVE_WORKSPACE_ENTRIES),
       "dependency-content-maintenance.cjs",
-      "internal-do.bundle.mjs",
+      "internal-do-programs.json",
       "host-build-fingerprint.json",
     ])
       fs.writeFileSync(path.join(root, "dist", entry), entry);
@@ -382,7 +382,7 @@ test("relocated source and desktop generations resolve relative to the new check
       "fs-disk-worker.cjs",
       ...Object.values(NATIVE_WORKSPACE_ENTRIES),
       "dependency-content-maintenance.cjs",
-      "internal-do.bundle.mjs",
+      "internal-do-programs.json",
       "host-build-fingerprint.json",
     ]) {
       fs.writeFileSync(path.join(root, "dist", entry), `${suffix}:${entry}`);
@@ -544,7 +544,7 @@ test("refuses an incomplete generation without replacing current", () => {
       "fs-disk-worker.cjs",
       ...Object.values(NATIVE_WORKSPACE_ENTRIES),
       "dependency-content-maintenance.cjs",
-      "internal-do.bundle.mjs",
+      "internal-do-programs.json",
       "host-build-fingerprint.json",
     ])
       fs.writeFileSync(path.join(root, "dist", entry), entry);

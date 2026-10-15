@@ -2,9 +2,15 @@ import * as fs from "node:fs";
 import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
 import * as path from "node:path";
 import { resolveRequiredHostArtifactRoot } from "../appRoot.js";
-import { createHash } from "node:crypto";
 import { canonicalJson } from "@vibestudio/content-addressing";
-import { domainHash, parseSha256, sha256 } from "@vibestudio/shared/execution/identity";
+import { domainHash, parseSha256 } from "@vibestudio/shared/execution/identity";
+import {
+  INTERNAL_DO_PROGRAMS_FILE,
+  readPublishedInternalDoPrograms,
+  captureInternalDoPrograms,
+  type PublishedInternalDoPrograms,
+  type CompiledInternalDoProgram,
+} from "../../../scripts/lib/internal-do-programs.mjs";
 import {
   executionArtifactDigest,
   executionSourceClosureDigest,
@@ -26,9 +32,10 @@ export const INTERNAL_DO_SOURCE = "vibestudio/internal";
 export { INTERNAL_DO_CLASSES };
 export const INTERNAL_DO_PRODUCT_SEED_ID = "product:vibestudio-internal-do";
 
-export interface InternalDOBundle {
-  bundle: string;
-  buildKey: string;
+export interface InternalDOProgram {
+  readonly bundle: string;
+  readonly buildKey: string;
+  readonly identity: InternalDOExecutionIdentity;
 }
 
 export interface InternalDOExecutionIdentity {
@@ -44,18 +51,89 @@ export interface InternalDOExecutionIdentity {
 }
 
 declare global {
-  var __VIBESTUDIO_INTERNAL_DO_BUNDLE__: string | undefined;
+  var __VIBESTUDIO_INTERNAL_DO_PROGRAMS__: unknown;
 }
 
-let cached: InternalDOBundle | null = null;
+let cached: InternalDOPrograms | null = null;
+
+function freeze<T>(value: T): T {
+  if (value && typeof value === "object") {
+    for (const child of Object.values(value)) freeze(child);
+    if (!Object.isFrozen(value)) Object.freeze(value);
+  }
+  return value;
+}
+
+/** A loader-owned capture, never an unchecked bundle DTO. Publication owns
+ * payload proof; this host owns immutable selection and class-bound identity. */
+export class InternalDOPrograms {
+  readonly #programs: ReadonlyMap<string, InternalDOProgram>;
+  readonly #publication: PublishedInternalDoPrograms;
+
+  private constructor(input: unknown) {
+    this.#publication = readPublishedInternalDoPrograms(input);
+    this.#programs = new Map(
+      INTERNAL_DO_CLASSES.map((className) => {
+        const program = this.#publication.programs[className]!;
+        return [
+          className,
+          freeze({
+            ...program,
+            identity: captureExecutionIdentity(program.buildKey, className),
+          }),
+        ];
+      })
+    );
+    Object.freeze(this);
+  }
+
+  static readInstalled(): InternalDOPrograms {
+    const snapshot = process.env["VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH"];
+    if (snapshot) {
+      if (!path.isAbsolute(snapshot))
+        throw new Error("VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH must be absolute");
+      return new InternalDOPrograms(JSON.parse(fs.readFileSync(snapshot, "utf8")));
+    }
+    if (globalThis.__VIBESTUDIO_INTERNAL_DO_PROGRAMS__ !== undefined)
+      return new InternalDOPrograms(globalThis.__VIBESTUDIO_INTERNAL_DO_PROGRAMS__);
+    return new InternalDOPrograms(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(resolveRequiredHostArtifactRoot(), INTERNAL_DO_PROGRAMS_FILE),
+          "utf8"
+        )
+      )
+    );
+  }
+
+  /** Producer/test fixtures enter through the same compiler-output proof. */
+  static fromCompiler(
+    compiled: Readonly<Record<string, CompiledInternalDoProgram>>
+  ): InternalDOPrograms {
+    return new InternalDOPrograms(captureInternalDoPrograms(compiled));
+  }
+
+  get(className: string): InternalDOProgram {
+    const program = this.#programs.get(className);
+    if (!program)
+      throw new Error(
+        `Internal Durable Object class ${className} is not a reviewed product export`
+      );
+    return program;
+  }
+
+  publication(): PublishedInternalDoPrograms {
+    return this.#publication;
+  }
+}
 
 export function isInternalDOSource(source: string): boolean {
   return source === INTERNAL_DO_SOURCE;
 }
 
-export function getInternalDOBundle(): InternalDOBundle {
+export function getInternalDOPrograms(): InternalDOPrograms {
   if (cached) return cached;
-  cached = loadBundle();
+  cached = InternalDOPrograms.readInstalled();
   return cached;
 }
 
@@ -66,17 +144,21 @@ export function getInternalDOBundle(): InternalDOBundle {
  * request ceiling, so two exports from the same bundle cannot alias authority.
  */
 export function internalDOExecutionIdentity(
-  bundle: InternalDOBundle,
+  programs: InternalDOPrograms,
+  className: string
+): InternalDOExecutionIdentity {
+  return programs.get(className).identity;
+}
+
+function captureExecutionIdentity(
+  buildKey: string,
   className: string
 ): InternalDOExecutionIdentity {
   if (!(INTERNAL_DO_CLASSES as readonly string[]).includes(className)) {
     throw new Error(`Internal Durable Object class ${className} is not a reviewed product export`);
   }
   const reviewedClassName = className as InternalDOClassName;
-  const artifactDigest = sha256(bundle.bundle);
-  if (parseSha256(bundle.buildKey, "internal DO bundle build key") !== artifactDigest) {
-    throw new Error("Internal Durable Object bundle build key does not match its exact bytes");
-  }
+  const artifactDigest = parseSha256(buildKey, "internal DO program build key");
   const rawManifest = executionCatalog.classes[reviewedClassName];
   const builtin = productBuiltinByIdentity(INTERNAL_DO_SOURCE, reviewedClassName);
   if (!builtin) throw new Error(`Internal Durable Object ${className} is not cataloged`);
@@ -140,62 +222,9 @@ export function internalDOExecutionIdentity(
 }
 
 export function internalDOExecutionArtifacts(
-  bundle: InternalDOBundle
+  programs: InternalDOPrograms
 ): readonly ExecutionArtifactRefV1[] {
   return INTERNAL_DO_CLASSES.map(
-    (className) => internalDOExecutionIdentity(bundle, className).artifact
-  );
-}
-
-function loadBundle(): InternalDOBundle {
-  // A supervising hub snapshots the exact product runtime once per hub boot
-  // and gives its own generation’s workspace children (including crash
-  // replacements) this path. Retained hosts load their own compiled bundle.
-  // Source-mode build artifacts are shared by developer instances and may be
-  // rebuilt concurrently; rereading the mutable dist file on child recovery
-  // would silently change the execution identity mid-boot.
-  const snapshotPath = process.env["VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH"];
-  if (snapshotPath) {
-    if (!path.isAbsolute(snapshotPath)) {
-      throw new Error("VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH must be absolute");
-    }
-    const bundle = fs.readFileSync(snapshotPath, "utf8");
-    if (bundle.length === 0) {
-      throw new Error(`Internal Durable Object bundle snapshot is empty: ${snapshotPath}`);
-    }
-    return {
-      bundle,
-      buildKey: createHash("sha256").update(bundle).digest("hex"),
-    };
-  }
-
-  // Production path: the build inlines the internal-DO bundle as a string
-  // constant via esbuild `define`, eliminating any runtime file lookup. See
-  // `build.mjs` (the `internalDoBundleDefine` block).
-  const inlined =
-    typeof globalThis.__VIBESTUDIO_INTERNAL_DO_BUNDLE__ === "string"
-      ? globalThis.__VIBESTUDIO_INTERNAL_DO_BUNDLE__
-      : undefined;
-  if (inlined && inlined.length > 0) {
-    return {
-      bundle: inlined,
-      buildKey: createHash("sha256").update(inlined).digest("hex"),
-    };
-  }
-
-  // Source/test path: read the prebuilt bundle from the exact application
-  // root. Used by Vitest and non-bundled execution after source prerequisites
-  // have produced `dist/internal-do.bundle.mjs`.
-  const candidates = [path.resolve(resolveRequiredHostArtifactRoot(), "internal-do.bundle.mjs")];
-  for (const candidate of candidates) {
-    if (!fs.existsSync(candidate)) continue;
-    const bundle = fs.readFileSync(candidate, "utf8");
-    return {
-      bundle,
-      buildKey: createHash("sha256").update(bundle).digest("hex"),
-    };
-  }
-  throw new Error(
-    `Internal Durable Object bundle not available. The production build inlines this via esbuild define; for source/test runs, build first with \`pnpm build\` so ${candidates.join(" or ")} exists.`
+    (className) => internalDOExecutionIdentity(programs, className).artifact
   );
 }

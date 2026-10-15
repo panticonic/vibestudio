@@ -186,6 +186,7 @@ const executionCatalog = {
     entries.map((entry) => [
       entry.className,
       {
+        implementation: entry.implementation,
         durableWorkQueues: entry.durableWorkQueues,
         provides: [],
         requests: entry.residentCapabilityRequests,

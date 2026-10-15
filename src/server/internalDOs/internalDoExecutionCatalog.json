@@ -2,18 +2,21 @@
   "version": 2,
   "classes": {
     "WorkspaceDO": {
+      "implementation": "@panticonic/builtin/workspace-state",
       "durableWorkQueues": [],
       "provides": [],
       "requests": [],
       "methodScopedRequests": []
     },
     "BrowserVaultDO": {
+      "implementation": "@panticonic/builtin/browser-data",
       "durableWorkQueues": [],
       "provides": [],
       "requests": [],
       "methodScopedRequests": []
     },
     "EvalDO": {
+      "implementation": "@panticonic/builtin/eval-engine",
       "durableWorkQueues": [],
       "provides": [],
       "requests": [],
@@ -28,6 +31,7 @@
       ]
     },
     "WebhookStoreDO": {
+      "implementation": "@panticonic/builtin/webhook-engine",
       "durableWorkQueues": [],
       "provides": [],
       "requests": [],

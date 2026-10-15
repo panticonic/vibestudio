@@ -131,7 +131,7 @@ describe("npm CLI packaging", () => {
       "dist/immutable-tree-worker.mjs",
       "dist/sqlite-integrity-worker.mjs",
       "dist/dependency-content-maintenance.cjs",
-      "dist/internal-do.bundle.mjs",
+      "dist/internal-do-programs.json",
       "dist/sql-wasm.wasm",
       "dist/host-build-fingerprint.json",
       "dist/host-preparation-recipes.json",

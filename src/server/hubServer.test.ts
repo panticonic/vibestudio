@@ -1,5 +1,6 @@
 import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 import * as fs from "node:fs";
+import { internalDoProgramsForFixture } from "../../tests/fixtures/internalDoPrograms.js";
 import * as os from "node:os";
 import * as path from "node:path";
 import { EventEmitter } from "node:events";
@@ -30,7 +31,7 @@ import {
   executeHubControl,
   observeWorkspaceChildDevices,
   applyHubWorkspacePresenceReport,
-  snapshotInternalDOBundleForHub,
+  snapshotInternalDOProgramsForHub,
   shutdownHubRuntime,
   handleWorkspaceChildExit,
   HubCompletePairingBodySchema,
@@ -162,10 +163,11 @@ describe("hub internal runtime snapshot", () => {
   it("publishes immutable bundle bytes for every workspace child in the hub boot", () => {
     const configDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-hub-bundle-"));
     try {
-      const snapshotPath = snapshotInternalDOBundleForHub(configDir, "exact-bundle-bytes");
+      const programs = internalDoProgramsForFixture("hub-snapshot");
+      const snapshotPath = snapshotInternalDOProgramsForHub(configDir, programs);
 
       expect(path.isAbsolute(snapshotPath)).toBe(true);
-      expect(fs.readFileSync(snapshotPath, "utf8")).toBe("exact-bundle-bytes");
+      expect(JSON.parse(fs.readFileSync(snapshotPath, "utf8"))).toEqual(programs.publication());
       expect(fs.statSync(snapshotPath).mode & 0o777).toBe(0o600);
     } finally {
       fs.rmSync(configDir, { recursive: true, force: true });
@@ -730,7 +732,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
       VIBESTUDIO_REQUIRE_ELECTRON_READY: "1",
       VIBESTUDIO_WORKSPACE_DIR: "/somewhere",
       VIBESTUDIO_ADMIN_TOKEN: "hub-operator-token",
-      VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH: "/hub/runtime/internal-do.bundle.mjs",
+      VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH: "/hub/runtime/internal-do-programs.json",
     } as NodeJS.ProcessEnv,
     appRoot: "/app",
     workspaceName: "base",
@@ -785,7 +787,9 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     expect(env["VIBESTUDIO_WORKSPACE_ID"]).toBe("ws_base");
     expect(env["VIBESTUDIO_GATEWAY_PORT"]).toBeUndefined();
     expect(env["VIBESTUDIO_WORKSPACE_DIR"]).toBeUndefined();
-    expect(env["VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH"]).toBe("/hub/runtime/internal-do.bundle.mjs");
+    expect(env["VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH"]).toBe(
+      "/hub/runtime/internal-do-programs.json"
+    );
     expect(env["PATH"]).toBe("/usr/bin");
   });
 
@@ -873,7 +877,7 @@ describe("historical workspace runtime environment", () => {
       fs.writeFileSync(binary, "retained tool");
       const env: NodeJS.ProcessEnv = {
         VIBESTUDIO_HOST_ARTIFACT_ROOT: "/new/dist",
-        VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH: "/new/hub-bundle",
+        VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH: "/new/hub-bundle",
         ESBUILD_BINARY_PATH: "/new/esbuild",
       };
       applyWorkspaceHostRuntimeEnv(
@@ -888,7 +892,7 @@ describe("historical workspace runtime environment", () => {
         "2.0.0"
       );
       expect(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]).toBe(path.join(root, "dist"));
-      expect(env["VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH"]).toBeUndefined();
+      expect(env["VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH"]).toBeUndefined();
       expect(env["ESBUILD_BINARY_PATH"]).toBe(binary);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
@@ -947,7 +951,7 @@ describe("historical workspace runtime environment", () => {
   it("preserves the current host runtime mode and binds its exact app version", () => {
     const env: NodeJS.ProcessEnv = {
       ELECTRON_RUN_AS_NODE: "caller-owned",
-      VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH: "/current/hub-bundle",
+      VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH: "/current/hub-bundle",
       ESBUILD_BINARY_PATH: "/current/esbuild",
     };
     applyWorkspaceHostRuntimeEnv(
@@ -962,7 +966,7 @@ describe("historical workspace runtime environment", () => {
       "2.0.0"
     );
     expect(env["ELECTRON_RUN_AS_NODE"]).toBe("caller-owned");
-    expect(env["VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH"]).toBe("/current/hub-bundle");
+    expect(env["VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH"]).toBe("/current/hub-bundle");
     expect(env["ESBUILD_BINARY_PATH"]).toBe("/current/esbuild");
   });
 });

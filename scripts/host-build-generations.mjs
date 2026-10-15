@@ -28,7 +28,7 @@ const REQUIRED = {
     "fs-disk-worker.cjs",
     ...Object.values(NATIVE_WORKSPACE_ENTRIES),
     "dependency-content-maintenance.cjs",
-    "internal-do.bundle.mjs",
+    "internal-do-programs.json",
     "host-build-fingerprint.json",
     "headless-host",
     "workerd-programs",

@@ -213,15 +213,15 @@ it("launches a retained server with its own artifacts after the original install
     console.log(JSON.stringify({
       hostVersion: process.env.VIBESTUDIO_APP_VERSION,
       currentVersion: process.env.VIBESTUDIO_CURRENT_APP_VERSION,
-      bundle: readFileSync(join(artifacts, "internal-do.bundle.mjs"), "utf8"),
+      bundle: readFileSync(join(artifacts, "internal-do-programs.json"), "utf8"),
       worker: readFileSync(join(artifacts, "workerd-programs", "main.mjs"), "utf8"),
-      hubBundle: process.env.VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH ?? null,
+      hubBundle: process.env.VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH ?? null,
       appRoot: process.env.VIBESTUDIO_APP_ROOT,
     }));
   `
   );
   fs.mkdirSync(path.join(input.app, "dist", "workerd-programs"));
-  fs.writeFileSync(path.join(input.app, "dist", "internal-do.bundle.mjs"), "retained bundle");
+  fs.writeFileSync(path.join(input.app, "dist", "internal-do-programs.json"), "retained bundle");
   fs.writeFileSync(path.join(input.app, "dist", "workerd-programs", "main.mjs"), "retained worker");
   publishHistoricalHostSnapshot({
     centralDataPath: input.central,
@@ -238,7 +238,7 @@ it("launches a retained server with its own artifacts after the original install
     baseEnv: {
       ...process.env,
       VIBESTUDIO_HOST_ARTIFACT_ROOT: path.join(input.app, "new-generation"),
-      VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH: path.join(input.app, "new-hub-bundle"),
+      VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH: path.join(input.app, "new-hub-bundle"),
       ESBUILD_BINARY_PATH: path.join(input.app, "new-esbuild"),
     },
     appRoot: launchSet.appRoot,

@@ -18,7 +18,7 @@ import {
   type EvalStartInput,
 } from "@vibestudio/service-schemas/eval";
 import {
-  getInternalDOBundle,
+  getInternalDOPrograms,
   internalDOExecutionIdentity,
   INTERNAL_DO_SOURCE,
 } from "../internalDOs/internalDoLoader.js";
@@ -341,7 +341,7 @@ export function createEvalService(deps: {
   const runSupervisions = new Map<string, { dispose: () => void }>();
   let shutdownRequested = false;
   let shutdownPromise: Promise<void> | null = null;
-  const evalExecutionIdentity = internalDOExecutionIdentity(getInternalDOBundle(), EVAL_DO_CLASS);
+  const evalExecutionIdentity = internalDOExecutionIdentity(getInternalDOPrograms(), EVAL_DO_CLASS);
 
   const evalDoKey = (ownerId: string, subKey: string): string =>
     evalRuntimeId(ownerId, subKey).slice(`do:${INTERNAL_DO_SOURCE}:${EVAL_DO_CLASS}:`.length);

@@ -122,7 +122,7 @@ import { authError, authErrorStatus } from "./hostCore/auth/errors.js";
 import { bridgeDuplexSockets } from "./socketBridge.js";
 import { workspaceIrohReachPaths } from "./hostCore/irohReachPaths.js";
 import { writeFileAtomicSync } from "../atomicFile.js";
-import { getInternalDOBundle } from "./internalDOs/internalDoLoader.js";
+import { getInternalDOPrograms } from "./internalDOs/internalDoLoader.js";
 import { ServiceDispatcher, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { EventService } from "@vibestudio/shared/eventsService";
 import { authorizeVerifiedCaller } from "./services/authorityRuntime.js";
@@ -135,7 +135,7 @@ import { readBoundedBody, sendJson, sendText } from "./hostCore/httpResponses.js
 declare const __filename: string;
 
 const WORKSPACE_STARTUP_STDERR_LIMIT_BYTES = 32 * 1024;
-const INTERNAL_DO_BUNDLE_SNAPSHOT_ENV = "VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH";
+const INTERNAL_DO_PROGRAMS_SNAPSHOT_ENV = "VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH";
 
 /**
  * Freeze the product-baked internal runtime for this hub boot.
@@ -144,12 +144,12 @@ const INTERNAL_DO_BUNDLE_SNAPSHOT_ENV = "VIBESTUDIO_INTERNAL_DO_BUNDLE_PATH";
  * rebuild it while this hub is serving. Workspace crash recovery must still
  * restore the exact runtime identities sealed earlier in this boot.
  */
-export function snapshotInternalDOBundleForHub(
+export function snapshotInternalDOProgramsForHub(
   configDir: string,
-  bundle = getInternalDOBundle().bundle
+  programs = getInternalDOPrograms()
 ): string {
-  const snapshotPath = path.join(configDir, "server-auth", "internal-do.bundle.snapshot.mjs");
-  writeFileAtomicSync(snapshotPath, bundle, { mode: 0o600 });
+  const snapshotPath = path.join(configDir, "server-auth", "internal-do-programs.snapshot.json");
+  writeFileAtomicSync(snapshotPath, JSON.stringify(programs.publication()), { mode: 0o600 });
   return snapshotPath;
 }
 
@@ -2867,7 +2867,7 @@ export function applyWorkspaceHostRuntimeEnv(
   env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = path.dirname(launchSet.serverEntry);
   // The retained process owns its compiled bundle and build executable. The
   // hub snapshot is deliberately preserved only for its own generation.
-  delete env[INTERNAL_DO_BUNDLE_SNAPSHOT_ENV];
+  delete env[INTERNAL_DO_PROGRAMS_SNAPSHOT_ENV];
   const esbuildBinary = getEsbuildBinaryPath(launchSet.appRoot);
   if (esbuildBinary) env["ESBUILD_BINARY_PATH"] = esbuildBinary;
   else delete env["ESBUILD_BINARY_PATH"];
@@ -3459,8 +3459,8 @@ export async function runHubServer(input: {
     await new Promise<void>((resolve) => server.close(() => resolve()));
     throw error;
   }
-  process.env[INTERNAL_DO_BUNDLE_SNAPSHOT_ENV] =
-    snapshotInternalDOBundleForHub(getCentralDataPath());
+  process.env[INTERNAL_DO_PROGRAMS_SNAPSHOT_ENV] =
+    snapshotInternalDOProgramsForHub(getCentralDataPath());
   recoverStagedWorkspaceDeletions(centralData, nativeWorkspaceCleanup(appRoot));
   const version = process.env["VIBESTUDIO_APP_VERSION"] ?? WORKSPACE_APP_VERSION;
   const serverEntryPath = process.argv[1];

@@ -53,7 +53,7 @@ export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
   "dist/browserTransport.js",
   ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => `dist/${filename}`),
   "dist/dependency-content-maintenance.cjs",
-  "dist/internal-do.bundle.mjs",
+  "dist/internal-do-programs.json",
   "dist/sql-wasm.wasm",
   "dist/host-build-fingerprint.json",
   "dist/host-preparation-recipes.json",

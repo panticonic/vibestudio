@@ -798,7 +798,7 @@ describe("WorkerdManager", () => {
       const internal = await import("./internalDOs/internalDoLoader.js");
       for (const className of internal.INTERNAL_DO_CLASSES) {
         const identity = internal.internalDOExecutionIdentity(
-          internal.getInternalDOBundle(),
+          internal.getInternalDOPrograms(),
           className
         );
         expect(

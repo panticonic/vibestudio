@@ -1,6 +1,11 @@
 import { assertSingleInfrastructureModuleTree } from "./scripts/lib/bundle-module-identity.mjs";
 import * as esbuild from "esbuild";
 import { buildArtifactGroups, joinBuildOperations } from "./scripts/build-artifact-groups.mjs";
+import {
+  INTERNAL_DO_PROGRAMS_FILE,
+  captureInternalDoPrograms,
+} from "./scripts/lib/internal-do-programs.mjs";
+import { internalDoBuildOptions, internalDoCompilerOutputs } from "./scripts/internal-do-build.mjs";
 import { stageNodeRuntime } from "./scripts/node-runtime-artifacts.mjs";
 import { buildNativeIsolation } from "./scripts/build-native-isolation.mjs";
 import { prepareNativeDependencyFiles } from "./scripts/native-host-dependencies.mjs";
@@ -551,18 +556,40 @@ const browserTransportConfig = {
   logOverride,
 };
 
-const internalDoBundleConfig = {
-  entryPoints: ["src/server/internalDOs/workerdEntry.ts"],
-  bundle: true,
-  platform: "browser",
-  target: "es2022",
-  format: "esm",
-  outfile: "dist/internal-do.bundle.mjs",
-  conditions: ["worker", "browser"],
-  external: ["node:*", "electron"],
-  sourcemap: isDev,
+const internalDoProgramsBase = internalDoBuildOptions({
   minify: !isDev,
+  sourcemap: isDev,
+});
+const internalDoProgramsConfig = {
+  ...internalDoProgramsBase,
   logOverride,
+  plugins: [
+    ...internalDoProgramsBase.plugins,
+    {
+      name: "publish-internal-do-programs",
+      setup(build) {
+        build.onEnd(async (result) => {
+          if (result.errors.length > 0) return;
+          const capture = captureInternalDoPrograms(internalDoCompilerOutputs(result));
+          // Source maps are producer diagnostics, not executable payload. Keep
+          // the existing linked-map contract instead of making every isolate
+          // parse an inline copy of the complete original source graph.
+          await joinBuildOperations(
+            (result.outputFiles ?? [])
+              .filter((output) => output.path.endsWith(".map"))
+              .map((output) => async () => {
+                await fs.promises.mkdir(path.dirname(output.path), { recursive: true });
+                await fs.promises.writeFile(output.path, output.contents);
+              })
+          );
+          await fs.promises.writeFile(
+            path.join("dist", INTERNAL_DO_PROGRAMS_FILE),
+            JSON.stringify(capture)
+          );
+        });
+      },
+    },
+  ],
 };
 
 // Plugin to rewrite bare Node builtin imports to node: prefix and mark electron
@@ -800,7 +827,7 @@ async function build() {
             adblockWorkerConfig,
             ...preloadConfigs,
             browserTransportConfig,
-            internalDoBundleConfig,
+            internalDoProgramsConfig,
             bootstrapConfig,
             clientConfig,
             releaseVerifierRunnerConfig,
@@ -858,8 +885,8 @@ async function buildInternalDoOnly() {
     releaseLock = await acquireSourcePrerequisiteLock();
     fs.mkdirSync("dist", { recursive: true });
     invalidateHostBuildFingerprints();
-    await buildHostArtifact(internalDoBundleConfig);
-    console.log("Internal Durable Object bundle built successfully!");
+    await buildHostArtifact(internalDoProgramsConfig);
+    console.log("Internal Durable Object programs built successfully!");
   } catch (error) {
     console.error("Internal Durable Object bundle build failed:", error);
     process.exitCode = 1;
@@ -871,8 +898,9 @@ async function buildInternalDoOnly() {
 /** Source and packaged launchers execute the same server artifact contract. */
 async function buildServerArtifacts(modes, workerdPrograms) {
   const embedded = {
-    "globalThis.__VIBESTUDIO_INTERNAL_DO_BUNDLE__": JSON.stringify(
-      fs.readFileSync("dist/internal-do.bundle.mjs", "utf8")
+    "globalThis.__VIBESTUDIO_INTERNAL_DO_PROGRAMS__": fs.readFileSync(
+      path.join("dist", INTERNAL_DO_PROGRAMS_FILE),
+      "utf8"
     ),
     "globalThis.__VIBESTUDIO_WORKERD_PROGRAMS__": JSON.stringify(workerdPrograms),
   };
@@ -967,7 +995,7 @@ async function buildSourceServerPrerequisites() {
       () => buildWorkerdPrograms({ minify: !isDev, logOverride }),
       () =>
         buildArtifactGroups(
-          [browserTransportConfig, internalDoBundleConfig],
+          [browserTransportConfig, internalDoProgramsConfig],
           assertHostBuildMetafiles,
           buildHostArtifact
         ),

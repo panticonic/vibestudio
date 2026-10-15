@@ -505,9 +505,9 @@ async function main() {
   const { ExecutionPublicationJournal } = await import("./executionPublicationJournal.js");
   const { executionArtifactRefFromBuild, buildKeyRootProvider, DelegatingExecutionRootProvider } =
     await import("./executionRootProviders.js");
-  const { getInternalDOBundle, internalDOExecutionArtifacts } =
+  const { getInternalDOPrograms, internalDOExecutionArtifacts } =
     await import("./internalDOs/internalDoLoader.js");
-  const productSeedArtifacts = internalDOExecutionArtifacts(getInternalDOBundle());
+  const productSeedArtifacts = internalDOExecutionArtifacts(getInternalDOPrograms());
   const productSeedArtifactByIdentity = new Map(
     productSeedArtifacts.map((artifact) => [
       `${artifact.buildKey}\0${artifact.executionDigest}`,

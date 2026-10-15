@@ -1,14 +1,28 @@
-import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import { internalDOExecutionArtifacts } from "./internalDOs/internalDoLoader.js";
+import { internalDoProgramsForFixture } from "../../tests/fixtures/internalDoPrograms.js";
+import {
+  executionArtifactDigest,
+  verifyExecutionArtifactRef,
+} from "@vibestudio/shared/execution/retention";
+import { sha256 } from "@vibestudio/shared/execution/identity";
 import { buildKeyRootProvider } from "./executionRootProviders.js";
+
+function sharedBuildArtifacts() {
+  const first = internalDOExecutionArtifacts(internalDoProgramsForFixture())[0]!;
+  const unsigned = { ...first, recipeDigest: sha256("a second recipe over the exact same bytes") };
+  const second = verifyExecutionArtifactRef({
+    ...unsigned,
+    executionDigest: executionArtifactDigest(unsigned),
+  });
+  return [first, second];
+}
 
 describe("buildKeyRootProvider", () => {
   it("rejects another execution even when it shares the requested build bytes", async () => {
-    const bundle = "export class InternalDO {}";
-    const buildKey = createHash("sha256").update(bundle).digest("hex");
-    const [first, second] = internalDOExecutionArtifacts({ bundle, buildKey });
+    const [first, second] = sharedBuildArtifacts();
     if (!first || !second) throw new Error("expected two product-seed execution artifacts");
+    const buildKey = first.buildKey;
     const provider = buildKeyRootProvider({
       id: "runtime-entity",
       owner: "runtime-entity",
@@ -29,9 +43,7 @@ describe("buildKeyRootProvider", () => {
   });
 
   it("rejects a resolver returning a different build", async () => {
-    const bundle = "export class InternalDO {}";
-    const buildKey = createHash("sha256").update(bundle).digest("hex");
-    const [artifact] = internalDOExecutionArtifacts({ bundle, buildKey });
+    const [artifact] = sharedBuildArtifacts();
     if (!artifact) throw new Error("expected product-seed execution artifact");
     const provider = buildKeyRootProvider({
       id: "runtime-entity",
@@ -52,12 +64,11 @@ describe("buildKeyRootProvider", () => {
   });
 
   it("keeps an execution digest while resolving artifacts with a shared build key", async () => {
-    const bundle = "export class InternalDO {}";
-    const buildKey = createHash("sha256").update(bundle).digest("hex");
-    const artifacts = internalDOExecutionArtifacts({ bundle, buildKey });
+    const artifacts = sharedBuildArtifacts();
     const first = artifacts[0];
     const second = artifacts[1];
     if (!first || !second) throw new Error("expected two product-seed execution artifacts");
+    const buildKey = first.buildKey;
     const resolve = vi.fn(({ executionDigest }: { executionDigest?: string }) =>
       executionDigest === first.executionDigest ? first : second
     );

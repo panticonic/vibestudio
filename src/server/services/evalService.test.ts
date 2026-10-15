@@ -27,7 +27,7 @@ import {
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { DODispatch } from "../doDispatch.js";
 import {
-  getInternalDOBundle,
+  getInternalDOPrograms,
   internalDOExecutionIdentity,
   INTERNAL_DO_SOURCE,
 } from "../internalDOs/internalDoLoader.js";
@@ -64,7 +64,7 @@ const WORKSPACE_REF = {
   className: "WorkspaceDO",
   objectKey: "ws_1",
 };
-const EVAL_EXECUTION_IDENTITY = internalDOExecutionIdentity(getInternalDOBundle(), "EvalDO");
+const EVAL_EXECUTION_IDENTITY = internalDOExecutionIdentity(getInternalDOPrograms(), "EvalDO");
 
 function evalKey(ownerId: string, subKey: string): string {
   return createHash("sha256").update(`${ownerId}\0${subKey}`).digest("hex").slice(0, 40);
