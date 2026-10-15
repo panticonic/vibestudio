@@ -269,7 +269,7 @@ const APEX_LANDING_HTML = `<!doctype html>
       <span class="kicker">The idea</span>
       <h2 class="section-title" id="why">There’s more to AI-UX than a chat box</h2>
       <p>Most AI apps follow the same template: the app, a chat box in the corner, a few tools wired up behind it. I think interfaces can do a lot more than that. They could generate parts of themselves while you use them, work with your own data, and drop agents into games and tools wherever an agent actually helps.</p>
-      <p>Actually turning that hot take into something better isn’t quite as straightforward though. The models we write code with learned from software that came before any of this. And I think it is also really easy to suffer from a lack of imagination here. So I built Vibestudio as an intuition pump to move in the direction of what comes next.</p>
+      <p>Unfortunately, building something to break out of the old paradigm isn't that easy: First of all, the models we write code with learned from software that mostly came before AI. But also: It is difficult to even imagine what the future of UX could look like and it is really easy to suffer from a lack of imagination here. So I built Vibestudio as an intuition pump to move in the direction of what comes next.</p>
       <p>When JS-enabled browsers were initially introduced, when the first web-apps started working, they made new software something you could try in seconds instead of minutes or hours. Even today, your agent can build something roughly right in minutes, but making it delightful still takes hours. It’s worth a lot to open something another person already thought hard about, and run it on your own AI — but we need a runtime to connect 3rd party AI-enabled apps to your agentic environment.</p>
     </section>
 
@@ -331,8 +331,8 @@ const APEX_LANDING_HTML = `<!doctype html>
     </section>
 
     <section class="narrow closing" aria-label="A note on status">
-      <p>Vibestudio is alpha software. Things will break, the approval prompts are still too chatty, and some of the example apps are rough. Please read about the <a href="https://github.com/panticonic/vibestudio/blob/main/docs/permission-system.md">permission system</a> before you connect anything sensitive.</p>
-      <p>If you build something strange with it, or find what breaks, <a href="https://github.com/panticonic/vibestudio/issues">tell me</a>.</p>
+      <p>Vibestudio is alpha software. Things will break, the approval prompts are still too chatty, and some of the example apps are rough. Please consider before you connect anything sensitive.</p>
+      <p>Build something strange, see what breaks, and <a href="https://github.com/panticonic/vibestudio/issues">tell me</a> about it!</p>
       <p class="sig">Gabe</p>
     </section>
   </main>
