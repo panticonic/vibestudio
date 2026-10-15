@@ -114,6 +114,29 @@ that boundary. Record cold and warm results separately, with the exact app revis
 template pins, prepared artifact identities, and native startup phase receipts.
 Until that boundary has been measured, do not claim that startup meets the target.
 
+Template publication can require a current host build before the final template
+pin exists: host-owned template test projections run the canonical
+`scripts/ensure-host-build.mjs` and consume that checkout's desktop generation.
+An explicit artifact-root override used by conventional host fixtures does not
+replace this projection dependency. Produce the required current generation to
+unblock template verification and publication. Then adopt the exact successful
+publication receipt, freeze the resulting host inputs and template pins, and
+produce the final production host and installed application. These are different
+input snapshots with a real publication edge, not duplicate producers for the
+same candidate. Keep exhaustive installed-runtime preparation and its genuine
+fresh-consumer verification in the final package gate.
+
+Local startup timing need not depend on shareable network reach. A restored-shell
+sample records its DOM boundary and both Personal and System's successful native
+semantic-activation receipts from the same launch; its healthy-restored timestamp
+is the latest of those three boundaries. Label this boundary explicitly rather
+than treating it as proof that every panel has rendered interactive content.
+Preserve native startup phases and service/Workerd reports. Optional remote CPU
+profiling or a separately paired online diagnostic client is additional evidence,
+not a prerequisite for completing the local timing sample. Retiring its launcher
+or Electron process is not the whole cleanup proof: the external owner must also
+audit detached descendants and remove the exact owned scratch/cache fixture.
+
 Native service-startup evidence includes the existing ServiceContainer ready
 message with `startupReport=<JSON>`. Each successful readiness boundary records
 the container's elapsed duration, realized critical path, and service names,
