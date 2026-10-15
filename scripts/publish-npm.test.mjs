@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
 import {
+  distTagPromotionDecision,
   npmArchivePayloadSha256,
   publishArgs,
   parseArgs,
@@ -78,19 +79,76 @@ void test("reused candidates require an explicit immutable release identity", ()
     () => parseArgs(["--candidate-version", "not-a-version"]),
     /valid semantic version/u
   );
+  assert.throws(
+    () => parseArgs(["--tag", "vibestudio-publication-candidate"]),
+    /reserved for atomic publication/u
+  );
 });
 
 void test("real publication retains errors without buffering the package file manifest", () => {
-  assert.deepEqual(publishArgs({ packagePath: "/candidate.tgz", dryRun: false, tag: "latest" }), [
-    "publish",
-    "/candidate.tgz",
-    "--access",
-    "public",
-    "--tag",
-    "latest",
-    "--loglevel",
-    "error",
-  ]);
+  assert.deepEqual(
+    publishArgs({
+      packagePath: "/candidate.tgz",
+      dryRun: false,
+      tag: "vibestudio-publication-candidate",
+    }),
+    [
+      "publish",
+      "/candidate.tgz",
+      "--access",
+      "public",
+      "--tag",
+      "vibestudio-publication-candidate",
+      "--loglevel",
+      "error",
+    ]
+  );
+});
+
+void test("latest dist-tag promotion is monotonic across delayed releases", () => {
+  assert.equal(
+    distTagPromotionDecision({
+      candidateVersion: "1.2.3",
+      currentVersion: null,
+      tag: "latest",
+    }),
+    "promote"
+  );
+  assert.equal(
+    distTagPromotionDecision({
+      candidateVersion: "1.2.3",
+      currentVersion: "1.2.2",
+      tag: "latest",
+    }),
+    "promote"
+  );
+  assert.equal(
+    distTagPromotionDecision({
+      candidateVersion: "1.2.3",
+      currentVersion: "1.2.3",
+      tag: "latest",
+    }),
+    "current"
+  );
+  assert.equal(
+    distTagPromotionDecision({
+      candidateVersion: "1.2.3",
+      currentVersion: "1.3.0",
+      tag: "latest",
+    }),
+    "preserve-newer"
+  );
+});
+
+void test("explicit non-latest dist-tags reconcile to the requested release", () => {
+  assert.equal(
+    distTagPromotionDecision({
+      candidateVersion: "1.2.3",
+      currentVersion: "1.3.0",
+      tag: "next",
+    }),
+    "promote"
+  );
 });
 
 void test("rejects a stale staged candidate before publication", () => {

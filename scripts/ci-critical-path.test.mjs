@@ -36,6 +36,22 @@ test("APT repository instructions restrict downloads to the native architecture"
   assert.equal(repositoryLines, instructionFiles.length);
 });
 
+test("RPM repository instructions enable package and metadata signature checks", async () => {
+  const instructionFiles = [
+    "README.md",
+    ".github/workflows/release.yml",
+    "scripts/publish/build-linux-repos.sh",
+  ];
+  for (const fileName of instructionFiles) {
+    const source = await fs.readFile(path.join(repositoryRoot, fileName), "utf8");
+    assert.match(source, /baseurl=(?:https:\/\/panticonic\.github\.io\/vibestudio|\$BASE_URL)\/rpm/u);
+    assert.match(source, /(?:^|\n)\s*gpgcheck=1(?:\n|$)/u);
+    assert.match(source, /(?:^|\n)\s*repo_gpgcheck=1(?:\n|$)/u);
+    assert.match(source, /gpgkey=(?:https:\/\/panticonic\.github\.io\/vibestudio|\$BASE_URL)\/gpg\.key/u);
+    assert.doesNotMatch(source, /config-manager --add-repo/u);
+  }
+});
+
 test("Linux candidate checksums admit native package architecture names and reject incomplete sets", async () => {
   const workflow = await readWorkflow("linux-installer.yml");
   const command = workflow.jobs.candidate.steps
@@ -111,6 +127,7 @@ test("npm publication resumes from the exact protected-main CI artifact", async 
   );
   assert.equal(workflow.on.workflow_call.secrets.NPM_TOKEN.required, true);
   assert.deepEqual(workflow.permissions, {});
+  assert.equal(workflow.concurrency.group, "npm-server-publish-vibestudio-server");
   assert.equal(workflow.concurrency["cancel-in-progress"], false);
   assert.deepEqual(dependenciesOf(workflow.jobs.publish), ["validate"]);
   assert.deepEqual(workflow.jobs.validate.permissions, { actions: "read", contents: "read" });
@@ -681,14 +698,27 @@ test("native artifact consumers wait for their exact producers without unrelated
   assert.match(windowsPackage.run, /--prepackaged release\/win-unpacked/);
   assert.doesNotMatch(windowsPackage.run, /pnpm build/);
   const windowsChecksum = windowsSteps.find((step) => step.name === "Generate installer checksums");
+  const windowsUpdaterMetadata = windowsSteps.find(
+    (step) => step.name === "Verify updater metadata binds the Windows installer"
+  );
   const windowsUpload = windowsSteps.find(
     (step) => step.name === "Upload immutable Windows release candidate"
   );
   assert.ok(windowsSteps.indexOf(windowsPackage) < windowsSteps.indexOf(windowsChecksum));
+  assert.ok(windowsSteps.indexOf(windowsPackage) < windowsSteps.indexOf(windowsUpdaterMetadata));
+  assert.ok(windowsSteps.indexOf(windowsUpdaterMetadata) < windowsSteps.indexOf(windowsUpload));
+  assert.match(windowsUpdaterMetadata.run, /verify-electron-updater-metadata\.mjs/u);
+  assert.match(
+    windowsUpdaterMetadata.run,
+    /--write-receipt release\/updater-metadata-windows\.json/u
+  );
+  assert.match(windowsUpdaterMetadata.run, /release\/latest\.yml/u);
+  assert.match(windowsUpdaterMetadata.run, /release\/\*\.exe/u);
   assert.ok(windowsSteps.indexOf(windowsChecksum) < windowsSteps.indexOf(windowsUpload));
   assert.match(windowsChecksum.run, /latest\.yml/);
   assert.match(windowsChecksum.run, /SHA256SUMS-windows/);
   assert.equal(windowsUpload.with.name, "vibestudio-windows-\${{ github.sha }}");
+  assert.match(windowsUpload.with.path, /release\/updater-metadata-windows\.json/u);
   assert.equal(windowsUpload.with["if-no-files-found"], "error");
   assert.doesNotMatch(JSON.stringify(windowsInstaller), /\$\{\{\s*secrets\./);
   assert.doesNotMatch(JSON.stringify(windowsInstaller), /softprops\/action-gh-release/);
@@ -973,6 +1003,13 @@ test("native artifact consumers wait for their exact producers without unrelated
   assert.ok(
     macSteps.some((step) => step.name === "Restore and verify the exact tested application")
   );
+  const macUpdaterMetadata = macSteps.find(
+    (step) => step.name === "Verify updater metadata binds the macOS artifacts"
+  );
+  assert.match(macUpdaterMetadata.run, /verify-electron-updater-metadata\.mjs/u);
+  assert.match(macUpdaterMetadata.run, /--write-receipt release\/updater-metadata-macos\.json/u);
+  assert.match(macUpdaterMetadata.run, /release\/latest-mac\.yml/u);
+  assert.match(macUpdaterMetadata.run, /release\/\*\.dmg release\/\*\.zip/u);
   assert.doesNotMatch(JSON.stringify(macSteps), /pnpm build(?:\s|$)/u);
   assert.ok(
     macSteps.some((step) => step.name === "Download source-attested Darwin process observers")
@@ -1034,6 +1071,19 @@ test("native artifact consumers wait for their exact producers without unrelated
       /always\(\)|!cancelled\(\)/,
       `${publisher} must skip when a required dependency fails or is cancelled`
     );
+  }
+  for (const [publisher, metadata, artifacts] of [
+    ["publish-windows", "latest.yml", "release/*.exe"],
+    ["publish-macos", "latest-mac.yml", "release/*.dmg release/*.zip"],
+  ]) {
+    const verification = releaseJobs[publisher].steps.find((step) =>
+      step.name?.startsWith("Verify updater metadata binds the published")
+    );
+    assert.equal(verification.env.RELEASE_TAG, "${{ inputs.release-tag }}");
+    assert.match(verification.run, /verify-electron-updater-metadata\.mjs/u);
+    assert.match(verification.run, /--receipt release\/updater-metadata-(?:windows|macos)\.json/u);
+    assert.ok(verification.run.includes(`release/${metadata}`));
+    assert.ok(verification.run.includes(artifacts));
   }
 
   const npmPublisher = releaseJobs["publish-npm"];

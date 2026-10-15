@@ -64,6 +64,14 @@ jobs:
       - name: Package NSIS installer from the tested application
         run: pnpm exec electron-builder --win --x64 --prepackaged release/win-unpacked --publish never
 
+      - name: Verify updater metadata binds the Windows installer
+        shell: bash
+        run: >-
+          node scripts/verify-electron-updater-metadata.mjs
+          --write-receipt release/updater-metadata-windows.json
+          release/latest.yml "$(node -p "require('./package.json').version")"
+          release/*.exe
+
       - name: Generate installer checksums
         shell: bash
         working-directory: release
@@ -80,6 +88,7 @@ jobs:
           path: |
             release/*.exe
             release/latest.yml
+            release/updater-metadata-windows.json
             release/SHA256SUMS-windows
           if-no-files-found: error
           retention-days: 7

@@ -48,7 +48,10 @@ on:
 permissions: {}
 
 concurrency:
-  group: npm-server-publish-${{ inputs.release-tag }}
+  # npm versions are immutable, but dist-tags are package-wide mutable pointers.
+  # Serialize every release of this package so an older delayed publication
+  # cannot race a newer release while reconciling `latest`.
+  group: npm-server-publish-vibestudio-server
   cancel-in-progress: false
 
 jobs:

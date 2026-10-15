@@ -17,9 +17,13 @@ RELEASE_DIR=${1:?usage: build-linux-repos.sh <release-dir> <output-dir> <base-ur
 OUTPUT_DIR=${2:?usage: build-linux-repos.sh <release-dir> <output-dir> <base-url>}
 BASE_URL=${3:?usage: build-linux-repos.sh <release-dir> <output-dir> <base-url>}
 PACKAGE_BASE_URL=${4:?usage: build-linux-repos.sh <release-dir> <output-dir> <base-url> <release-assets-url>}
+PREVIOUS_RPM_ROOT=${5:-}
 SIGNING_KEY=${SIGNING_KEY:-packages@vibestudio.app}
+SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:?SOURCE_DATE_EPOCH must identify the immutable release}
+DEPLOYMENT_EPOCH=${DEPLOYMENT_EPOCH:?DEPLOYMENT_EPOCH must identify this Pages deployment}
 SUITE=${SUITE:-stable}
 COMPONENT=main
+RPM_RETENTION_SECONDS=86400
 
 log() { printf '[linux-repos] %s\n' "$1" >&2; }
 
@@ -116,9 +120,12 @@ if [ "$rpm_count" -gt 0 ]; then
   bash "$SCRIPT_ROOT/scripts/publish/verify-rpm-signatures.sh" "$RPM_ROOT"
   # DNF reads the signed index here and fetches the exact, already signed release
   # assets. Hosting a second copy would exceed GitHub Pages' 1 GB site limit.
-  createrepo_c --quiet --baseurl "${PACKAGE_BASE_URL%/}/" "$RPM_ROOT"
-  gpg --batch --yes --local-user "$SIGNING_KEY" \
+  createrepo_c --quiet --baseurl "${PACKAGE_BASE_URL%/}/" \
+    --revision "$SOURCE_DATE_EPOCH" --set-timestamp-to-revision "$RPM_ROOT"
+  gpg --batch --yes --faked-system-time "$SOURCE_DATE_EPOCH!" --local-user "$SIGNING_KEY" \
     --detach-sign --armor "$RPM_ROOT/repodata/repomd.xml"
+  python3 "$SCRIPT_ROOT/scripts/publish/retain-rpm-repodata.py" \
+    "$RPM_ROOT" "$PREVIOUS_RPM_ROOT" "$DEPLOYMENT_EPOCH" "$RPM_RETENTION_SECONDS"
   rm "$RPM_ROOT"/*.rpm
   log "signed dnf metadata"
 else
@@ -287,7 +294,7 @@ echo "deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/vibest
 sudo apt update &amp;&amp; sudo apt install vibestudio</code></pre>
        </article>
        <article class="card">
-         <div class="card-head"><div class="os-icon" aria-hidden="true">F</div><h2>Fedora, RHEL &amp; openSUSE</h2></div>
+         <div class="card-head"><div class="os-icon" aria-hidden="true">F</div><h2>Fedora &amp; RHEL</h2></div>
          <p>Register the signed repository, then use DNF to install and receive updates.</p>
          <div class="step-label">Run in Terminal</div>
          <pre><code>sudo rpm --import $BASE_URL/gpg.key
@@ -303,7 +310,7 @@ REPO
 sudo dnf install Vibestudio</code></pre>
        </article>
      </div>
-     <aside class="arch"><strong>Arch Linux</strong><p>Download the Arch package attached to the <a href="https://github.com/panticonic/vibestudio/releases">latest GitHub release</a>.</p></aside>
+     <aside class="arch"><strong>openSUSE, Arch Linux, and other distributions</strong><p>Download the matching package attached to the <a href="https://github.com/panticonic/vibestudio/releases">latest GitHub release</a>.</p></aside>
    </section>
  </main>
  <footer class="wrap"><a href="https://vibestudio.app/" data-carry-theme>Vibestudio</a><span>Questions or issues? <a href="https://github.com/panticonic/vibestudio/issues">Get help on GitHub</a></span></footer>

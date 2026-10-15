@@ -39,13 +39,33 @@ fi
 bash "$SCRIPT_DIR/sign-linux-installers.sh" "$test_root/release"
 (cd "$test_root/release" && sha256sum --check SHA256SUMS-linux)
 assets_url=https://github.com/example/repo/releases/download/v1.0.0
+export SOURCE_DATE_EPOCH
+SOURCE_DATE_EPOCH=$(date +%s)
+export DEPLOYMENT_EPOCH=$SOURCE_DATE_EPOCH
 bash "$SCRIPT_DIR/build-linux-repos.sh" "$test_root/release" "$test_root/site" https://example.invalid "$assets_url"
 gpg --verify "$test_root/site/apt/dists/stable/InRelease"
 gpg --verify "$test_root/site/rpm/repodata/repomd.xml.asc" "$test_root/site/rpm/repodata/repomd.xml"
 test -z "$(find "$test_root/site/rpm" -name '*.rpm' -print)"
-python3 - "$test_root/site" "$test_root/release" "$assets_url/" <<'PY'
+same_release_epoch=$SOURCE_DATE_EPOCH
+bash "$SCRIPT_DIR/build-linux-repos.sh" "$test_root/release" "$test_root/site-repeat" https://example.invalid "$assets_url"
+cmp "$test_root/site/rpm/repodata/repomd.xml" "$test_root/site-repeat/rpm/repodata/repomd.xml"
+cmp "$test_root/site/rpm/repodata/repomd.xml.asc" "$test_root/site-repeat/rpm/repodata/repomd.xml.asc"
+SOURCE_DATE_EPOCH=$((same_release_epoch + 1))
+DEPLOYMENT_EPOCH=$((DEPLOYMENT_EPOCH + 60))
+bash "$SCRIPT_DIR/build-linux-repos.sh" "$test_root/release" "$test_root/site-next" https://example.invalid "$assets_url" "$test_root/site/rpm"
+mkdir -p "$test_root/published"
+cp -a "$test_root/site-next/rpm" "$test_root/published/rpm"
+cp "$test_root/site/rpm/repodata/retention.json" "$test_root/published/rpm/repodata/retention.json"
+python3 "$SCRIPT_DIR/fetch-rpm-repodata.py" \
+  "file://$test_root/published/rpm" "$test_root/captured" "$DEPLOYMENT_EPOCH" 86400
+gpg --verify "$test_root/captured/repodata/repomd.xml.asc" "$test_root/captured/repodata/repomd.xml"
+python3 - "$test_root/site" "$test_root/site-next" "$test_root/captured" "$test_root/release" "$assets_url/" <<'PY'
 import gzip, hashlib, pathlib, re, sys, xml.etree.ElementTree as ET
-site, release, origin = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+site = pathlib.Path(sys.argv[1])
+next_site = pathlib.Path(sys.argv[2])
+captured = pathlib.Path(sys.argv[3])
+release = pathlib.Path(sys.argv[4])
+origin = sys.argv[5]
 ns = {'repo': 'http://linux.duke.edu/metadata/repo', 'pkg': 'http://linux.duke.edu/metadata/common'}
 repo = ET.parse(site / 'rpm/repodata/repomd.xml')
 primary = repo.find('repo:data[@type="primary"]/repo:location', ns).attrib['href']
@@ -58,6 +78,23 @@ for package in packages:
     assert location.attrib['{http://www.w3.org/XML/1998/namespace}base'] == origin
     payload = release / location.attrib['href']
     assert package.find('pkg:checksum', ns).text == hashlib.sha256(payload.read_bytes()).hexdigest()
+retention = __import__('json').loads((next_site / 'rpm/repodata/retention.json').read_text())
+retained = {record['path']: record for record in retention['files']}
+old_references = set()
+for record in repo.findall('repo:data', ns):
+    relative = record.find('repo:location', ns).attrib['href']
+    checksum = record.find('repo:checksum', ns).text
+    old_references.add(relative)
+    assert retained[relative]['sha256'] == checksum
+    assert hashlib.sha256((next_site / 'rpm' / relative).read_bytes()).hexdigest() == checksum
+next_repo = ET.parse(next_site / 'rpm/repodata/repomd.xml')
+new_references = {
+    record.find('repo:location', ns).attrib['href']
+    for record in next_repo.findall('repo:data', ns)
+}
+captured_manifest = __import__('json').loads((captured / 'repodata/retention.json').read_text())
+captured_references = {record['path'] for record in captured_manifest['files']}
+assert captured_references == old_references | new_references
 for arch in ['amd64', 'arm64']:
     index = (site / f'apt/dists/stable/main/binary-{arch}/Packages').read_text()
     assert f'Architecture: {arch}\n' in index
@@ -83,6 +120,8 @@ assert set(indexes) == {
 }
 downloads = (site / 'index.html').read_text()
 assert 'arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/vibestudio.asc' in downloads
+assert '<h2>Fedora &amp; RHEL</h2>' in downloads
+assert 'gpgcheck=1\nrepo_gpgcheck=1\n' in downloads
 PY
 # Modifying a payload after signing must fail verification.
 python3 - "$test_root/release" <<'PY'

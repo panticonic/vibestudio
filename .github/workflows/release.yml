@@ -166,11 +166,19 @@ jobs:
             sudo apt update && sudo apt install vibestudio
             ```
 
-            **Fedora / RHEL / openSUSE** — updates arrive with `dnf upgrade`.
+            **Fedora / RHEL** — updates arrive with `dnf upgrade`.
 
             ```sh
             sudo rpm --import https://panticonic.github.io/vibestudio/gpg.key
-            sudo dnf config-manager --add-repo https://panticonic.github.io/vibestudio/rpm
+            sudo tee /etc/yum.repos.d/vibestudio.repo <<'REPO'
+            [vibestudio]
+            name=Vibestudio
+            baseurl=https://panticonic.github.io/vibestudio/rpm
+            enabled=1
+            gpgcheck=1
+            repo_gpgcheck=1
+            gpgkey=https://panticonic.github.io/vibestudio/gpg.key
+            REPO
             sudo dnf install Vibestudio
             ```
 
@@ -197,7 +205,7 @@ jobs:
             if the package repository is still behind, the app tells you instead of
             claiming the update succeeded. After a package upgrade, choose **Restart now**.
 
-            **Arch, or any distro without a repository** — the `.pkg.tar.zst`, `.rpm` and
+            **openSUSE, Arch, or any distro without a repository** — the `.pkg.tar.zst`, `.rpm` and
             `.deb` files below install directly. Every packaged format carries the AppArmor
             profile that a workspace sandbox needs on Ubuntu 24.04+.
 
@@ -276,6 +284,14 @@ jobs:
         working-directory: release
         run: sha256sum --check SHA256SUMS-macos
 
+      - name: Verify updater metadata binds the published macOS artifacts
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: >-
+          node scripts/verify-electron-updater-metadata.mjs
+          --receipt release/updater-metadata-macos.json
+          release/latest-mac.yml "$RELEASE_TAG" release/*.dmg release/*.zip
+
       - name: Download Darwin process observer candidate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -330,6 +346,13 @@ jobs:
       - name: Verify installer checksums
         working-directory: release
         run: sha256sum --check SHA256SUMS-windows
+      - name: Verify updater metadata binds the published Windows installer
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: >-
+          node scripts/verify-electron-updater-metadata.mjs
+          --receipt release/updater-metadata-windows.json
+          release/latest.yml "$RELEASE_TAG" release/*.exe
       - name: Attach installer to the release
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:

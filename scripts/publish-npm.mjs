@@ -12,7 +12,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createGunzip } from "node:zlib";
 import { formatRpcFailure } from "@vibestudio/rpc";
-import { valid as validSemver } from "semver";
+import { compare as compareSemver, valid as validSemver } from "semver";
 import { tsImport } from "tsx/esm/api";
 import { runWithOwnedCleanup } from "./lib/owned-cleanup.mjs";
 import { spawnResultFailure } from "./lib/spawn-result-failure.mjs";
@@ -37,6 +37,7 @@ const rootPkg = readJson(path.join(repoRoot, "package.json"));
 let announcedTokenEnv = false;
 let npmAuth;
 let candidateScratchDirectory = null;
+const publicationStagingTag = "vibestudio-publication-candidate";
 const serverPackage = {
   name: "@panticonic/vibestudio-server",
   dir: path.join(repoRoot, "dist-packages", "server"),
@@ -93,9 +94,7 @@ async function main() {
     }
   } else {
     if (options.candidateSourceSha || options.candidateVersion) {
-      throw new Error(
-        "--candidate-source-sha and --candidate-version require --candidate-receipt"
-      );
+      throw new Error("--candidate-source-sha and --candidate-version require --candidate-receipt");
     }
     if (!options.skipBuild) run("pnpm", ["build"], { cwd: repoRoot });
     if (!options.skipStage)
@@ -126,10 +125,12 @@ async function main() {
   }
 
   const registryVersions = new Map();
+  const payloadVerified = new Set();
   for (const entry of manifests) {
     const existing = npmView(entry.pkg.name, entry.version);
     if (existing === entry.version) {
       await verifyPublishedCandidate(entry, candidate.tarballPath);
+      payloadVerified.add(entry.pkg.name);
       console.log(
         `[publish-npm] ${entry.pkg.name}@${entry.version} is already published with the same candidate payload; skipping.`
       );
@@ -148,7 +149,11 @@ async function main() {
     console.log(`\n[publish-npm] Dry-run ${entry.pkg.name}@${entry.version}`);
     run(
       "npm",
-      publishArgs({ packagePath: candidate.tarballPath, dryRun: true, tag: options.tag }),
+      publishArgs({
+        packagePath: candidate.tarballPath,
+        dryRun: true,
+        tag: publicationStagingTag,
+      }),
       { cwd: repoRoot }
     );
   }
@@ -164,17 +169,16 @@ async function main() {
 
   if (!publishQueue.length) {
     console.log("\n[publish-npm] All selected package versions are already published.");
-  } else {
-    const publishToken = getAuthToken();
-    if (!publishToken) {
-      throw new Error(
-        "npm publish requires a saved token. Run pnpm setup:npm-token, or export NPM_TOKEN/NODE_AUTH_TOKEN for this shell."
-      );
-    }
-    const npmUser = ensureTokenAuth();
-    if (npmUser !== "panticonic") {
-      console.warn(`[publish-npm] npm token authenticates as ${npmUser}; expected panticonic.`);
-    }
+  }
+  const publishToken = getAuthToken();
+  if (!publishToken) {
+    throw new Error(
+      "npm publication requires a saved token. Run pnpm setup:npm-token, or export NPM_TOKEN/NODE_AUTH_TOKEN for this shell."
+    );
+  }
+  const npmUser = ensureTokenAuth();
+  if (npmUser !== "panticonic") {
+    console.warn(`[publish-npm] npm token authenticates as ${npmUser}; expected panticonic.`);
   }
 
   for (const entry of publishQueue) {
@@ -182,7 +186,11 @@ async function main() {
     console.log("[publish-npm] Using the configured npm publish token.");
     const result = spawnSync(
       "npm",
-      publishArgs({ packagePath: candidate.tarballPath, dryRun: false, tag: options.tag }),
+      publishArgs({
+        packagePath: candidate.tarballPath,
+        dryRun: false,
+        tag: publicationStagingTag,
+      }),
       {
         cwd: repoRoot,
         stdio: ["inherit", "pipe", "pipe"],
@@ -204,11 +212,20 @@ async function main() {
   console.log("\n[publish-npm] Registry verification");
   for (const entry of manifests) {
     const published = await verifyPublished(entry);
+    if (!payloadVerified.has(entry.pkg.name)) {
+      await verifyPublishedCandidate(entry, candidate.tarballPath);
+      payloadVerified.add(entry.pkg.name);
+    }
     console.log(`  ${entry.pkg.name}@${published}`);
   }
 
   for (const entry of manifests) {
     await runInstallSmoke(entry, `${entry.pkg.name}@${entry.version}`, "Registry install smoke");
+  }
+
+  for (const entry of manifests) {
+    reconcileDistTag(entry, options.tag);
+    retirePublicationStagingTag(entry);
   }
 }
 
@@ -255,10 +272,10 @@ export function parseArgs(argv) {
   }
 
   if (!options.tag) throw new Error("--tag must not be empty");
-  if (
-    options.candidateSourceSha &&
-    !/^[0-9a-f]{40}$/u.test(options.candidateSourceSha)
-  ) {
+  if (options.tag === publicationStagingTag) {
+    throw new Error(`--tag ${publicationStagingTag} is reserved for atomic publication`);
+  }
+  if (options.candidateSourceSha && !/^[0-9a-f]{40}$/u.test(options.candidateSourceSha)) {
     throw new Error("--candidate-source-sha must be a full Git commit SHA");
   }
   if (options.candidateVersion && validSemver(options.candidateVersion) === null) {
@@ -321,7 +338,8 @@ Options:
   --candidate-receipt <file> Reuse an archive whose receipt matches this Git commit
   --candidate-source-sha <sha> Exact release source attested by a reused receipt
   --candidate-version <version> Exact package version attested by a reused receipt
-  --tag <tag>               npm dist-tag. Default: latest
+  --tag <tag>               Dist-tag promoted after registry smoke. Default: latest
+                            latest advances monotonically and never moves backward
 
 Common reruns:
   pnpm publish:server-npm:staged
@@ -342,6 +360,18 @@ export function publishArgs({ packagePath, dryRun, tag }) {
   if (dryRun) args.push("--dry-run", "--silent");
   else args.push("--loglevel", "error");
   return args;
+}
+
+export function distTagPromotionDecision({ candidateVersion, currentVersion, tag }) {
+  if (validSemver(candidateVersion) === null) {
+    throw new Error(`Candidate version is not valid semantic version: ${candidateVersion}`);
+  }
+  if (currentVersion === candidateVersion) return "current";
+  if (tag !== "latest" || currentVersion === null) return "promote";
+  if (validSemver(currentVersion) === null) {
+    throw new Error(`npm dist-tag ${tag} has invalid semantic version: ${currentVersion}`);
+  }
+  return compareSemver(candidateVersion, currentVersion) > 0 ? "promote" : "preserve-newer";
 }
 
 export function validateStagedPackage(pkg) {
@@ -368,7 +398,9 @@ function validateCandidateIdentity(pkg, version) {
 }
 
 function npmView(name, version) {
-  const result = capture("npm", ["view", `${name}@${version}`, "version"], { cwd: repoRoot });
+  const result = capture("npm", ["view", `${name}@${version}`, "version", "--prefer-online"], {
+    cwd: repoRoot,
+  });
   if (result.status === 0) return result.stdout.trim();
   if (/E404|404 Not Found|is not in this registry/.test(`${result.stdout}\n${result.stderr}`)) {
     return null;
@@ -383,6 +415,73 @@ function npmView(name, version) {
     );
   }
   throw new Error(`Could not check npm registry for ${name}@${version}`);
+}
+
+function npmDistTags(name) {
+  const result = capture("npm", ["view", name, "dist-tags", "--json", "--prefer-online"], {
+    cwd: repoRoot,
+  });
+  const failure = spawnResultFailure(result, `npm view ${name} dist-tags`);
+  if (failure) throw failure;
+  try {
+    const tags = JSON.parse(result.stdout);
+    if (!tags || typeof tags !== "object" || Array.isArray(tags)) {
+      throw new Error("expected an object");
+    }
+    return tags;
+  } catch (error) {
+    throw new Error(`npm returned invalid dist-tags for ${name}`, { cause: error });
+  }
+}
+
+function reconcileDistTag(entry, tag) {
+  const before = npmDistTags(entry.pkg.name);
+  const currentVersion = typeof before[tag] === "string" ? before[tag] : null;
+  const decision = distTagPromotionDecision({
+    candidateVersion: entry.version,
+    currentVersion,
+    tag,
+  });
+
+  if (decision === "promote") {
+    console.log(`\n[publish-npm] Promoting ${tag} to ${entry.pkg.name}@${entry.version}`);
+    run("npm", ["dist-tag", "add", `${entry.pkg.name}@${entry.version}`, tag], {
+      cwd: repoRoot,
+      authenticated: true,
+    });
+  } else if (decision === "preserve-newer") {
+    console.log(
+      `\n[publish-npm] Preserving newer ${tag} pointer ${entry.pkg.name}@${currentVersion}.`
+    );
+  } else {
+    console.log(`\n[publish-npm] ${tag} already points to ${entry.pkg.name}@${entry.version}.`);
+  }
+
+  const expectedVersion = decision === "preserve-newer" ? currentVersion : entry.version;
+  const after = npmDistTags(entry.pkg.name);
+  if (after[tag] !== expectedVersion) {
+    throw new Error(
+      `npm dist-tag ${tag} points to ${String(after[tag])}; expected ${expectedVersion}`
+    );
+  }
+}
+
+function retirePublicationStagingTag(entry) {
+  const tags = npmDistTags(entry.pkg.name);
+  if (tags[publicationStagingTag] !== entry.version) return;
+  console.log(
+    `[publish-npm] Removing ${publicationStagingTag} from ${entry.pkg.name}@${entry.version}.`
+  );
+  run("npm", ["dist-tag", "rm", entry.pkg.name, publicationStagingTag], {
+    cwd: repoRoot,
+    authenticated: true,
+  });
+  const after = npmDistTags(entry.pkg.name);
+  if (after[publicationStagingTag] === entry.version) {
+    throw new Error(
+      `npm dist-tag ${publicationStagingTag} still points to ${entry.pkg.name}@${entry.version}`
+    );
+  }
 }
 
 async function verifyPublishedCandidate(entry, candidatePath) {
@@ -568,7 +667,7 @@ function run(command, args, options) {
     cwd: options.cwd,
     stdio: command === "npm" ? ["inherit", "pipe", "pipe"] : "inherit",
     encoding: "utf8",
-    env: npmEnv(),
+    env: npmEnv({ authenticated: options.authenticated }),
   });
   if (result.stdout) process.stdout.write(redactAuthToken(result.stdout));
   if (result.stderr) process.stderr.write(redactAuthToken(result.stderr));

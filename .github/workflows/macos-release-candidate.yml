@@ -85,6 +85,13 @@ jobs:
         run: >-
           CSC_IDENTITY_AUTO_DISCOVERY=false pnpm exec electron-builder --mac
           --prepackaged release/Vibestudio.app --publish never
+      - name: Verify updater metadata binds the macOS artifacts
+        shell: bash
+        run: >-
+          node scripts/verify-electron-updater-metadata.mjs
+          --write-receipt release/updater-metadata-macos.json
+          release/latest-mac.yml "$(node -p "require('./package.json').version")"
+          release/*.dmg release/*.zip
       - name: Generate DMG checksums
         run: |
           cd release
@@ -109,6 +116,7 @@ jobs:
             release/*.dmg
             release/*.zip
             release/latest-mac.yml
+            release/updater-metadata-macos.json
             release/macos-signing.txt
             release/SHA256SUMS-macos
           if-no-files-found: error
