@@ -1,5 +1,7 @@
 import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
 import * as fs from "node:fs";
+import * as http from "node:http";
+import * as net from "node:net";
 import { internalDoProgramsForFixture } from "../../tests/fixtures/internalDoPrograms.js";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -28,6 +30,7 @@ import {
   buildWorkspaceChildArgs,
   buildWorkspaceChildEnv,
   completeControlPairing,
+  createHubGatewayServer,
   executeHubControl,
   observeWorkspaceChildDevices,
   applyHubWorkspacePresenceReport,
@@ -41,6 +44,7 @@ import {
   revokeHubDevice,
   revokeHubUser,
   restoreRoutedWorkspaceRuntimes,
+  runHubServer,
   isHubControlHttpPath,
   selectWorkspaceCreationRootTemplate,
   selectBootstrapWorkspace,
@@ -52,6 +56,126 @@ import {
 import { WORKSPACE_EPOCH_HANDOFF_EXIT_CODE } from "./historicalWorkspaceHost.js";
 
 describe("hub shutdown ownership", () => {
+  it("preserves a failed listener acquisition without retiring another gateway", async () => {
+    const owner = createHubGatewayServer((_req, res) => res.end("owner"));
+    try {
+      await new Promise<void>((resolve) => owner.server.listen(0, "127.0.0.1", resolve));
+      const address = owner.server.address();
+      if (!address || typeof address === "string") throw new Error("Missing test gateway address");
+      await expect(
+        runHubServer({ args: { gatewayPort: address.port }, appRoot: "/unused" })
+      ).rejects.toMatchObject({ code: "EADDRINUSE" });
+      expect(owner.server.listening).toBe(true);
+    } finally {
+      await owner.close();
+    }
+  });
+
+  it("joins long-lived HTTP and upgraded connections without waiting for their clients to quit", async () => {
+    const gateway = createHubGatewayServer((_req, res) => {
+      res.writeHead(200, { "content-type": "text/plain" });
+      res.write("still running\n");
+    });
+    gateway.server.on("upgrade", (_req, socket) => {
+      socket.write(
+        "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: gateway-test\r\n\r\n"
+      );
+    });
+    const accepted: net.Socket[] = [];
+    gateway.server.on("connection", (socket) => accepted.push(socket));
+    let response: http.IncomingMessage | undefined;
+    let upgraded: net.Socket | undefined;
+    try {
+      await new Promise<void>((resolve) => gateway.server.listen(0, "127.0.0.1", resolve));
+      const address = gateway.server.address();
+      if (!address || typeof address === "string") throw new Error("Missing test gateway address");
+      response = await new Promise<http.IncomingMessage>((resolve, reject) => {
+        http.get({ host: "127.0.0.1", port: address.port }, resolve).on("error", reject);
+      });
+      const responseErrors: Error[] = [];
+      response.on("error", (error) => responseErrors.push(error));
+      const responseClosed = new Promise<void>((resolve) => response!.once("close", resolve));
+      response.resume();
+      upgraded = await new Promise<net.Socket>((resolve, reject) => {
+        const request = http.request({
+          host: "127.0.0.1",
+          port: address.port,
+          headers: { connection: "Upgrade", upgrade: "gateway-test" },
+        });
+        request.once("upgrade", (_res, socket) => resolve(socket));
+        request.on("error", reject);
+        request.end();
+      });
+      const upgradedClosed = new Promise<void>((resolve) => upgraded!.once("close", resolve));
+      upgraded.resume();
+      const acceptedClosed = accepted.map(
+        (socket) => new Promise<void>((resolve) => socket.once("close", resolve))
+      );
+      expect(accepted).toHaveLength(2);
+      const closing = gateway.close();
+      expect(gateway.close()).toBe(closing);
+      expect(gateway.server.listening).toBe(false);
+      await closing;
+      expect(accepted.every((socket) => socket.destroyed)).toBe(true);
+      await Promise.all([...acceptedClosed, responseClosed, upgradedClosed]);
+      expect(response.complete).toBe(false);
+      expect(responseErrors).toHaveLength(1);
+      expect(responseErrors[0]).toMatchObject({ code: "ECONNRESET" });
+      const refusal = await new Promise<Error>((resolve, reject) => {
+        const socket = net.connect(address.port, "127.0.0.1");
+        let failure: Error | undefined;
+        socket.once("connect", () => {
+          socket.destroy();
+          failure = new Error("Closed gateway accepted a client");
+        });
+        socket.once("error", (error) => {
+          failure = error;
+        });
+        socket.once("close", () => {
+          if (failure) resolve(failure);
+          else reject(new Error("Gateway connection closed without its failure"));
+        });
+      });
+      expect(refusal).toMatchObject({ code: "ECONNREFUSED" });
+    } finally {
+      response?.destroy();
+      upgraded?.destroy();
+      await gateway.close();
+    }
+  });
+
+  it("preserves gateway close failures after retiring its accepted sockets", async () => {
+    const gateway = createHubGatewayServer((_req, res) => {
+      res.writeHead(200);
+      res.write("pending");
+    });
+    const failure = new Error("gateway close failed");
+    const nativeClose = gateway.server.close.bind(gateway.server);
+    let response: http.IncomingMessage | undefined;
+    try {
+      await new Promise<void>((resolve) => gateway.server.listen(0, "127.0.0.1", resolve));
+      const address = gateway.server.address();
+      if (!address || typeof address === "string") throw new Error("Missing test gateway address");
+      response = await new Promise<http.IncomingMessage>((resolve, reject) => {
+        http.get({ host: "127.0.0.1", port: address.port }, resolve).on("error", reject);
+      });
+      response.on("error", () => {});
+      const responseClosed = new Promise<void>((resolve) => response!.once("close", resolve));
+      response.resume();
+      vi.spyOn(gateway.server, "close").mockImplementation((callback) => {
+        nativeClose(() => callback?.(failure));
+        return gateway.server;
+      });
+      await expect(gateway.close()).rejects.toBe(failure);
+      await responseClosed;
+      expect(gateway.server.listening).toBe(false);
+      await expect(gateway.close()).rejects.toBe(failure);
+    } finally {
+      response?.destroy();
+      vi.restoreAllMocks();
+    }
+  });
+
   it("retires ingress alongside invitation arming and joins both before transport and stores", async () => {
     const events: string[] = [];
     let finishInvitation!: () => void;

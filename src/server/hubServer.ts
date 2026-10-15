@@ -20,6 +20,7 @@ import {
 } from "@vibestudio/shared/ownedProcessGroup";
 import { createHash, randomBytes } from "node:crypto";
 import type { Duplex } from "node:stream";
+import type { Socket } from "node:net";
 import { z } from "zod";
 import {
   deleteAndUnregisterWorkspace,
@@ -3324,6 +3325,59 @@ export function openHubDataStores(databasePath: string): {
   }
 }
 
+/** The gateway owns every accepted connection, including HTTP upgrades. Stop
+ * accepting before retiring them; join their close events before releasing
+ * the gateway. http.Server.close alone waits for HTTP clients and excludes
+ * upgraded sockets, so it cannot establish this ownership boundary. */
+export function createHubGatewayServer(requestHandler: http.RequestListener): {
+  server: http.Server;
+  close(): Promise<void>;
+} {
+  const server = http.createServer(requestHandler);
+  const sockets = new Set<Socket>();
+  let closing: Promise<void> | undefined;
+  let listenerClosed = false;
+  let closeFailure: Error | undefined;
+  let finishClose = () => {};
+  server.on("connection", (socket) => {
+    sockets.add(socket);
+    socket.once("close", () => {
+      sockets.delete(socket);
+      finishClose();
+    });
+    if (closing) socket.destroy();
+  });
+  return {
+    server,
+    close() {
+      if (closing) return closing;
+      let resolveClose!: () => void;
+      let rejectClose!: (error: Error) => void;
+      closing = new Promise<void>((resolve, reject) => {
+        resolveClose = resolve;
+        rejectClose = reject;
+      });
+      finishClose = () => {
+        if (!listenerClosed || sockets.size !== 0) return;
+        if (closeFailure) rejectClose(closeFailure);
+        else resolveClose();
+      };
+      if (server.listening) {
+        server.close((error) => {
+          closeFailure = error;
+          listenerClosed = true;
+          finishClose();
+        });
+      } else {
+        listenerClosed = true;
+      }
+      for (const socket of sockets) socket.destroy();
+      finishClose();
+      return closing;
+    },
+  };
+}
+
 /**
  * Claim the hub's externally visible ownership boundary before opening or
  * mutating central state. A second hub must fail at listen(2) rather than
@@ -3332,7 +3386,7 @@ export function openHubDataStores(databasePath: string): {
 async function startHubGateway(input: {
   requestedPort?: number;
   getState(): HubRuntimeState | null;
-}): Promise<{ server: http.Server; port: number }> {
+}): Promise<{ close(): Promise<void>; port: number }> {
   const requestHandler = (req: http.IncomingMessage, res: http.ServerResponse) => {
     void (async () => {
       const state = input.getState();
@@ -3384,7 +3438,8 @@ async function startHubGateway(input: {
     });
   };
 
-  const server = http.createServer(requestHandler);
+  const gateway = createHubGatewayServer(requestHandler);
+  const { server } = gateway;
   server.on("upgrade", (req, socket, head) => {
     const state = input.getState();
     if (!state) {
@@ -3414,16 +3469,30 @@ async function startHubGateway(input: {
     void proxyUpgrade(state, proxied, req, socket, head);
   });
 
-  const port = await new Promise<number>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(input.requestedPort ?? 0, GATEWAY_HOST, () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") reject(new Error("Hub listen failed"));
-      else resolve(address.port);
+  let port: number;
+  try {
+    port = await new Promise<number>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(input.requestedPort ?? 0, GATEWAY_HOST, () => {
+        server.off("error", reject);
+        const address = server.address();
+        if (!address || typeof address === "string") reject(new Error("Hub listen failed"));
+        else resolve(address.port);
+      });
     });
-  });
-  return { server, port };
+  } catch (error) {
+    await runOwnedCleanupSteps(
+      [
+        () => {
+          throw error;
+        },
+        () => gateway.close(),
+      ],
+      "Hub gateway acquisition failed"
+    );
+    throw error;
+  }
+  return { close: gateway.close, port };
 }
 
 export async function runHubServer(input: {
@@ -3435,7 +3504,7 @@ export async function runHubServer(input: {
   const appRoot = input.appRoot;
   const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBESTUDIO_GATEWAY_PORT");
   let state: HubRuntimeState | null = null;
-  const { server, port: gatewayPort } = await startHubGateway({
+  const { close: closeGateway, port: gatewayPort } = await startHubGateway({
     requestedPort: requestedGatewayPort,
     getState: () => state,
   });
@@ -3446,19 +3515,29 @@ export async function runHubServer(input: {
     process.env["VIBESTUDIO_IDENTITY_DB_PATH"] ??
     path.join(getCentralDataPath(), "server-auth", "identity.db");
   const serverBootId = `boot_${randomBytes(18).toString("base64url")}`;
-  const { centralData, identityDb } = openHubDataStores(identityDbPath);
+  let stores: ReturnType<typeof openHubDataStores> | undefined;
   try {
-    centralData.claimHubProcessOwnership({
+    stores = openHubDataStores(identityDbPath);
+    stores.centralData.claimHubProcessOwnership({
       ownerBootId: serverBootId,
       gatewayPort,
       pid: process.pid,
     });
   } catch (error) {
-    identityDb.close();
-    centralData.close();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await runOwnedCleanupSteps(
+      [
+        () => {
+          throw error;
+        },
+        () => stores?.identityDb.close(),
+        () => stores?.centralData.close(),
+        closeGateway,
+      ],
+      "Hub state acquisition failed"
+    );
     throw error;
   }
+  const { centralData, identityDb } = stores;
   process.env[INTERNAL_DO_PROGRAMS_SNAPSHOT_ENV] =
     snapshotInternalDOProgramsForHub(getCentralDataPath());
   recoverStagedWorkspaceDeletions(centralData, nativeWorkspaceCleanup(appRoot));
@@ -3686,10 +3765,7 @@ export async function runHubServer(input: {
           await terminateWorkspaceChild(child);
           ownedState.workspaceChildren.delete(child);
         }),
-      closeGateway: () =>
-        new Promise<void>((resolve, reject) =>
-          server.close((error) => (error ? reject(error) : resolve()))
-        ),
+      closeGateway,
       joinMaintenance: async () => {
         await revocationCleanupDrain;
       },
