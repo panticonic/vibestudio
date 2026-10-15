@@ -326,4 +326,30 @@ describe("Build V2 process and role ownership", () => {
     expect(sharedSignal?.aborted).toBe(true);
     await expect(shutdown).rejects.toThrow("Build process owner is shutting down");
   });
+
+  it("preserves the producer's exact cancellation while joining its shared work", async () => {
+    const processOwner = new BuildProcessOwner({ appRoot: process.cwd(), appNodeModules: [] });
+    const entered = deferred<void>();
+    const cancellation = Object.assign(new Error("Template preparation cancelled"), {
+      code: "ECANCELLED",
+    });
+    const admitted = processOwner.admitSharedBuild(
+      "/shared-cache\0producer-stop",
+      (signal) =>
+        new BuildFlight<StoredBuildResult>("background", async () => {
+          entered.resolve();
+          return await new Promise<never>((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        })
+    );
+    // Observe both owners before delivering cancellation; neither rejection
+    // may become a new failure disconnected from the producer's lifecycle.
+    const work = admitted.entry.flight.promise.catch((error: unknown) => error);
+    await entered.promise;
+    const shutdown = processOwner.shutdown(cancellation).catch((error: unknown) => error);
+    await expect(work).resolves.toBe(cancellation);
+    await expect(shutdown).resolves.toBe(cancellation);
+    expect(processOwner.lifetime.isDrained).toBe(true);
+  });
 });

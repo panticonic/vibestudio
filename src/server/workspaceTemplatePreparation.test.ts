@@ -265,6 +265,7 @@ describe("workspace source preparation ownership", () => {
     await rolesEntered;
     controller.abort(reason);
     await joining;
+    expect(stage.processShutdown).toHaveBeenCalledWith(reason);
     expect(stop).not.toHaveBeenCalled();
     expect(stage.buildShutdown).not.toHaveBeenCalled();
     finishJobs();

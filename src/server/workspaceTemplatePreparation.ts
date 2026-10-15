@@ -711,7 +711,10 @@ async function produceWorkspaceTemplates(
   // settles. All role borrowers are now joined; retain every role resource
   // until the process owner has joined the compiler flights themselves.
   for (const retirement of [
-    () => processOwner.shutdown(),
+    // Withdrawn role borrowers can leave shared compiler work in flight. Its
+    // owner must join using the producer's original cancellation, not replace
+    // it with an unrelated shutdown failure while retiring the same work.
+    () => processOwner.shutdown(input.signal?.aborted ? input.signal.reason : undefined),
     async () => {
       // The three role lifetimes are independent once their shared owner joins.
       // Admit all cleanup, and retain every failure rather than short-circuiting.

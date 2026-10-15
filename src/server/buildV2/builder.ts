@@ -285,9 +285,8 @@ export class BuildProcessOwner {
     }
   }
 
-  async shutdown(): Promise<void> {
+  async shutdown(closing = new Error("Build process owner is shutting down")): Promise<void> {
     if (this.shutdownFlight) return this.shutdownFlight;
-    const closing = new Error("Build process owner is shutting down");
     this.buildSlotQueue.close(closing);
     this.shutdownFlight = (async () => {
       const operationFailures = await this.lifetime.close(closing);
