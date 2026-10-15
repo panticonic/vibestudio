@@ -66,10 +66,8 @@ const nativeBoundary = createNativeBoundary(workspaceAppRoot);
 const nodeBuiltinPolyfills = {
   path: require.resolve("path-browserify"),
   crypto: path.resolve(workspaceAppRoot, "src", "polyfills", "crypto.js"),
-  fs: path.resolve(workspaceAppRoot, "src", "polyfills", "fs.js"),
   "node:crypto": path.resolve(workspaceAppRoot, "src", "polyfills", "crypto.js"),
   "node:path": require.resolve("path-browserify"),
-  "node:fs": path.resolve(workspaceAppRoot, "src", "polyfills", "fs.js"),
 };
 
 const config = {
