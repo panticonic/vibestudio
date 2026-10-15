@@ -259,7 +259,7 @@ cat > "$OUTPUT_DIR/index.html" <<HTML
          <div class="step-label">Run in Terminal</div>
          <pre><code>sudo install -d -m 0755 /etc/apt/keyrings
 curl -fsSL $BASE_URL/gpg.key | sudo tee /etc/apt/keyrings/vibestudio.asc > /dev/null
-echo "deb [signed-by=/etc/apt/keyrings/vibestudio.asc] $BASE_URL/apt $SUITE $COMPONENT" \\
+echo "deb [arch=\$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/vibestudio.asc] $BASE_URL/apt $SUITE $COMPONENT" \\
   | sudo tee /etc/apt/sources.list.d/vibestudio.list
 sudo apt update &amp;&amp; sudo apt install vibestudio</code></pre>
        </article>

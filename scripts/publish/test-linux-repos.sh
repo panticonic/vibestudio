@@ -62,6 +62,8 @@ for arch in ['amd64', 'arm64']:
     index = (site / f'apt/dists/stable/main/binary-{arch}/Packages').read_text()
     assert f'Architecture: {arch}\n' in index
     assert f'Filename: pool/main/v/vibestudio/vibestudio-{arch}.deb\n' in index
+downloads = (site / 'index.html').read_text()
+assert 'arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/vibestudio.asc' in downloads
 PY
 # Modifying a payload after signing must fail verification.
 python3 - "$test_root/release" <<'PY'

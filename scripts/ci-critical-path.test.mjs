@@ -9,6 +9,33 @@ import { execFileSync } from "node:child_process";
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
+test("APT repository instructions restrict downloads to the native architecture", async () => {
+  const instructionFiles = [
+    "README.md",
+    ".github/workflows/release.yml",
+    "scripts/publish/build-linux-repos.sh",
+  ];
+  let repositoryLines = 0;
+  for (const fileName of instructionFiles) {
+    const source = await fs.readFile(path.join(repositoryRoot, fileName), "utf8");
+    const lines = source
+      .split("\n")
+      .filter(
+        (line) =>
+          line.includes("deb [") &&
+          /(?:panticonic\.github\.io\/vibestudio|\$BASE_URL)\/apt/u.test(line)
+      );
+    assert.equal(lines.length, 1, `${fileName} must contain one APT repository instruction`);
+    assert.match(
+      lines[0],
+      /deb \[arch=\\?\$\(dpkg --print-architecture\) signed-by=\/etc\/apt\/keyrings\/vibestudio\.asc\]/u,
+      `${fileName} must prevent APT from probing configured foreign architectures`
+    );
+    repositoryLines += lines.length;
+  }
+  assert.equal(repositoryLines, instructionFiles.length);
+});
+
 test("Linux candidate checksums admit native package architecture names and reject incomplete sets", async () => {
   const workflow = await readWorkflow("linux-installer.yml");
   const command = workflow.jobs.candidate.steps

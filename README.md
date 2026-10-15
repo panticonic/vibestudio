@@ -85,7 +85,7 @@ app, replace it in Applications, then reopen it. Homebrew installs offer to run
 sudo install -d -m 0755 /etc/apt/keyrings
 curl -fsSL https://panticonic.github.io/vibestudio/gpg.key \
   | sudo tee /etc/apt/keyrings/vibestudio.asc > /dev/null
-echo "deb [signed-by=/etc/apt/keyrings/vibestudio.asc] https://panticonic.github.io/vibestudio/apt stable main" \
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/vibestudio.asc] https://panticonic.github.io/vibestudio/apt stable main" \
   | sudo tee /etc/apt/sources.list.d/vibestudio.list
 sudo apt update && sudo apt install vibestudio
 ```
