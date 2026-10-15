@@ -2,12 +2,16 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import {
   canonicalStoredPairing,
-  isCliCredentials,
+  isCliIdentity,
+  migrateCliIdentity,
   isCliStoredPairing,
   type CliAgentCredentials,
   type CliIrohAgentCredentials,
   type CliCredentials,
   type CliDeviceCredentials,
+  type CliDeviceIdentity,
+  type CliIdentity,
+  type CliAccountDeviceCredentials,
   type CliIrohDeviceCredentials,
   type CliLocalDeviceCredentials,
   type CliStoredPairing,
@@ -21,6 +25,9 @@ export {
   type CliIrohAgentCredentials,
   type CliCredentials,
   type CliDeviceCredentials,
+  type CliDeviceIdentity,
+  type CliIdentity,
+  type CliAccountDeviceCredentials,
   type CliIrohDeviceCredentials,
   type CliLocalDeviceCredentials,
   type CliStoredPairing,
@@ -29,6 +36,16 @@ export {
 export const credentialPath = cliCredentialPath;
 
 export function loadCliCredentials(filePath: string = credentialPath()): CliCredentials | null {
+  const identity = loadCliIdentity(filePath);
+  if (identity?.kind === "device" && identity.phase === "account") {
+    throw new Error(
+      "This CLI is paired, but no workspace is selected; run `vibestudio remote select Personal` or `vibestudio terminal` to finish opening your account"
+    );
+  }
+  return identity;
+}
+
+export function loadCliIdentity(filePath: string = credentialPath()): CliIdentity | null {
   const p = path.resolve(filePath);
   if (!fs.existsSync(p)) return null;
   let parsed: unknown;
@@ -43,7 +60,12 @@ export function loadCliCredentials(filePath: string = credentialPath()): CliCred
     );
     return null;
   }
-  if (isCliCredentials(parsed)) return parsed;
+  const identity = migrateCliIdentity(parsed);
+  if (identity) {
+    if (!isCliIdentity(parsed))
+      writeFileAtomicSync(p, JSON.stringify(identity, null, 2), { mode: 0o600 });
+    return identity;
+  }
   console.warn(
     `[vibestudio] credential file is not a canonical CLI credential: ${p}\n` +
       "             delete it and sign in again, or restore a good copy."
@@ -65,22 +87,35 @@ export function requireDeviceCliCredentials(
   return credentials;
 }
 
-export function saveCliCredentials(
-  creds: CliCredentials,
-  filePath: string = credentialPath()
-): void {
-  if (!isCliCredentials(creds)) {
+export function requireDeviceCliIdentity(
+  identity: CliIdentity,
+  operation: string
+): CliDeviceIdentity {
+  if (identity.kind !== "device")
+    throw new Error(
+      `${operation} requires a paired human device profile; agent profiles cannot manage device identity`
+    );
+  return identity;
+}
+
+export function saveCliCredentials(creds: CliIdentity, filePath: string = credentialPath()): void {
+  if (!isCliIdentity(creds)) {
     throw new Error("Refusing to persist a non-canonical CLI credential");
   }
   const p = path.resolve(filePath);
   if (fs.existsSync(p)) {
     const existing = readCanonicalCredentialForWrite(p);
     if (
-      existing.serverId !== creds.serverId ||
+      ("serverId" in existing && "serverId" in creds && existing.serverId !== creds.serverId) ||
       existing.kind !== creds.kind ||
       (existing.kind === "device" &&
         creds.kind === "device" &&
-        existing.deviceId !== creds.deviceId) ||
+        (existing.deviceId !== creds.deviceId ||
+          existing.transport !== creds.transport ||
+          (existing.phase === "account" &&
+            existing.transport === "iroh" &&
+            creds.transport === "iroh" &&
+            existing.controlPairing.endpointId !== creds.controlPairing.endpointId))) ||
       (existing.kind === "agent" &&
         creds.kind === "agent" &&
         (existing.agentId !== creds.agentId || existing.entityId !== creds.entityId))
@@ -100,8 +135,8 @@ export function saveCliCredentials(
  * never silently repointed after the remote server has already created a new
  * device.
  */
-export function assertCliProfileIsUnpaired(): void {
-  const p = credentialPath();
+export function assertCliProfileIsUnpaired(filePath: string = credentialPath()): void {
+  const p = path.resolve(filePath);
   if (!fs.existsSync(p)) return;
   readCanonicalCredentialForWrite(p);
   throw new Error(
@@ -120,7 +155,7 @@ export function isIrohCredential<T extends { workspacePairing?: unknown }>(
   return !!creds?.workspacePairing && isCliStoredPairing(creds.workspacePairing);
 }
 
-function readCanonicalCredentialForWrite(filePath: string): CliCredentials {
+function readCanonicalCredentialForWrite(filePath: string): CliIdentity {
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
@@ -130,11 +165,12 @@ function readCanonicalCredentialForWrite(filePath: string): CliCredentials {
         "restore it or run `vibestudio remote logout` first"
     );
   }
-  if (!isCliCredentials(parsed)) {
+  const identity = migrateCliIdentity(parsed);
+  if (!identity) {
     throw new Error(
       `Refusing to replace non-canonical CLI credential state at ${filePath}; ` +
         "restore it or run `vibestudio remote logout` first"
     );
   }
-  return parsed;
+  return identity;
 }

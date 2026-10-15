@@ -15,6 +15,7 @@ import {
 import { RpcClient, type DeviceCredential } from "../rpcClient.js";
 import { runTerminalLaunchGate } from "../terminalLaunchGate.js";
 import type { LaunchProgress } from "./launchProgress.js";
+import { runOwnedCleanupSteps, runWithOwnedCleanup } from "../../../scripts/lib/owned-cleanup.mjs";
 import {
   loadTerminalBrowserModule,
   requestTerminalAppGrant,
@@ -48,9 +49,10 @@ export interface TerminalSessionsOptions {
 export interface TerminalSessionDependencies {
   route(
     credentials: DeviceCredential,
-    selector: RemoteWorkspaceSelector
+    selector: RemoteWorkspaceSelector,
+    options?: { signal?: AbortSignal }
   ): Promise<DeviceCredential>;
-  createDevice(credentials: DeviceCredential): RpcClient;
+  createDevice(credentials: DeviceCredential, options?: { signal?: AbortSignal }): RpcClient;
   listWorkspaces(control: RpcClient): Promise<RemoteWorkspaceEntry[]>;
   runGate: typeof runTerminalLaunchGate;
   requestGrant: typeof requestTerminalAppGrant;
@@ -61,7 +63,7 @@ export interface TerminalSessionDependencies {
 
 const DEFAULT_DEPENDENCIES: TerminalSessionDependencies = {
   route: selectRemoteWorkspace,
-  createDevice: (credentials) => new RpcClient(credentials),
+  createDevice: (credentials, owner) => new RpcClient(credentials, owner),
   listWorkspaces: listWorkspacesVia,
   runGate: runTerminalLaunchGate,
   requestGrant: requestTerminalAppGrant,
@@ -86,8 +88,14 @@ export async function runTerminalSessions(
   const deps = { ...DEFAULT_DEPENDENCIES, ...options.dependencies };
   let selector: RemoteWorkspaceSelector = options.workspace ?? { privateRole: "personal" };
   for (;;) {
-    const system = await deps.route(options.credentials, { privateRole: "system" });
-    const shown = await deps.route(options.credentials, selector);
+    options.signal?.throwIfAborted();
+    const routing = options.signal ? { signal: options.signal } : undefined;
+    const system = routing
+      ? await deps.route(options.credentials, { privateRole: "system" }, routing)
+      : await deps.route(options.credentials, { privateRole: "system" });
+    const shown = routing
+      ? await deps.route(options.credentials, selector, routing)
+      : await deps.route(options.credentials, selector);
     const result = await runOnce(system, shown, options, deps);
     if (result.kind === "app-updated") {
       options.progress.note("The terminal app was updated; loading the new version…");
@@ -107,7 +115,9 @@ async function runOnce(
   options: TerminalSessionsOptions,
   deps: TerminalSessionDependencies
 ): Promise<Awaited<ReturnType<typeof runTerminalBrowser>>> {
-  const device = deps.createDevice(systemRoute);
+  const device = options.signal
+    ? deps.createDevice(systemRoute, { signal: options.signal })
+    : deps.createDevice(systemRoute);
   // One System connection carries the gate, the grant, the module download and
   // the app principal's session (a second session on the same Iroh connection).
   const releaseDevice = device.retainConnection();
@@ -121,80 +131,106 @@ async function runOnce(
       name: workspaceLabel(entry),
     }));
   };
-  try {
-    const visible = await listWorkspaces();
-    const routed = (route: DeviceCredential): TerminalBrowserWorkspace => {
-      const entry = visible.find((candidate) => candidate.id === route.workspaceId);
-      if (!entry) throw new CliError("The selected workspace is not visible to this account.");
-      return entry;
-    };
-    const system = routed(systemRoute);
-    const workspace = routed(shownRoute);
-    const prepare = options.progress.step(`Preparing the terminal browser in ${system.name}`);
-    let gate: Awaited<ReturnType<typeof deps.runGate>>;
-    try {
-      gate = await deps.runGate(device, {
-        target: "terminal",
-        yes: options.yes,
-        input: options.stdin,
-        output: options.stdout,
-        onProgress: (line) => prepare.note(line),
+  return runWithOwnedCleanup(
+    async () => {
+      const visible = await listWorkspaces();
+      const routed = (route: DeviceCredential): TerminalBrowserWorkspace => {
+        const entry = visible.find((candidate) => candidate.id === route.workspaceId);
+        if (!entry) throw new CliError("The selected workspace is not visible to this account.");
+        return entry;
+      };
+      const system = routed(systemRoute);
+      const workspace = routed(shownRoute);
+      const prepare = options.progress.step(`Preparing the terminal browser in ${system.name}`);
+      let gate: Awaited<ReturnType<typeof deps.runGate>>;
+      try {
+        gate = await deps.runGate(device, {
+          target: "terminal",
+          yes: options.yes,
+          input: options.stdin,
+          output: options.stdout,
+          onProgress: (line) => prepare.note(line),
+          ...(options.signal ? { signal: options.signal } : {}),
+        });
+      } catch (error) {
+        prepare.fail();
+        throw error;
+      }
+      if (gate.status === "denied") {
+        prepare.fail();
+        throw new CliError("Terminal startup was declined; nothing was started.");
+      }
+      if (gate.launch?.status !== "ready") {
+        const reason = gate.launch && "reason" in gate.launch ? gate.launch.reason : gate.status;
+        prepare.fail();
+        throw new CliError(
+          `The terminal browser is not available in ${system.name}: ${reason}. ` +
+            "The System workspace must declare it under hostTargets.terminal.app in meta/vibestudio.yml."
+        );
+      }
+      prepare.done();
+      const load = options.progress.step("Loading the terminal browser");
+      let grant: Awaited<ReturnType<typeof deps.requestGrant>>;
+      let module: Awaited<ReturnType<typeof deps.loadModule>>;
+      try {
+        grant = options.signal
+          ? await deps.requestGrant(device, gate.launch.entity.source || null, {
+              signal: options.signal,
+            })
+          : await deps.requestGrant(device, gate.launch.entity.source || null);
+        module = options.signal
+          ? await deps.loadModule(device, grant.app, { signal: options.signal })
+          : await deps.loadModule(device, grant.app);
+        // The workspace the browser shows is reached as this device, exactly as
+        // the desktop shell reaches the workspace it shows.
+        workspaceDevice =
+          workspace.id === system.id ? device : await device.openWorkspaceConnection(shownRoute);
+      } catch (error) {
+        load.fail();
+        throw error;
+      }
+      load.done();
+      return await deps.runBrowser({
+        device,
+        workspaceDevice,
+        grant,
+        module,
+        system,
+        workspace,
+        server: options.server,
+        ...(options.serverExited ? { serverExited: options.serverExited } : {}),
+        listWorkspaces,
+        openExternal: deps.openExternal,
+        stdin: options.stdin,
+        stdout: options.stdout,
         ...(options.signal ? { signal: options.signal } : {}),
       });
-    } catch (error) {
-      prepare.fail();
-      throw error;
-    }
-    if (gate.status === "denied") {
-      prepare.fail();
-      throw new CliError("Terminal startup was declined; nothing was started.");
-    }
-    if (gate.launch?.status !== "ready") {
-      const reason = gate.launch && "reason" in gate.launch ? gate.launch.reason : gate.status;
-      prepare.fail();
-      throw new CliError(
-        `The terminal browser is not available in ${system.name}: ${reason}. ` +
-          "The System workspace must declare it under hostTargets.terminal.app in meta/vibestudio.yml."
+    },
+    async () => {
+      const openControl = control as RpcClient | null;
+      const openWorkspace = workspaceDevice as RpcClient | null;
+      await runOwnedCleanupSteps(
+        [
+          async () => {
+            const results = await Promise.allSettled([
+              openControl?.close(),
+              openWorkspace && openWorkspace !== device ? openWorkspace.close() : undefined,
+              releaseDevice(),
+            ]);
+            const failures = [
+              ...new Set(
+                results.flatMap((result) => (result.status === "rejected" ? [result.reason] : []))
+              ),
+            ];
+            if (failures.length === 1) throw failures[0];
+            if (failures.length)
+              throw new AggregateError(failures, "Terminal connections could not all be closed");
+          },
+          () => device.close(),
+        ],
+        "Terminal connection retirement failed"
       );
-    }
-    prepare.done();
-    const load = options.progress.step("Loading the terminal browser");
-    let grant: Awaited<ReturnType<typeof deps.requestGrant>>;
-    let module: Awaited<ReturnType<typeof deps.loadModule>>;
-    try {
-      grant = await deps.requestGrant(device, gate.launch.entity.source || null);
-      module = await deps.loadModule(device, grant.app);
-      // The workspace the browser shows is reached as this device, exactly as
-      // the desktop shell reaches the workspace it shows.
-      workspaceDevice =
-        workspace.id === system.id ? device : await device.openWorkspaceConnection(shownRoute);
-    } catch (error) {
-      load.fail();
-      throw error;
-    }
-    load.done();
-    return await deps.runBrowser({
-      device,
-      workspaceDevice,
-      grant,
-      module,
-      system,
-      workspace,
-      server: options.server,
-      ...(options.serverExited ? { serverExited: options.serverExited } : {}),
-      listWorkspaces,
-      openExternal: deps.openExternal,
-      stdin: options.stdin,
-      stdout: options.stdout,
-    });
-  } finally {
-    const openControl = control as RpcClient | null;
-    const openWorkspace = workspaceDevice as RpcClient | null;
-    await Promise.allSettled([
-      openControl?.close(),
-      openWorkspace && openWorkspace !== device ? openWorkspace.close() : undefined,
-      releaseDevice(),
-    ]);
-    await device.close();
-  }
+    },
+    "Terminal browser operation and retirement failed"
+  );
 }

@@ -498,3 +498,60 @@ shutdown. Actual installed acceptance, including session restoration, still
 requires published terminal template versions and a matching package; neither
 the stale local installation nor current published pins represent this branch.
 Publication has not been performed.
+
+### UX completion pass (2026-10-14, in progress)
+
+This pass follows the end-to-end review, not merely the original feature list.
+Completion requires both the behavior and evidence for its adverse boundaries.
+
+| Area            | Required outcome                                                                                 | Verification boundary                                                                  |
+| --------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| Approvals       | Stable request identity, visible decisions, complete protected forms and actual install outcomes | Queue withdrawal/reorder, resize while deciding, secret/device-code flows              |
+| Input           | Fragment-safe keyboard and paste framing; explicit legacy cancellation                           | Split ESC/CSI/paste, enhanced keyboard negotiation, exact PTY key forwarding           |
+| Sessions        | One admitted lifecycle operation per session; real exit/disposal; complete rollback              | Concurrent resume, held exit, failed launch/close/restart, transport observation error |
+| Connections     | Owner cancellation reaches authentication and stream creation; retirement is joined              | Held authentication/attach head/body cancellation, workspace switch and shutdown       |
+| Pairing         | Device identity persists independently of later workspace selection                              | Cancel/fail after invite redemption; recover without consuming another invite          |
+| Chat navigation | Durable selection commits atomically; stale actions cannot affect a new conversation             | Failed state write, delayed attachment/OAuth callbacks, concurrent navigation          |
+| Composer        | Per-conversation durable drafts, staged files and unpublished queue with real delivery ownership | Navigation/relaunch, deferred model setup, queued edit/cancel/publish                  |
+| History         | Full durable export/search with truthful paging and one canonical projection                     | Multi-page history, replay recovery, content beyond old display limits                 |
+| Content         | Cursor-following editors and complete inspectable forms/tool results                             | Long/wide text, Unicode graphemes, resizing, large queues                              |
+| Browser         | Visible focused tabs, scrollback search, full error/log inspection and ordered settings          | Overflow tabs, Unicode copy, delayed reads/saves, failed actions                       |
+| Files           | Explicit client upload/download through existing context-scoped fs; no new app/client transport  | Binary bytes, immutable context, budget/identity failure, exclusive local publication  |
+| Credentials     | Terminal-only OAuth and API-key setup through trusted protected input                            | No secret in chat/history/logs; withdrawal and generation ownership                    |
+| Packaging       | Native public command reaches the canonical bundled CLI                                          | Installed launcher dispatch, exact packaged cold/warm startup and restoration          |
+
+Independent source ownership is split between host lifecycle, System browser,
+Base chat, and integration. Projection consumers depend on one completed host
+artifact generation; host sources must remain stable during its production.
+Final agentic latency journeys run alone on one uniquely owned managed instance,
+after conventional checks finish. Every required check remains in the handoff
+gate, and all owned instances, stream readers, transports and scratch must be
+retired before claiming completion. Published-package acceptance remains a
+separate authority boundary; unpublished worktrees are not published releases.
+
+The host verification session now passes 9,439 tests (21 environment-dependent
+skips) and all 12 runtime-foundation evidence cases. The full host Vitest run
+and its evidence consumer own one uninterrupted evidence session: a concurrent
+focused host Vitest invocation would replace the reporter fragment before the
+consumer reads it. Projected template checks may run independently, with one
+heavy composition compiler admitted at a time to bound host memory.
+
+The first real source smoke found a cross-bundle RPC ownership defect that
+same-module mocks could not reproduce. Client views now delegate to the client
+creator's required `createView` capability, preserving its schema, transport,
+and lifecycle ownership across independently bundled CLI and browser modules.
+No global client registry or alternate transport path is introduced. Independent
+bundle regressions cover calls, events, peers, streams and cancellation. The
+smoke's readiness assertion also now requires active alternate-screen chrome;
+matching words in pairing prose are not evidence that the browser started.
+The failed smoke's owned processes and scratch were retired; bounded failure
+evidence is retained privately. A fresh source smoke and the extended managed
+fork/resume journey remain required before this pass is complete.
+
+Durable queued delivery now distinguishes publication acceptance from retained
+attachment retirement. Accepted entries can only retry cleanup, never hydrate
+or publish again. Restoring unresolved cleanup exposes actionable rows instead
+of rejecting the whole queue; a failed release does not hide or block independent
+pending messages. Failed discard cleanup is likewise non-publishable. The final
+42 focused lifecycle/UI cases and Base composition/integration typechecks pass,
+including restart while release still fails followed by in-place repair.

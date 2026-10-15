@@ -20,14 +20,16 @@ import {
 import { CliError } from "../output.js";
 import { shellCallerId, type PrincipalTransport, type RpcClient } from "../rpcClient.js";
 import { guardTerminal } from "./ttyRestore.js";
+import { createTerminalFiles } from "./terminalFiles.js";
 
 /** Requests the device's terminal-app principal over the CLI's own connection. */
 export async function requestTerminalAppGrant(
   device: Pick<RpcClient, "call">,
-  source: string | null
+  source: string | null,
+  options?: { signal?: AbortSignal }
 ): Promise<AppPrincipalGrantResponse> {
   return AppPrincipalGrantResponseSchema.parse(
-    await device.call("auth.grantAppPrincipal", [{ principal: "terminal-app", source }])
+    await device.call("auth.grantAppPrincipal", [{ principal: "terminal-app", source }], options)
   );
 }
 
@@ -42,7 +44,8 @@ export async function requestTerminalAppGrant(
  */
 export async function loadTerminalBrowserModule(
   device: Pick<RpcClient, "stream">,
-  app: AppPrincipalGrantResponse["app"]
+  app: AppPrincipalGrantResponse["app"],
+  options?: { signal?: AbortSignal }
 ): Promise<TerminalBrowserModule> {
   const entry = app.artifacts.filter((artifact) => artifact.role === "primary");
   if (entry.length !== 1 || !entry[0]!.path.endsWith(".mjs")) {
@@ -50,9 +53,12 @@ export async function loadTerminalBrowserModule(
       `The terminal app ${app.source} has no single ESM entry module in build ${app.buildKey}.`
     );
   }
-  const response = await device.stream("main", "gateway.fetch", [
-    { path: entry[0]!.route, method: "GET" },
-  ]);
+  const response = await device.stream(
+    "main",
+    "gateway.fetch",
+    [{ path: entry[0]!.route, method: "GET" }],
+    options
+  );
   if (!response.ok) {
     throw new CliError(
       `Could not download the terminal app (${app.source}): HTTP ${response.status} ` +
@@ -138,6 +144,7 @@ export interface TerminalBrowserRunOptions {
   server: TerminalBrowserServerInfo;
   /** Owned server lifetime: its exit is an authoritative terminal event. */
   serverExited?: Promise<string>;
+  signal?: AbortSignal;
   listWorkspaces(): Promise<TerminalBrowserWorkspace[]>;
   openExternal(url: string): Promise<void>;
   stdin: NodeJS.ReadStream;
@@ -160,19 +167,30 @@ export async function runTerminalBrowser(
 ): Promise<TerminalBrowserRunResult> {
   const { device, grant } = options;
   const state = new TerminalConnectionState(options.server.endpoint);
+  options.signal?.throwIfAborted();
+  const lifetime = new AbortController();
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, lifetime.signal])
+    : lifetime.signal;
   let appUpdated = false;
   let initialGrant: string | null = grant.connectionGrant;
   // Every (re)authentication redeems a fresh one-use grant for the same
   // principal. A grant bound to another build means the app was updated:
   // the running module can no longer be the principal's executable.
-  const getToken = async (): Promise<string> => {
+  const getToken = async (authenticationSignal?: AbortSignal): Promise<string> => {
+    const requestSignal = authenticationSignal
+      ? AbortSignal.any([signal, authenticationSignal])
+      : signal;
+    requestSignal.throwIfAborted();
     if (state.lost) throw new CliError(`terminal session ended: ${describeLost(state)}`);
     if (initialGrant) {
       const token = initialGrant;
       initialGrant = null;
       return token;
     }
-    const next = await requestTerminalAppGrant(device, grant.app.source);
+    const next = await requestTerminalAppGrant(device, grant.app.source, {
+      signal: requestSignal,
+    });
     if (next.app.buildKey !== grant.app.buildKey) {
       appUpdated = true;
       state.lose("the terminal app was updated; reloading it");
@@ -180,7 +198,8 @@ export async function runTerminalBrowser(
     }
     return next.connectionGrant;
   };
-  const lifetime = new AbortController();
+  const onAbort = () => state.lose("the terminal invocation was cancelled");
+  signal.addEventListener("abort", onAbort, { once: true });
   const transports: PrincipalTransport[] = [];
   const unsubscribes: Array<() => void> = [];
   const connect = async (
@@ -201,7 +220,7 @@ export async function runTerminalBrowser(
       selfId,
       callerKind,
       transport,
-      lifetime: lifetime.signal,
+      lifetime: signal,
       onRecovery: (handler) => {
         recoveryHandlers.add(handler);
         return () => recoveryHandlers.delete(handler);
@@ -221,6 +240,7 @@ export async function runTerminalBrowser(
           clientLabel: "Vibestudio terminal",
           onRecovery,
           onTerminalClose,
+          signal,
         }),
       grant.callerId,
       "app"
@@ -232,6 +252,7 @@ export async function runTerminalBrowser(
           clientLabel: "Vibestudio terminal",
           onRecovery,
           onTerminalClose,
+          signal,
         }),
       shellCallerId(grant.deviceId),
       "shell"
@@ -251,6 +272,8 @@ export async function runTerminalBrowser(
       onConnectionState: (listener) => state.subscribe(listener),
       listWorkspaces: () => options.listWorkspaces(),
       openExternal: (url) => options.openExternal(url),
+      files: createTerminalFiles(workspaceRpc, signal),
+      signal,
     };
     releaseTerminal = guardTerminal(options.stdin, options.stdout);
     const exit = await options.module.run(host);
@@ -258,13 +281,24 @@ export async function runTerminalBrowser(
   } catch (error) {
     outcome = { ok: false, error };
   }
-  releaseTerminal?.();
-  for (const unsubscribe of unsubscribes) unsubscribe();
-  lifetime.abort(new Error("terminal browser exited"));
+  const cleanupFailures: unknown[] = [];
+  for (const cleanup of [
+    () => releaseTerminal?.(),
+    () => signal.removeEventListener("abort", onAbort),
+    ...unsubscribes,
+    () => lifetime.abort(new Error("terminal browser exited")),
+  ]) {
+    try {
+      cleanup();
+    } catch (error) {
+      cleanupFailures.push(error);
+    }
+  }
   // Join every session's close; none may be abandoned, and no failure is dropped.
   const closeFailures = (
-    await Promise.allSettled(transports.map((transport) => transport.close()))
+    await Promise.allSettled(transports.map(async (transport) => transport.close()))
   ).flatMap((result) => (result.status === "rejected" ? [result.reason as unknown] : []));
+  closeFailures.unshift(...cleanupFailures);
   if (!outcome.ok) {
     if (closeFailures.length === 0) throw outcome.error;
     throw new AggregateError(

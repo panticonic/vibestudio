@@ -2,7 +2,10 @@ import { mkdtemp, readFile, readdir } from "node:fs/promises";
 import * as fs from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
+import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { cleanupRuntimeEntity } from "../runtimeEntityCleanup.js";
 import {
   createVerifiedCaller,
   type ServiceContext,
@@ -36,6 +39,7 @@ function personCtx(source?: string): ServiceContext {
 async function harness(registryPath?: string) {
   const root = await mkdtemp(path.join(tmpdir(), "terminal-apps-"));
   const exits = new Map<string, (value: { exitCode: number | null; signal?: string }) => void>();
+  const exitFailures = new Map<string, (error: unknown) => void>();
   const shellCalls: Array<{ method: string; args: unknown[]; ctx: ServiceContext }> = [];
   let pty = 0;
   const deadPtys = new Set<string>();
@@ -65,7 +69,7 @@ async function harness(registryPath?: string) {
     }),
     createContext: vi.fn(async () => `ctx-${++entity}`),
     entityStateArgs: vi.fn(async () => ({ channelName: "kept" })),
-    primaryArtifactPath: async () => "/builds/chat/bundle.js",
+    primaryArtifactPath: vi.fn(async () => "/builds/chat/bundle.js"),
     grantConnection: vi.fn(() => "grant-token"),
     holdLease: vi.fn(),
     dispatch: vi.fn(async (ctx, service, method, args) => {
@@ -78,6 +82,7 @@ async function harness(registryPath?: string) {
       if (shellMethod === "awaitExit") {
         return new Promise((resolve, reject) => {
           exits.set(shellArgs[0] as string, resolve);
+          exitFailures.set(shellArgs[0] as string, reject);
           ctx.signal?.addEventListener("abort", () => reject(ctx.signal!.reason));
         });
       }
@@ -88,10 +93,229 @@ async function harness(registryPath?: string) {
   const service = createTerminalAppsService(deps);
   const call = (method: string, ctx: ServiceContext, ...args: unknown[]) =>
     service.handler(ctx, method, args) as Promise<unknown>;
-  return { root, deps, service, call, shellCalls, exits, retired, events, deadPtys };
+  return { root, deps, service, call, shellCalls, exits, exitFailures, retired, events, deadPtys };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+async function stoppedShell(h: Awaited<ReturnType<typeof harness>>) {
+  const session = (await call(h, "launch", personCtx(), { cols: 80, rows: 24 })) as {
+    sessionId: string;
+  };
+  const stopped = deferred<void>();
+  const emit = h.deps.emitToUser;
+  h.deps.emitToUser = (user, event, payload) => {
+    emit(user, event, payload);
+    if (payload.sessions.some((entry) => entry.sessionId === session.sessionId && !entry.running))
+      stopped.resolve();
+  };
+  h.exits.get("pty-1")!({ exitCode: 0 });
+  await stopped.promise;
+  return session;
 }
 
 describe("terminalApps launch service", () => {
+  it("admits one stopped-session start across simultaneous device resumes", async () => {
+    const h = await harness();
+    const session = await stoppedShell(h);
+    const entered = deferred<void>();
+    const opened = deferred<{ sessionId: string }>();
+    const original = vi.mocked(h.deps.dispatch).getMockImplementation()!;
+    vi.mocked(h.deps.dispatch)
+      .mockClear()
+      .mockImplementation(async (ctx, service, method, args) => {
+        if (args[1] === "open") {
+          entered.resolve();
+          return opened.promise;
+        }
+        return original(ctx, service, method, args);
+      });
+    const first = call(h, "resume", personCtx(), {
+      sessionId: session.sessionId,
+      cols: 80,
+      rows: 24,
+    });
+    await entered.promise;
+    const second = call(h, "resume", personCtx(), {
+      sessionId: session.sessionId,
+      cols: 80,
+      rows: 24,
+    });
+    opened.resolve({ sessionId: "pty-2" });
+    const results = await Promise.all([first, second]);
+    expect(results).toEqual([
+      expect.objectContaining({ shellSessionId: "pty-2" }),
+      expect.objectContaining({ shellSessionId: "pty-2" }),
+    ]);
+    expect(
+      vi.mocked(h.deps.dispatch).mock.calls.filter((call) => call[3][1] === "open")
+    ).toHaveLength(1);
+    await h.service.stop();
+  });
+
+  it("retains a visible retryable session and retires all app resources after artifact lookup fails", async () => {
+    const h = await harness();
+    const failure = new Error("primary artifact missing");
+    vi.mocked(h.deps.primaryArtifactPath).mockRejectedValueOnce(failure);
+    await expect(
+      call(h, "launch", personCtx("terminal-apps/chat"), {
+        source: "terminal-apps/chat",
+        cols: 80,
+        rows: 24,
+      })
+    ).rejects.toBe(failure);
+    expect(h.retired).toHaveLength(1);
+    expect(await readdir(h.deps.launchDirectory)).toEqual([]);
+    const entries = (await call(h, "list", personCtx())) as Array<{ sessionId: string }>;
+    expect(entries).toEqual([
+      expect.objectContaining({ running: false, failure: failure.message, shellSessionId: null }),
+    ]);
+    const restored = await call(h, "resume", personCtx("terminal-apps/chat"), {
+      sessionId: entries[0]!.sessionId,
+      cols: 80,
+      rows: 24,
+    });
+    expect(restored).toMatchObject({ running: true });
+    expect(restored).not.toHaveProperty("failure");
+    expect(h.deps.createContext).toHaveBeenCalledTimes(1);
+    await h.service.stop();
+  });
+
+  it("preserves both launch failure and rollback failure", async () => {
+    const h = await harness();
+    const launch = new Error("artifact lookup failed");
+    const rollback = new Error("entity retirement failed");
+    vi.mocked(h.deps.primaryArtifactPath).mockRejectedValueOnce(launch);
+    vi.mocked(h.deps.retireEntity).mockRejectedValueOnce(rollback);
+    await expect(
+      call(h, "launch", personCtx("terminal-apps/chat"), {
+        source: "terminal-apps/chat",
+        cols: 80,
+        rows: 24,
+      })
+    ).rejects.toMatchObject({ errors: [launch, rollback] });
+    expect(await call(h, "list", personCtx())).toEqual([
+      expect.objectContaining({ running: false, failure: "Terminal launch and rollback failed" }),
+    ]);
+    await h.service.stop();
+  });
+
+  it("preserves the known PTY until close disposal succeeds and lets the person retry", async () => {
+    const h = await harness();
+    const session = (await call(h, "launch", personCtx(), { cols: 80, rows: 24 })) as {
+      sessionId: string;
+    };
+    const original = vi.mocked(h.deps.dispatch).getMockImplementation()!;
+    const failure = new Error("could not stop PTY");
+    vi.mocked(h.deps.dispatch).mockImplementationOnce(async () => {
+      throw failure;
+    });
+    await expect(call(h, "close", personCtx(), session.sessionId)).rejects.toBe(failure);
+    expect(await call(h, "list", personCtx())).toEqual([
+      expect.objectContaining({ running: true, shellSessionId: "pty-1", failure: failure.message }),
+    ]);
+    vi.mocked(h.deps.dispatch).mockImplementation(original);
+    await call(h, "close", personCtx(), session.sessionId);
+    expect(await call(h, "list", personCtx())).toEqual([]);
+    await h.service.stop();
+  });
+
+  it("keeps close ownership visible while disposal joins and orders a concurrent resume after close", async () => {
+    const h = await harness();
+    const session = (await call(h, "launch", personCtx(), { cols: 80, rows: 24 })) as {
+      sessionId: string;
+    };
+    const entered = deferred<void>();
+    const joined = deferred<void>();
+    vi.mocked(h.deps.dispatch).mockImplementationOnce(async () => {
+      entered.resolve();
+      await joined.promise;
+    });
+    const closing = call(h, "close", personCtx(), session.sessionId);
+    await entered.promise;
+    expect(await call(h, "list", personCtx())).toEqual([
+      expect.objectContaining({ running: true, shellSessionId: "pty-1" }),
+    ]);
+    const resuming = call(h, "resume", personCtx(), {
+      sessionId: session.sessionId,
+      cols: 80,
+      rows: 24,
+    });
+    const rejected = expect(resuming).rejects.toMatchObject({ code: "ENOENT" });
+    joined.resolve();
+    await closing;
+    await rejected;
+    expect(await call(h, "list", personCtx())).toEqual([]);
+    await h.service.stop();
+  });
+
+  it("keeps the previous incarnation running when restart cannot dispose its PTY", async () => {
+    const h = await harness();
+    const session = (await call(h, "launch", personCtx("terminal-apps/chat"), {
+      source: "terminal-apps/chat",
+      cols: 80,
+      rows: 24,
+    })) as { sessionId: string; principalId: string };
+    const failure = new Error("disposal rejected");
+    vi.mocked(h.deps.dispatch).mockRejectedValueOnce(failure);
+    await expect(
+      call(h, "restart", personCtx("terminal-apps/chat"), {
+        sessionId: session.sessionId,
+        cols: 80,
+        rows: 24,
+      })
+    ).rejects.toBe(failure);
+    expect(h.retired).toEqual([]);
+    expect(h.deps.createEntity).toHaveBeenCalledTimes(1);
+    expect(await call(h, "list", personCtx())).toEqual([
+      expect.objectContaining({
+        running: true,
+        shellSessionId: "pty-1",
+        principalId: session.principalId,
+        failure: failure.message,
+      }),
+    ]);
+    await h.service.stop();
+  });
+
+  it("does not turn an exit-observation failure into program exit", async () => {
+    const h = await harness();
+    const session = (await call(h, "launch", personCtx(), { cols: 80, rows: 24 })) as {
+      sessionId: string;
+    };
+    const failurePublished = deferred<void>();
+    const original = h.deps.emitToUser;
+    h.deps.emitToUser = (user, event, payload) => {
+      original(user, event, payload);
+      if (payload.sessions.some((entry) => entry.failure)) failurePublished.resolve();
+    };
+    h.exitFailures.get("pty-1")!(new Error("RPC delivery failed"));
+    await failurePublished.promise;
+    expect(await call(h, "list", personCtx())).toEqual([
+      expect.objectContaining({
+        sessionId: session.sessionId,
+        running: true,
+        shellSessionId: "pty-1",
+        failure: "Could not observe program exit: RPC delivery failed",
+      }),
+    ]);
+    expect(h.retired).toEqual([]);
+    const resumed = await call(h, "resume", personCtx(), {
+      sessionId: session.sessionId,
+      cols: 80,
+      rows: 24,
+    });
+    expect(resumed).toMatchObject({ running: true, shellSessionId: "pty-1" });
+    expect(resumed).not.toHaveProperty("failure");
+    expect(h.shellCalls.filter((call) => call.method === "awaitExit")).toHaveLength(2);
+    await h.service.stop();
+  });
   it.each(["user", "code"])(
     "reviews one exact app run for a %s caller on launch, resume and restart",
     async (kind) => {
@@ -245,7 +469,7 @@ describe("terminalApps launch service", () => {
       running: true,
       shellSessionId: "pty-1",
     });
-    expect(entry.principalId).toMatch(/^panel:nav-term-/);
+    expect(entry.principalId).toBe(`panel:terminal-session-${entry.sessionId}`);
     expect(h.deps.holdLease).toHaveBeenCalledWith(
       expect.objectContaining({ runtimeEntityId: entry.principalId, authorizedBy: "shell:laptop" })
     );
@@ -279,11 +503,68 @@ describe("terminalApps launch service", () => {
 
   it("retires the incarnation when the PTY exits, and relaunches with the same context and state", async () => {
     const h = await harness();
+    const cache = new EntityCache();
+    const grants = new ConnectionGrantService({ entityCache: cache });
+    onTestFinished(async () => {
+      try {
+        await h.service.stop();
+      } finally {
+        grants.stop();
+      }
+    });
+    const created = vi.mocked(h.deps.createEntity).getMockImplementation();
+    if (!created) throw new Error("Missing harness runtime entity implementation");
+    vi.mocked(h.deps.createEntity).mockImplementation(async (...args) => {
+      const key = args[1].key;
+      if (!key) throw new Error("Terminal runtime entity must provide its durable session key");
+      const entity = await created(...args);
+      cache._onActivate({
+        id: entity.id,
+        kind: "panel",
+        source: entity.source,
+        contextId: entity.contextId,
+        key,
+        createdAt: Date.now(),
+        authoritySessionId: crypto.randomUUID(),
+        status: "active",
+        cleanupComplete: true,
+        activeBuildKey: "b".repeat(64),
+        activeExecutionDigest: "a".repeat(64),
+        activeAuthority: { requests: [], provides: [] },
+      });
+      return entity;
+    });
+    const tokens: string[] = [];
+    vi.mocked(h.deps.grantConnection).mockImplementation((principalId, issuedBy, subject) => {
+      const { token } = grants.grant(principalId, issuedBy, { subject });
+      tokens.push(token);
+      return token;
+    });
+    vi.mocked(h.deps.retireEntity).mockImplementation(async (id) => {
+      const active = cache.resolve(id);
+      if (!active) throw new Error(`Missing runtime entity ${id}`);
+      const retired = { ...active, status: "retired" as const, cleanupComplete: false };
+      cache._onRetire(retired);
+      await cleanupRuntimeEntity(retired, {
+        connectionGrants: grants,
+        retireAuthorityOwner: () => {},
+        egressProxy: { dropCaller: async () => {} },
+        approvalQueue: { cancelForCaller: () => {} },
+        credentialSessionGrantStore: { dropForCaller: (_callerId) => 0 },
+        tokenManager: { revokeToken: (_callerId) => false },
+        releaseBlobRetentions: async () => {},
+        getWorkerdManager: () => null,
+        getFsService: () => null,
+        getWebhookIngress: () => null,
+      });
+      h.retired.push(id);
+    });
     const first = (await call(h, "launch", personCtx("terminal-apps/chat"), {
       source: "terminal-apps/chat",
       cols: 80,
       rows: 24,
     })) as { sessionId: string; principalId: string };
+    expect(grants.redeem(tokens[0]!)).toMatchObject({ principalId: first.principalId });
     h.exits.get("pty-1")!({ exitCode: 0 });
     await vi.waitFor(() => expect(h.retired).toContain(first.principalId));
     const listed = (await call(h, "list", personCtx())) as Array<{
@@ -298,13 +579,28 @@ describe("terminalApps launch service", () => {
       rows: 24,
     })) as { principalId: string; running: boolean };
     expect(resumed.running).toBe(true);
-    expect(resumed.principalId).not.toBe(first.principalId);
+    expect(resumed.principalId).toBe(first.principalId);
+    expect(tokens[1]).not.toBe(tokens[0]);
+    expect(grants.validate(tokens[0]!)).toBeNull();
+    expect(grants.redeem(tokens[1]!)).toMatchObject({ principalId: first.principalId });
+    expect(h.deps.grantConnection).toHaveBeenCalledTimes(2);
+    const leases = vi.mocked(h.deps.holdLease).mock.calls;
+    expect(leases[1]![0].connectionId).not.toBe(leases[0]![0].connectionId);
     const spec = vi.mocked(h.deps.createEntity).mock.calls.at(-1)![1] as {
       contextId: string;
       stateArgs: unknown;
     };
     expect(spec.contextId).toBe("ctx-1");
     expect(spec.stateArgs).toEqual({ channelName: "kept" });
+    const restarted = (await call(h, "restart", personCtx("terminal-apps/chat"), {
+      sessionId: first.sessionId,
+      cols: 80,
+      rows: 24,
+    })) as { principalId: string };
+    expect(restarted.principalId).toBe(first.principalId);
+    expect(grants.validate(tokens[1]!)).toBeNull();
+    expect(tokens[2]).not.toBe(tokens[1]);
+    expect(grants.redeem(tokens[2]!)).toMatchObject({ principalId: first.principalId });
     await h.service.stop();
   });
 
@@ -328,7 +624,7 @@ describe("terminalApps launch service", () => {
     expect(vi.mocked(h.deps.createEntity).mock.calls.at(-1)![1]).toMatchObject({
       contextId: "ctx-1",
     });
-    expect(launched.principalId).toMatch(/^panel:nav-term-/);
+    expect(launched.principalId).toMatch(/^panel:terminal-session-/);
     await call(h, "launch", testCtx(), { command: "/bin/sh", cols: 80, rows: 24 });
     expect(vi.mocked(h.deps.createContext).mock.calls.at(-1)![0]).toMatchObject({ testPolicy });
     await call(h, "launch", personCtx("terminal-apps/chat"), {

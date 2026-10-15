@@ -4,7 +4,8 @@ import type { DeviceCredential } from "./rpcClient.js";
 import { connectModelProvider, type ModelConnectDependencies } from "./modelConnect.js";
 
 const CREDENTIALS = {
-  schemaVersion: 5,
+  schemaVersion: 6,
+  phase: "workspace",
   kind: "device",
   url: `iroh://${"bb".repeat(32)}/_workspace/dev`,
   workspaceId: "ws_dev",

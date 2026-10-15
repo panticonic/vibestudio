@@ -99,7 +99,8 @@ function writeCredentials(tmpDir: string, url = `iroh://${"bb".repeat(32)}/_work
   fs.writeFileSync(
     path.join(dir, "cli-credentials.json"),
     JSON.stringify({
-      schemaVersion: 5,
+      schemaVersion: 6,
+      phase: "workspace",
       kind: "device",
       transport: "iroh",
       endpointSecret: "E".repeat(43),

@@ -14,6 +14,7 @@ import type {
   RpcErrorData,
   RpcErrorKind,
   RpcStreamOptions,
+  RpcCallOptions,
 } from "@vibestudio/rpc";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
 import { Agent, type Dispatcher } from "undici";
@@ -92,16 +93,22 @@ export interface PrincipalTransportOptions {
   /** Envelope identity; the server derives the authenticated caller from the token. */
   selfId: string;
   /** Redeemable credential for the principal; called for every (re)authentication. */
-  getToken(): Promise<string>;
+  getToken(signal?: AbortSignal): Promise<string>;
   clientLabel: string;
   onRecovery?(kind: RecoveryKind): void | Promise<void>;
   /** The server ended the session for good (credential revoked, principal retired). */
   onTerminalClose?(error: Error): void;
+  signal?: AbortSignal;
 }
 
 /** Shared surface of the persistent local-WebSocket and remote-Iroh clients. */
 interface PersistentRpcClient {
-  callTarget(targetId: string, method: string, args?: unknown[]): Promise<unknown>;
+  callTarget(
+    targetId: string,
+    method: string,
+    args?: unknown[],
+    options?: RpcCallOptions
+  ): Promise<unknown>;
   stream(
     targetId: string,
     method: string,
@@ -127,7 +134,8 @@ function isAgentCliCredentials(
 function isCompleteDeviceCredentials(creds: RpcClientCredential): creds is CliDeviceCredentials {
   const candidate = creds as Partial<CliDeviceCredentials>;
   return (
-    candidate.schemaVersion === 5 &&
+    candidate.schemaVersion === 6 &&
+    candidate.phase === "workspace" &&
     candidate.kind === "device" &&
     typeof candidate.workspaceId === "string" &&
     candidate.workspaceId.length > 0 &&
@@ -190,19 +198,25 @@ async function fetchOrAuthError(url: URL, init: RpcRequestInit): Promise<Respons
   try {
     return await fetch(url, init as RequestInit);
   } catch (error) {
+    init.signal?.throwIfAborted();
     throw new ConnectionError(`cannot reach ${url.origin}: ${networkErrorMessage(error)}`);
   }
 }
 
 export async function refreshShell(
-  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken">
+  creds: Pick<DeviceCredential, "url" | "deviceId" | "refreshToken">,
+  options: { signal?: AbortSignal } = {}
 ): Promise<RefreshShellResponse> {
   const response = await fetchOrAuthError(serverAuthRouteUrl(creds.url, "refresh-shell"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ deviceId: creds.deviceId, refreshToken: creds.refreshToken }),
+    ...(options.signal ? { signal: options.signal } : {}),
   });
-  const raw = (await response.json().catch(() => ({}))) as unknown;
+  const raw = (await response.json().catch(() => {
+    options.signal?.throwIfAborted();
+    return {};
+  })) as unknown;
   const body = responseRecord(raw);
   if (!response.ok) {
     throw new AuthError(
@@ -221,16 +235,23 @@ export async function refreshShell(
  * (bearer) token, so HTTP `POST /rpc` works with agent credentials — the HTTP
  * mirror of the WS/Iroh redeemer (one auth model everywhere, §6.1).
  */
-export async function refreshAgent(creds: {
-  url: string;
-  token: string;
-}): Promise<RefreshAgentResponse> {
+export async function refreshAgent(
+  creds: {
+    url: string;
+    token: string;
+  },
+  options: { signal?: AbortSignal } = {}
+): Promise<RefreshAgentResponse> {
   const response = await fetchOrAuthError(serverAuthRouteUrl(creds.url, "refresh-agent"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ agentToken: creds.token }),
+    ...(options.signal ? { signal: options.signal } : {}),
   });
-  const raw = (await response.json().catch(() => ({}))) as unknown;
+  const raw = (await response.json().catch(() => {
+    options.signal?.throwIfAborted();
+    return {};
+  })) as unknown;
   const body = responseRecord(raw);
   if (!response.ok) {
     throw new AuthError(
@@ -286,7 +307,15 @@ export class RpcClient {
   private closePromise: Promise<void> | null = null;
   private closeFailure: Promise<void> | null = null;
 
-  constructor(creds: RpcClientCredential) {
+  private cancellationAttached = false;
+  private readonly cancel = () => {
+    void this.close().catch(() => undefined);
+  };
+
+  constructor(
+    creds: RpcClientCredential,
+    private readonly owner: { signal?: AbortSignal } = {}
+  ) {
     this.url = creds.url;
     if (isAgentCliCredentials(creds)) {
       this.pairing = creds.transport === "iroh" ? creds.workspacePairing : undefined;
@@ -321,7 +350,7 @@ export class RpcClient {
     }
     this.mainCall = createMainRpcCaller(
       schemaRpcCaller({
-        call: (target, method, args) => this.callTarget(target, method, args),
+        call: (target, method, args, options) => this.callTarget(target, method, args, options),
         stream: (target, method, args, options) => this.stream(target, method, args, options),
       })
     );
@@ -360,30 +389,35 @@ export class RpcClient {
    * one-shot HTTP path it is a short-lived bearer (shell or agent).
    */
   async getShellToken(): Promise<string> {
+    this.assertOpen();
     if (this.rawToken) return this.rawToken;
     if (this.isIroh) return this.authToken();
     return await this.ensureBearerToken();
   }
 
-  private async ensureBearerToken(): Promise<string> {
+  private async ensureBearerToken(signal = this.owner.signal): Promise<string> {
+    signal?.throwIfAborted();
     const cached = shellTokenCache.get(cacheKey(this.url, this.principalCacheId()));
     if (cached) return cached;
-    return await this.refreshBearerToken();
+    return await this.refreshBearerToken(signal);
   }
 
-  private async refreshBearerToken(): Promise<string> {
+  private async refreshBearerToken(signal = this.owner.signal): Promise<string> {
     if (this.rawToken) {
-      const refresh = await refreshAgent({ url: this.url, token: this.rawToken });
+      const refresh = await refreshAgent({ url: this.url, token: this.rawToken }, { signal });
       this.callerId = refresh.callerId || `agent:${refresh.entityId}`;
       shellTokenCache.set(cacheKey(this.url, this.principalCacheId()), refresh.token);
       return refresh.token;
     }
     const device = this.deviceCredential();
-    const refresh = await refreshShell({
-      url: this.url,
-      deviceId: device.deviceId,
-      refreshToken: device.refreshToken,
-    });
+    const refresh = await refreshShell(
+      {
+        url: this.url,
+        deviceId: device.deviceId,
+        refreshToken: device.refreshToken,
+      },
+      { signal }
+    );
     this.lastRefresh = refresh;
     this.callerId = refresh.callerId;
     shellTokenCache.set(cacheKey(this.url, this.principalCacheId()), refresh.shellToken);
@@ -391,18 +425,28 @@ export class RpcClient {
   }
 
   /** Direct service dispatch: `service.method` on the server dispatcher. */
-  async call(method: QualifiedServiceMethod, args: unknown[] = []): Promise<unknown> {
-    return this.callTarget("main", method, args);
+  async call(
+    method: QualifiedServiceMethod,
+    args: unknown[] = [],
+    options?: RpcCallOptions
+  ): Promise<unknown> {
+    return this.callTarget("main", method, args, options);
   }
 
   /** Relay call to a runtime target (worker, DO, panel) by entity/target id. */
-  async callTarget(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
+  async callTarget(
+    targetId: string,
+    method: string,
+    args: unknown[] = [],
+    options?: RpcCallOptions
+  ): Promise<unknown> {
     this.assertOpen();
+    options?.signal?.throwIfAborted();
     if (targetId === "main") requireQualifiedServiceMethod(method);
     if (this.isIroh) {
-      return await this.dispatchIroh(targetId, method, args);
+      return await this.dispatchIroh(targetId, method, args, options);
     }
-    return await this.dispatch(targetId, method, args);
+    return await this.dispatch(targetId, method, args, options);
   }
 
   /**
@@ -465,6 +509,7 @@ export class RpcClient {
    */
   async openPrincipalTransport(options: PrincipalTransportOptions): Promise<PrincipalTransport> {
     this.assertOpen();
+    options.signal?.throwIfAborted();
     if (this.isIroh) {
       this.keepPushOpen = true;
       const client = await this.ensureIrohClient();
@@ -473,6 +518,7 @@ export class RpcClient {
         clientLabel: options.clientLabel,
         clientPlatform: "headless",
         getToken: options.getToken,
+        ...(options.signal ? { signal: options.signal } : {}),
         ...(options.onRecovery ? { onRecovery: (kind) => options.onRecovery!(kind) } : {}),
         ...(options.onTerminalClose ? { onTerminalClose: options.onTerminalClose } : {}),
       });
@@ -483,6 +529,7 @@ export class RpcClient {
       import("@vibestudio/rpc/transports/wsClient"),
       import("@vibestudio/rpc/transports/nodeWsLike"),
     ]);
+    options.signal?.throwIfAborted();
     const url = this.url;
     let closing = false;
     const transport = wsClientTransport({
@@ -498,7 +545,7 @@ export class RpcClient {
       ...(options.onRecovery ? { onRecovery: options.onRecovery } : {}),
       adapter: {
         now: () => Date.now(),
-        getAuthToken: () => options.getToken(),
+        getAuthToken: (signal) => options.getToken(signal),
         createSocket: (socketUrl, protocols) => new NodeWsLike(new WebSocket(socketUrl, protocols)),
       },
     });
@@ -510,21 +557,35 @@ export class RpcClient {
         );
       }
     });
-    try {
-      await transport.connectAndWait();
-    } catch (error) {
+    const closeTransport = transport.close.bind(transport);
+    let retirement: Promise<void> | undefined;
+    const close = () => {
       closing = true;
       unsubscribe();
-      await transport.close();
-      throw error;
+      options.signal?.removeEventListener("abort", cancel);
+      return (retirement ??= closeTransport());
+    };
+    const cancel = () => {
+      void close().catch(() => undefined);
+    };
+    options.signal?.addEventListener("abort", cancel, { once: true });
+    if (options.signal?.aborted) cancel();
+    try {
+      await transport.connectAndWait();
+      options.signal?.throwIfAborted();
+    } catch (error) {
+      const failure = options.signal?.aborted ? options.signal.reason : error;
+      try {
+        await close();
+      } catch (cleanup) {
+        throw new AggregateError([failure, cleanup], "Principal admission and retirement failed", {
+          cause: failure,
+        });
+      }
+      throw failure;
     }
-    const closeTransport = transport.close.bind(transport);
     return Object.assign(transport as typeof transport & PrincipalTransport, {
-      close: async () => {
-        closing = true;
-        unsubscribe();
-        await closeTransport();
-      },
+      close,
     });
   }
 
@@ -557,13 +618,13 @@ export class RpcClient {
     if (routed.deviceId !== device.deviceId) {
       throw new Error("A workspace connection must use this client's device credential");
     }
-    if (!this.isIroh) return new RpcClient(routed);
+    if (!this.isIroh) return new RpcClient(routed, this.owner);
     if (routed.transport !== "iroh") {
       throw new Error("A workspace route of an Iroh credential must carry Iroh reach");
     }
     const parent = await this.ensureIrohClient();
     this.assertOpen();
-    const workspace = new RpcClient(routed);
+    const workspace = new RpcClient(routed, this.owner);
     workspace.irohClient = Promise.resolve(
       parent.peer({
         reach: routed.workspacePairing,
@@ -588,19 +649,23 @@ export class RpcClient {
   async openControlConnection(): Promise<RpcClient> {
     this.assertOpen();
     const device = this.deviceCredential();
-    if (!this.isIroh) return new RpcClient({ url: new URL(this.url).origin, ...device });
+    if (!this.isIroh)
+      return new RpcClient({ url: new URL(this.url).origin, ...device }, this.owner);
     const controlPairing = this.controlPairing;
     if (!controlPairing) {
       throw new Error("Stored credential does not contain hub control reach");
     }
     const parent = await this.ensureIrohClient();
     this.assertOpen();
-    const control = new RpcClient({
-      url: this.url,
-      ...device,
-      pairing: controlPairing,
-      endpointSecret: this.endpointSecret,
-    });
+    const control = new RpcClient(
+      {
+        url: this.url,
+        ...device,
+        pairing: controlPairing,
+        endpointSecret: this.endpointSecret,
+      },
+      this.owner
+    );
     control.irohClient = Promise.resolve(
       parent.peer({
         reach: controlPairing,
@@ -634,35 +699,47 @@ export class RpcClient {
       await this.ensureIrohClient();
       this.assertOpen();
       const sibling = this.rawToken
-        ? new RpcClient({
-            url: this.url,
-            token: this.rawToken,
-            workspacePairing: this.pairing,
-            endpointSecret: this.endpointSecret,
-          })
-        : new RpcClient({
-            url: this.url,
-            ...this.deviceCredential(),
-            pairing: this.pairing,
-            endpointSecret: this.endpointSecret,
-          });
+        ? new RpcClient(
+            {
+              url: this.url,
+              token: this.rawToken,
+              workspacePairing: this.pairing,
+              endpointSecret: this.endpointSecret,
+            },
+            this.owner
+          )
+        : new RpcClient(
+            {
+              url: this.url,
+              ...this.deviceCredential(),
+              pairing: this.pairing,
+              endpointSecret: this.endpointSecret,
+            },
+            this.owner
+          );
       sibling.irohClient = this.irohClient;
       sibling.ownsIrohClient = false;
       return sibling;
     }
     if (this.rawToken) {
-      return new RpcClient({
-        url: this.url,
-        token: this.rawToken,
-        ...(this.pairing ? { workspacePairing: this.pairing } : {}),
-      });
+      return new RpcClient(
+        {
+          url: this.url,
+          token: this.rawToken,
+          ...(this.pairing ? { workspacePairing: this.pairing } : {}),
+        },
+        this.owner
+      );
     }
     const device = this.deviceCredential();
-    return new RpcClient({
-      url: this.url,
-      ...device,
-      ...(this.pairing ? { pairing: this.pairing } : {}),
-    });
+    return new RpcClient(
+      {
+        url: this.url,
+        ...device,
+        ...(this.pairing ? { pairing: this.pairing } : {}),
+      },
+      this.owner
+    );
   }
 
   close(): Promise<void> {
@@ -685,6 +762,8 @@ export class RpcClient {
   }
 
   private async retireResources(): Promise<void> {
+    this.owner.signal?.removeEventListener("abort", this.cancel);
+    this.cancellationAttached = false;
     const iroh = this.irohClient;
     const ws = this.wsClient;
     const httpDispatcher = this.httpDispatcher;
@@ -725,6 +804,11 @@ export class RpcClient {
   }
 
   private assertOpen(): void {
+    this.owner.signal?.throwIfAborted();
+    if (this.owner.signal && !this.cancellationAttached) {
+      this.owner.signal.addEventListener("abort", this.cancel, { once: true });
+      this.cancellationAttached = true;
+    }
     if (this.closePromise || this.closeFailure) {
       throw new ConnectionError("RPC client is closing or could not be closed");
     }
@@ -759,8 +843,17 @@ export class RpcClient {
   }
 
   /** Build an `RpcEnvelope` and POST it to the envelope-native `/rpc`. */
-  private async dispatch(targetId: string, method: string, args: unknown[]): Promise<unknown> {
-    const token = await this.ensureBearerToken();
+  private async dispatch(
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: RpcCallOptions
+  ): Promise<unknown> {
+    const signal =
+      options?.signal && this.owner.signal
+        ? AbortSignal.any([options.signal, this.owner.signal])
+        : (options?.signal ?? this.owner.signal);
+    const token = await this.ensureBearerToken(signal);
     this.assertOpen();
     const requestId =
       typeof globalThis.crypto?.randomUUID === "function"
@@ -774,17 +867,21 @@ export class RpcClient {
       provenance: [caller],
       message: { type: "request", requestId, fromId: caller.callerId, method, args },
     };
-    return await this.post(envelope, token);
+    return await this.post(envelope, token, signal);
   }
 
-  private async post(body: Record<string, unknown>, initialToken?: string): Promise<unknown> {
-    let token = initialToken ?? (await this.ensureBearerToken());
-    let response = await this.postRpc(token, body);
+  private async post(
+    body: Record<string, unknown>,
+    initialToken?: string,
+    signal = this.owner.signal
+  ): Promise<unknown> {
+    let token = initialToken ?? (await this.ensureBearerToken(signal));
+    let response = await this.postRpc(token, body, signal);
     if (response.status === 401) {
       // Bearer token expired or server restarted — refresh once and retry.
       shellTokenCache.delete(cacheKey(this.url, this.principalCacheId()));
-      token = await this.refreshBearerToken();
-      response = await this.postRpc(token, body);
+      token = await this.refreshBearerToken(signal);
+      response = await this.postRpc(token, body, signal);
       if (response.status === 401) {
         const errorBody = responseRecord(await readRpcResponseBody(response));
         throw new AuthError(remoteErrorMessage(errorBody, "unauthorized after token refresh"));
@@ -821,7 +918,11 @@ export class RpcClient {
     return message.result;
   }
 
-  private postRpc(token: string, body: Record<string, unknown>): Promise<Response> {
+  private postRpc(
+    token: string,
+    body: Record<string, unknown>,
+    signal = this.owner.signal
+  ): Promise<Response> {
     // RPC methods own their semantic lifetime. Template publication, builds,
     // and reviewed operations may legitimately remain open past Undici's
     // implicit ~300s response-header deadline. Cancellation belongs to the
@@ -839,10 +940,16 @@ export class RpcClient {
       },
       body: encodeRpcJson(body),
       dispatcher: this.httpDispatcher,
+      ...(signal ? { signal } : {}),
     });
   }
 
-  private async dispatchIroh(targetId: string, method: string, args: unknown[]): Promise<unknown> {
+  private async dispatchIroh(
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: RpcCallOptions
+  ): Promise<unknown> {
     const client = await this.ensureIrohClient();
     this.assertOpen();
     let result: unknown;
@@ -851,8 +958,8 @@ export class RpcClient {
     try {
       result =
         targetId === "main"
-          ? await client.call(requireQualifiedServiceMethod(method), args)
-          : await client.callTarget(targetId, method, args);
+          ? await client.call(requireQualifiedServiceMethod(method), args, options)
+          : await client.callTarget(targetId, method, args, options);
     } catch (error) {
       operationFailure = toRpcError(error);
       operationFailed = true;
@@ -901,6 +1008,7 @@ export class RpcClient {
             getToken: () => this.authToken(),
             clientLabel: "Vibestudio CLI",
             onPaired: () => undefined,
+            ...(this.owner.signal ? { signal: this.owner.signal } : {}),
           });
         })
         .catch((error) => {
@@ -931,6 +1039,7 @@ export class RpcClient {
             callerKind: this.callerKind,
             getToken: () => this.authToken(),
             clientLabel: "Vibestudio CLI",
+            ...(this.owner.signal ? { signal: this.owner.signal } : {}),
           });
         })
         .catch((error) => {

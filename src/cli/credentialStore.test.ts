@@ -6,13 +6,15 @@ import {
   assertCliProfileIsUnpaired,
   credentialPath,
   loadCliCredentials,
+  loadCliIdentity,
   saveCliCredentials,
   type CliIrohAgentCredentials,
   type CliIrohDeviceCredentials,
 } from "./credentialStore.js";
 
 const CURRENT: CliIrohDeviceCredentials = {
-  schemaVersion: 5,
+  schemaVersion: 6,
+  phase: "workspace",
   kind: "device",
   url: `iroh://${"bb".repeat(32)}/_workspace/dev`,
   workspaceId: "workspace-dev",
@@ -70,6 +72,34 @@ describe("CLI persisted device credential", () => {
     fs.mkdirSync(path.dirname(credentialPath()), { recursive: true });
     fs.writeFileSync(credentialPath(), typeof value === "string" ? value : JSON.stringify(value));
   }
+
+  it("migrates a validated v5 workspace record once at the file boundary", () => {
+    const { phase: _phase, ...old } = CURRENT;
+    write({ ...old, schemaVersion: 5 });
+    expect(loadCliCredentials()).toEqual(CURRENT);
+    expect(JSON.parse(fs.readFileSync(credentialPath(), "utf8"))).toEqual(CURRENT);
+  });
+
+  it("retains a real account receipt while requiring selection for workspace calls", () => {
+    const receipt = {
+      schemaVersion: 6 as const,
+      phase: "account" as const,
+      kind: "device" as const,
+      transport: "iroh" as const,
+      url: `iroh://${CURRENT.controlPairing.endpointId}`,
+      deviceId: CURRENT.deviceId,
+      refreshToken: CURRENT.refreshToken,
+      endpointSecret: CURRENT.endpointSecret,
+      controlPairing: CURRENT.controlPairing,
+      pairedAt: CURRENT.pairedAt,
+    };
+    saveCliCredentials(receipt);
+    expect(loadCliIdentity()).toEqual(receipt);
+    expect(() => loadCliCredentials()).toThrow(/paired.*no workspace is selected/);
+    expect(() => assertCliProfileIsUnpaired()).toThrow(/already paired/);
+    saveCliCredentials(CURRENT);
+    expect(loadCliCredentials()).toEqual(CURRENT);
+  });
 
   it("round-trips only the exact canonical schema", () => {
     saveCliCredentials(CURRENT);

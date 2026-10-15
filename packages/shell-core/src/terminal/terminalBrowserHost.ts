@@ -17,7 +17,7 @@
  */
 import type { RpcClient } from "@vibestudio/rpc";
 
-export const TERMINAL_BROWSER_HOST_CONTRACT_VERSION = 2 as const;
+export const TERMINAL_BROWSER_HOST_CONTRACT_VERSION = 3 as const;
 
 export type TerminalServerConnectionState =
   | { phase: "connected" }
@@ -68,6 +68,31 @@ export interface TerminalBrowserHost {
   listWorkspaces(): Promise<TerminalBrowserWorkspace[]>;
   /** Opens a URL on the user's machine (CLI-side, after browser-side confirmation). */
   openExternal(url: string): Promise<void>;
+  /** Trusted, explicit file gestures on the client computer. Never app-requested input. */
+  files: TerminalBrowserFiles;
+  /** The CLI invocation's authoritative cancellation lifetime. */
+  signal: AbortSignal;
+}
+
+export interface TerminalFileResult {
+  path: string;
+  size: number;
+}
+
+export interface TerminalBrowserFiles {
+  upload(
+    input: { contextId: string; localPath: string; workspacePath: string },
+    options?: { signal?: AbortSignal }
+  ): Promise<TerminalFileResult>;
+  download(
+    input: { contextId: string; workspacePath: string; localPath: string },
+    options?: { signal?: AbortSignal }
+  ): Promise<TerminalFileResult>;
+  /** Save a user-selected text artifact; existing files are never overwritten. */
+  saveText(
+    input: { localPath: string; text: string },
+    options?: { signal?: AbortSignal }
+  ): Promise<TerminalFileResult>;
 }
 
 export type TerminalBrowserExit =

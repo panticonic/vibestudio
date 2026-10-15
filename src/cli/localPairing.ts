@@ -7,9 +7,12 @@ import {
   type HubReadyPayload,
 } from "@vibestudio/service-schemas/hubControl";
 import { selectedWorkspacePath } from "@vibestudio/shared/connect";
-import { loadCliCredentials, saveCliCredentials, type CliCredentials } from "./credentialStore.js";
+import { loadCliIdentity, saveCliCredentials, type CliIdentity } from "./credentialStore.js";
 import { RpcClient } from "./rpcClient.js";
 import { ConnectionError } from "./output.js";
+import { selectAccountWorkspace } from "./remoteClient.js";
+import { runWithOwnedCleanup } from "../../scripts/lib/owned-cleanup.mjs";
+import type { QualifiedServiceMethod } from "@vibestudio/shared/typedServiceClient";
 
 /**
  * Local pairing: the one implementation through which a CLI profile pairs with
@@ -46,10 +49,31 @@ interface LocalPairingDeps {
   /** Device label shown in the server's device list. */
   label?: string;
   fetch?: typeof fetch;
-  rpcClient?: (credential: { url: string; deviceId: string; refreshToken: string }) => {
-    call(method: string, args?: unknown[]): Promise<unknown>;
+  signal?: AbortSignal;
+  rpcClient?: (
+    credential: { url: string; deviceId: string; refreshToken: string },
+    owner?: { signal?: AbortSignal }
+  ) => {
+    call(method: string, args?: unknown[], options?: { signal?: AbortSignal }): Promise<unknown>;
     close(): Promise<void>;
   };
+}
+
+async function localRpcOperation(
+  credential: { url: string; deviceId: string; refreshToken: string },
+  deps: LocalPairingDeps,
+  method: QualifiedServiceMethod,
+  args: unknown[]
+): Promise<unknown> {
+  deps.signal?.throwIfAborted();
+  const createRpc = deps.rpcClient ?? ((credential, owner) => new RpcClient(credential, owner));
+  const owner = deps.signal ? { signal: deps.signal } : undefined;
+  const rpc = owner ? createRpc(credential, owner) : createRpc(credential);
+  return runWithOwnedCleanup(
+    () => (owner ? rpc.call(method, args, owner) : rpc.call(method, args)),
+    () => rpc.close(),
+    "Local pairing operation and connection retirement failed"
+  );
 }
 
 function pairingResponse(value: unknown): PairingResponse {
@@ -69,14 +93,20 @@ async function postPairing(
   gatewayUrl: string,
   invite: Pick<HubPairingInvite, "code">,
   label: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<PairingResponse> {
+  signal?.throwIfAborted();
   const response = await fetchImpl(new URL("/_r/s/auth/complete-pairing", gatewayUrl), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code: invite.code, label, platform: process.platform }),
+    ...(signal ? { signal } : {}),
   });
-  const body = (await response.json().catch(() => ({}))) as unknown;
+  const body = (await response.json().catch(() => {
+    signal?.throwIfAborted();
+    return {};
+  })) as unknown;
   if (!response.ok) {
     const message =
       body && typeof body === "object" && !Array.isArray(body)
@@ -94,13 +124,13 @@ async function postPairing(
 function existingCredential(
   serverId: string,
   credentialFile: string | undefined
-): CliCredentials | null {
-  const existing = loadCliCredentials(credentialFile);
+): CliIdentity | null {
+  const existing = loadCliIdentity(credentialFile);
   if (!existing) return null;
-  if (existing.serverId !== serverId) {
+  if (!("serverId" in existing) || existing.serverId !== serverId) {
     throw new Error(
       `The saved CLI credential (${credentialFile ?? "default profile"}) belongs to server ` +
-        `${existing.serverId}, but the local server is ${serverId}. Run ` +
+        `${"serverId" in existing ? existing.serverId : "a remote account"}, but the local server is ${serverId}. Run ` +
         "`vibestudio remote logout` to forget the old pairing, then try again."
     );
   }
@@ -116,21 +146,23 @@ async function routeWorkspace(
   },
   deps: LocalPairingDeps
 ): Promise<ReturnType<typeof HubWorkspaceRouteSchema.parse>> {
-  const createRpc = deps.rpcClient ?? ((credential) => new RpcClient(credential));
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const rpc = createRpc({
-      url: input.gatewayUrl,
-      deviceId: input.deviceId,
-      refreshToken: input.refreshToken,
-    });
     try {
       return HubWorkspaceRouteSchema.parse(
-        await rpc.call("hubControl.routeWorkspace", [{ workspaceId: input.workspaceId }])
+        await localRpcOperation(
+          {
+            url: input.gatewayUrl,
+            deviceId: input.deviceId,
+            refreshToken: input.refreshToken,
+          },
+          deps,
+          "hubControl.routeWorkspace",
+          [{ workspaceId: input.workspaceId }]
+        )
       );
     } catch (error) {
+      deps.signal?.throwIfAborted();
       if (!(error instanceof ConnectionError) || attempt > 0) throw error;
-    } finally {
-      await rpc.close();
     }
   }
   throw new Error("The CLI could not route its workspace on the local server");
@@ -148,53 +180,69 @@ async function ensureUserWorkspaces(
   input: { gatewayUrl: string; deviceId: string; refreshToken: string },
   deps: LocalPairingDeps
 ): Promise<{ personal: { workspaceId: string }; system: { workspaceId: string } }> {
-  const createRpc = deps.rpcClient ?? ((credential) => new RpcClient(credential));
-  // A cold hub can refuse the first call while it is still starting, which is
-  // why routing already retries once; preparing the account is no different.
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const rpc = createRpc({
-      url: input.gatewayUrl,
-      deviceId: input.deviceId,
-      refreshToken: input.refreshToken,
-    });
     try {
-      return (await rpc.call("hubControl.ensureUserWorkspaces", [])) as {
+      return (await localRpcOperation(
+        {
+          url: input.gatewayUrl,
+          deviceId: input.deviceId,
+          refreshToken: input.refreshToken,
+        },
+        deps,
+        "hubControl.ensureUserWorkspaces",
+        []
+      )) as {
         personal: { workspaceId: string };
         system: { workspaceId: string };
       };
     } catch (error) {
+      deps.signal?.throwIfAborted();
       if (!(error instanceof ConnectionError) || attempt > 0) throw error;
-    } finally {
-      await rpc.close();
     }
   }
   throw new Error("The CLI could not prepare its account workspaces on the local server");
 }
 
 async function reconcileExistingCredential(
-  input: { gatewayUrl: string; serverId: string; workspaceId: string },
-  existing: CliCredentials,
+  input: {
+    gatewayUrl: string;
+    serverId: string;
+    workspaceId?: string;
+    workspace?: LocalCliWorkspaceSelection;
+  },
+  existing: CliIdentity,
   credentialFile: string | undefined,
   deps: LocalPairingDeps
-): Promise<LocalCliPairingResult> {
+): Promise<Extract<LocalCliPairingResult, { status: "existing" }>> {
   if (existing.kind !== "device") {
     throw new Error("The CLI profile is not a paired device credential");
   }
-  const route = await routeWorkspace(
+  const credential = {
+    gatewayUrl: input.gatewayUrl,
+    deviceId: existing.deviceId,
+    refreshToken: existing.refreshToken,
+  };
+  const route = await selectAccountWorkspace(
     {
-      gatewayUrl: input.gatewayUrl,
-      deviceId: existing.deviceId,
-      refreshToken: existing.refreshToken,
-      workspaceId: input.workspaceId,
+      ensureUserWorkspaces: () => ensureUserWorkspaces(credential, deps),
+      routeWorkspace: ({ workspaceId }) => routeWorkspace({ ...credential, workspaceId }, deps),
     },
-    deps
+    input.workspaceId
+      ? { workspaceId: input.workspaceId }
+      : { privateRole: input.workspace ?? "system" }
   );
-  if (route.serverId !== input.serverId || route.workspaceId !== input.workspaceId) {
+  if (route.serverId !== input.serverId) {
     throw new Error("The local server routed a different workspace than the CLI selected");
   }
   saveCliCredentials(
     {
-      ...existing,
+      kind: "device",
+      deviceId: existing.deviceId,
+      refreshToken: existing.refreshToken,
+      pairedAt: existing.pairedAt,
+      schemaVersion: 6,
+      phase: "workspace",
+      transport: "local",
       url: new URL(selectedWorkspacePath(route.workspace), input.gatewayUrl).toString(),
       workspaceId: route.workspaceId,
       workspaceName: route.workspace,
@@ -222,49 +270,25 @@ async function pairWithInvite(
     input.gatewayUrl,
     input.invite,
     deps.label ?? `Vibestudio CLI on ${os.hostname()}`,
-    deps.fetch
+    deps.fetch,
+    deps.signal
   );
-  const pair = await ensureUserWorkspaces(
-    {
-      gatewayUrl: input.gatewayUrl,
-      deviceId: device.deviceId,
-      refreshToken: device.refreshToken,
-    },
-    deps
-  );
-  // System is where the account's tooling lives and what a desktop client
-  // routes its own connection to, so a headless CLI and an attached client
-  // see the same workspace by default. Personal is a real
-  // choice, not a fallback: it installs different units, so it is the only
-  // place cases that need those units can run.
-  const workspaceId = pair[input.workspace ?? "system"].workspaceId;
-  const route = await routeWorkspace(
-    {
-      gatewayUrl: input.gatewayUrl,
-      deviceId: device.deviceId,
-      refreshToken: device.refreshToken,
-      workspaceId,
-    },
-    deps
-  );
-  if (route.serverId !== input.serverId || route.workspaceId !== workspaceId) {
-    throw new Error("The local server routed a different workspace than the pairing selected");
-  }
-
-  const credentials: CliCredentials = {
-    schemaVersion: 5,
+  // Redemption is irreversible: retain its real device receipt before any
+  // cancellable workspace materialization or navigation begins.
+  const receipt: CliIdentity = {
+    schemaVersion: 6,
+    phase: "account",
     kind: "device",
     transport: "local",
-    url: new URL(selectedWorkspacePath(route.workspace), input.gatewayUrl).toString(),
-    workspaceId: route.workspaceId,
-    workspaceName: route.workspace,
-    serverId: route.serverId,
+    url: new URL(input.gatewayUrl).origin,
+    serverId: input.serverId,
     deviceId: device.deviceId,
     refreshToken: device.refreshToken,
     pairedAt: Date.now(),
   };
-  saveCliCredentials(credentials, credentialFile);
-  return { status: "paired", workspaceName: route.workspace, workspaceId: route.workspaceId };
+  saveCliCredentials(receipt, credentialFile);
+  const selected = await reconcileExistingCredential(input, receipt, credentialFile, deps);
+  return { ...selected, status: "paired" };
 }
 
 /**
@@ -283,6 +307,7 @@ export async function pairLocalCli(
     workspace?: LocalCliWorkspaceSelection;
   } & LocalPairingDeps = {}
 ): Promise<LocalCliPairingResult> {
+  options.signal?.throwIfAborted();
   const ready = HubReadyPayloadSchema.parse(rawReady);
   const existing = existingCredential(ready.serverId, options.credentialFile);
   if (existing) {
@@ -293,7 +318,9 @@ export async function pairLocalCli(
       {
         gatewayUrl: ready.gatewayUrl,
         serverId: ready.serverId,
-        workspaceId: existing.workspaceId,
+        ...(existing.kind === "device" && existing.phase === "account"
+          ? { workspace: options.workspace }
+          : { workspaceId: existing.workspaceId }),
       },
       existing,
       options.credentialFile,
@@ -322,22 +349,22 @@ export async function pairLocalCliFromDevice(
   sponsor: LocalCliPairingSponsor,
   options: { credentialFile?: string } & LocalPairingDeps = {}
 ): Promise<LocalCliPairingResult> {
+  options.signal?.throwIfAborted();
   const existing = existingCredential(sponsor.serverId, options.credentialFile);
   if (existing) {
     return reconcileExistingCredential(sponsor, existing, options.credentialFile, options);
   }
 
-  const rpc = (options.rpcClient ?? ((credential) => new RpcClient(credential)))({
-    url: sponsor.gatewayUrl,
-    deviceId: sponsor.deviceId,
-    refreshToken: sponsor.refreshToken,
-  });
-  let rawInvite: unknown;
-  try {
-    rawInvite = await rpc.call("hubControl.pairDevice", []);
-  } finally {
-    await rpc.close();
-  }
+  const rawInvite = await localRpcOperation(
+    {
+      url: sponsor.gatewayUrl,
+      deviceId: sponsor.deviceId,
+      refreshToken: sponsor.refreshToken,
+    },
+    options,
+    "hubControl.pairDevice",
+    []
+  );
   const result =
     rawInvite && typeof rawInvite === "object" && !Array.isArray(rawInvite)
       ? (rawInvite as { pairing?: unknown })

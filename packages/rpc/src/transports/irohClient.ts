@@ -134,7 +134,7 @@ export interface IrohClientSessionOptions {
   clientLabel?: string;
   clientPlatform?: ClientPlatform;
   oauthCallbackMode?: OAuthCallbackMode;
-  getToken(): string | Promise<string>;
+  getToken(signal?: AbortSignal): string | Promise<string>;
   onPaired?(credential: DeviceCredential): void | Promise<void>;
   onRecovery?(kind: RecoveryKind, receipt: IrohRecoveryReceipt): void | Promise<void>;
   onTerminalClose?(error: Error): void;
@@ -184,12 +184,15 @@ class ClientSession implements IrohClientSession {
   private readonly outboundRequests = new Map<string, OutboundRequest>();
   private readonly outboundRequestAdmissions = new Map<string, Promise<OutboundRequest>>();
   private openPromise: Promise<void> | null = null;
+  private readonly opening = new Set<Promise<void>>();
+  private readonly admissions = new Map<Promise<void>, AbortController>();
   private requestGeneration = 0;
   private authenticatedCallerId: string | null = null;
   private lastServerBootId: string | null = null;
   private terminal = false;
   private closePromise: Promise<void> | null = null;
   private failureCompletion: Promise<void> = Promise.resolve();
+  private retirementReason: Error | null = null;
 
   constructor(
     private readonly pipe: ClientPipe,
@@ -222,7 +225,13 @@ class ClientSession implements IrohClientSession {
   }
 
   ready(): Promise<void> {
-    return (this.openPromise ??= this.open());
+    if (!this.openPromise) {
+      const opening = Promise.resolve().then(() => this.open());
+      this.opening.add(opening);
+      void opening.finally(() => this.opening.delete(opening)).catch(() => {});
+      this.openPromise = opening;
+    }
+    return this.openPromise;
   }
 
   onMessage(handler: (envelope: RpcEnvelope) => void): () => void {
@@ -414,17 +423,7 @@ class ClientSession implements IrohClientSession {
         SESSION_CONNECTION_LOST_CODE
       )
     );
-    this.closePromise = (async () => {
-      try {
-        if (this.pipe.status() === "connected")
-          await this.pipe.writeControl({ t: IROH_SESSION_CLOSE, sid: this.sid, code: 1000 });
-      } finally {
-        // A failed control write must not strand this session's request owners.
-        await retirement;
-        this.pipe.removeSession(this.sid, this);
-        for (const listener of this.statusListeners) listener("disconnected");
-      }
-    })();
+    this.closePromise = this.finishClose(retirement, true);
     return this.closePromise;
   }
 
@@ -461,7 +460,7 @@ class ClientSession implements IrohClientSession {
     const generation = this.requestGeneration;
     if (frame.terminal) {
       this.terminal = true;
-      this.closePromise ??= retirement.then(() => this.pipe.removeSession(this.sid, this));
+      this.closePromise ??= this.finishClose(retirement, false);
       this.options.onTerminalClose?.(error);
       for (const listener of this.statusListeners) listener("disconnected");
     } else {
@@ -470,49 +469,54 @@ class ClientSession implements IrohClientSession {
         .then(() => {
           return !this.terminal && generation === this.requestGeneration ? this.ready() : undefined;
         })
-        .catch((openError) => this.options.onTerminalClose?.(asError(openError)));
+        .catch((openError) => {
+          if (!this.terminal) this.options.onTerminalClose?.(asError(openError));
+        });
     }
   }
 
   fail(error: Error): Promise<void> {
+    this.terminal = true;
     const retirement = this.failOutstanding(error);
     this.openPromise = null;
     return retirement;
   }
 
   private async open(): Promise<void> {
-    if (this.terminal) throw new Error(`Iroh session ${this.sid} is closed`);
+    if (this.terminal)
+      throw this.retirementReason ?? new Error(`Iroh session ${this.sid} is closed`);
     const generation = this.requestGeneration;
     // Admit the logical waiter before the shared handshake. Its own close
     // can reject readiness without closing a pipe needed by sibling sessions.
     const resultPromise = this.pipe.waitForOpen(this.sid);
     // Observe the server result while credentials and the control write are
     // pending: disconnect can reject it before either operation completes.
-    const [result] = await Promise.all([
-      resultPromise,
-      (async () => {
-        await this.pipe.ready();
-        if (this.terminal || this.requestGeneration !== generation)
-          throw new Error(`Iroh session ${this.sid} closed during the pipe handshake`);
-        const token = await this.options.getToken();
-        if (this.terminal || this.requestGeneration !== generation)
-          throw new Error(`Iroh session ${this.sid} closed during credential acquisition`);
-        await this.pipe.writeControl({
-          t: IROH_SESSION_OPEN,
-          sid: this.sid,
-          token,
-          ...(this.options.connectionId ? { connectionId: this.options.connectionId } : {}),
-          ...(this.options.clientSessionId
-            ? { clientSessionId: this.options.clientSessionId }
-            : {}),
-          ...(this.options.clientLabel ? { clientLabel: this.options.clientLabel } : {}),
-          ...(this.options.clientPlatform ? { clientPlatform: this.options.clientPlatform } : {}),
-          ...(this.options.oauthCallbackMode
-            ? { oauthCallbackMode: this.options.oauthCallbackMode }
-            : {}),
-        });
-      })(),
-    ]);
+    const controller = new AbortController();
+    const admission = Promise.resolve().then(async () => {
+      // Physical acquisition is shared and owned by the pipe; this logical
+      // session owns only its cancellable waiter on that readiness.
+      await this.waitForPipe(controller.signal);
+      controller.signal.throwIfAborted();
+      const token = await this.options.getToken(controller.signal);
+      controller.signal.throwIfAborted();
+      if (this.terminal || this.requestGeneration !== generation)
+        throw new Error(`Iroh session ${this.sid} closed during credential acquisition`);
+      await this.pipe.writeControl({
+        t: IROH_SESSION_OPEN,
+        sid: this.sid,
+        token,
+        ...(this.options.connectionId ? { connectionId: this.options.connectionId } : {}),
+        ...(this.options.clientSessionId ? { clientSessionId: this.options.clientSessionId } : {}),
+        ...(this.options.clientLabel ? { clientLabel: this.options.clientLabel } : {}),
+        ...(this.options.clientPlatform ? { clientPlatform: this.options.clientPlatform } : {}),
+        ...(this.options.oauthCallbackMode
+          ? { oauthCallbackMode: this.options.oauthCallbackMode }
+          : {}),
+      });
+    });
+    this.admissions.set(admission, controller);
+    void admission.finally(() => this.admissions.delete(admission)).catch(() => {});
+    const [result] = await Promise.all([resultPromise, admission]);
     if (!result.success) {
       this.terminal = result.terminal ?? true;
       throw Object.assign(new Error(result.error ?? "Iroh session authentication failed"), {
@@ -530,6 +534,50 @@ class ClientSession implements IrohClientSession {
     const recovery = irohRecoveryKind(this.lastServerBootId, receipt);
     this.lastServerBootId = result.serverBootId ?? this.lastServerBootId;
     await this.options.onRecovery?.(recovery, receipt);
+  }
+
+  private waitForPipe(signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted();
+    return new Promise<void>((resolve, reject) => {
+      const aborted = () => {
+        signal.removeEventListener("abort", aborted);
+        reject(signal.reason);
+      };
+      signal.addEventListener("abort", aborted, { once: true });
+      void this.pipe.ready().then(
+        () => {
+          signal.removeEventListener("abort", aborted);
+          resolve();
+        },
+        (error: unknown) => {
+          signal.removeEventListener("abort", aborted);
+          reject(error);
+        }
+      );
+    });
+  }
+
+  private async finishClose(retirement: Promise<void>, sendClose: boolean): Promise<void> {
+    const outcomes = await Promise.allSettled([
+      retirement,
+      Promise.resolve().then(async () => {
+        if (sendClose && this.pipe.status() === "connected")
+          await this.pipe.writeControl({ t: IROH_SESSION_CLOSE, sid: this.sid, code: 1000 });
+      }),
+    ]);
+    const failures = outcomes.flatMap((outcome) =>
+      outcome.status === "rejected" ? [outcome.reason] : []
+    );
+    this.pipe.removeSession(this.sid, this);
+    for (const listener of this.statusListeners) {
+      try {
+        listener("disconnected");
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length) throw new AggregateError(failures, "Iroh session retirement failed");
   }
 
   private async respondOnInboundStream(
@@ -778,9 +826,24 @@ class ClientSession implements IrohClientSession {
   }
 
   private failOutstanding(error: Error): Promise<void> {
+    this.retirementReason = error;
     this.requestGeneration += 1;
     this.pipe.rejectOpen(this.sid, error);
     const retirements: Promise<unknown>[] = [this.failureCompletion];
+    for (const [admission, controller] of this.admissions) {
+      controller.abort(error);
+      retirements.push(
+        admission.catch((failure: unknown) => {
+          if (failure !== error) throw failure;
+        })
+      );
+    }
+    for (const opening of this.opening)
+      retirements.push(
+        opening.catch((failure: unknown) => {
+          if (failure !== error) throw failure;
+        })
+      );
     for (const [requestId, outbound] of this.outboundRequests) {
       this.emitTransportFailure(requestId, error);
       retirements.push(outbound.cancel(error, IROH_SESSION_CLOSE_CODE));
@@ -799,7 +862,18 @@ class ClientSession implements IrohClientSession {
     }
     // Keep owners visible until their cleanup settles, and include retirements
     // already in progress when another authoritative lifecycle event arrives.
-    return (this.failureCompletion = Promise.all(retirements).then(() => undefined));
+    return (this.failureCompletion = Promise.allSettled(retirements).then((outcomes) => {
+      const failures = [
+        ...new Set(
+          outcomes.flatMap((outcome) =>
+            outcome.status === "rejected" ? [outcome.reason as unknown] : []
+          )
+        ),
+      ];
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1)
+        throw new AggregateError(failures, "Iroh session operations failed to retire");
+    }));
   }
 }
 
@@ -1103,9 +1177,7 @@ class ClientPipe implements IrohClientPipe {
 
   private ownLifecycle(operation: Promise<void>): void {
     this.lifecycleOperations.add(operation);
-    void operation
-      .finally(() => this.lifecycleOperations.delete(operation))
-      .catch(() => undefined);
+    void operation.finally(() => this.lifecycleOperations.delete(operation)).catch(() => undefined);
   }
 
   private setStatus(status: RpcConnectionStatus): void {

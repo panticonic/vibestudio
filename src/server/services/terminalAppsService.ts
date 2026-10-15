@@ -98,6 +98,9 @@ interface StoredSession {
   entityId?: string;
   shellSessionId: string | null;
   running: boolean;
+  failure?: string;
+  /** One-shot launch material still owned by this incarnation until consumed or retired. */
+  launchFile?: string;
   exit?: { code: number | null; signal?: string };
   createdAt: number;
   lastActiveAt: number;
@@ -174,6 +177,8 @@ function entryOf(session: StoredSession): TerminalSessionEntry {
     ...(session.running && session.entityId ? { principalId: session.entityId } : {}),
     shellSessionId: session.running ? session.shellSessionId : null,
     running: session.running,
+    ...(session.failure ? { failure: session.failure } : {}),
+    ...(session.contextId ? { contextId: session.contextId } : {}),
     ...(session.exit ? { exit: session.exit } : {}),
     createdAt: session.createdAt,
     lastActiveAt: session.lastActiveAt,
@@ -207,10 +212,14 @@ export function createTerminalAppsService(
     }
     saveRegistry();
     // Incarnations from before the restart hold no PTY any more.
-    const stale = registry.sessions.flatMap((session) =>
-      session.entityId ? [session.entityId] : []
-    );
-    void Promise.allSettled(stale.map((id) => deps.retireEntity(id))).then((results) => {
+    const stale = registry.sessions.filter((session) => session.entityId || session.launchFile);
+    void Promise.allSettled(
+      stale.map((session) =>
+        ownSession(session.sessionId, () =>
+          operateSession(session, () => retireIncarnation(session))
+        )
+      )
+    ).then((results) => {
       for (const result of results)
         if (result.status === "rejected")
           deps.log?.(
@@ -227,6 +236,27 @@ export function createTerminalAppsService(
   // Cancels the service's own pending shell calls (exit watches) when it stops.
   const lifetime = new AbortController();
   const exitWatches = new Set<Promise<void>>();
+  const watchedPtys = new Map<string, symbol>();
+  const lifecycle = new Map<string, Promise<void>>();
+
+  /** A session has one lifecycle owner, shared by all devices and its exit watch. */
+  function ownSession<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    if (stopped) return Promise.reject(lifetime.signal.reason);
+    const previous = lifecycle.get(sessionId) ?? Promise.resolve();
+    const current = previous.then(() => {
+      lifetime.signal.throwIfAborted();
+      return operation();
+    });
+    const joined = current.then(
+      () => undefined,
+      () => undefined
+    );
+    lifecycle.set(sessionId, joined);
+    void joined.then(() => {
+      if (lifecycle.get(sessionId) === joined) lifecycle.delete(sessionId);
+    });
+    return current;
+  }
 
   function saveRegistry(): void {
     fs.mkdirSync(path.dirname(deps.registryPath), { recursive: true });
@@ -282,7 +312,20 @@ export function createTerminalAppsService(
 
   /** Retire the latest incarnation (idempotent); its record keeps the stateArgs. */
   async function retireIncarnation(session: StoredSession): Promise<void> {
-    if (session.entityId) await deps.retireEntity(session.entityId);
+    const outcomes = await Promise.allSettled([
+      session.launchFile
+        ? rm(session.launchFile, { force: true }).then(() => {
+            delete session.launchFile;
+          })
+        : undefined,
+      session.entityId ? deps.retireEntity(session.entityId) : undefined,
+    ]);
+    const failures = outcomes.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []
+    );
+    if (failures.length === 1) throw failures[0];
+    if (failures.length)
+      throw new AggregateError(failures, "Terminal incarnation retirement failed");
   }
 
   /** Whether the shell extension still runs this PTY (its authoritative state). */
@@ -298,7 +341,10 @@ export function createTerminalAppsService(
 
   /** Follow the PTY to its exit (the shell extension's authoritative lifecycle). */
   function watchExit(session: StoredSession, subject: UserSubject, shellSessionId: string): void {
-    const watch = (async () => {
+    if (watchedPtys.has(shellSessionId)) return;
+    const owner = Symbol(shellSessionId);
+    watchedPtys.set(shellSessionId, owner);
+    const watch: Promise<void> = (async () => {
       let exit: { code: number | null; signal?: string } | undefined;
       try {
         const result = (await shellAs(subject, "awaitExit", [shellSessionId])) as {
@@ -307,24 +353,36 @@ export function createTerminalAppsService(
         };
         exit = { code: result.exitCode, ...(result.signal ? { signal: result.signal } : {}) };
       } catch (error) {
-        // The shell extension (and so the PTY) went away, or the session was
-        // disposed: either way the program is no longer running.
         if (stopped) return;
-        deps.log?.("warn", "Terminal session PTY ended without an exit status", {
+        if (watchedPtys.get(shellSessionId) === owner) watchedPtys.delete(shellSessionId);
+        // An observation failure is not process exit. Keep the known PTY and
+        // let a subsequent explicit operation ask its authoritative owner.
+        await ownSession(session.sessionId, async () => {
+          if (session.shellSessionId !== shellSessionId) return;
+          session.failure = `Could not observe program exit: ${error instanceof Error ? error.message : String(error)}`;
+          changed(session.userId);
+        });
+        deps.log?.("warn", "Could not observe terminal session PTY exit", {
           sessionId: session.sessionId,
           error: error instanceof Error ? error.message : String(error),
         });
+        return;
       }
-      if (stopped || session.shellSessionId !== shellSessionId) return;
-      session.running = false;
-      session.shellSessionId = null;
-      if (exit) session.exit = exit;
-      session.lastActiveAt = Date.now();
-      try {
-        await retireIncarnation(session);
-      } finally {
-        if (registryFile().sessions.includes(session)) changed(session.userId);
-      }
+      if (stopped) return;
+      await ownSession(session.sessionId, () =>
+        operateSession(session, async () => {
+          if (session.shellSessionId !== shellSessionId) return;
+          session.running = false;
+          session.shellSessionId = null;
+          if (exit) session.exit = exit;
+          session.lastActiveAt = Date.now();
+          try {
+            await retireIncarnation(session);
+          } finally {
+            if (registryFile().sessions.includes(session)) changed(session.userId);
+          }
+        })
+      );
     })().catch((error: unknown) =>
       deps.log?.("error", "Terminal session exit handling failed", {
         sessionId: session.sessionId,
@@ -332,7 +390,10 @@ export function createTerminalAppsService(
       })
     );
     exitWatches.add(watch);
-    void watch.finally(() => exitWatches.delete(watch));
+    void watch.finally(() => {
+      exitWatches.delete(watch);
+      if (watchedPtys.get(shellSessionId) === owner) watchedPtys.delete(shellSessionId);
+    });
   }
 
   async function start(
@@ -345,58 +406,67 @@ export function createTerminalAppsService(
     let command: string | undefined;
     let args: string[] = [];
     let env: Record<string, string> = { COLORTERM: "truecolor" };
-    let launchFile: string | null = null;
-    // The session's context is created once, by this call, so it is the call's
-    // test policy (if any) that the context, and so everything the app or
-    // shell runs in it, is decided under. An app incarnation is then created
-    // into that context; a context a runtime creates for itself would carry
-    // no policy.
-    session.contextId ??= await deps.createContext(contextCreator(ctx, subject));
-    if (session.kind === "app") {
-      const source = session.source!;
-      const previousState = session.entityId ? await deps.entityStateArgs(session.entityId) : null;
-      await retireIncarnation(session);
-      const handle = await deps.createEntity(createHostCaller(HOST_CALLER_ID, "server", subject), {
-        kind: "panel",
-        execution: { surface: "code", source },
-        key: `nav-term-${randomUUID()}`,
-        contextId: session.contextId,
-        ...(previousState ? { stateArgs: previousState } : {}),
-      });
-      session.entityId = handle.id;
-      session.contextId = handle.contextId;
-      if (!handle.buildKey) throw new Error(`${source} has no built program`);
-      const connectionId = `terminal-${session.sessionId}-${randomUUID().slice(0, 8)}`;
-      deps.holdLease({
-        runtimeEntityId: handle.id,
-        connectionId,
-        authorizedBy: ctx.caller.runtime.id,
-        holderLabel: "terminal session",
-      });
-      const material: TerminalAppLaunchMaterial = {
-        gatewayUrl: deps.gatewayUrl(),
-        principalId: handle.id,
-        connectionId,
-        grant: deps.grantConnection(handle.id, ctx.caller.runtime.id, subject),
-        sessionId: session.sessionId,
-        contextId: handle.contextId,
-        state: previousState ?? {},
-        title: session.title,
-        ...(approvalsKey ? { approvalsKey } : {}),
-      };
-      await mkdir(deps.launchDirectory, { recursive: true, mode: 0o700 });
-      launchFile = path.join(deps.launchDirectory, `${randomUUID()}.json`);
-      await writeFile(launchFile, JSON.stringify(material), { mode: 0o600, flag: "wx" });
-      command = deps.nodeExecutable();
-      args = [await deps.primaryArtifactPath(handle.buildKey)];
-      env = { ...env, [TERMINAL_LAUNCH_ENV]: launchFile };
-    } else {
-      if (session.program) {
-        command = session.program.command;
-        args = session.program.args;
-      }
-    }
     try {
+      ctx.signal?.throwIfAborted();
+      // The session's context is created once, by this call, so it is the call's
+      // test policy (if any) that the context, and so everything the app or
+      // shell runs in it, is decided under. An app incarnation is then created
+      // into that context; a context a runtime creates for itself would carry
+      // no policy.
+      session.contextId ??= await deps.createContext(contextCreator(ctx, subject));
+      if (session.kind === "app") {
+        const source = session.source!;
+        const previousState = session.entityId
+          ? await deps.entityStateArgs(session.entityId)
+          : null;
+        await retireIncarnation(session);
+        const handle = await deps.createEntity(
+          createHostCaller(HOST_CALLER_ID, "server", subject),
+          {
+            kind: "panel",
+            execution: { surface: "code", source },
+            // Runtime activation serializes this canonical identity across
+            // incarnations; semantic state and owned attachment scopes survive.
+            key: `terminal-session-${session.sessionId}`,
+            contextId: session.contextId,
+            ...(previousState ? { stateArgs: previousState } : {}),
+          }
+        );
+        session.entityId = handle.id;
+        session.contextId = handle.contextId;
+        if (!handle.buildKey) throw new Error(`${source} has no built program`);
+        const connectionId = `terminal-${session.sessionId}-${randomUUID().slice(0, 8)}`;
+        deps.holdLease({
+          runtimeEntityId: handle.id,
+          connectionId,
+          authorizedBy: ctx.caller.runtime.id,
+          holderLabel: "terminal session",
+        });
+        const material: TerminalAppLaunchMaterial = {
+          gatewayUrl: deps.gatewayUrl(),
+          principalId: handle.id,
+          connectionId,
+          grant: deps.grantConnection(handle.id, ctx.caller.runtime.id, subject),
+          sessionId: session.sessionId,
+          contextId: handle.contextId,
+          state: previousState ?? {},
+          title: session.title,
+          ...(approvalsKey ? { approvalsKey } : {}),
+        };
+        await mkdir(deps.launchDirectory, { recursive: true, mode: 0o700 });
+        session.launchFile = path.join(deps.launchDirectory, `${randomUUID()}.json`);
+        await writeFile(session.launchFile, JSON.stringify(material), { mode: 0o600, flag: "wx" });
+        command = deps.nodeExecutable();
+        args = [await deps.primaryArtifactPath(handle.buildKey)];
+        env = { ...env, [TERMINAL_LAUNCH_ENV]: session.launchFile };
+      } else {
+        if (session.program) {
+          command = session.program.command;
+          args = session.program.args;
+        }
+      }
+      ctx.signal?.throwIfAborted();
+      lifetime.signal.throwIfAborted();
       const opened = (await shellAs(subject, "open", [
         {
           ...(command ? { command, args } : {}),
@@ -411,13 +481,51 @@ export function createTerminalAppsService(
       session.shellSessionId = opened.sessionId;
       session.running = true;
       delete session.exit;
+      delete session.failure;
       session.lastActiveAt = Date.now();
       watchExit(session, subject, opened.sessionId);
     } catch (error) {
-      if (launchFile) await rm(launchFile, { force: true });
-      await retireIncarnation(session);
+      try {
+        await retireIncarnation(session);
+      } catch (retirement) {
+        throw new AggregateError([error, retirement], "Terminal launch and rollback failed", {
+          cause: error,
+        });
+      }
       throw error;
     }
+  }
+
+  /** Persist failure without discarding any resource whose owner did not settle. */
+  async function operateSession<T>(
+    session: StoredSession,
+    operation: () => Promise<T>
+  ): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      session.failure = error instanceof Error ? error.message : String(error);
+      try {
+        changed(session.userId);
+      } catch (persistence) {
+        throw new AggregateError(
+          [error, persistence],
+          "Terminal operation and failure publication failed",
+          { cause: error }
+        );
+      }
+      throw error;
+    }
+  }
+
+  async function stopProgram(session: StoredSession, subject: UserSubject): Promise<void> {
+    const previous = session.shellSessionId;
+    // dispose joins the actual PTY exit. Do not detach its identity before that
+    // succeeds: failed signaling/retirement must remain visible and actionable.
+    if (previous) await shellAs(subject, "dispose", [previous]);
+    session.running = false;
+    session.shellSessionId = null;
+    await retireIncarnation(session);
   }
 
   async function prepareRun(ctx: ServiceContext, args: unknown[]) {
@@ -532,64 +640,78 @@ export function createTerminalAppsService(
           createdAt: now,
           lastActiveAt: now,
         };
-        await start(ctx, session, input, input.approvalsKey);
         registryFile().sessions.push(session);
-        changed(subject.userId);
-        return entryOf(session);
+        return ownSession(session.sessionId, () =>
+          operateSession(session, async () => {
+            try {
+              await start(ctx, session, input, input.approvalsKey);
+            } catch (error) {
+              // A created context is semantic user data: retain a stopped,
+              // retryable session rather than silently deleting their folder.
+              if (!session.contextId && !session.entityId)
+                registryFile().sessions = registryFile().sessions.filter(
+                  (candidate) => candidate !== session
+                );
+              throw error;
+            }
+            changed(subject.userId);
+            return entryOf(session);
+          })
+        );
       },
-      resume: async (ctx, [input]) => {
-        const subject = userSubject(ctx);
-        const session = requireSession(subject.userId, input.sessionId);
-        requirePrepared(ctx, session.source);
-        // Ask the PTY's owner, not this service's exit watch: the program may
-        // have exited a moment before the watch reported it.
-        if (
-          session.running &&
-          session.shellSessionId &&
-          !(await ptyAlive(subject, session.shellSessionId))
-        ) {
-          session.running = false;
-          session.shellSessionId = null;
-          await retireIncarnation(session);
-        }
-        if (!session.running) await start(ctx, session, input, input.approvalsKey);
-        session.lastActiveAt = Date.now();
-        changed(subject.userId);
-        return entryOf(session);
-      },
-      restart: async (ctx, [input]) => {
-        const subject = userSubject(ctx);
-        const session = requireSession(subject.userId, input.sessionId);
-        requirePrepared(ctx, session.source);
-        const previous = session.running ? session.shellSessionId : null;
-        // Detach the exit watch first (it ignores a PTY that is no longer the
-        // session's), then end the old PTY and start the program again.
-        session.running = false;
-        session.shellSessionId = null;
-        try {
-          if (previous) await shellAs(subject, "dispose", [previous]);
-        } finally {
-          await retireIncarnation(session);
-        }
-        await start(ctx, session, input, input.approvalsKey);
-        session.lastActiveAt = Date.now();
-        changed(subject.userId);
-        return entryOf(session);
-      },
-      close: async (ctx, [sessionId]) => {
-        const subject = userSubject(ctx);
-        const session = requireSession(subject.userId, sessionId);
-        const shellSessionId = session.running ? session.shellSessionId : null;
-        session.running = false;
-        session.shellSessionId = null;
-        registryFile().sessions = registryFile().sessions.filter((s) => s !== session);
-        try {
-          if (shellSessionId) await shellAs(subject, "dispose", [shellSessionId]);
-        } finally {
-          await retireIncarnation(session);
-          changed(subject.userId);
-        }
-      },
+      resume: (ctx, [input]) =>
+        ownSession(input.sessionId, async () => {
+          const subject = userSubject(ctx);
+          const session = requireSession(subject.userId, input.sessionId);
+          return operateSession(session, async () => {
+            ctx.signal?.throwIfAborted();
+            requirePrepared(ctx, session.source);
+            // Ask the PTY's owner, not this service's exit watch: the program may
+            // have exited a moment before the watch reported it.
+            if (
+              session.running &&
+              session.shellSessionId &&
+              !(await ptyAlive(subject, session.shellSessionId))
+            ) {
+              session.running = false;
+              session.shellSessionId = null;
+              await retireIncarnation(session);
+            }
+            if (!session.running) await start(ctx, session, input, input.approvalsKey);
+            else if (session.shellSessionId) {
+              watchExit(session, subject, session.shellSessionId);
+              delete session.failure;
+            }
+            session.lastActiveAt = Date.now();
+            changed(subject.userId);
+            return entryOf(session);
+          });
+        }),
+      restart: (ctx, [input]) =>
+        ownSession(input.sessionId, async () => {
+          const subject = userSubject(ctx);
+          const session = requireSession(subject.userId, input.sessionId);
+          return operateSession(session, async () => {
+            ctx.signal?.throwIfAborted();
+            requirePrepared(ctx, session.source);
+            await stopProgram(session, subject);
+            await start(ctx, session, input, input.approvalsKey);
+            session.lastActiveAt = Date.now();
+            changed(subject.userId);
+            return entryOf(session);
+          });
+        }),
+      close: (ctx, [sessionId]) =>
+        ownSession(sessionId, async () => {
+          const subject = userSubject(ctx);
+          const session = requireSession(subject.userId, sessionId);
+          return operateSession(session, async () => {
+            ctx.signal?.throwIfAborted();
+            await stopProgram(session, subject);
+            registryFile().sessions = registryFile().sessions.filter((s) => s !== session);
+            changed(subject.userId);
+          });
+        }),
       getSettings: (ctx) => registryFile().settings[userSubject(ctx).userId] ?? {},
       setSettings: (ctx, [settings]) => {
         const userId = userSubject(ctx).userId;
@@ -603,7 +725,7 @@ export function createTerminalAppsService(
     async stop() {
       stopped = true;
       lifetime.abort(new Error("The terminal launch service stopped"));
-      await Promise.allSettled([...exitWatches]);
+      await Promise.allSettled([...lifecycle.values(), ...exitWatches]);
     },
   };
 }

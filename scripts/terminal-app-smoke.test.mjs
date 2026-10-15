@@ -51,6 +51,7 @@ function fixture() {
   write("resources/userland-builds/release.json", manifest);
   for (const file of [
     "vibestudio",
+    "resources/vibestudio-cli",
     "resources/app.asar",
     "resources/app.asar.unpacked/dist/prepare-workspace-templates.cjs",
     "resources/app.asar.unpacked/dist/cli/client.mjs",
@@ -132,6 +133,33 @@ test("retains bounded terminal failure evidence", () => {
   const screen = observe(term);
   term.emit("x".repeat(300000));
   assert.equal(screen.raw.length, 262144);
+});
+
+test("browser readiness requires chrome in its owned alternate screen, not permission prose", async () => {
+  const term = terminal();
+  const screen = observe(term);
+  term.emit("pair another device with Vibestudio · access a workspace\r\n");
+  let ready = false;
+  const rendered = screen.waitForScreen("Vibestudio ·").then(() => {
+    ready = true;
+  });
+  try {
+    await Promise.resolve();
+    assert.equal(ready, false);
+    term.emit("\x1b[?1049");
+    await Promise.resolve();
+    assert.equal(ready, false);
+    term.emit("h\x1b[1;1HVibestudio · Personal");
+    await rendered;
+    assert.equal(ready, true);
+    term.emit("\x1b[?1049l");
+    const closedScreen = screen.waitForScreen("Vibestudio ·");
+    term.finish(1);
+    await assert.rejects(closedScreen, /code 1/);
+  } finally {
+    term.finish(0);
+    await rendered.catch(() => undefined);
+  }
 });
 
 test("removes scratch only after joining the terminal/server and release producer", async () => {

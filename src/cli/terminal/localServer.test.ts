@@ -19,11 +19,17 @@ if (process.env.FAKE_HUB_FAIL) {
   console.error("fake hub cannot bind");
   process.exit(3);
 }
-fs.writeFileSync(readyFile, JSON.stringify({ mode: "hub", pid: process.pid }));
 process.on("SIGTERM", () => {
   console.log("fake hub stopping");
   process.exit(0);
 });
+if (process.env.FAKE_HUB_PREPARING) {
+  const temporary = process.env.FAKE_HUB_PREPARING + ".preparing";
+  fs.writeFileSync(temporary, JSON.stringify({ pid: process.pid }));
+  fs.renameSync(temporary, process.env.FAKE_HUB_PREPARING);
+} else {
+  fs.writeFileSync(readyFile, JSON.stringify({ mode: "hub", pid: process.pid }));
+}
 setInterval(() => {}, 1000);
 `;
 
@@ -37,6 +43,43 @@ function fixture() {
 }
 
 describe("startLocalServer", () => {
+  it.each([false, true])(
+    "cancels and joins startup before retaining=%s can release ownership",
+    async (retain) => {
+      const { root, artifacts, stateRoot } = fixture();
+      const preparing = path.join(root, "preparing.json");
+      const controller = new AbortController();
+      let watcher: fs.FSWatcher;
+      const published = new Promise<void>((resolve, reject) => {
+        watcher = fs.watch(root, () => {
+          if (!fs.existsSync(preparing)) return;
+          watcher.close();
+          resolve();
+        });
+        watcher.on("error", reject);
+      });
+      const starting = startLocalServer({
+        hostArtifactRoot: artifacts,
+        appRoot: root,
+        env: { ...process.env, FAKE_HUB_PREPARING: preparing },
+        retain,
+        stateRoot,
+        signal: controller.signal,
+      });
+      void starting.catch(() => undefined);
+      try {
+        await published;
+        const { pid } = JSON.parse(fs.readFileSync(preparing, "utf8")) as { pid: number };
+        controller.abort(new Error("user cancelled startup"));
+        await expect(starting).rejects.toThrow(/before it was ready/);
+        expect(() => process.kill(pid, 0)).toThrow();
+      } finally {
+        watcher!.close();
+        controller.abort(new Error("test finished"));
+        await starting.catch(() => undefined);
+      }
+    }
+  );
   it("keeps server output in the log, resolves on the ready file, and joins on stop", async () => {
     const { root, artifacts, stateRoot } = fixture();
     const server = await startLocalServer({

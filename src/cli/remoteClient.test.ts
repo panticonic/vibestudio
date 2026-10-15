@@ -1,4 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import {
   createConnectLink,
   DEFAULT_IROH_RELAYS,
@@ -7,6 +10,8 @@ import {
 
 const transport = vi.hoisted(() => ({
   calls: [] as Array<{ method: string; args: unknown[] }>,
+  afterPaired: null as (() => void) | null,
+  redemptions: 0,
   options: null as {
     onPaired?: (credential: { deviceId: string; refreshToken: string }) => void;
   } | null,
@@ -19,10 +24,12 @@ vi.mock("../node/iroh/irohRpcClient.js", () => ({
     }
 
     async ready(): Promise<void> {
+      transport.redemptions++;
       await transport.options?.onPaired?.({
         deviceId: "dev_123456789012345678901234",
-        refreshToken: "refresh-token",
+        refreshToken: "R".repeat(43),
       });
+      transport.afterPaired?.();
     }
 
     async call(method: string, args: unknown[] = []): Promise<unknown> {
@@ -70,11 +77,45 @@ vi.mock("../node/iroh/irohRpcClient.js", () => ({
 }));
 
 import { findWorkspace, pairRemoteServer } from "./remoteClient.js";
+import { loadCliIdentity, loadCliCredentials } from "./credentialStore.js";
 
 describe("pairRemoteServer", () => {
+  let profile: string;
   beforeEach(() => {
+    profile = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-remote-pair-"));
+    vi.stubEnv("XDG_CONFIG_HOME", profile);
     transport.calls = [];
     transport.options = null;
+    transport.afterPaired = null;
+    transport.redemptions = 0;
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    fs.rmSync(profile, { recursive: true, force: true });
+  });
+
+  it("recovers a persisted redemption after cancelled selection without redeeming again", async () => {
+    const link = createConnectLink({
+      endpointId: "11".repeat(32),
+      relays: [...DEFAULT_IROH_RELAYS],
+      v: IROH_REACH_VERSION,
+      code: "A".repeat(22),
+    });
+    const owner = new AbortController();
+    const reason = new Error("user cancelled");
+    transport.afterPaired = () => owner.abort(reason);
+    await expect(pairRemoteServer({ link, signal: owner.signal })).rejects.toBe(reason);
+    expect(loadCliIdentity()).toMatchObject({
+      phase: "account",
+      deviceId: "dev_123456789012345678901234",
+    });
+    expect(() => loadCliCredentials()).toThrow(/no workspace is selected/);
+    transport.afterPaired = null;
+    await expect(pairRemoteServer({ link })).resolves.toMatchObject({
+      phase: "workspace",
+      workspaceId: "ws_personal",
+    });
+    expect(transport.redemptions).toBe(1);
   });
 
   it("uses service-qualified hub control methods on the Iroh transport", async () => {

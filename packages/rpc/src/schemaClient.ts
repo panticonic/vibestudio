@@ -96,6 +96,7 @@ export function schemaRpcClient(wire: RpcWireClient): RpcClient {
   const client: RpcClient = {
     ...wire,
     ...schemaRpcCaller(wire),
+    createView: (options) => schemaRpcClient(wire.createView(options)),
     streamReadable: (target, method, args, options) =>
       ownRpcOperation(wire, async () => {
         throwIfAborted(options?.signal);

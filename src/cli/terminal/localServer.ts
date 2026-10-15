@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { DevInstanceSupervisor, waitForReady } from "../../dev/devInstanceSupervisor.js";
 import { cliConfigRoot } from "../configPaths.js";
 import { CliError } from "../output.js";
+import { runWithOwnedCleanup } from "../../../scripts/lib/owned-cleanup.mjs";
 
 /**
  * Where a local server keeps its stdio log and ready-file handoff. Both live
@@ -34,6 +35,8 @@ export interface LocalServerOptions {
    */
   retain: boolean;
   stateRoot?: string;
+  /** The startup owner's explicit cancellation; retention begins only after readiness. */
+  signal?: AbortSignal;
 }
 
 export interface LocalServer {
@@ -51,10 +54,12 @@ export interface LocalServer {
 export class LocalServerStartError extends CliError {
   constructor(
     message: string,
-    readonly logFile: string
+    readonly logFile: string,
+    cause?: unknown
   ) {
     super(`${message}\nServer log: ${logFile}`);
     this.name = "LocalServerStartError";
+    if (cause !== undefined) this.cause = cause;
   }
 }
 
@@ -65,6 +70,7 @@ export class LocalServerStartError extends CliError {
  * ready file; the server's exit before that is the failure.
  */
 export async function startLocalServer(options: LocalServerOptions): Promise<LocalServer> {
+  options.signal?.throwIfAborted();
   const serverEntry = path.join(options.hostArtifactRoot, "server.mjs");
   const { logFile, readyFile } = localServerPaths(options.stateRoot);
   if (!fs.existsSync(serverEntry)) {
@@ -104,7 +110,7 @@ async function startOwned(
     env: options.env,
     stdio: ["ignore", log, log],
     // A terminal hang-up or SIGTERM to the CLI stops and joins the server.
-    forwardParentSignals: true,
+    forwardParentSignals: !options.signal,
     readiness: {
       file: readyFile,
       async onReady(value) {
@@ -112,14 +118,26 @@ async function startOwned(
       },
     },
   });
+  const stop = () => void supervisor.stop().catch(() => {});
+  options.signal?.addEventListener("abort", stop, { once: true });
+  if (options.signal?.aborted) stop();
   try {
     await supervisor.start();
+    options.signal?.throwIfAborted();
   } catch (error) {
-    await supervisor.close().catch(() => undefined);
-    throw new LocalServerStartError(
-      `The local Vibestudio server stopped before it was ready: ${errorMessage(error)}`,
-      logFile
+    return runWithOwnedCleanup(
+      async () => {
+        throw new LocalServerStartError(
+          `The local Vibestudio server stopped before it was ready: ${errorMessage(error)}`,
+          logFile,
+          error
+        );
+      },
+      () => supervisor.close(),
+      "Local server startup and retirement failed"
     );
+  } finally {
+    options.signal?.removeEventListener("abort", stop);
   }
   const pid = supervisor.process?.pid;
   if (pid === undefined) throw new LocalServerStartError("The local server has no pid", logFile);
@@ -160,14 +178,46 @@ async function startRetained(
     child.once("error", (error) => resolve(`the local server failed: ${error.message}`));
   });
   let ready: unknown;
+  let retirement: Promise<void> | undefined;
+  const stop = () =>
+    (retirement ??= Promise.resolve().then(async () => {
+      if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
+        try {
+          if (!child.kill("SIGTERM")) throw new Error("The server rejected termination");
+        } catch (cause) {
+          throw Object.assign(
+            new Error(`Retained server ownership unresolved (pid ${child.pid})`, { cause }),
+            { code: "EOWNERSHIP" }
+          );
+        }
+      }
+      await exited;
+    }));
+  const cancel = () => void stop().catch(() => {});
+  options.signal?.addEventListener("abort", cancel, { once: true });
+  if (options.signal?.aborted) cancel();
   try {
-    ready = await waitForReady(readyFile, child, undefined, new AbortController().signal);
-  } catch (error) {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
-    throw new LocalServerStartError(
-      `The local Vibestudio server stopped before it was ready: ${errorMessage(error)}`,
-      logFile
+    ready = await waitForReady(
+      readyFile,
+      child,
+      undefined,
+      options.signal ?? new AbortController().signal
     );
+    options.signal?.throwIfAborted();
+  } catch (error) {
+    return runWithOwnedCleanup(
+      async () => {
+        throw new LocalServerStartError(
+          `The local Vibestudio server stopped before it was ready: ${errorMessage(error)}`,
+          logFile,
+          error
+        );
+      },
+      stop,
+      "Retained server startup and retirement failed"
+    );
+  } finally {
+    options.signal?.removeEventListener("abort", cancel);
   }
   if (child.pid === undefined)
     throw new LocalServerStartError("The local server has no pid", logFile);

@@ -76,6 +76,11 @@ export function observe(term) {
     new Error(
       `vibestudio terminal exited (code ${exitCode}, signal ${signal || "none"}) before the expected output`
     );
+  const waitFor = (matches) => {
+    if (exit) return Promise.reject(exitFailure(exit.exitCode, exit.signal));
+    if (matches(raw)) return Promise.resolve();
+    return new Promise((resolve, reject) => waiters.add({ matches, resolve, reject }));
+  };
   const exited = new Promise((resolve) => {
     term.onExit(({ exitCode, signal }) => {
       exit = { exitCode, signal };
@@ -86,9 +91,8 @@ export function observe(term) {
   });
   term.onData((chunk) => {
     raw = (raw + chunk).slice(-262144);
-    const text = raw.replace(ANSI, "");
     for (const waiter of [...waiters]) {
-      if (text.includes(waiter.needle)) {
+      if (waiter.matches(raw)) {
         waiters.delete(waiter);
         waiter.resolve();
       }
@@ -103,9 +107,17 @@ export function observe(term) {
     },
     exited,
     waitFor(needle) {
-      if (exit) return Promise.reject(exitFailure(exit.exitCode, exit.signal));
-      if (raw.replace(ANSI, "").includes(needle)) return Promise.resolve();
-      return new Promise((resolve, reject) => waiters.add({ needle, resolve, reject }));
+      return waitFor((output) => output.replace(ANSI, "").includes(needle));
+    },
+    waitForScreen(needle) {
+      return waitFor((output) => {
+        const entered = output.lastIndexOf("\x1b[?1049h");
+        return (
+          entered >= 0 &&
+          output.lastIndexOf("\x1b[?1049l") < entered &&
+          output.slice(entered).replace(ANSI, "").includes(needle)
+        );
+      });
     },
   };
 }
@@ -145,17 +157,19 @@ export function installedSmokeTarget(appDirectory, expectedReleasePath) {
     );
   }
   const executable = path.join(path.resolve(appDirectory), "vibestudio");
+  const launcher = path.join(resources, "vibestudio-cli");
   const appRoot = path.join(resources, "app.asar");
   const hostArtifactRoot = path.join(resources, "app.asar.unpacked/dist");
   for (const file of [
     executable,
+    launcher,
     appRoot,
     path.join(hostArtifactRoot, "prepare-workspace-templates.cjs"),
     path.join(hostArtifactRoot, "cli/client.mjs"),
   ]) {
     if (!fs.statSync(file).isFile()) throw new Error(`Installed artifact is not a file: ${file}`);
   }
-  return { resources, appRoot, hostArtifactRoot, executable };
+  return { resources, appRoot, hostArtifactRoot, executable, launcher };
 }
 
 /** Scratch belongs to both the CLI/server and the producer. Attempt every
@@ -295,8 +309,10 @@ export async function main(args = process.argv.slice(2)) {
           log(`launching ${sample}`);
           log("running `vibestudio terminal --yes` in a pseudo-terminal");
           term = pty.spawn(
-            installed?.executable ?? process.execPath,
-            [path.join(hostArtifactRoot, "cli", "client.mjs"), "terminal", "--yes"],
+            installed?.launcher ?? process.execPath,
+            installed
+              ? ["terminal", "--yes"]
+              : [path.join(hostArtifactRoot, "cli", "client.mjs"), "terminal", "--yes"],
             { name: "xterm-256color", cols: 120, rows: 40, cwd: home, env }
           );
           screen = observe(term);
@@ -309,7 +325,7 @@ export async function main(args = process.argv.slice(2)) {
           await screen.waitFor(
             sample === "warm-profile" ? "Reconnecting to the local server" : "Pairing this terminal"
           );
-          await screen.waitFor(CHROME_MARKER);
+          await screen.waitForScreen(CHROME_MARKER);
           log("the terminal browser rendered its chrome");
           log(
             `${sample}: browser chrome ready after ${Math.round(performance.now() - startedAt)} ms`

@@ -1,4 +1,4 @@
-import type { CliDeviceCredentials } from "./credentialStore.js";
+import type { CliDeviceIdentity } from "./credentialStore.js";
 
 export interface LocalHubControlTransport {
   serverUrl: string;
@@ -6,7 +6,7 @@ export interface LocalHubControlTransport {
 
 /** A paired device's authenticated transport is part of its credential identity. */
 export async function resolveLocalHubControlTransport(
-  credentials: CliDeviceCredentials
+  credentials: CliDeviceIdentity
 ): Promise<LocalHubControlTransport | null> {
   return credentials.transport === "local" ? { serverUrl: new URL(credentials.url).origin } : null;
 }

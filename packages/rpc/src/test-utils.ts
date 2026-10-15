@@ -1,6 +1,6 @@
 import type { RpcCaller } from "./types.js";
 import type { RpcWireCaller } from "./internal-types.js";
-import { createRpcPeer } from "./client-core.js";
+import { createRpcPeer, createRpcWireView } from "./client-core.js";
 import { schemaRpcClient, registerRpcWireClient, schemaRpcCaller } from "./schemaClient.js";
 
 type MockProperties<F> = Pick<F, keyof F>;
@@ -13,6 +13,7 @@ type MockWire = {
     options?: import("./types.js").RpcCallOptions
   ) => Promise<unknown>;
   stream?: RpcWireCaller["stream"];
+  streamReadable?: import("./internal-types.js").RpcWireClient["streamReadable"];
 };
 type SchemaMock<Call, Stream> = RpcCaller & {
   call: RpcCaller["call"] & MockProperties<Call>;
@@ -47,6 +48,7 @@ export function schemaRpcClientMock(
   selfId: string
 ): import("./types.js").RpcClient {
   const client: import("./internal-types.js").RpcWireClient = {
+    createView: (options) => createRpcWireView(client, options),
     selfId,
     call: wire.call.bind(wire),
     stream:
@@ -54,9 +56,11 @@ export function schemaRpcClientMock(
       (async () => {
         throw new Error("Unexpected streaming RPC");
       }),
-    streamReadable: async () => {
-      throw new Error("Unexpected readable streaming RPC");
-    },
+    streamReadable:
+      wire.streamReadable?.bind(wire) ??
+      (async () => {
+        throw new Error("Unexpected readable streaming RPC");
+      }),
     expose() {},
     exposeAll() {},
     exposeStreaming() {},

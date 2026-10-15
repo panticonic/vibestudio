@@ -32,6 +32,82 @@ describe("WsRpcClient connection ownership", () => {
     expect(transportMocks.close).toHaveBeenCalledOnce();
   });
 
+  it("closes the acquired transport before joining unfinished authentication", async () => {
+    let rejectReady!: (error: unknown) => void;
+    let entered!: () => void;
+    const connecting = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const closed = new Error("transport closed during admission");
+    transportMocks.connectAndWait.mockImplementationOnce(() => {
+      entered();
+      return new Promise<void>((_resolve, reject) => {
+        rejectReady = reject;
+      });
+    });
+    transportMocks.close.mockImplementationOnce(async () => {
+      rejectReady(closed);
+    });
+    const client = new WsRpcClient({
+      url: "https://server.example",
+      callerId: "shell:cli",
+      callerKind: "shell",
+      getToken: () => "token",
+    });
+    const ready = client.ready();
+    const failed = expect(ready).rejects.toBe(closed);
+    await connecting;
+    await client.close();
+    await failed;
+    expect(transportMocks.close).toHaveBeenCalledOnce();
+  });
+
+  it("preserves authentication and transport retirement failures together", async () => {
+    const admission = new Error("credential rejected");
+    const retirement = new Error("socket retirement failed");
+    transportMocks.connectAndWait.mockRejectedValueOnce(admission);
+    transportMocks.close.mockRejectedValueOnce(retirement);
+    const client = new WsRpcClient({
+      url: "https://server.example",
+      callerId: "shell:cli",
+      callerKind: "shell",
+      getToken: () => "token",
+    });
+    await expect(client.ready()).rejects.toMatchObject({ errors: [admission, retirement] });
+  });
+
+  it("cancels and joins admitted authentication with the caller's original cause", async () => {
+    const owner = new AbortController();
+    const reason = new Error("terminal cancelled");
+    let rejectReady!: (error: unknown) => void;
+    let entered!: () => void;
+    const admitted = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    transportMocks.connectAndWait.mockImplementationOnce(() => {
+      entered();
+      return new Promise<void>((_resolve, reject) => {
+        rejectReady = reject;
+      });
+    });
+    transportMocks.close.mockImplementationOnce(async () => {
+      rejectReady(new Error("socket closed"));
+    });
+    const client = new WsRpcClient({
+      url: "https://server.example",
+      callerId: "shell:cli",
+      callerKind: "shell",
+      getToken: () => "token",
+      signal: owner.signal,
+    });
+    const failed = expect(client.ready()).rejects.toBe(reason);
+    await admitted;
+    owner.abort(reason);
+    await client.close();
+    await failed;
+    expect(transportMocks.close).toHaveBeenCalledOnce();
+  });
+
   it("rejects dynamically supplied unqualified direct methods before connecting", async () => {
     const client = new WsRpcClient({
       url: "https://server.example",

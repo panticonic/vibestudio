@@ -10,12 +10,14 @@ import type {
 import type { CliCommand, ParsedInvocation } from "../commandTable.js";
 import { cliConfigRoot } from "../configPaths.js";
 import {
-  assertCliProfileIsUnpaired,
   credentialPath,
   loadCliCredentials,
+  loadCliIdentity,
+  requireDeviceCliIdentity,
   requireDeviceCliCredentials,
   saveCliCredentials,
   type CliDeviceCredentials,
+  type CliDeviceIdentity,
 } from "../credentialStore.js";
 import { pairLocalCli } from "../localPairing.js";
 import {
@@ -26,13 +28,19 @@ import {
   printError,
   redactCliSecrets,
 } from "../output.js";
-import { pairRemoteServer, serverEndpoint } from "../remoteClient.js";
+import { pairRemoteServer, selectRemoteWorkspace, serverEndpoint } from "../remoteClient.js";
 import { refreshShell } from "../rpcClient.js";
 import { EXIT_INTERRUPTED } from "../terminalLaunchGate.js";
 import { createLaunchProgress, runStep } from "./launchProgress.js";
 import { localServerPaths, startLocalServer, type LocalServer } from "./localServer.js";
 import { runTerminalSessions } from "./terminalSessions.js";
 import { routeProcessWarnings, tolerateTerminalHangup } from "./ttyRestore.js";
+import { LaunchTermination } from "../../dev/launchTermination.js";
+import {
+  hasOwnershipFailure,
+  runOwnedCleanupSteps,
+  runWithOwnedCleanup,
+} from "../../../scripts/lib/owned-cleanup.mjs";
 
 export interface TerminalCommandContext {
   /** Exact application root of this installation (contains `dist/server.mjs`). */
@@ -107,75 +115,114 @@ async function runTerminalCommand(
   // SIGHUP); the dead terminal must not crash the command while it joins it.
   tolerateTerminalHangup();
   let server: LocalServer | null = null;
-  let interrupted = false;
-  const onInterrupt = () => {
-    interrupted = true;
-  };
+  const termination = new LaunchTermination();
   try {
-    if (!process.stdin.isTTY || !process.stdout.isTTY) {
-      throw new UsageError(
-        "vibestudio terminal needs an interactive terminal: stdin and stdout must both be a TTY."
-      );
-    }
-    const options = parseOptions(inv);
-    const existing = await pairFromLink(options, out);
-    const reusable = existing && !(await needsLocalServer(existing)) ? existing : null;
-    // Starting a local server adds two steps to the two that every launch has.
-    const progress = createLaunchProgress({ write: out, total: reusable ? 2 : 4 });
-    let credentials: CliDeviceCredentials;
-    if (reusable) {
-      credentials = reusable;
-    } else {
-      const paths = localServerPaths();
-      const reconnecting = existing !== null;
-      out(`  state: ${cliConfigRoot()}`);
-      out(`  log:   ${paths.logFile}`);
-      // Ctrl-C before the browser starts stops the server we own and ends startup.
-      process.on("SIGINT", onInterrupt);
-      const started = await runStep(
-        progress,
-        reconnecting
-          ? "Starting the local Vibestudio server"
-          : "Not paired with a server yet: starting a local Vibestudio server",
-        () =>
-          startLocalServer({
-            hostArtifactRoot:
-              process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] ?? path.join(context.appRoot, "dist"),
-            appRoot: process.env["VIBESTUDIO_APP_ROOT"] ?? context.appRoot,
-            env: process.env,
-            retain: options.keepServer,
-          })
-      );
-      server = started;
-      credentials = await runStep(
-        progress,
-        reconnecting ? "Reconnecting to the local server" : "Pairing this terminal",
-        () => pairWithLocalServer(started)
-      );
-    }
-    const serverInfo = describeServer(credentials, server);
-    const exit = await runTerminalSessions({
-      credentials,
-      ...(options.workspace ? { workspace: options.workspace } : {}),
-      server: serverInfo,
-      ...(server && !server.retained ? { serverExited: server.exited } : {}),
-      yes: options.yes,
-      stdin: process.stdin,
-      stdout: process.stdout,
-      progress,
-    });
-    return reportTerminalExit(exit, server?.logFile);
-  } catch (error) {
-    if (interrupted) {
-      process.stderr.write("Interrupted.\n");
-      return EXIT_INTERRUPTED;
-    }
-    return printTerminalError(error, server?.logFile);
+    return await runWithOwnedCleanup(
+      async () => {
+        try {
+          if (!process.stdin.isTTY || !process.stdout.isTTY) {
+            throw new UsageError(
+              "vibestudio terminal needs an interactive terminal: stdin and stdout must both be a TTY."
+            );
+          }
+          const options = parseOptions(inv);
+          const existing = await pairFromLink(options, out, termination.signal);
+          const reusable =
+            existing && !(await needsLocalServer(existing, termination.signal)) ? existing : null;
+          // Starting a local server adds two steps to the two that every launch has.
+          const progress = createLaunchProgress({ write: out, total: reusable ? 2 : 4 });
+          let credentials: CliDeviceCredentials;
+          if (reusable) {
+            credentials =
+              reusable.phase === "workspace"
+                ? reusable
+                : await selectRemoteWorkspace(
+                    reusable,
+                    { privateRole: reusable.transport === "local" ? "system" : "personal" },
+                    { signal: termination.signal }
+                  );
+            saveCliCredentials(credentials);
+          } else {
+            const paths = localServerPaths();
+            const reconnecting = existing !== null;
+            out(`  state: ${cliConfigRoot()}`);
+            out(`  log:   ${paths.logFile}`);
+            // Ctrl-C before the browser starts stops the server we own and ends startup.
+            const started = await runStep(
+              progress,
+              reconnecting
+                ? "Starting the local Vibestudio server"
+                : "Not paired with a server yet: starting a local Vibestudio server",
+              () =>
+                startLocalServer({
+                  hostArtifactRoot:
+                    process.env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] ??
+                    path.join(context.appRoot, "dist"),
+                  appRoot: process.env["VIBESTUDIO_APP_ROOT"] ?? context.appRoot,
+                  env: process.env,
+                  retain: options.keepServer,
+                  signal: termination.signal,
+                })
+            );
+            server = started;
+            credentials = await runStep(
+              progress,
+              reconnecting ? "Reconnecting to the local server" : "Pairing this terminal",
+              () => pairWithLocalServer(started, termination.signal)
+            );
+          }
+          const serverInfo = describeServer(credentials, server);
+          const exit = await runTerminalSessions({
+            credentials,
+            ...(options.workspace ? { workspace: options.workspace } : {}),
+            server: serverInfo,
+            ...(server && !server.retained ? { serverExited: server.exited } : {}),
+            yes: options.yes,
+            stdin: process.stdin,
+            stdout: process.stdout,
+            progress,
+            signal: termination.signal,
+          });
+          return reportTerminalExit(exit, server?.logFile);
+        } catch (error) {
+          if (termination.requested && isTerminalCancellation(error, termination.signal)) {
+            process.stderr.write("Interrupted.\n");
+            return termination.requested === "SIGINT"
+              ? EXIT_INTERRUPTED
+              : 128 + (os.constants.signals[termination.requested] ?? 0);
+          }
+          return printTerminalError(error, server?.logFile);
+        }
+      },
+      () =>
+        runOwnedCleanupSteps(
+          [
+            async () => {
+              if (server) await retireServer(server, out);
+            },
+            async () => releaseWarnings(),
+          ],
+          "Terminal command retirement failed"
+        ),
+      "Terminal command and retirement failed"
+    );
   } finally {
-    process.off("SIGINT", onInterrupt);
-    if (server) await retireServer(server, out);
-    releaseWarnings();
+    termination.dispose();
   }
+}
+
+/** Cancellation is an operation outcome, not permission to discard a failure
+ * that happened before it or an error from retiring the owned resources. */
+export function isTerminalCancellation(error: unknown, signal: AbortSignal): boolean {
+  if (!signal.aborted || hasOwnershipFailure(error)) return false;
+  const seen = new Set<unknown>();
+  while (!seen.has(error)) {
+    seen.add(error);
+    if (error === signal.reason) return true;
+    if (!(error instanceof Error) || error instanceof AggregateError) return false;
+    error = error.cause;
+  }
+  return false;
 }
 
 /** Where `vibestudio terminal` writes its own diagnostics. */
@@ -220,22 +267,23 @@ function parseOptions(inv: ParsedInvocation): TerminalOptions {
 /** The stored device credential, after pairing with `link` when one was given. */
 async function pairFromLink(
   options: TerminalOptions,
-  progress: (line: string) => void
-): Promise<CliDeviceCredentials | null> {
+  progress: (line: string) => void,
+  signal?: AbortSignal
+): Promise<CliDeviceIdentity | null> {
   if (options.link) {
-    assertCliProfileIsUnpaired();
     progress("Pairing with the server from your link…");
     const credentials = await pairRemoteServer({
       link: options.link,
       label: options.label,
       platform: "terminal",
+      ...(signal ? { signal } : {}),
     });
     saveCliCredentials(credentials);
     progress(`Paired. Credentials: ${credentialPath()}`);
     return credentials;
   }
-  const loaded = loadCliCredentials();
-  return loaded ? requireDeviceCliCredentials(loaded, "vibestudio terminal") : null;
+  const loaded = loadCliIdentity();
+  return loaded ? requireDeviceCliIdentity(loaded, "vibestudio terminal") : null;
 }
 
 /**
@@ -243,10 +291,13 @@ async function pairFromLink(
  * local server: start it. Any other failure (a rejected credential) is the
  * user's to resolve, so it is reported rather than worked around.
  */
-async function needsLocalServer(credentials: CliDeviceCredentials): Promise<boolean> {
+async function needsLocalServer(
+  credentials: CliDeviceIdentity,
+  signal?: AbortSignal
+): Promise<boolean> {
   if (credentials.transport !== "local") return false;
   try {
-    await refreshShell(credentials);
+    await refreshShell(credentials, { signal });
     return false;
   } catch (error) {
     if (error instanceof ConnectionError) return true;
@@ -260,8 +311,14 @@ async function needsLocalServer(credentials: CliDeviceCredentials): Promise<bool
   }
 }
 
-async function pairWithLocalServer(server: LocalServer): Promise<CliDeviceCredentials> {
-  const paired = await pairLocalCli(server.ready, { label: `Terminal on ${os.hostname()}` });
+async function pairWithLocalServer(
+  server: LocalServer,
+  signal?: AbortSignal
+): Promise<CliDeviceCredentials> {
+  const paired = await pairLocalCli(server.ready, {
+    label: `Terminal on ${os.hostname()}`,
+    ...(signal ? { signal } : {}),
+  });
   if (paired.status === "invite-required") {
     throw new AuthError(
       "This machine's local server already belongs to an account, and this terminal is not " +
@@ -305,7 +362,10 @@ export function printTerminalError(error: unknown, logFile?: string): number {
   return printError(withServerLog(error, logFile), { json: false });
 }
 
-async function retireServer(server: LocalServer, progress: (line: string) => void): Promise<void> {
+export async function retireServer(
+  server: LocalServer,
+  progress: (line: string) => void
+): Promise<void> {
   if (server.retained) {
     progress(
       `The local server keeps running (pid ${server.pid}); \`vibestudio terminal\` attaches ` +
@@ -322,7 +382,7 @@ async function retireServer(server: LocalServer, progress: (line: string) => voi
       `The local server did not stop cleanly: ${error instanceof Error ? error.message : String(error)}\n` +
         `Server log: ${server.logFile}\n`
     );
-    process.exitCode = 1;
+    throw new Error("The local server could not be retired", { cause: error });
   }
 }
 

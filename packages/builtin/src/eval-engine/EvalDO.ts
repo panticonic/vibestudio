@@ -2,7 +2,13 @@ import { residentChannelRpcMethods } from "@vibestudio/shared/residentSession";
 import { APPROVAL_WAIT_CANCELLED_CODE } from "@vibestudio/shared/approvals";
 import { schemaRpcClient } from "@vibestudio/rpc/internal";
 import { mainRpcMethod, mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
-import { wireClientFor, registerRpcWireClient, createRpcPeer } from "@vibestudio/rpc/internal";
+import {
+  wireClientFor,
+  registerRpcWireClient,
+  createRpcPeer,
+  createRpcWireView,
+  ownRpcOperation,
+} from "@vibestudio/rpc/internal";
 import { type RpcWireClient } from "@vibestudio/rpc/internal";
 import {
   DurableObjectBase,
@@ -950,6 +956,8 @@ export class EvalDO extends DurableObjectBase {
 
     const rpc: RpcWireClient = registerRpcWireClient(
       Object.freeze({
+        createView: (options: import("@vibestudio/rpc").RpcClientViewOptions) =>
+          createRpcWireView(rpc, options),
         selfId: base.selfId,
         expose: base.expose.bind(base),
         exposeAll: base.exposeAll.bind(base),
@@ -971,7 +979,8 @@ export class EvalDO extends DurableObjectBase {
         ready: base.ready.bind(base),
         onStatusChange: base.onStatusChange.bind(base),
         onRecovery: base.onRecovery.bind(base),
-      })
+      }),
+      (operation) => ownRpcOperation(base, operation)
     );
     const callMainService = (service: string, method: string, args: unknown[]) =>
       rpc.call("main", `${service}.${method}`, args);
@@ -3995,8 +4004,10 @@ export class EvalDO extends DurableObjectBase {
     const emit = (targetId: string, event: string, payload: unknown, options?: RpcCallOptions) =>
       this.requireActiveEvalExecution().rpc.emit(targetId, event, payload, options);
 
-    const wire = registerRpcWireClient(
+    const wire: RpcWireClient & ResidentSessionRegistrar = registerRpcWireClient(
       Object.freeze({
+        createView: (options: import("@vibestudio/rpc").RpcClientViewOptions) =>
+          createRpcWireView(wire, options),
         selfId: this.rpc.selfId,
         registerResidentSession: (
           channelId: string,
@@ -4085,7 +4096,8 @@ export class EvalDO extends DurableObjectBase {
         ready: this.rpc.ready.bind(this.rpc),
         onStatusChange: this.rpc.onStatusChange.bind(this.rpc),
         onRecovery: this.rpc.onRecovery.bind(this.rpc),
-      })
+      }),
+      async (operation) => ownRpcOperation(this.requireActiveEvalExecution().rpc, operation)
     );
     const rpc = Object.assign(schemaRpcClient(wire), {
       registerResidentSession: wire.registerResidentSession,

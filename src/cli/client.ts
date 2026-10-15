@@ -10,12 +10,13 @@ import { isConnectPairingInput, isSelectedWorkspaceUrl } from "@vibestudio/share
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import {
-  assertCliProfileIsUnpaired,
   clearCliCredentials,
   loadCliCredentials,
+  loadCliIdentity,
   saveCliCredentials,
   credentialPath,
   requireDeviceCliCredentials,
+  requireDeviceCliIdentity,
 } from "./credentialStore.js";
 import {
   addRemoteWorkspaceMember,
@@ -89,7 +90,6 @@ async function remotePair(inv: ParsedInvocation): Promise<number> {
     if (!positional || !isConnectPairingInput(positional)) {
       throw new UsageError("pass compact pairing material or a Vibestudio pairing link");
     }
-    assertCliProfileIsUnpaired();
     const creds = await pairRemoteServer({ link: positional, ...(label ? { label } : {}) });
     saveCliCredentials(creds);
     const result = { url: creds.url, credentialPath: credentialPath() };
@@ -109,11 +109,30 @@ async function remotePair(inv: ParsedInvocation): Promise<number> {
 async function remoteStatus(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const loaded = loadCliCredentials();
+    const loaded = loadCliIdentity();
     if (!loaded) {
       throw new AuthError(NOT_PAIRED_GUIDANCE);
     }
-    const creds = requireDeviceCliCredentials(loaded, "remote status");
+    const creds = requireDeviceCliIdentity(loaded, "remote status");
+    if (creds.phase === "account") {
+      printResult(
+        {
+          paired: true,
+          phase: "account",
+          workspaceSelected: false,
+          url: creds.url,
+          deviceId: creds.deviceId,
+        },
+        {
+          json,
+          human: () => {
+            console.log(`paired: ${creds.url}`);
+            console.log("workspace: not selected; run `vibestudio remote select Personal`");
+          },
+        }
+      );
+      return 0;
+    }
     if (!creds.workspaceName || !isSelectedWorkspaceUrl(creds.url)) {
       throw new AuthError(
         "no remote workspace selected - run `vibestudio remote select <workspace>`"
@@ -148,6 +167,12 @@ function requirePairedCredentials(): DeviceCredential {
   const credentials = loadCliCredentials();
   if (!credentials) throw new AuthError(NOT_PAIRED_GUIDANCE);
   return requireDeviceCliCredentials(credentials, "remote device management");
+}
+
+function requireAccountIdentity() {
+  const identity = loadCliIdentity();
+  if (!identity) throw new AuthError(NOT_PAIRED_GUIDANCE);
+  return requireDeviceCliIdentity(identity, "remote account management");
 }
 
 function ttlFrom(inv: ParsedInvocation): number | undefined {
@@ -186,7 +211,7 @@ async function remoteInviteUser(inv: ParsedInvocation): Promise<number> {
       throw new UsageError('--role must be "admin" or "member"');
     }
     const ttlMs = ttlFrom(inv);
-    const result = await inviteRemoteUser(requirePairedCredentials(), {
+    const result = await inviteRemoteUser(requireAccountIdentity(), {
       handle,
       workspaces,
       ...(displayName ? { displayName } : {}),
@@ -210,7 +235,7 @@ async function remotePairDevice(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const ttlMs = ttlFrom(inv);
-    const result = await pairRemoteDevice(requirePairedCredentials(), {
+    const result = await pairRemoteDevice(requireAccountIdentity(), {
       ...(ttlMs ? { ttlMs } : {}),
     });
     printResult(result, { json, human: () => printPairingInvite(result.pairing) });
@@ -237,8 +262,8 @@ async function remoteMutateMember(inv: ParsedInvocation, remove: boolean): Promi
     if (!workspace) throw new UsageError("--workspace is required");
     const input = { workspace, ...memberRef(inv) };
     const result = remove
-      ? await removeRemoteWorkspaceMember(requirePairedCredentials(), input)
-      : await addRemoteWorkspaceMember(requirePairedCredentials(), input);
+      ? await removeRemoteWorkspaceMember(requireAccountIdentity(), input)
+      : await addRemoteWorkspaceMember(requireAccountIdentity(), input);
     printResult(result, {
       json,
       human: () => {
@@ -262,7 +287,7 @@ async function remoteListUsers(inv: ParsedInvocation): Promise<number> {
     const workspace =
       typeof inv.flags["workspace"] === "string" ? inv.flags["workspace"].trim() : "";
     if (!workspace) throw new UsageError("--workspace is required");
-    const result = await listRemoteWorkspaceMembers(requirePairedCredentials(), workspace);
+    const result = await listRemoteWorkspaceMembers(requireAccountIdentity(), workspace);
     printResult(result, {
       json,
       human: () => {
@@ -282,7 +307,7 @@ async function remoteListUsers(inv: ParsedInvocation): Promise<number> {
 async function remoteListDevices(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const result = await listRemoteDevices(requirePairedCredentials());
+    const result = await listRemoteDevices(requireAccountIdentity());
     printResult(result, {
       json,
       human: () => {
@@ -300,7 +325,7 @@ async function remoteRevokeDevice(inv: ParsedInvocation): Promise<number> {
   try {
     const deviceId = inv.positionals[0] ?? "";
     if (!deviceId) throw new UsageError("device id is required");
-    const credentials = requirePairedCredentials();
+    const credentials = requireAccountIdentity();
     const result = await revokeRemoteDevice(credentials, deviceId);
     printResult(result, {
       json,
@@ -316,9 +341,9 @@ async function remoteRevokeDevice(inv: ParsedInvocation): Promise<number> {
 async function remoteWorkspaceList(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const loaded = loadCliCredentials();
+    const loaded = loadCliIdentity();
     if (!loaded) throw new AuthError(NOT_PAIRED_GUIDANCE);
-    const creds = requireDeviceCliCredentials(loaded, "remote workspace listing");
+    const creds = requireDeviceCliIdentity(loaded, "remote workspace listing");
     const workspaces = await listRemoteWorkspaces(creds);
     printResult(
       { workspaces },
@@ -340,7 +365,7 @@ async function remoteWorkspaceList(inv: ParsedInvocation): Promise<number> {
 async function remoteEnsureUserWorkspaces(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
-    const credentials = requirePairedCredentials();
+    const credentials = requireAccountIdentity();
     const pair = await ensureRemoteUserWorkspaces(credentials);
     printResult(pair, {
       json,
@@ -386,9 +411,9 @@ async function remoteWorkspaceCreate(inv: ParsedInvocation): Promise<number> {
           ...(templateCredential ? { credential: templateCredential } : {}),
         })
       : undefined;
-    const loaded = loadCliCredentials();
+    const loaded = loadCliIdentity();
     if (!loaded) throw new AuthError(NOT_PAIRED_GUIDANCE);
-    const credentials = requireDeviceCliCredentials(loaded, "remote workspace creation");
+    const credentials = requireDeviceCliIdentity(loaded, "remote workspace creation");
     const operationId =
       typeof inv.flags["operation-id"] === "string" ? inv.flags["operation-id"] : "";
     if (!/^[A-Za-z0-9_-]{16,128}$/.test(operationId))
@@ -425,9 +450,9 @@ async function remoteWorkspaceSelect(inv: ParsedInvocation): Promise<number> {
       inv.positionals[0] ??
       (typeof inv.flags["workspace"] === "string" ? inv.flags["workspace"] : "");
     if (!name) throw new UsageError("workspace name is required");
-    const loaded = loadCliCredentials();
+    const loaded = loadCliIdentity();
     if (!loaded) throw new AuthError(NOT_PAIRED_GUIDANCE);
-    const creds = requireDeviceCliCredentials(loaded, "remote workspace selection");
+    const creds = requireDeviceCliIdentity(loaded, "remote workspace selection");
     const selected = await selectRemoteWorkspace(creds, name);
     saveCliCredentials(selected);
     printResult(
@@ -683,8 +708,8 @@ const remoteCommands: CliCommand[] = [
     run: async (inv) => {
       const json = jsonMode(inv.flags["json"] === true);
       try {
-        const credentials = loadCliCredentials();
-        if (credentials) requireDeviceCliCredentials(credentials, "remote logout");
+        const credentials = loadCliIdentity();
+        if (credentials) requireDeviceCliIdentity(credentials, "remote logout");
         clearCliCredentials();
         printResult({ loggedOut: true }, { json, human: () => console.log("logged out") });
         return 0;

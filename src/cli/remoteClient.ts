@@ -12,8 +12,18 @@ import type {
   WorkspaceCreationReceipt,
   WorkspaceTemplatePin,
 } from "@vibestudio/workspace-contracts/types";
-import type { CliStoredPairing } from "./credentialStore.js";
-import { canonicalStoredPairing } from "./credentialStore.js";
+import type {
+  CliStoredPairing,
+  CliDeviceIdentity,
+  CliAccountDeviceCredentials,
+} from "./credentialStore.js";
+import {
+  canonicalStoredPairing,
+  loadCliIdentity,
+  saveCliCredentials,
+  assertCliProfileIsUnpaired,
+  requireDeviceCliIdentity,
+} from "./credentialStore.js";
 import { AuthError, UsageError } from "./output.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
 import { resolveLocalHubControlTransport } from "./localHubTransport.js";
@@ -27,6 +37,8 @@ export interface PairOptions {
   link: string;
   label?: string;
   platform?: string;
+  signal?: AbortSignal;
+  credentialFile?: string;
 }
 
 export type RemoteWorkspaceEntry = HubWorkspaceEntry;
@@ -46,28 +58,37 @@ export interface CreateRemoteWorkspaceOptions {
   purpose?: "use" | "author";
 }
 
-function controlClient(rpc: RpcClient) {
-  return typedClient("hubControl", hubControlMethods, rpc);
+function controlClient(rpc: RpcClient, options?: { signal?: AbortSignal }) {
+  return typedClient(
+    "hubControl",
+    hubControlMethods,
+    options?.signal ? { call: (method, args) => rpc.call(method, args, options) } : rpc
+  );
 }
 
 async function withControl<T>(
-  creds: DeviceCredential,
-  operation: (client: ReturnType<typeof controlClient>) => Promise<T>
+  creds: CliDeviceIdentity,
+  operation: (client: ReturnType<typeof controlClient>) => Promise<T>,
+  options: { signal?: AbortSignal } = {}
 ): Promise<T> {
+  options.signal?.throwIfAborted();
   const local = await resolveLocalHubControlTransport(creds);
-  const rpc = new RpcClient({
-    url: local?.serverUrl ?? creds.url,
-    deviceId: creds.deviceId,
-    refreshToken: creds.refreshToken,
-    ...(local || creds.transport === "local"
-      ? {}
-      : { pairing: creds.controlPairing, endpointSecret: creds.endpointSecret }),
-  });
+  const rpc = new RpcClient(
+    {
+      url: local?.serverUrl ?? creds.url,
+      deviceId: creds.deviceId,
+      refreshToken: creds.refreshToken,
+      ...(local || creds.transport === "local"
+        ? {}
+        : { pairing: creds.controlPairing, endpointSecret: creds.endpointSecret }),
+    },
+    options
+  );
   let result: T | undefined;
   let operationError: unknown;
   let operationFailed = false;
   try {
-    result = await operation(controlClient(rpc));
+    result = await operation(controlClient(rpc, options));
   } catch (error) {
     operationFailed = true;
     operationError = error;
@@ -88,23 +109,39 @@ async function withControl<T>(
     throw operationError;
   }
   if (closeError !== undefined) {
-    console.warn(
-      "[remoteClient] Control operation completed but connection cleanup failed:",
-      closeError
-    );
+    throw closeError;
   }
   return result as T;
 }
 
 export async function pairRemoteServer(options: PairOptions): Promise<DeviceCredential> {
+  options.signal?.throwIfAborted();
   if (!options.link) throw new AuthError("pair requires a Vibestudio pairing link");
   const pairing = parsePairingLink(options.link);
+  const existing = loadCliIdentity(options.credentialFile);
+  if (existing) {
+    const identity = requireDeviceCliIdentity(existing, "pairing recovery");
+    if (
+      identity.transport !== "iroh" ||
+      identity.controlPairing.endpointId !== pairing.endpointId
+    ) {
+      throw new AuthError(
+        "CLI is already paired to another account; run `vibestudio remote logout` first"
+      );
+    }
+    if (identity.phase === "workspace") return identity;
+    const selected = await selectRemoteWorkspace(
+      identity,
+      { privateRole: "personal" },
+      { signal: options.signal }
+    );
+    saveCliCredentials(selected, options.credentialFile);
+    return selected;
+  }
+  // Also refuse unreadable existing state before consuming a one-use invite.
+  assertCliProfileIsUnpaired(options.credentialFile);
   const endpointSecret = randomBytes(32).toString("base64url");
-  const pairedRef: {
-    current: {
-      credential: { deviceId: string; refreshToken: string };
-    } | null;
-  } = {
+  const pairedRef: { current: CliAccountDeviceCredentials | null } = {
     current: null,
   };
   const { IrohRpcClient } = await import("../node/iroh/irohRpcClient.js");
@@ -115,8 +152,23 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
     getToken: () => pairing.code,
     clientLabel: options.label ?? `${os.userInfo().username}@${os.hostname()}`,
     onPaired: (credential) => {
-      pairedRef.current = { credential };
+      const { code: _code, ...controlReach } = pairing;
+      const receipt: CliAccountDeviceCredentials = {
+        schemaVersion: 6,
+        phase: "account",
+        kind: "device",
+        transport: "iroh",
+        url: `iroh://${pairing.endpointId}`,
+        deviceId: credential.deviceId,
+        refreshToken: credential.refreshToken,
+        endpointSecret,
+        controlPairing: storeReach(controlReach),
+        pairedAt: Date.now(),
+      };
+      saveCliCredentials(receipt, options.credentialFile);
+      pairedRef.current = receipt;
     },
+    ...(options.signal ? { signal: options.signal } : {}),
   });
   let pairedCredential: DeviceCredential | null = null;
   let pairingFailure: unknown = null;
@@ -124,36 +176,11 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
     await client.ready();
     const paired = pairedRef.current;
     if (!paired) throw new AuthError("pairing did not return a device credential");
-    // Pairing authenticates the account. Workspace selection begins only after
-    // that boundary and defaults to the account's Personal workspace.
-    const hubControl = typedClient("hubControl", hubControlMethods, client);
-    const pair = await hubControl.ensureUserWorkspaces();
-    const targetWorkspaceId = pair.personal.workspaceId;
-    const route = await hubControl.routeWorkspace({ workspaceId: targetWorkspaceId });
-    if (route.workspaceId !== targetWorkspaceId) {
-      throw new AuthError("workspace route changed the pairing target");
-    }
-    const { code: _code, ...stableHubReach } = pairing;
-    const controlPairing = storeReach(stableHubReach);
-    const workspacePairing = storeReach(route.workspaceReach);
-    pairedCredential = {
-      schemaVersion: 5,
-      kind: "device",
-      transport: "iroh",
-      url: selectedUrl(workspacePairing, route.workspace),
-      workspaceId: route.workspaceId,
-      workspaceName: route.workspace,
-      serverId: route.serverId,
-      deviceId: paired.credential.deviceId,
-      refreshToken: paired.credential.refreshToken,
-      endpointSecret,
-      controlPairing,
-      workspacePairing,
-      pairedAt: Date.now(),
-    };
+    // The redemption connection has one ownership scope; selection below uses
+    // the same account-control operation as every later navigation.
   } catch (error) {
     pairingFailure =
-      error instanceof AuthError
+      error instanceof AuthError || (options.signal?.aborted && error === options.signal.reason)
         ? error
         : new AuthError(
             `pairing failed: ${error instanceof Error ? error.message : String(error)}`
@@ -170,30 +197,39 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
     throw closed.reason;
   }
   if (pairingFailure) throw pairingFailure;
-  if (!pairedCredential) throw new AuthError("pairing produced no device credential");
+  if (!pairedRef.current) throw new AuthError("pairing produced no device credential");
+  pairedCredential = await selectRemoteWorkspace(
+    pairedRef.current,
+    { privateRole: "personal" },
+    { signal: options.signal }
+  );
+  saveCliCredentials(pairedCredential, options.credentialFile);
   return pairedCredential;
 }
 
 export async function listRemoteWorkspaces(
-  creds: DeviceCredential
+  creds: CliDeviceIdentity
 ): Promise<RemoteWorkspaceEntry[]> {
   return await withControl(creds, (client) => client.listWorkspaces());
 }
 
 /** List workspaces over an already-open hub control connection. */
-export async function listWorkspacesVia(control: RpcClient): Promise<RemoteWorkspaceEntry[]> {
-  return await controlClient(control).listWorkspaces();
+export async function listWorkspacesVia(
+  control: RpcClient,
+  options?: { signal?: AbortSignal }
+): Promise<RemoteWorkspaceEntry[]> {
+  return await controlClient(control, options).listWorkspaces();
 }
 
 /** Prepare the authenticated account's private pair through the same host operation as apps. */
 export async function ensureRemoteUserWorkspaces(
-  creds: DeviceCredential
+  creds: CliDeviceIdentity
 ): Promise<{ personal: RemoteWorkspaceEntry; system: RemoteWorkspaceEntry }> {
   return await withControl(creds, (client) => client.ensureUserWorkspaces());
 }
 
 export async function createRemoteWorkspace(
-  creds: DeviceCredential,
+  creds: CliDeviceIdentity,
   options: CreateRemoteWorkspaceOptions
 ): Promise<WorkspaceCreationReceipt> {
   return await withControl(creds, (client) =>
@@ -214,6 +250,28 @@ export type RemoteWorkspaceSelector =
   | string
   | { workspaceId: string }
   | { privateRole: "personal" | "system" };
+
+/** Account preparation and route selection are one shared navigation boundary,
+ * independent of whether the caller transports control over loopback or Iroh. */
+export async function selectAccountWorkspace(
+  control: {
+    ensureUserWorkspaces(): Promise<{
+      personal: { workspaceId: string };
+      system: { workspaceId: string };
+    }>;
+    routeWorkspace(input: { workspaceId: string }): Promise<HubWorkspaceRoute>;
+  },
+  selector: Exclude<RemoteWorkspaceSelector, string>
+): Promise<HubWorkspaceRoute> {
+  const workspaceId =
+    "workspaceId" in selector
+      ? selector.workspaceId
+      : (await control.ensureUserWorkspaces())[selector.privateRole].workspaceId;
+  const route = await control.routeWorkspace({ workspaceId });
+  if (route.workspaceId !== workspaceId)
+    throw new AuthError("workspace route changed the selected target");
+  return route;
+}
 
 /** Where a credential's server is, as people see it: never a workspace path. */
 export function serverEndpoint(credentials: DeviceCredential): string {
@@ -244,84 +302,89 @@ export function findWorkspace(
 }
 
 export async function selectRemoteWorkspace(
-  creds: DeviceCredential,
-  selector: RemoteWorkspaceSelector
+  creds: CliDeviceIdentity,
+  selector: RemoteWorkspaceSelector,
+  options: { signal?: AbortSignal } = {}
 ): Promise<DeviceCredential> {
-  const route: HubWorkspaceRoute = await withControl(creds, async (client) => {
-    if (typeof selector === "string") {
-      const entry = findWorkspace(await client.listWorkspaces(), selector);
-      return await client.routeWorkspace({ workspaceId: entry.workspaceId });
-    }
-    if ("workspaceId" in selector) {
-      return await client.routeWorkspace({ workspaceId: selector.workspaceId });
-    }
-    const pair = await client.ensureUserWorkspaces();
-    return await client.routeWorkspace({ workspaceId: pair[selector.privateRole].workspaceId });
-  });
-  if (route.serverId !== creds.serverId) {
+  const route: HubWorkspaceRoute = await withControl(
+    creds,
+    async (client) => {
+      if (typeof selector === "string") {
+        const entry = findWorkspace(await client.listWorkspaces(), selector);
+        return await selectAccountWorkspace(client, { workspaceId: entry.workspaceId });
+      }
+      return await selectAccountWorkspace(client, selector);
+    },
+    options
+  );
+  if ("serverId" in creds && route.serverId !== creds.serverId) {
     throw new AuthError("workspace route changed the paired server identity");
   }
   if (creds.transport === "local") {
     return {
       ...creds,
+      schemaVersion: 6,
+      phase: "workspace",
       url: route.serverUrl,
       workspaceId: route.workspaceId,
       workspaceName: route.workspace,
-      serverId: creds.serverId,
+      serverId: route.serverId,
     };
   }
   const workspacePairing = storeReach(route.workspaceReach);
   return {
     ...creds,
+    schemaVersion: 6,
+    phase: "workspace",
     url: selectedUrl(workspacePairing, route.workspace),
     workspaceId: route.workspaceId,
     workspaceName: route.workspace,
-    serverId: creds.serverId,
+    serverId: route.serverId,
     controlPairing: creds.controlPairing,
     workspacePairing,
   };
 }
 
 export async function inviteRemoteUser(
-  creds: DeviceCredential,
+  creds: CliDeviceIdentity,
   options: InviteUserOptions
 ): Promise<{ user: unknown; workspaces: string[]; pairing: HubPairingInvite }> {
   return await withControl(creds, (client) => client.inviteUser(options));
 }
 
 export async function pairRemoteDevice(
-  creds: DeviceCredential,
+  creds: CliDeviceIdentity,
   options: { ttlMs?: number } = {}
 ): Promise<{ userId: string; handle: string; pairing: HubPairingInvite }> {
   return await withControl(creds, (client) => client.pairDevice(options));
 }
 
 export async function addRemoteWorkspaceMember(
-  creds: DeviceCredential,
+  creds: CliDeviceIdentity,
   options: { workspace: string; userId?: string; handle?: string }
 ): Promise<Record<string, unknown>> {
   return await withControl(creds, (client) => client.addWorkspaceMember(options));
 }
 
 export async function removeRemoteWorkspaceMember(
-  creds: DeviceCredential,
+  creds: CliDeviceIdentity,
   options: { workspace: string; userId?: string; handle?: string }
 ): Promise<{ removed: boolean; closedSessions: number }> {
   return await withControl(creds, (client) => client.removeWorkspaceMember(options));
 }
 
 export async function listRemoteWorkspaceMembers(
-  creds: DeviceCredential,
+  creds: CliDeviceIdentity,
   workspace: string
 ): Promise<{ workspace: string; workspaceId: string; members: Record<string, unknown>[] }> {
   return await withControl(creds, (client) => client.listWorkspaceMembers({ workspace }));
 }
 
-export async function listRemoteDevices(creds: DeviceCredential) {
+export async function listRemoteDevices(creds: CliDeviceIdentity) {
   return await withControl(creds, (client) => client.listDevices());
 }
 
-export async function revokeRemoteDevice(creds: DeviceCredential, deviceId: string) {
+export async function revokeRemoteDevice(creds: CliDeviceIdentity, deviceId: string) {
   return await withControl(creds, (client) => client.revokeDevice(deviceId));
 }
 

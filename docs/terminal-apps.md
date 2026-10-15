@@ -62,7 +62,39 @@ Every key goes to the program in the focused tab except the **prefix key**
 | `?`                      | Help: every binding                                                 |
 | `q`                      | Quit; sessions keep running and stay resumable                      |
 | the prefix again         | Send the prefix key itself to the program                           |
-| `Esc`                    | Cancel the prefix                                                   |
+| `Ctrl-G`                 | Cancel browser UI or the prefix                                     |
+
+Ctrl-G cancels browser UI without making an approval decision. Enhanced
+keyboard terminals also support Escape; on legacy terminals an isolated Escape
+is indistinguishable from the start of a fragmented key sequence, so use Ctrl-G.
+When the program has focus, its keys still pass through unchanged. Ctrl-G cannot
+be configured as the browser prefix.
+
+In copy mode, `/` searches retained terminal output and `n`/`N` move between
+matches. Copy and export join soft-wrapped lines without losing Unicode cells.
+The log supports filtering, full-entry inspection, copying and export. These
+actions and terminal-output export are also available in the command palette.
+
+The palette's upload/download actions ask for exact local and workspace paths
+and keep the originally selected session context even if you change tabs.
+Uploading replaces the chosen workspace destination; downloads and exports
+never overwrite existing local files. Uploads are limited to 8 MiB; downloads
+stream bounded pages and verify the complete content identity. Use
+`/attach <workspace-path>` in chat after uploading a local attachment.
+
+Chat has `/attachments` to inspect and remove staged files, `/queue` to inspect
+and change unpublished messages, and `/search` and `/export` over the complete
+conversation history. Drafts, attachments and deferred messages are kept per
+conversation. Opening requests are immutable: cancel and compose a replacement
+instead of editing a request already admitted to agent setup.
+Once publication has been attempted, retry keeps the exact message and delivery
+identity. Accepted messages awaiting attachment cleanup offer cleanup retry only;
+they are not sent again. Discarding a queue entry never recalls an accepted message.
+
+Use `/connect <provider>` for provider setup. API keys and other secrets are
+entered in the browser's protected approval form, never in the chat transcript.
+Device-code sign-in provides explicit open/copy actions; callback-based OAuth
+waits for the provider callback rather than asking for an empty submission.
 
 Mouse support:
 
@@ -255,6 +287,11 @@ The contract with the CLI is
 - `host.rpc` is the browser's app principal in System, used for settings.
 - `host.workspaceRpc` is this device's session in the shown workspace, used for
   sessions, apps and approvals.
+- `host.signal` owns the invocation. Cancellation reaches transport creation,
+  pending calls and transfers; shutdown joins their cleanup.
+- `host.files` handles explicit user upload/download/export gestures through
+  the existing context-scoped filesystem service. Workspace apps cannot invoke
+  this trusted client-file capability themselves.
 - `run` settles with `quit`, `switch-workspace` or `connection-lost`. It never
   exits the process, and it restores the terminal on every path.
 

@@ -117,9 +117,10 @@ export interface RpcWireCaller {
 }
 export type RpcWireClient = Omit<
   import("./types.js").RpcClient,
-  "call" | "stream" | "streamReadable" | "peer"
+  "call" | "stream" | "streamReadable" | "peer" | "createView"
 > &
   RpcWireCaller & {
+    createView(options: import("./types.js").RpcClientViewOptions): RpcWireClient;
     streamReadable(
       targetId: string,
       method: string,

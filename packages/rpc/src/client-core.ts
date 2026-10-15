@@ -1,7 +1,6 @@
 import { encodeRpcJson, decodeRpcJson } from "./wireJson.js";
 import {
   schemaRpcClient,
-  wireClientFor,
   registerRpcWireClient,
   ownRpcOperation,
   registerRpcOperationOwner,
@@ -19,6 +18,7 @@ import type {
   RpcCallOptions,
   RpcCausalParent,
   RpcClientConfig,
+  RpcClientViewOptions,
   RpcConnectionStatus,
   RpcContextMethods,
   RpcContextStreamingHandler,
@@ -556,6 +556,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         : options;
     const scoped: RpcWireClient = {
       ...client,
+      createView: (options) => createRpcWireView(scoped, options),
       call: (targetId, method, args, options) =>
         observeOutbound(
           callWithProvenance(scopedProvenance, targetId, method, args, inheritedOptions(options))
@@ -1579,6 +1580,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
   }
 
   const client: RpcWireClient = {
+    createView: (options) => createRpcWireView(client, options),
     selfId: config.selfId,
     expose(method, handler, website): void {
       requireActive();
@@ -1811,12 +1813,13 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
 }
 
 /** One client view path: peers must retain the same options as direct effects. */
-function withCallOptions(
+export function createRpcWireView(
   base: RpcWireClient,
-  map: (options?: RpcCallOptions | RpcStreamOptions) => RpcCallOptions & RpcStreamOptions,
-  enter: <T>(operation: () => T) => T = (operation) => operation()
+  options: RpcClientViewOptions
 ): RpcWireClient {
+  const { mapOptions: map, enter = (operation) => operation() } = options;
   const view: RpcWireClient = {
+    createView: (options) => createRpcWireView(view, options),
     selfId: base.selfId,
     expose: base.expose.bind(base),
     exposeAll: base.exposeAll.bind(base),
@@ -1843,12 +1846,10 @@ function withCallOptions(
 
 function clientView<Client extends import("./types.js").RpcClient | RpcWireClient>(
   base: Client,
-  map: Parameters<typeof withCallOptions>[1],
-  enter?: Parameters<typeof withCallOptions>[2]
+  mapOptions: RpcClientViewOptions["mapOptions"],
+  enter?: RpcClientViewOptions["enter"]
 ): Client {
-  const wire = wireClientFor(base);
-  const view = withCallOptions(wire, map, enter);
-  return (wire === base ? view : schemaRpcClient(view)) as Client;
+  return base.createView({ mapOptions, ...(enter ? { enter } : {}) }) as Client;
 }
 
 /** Enter the owning async context for every outbound effect, including peer calls.

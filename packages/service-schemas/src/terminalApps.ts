@@ -48,6 +48,8 @@ export const TerminalSessionEntrySchema: z.ZodType<TerminalSessionEntry> = z
     /** The live PTY session to attach to with the shell extension. */
     shellSessionId: z.string().nullable(),
     running: z.boolean(),
+    failure: z.string().optional(),
+    contextId: z.string().optional(),
     exit: z
       .object({ code: z.number().nullable(), signal: z.string().optional() })
       .strict()

@@ -40,9 +40,26 @@ export interface RestorableOutput {
 
 /** Return the terminal to line mode with the main screen and a visible cursor. */
 export function restoreTerminal(input: RestorableInput, output: RestorableOutput): void {
-  if (input.isTTY && input.isRaw) input.setRawMode?.(false);
-  input.pause();
-  if (output.isTTY) output.write(TERMINAL_RESET_SEQUENCE);
+  const failures: unknown[] = [];
+  for (const restore of [
+    () => {
+      if (input.isTTY && input.isRaw) input.setRawMode?.(false);
+    },
+    () => input.pause(),
+    () => {
+      if (output.isTTY) output.write(TERMINAL_RESET_SEQUENCE);
+    },
+  ]) {
+    try {
+      restore();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "The terminal could not be fully restored");
+  }
 }
 
 /**

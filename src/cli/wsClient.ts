@@ -11,7 +11,7 @@ import {
  * its own identity.
  */
 
-import { type RpcStreamOptions } from "@vibestudio/rpc";
+import { type RpcStreamOptions, type RpcCallOptions } from "@vibestudio/rpc";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
@@ -26,32 +26,52 @@ export interface WsClientConfig {
   url: string;
   callerId: string;
   callerKind: CallerKind;
-  getToken: () => Promise<string> | string;
+  getToken: (signal?: AbortSignal) => Promise<string> | string;
   connectionId?: string;
   clientLabel?: string;
   logPrefix?: string;
+  signal?: AbortSignal;
 }
 
 export class WsRpcClient {
+  private transport: ReturnType<typeof wsClientTransport> | null = null;
+  private transportRetirement: Promise<void> | null = null;
+  private closed = false;
+  private closePromise: Promise<void> | null = null;
   private connected: Promise<{
     transport: ReturnType<typeof wsClientTransport>;
     core: CoreRpcClient;
   }> | null = null;
 
-  constructor(private readonly config: WsClientConfig) {}
+  constructor(private readonly config: WsClientConfig) {
+    config.signal?.addEventListener("abort", this.cancel, { once: true });
+  }
+  private readonly cancel = () => {
+    void this.close().catch(() => undefined);
+  };
 
   async ready(): Promise<void> {
     await this.ensureConnected();
   }
 
-  async call(method: QualifiedServiceMethod, args: unknown[] = []): Promise<unknown> {
-    return this.callTarget("main", method, args);
+  async call(
+    method: QualifiedServiceMethod,
+    args: unknown[] = [],
+    options?: RpcCallOptions
+  ): Promise<unknown> {
+    return this.callTarget("main", method, args, options);
   }
 
-  async callTarget(targetId: string, method: string, args: unknown[] = []): Promise<unknown> {
+  async callTarget(
+    targetId: string,
+    method: string,
+    args: unknown[] = [],
+    options?: RpcCallOptions
+  ): Promise<unknown> {
+    options?.signal?.throwIfAborted();
     if (targetId === "main") requireQualifiedServiceMethod(method);
     const { core } = await this.ensureConnected();
-    return await core.call(targetId, method, args);
+    return await core.call(targetId, method, args, options);
   }
 
   async stream(
@@ -86,17 +106,36 @@ export class WsRpcClient {
     };
   }
 
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
+    this.closed = true;
+    this.config.signal?.removeEventListener("abort", this.cancel);
     const connected = this.connected;
-    this.connected = null;
-    if (!connected) return;
-    await (await connected).transport.close();
+    // Start closing the acquired transport before joining readiness: its close
+    // is the authoritative event that releases a pending authentication wait.
+    const retirement = this.retireTransport();
+    return (this.closePromise = (async () => {
+      const results = await Promise.allSettled([retirement, connected?.catch(() => undefined)]);
+      this.connected = null;
+      const errors = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (errors.length === 1) throw errors[0];
+      if (errors.length) throw new AggregateError(errors, "WebSocket client retirement failed");
+    })());
+  }
+
+  private retireTransport(): Promise<void> {
+    const transport = this.transport;
+    return (this.transportRetirement ??= Promise.resolve().then(() => transport?.close()));
   }
 
   private ensureConnected(): Promise<{
     transport: ReturnType<typeof wsClientTransport>;
     core: CoreRpcClient;
   }> {
+    this.config.signal?.throwIfAborted();
+    if (this.closed) return Promise.reject(new Error("WebSocket RPC client is closed"));
     if (!this.connected) {
       this.connected = this.connect().catch((error) => {
         this.connected = null;
@@ -111,6 +150,8 @@ export class WsRpcClient {
     core: CoreRpcClient;
   }> {
     const { WebSocket } = await import("ws");
+    this.config.signal?.throwIfAborted();
+    if (this.closed) throw new Error("WebSocket RPC client is closed");
     const clientLabel = this.config.clientLabel ?? "Vibestudio CLI";
     const transport = wsClientTransport({
       selfId: this.config.callerId,
@@ -125,16 +166,29 @@ export class WsRpcClient {
       }),
       adapter: {
         now: () => Date.now(),
-        getAuthToken: async () => await this.config.getToken(),
+        getAuthToken: async (signal) => await this.config.getToken(signal),
         createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
       },
     });
+    this.transport = transport;
+    this.transportRetirement = null;
     try {
       await transport.connectAndWait();
     } catch (error) {
-      await transport.close();
-      throw error;
+      const failure = this.config.signal?.aborted ? this.config.signal.reason : error;
+      try {
+        await this.retireTransport();
+      } catch (cleanup) {
+        throw new AggregateError(
+          [failure, cleanup],
+          "WebSocket authentication and retirement failed",
+          { cause: failure }
+        );
+      }
+      throw failure;
     }
+    this.config.signal?.throwIfAborted();
+    if (this.closed) throw new Error("WebSocket RPC client is closed");
     const core = createInternalRpcClient({
       selfId: this.config.callerId,
       callerKind: this.config.callerKind,

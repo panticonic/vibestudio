@@ -158,7 +158,7 @@ describe("runTerminalBrowser", () => {
     });
     await expect(run()).resolves.toEqual({ kind: "exit", exit: { kind: "quit" } });
     const host = received as unknown as TerminalBrowserHost;
-    expect(host.contractVersion).toBe(2);
+    expect(host.contractVersion).toBe(3);
     expect(host.appId).toBe("app:apps/terminal-browser:dev_1");
     expect(host.rpc.selfId).toBe("app:apps/terminal-browser:dev_1");
     expect(host.system).toEqual({ id: "ws_system", name: "system" });
@@ -185,9 +185,11 @@ describe("runTerminalBrowser", () => {
       },
     });
     await expect(run()).resolves.toEqual({ kind: "app-updated" });
-    expect(device.call).toHaveBeenCalledWith("auth.grantAppPrincipal", [
-      { principal: "terminal-app", source: "apps/terminal-browser" },
-    ]);
+    expect(device.call).toHaveBeenCalledWith(
+      "auth.grantAppPrincipal",
+      [{ principal: "terminal-app", source: "apps/terminal-browser" }],
+      { signal: expect.any(AbortSignal) }
+    );
   });
 
   it("restores the terminal and closes the session when the browser throws", async () => {
@@ -200,6 +202,51 @@ describe("runTerminalBrowser", () => {
     expect(tty.stdout.write).toHaveBeenCalledWith(expect.stringContaining("\x1b[?1049l"));
     expect(tty.stdin.isRaw).toBe(false);
     expect(transport.close).toHaveBeenCalled();
+  });
+
+  it("binds a reconnect grant to its authentication owner without ending the browser", async () => {
+    const authentication = new AbortController();
+    const reason = new Error("reconnect superseded");
+    const { run, device, options } = harness({
+      run: async (host) => {
+        device.call.mockImplementationOnce(async (...args: unknown[]) => {
+          const signal = (args[2] as { signal: AbortSignal }).signal;
+          expect(signal).not.toBe(host.signal);
+          return new Promise<never>((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          });
+        });
+        const grantRequest = options().getToken(authentication.signal);
+        authentication.abort(reason);
+        await expect(grantRequest).rejects.toBe(reason);
+        expect(host.signal.aborted).toBe(false);
+        return { kind: "quit" };
+      },
+    });
+    await expect(run()).resolves.toEqual({ kind: "exit", exit: { kind: "quit" } });
+  });
+
+  it("joins both transports and retains independent cleanup failures", async () => {
+    const browserFailure = new Error("browser crashed");
+    const releaseFailure = new Error("terminal restore failed");
+    const closeFailure = new Error("transport close failed");
+    const { run, tty, transport, workspaceTransport } = harness({
+      run: async () => {
+        tty.stdout.write.mockImplementation(() => {
+          throw releaseFailure;
+        });
+        throw browserFailure;
+      },
+    });
+    transport.close.mockRejectedValueOnce(closeFailure);
+    const failure = await run().catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([
+      browserFailure,
+      releaseFailure,
+      closeFailure,
+    ]);
+    expect(workspaceTransport.close).toHaveBeenCalledOnce();
   });
 
   it("reports reconnecting while the workspace session recovers", async () => {
@@ -243,9 +290,12 @@ describe("loadTerminalBrowserModule", () => {
     };
     const module = await loadTerminalBrowserModule(device as never, grant().app);
     await expect(module.run({} as never)).resolves.toEqual({ kind: "quit" });
-    expect(device.stream).toHaveBeenCalledWith("main", "gateway.fetch", [
-      { path: "/_a/build-1/index.mjs", method: "GET" },
-    ]);
+    expect(device.stream).toHaveBeenCalledWith(
+      "main",
+      "gateway.fetch",
+      [{ path: "/_a/build-1/index.mjs", method: "GET" }],
+      undefined
+    );
   });
 
   it("rejects a module without run(host)", async () => {

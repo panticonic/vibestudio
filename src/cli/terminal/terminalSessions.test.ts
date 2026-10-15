@@ -7,7 +7,8 @@ import type { RemoteWorkspaceEntry, RemoteWorkspaceSelector } from "../remoteCli
 import { runTerminalSessions, type TerminalSessionDependencies } from "./terminalSessions.js";
 
 const credentials = {
-  schemaVersion: 5,
+  schemaVersion: 6,
+  phase: "workspace",
   kind: "device",
   transport: "local",
   url: "http://127.0.0.1:4000/_r/ws/personal",
@@ -135,6 +136,33 @@ const options = (deps: Partial<TerminalSessionDependencies>, progress: string[])
 });
 
 describe("runTerminalSessions", () => {
+  it("attempts every connection cleanup and retains operation and cleanup failures", async () => {
+    const { deps, devices, progress } = harness([{ kind: "exit", exit: { kind: "quit" } }]);
+    const operation = new Error("browser failed");
+    const workspace = new Error("workspace close failed");
+    const device = new Error("device close failed");
+    vi.mocked(deps.runBrowser).mockImplementation(async () => {
+      devices[0]!.workspaces[0]!.close.mockRejectedValue(workspace);
+      devices[0]!.close.mockRejectedValue(device);
+      throw operation;
+    });
+    await expect(runTerminalSessions(options(deps, progress))).rejects.toMatchObject({
+      errors: [operation, expect.objectContaining({ errors: [workspace, device] })],
+    });
+    expect(devices[0]!.release).toHaveBeenCalled();
+    expect(devices[0]!.close).toHaveBeenCalled();
+  });
+
+  it("rejects quit when a workspace connection did not retire", async () => {
+    const { deps, devices, progress } = harness([{ kind: "exit", exit: { kind: "quit" } }]);
+    const failure = new Error("workspace close failed");
+    vi.mocked(deps.runBrowser).mockImplementation(async () => {
+      devices[0]!.workspaces[0]!.close.mockRejectedValue(failure);
+      return { kind: "exit", exit: { kind: "quit" } };
+    });
+    await expect(runTerminalSessions(options(deps, progress))).rejects.toBe(failure);
+    expect(devices[0]!.close).toHaveBeenCalled();
+  });
   it("runs the browser from System, shows the Personal workspace by default, and returns its quit", async () => {
     const { deps, devices, routes, progress } = harness([{ kind: "exit", exit: { kind: "quit" } }]);
     await expect(runTerminalSessions(options(deps, progress))).resolves.toEqual({ kind: "quit" });

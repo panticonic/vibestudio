@@ -42,6 +42,26 @@ describe("restoreTerminal", () => {
     restoreTerminal(input, output);
     expect(output.write).not.toHaveBeenCalled();
   });
+
+  it("attempts every restoration step and preserves independent failures", () => {
+    const { input, output } = fakeTty();
+    const rawFailure = new Error("raw mode failed");
+    const pauseFailure = new Error("pause failed");
+    input.setRawMode.mockImplementation(() => {
+      throw rawFailure;
+    });
+    input.pause.mockImplementation(() => {
+      throw pauseFailure;
+    });
+    let failure: unknown;
+    try {
+      restoreTerminal(input, output);
+    } catch (error) {
+      failure = error;
+    }
+    expect((failure as AggregateError).errors).toEqual([rawFailure, pauseFailure]);
+    expect(output.write).toHaveBeenCalledWith(TERMINAL_RESET_SEQUENCE);
+  });
 });
 
 describe("guardTerminal", () => {
