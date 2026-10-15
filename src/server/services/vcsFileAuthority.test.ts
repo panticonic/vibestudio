@@ -154,11 +154,11 @@ describe("website semantic file consent", () => {
     );
     expect(selected).toContainEqual({
       capability: "filesystem.read",
-      resource: { kind: "exact", key: "workspace-path/projects/demo/a.txt" },
+      resource: { kind: "prefix", prefix: "workspace-path/projects/demo/" },
     });
     expect(selected).toContainEqual({
       capability: "filesystem.read",
-      resource: { kind: "exact", key: "workspace-path/projects/demo/b.txt" },
+      resource: { kind: "prefix", prefix: "workspace-path/projects/demo/" },
     });
     expect(selected).toContainEqual({
       capability: "filesystem.list",
@@ -181,7 +181,7 @@ describe("website semantic file consent", () => {
     ).toEqual([
       {
         capability: "filesystem.read",
-        resource: { kind: "exact", key: "workspace-path/projects/demo/src/file.txt" },
+        resource: { kind: "prefix", prefix: "workspace-path/projects/demo/" },
       },
     ]);
   });
@@ -196,7 +196,7 @@ describe("website semantic file consent", () => {
       )
     ).toEqual([
       {
-        capability: "filesystem.list",
+        capability: "filesystem.read",
         resource: { kind: "prefix", prefix: "workspace-path/projects/demo/" },
       },
     ]);
@@ -212,7 +212,7 @@ describe("website semantic file consent", () => {
       { capability: "filesystem.list", resource: { kind: "prefix", prefix: "workspace-path/" } },
     ]);
   });
-  it("covers all lexical prefix matches with their containing folder", async () => {
+  it("shares repository consent across lexical prefix matches", async () => {
     expect(
       scopes(
         await vcsFileSelections(
@@ -223,8 +223,8 @@ describe("website semantic file consent", () => {
       )
     ).toEqual([
       {
-        capability: "filesystem.list",
-        resource: { kind: "prefix", prefix: "workspace-path/projects/demo/src/" },
+        capability: "filesystem.read",
+        resource: { kind: "prefix", prefix: "workspace-path/projects/demo/" },
       },
     ]);
   });
@@ -275,11 +275,7 @@ describe("website semantic file consent", () => {
     ).toEqual([
       {
         capability: "filesystem.write",
-        resource: { kind: "exact", key: "workspace-path/projects/demo/a.txt" },
-      },
-      {
-        capability: "filesystem.write",
-        resource: { kind: "exact", key: "workspace-path/projects/demo/b.txt" },
+        resource: { kind: "prefix", prefix: "workspace-path/projects/demo/" },
       },
     ]);
     expect(calls).toBe(2);

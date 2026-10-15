@@ -345,14 +345,11 @@ distinction honest:
    version review displays and its own grants bound. Miscategorization is
    still a defect (and version review is where it is caught), but it cannot
    widen enforcement.
-5. Stricter standing-grant default, keyed to **manifest-visible authority,
-   not self-declared domain**: if the service's own manifest requests any
-   `sharing`, `accounts`, or network-egress capability, no "always" scope
-   is offered for its methods until the user has approved the same
-   (capability, resource) at least twice
-   ([agent-authority-profile.md](agent-authority-profile.md) §5.4). Keying
-   off the manifest closes the "declare yourself files/see to skip the
-   cooldown" bypass.
+5. Standing grants require an explicit user choice and the receiver's
+   reviewed eligibility policy. Eligible methods offer that choice from their
+   first use, including sharing, accounts, and network egress. Prior approval
+   counts and self-declared domains do not control eligibility
+   ([agent-authority-profile.md](agent-authority-profile.md) §5.4).
 6. `workspace-service:*` (the wildcard) is not a capability and cannot be
    declared, requested, or granted. It exists today only inside eval
    ceilings, which this plan deletes.

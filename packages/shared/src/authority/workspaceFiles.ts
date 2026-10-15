@@ -20,7 +20,7 @@ export function workspaceFileResource(
   return access.kind === "folder" ? { kind: "prefix", prefix: key } : { kind: "exact", key };
 }
 
-/** Ordinary code keeps its existing admission; website effects select bounded leaves. */
+/** Ordinary code keeps its existing admission; website effects select repository consent. */
 export function workspaceFileMethodAuthority(
   resolver: string,
   effects: readonly WorkspaceFileEffect[],
@@ -33,7 +33,14 @@ export function workspaceFileMethodAuthority(
       ? {
           prepared: {
             resolver,
-            leaves: effects.map((effect) => ({
+            // Repository browsing shares read consent; workspace structure remains list-only.
+            leaves: [
+              ...new Set(
+                effects.flatMap((effect) =>
+                  effect === "list" ? (["list", "read"] as const) : [effect]
+                )
+              ),
+            ].map((effect) => ({
               capability: `filesystem.${effect}`,
               requirement: fixedPreparedAuthorityRequirement(
                 requirementForPrincipals(["website"], `filesystem.${effect}`)

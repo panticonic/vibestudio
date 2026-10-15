@@ -1,3 +1,4 @@
+import { taxonomyRepoForPath } from "@vibestudio/shared/runtime/entitySpec";
 import { resourceScopeContains } from "@vibestudio/shared/authorization";
 import {
   fixedPreparedAuthoritySelection,
@@ -11,13 +12,15 @@ import {
 export function workspaceFileSelection(
   access: WorkspaceFileAccess
 ): FixedPreparedAuthoritySelection {
+  access = consentAccess(access);
   const resource = workspaceFileResource(access);
   const folder = access.kind === "folder";
+  const repository = taxonomyRepoForPath(access.path) === access.path;
   const logicalPath = access.path.replace(/\/+$/, "");
   const value = logicalPath ? `/${logicalPath}${folder ? "/" : ""}` : "/";
   const object = {
-    type: folder ? "workspace-folder" : "workspace-file",
-    label: folder ? "Folder" : "File",
+    type: repository ? "workspace-repository" : folder ? "workspace-folder" : "workspace-file",
+    label: repository ? "Repository" : folder ? "Folder" : "File",
     value,
   };
   const action =
@@ -30,8 +33,8 @@ export function workspaceFileSelection(
     access.effect === "list"
       ? "Shows file and folder names in this part of the workspace. This does not allow reading file contents or changing files."
       : access.effect === "read"
-        ? `Shares contents of ${folder ? "files in this folder and its subfolders" : "this file"} with the website and agents it starts.`
-        : `Allows the website and agents it starts to create, change, and delete ${folder ? "files in this folder and its subfolders" : "this file"}.`;
+        ? `Shares contents of ${repository ? "all files in this repository" : folder ? "files in this folder and its subfolders" : "this file"} with the website and agents it starts.`
+        : `Allows the website and agents it starts to create, change, and delete ${repository ? "all files in this repository" : folder ? "files in this folder and its subfolders" : "this file"}.`;
   return fixedPreparedAuthoritySelection({
     capability: `filesystem.${access.effect}`,
     resourceKey: resource.kind === "prefix" ? resource.prefix : resource.key,
@@ -52,13 +55,26 @@ export function workspaceFileSelection(
   });
 }
 
+/** Consent follows the workspace repository taxonomy, shared by fs and VCS.
+ * Keep execution coordinates exact: disk path binding must still detect a
+ * symlink target changing after preparation, even inside an approved repo.
+ * Browsing a repo is part of reading it, so metadata and contents share consent.
+ */
+function consentAccess(access: WorkspaceFileAccess): WorkspaceFileAccess {
+  const path = access.path.replace(/\/+$/, "");
+  const repo = taxonomyRepoForPath(path);
+  return repo
+    ? { effect: access.effect === "list" ? "read" : access.effect, path: repo, kind: "folder" }
+    : { ...access, path };
+}
+
 export function workspaceFileSelections(
   accesses: readonly WorkspaceFileAccess[]
 ): FixedPreparedAuthoritySelection[] {
   const unique = [
     ...new Map(
       accesses.map((access) => {
-        const normalized = { ...access, path: access.path.replace(/\/+$/, "") };
+        const normalized = consentAccess(access);
         return [JSON.stringify(normalized), normalized] as const;
       })
     ).values(),

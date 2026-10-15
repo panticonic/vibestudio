@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:cfda71bafbd0951fb4c8547fa5e4bdba5068919f2ff963468f7bf292f82343a6",
+  "censusDigest": "sha256:b975d10c190f0bf70553929cce64ed3b210e68164701d6fa2d3fb3b379c0dc28",
   "decisions": {
     "host:terminalApps.launch": {
       "review": "single-prepared-terminal-program-consent",
@@ -231,43 +231,43 @@
     },
     "host:blobstore.diffTrees": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.getBase64": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.getRange": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.getRangeBytes": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.getText": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.getTree": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.grep": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.has": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.listTree": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.putBase64": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.putRetained": {
       "review": "caller-scoped-retained-content",
@@ -275,15 +275,15 @@
     },
     "host:blobstore.putText": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.putTree": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.readFileAtTree": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:blobstore.releaseRetention": {
       "review": "caller-scoped-retained-content",
@@ -295,7 +295,7 @@
     },
     "host:blobstore.stat": {
       "review": "reachable-scoped-website-content-authority",
-      "change": "Makes the method’s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
+      "change": "Makes the method\u2019s declared website eligibility reachable through the blobstore service authority. The method retains its existing exact content operation, sensitivity, workspace membership, and scoped disclosure checks; closed retention, materialization, deletion, and inventory operations remain unavailable to website principals."
     },
     "host:browserEnvironment.applyCookies": {
       "review": "authenticated-browser-host-cookie-application",
@@ -698,204 +698,204 @@
       "change": "Re-runs the existing meta-change reconcile for one already-declared extension at its published ref. A changed build identity is staged in the ordinary install/update unit review and runs only after the user accepts it; an unchanged admitted build is left as is. No declaration, source, or admission is created by the call."
     },
     "host:fs.access": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.access#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.appendFile": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.appendFile#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.copyFile": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.copyFile#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.copyFile#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.exists": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.exists#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.glob": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.glob#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.grep": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.grep#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.handleClose": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.handleRead": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.handleRead#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.handleStat": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.handleStat#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.handleWrite": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.handleWrite#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.lstat": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.lstat#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.mkdir": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.mkdir#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.nativeRoots": {
       "review": "scoped-native-context-root-disclosure",
       "change": "Reports only the already admitted native source and scratch paths for the calling extension context; does not grant another context or host filesystem access."
     },
     "host:fs.open": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.open#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.open#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.readBytes": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.readBytes#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.readdir": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.readdir#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.readFile": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.readFile#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.readText": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.readText#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.rename": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.rename#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.rm": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.rm#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.rmdir": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.rmdir#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.stat": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.stat#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.truncate": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.truncate#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.unlink": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.unlink#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.writeFile": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:fs.writeFile#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:gateway.fetch": {
       "review": "connected-website-workspace-asset-gateway",
@@ -1235,7 +1235,7 @@
     },
     "host:runtime.dropSemanticContext": {
       "review": "reachable-scoped-website-runtime-authority",
-      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+      "change": "Makes the method\u2019s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method\u2019s existing capability and sensitivity; administrative lifecycle methods remain closed."
     },
     "host:runtime.faultAbortAgentVessel": {
       "review": "sealed-exact-vessel-system-test-abort",
@@ -1243,7 +1243,7 @@
     },
     "host:runtime.forkSemanticContext": {
       "review": "reachable-scoped-website-runtime-authority",
-      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+      "change": "Makes the method\u2019s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method\u2019s existing capability and sensitivity; administrative lifecycle methods remain closed."
     },
     "host:runtime.listContexts": {
       "review": "bounded-context-id-discovery",
@@ -1251,11 +1251,11 @@
     },
     "host:runtime.listEntities": {
       "review": "reachable-scoped-website-runtime-authority",
-      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+      "change": "Makes the method\u2019s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method\u2019s existing capability and sensitivity; administrative lifecycle methods remain closed."
     },
     "host:runtime.listOwnedContexts": {
       "review": "reachable-scoped-website-runtime-authority",
-      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+      "change": "Makes the method\u2019s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method\u2019s existing capability and sensitivity; administrative lifecycle methods remain closed."
     },
     "host:runtime.rebindAgentChannel": {
       "review": "owner-scoped-cloned-agent-channel-binding",
@@ -1283,7 +1283,7 @@
     },
     "host:runtime.resolveContext": {
       "review": "reachable-scoped-website-runtime-authority",
-      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+      "change": "Makes the method\u2019s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method\u2019s existing capability and sensitivity; administrative lifecycle methods remain closed."
     },
     "host:runtime.retireEntity": {
       "review": "scoped-website-public-workspace-rpc",
@@ -1307,19 +1307,19 @@
     },
     "host:runtime.supervision.describe": {
       "review": "reachable-scoped-website-runtime-authority",
-      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+      "change": "Makes the method\u2019s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method\u2019s existing capability and sensitivity; administrative lifecycle methods remain closed."
     },
     "host:runtime.supervision.health": {
       "review": "reachable-scoped-website-runtime-authority",
-      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+      "change": "Makes the method\u2019s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method\u2019s existing capability and sensitivity; administrative lifecycle methods remain closed."
     },
     "host:runtime.supervision.list": {
       "review": "reachable-scoped-website-runtime-authority",
-      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+      "change": "Makes the method\u2019s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method\u2019s existing capability and sensitivity; administrative lifecycle methods remain closed."
     },
     "host:runtime.supervision.logs": {
       "review": "reachable-scoped-website-runtime-authority",
-      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+      "change": "Makes the method\u2019s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method\u2019s existing capability and sensitivity; administrative lifecycle methods remain closed."
     },
     "host:runtime.supervision.prepare": {
       "review": "compound-runtime-preparation-authority-target",
@@ -1355,7 +1355,7 @@
     },
     "host:runtime.supervision.versions": {
       "review": "reachable-scoped-website-runtime-authority",
-      "change": "Makes the method’s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method’s existing capability and sensitivity; administrative lifecycle methods remain closed."
+      "change": "Makes the method\u2019s existing website eligibility reachable through its shared runtime agent authority policy. The receiver still enforces exact workspace, ownership, context, entity, or release identity and the method\u2019s existing capability and sensitivity; administrative lifecycle methods remain closed."
     },
     "host:shellApproval.getWorkspaceCreationReviewState": {
       "review": "bounded-workspace-review-readiness-read",
@@ -1390,212 +1390,212 @@
       "change": "Opens the protected-input transport for trusted presenters while retaining a prepared protected-input.submit leaf for non-chrome code and exact pending secret-input validation."
     },
     "host:vcs.blame": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.blame#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.commit": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.compare": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.compare#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.copy": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.copy#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.copy#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.discard": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.discard#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.edit": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.edit#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.finalizeExternalDelta": {
       "review": "scoped-website-public-workspace-rpc",
       "change": "Exposes finalization of one caller-reachable external delta only after the semantic engine proves every effective change is accounted for. The operation releases that delta's dedicated review roots and cannot mutate source content or finalize a foreign or incomplete review. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:vcs.history": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.history#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.importSnapshot": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.importSnapshot#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.inspect": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.inspect#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.listDirectory": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.listDirectory#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.listFiles": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.listFiles#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.mainState": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.mainState#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.merge": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.merge#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.move": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.move#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.neighbors": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.neighbors#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.push": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.push#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.query": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.query#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.readFile": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.readFile#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.readFile#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.readMemory": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.readMemory#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.registerExternalDelta": {
       "review": "scoped-website-public-workspace-rpc",
       "change": "Adds the existing context-write semantic operation to the ordinary VCS surface so userland can register an exact old-to-new external repository delta for compare and merge. Context ownership, causal references, immutable source coordinates, and repository identity remain receiver-validated; lifecycle retirement and finalization remain internal to merge review. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:vcs.resolveRepository": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.resolveRepository#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.revert": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.revert#capability:filesystem.write": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.search": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.search#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.status": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.status#capability:filesystem.list": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.supersedeExternalDelta": {
       "review": "scoped-website-public-workspace-rpc",
       "change": "Exposes retirement of one caller-reachable external delta so userland can abandon or replace a review it owns. Context and delta identity are receiver-validated; the operation grants no source mutation, merge, or foreign lifecycle authority. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
     },
     "host:vcs.walk": {
-      "review": "connected-website-scoped-file-authority",
-      "change": "Keeps ordinary code, host, and user admission and selects receiver-resolved website consent for the actual file or folder effects. Structure listing is independent of contents and writes. Closing a handle and recording an already-authorized working state do not acquire file effects. Existing context, identity, causal-ingress, publication, generation, and lifecycle checks remain in force."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:vcs.walk#capability:filesystem.read": {
-      "review": "receiver-prepared-website-file-envelope",
-      "change": "Acquires this website capability for the complete receiver-resolved workspace path envelope. Exact-file grants cannot cover recursive folders, sibling projects stay outside folder grants, and denied descendants block folder-wide effects. Listing reveals names and metadata without contents. Copy and move select both endpoint effects; open handles retain their approved path. Whole-state history queries explicitly request the whole workspace. Focused dispatcher and native filesystem tests cover these boundaries; native UI acceptance remains blocked by SDK declaration generation."
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     },
     "host:view.browserForceReload": {
       "review": "workspace-scoped-native-ui-adapter",
@@ -1872,6 +1872,62 @@
     "host:workspaceTemplateSource.resolveLocal": {
       "review": "reviewed-exact-workspace-source-consumer",
       "change": "Records the existing exact checkpoint lookup for the reviewed templates extension and authenticated shell. It returns the designated pin for one template URL without exposing native checkout paths or executing its source."
+    },
+    "host:fs.access#capability:filesystem.read": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:fs.exists#capability:filesystem.read": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:fs.glob#capability:filesystem.read": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:fs.handleStat#capability:filesystem.read": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:fs.lstat#capability:filesystem.read": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:fs.readdir#capability:filesystem.read": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:fs.stat#capability:filesystem.read": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:vcs.listDirectory#capability:filesystem.read": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:vcs.listFiles#capability:filesystem.read": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:vcs.mainState#capability:filesystem.read": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:vcs.readFiles#capability:filesystem.list": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:vcs.readFiles#capability:filesystem.read": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:vcs.resolveRepository#capability:filesystem.read": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:vcs.status#capability:filesystem.read": {
+      "review": "repository-file-consent",
+      "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
     }
   },
   "version": 1

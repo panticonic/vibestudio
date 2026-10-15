@@ -2432,7 +2432,6 @@ async function startHubControlTransport(
     acquireMany: (inputs, signal) => acquisitions.requestManyAndWait(inputs, signal),
     consume: (grantId) => acquisitions.consume(grantId),
     touch: (grantId) => acquisitions.touch(grantId),
-    priorInteractiveApprovalCount: (input) => grantStore.priorInteractiveApprovalCount(input),
     invalidate: (inputs) => acquisitions.invalidate(inputs),
   });
   dispatcher.registerService(createDirectHubControlService(state));

@@ -2384,8 +2384,6 @@ async function main() {
       acquireMany: (inputs, signal) => acquisitionCoordinator.requestManyAndWait(inputs, signal),
       consume: (grantId) => acquisitionCoordinator.consume(grantId),
       touch: (grantId) => acquisitionCoordinator.touch(grantId),
-      priorInteractiveApprovalCount: (input) =>
-        capabilityGrantStore.priorInteractiveApprovalCount(input),
       invalidate: (inputs) => acquisitionCoordinator.invalidate(inputs),
     };
   dispatcher.setAuthorityAcquirer(

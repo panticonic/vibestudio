@@ -86,3 +86,24 @@ a reviewed authority domain/verb. The shared census test covers semantic
 capabilities as well as RPC-derived host methods. A partially defined
 capability fails closed before presentation; do not replace missing review
 metadata with generic transport names or an approval bypass.
+
+## Approval granularity
+
+Connected websites and agents they start request file access per repository,
+using the shared workspace repository taxonomy. Reading any file, listing the
+repository, or browsing a subfolder requests the same `filesystem.read` grant
+for that repository. `filesystem.write` separately covers creating, changing,
+and deleting files throughout the repository. Batch operations collapse to one
+request per repository and access mode; cross-repository operations still check
+each affected repository. New files and subfolders reuse the repository grant.
+
+Workspace-wide discovery remains `filesystem.list`, and workspace-wide content
+queries require workspace-wide read consent. Paths outside repositories retain
+their file/folder scopes. Existing narrow grants are not silently widened.
+Prepared filesystem execution still binds the actual resolved paths so symbolic
+links cannot redirect an authorized operation after preparation.
+
+Reusable agent grants are offered on the first eligible gated request. They do
+not require a history of approving the same resource. Eligibility still follows
+the reviewed capability policy and excludes irreversible operations; users
+choose whether to grant reusable access.

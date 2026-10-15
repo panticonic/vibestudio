@@ -1,5 +1,3 @@
-import { capabilityDomain } from "./authorityDomains.js";
-
 export interface ReceiverAuthorityPolicy {
   /** Preferred continuity when the authenticated subject can enforce it. */
   preferredContinuity: "operation" | "task" | "reviewed-version";
@@ -9,12 +7,6 @@ export interface ReceiverAuthorityPolicy {
   requiresSubstance: boolean;
   substanceKind: import("../approvals.js").OperationSubstance["kind"] | null;
 }
-
-const NETWORK_EGRESS = new Set<string>([
-  "network.connect",
-  "network.response.read",
-  "workspace.gateway.access",
-]);
 
 const IRREVERSIBLE = new Set<string>([
   "application.shutdown",
@@ -108,18 +100,12 @@ export function receiverAuthorityPolicy(
   };
 }
 
+/** Offer reusable authority at the first explicit decision for eligible effects. */
 export function standingAgentScopeEligible(input: {
-  capability: string;
   tier: "open" | "gated" | "critical";
   policy: ReceiverAuthorityPolicy;
-  domain?: string;
-  priorInteractiveApprovals: number;
 }): boolean {
-  if (input.tier !== "gated" || input.policy.agentScope !== "offer" || input.policy.irreversible) {
-    return false;
-  }
-  const domain = input.domain ?? capabilityDomain(input.capability)?.domain;
-  const needsHistory =
-    domain === "sharing" || domain === "accounts" || NETWORK_EGRESS.has(input.capability);
-  return !needsHistory || input.priorInteractiveApprovals >= 2;
+  return (
+    input.tier === "gated" && input.policy.agentScope === "offer" && !input.policy.irreversible
+  );
 }
