@@ -261,6 +261,24 @@ display disconnecting; it is not a valid latency sample. Its application joined
 and private state was retired after an external zero-reference audit. Subsequent
 attempts use an owned isolated virtual display/session, not the user's desktop.
 
+An isolated-display run reached both semantic activations and a healthy restored
+UI, then exposed an actual ordered-shutdown deadlock before a clean repeat.
+Both workspace children exited successfully, but the hub had stopped listening
+while retaining three accepted connections to Electron's network process.
+`http.Server.close()` awaited those connections; Electron awaited the hub
+before exiting. The diagnostic was explicitly cancelled and joined, its
+private fixture removed, and the cancellation retained separately from the raw
+helper output. That run is not passing shutdown or final comparison evidence.
+The repair belongs to the gateway's connection owner: stop acceptance, retire
+all owned HTTP and upgraded sockets, and join their actual close events before
+releasing stores. No elapsed-time recovery policy is involved. The gateway now
+has one idempotent close owner shared by ordinary shutdown and failed startup
+acquisition cleanup. Seventy-two focused hub cases pass; the real streaming-HTTP
+and upgraded-connection case verifies termination, client error propagation,
+closed-listener refusal, and joined socket events. All four host typecheck
+programs and the rebuilt production artifact/native contracts pass. A new
+canonical package and unchanged-pin UI/shutdown comparison are still required.
+
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
 release artifacts or a reason to retain workspace databases and dependency trees.
