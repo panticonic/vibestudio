@@ -205,27 +205,29 @@ async function closeSubscriptionReader(
   terminal: boolean,
   failure: { error: unknown } | undefined
 ): Promise<void> {
-  const cleanupFailures: unknown[] = [];
+  const failures = new Set<unknown>(failure ? [failure.error] : []);
   if (!terminal)
     try {
       await reader.cancel(failure?.error);
     } catch (error) {
-      cleanupFailures.push(error);
+      failures.add(error);
     }
   try {
     reader.releaseLock();
   } catch (error) {
-    cleanupFailures.push(error);
+    failures.add(error);
   }
-  if (!cleanupFailures.length) return;
+  // Cancelling an errored stream rejects with the same stored read failure.
+  // That is one failure, not an independent cleanup failure.
+  if (failures.size === (failure ? 1 : 0)) return;
   if (failure)
     throw new AggregateError(
-      [failure.error, ...cleanupFailures],
+      [...failures],
       "Channel subscription and owned reader cleanup failed",
       { cause: failure.error }
     );
-  if (cleanupFailures.length === 1) throw cleanupFailures[0];
-  throw new AggregateError(cleanupFailures, "Channel subscription reader cleanup failed");
+  if (failures.size === 1) throw failures.values().next().value;
+  throw new AggregateError([...failures], "Channel subscription reader cleanup failed");
 }
 
 export async function* readChannelSubscriptionRecords<TResult = unknown, TMessage = unknown>(

@@ -7,6 +7,18 @@ import {
 } from "./channel.js";
 
 describe("channel subscription diagnostics", () => {
+  it("propagates an errored transport once by identity after joining reader cleanup", async () => {
+    const original = new Error("transport disconnected");
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(original);
+      },
+    });
+    await expect(readChannelSubscriptionRecords({ status: 200, body }).next()).rejects.toBe(
+      original
+    );
+    expect(body.locked).toBe(false);
+  });
   it("consumes raw native head/body without a Response wrapper", async () => {
     const bytes = new TextEncoder().encode(
       '{"kind":"subscribed","result":{"ok":true}}\n{"kind":"message","payload":"hello"}\n'
