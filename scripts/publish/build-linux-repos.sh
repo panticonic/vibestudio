@@ -59,6 +59,7 @@ log "staged $deb_count deb(s)"
 # paths are what apt fetches, so it must run from the repository root.
 bash "$SCRIPT_ROOT/scripts/publish/build-apt-indices.sh" "$APT_ROOT" "$SUITE"
 
+release_file="$APT_ROOT/Release.new"
 apt-ftparchive \
   -o "APT::FTPArchive::Release::Origin=Vibestudio" \
   -o "APT::FTPArchive::Release::Label=Vibestudio" \
@@ -66,8 +67,30 @@ apt-ftparchive \
   -o "APT::FTPArchive::Release::Codename=$SUITE" \
   -o "APT::FTPArchive::Release::Architectures=amd64 arm64" \
   -o "APT::FTPArchive::Release::Components=$COMPONENT" \
+  -o "APT::FTPArchive::Release::Acquire-By-Hash=yes" \
   -o "APT::FTPArchive::Release::Description=Vibestudio desktop and server packages" \
-  release "$APT_ROOT/dists/$SUITE" > "$APT_ROOT/dists/$SUITE/Release"
+  release "$APT_ROOT/dists/$SUITE" > "$release_file"
+mv "$release_file" "$APT_ROOT/dists/$SUITE/Release"
+
+# A Pages deployment and its CDN caches do not become visible as one atomic
+# filesystem update. If apt fetched Packages by its stable name, a fresh
+# InRelease could therefore be paired with the preceding Packages response.
+# Acquire-By-Hash makes the checksum from Release part of the index URL, so a
+# cache can return only the exact bytes described by the signed metadata.
+#
+# Create these objects after Release: apt-ftparchive must checksum only the
+# canonical indexes, otherwise each publication would recursively index the
+# by-hash objects produced by the preceding publication.
+while read -r digest _ relative_path; do
+  index="$APT_ROOT/dists/$SUITE/$relative_path"
+  by_hash_dir="$(dirname "$index")/by-hash/SHA256"
+  mkdir -p "$by_hash_dir"
+  cp "$index" "$by_hash_dir/$digest"
+done < <(awk '
+  /^SHA256:$/ { in_sha256=1; next }
+  /^[^ ]/ { in_sha256=0 }
+  in_sha256 { print $1, $2, $3 }
+' "$APT_ROOT/dists/$SUITE/Release")
 
 # InRelease is the inline-signed index modern apt prefers; Release.gpg keeps
 # older clients working against the same tree.

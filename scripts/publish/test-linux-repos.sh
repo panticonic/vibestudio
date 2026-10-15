@@ -44,7 +44,7 @@ gpg --verify "$test_root/site/apt/dists/stable/InRelease"
 gpg --verify "$test_root/site/rpm/repodata/repomd.xml.asc" "$test_root/site/rpm/repodata/repomd.xml"
 test -z "$(find "$test_root/site/rpm" -name '*.rpm' -print)"
 python3 - "$test_root/site" "$test_root/release" "$assets_url/" <<'PY'
-import gzip, hashlib, pathlib, sys, xml.etree.ElementTree as ET
+import gzip, hashlib, pathlib, re, sys, xml.etree.ElementTree as ET
 site, release, origin = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
 ns = {'repo': 'http://linux.duke.edu/metadata/repo', 'pkg': 'http://linux.duke.edu/metadata/common'}
 repo = ET.parse(site / 'rpm/repodata/repomd.xml')
@@ -62,6 +62,25 @@ for arch in ['amd64', 'arm64']:
     index = (site / f'apt/dists/stable/main/binary-{arch}/Packages').read_text()
     assert f'Architecture: {arch}\n' in index
     assert f'Filename: pool/main/v/vibestudio/vibestudio-{arch}.deb\n' in index
+release_text = (site / 'apt/dists/stable/Release').read_text()
+assert re.search(r'^Acquire-By-Hash: yes$', release_text, re.MULTILINE)
+sha256_section = release_text.split('SHA256:\n', 1)[1].split('\nSHA512:\n', 1)[0]
+indexes = []
+for line in sha256_section.splitlines():
+    digest, size, relative = line.split()
+    canonical = site / 'apt/dists/stable' / relative
+    assert canonical.stat().st_size == int(size)
+    assert hashlib.sha256(canonical.read_bytes()).hexdigest() == digest
+    by_hash = canonical.parent / 'by-hash/SHA256' / digest
+    assert by_hash.read_bytes() == canonical.read_bytes()
+    indexes.append(relative)
+assert indexes
+assert set(indexes) == {
+    'main/binary-amd64/Packages',
+    'main/binary-amd64/Packages.gz',
+    'main/binary-arm64/Packages',
+    'main/binary-arm64/Packages.gz',
+}
 downloads = (site / 'index.html').read_text()
 assert 'arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/vibestudio.asc' in downloads
 PY
