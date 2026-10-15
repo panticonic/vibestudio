@@ -144,6 +144,25 @@ validates producer payloads, while final sealed-generation validation still
 requires the publication records. Fifteen focused generation tests and the real
 cold source build pass.
 
+The remaining manually assembled clients were migrated in Personal and the
+development system-testing template too. Personal's collection boundary and
+browser-data extension forward the real readable primitive; its dead
+`apps:status` observation is removed. The system-test fault injector uses one
+fault policy for calls and both genuine stream capabilities, preserving the
+owning transport, cancellation options, and raw body identity. Personal passes
+37 focused cases and composition typechecking; system-testing passes 65 focused
+cases and composition typechecking. Their source worktrees, like Base and
+System, are committed and clean; original checkouts are unchanged.
+
+The prepared Base 0.3.93 publication review contains exactly 29 changed paths
+against upstream `8a7a1113d344baeb9846b5a0fc2de38d7265aa8d`. All 27 old and 28 new
+Git blobs and modes match checked source
+`f543603921778ba0852c5c361809138f206540c3`, including deletion of the obsolete
+Quickfire worker contract. No release has been published: exact release approval
+precedes Base publication, followed by dependent Personal/System releases and
+final installed production measurements. All diagnostic instances and owned
+scratch are retired while waiting; inherited shared caches remain intact.
+
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
 release artifacts or a reason to retain workspace databases and dependency trees.
