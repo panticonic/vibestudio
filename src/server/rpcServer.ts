@@ -574,6 +574,8 @@ export class RpcServer {
   >();
   private pendingWsAdmissionResolutions = 0;
   private readonly pendingGatewayUpgrades = new Set<Promise<void>>();
+  private readonly pendingWsRpcRequests = new Set<Promise<void>>();
+  private readonly wsRpcFailures: unknown[] = [];
   private readonly wsAdmissionGrants = new Map<string, RpcWebSocketAdmissionGrant>();
   private readonly pairingAdmissionReplayKey = randomBytes(32);
   private readonly pairingAdmissionReplays = new Map<string, RpcPairingAdmissionReplay>();
@@ -2685,7 +2687,8 @@ export class RpcServer {
             return;
           }
         }
-        void this.handleRpc(client, rpcMessage, envelope);
+        if (this.isShuttingDown()) return;
+        this.ownWsRpcRequest(this.handleRpc(client, rpcMessage, envelope));
         break;
       }
       case "ws:tool-result":
@@ -2768,6 +2771,24 @@ export class RpcServer {
         // Ignore duplicate auth messages
         break;
     }
+  }
+
+  private ownWsRpcRequest(operation: Promise<void>): void {
+    // The ingress promise is distinct from the stream owner's inner promise.
+    // Observe it immediately and retain its failure even if it settles before
+    // shutdown; stop must join and report every admitted operation.
+    let owned!: Promise<void>;
+    owned = operation.then(
+      () => {
+        this.pendingWsRpcRequests.delete(owned);
+      },
+      (error: unknown) => {
+        this.wsRpcFailures.push(error);
+        this.pendingWsRpcRequests.delete(owned);
+        log.error("WebSocket RPC request failed", { error });
+      }
+    );
+    this.pendingWsRpcRequests.add(owned);
   }
 
   private async handleRpc(
@@ -6240,15 +6261,17 @@ export class RpcServer {
     const results = await Promise.allSettled([
       this.streamingRelay.drain(),
       this.httpRpc.drain(),
+      ...this.pendingWsRpcRequests,
       ...this.pendingGatewayUpgrades,
       ...[...this.callerRetirements.values()].map((retirement) => retirement.promise),
     ]);
     const failures = [
-      ...new Set(
-        results.flatMap((result) =>
+      ...new Set([
+        ...this.wsRpcFailures,
+        ...results.flatMap((result) =>
           result.status === "rejected" ? [result.reason as unknown] : []
-        )
-      ),
+        ),
+      ]),
     ];
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) {

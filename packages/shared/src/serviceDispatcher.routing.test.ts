@@ -11,6 +11,89 @@ import {
 import { testAuthority } from "./serviceDispatcherTestUtils.js";
 
 describe("ServiceDispatcher ownership", () => {
+  it.each(["signal", "connectionSignal"] as const)(
+    "preserves the exact authoritative %s cancellation reason",
+    async (signalName) => {
+      const dispatcher = new ServiceDispatcher();
+      dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
+        testAuthority(caller, capability, resourceKey)
+      );
+      const controller = new AbortController();
+      dispatcher.registerService({
+        name: "cancelled",
+        authority: { principals: ["code"] },
+        methods: {
+          read: {
+            args: z.tuple([]),
+            website: { kind: "closed", reason: "Host cancellation fixture" },
+            tier: { tier: "open", session: "family", rationale: "Owner cancellation" },
+          },
+        },
+        handler: async () => {
+          controller.abort();
+          throw controller.signal.reason;
+        },
+      });
+      const failure = dispatcher.dispatch(
+        {
+          caller: createVerifiedCaller("extension:fixture", "extension"),
+          [signalName]: controller.signal,
+        },
+        "cancelled",
+        "read",
+        []
+      );
+      const observed = await failure.catch((error: unknown) => error);
+      expect(controller.signal.aborted).toBe(true);
+      expect(observed).toBe(controller.signal.reason);
+    }
+  );
+
+  it("does not acknowledge an independent failure or mixed cleanup failure after cancellation", async () => {
+    const dispatcher = new ServiceDispatcher();
+    dispatcher.setAuthorityResolver(({ caller, capability, resourceKey }) =>
+      testAuthority(caller, capability, resourceKey)
+    );
+    let controller = new AbortController();
+    const independent = new DOMException("independent aborted operation", "AbortError");
+    let thrown: unknown;
+    let mixed = false;
+    dispatcher.registerService({
+      name: "cancelled",
+      authority: { principals: ["code"] },
+      methods: {
+        read: {
+          args: z.tuple([]),
+          website: { kind: "closed", reason: "Host cancellation fixture" },
+          tier: { tier: "open", session: "family", rationale: "Owner cancellation" },
+        },
+      },
+      handler: async () => {
+        controller.abort();
+        thrown = mixed
+          ? new AggregateError([controller.signal.reason, independent], "cleanup failed")
+          : independent;
+        throw thrown;
+      },
+    });
+    const dispatch = () =>
+      dispatcher.dispatch(
+        {
+          caller: createVerifiedCaller("extension:fixture", "extension"),
+          signal: controller.signal,
+        },
+        "cancelled",
+        "read",
+        []
+      );
+    await expect(dispatch()).rejects.toMatchObject({ cause: independent });
+    controller = new AbortController();
+    mixed = true;
+    const observed = await dispatch().catch((error: unknown) => error);
+    expect(observed).toBeInstanceOf(ServiceError);
+    expect(observed).toMatchObject({ cause: thrown });
+  });
+
   it.each(["filesystem.read", "filesystem.write"])(
     "presents the additional %s leaf's declared scope",
     async (capability) => {

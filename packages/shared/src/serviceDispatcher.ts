@@ -1319,6 +1319,15 @@ export class ServiceDispatcher {
     try {
       return await invoke(ctx);
     } catch (error) {
+      // Cancellation belongs to the invoking owner. Preserve its exact reason
+      // so transports can acknowledge cancellation without hiding an unrelated
+      // handler or cleanup failure that happened after the signal was aborted.
+      if (
+        (ctx.signal?.aborted && error === ctx.signal.reason) ||
+        (ctx.connectionSignal?.aborted && error === ctx.connectionSignal.reason)
+      ) {
+        throw error;
+      }
       if (error instanceof ServiceError) {
         throw error;
       }

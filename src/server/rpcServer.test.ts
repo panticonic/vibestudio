@@ -560,6 +560,92 @@ const flushAsync = (): Promise<void> => new Promise((resolve) => setTimeout(reso
 
 /** Fake answerer pipe implementing the v3 attachable-pipe contract. */
 describe("RpcServer stream-request emit path (§2.3 binary surface, §2.4 cancellation)", () => {
+  it.each(["before shutdown", "during shutdown"])(
+    "owns WS ingress and preserves independent cleanup failures %s",
+    async (phase) => {
+      const { server, dispatcher } = setupStreamingServer();
+      const client = createClient();
+      registerClient(server, client);
+      const cleanupFailure = new Error("stream admission cleanup failed");
+      let entered!: () => void;
+      const admitted = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      let finish!: () => void;
+      const retired = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      dispatcher.dispatch.mockImplementation(async (ctx: ServiceContext) => {
+        entered();
+        await new Promise<void>((resolve) =>
+          ctx.signal!.addEventListener("abort", () => resolve(), { once: true })
+        );
+        await retired;
+        throw cleanupFailure;
+      });
+      await testServer(server).handleMessage(client, {
+        type: "ws:rpc",
+        envelope: clientEnvelope(client, "main", streamRequest("owned-cleanup")),
+      });
+      await admitted;
+      if (phase === "before shutdown") {
+        await testServer(server).handleMessage(client, {
+          type: "ws:rpc",
+          envelope: clientEnvelope(client, "main", {
+            type: "stream-cancel",
+            requestId: "owned-cleanup",
+            fromId: client.caller.runtime.id,
+          }),
+        });
+        finish();
+        await flushAsync();
+      }
+      const stopped = server.stop();
+      const outcome = stopped.catch((error: unknown) => error);
+      let settled = false;
+      void outcome.then(() => {
+        settled = true;
+      });
+      await flushAsync();
+      expect(settled).toBe(phase === "before shutdown");
+      finish();
+      expect(await outcome).toBe(cleanupFailure);
+      await expect(server.stop()).rejects.toBe(cleanupFailure);
+    }
+  );
+
+  it("acknowledges exact cancellation during WS service admission without failing shutdown", async () => {
+    const { server, dispatcher } = setupStreamingServer();
+    const client = createClient();
+    registerClient(server, client);
+    let entered!: () => void;
+    const admitted = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    dispatcher.dispatch.mockImplementation(async (ctx: ServiceContext) => {
+      entered();
+      await new Promise<void>((resolve) =>
+        ctx.signal!.addEventListener("abort", () => resolve(), { once: true })
+      );
+      throw ctx.signal!.reason;
+    });
+    await testServer(server).handleMessage(client, {
+      type: "ws:rpc",
+      envelope: clientEnvelope(client, "main", streamRequest("owned-cancel")),
+    });
+    await admitted;
+    await testServer(server).handleMessage(client, {
+      type: "ws:rpc",
+      envelope: clientEnvelope(client, "main", {
+        type: "stream-cancel",
+        requestId: "owned-cancel",
+        fromId: client.caller.runtime.id,
+      }),
+    });
+    await flushAsync();
+    await expect(server.stop()).resolves.toBeUndefined();
+  });
+
   function streamRequest(requestId: string, method = "files.stream"): RpcMessage {
     return { type: "stream-request", requestId, fromId: "panel:nav-a", method, args: [] };
   }
