@@ -62,13 +62,24 @@ export interface ChannelProtocolEvent<T = unknown> {
   externalKeys?: string[];
   contentType?: string;
   ts: number;
-  attachments?: Array<{ id: string; type?: string; data: string; mimeType: string; filename?: string; size: number }>;
+  attachments?: Array<{
+    id: string;
+    type?: string;
+    data: string;
+    mimeType: string;
+    filename?: string;
+    size: number;
+  }>;
   annotations?: Record<string, unknown>;
 }
 export type ChannelProtocolBootstrapSnapshot =
   | {
       kind: "roster-snapshot";
-      participants: Array<{ id: string; ref: ChannelProtocolParticipantRef; metadata: Record<string, unknown> }>;
+      participants: Array<{
+        id: string;
+        ref: ChannelProtocolParticipantRef;
+        metadata: Record<string, unknown>;
+      }>;
       ts: number;
     }
   | { kind: "receipt-snapshot"; events: ChannelProtocolEvent[]; ts: number };
@@ -84,7 +95,11 @@ export interface ChannelProtocolReplayReady {
   hasMoreBefore?: boolean;
   hasMoreAfter?: boolean;
 }
-export interface ChannelReplayAfterRequest { after: number; limit?: number; throughSeq?: number }
+export interface ChannelReplayAfterRequest {
+  after: number;
+  limit?: number;
+  throughSeq?: number;
+}
 export interface ChannelReplayEnvelope {
   mode: "initial" | "after" | "before";
   logEvents: ChannelProtocolEvent[];
@@ -94,24 +109,36 @@ export interface ChannelReplayEnvelope {
 
 /** Host-driven subset of the actual channel Durable Object receiver. */
 export interface ChannelCliRpc {
-  subscribe(participantId: string, metadata: Record<string, unknown>, subscriptionId?: string): Promise<Response>;
-  sendAsCaller(text: string, opts?: {
-    handle?: string;
-    to?: Array<{ kind: "all" | "role" | "participant"; role?: string; participantId?: string }>;
-    mentions?: string[];
-    idempotencyKey?: string;
-  }): Promise<{ id?: number; messageId: string }>;
+  subscribe(
+    participantId: string,
+    metadata: Record<string, unknown>,
+    subscriptionId?: string
+  ): Promise<Response>;
+  sendAsCaller(
+    text: string,
+    opts?: {
+      handle?: string;
+      to?: Array<{ kind: "all" | "role" | "participant"; role?: string; participantId?: string }>;
+      mentions?: string[];
+      idempotencyKey?: string;
+    }
+  ): Promise<{ id?: number; messageId: string }>;
   getReplayAfter(request: ChannelReplayAfterRequest): Promise<ChannelReplayEnvelope>;
-  getParticipants(): Promise<Array<{
-    participantId: string;
-    ref: ChannelProtocolParticipantRef;
-    metadata: Record<string, unknown>;
-    transport: string;
-    doRef?: { source: string; className: string; objectKey: string };
-  }>>;
+  getParticipants(): Promise<
+    Array<{
+      participantId: string;
+      ref: ChannelProtocolParticipantRef;
+      metadata: Record<string, unknown>;
+      transport: string;
+      doRef?: { source: string; className: string; objectKey: string };
+    }>
+  >;
 }
 export const channelClientRpcMethods = createReceiverRpcMethods<ChannelCliRpc>([
-  "subscribe", "sendAsCaller", "getReplayAfter", "getParticipants",
+  "subscribe",
+  "sendAsCaller",
+  "getReplayAfter",
+  "getParticipants",
 ]);
 
 /**
@@ -159,26 +186,79 @@ export function enqueueChannelSubscriptionBytes(
   return "enqueued";
 }
 
-export function channelSubscriptionQueuingStrategy(): ByteLengthQueuingStrategy {
-  return new ByteLengthQueuingStrategy({ highWaterMark: CHANNEL_SUBSCRIPTION_BUFFER_BYTES });
+export function channelSubscriptionQueuingStrategy() {
+  return {
+    highWaterMark: CHANNEL_SUBSCRIPTION_BUFFER_BYTES,
+    size: (chunk: Uint8Array) => chunk.byteLength,
+  };
+}
+
+/** The factual response head/body consumed on every platform. A transport's
+ * readable primitive supplies this without constructing a platform Response. */
+export interface ChannelSubscriptionResponse {
+  readonly status: number;
+  readonly body: ReadableStream<Uint8Array> | null;
+}
+
+async function closeSubscriptionReader(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  terminal: boolean,
+  failure: { error: unknown } | undefined
+): Promise<void> {
+  const cleanupFailures: unknown[] = [];
+  if (!terminal)
+    try {
+      await reader.cancel(failure?.error);
+    } catch (error) {
+      cleanupFailures.push(error);
+    }
+  try {
+    reader.releaseLock();
+  } catch (error) {
+    cleanupFailures.push(error);
+  }
+  if (!cleanupFailures.length) return;
+  if (failure)
+    throw new AggregateError(
+      [failure.error, ...cleanupFailures],
+      "Channel subscription and owned reader cleanup failed",
+      { cause: failure.error }
+    );
+  if (cleanupFailures.length === 1) throw cleanupFailures[0];
+  throw new AggregateError(cleanupFailures, "Channel subscription reader cleanup failed");
 }
 
 export async function* readChannelSubscriptionRecords<TResult = unknown, TMessage = unknown>(
-  response: Response
+  response: ChannelSubscriptionResponse
 ): AsyncGenerator<ChannelSubscriptionRecord<TResult, TMessage>, void, void> {
-  if (!response.ok) {
-    const detail = (await response.text()).trim().slice(0, 4096);
-    throw new Error(
-      `Channel subscription failed with HTTP ${response.status}${detail ? `: ${detail}` : ""}`
-    );
-  }
+  const httpFailed = response.status < 200 || response.status >= 300;
+  if (httpFailed && !response.body)
+    throw new Error(`Channel subscription failed with HTTP ${response.status}`);
   if (!response.body) throw new Error("Channel subscription returned no response body");
 
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let pending = "";
   let terminal = false;
+  let failure: { error: unknown } | undefined;
   try {
+    if (httpFailed) {
+      while (pending.length < 4096) {
+        const chunk = await reader.read();
+        if (chunk.done) {
+          terminal = true;
+          pending += decoder.decode();
+          break;
+        }
+        pending = (
+          pending + decoder.decode(chunk.value.subarray(0, 16384), { stream: true })
+        ).slice(0, 4096);
+      }
+      const detail = pending.trim().slice(0, 4096);
+      throw new Error(
+        `Channel subscription failed with HTTP ${response.status}${detail ? `: ${detail}` : ""}`
+      );
+    }
     for (;;) {
       const chunk = await reader.read();
       if (chunk.done) {
@@ -197,9 +277,11 @@ export async function* readChannelSubscriptionRecords<TResult = unknown, TMessag
     }
     const finalLine = pending.trim();
     if (finalLine) yield JSON.parse(finalLine) as ChannelSubscriptionRecord<TResult, TMessage>;
+  } catch (error) {
+    failure = { error };
+    throw error;
   } finally {
-    if (!terminal) await reader.cancel().catch(() => {});
-    reader.releaseLock();
+    await closeSubscriptionReader(reader, terminal, failure);
   }
 }
 
@@ -287,7 +369,11 @@ export const channelHistoryArgsSchema = z
 
 export const channelMethods = defineServiceMethods({
   list: {
-    website: {"kind":"closed","reason":"The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     args: z.tuple([]),
     returns: z.array(channelSummarySchema),
     description:
@@ -295,7 +381,11 @@ export const channelMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   history: {
-    website: {"kind":"closed","reason":"The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     args: z.tuple([channelHistoryArgsSchema]),
     returns: z.array(channelHistoryEntrySchema),
     description:
@@ -303,7 +393,11 @@ export const channelMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   send: {
-    website: {"kind":"closed","reason":"The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     args: z.tuple([z.string(), z.string(), channelSendOptsSchema.optional()]),
     returns: channelSendResultSchema,
     description:
@@ -311,7 +405,11 @@ export const channelMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   roster: {
-    website: {"kind":"closed","reason":"The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The channel receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     args: z.tuple([z.string()]),
     returns: z.array(channelRosterEntrySchema),
     description: "List a channel's current participants (channel DO getParticipants).",

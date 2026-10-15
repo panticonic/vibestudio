@@ -32,6 +32,7 @@ export type {
   ExposedMethods,
   RpcEventListener,
   RpcCaller,
+  RpcReadableCaller,
   RpcMethod,
   CallerKind,
   RpcEnvelope,

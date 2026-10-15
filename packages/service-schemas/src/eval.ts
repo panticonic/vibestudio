@@ -1159,5 +1159,5 @@ function defaultEvalPollDelay(attempt: number): Promise<void> {
 
 function abortReason(signal: AbortSignal | undefined): Error {
   if (signal?.reason instanceof Error) return signal.reason;
-  return new DOMException("Eval execution aborted", "AbortError");
+  return AbortSignal.abort().reason;
 }

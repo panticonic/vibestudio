@@ -424,7 +424,18 @@ export interface RpcMethod<Args extends unknown[], Result> {
   parseArgs(args: Args): Promise<unknown[]>;
 }
 
-export interface RpcCaller {
+/** Platform-neutral response head and owned byte body. The transport owner
+ * provides native streaming or its canonical browser/Node Response unwrap. */
+export interface RpcReadableCaller {
+  streamReadable<Args extends unknown[], Result>(
+    targetId: string,
+    method: RpcMethod<Args, Result>,
+    args: NoInfer<Args>,
+    options?: RpcStreamOptions
+  ): Promise<DecodedFramedStream>;
+}
+
+export interface RpcCaller extends RpcReadableCaller {
   call<Args extends unknown[], Result>(
     targetId: string,
     method: RpcMethod<Args, Result>,
@@ -638,18 +649,6 @@ export interface RpcClient extends RpcCaller {
     handler: RpcContextStreamingHandler,
     website: WebsiteMethodPolicy
   ): void;
-  /**
-   * Like `stream`, but returns the decoded head + a raw `ReadableStream<Uint8Array>`
-   * body instead of a `Response` — for React Native, whose whatwg-fetch `Response`
-   * cannot consume a ReadableStream body (the caller reads it via `getReader()`).
-   * Node callers should prefer `stream`.
-   */
-  streamReadable<Args extends unknown[], Result>(
-    targetId: string,
-    method: RpcMethod<Args, Result>,
-    args: NoInfer<Args>,
-    options?: RpcStreamOptions
-  ): Promise<DecodedFramedStream>;
   emit(targetId: string, event: string, payload: unknown, options?: RpcCallOptions): Promise<void>;
   on(
     event: string,

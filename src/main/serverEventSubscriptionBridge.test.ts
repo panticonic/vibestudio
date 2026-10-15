@@ -6,7 +6,7 @@ function makeFixture() {
   const signals: AbortSignal[] = [];
   const controllers: ReadableStreamDefaultController<Uint8Array>[] = [];
   const watches = new Map<string, ReadableStreamDefaultController<Uint8Array>>();
-  const stream = vi.fn(
+  const streamReadable = vi.fn(
     async (
       _service: string,
       _method: string,
@@ -17,8 +17,12 @@ function makeFixture() {
       const watchId = String(args[1]);
       const signal = options?.signal ?? new AbortController().signal;
       signals.push(signal);
-      return new Response(
-        new ReadableStream<Uint8Array>({
+      return {
+        status: 200,
+        statusText: "OK",
+        headers: [],
+        finalUrl: "",
+        body: new ReadableStream<Uint8Array>({
           start(controller) {
             controllers.push(controller);
             const previous = watches.get(watchId);
@@ -35,17 +39,17 @@ function makeFixture() {
               }
             });
           },
-        })
-      );
+        }),
+      };
     }
   );
   const onEvent = vi.fn();
   const bridge = createServerEventSubscriptionBridge({
-    getServerClient: () => ({ stream }) as never,
+    getServerClient: () => ({ streamReadable }) as never,
     onEvent,
     log: { warn: vi.fn() },
   });
-  return { bridge, stream, signals, controllers, onEvent };
+  return { bridge, streamReadable, signals, controllers, onEvent };
 }
 
 describe("createServerEventSubscriptionBridge", () => {
@@ -58,23 +62,27 @@ describe("createServerEventSubscriptionBridge", () => {
     const bridge = createServerEventSubscriptionBridge({
       getServerClient: () =>
         ({
-          stream: async (
+          streamReadable: async (
             _service: string,
             _method: string,
             _args: unknown[],
             options: { signal: AbortSignal }
           ) => {
             transportSignal = options.signal;
-            return new Response(
-              new ReadableStream({
+            return {
+              status: 200,
+              statusText: "OK",
+              headers: [],
+              finalUrl: "",
+              body: new ReadableStream({
                 start(controller) {
                   options.signal.addEventListener("abort", () => controller.close(), {
                     once: true,
                   });
                   admitted();
                 },
-              })
-            );
+              }),
+            };
           },
         }) as never,
       onEvent: vi.fn(),
@@ -97,8 +105,8 @@ describe("createServerEventSubscriptionBridge", () => {
       "panel-tree-invalidated",
     ]);
 
-    expect(fixture.stream).toHaveBeenCalledTimes(1);
-    expect(fixture.stream).toHaveBeenCalledWith(
+    expect(fixture.streamReadable).toHaveBeenCalledTimes(1);
+    expect(fixture.streamReadable).toHaveBeenCalledWith(
       "events",
       "watch",
       [["panel-tree-invalidated", "shell-approval:pending-changed"], expect.any(String)],
@@ -112,13 +120,13 @@ describe("createServerEventSubscriptionBridge", () => {
     const fixture = makeFixture();
     const releaseOne = await fixture.bridge.retainAll(["panel-tree-invalidated"]);
     const releaseTwo = await fixture.bridge.retainAll(["panel-tree-invalidated"]);
-    await vi.waitFor(() => expect(fixture.stream).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(fixture.streamReadable).toHaveBeenCalledTimes(1));
 
     releaseOne();
     expect(fixture.signals[0]!.aborted).toBe(false);
     releaseTwo();
     await vi.waitFor(() => expect(fixture.signals[0]!.aborted).toBe(true));
-    expect(fixture.stream).toHaveBeenCalledTimes(1);
+    expect(fixture.streamReadable).toHaveBeenCalledTimes(1);
   });
 
   it("delivers response records through the bridge callback", async () => {
@@ -146,8 +154,8 @@ describe("createServerEventSubscriptionBridge", () => {
     await fixture.bridge.recover();
 
     expect(fixture.signals[0]!.aborted).toBe(false);
-    expect(fixture.stream).toHaveBeenCalledTimes(2);
-    expect(fixture.stream.mock.calls[1]?.[2]).toEqual([
+    expect(fixture.streamReadable).toHaveBeenCalledTimes(2);
+    expect(fixture.streamReadable.mock.calls[1]?.[2]).toEqual([
       ["panel-tree-invalidated"],
       expect.any(String),
     ]);

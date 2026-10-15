@@ -15,8 +15,7 @@ import { serializeByKey } from "@vibestudio/shared/keyedSerializer";
 
 type Listener<E extends EventName> = (payload: EventPayloads[E]) => void;
 type EventsServiceName = "events" | "desktopEvents";
-type EventsRpc = Pick<RpcClient, "stream"> &
-  Partial<Pick<RpcClient, "streamReadable" | "onRecovery">>;
+type EventsRpc = Pick<RpcClient, "streamReadable"> & Partial<Pick<RpcClient, "onRecovery">>;
 
 interface ActiveWatch {
   generation: number;
@@ -82,9 +81,7 @@ export class EventsClient {
     serviceName: EventsServiceName = "events"
   ) {
     const args = eventsMethods.watch.args.parse([[...events], watchId]);
-    return typeof rpc.streamReadable === "function"
-      ? rpc.streamReadable("main", mainRpcMethods[`${serviceName}.watch`], args, options)
-      : rpc.stream("main", mainRpcMethods[`${serviceName}.watch`], args, options);
+    return rpc.streamReadable("main", mainRpcMethods[`${serviceName}.watch`], args, options);
   }
 
   async subscribe(event: EventName): Promise<void> {

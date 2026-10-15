@@ -215,6 +215,7 @@ function runtimeSchemaCaller(): import("@vibestudio/rpc").RpcCaller {
   return {
     call: (...args) => schemaRpcClient(getRuntimeBridge()).call(...args),
     stream: (...args) => schemaRpcClient(getRuntimeBridge()).stream(...args),
+    streamReadable: (...args) => schemaRpcClient(getRuntimeBridge()).streamReadable(...args),
   };
 }
 

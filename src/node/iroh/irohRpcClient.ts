@@ -11,7 +11,7 @@ import {
   type NodePhysicalConnection,
   type NodePhysicalEndpoint,
 } from "@vibestudio/iroh-transport/node";
-import { type RpcStreamOptions } from "@vibestudio/rpc";
+import { type RpcStreamOptions, type DecodedFramedStream } from "@vibestudio/rpc";
 import {
   createIrohClientPipe,
   type IrohClientPipe,
@@ -95,6 +95,15 @@ export class IrohRpcClient {
   ): Promise<Response> {
     if (target === "main") requireQualifiedServiceMethod(method);
     return (await this.ensureConnected()).rpc.stream(target, method, args, options);
+  }
+  async streamReadable(
+    target: string,
+    method: string,
+    args: unknown[] = [],
+    options?: RpcStreamOptions
+  ): Promise<DecodedFramedStream> {
+    if (target === "main") requireQualifiedServiceMethod(method);
+    return (await this.ensureConnected()).rpc.streamReadable(target, method, args, options);
   }
 
   async onEvent(

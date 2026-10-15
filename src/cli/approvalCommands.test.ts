@@ -10,7 +10,7 @@ import { parseInvocation } from "./commandTable.js";
 const rpc = vi.hoisted(() => ({
   call: vi.fn(),
   callTarget: vi.fn(),
-  stream: vi.fn(),
+  streamReadable: vi.fn(),
   close: vi.fn(),
 }));
 const credentials = vi.hoisted(() => vi.fn());
@@ -217,20 +217,24 @@ describe("workspace approval CLI", () => {
     expect(await run("watch")).toBe(3);
     credentials.mockReturnValue({ kind: "device" });
     expect(await run("list")).toBe(3);
-    expect(rpc.stream).not.toHaveBeenCalled();
+    expect(rpc.streamReadable).not.toHaveBeenCalled();
     expect(rpc.call).not.toHaveBeenCalled();
   });
 });
 
-function finiteStream(records: EventWatchRecord[]): Response {
-  return new Response(
-    new ReadableStream<Uint8Array>({
+function finiteStream(records: EventWatchRecord[]): import("@vibestudio/rpc").DecodedFramedStream {
+  return {
+    status: 200,
+    statusText: "OK",
+    headers: [],
+    finalUrl: "",
+    body: new ReadableStream<Uint8Array>({
       start(controller) {
         for (const record of records) controller.enqueue(encodeEventWatchRecord(record));
         controller.close();
       },
-    })
-  );
+    }),
+  };
 }
 
 describe("approval watch ownership", () => {
@@ -240,21 +244,29 @@ describe("approval watch ownership", () => {
     const records: unknown[] = [];
     const initialSigint = process.listenerCount("SIGINT");
     const initialSigterm = process.listenerCount("SIGTERM");
-    rpc.stream.mockImplementation(async (_target, _method, [topics, watchId], { signal }) => {
-      const response = events.openWatch({
-        callerId: "shell:external-cli",
-        callerKind: "shell",
-        connectionId: "cli-watch",
-        watchId,
-        userId: "alice",
-        events: topics,
-        snapshots: { "shell-approval:pending-changed": () => [{ pending: [capability] }] },
-        onClosed: () => {
-          released = true;
-        },
-      });
-      return new Response(response.body!.pipeThrough(new TransformStream(), { signal }));
-    });
+    rpc.streamReadable.mockImplementation(
+      async (_target, _method, [topics, watchId], { signal }) => {
+        const response = events.openWatch({
+          callerId: "shell:external-cli",
+          callerKind: "shell",
+          connectionId: "cli-watch",
+          watchId,
+          userId: "alice",
+          events: topics,
+          snapshots: { "shell-approval:pending-changed": () => [{ pending: [capability] }] },
+          onClosed: () => {
+            released = true;
+          },
+        });
+        return {
+          status: 200,
+          statusText: "OK",
+          headers: [],
+          finalUrl: "",
+          body: response.body!.pipeThrough(new TransformStream(), { signal }),
+        };
+      }
+    );
     vi.mocked(console.log).mockImplementation((line) => {
       const record = JSON.parse(String(line));
       records.push(record);
@@ -271,20 +283,20 @@ describe("approval watch ownership", () => {
       expect.objectContaining({ kind: "event", payload: { pending: [] } }),
     ]);
     expect(released).toBe(true);
-    expect(rpc.stream).toHaveBeenCalledWith(
+    expect(rpc.streamReadable).toHaveBeenCalledWith(
       "main",
       "events.watch",
       [["shell-approval:pending-changed", "shell-approval:resolved"], expect.any(String)],
       { signal: expect.any(AbortSignal), bodyIdleTimeoutMs: null }
     );
-    expect(rpc.stream.mock.calls[0]![3].signal.aborted).toBe(true);
+    expect(rpc.streamReadable.mock.calls[0]![3].signal.aborted).toBe(true);
     expect(rpc.close).toHaveBeenCalledOnce();
     expect(process.listenerCount("SIGINT")).toBe(initialSigint);
     expect(process.listenerCount("SIGTERM")).toBe(initialSigterm);
   });
 
   it("fails on unexpected termination rather than leaving a stranded watcher", async () => {
-    rpc.stream.mockResolvedValue(
+    rpc.streamReadable.mockResolvedValue(
       finiteStream([
         { kind: "watching", events: ["shell-approval:pending-changed"], epoch: "epoch-1" },
         {
@@ -300,40 +312,44 @@ describe("approval watch ownership", () => {
     expect(rpc.close).toHaveBeenCalledOnce();
   });
 
-  it("propagates the original stream failure and closes its client", async () => {
-    rpc.stream.mockResolvedValue(
-      new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.error(new Error("provider disconnected"));
-          },
-        })
-      )
-    );
+  it("propagates the original streamReadable failure and closes its client", async () => {
+    rpc.streamReadable.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: [],
+      finalUrl: "",
+      body: new ReadableStream({
+        start(controller) {
+          controller.error(new Error("provider disconnected"));
+        },
+      }),
+    });
     expect(await run("watch")).toBe(1);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("provider disconnected"));
     expect(rpc.close).toHaveBeenCalledOnce();
   });
 
-  it("cancels a stream that violates acknowledgement order", async () => {
+  it("cancels a streamReadable that violates acknowledgement order", async () => {
     const cancel = vi.fn();
-    rpc.stream.mockResolvedValue(
-      new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue(
-              encodeEventWatchRecord({
-                kind: "event",
-                event: "shell-approval:pending-changed",
-                sequence: 1,
-                payload: { pending: [] },
-              })
-            );
-          },
-          cancel,
-        })
-      )
-    );
+    rpc.streamReadable.mockResolvedValue({
+      status: 200,
+      statusText: "OK",
+      headers: [],
+      finalUrl: "",
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            encodeEventWatchRecord({
+              kind: "event",
+              event: "shell-approval:pending-changed",
+              sequence: 1,
+              payload: { pending: [] },
+            })
+          );
+        },
+        cancel,
+      }),
+    });
     expect(await run("watch")).toBe(1);
     expect(cancel).toHaveBeenCalledOnce();
     expect(console.error).toHaveBeenCalledWith(

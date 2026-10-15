@@ -1,4 +1,4 @@
-import { schemaRpcStream } from "@vibestudio/rpc/internal";
+import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import type { EventName } from "@vibestudio/shared/events";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import type { ServerClient } from "./serverClient.js";
@@ -17,25 +17,25 @@ export interface ServerEventSubscriptionBridge {
  * timers, callback subscribers, or inferred liveness.
  */
 export function createServerEventSubscriptionBridge(deps: {
-  getServerClient(): Pick<ServerClient, "stream"> | null;
+  getServerClient(): Pick<ServerClient, "streamReadable"> | null;
   onEvent(event: EventName, payload: unknown): void;
   log?: Pick<Console, "warn">;
 }): ServerEventSubscriptionBridge {
   const rpc = {
-    stream(
+    streamReadable(
       targetId: string,
       method: string,
       args: unknown[],
-      options?: Parameters<ServerClient["stream"]>[3]
-    ): Promise<Response> {
+      options?: Parameters<ServerClient["streamReadable"]>[3]
+    ): ReturnType<ServerClient["streamReadable"]> {
       if (targetId !== "main") throw new Error(`Unexpected event watch target: ${targetId}`);
       const client = deps.getServerClient();
       if (!client) throw new Error("Workspace server event transport is not connected");
       const dot = method.indexOf(".");
-      return client.stream(method.slice(0, dot), method.slice(dot + 1), args, options);
+      return client.streamReadable(method.slice(0, dot), method.slice(dot + 1), args, options);
     },
   };
-  const events = new EventsClient({ stream: schemaRpcStream(rpc.stream) });
+  const events = new EventsClient(schemaRpcCaller(rpc));
   const references = new Map<EventName, number>();
   const stopListening = new Map<EventName, () => void>();
   const log = deps.log ?? console;

@@ -143,7 +143,7 @@ async function watch(inv: ParsedInvocation): Promise<number> {
     positionals(inv, 0, "watch");
     rpc = requireClient();
     const response = await EventsClient.openWatch(
-      schemaRpcCaller({ call: rpc.callTarget.bind(rpc), stream: rpc.stream.bind(rpc) }),
+      schemaRpcCaller({ streamReadable: rpc.streamReadable.bind(rpc) }),
       ["shell-approval:pending-changed", "shell-approval:resolved"],
       randomUUID(),
       { signal: controller.signal, bodyIdleTimeoutMs: null }

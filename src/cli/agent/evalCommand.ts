@@ -188,8 +188,7 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
     {
       const events = new EventsClient(
         schemaRpcCaller({
-          call: client.callTarget.bind(client),
-          stream: client.stream.bind(client),
+          streamReadable: client.streamReadable.bind(client),
         })
       );
       const removeApprovalListener = events.on("shell-approval:pending-changed", ({ pending }) => {

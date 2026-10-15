@@ -304,9 +304,6 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
             signal: options.signal,
           })
         : rpc.callService("extensions", "invokeProvider", ["browserData", method, args]),
-    stream: async () => {
-      throw new Error("Browser data provider does not expose response streams");
-    },
   });
   const invoke = createRpcMethodCaller(providerRpc, "browserData", browserDataProviderRpcMethods);
   const callNative = <K extends keyof BrowserDataProvider & string>(

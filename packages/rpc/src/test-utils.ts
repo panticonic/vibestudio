@@ -1,4 +1,4 @@
-import type { RpcCaller } from "./types.js";
+import type { RpcCaller, RpcReadableCaller } from "./types.js";
 import type { RpcWireCaller } from "./internal-types.js";
 import { createRpcPeer } from "./client-core.js";
 import { schemaRpcClient, registerRpcWireClient, schemaRpcCaller } from "./schemaClient.js";
@@ -13,16 +13,28 @@ type MockWire = {
     options?: import("./types.js").RpcCallOptions
   ) => Promise<unknown>;
   stream?: RpcWireCaller["stream"];
+  streamReadable?: import("./internal-types.js").RpcWireClient["streamReadable"];
 };
-type SchemaMock<Call, Stream> = RpcCaller & {
+type SchemaMock<Call, Stream, Readable> = RpcCaller & {
+  streamReadable: RpcReadableCaller["streamReadable"] & MockProperties<NonNullable<Readable>>;
   call: RpcCaller["call"] & MockProperties<Call>;
   stream: RpcCaller["stream"] & MockProperties<NonNullable<Stream>>;
 };
 export function schemaRpcMock<
   Call extends MockWire["call"],
   Stream extends MockWire["stream"] = undefined,
->(wire: { call: Call; stream?: Stream }): SchemaMock<Call, Stream> {
+  Readable extends MockWire["streamReadable"] = undefined,
+>(wire: {
+  call: Call;
+  stream?: Stream;
+  streamReadable?: Readable;
+}): SchemaMock<Call, Stream, Readable> {
   const caller = schemaRpcCaller({
+    streamReadable:
+      wire.streamReadable?.bind(wire) ??
+      (async () => {
+        throw new Error("Unexpected readable streaming RPC");
+      }),
     call: wire.call.bind(wire),
     stream:
       wire.stream?.bind(wire) ??
@@ -30,7 +42,7 @@ export function schemaRpcMock<
         throw new Error("Unexpected streaming RPC");
       }),
   });
-  for (const key of ["call", "stream"] as const) {
+  for (const key of ["call", "stream", "streamReadable"] as const) {
     const mock = wire[key];
     if (!mock) continue;
     const descriptors = Object.getOwnPropertyDescriptors(mock);
@@ -38,7 +50,7 @@ export function schemaRpcMock<
       delete descriptors[intrinsic];
     Object.defineProperties(caller[key], descriptors);
   }
-  return caller as SchemaMock<Call, Stream>;
+  return caller as SchemaMock<Call, Stream, Readable>;
 }
 
 /** A full client fixture retains the same registered owner through contextual views. */
@@ -54,9 +66,11 @@ export function schemaRpcClientMock(
       (async () => {
         throw new Error("Unexpected streaming RPC");
       }),
-    streamReadable: async () => {
-      throw new Error("Unexpected readable streaming RPC");
-    },
+    streamReadable:
+      wire.streamReadable?.bind(wire) ??
+      (async () => {
+        throw new Error("Unexpected readable streaming RPC");
+      }),
     expose() {},
     exposeAll() {},
     exposeStreaming() {},

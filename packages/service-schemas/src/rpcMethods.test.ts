@@ -2,6 +2,8 @@ import { describe, expect, expectTypeOf, it, vi } from "vitest";
 import { z } from "zod";
 import type { RpcClient } from "@vibestudio/rpc";
 import { schemaRpcCaller, wireCallerFor } from "@vibestudio/rpc/internal";
+import { registerRpcOperationOwner } from "../../rpc/src/schemaClient.js";
+import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
 import {
   createExtensionRpcMethods,
   createLazyRpcMethods,
@@ -63,10 +65,67 @@ function transport(
     async (_target: string, _method: string, _args: unknown[]): Promise<unknown> => "received"
   )
 ) {
-  return { call, stream: vi.fn(async () => new Response("received")) };
+  return { call };
 }
 
 describe("receiver-owned RPC contracts", () => {
+  it("retains explicitly supplied raw wire spy diagnostics without converting a Response", async () => {
+    const response = {
+      status: 200,
+      statusText: "OK",
+      headers: [],
+      finalUrl: "",
+      body: new ReadableStream<Uint8Array>(),
+    };
+    const streamReadable = vi.fn(async () => response);
+    const caller = schemaRpcMock({ call: vi.fn(), streamReadable });
+    const descriptor = createRpcMethods("probe", methods).inspect;
+    await expect(caller.streamReadable("worker", descriptor, ["input"])).resolves.toBe(response);
+    expect(caller.streamReadable.mock.calls).toEqual(streamReadable.mock.calls);
+    caller.streamReadable.mockClear();
+    expect(streamReadable).not.toHaveBeenCalled();
+  });
+  it("projects raw-only streams through the same schema and operation owner", async () => {
+    const response = {
+      status: 200,
+      statusText: "OK",
+      headers: [],
+      finalUrl: "",
+      body: new ReadableStream<Uint8Array>(),
+    };
+    const streamReadable = vi.fn(async () => response);
+    const owner = vi.fn();
+    const caller = schemaRpcCaller(
+      registerRpcOperationOwner({ streamReadable }, async (operation) => {
+        owner();
+        return operation();
+      })
+    );
+    const descriptor = createRpcMethods("probe", methods).inspect;
+    await expect(caller.streamReadable("worker", descriptor, ["input"])).resolves.toBe(response);
+    expect(streamReadable).toHaveBeenCalledWith(
+      "worker",
+      "probe.inspect",
+      ["parsed:input"],
+      undefined
+    );
+    expect(owner).toHaveBeenCalledOnce();
+    expect(caller).not.toHaveProperty("stream");
+    expect(caller).not.toHaveProperty("call");
+    const original = new Error("owner retired");
+    const signal = AbortSignal.abort(original);
+    await expect(caller.streamReadable("worker", descriptor, ["input"], { signal })).rejects.toBe(
+      original
+    );
+    expect(streamReadable).toHaveBeenCalledOnce();
+    streamReadable.mockRejectedValueOnce(original);
+    await expect(caller.streamReadable("worker", descriptor, ["input"])).rejects.toBe(original);
+    await expect(
+      // @ts-expect-error The receiver admits strings, not arbitrary wire arguments.
+      caller.streamReadable("worker", descriptor, [123])
+    ).rejects.toThrow();
+    expect(streamReadable).toHaveBeenCalledTimes(2);
+  });
   it("freezes canonical method descriptors and tables", () => {
     const receiver = createReceiverRpcMethods<{
       inspect(value: string): Promise<string>;

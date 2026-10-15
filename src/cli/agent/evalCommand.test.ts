@@ -45,14 +45,14 @@ vi.mock("../../node/iroh/irohRpcClient.js", () => ({
       return await this.dispatch({ type: "call", targetId, method, args });
     }
 
-    async stream(
+    async streamReadable(
       _targetId: string,
       method: string,
       args: unknown[] = [],
       options?: { signal?: AbortSignal }
-    ): Promise<Response> {
-      if (method !== "events.watch") throw new Error(`Unexpected stream ${method}`);
-      const stream = new ReadableStream<Uint8Array>({
+    ): Promise<import("@vibestudio/rpc").DecodedFramedStream> {
+      if (method !== "events.watch") throw new Error(`Unexpected streamReadable ${method}`);
+      const streamReadable = new ReadableStream<Uint8Array>({
         start(controller) {
           transportMock.watchControllers.push(controller);
           controller.enqueue(
@@ -73,7 +73,7 @@ vi.mock("../../node/iroh/irohRpcClient.js", () => ({
           );
         },
       });
-      return new Response(stream);
+      return { status: 200, statusText: "OK", headers: [], finalUrl: "", body: streamReadable };
     }
 
     async close(): Promise<void> {}

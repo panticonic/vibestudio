@@ -8,7 +8,12 @@ import {
 } from "./credentialStore.js";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import { deserializeRpcFailure, decodeRpcJson, encodeRpcJson } from "@vibestudio/rpc";
-import type { RpcErrorData, RpcErrorKind, RpcStreamOptions } from "@vibestudio/rpc";
+import type {
+  RpcErrorData,
+  RpcErrorKind,
+  RpcStreamOptions,
+  DecodedFramedStream,
+} from "@vibestudio/rpc";
 import { Agent, type Dispatcher } from "undici";
 import {
   RefreshAgentResponseSchema,
@@ -70,6 +75,12 @@ export type RpcClientCredential = CliCredentials | DeviceEndpointCredential | Ra
 
 /** Shared surface of the persistent local-WebSocket and remote-Iroh clients. */
 interface PersistentRpcClient {
+  streamReadable(
+    targetId: string,
+    method: string,
+    args?: unknown[],
+    options?: RpcStreamOptions
+  ): Promise<DecodedFramedStream>;
   callTarget(targetId: string, method: string, args?: unknown[]): Promise<unknown>;
   stream(
     targetId: string,
@@ -288,7 +299,6 @@ export class RpcClient {
     this.mainCall = createMainRpcCaller(
       schemaRpcCaller({
         call: (target, method, args) => this.callTarget(target, method, args),
-        stream: (target, method, args, options) => this.stream(target, method, args, options),
       })
     );
   }
@@ -400,6 +410,19 @@ export class RpcClient {
     const client = await this.persistentClient();
     this.assertOpen();
     return await client.stream(targetId, method, args, options);
+  }
+  async streamReadable(
+    targetId: string,
+    method: string,
+    args: unknown[] = [],
+    options?: RpcStreamOptions
+  ): Promise<DecodedFramedStream> {
+    this.assertOpen();
+    if (targetId === "main") requireQualifiedServiceMethod(method);
+    this.keepPushOpen = true;
+    const client = await this.persistentClient();
+    this.assertOpen();
+    return await client.streamReadable(targetId, method, args, options);
   }
 
   async onEvent(

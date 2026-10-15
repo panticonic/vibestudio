@@ -11,7 +11,7 @@ import {
  * its own identity.
  */
 
-import { type RpcStreamOptions } from "@vibestudio/rpc";
+import { type RpcStreamOptions, type DecodedFramedStream } from "@vibestudio/rpc";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
@@ -63,6 +63,16 @@ export class WsRpcClient {
     if (targetId === "main") requireQualifiedServiceMethod(method);
     const { core } = await this.ensureConnected();
     return await core.stream(targetId, method, args, options);
+  }
+  async streamReadable(
+    targetId: string,
+    method: string,
+    args: unknown[] = [],
+    options?: RpcStreamOptions
+  ): Promise<DecodedFramedStream> {
+    if (targetId === "main") requireQualifiedServiceMethod(method);
+    const { core } = await this.ensureConnected();
+    return await core.streamReadable(targetId, method, args, options);
   }
 
   async onEvent(

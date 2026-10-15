@@ -416,6 +416,9 @@ export async function createIrohServerClient(
       // REQUEST body out on the same channel (plan §1.6).
       return rpc.stream("main", `${service}.${method}`, callArgs, options);
     },
+    streamReadable(service, method, callArgs, options) {
+      return rpc.streamReadable("main", `${service}.${method}`, callArgs, options);
+    },
     onDirectEvent(event, listener) {
       return rpc.on(event, ({ payload }) => listener(payload as never), {
         kind: "closed",

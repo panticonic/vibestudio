@@ -22,7 +22,7 @@ import {
   type ChannelSummary,
 } from "@vibestudio/service-schemas/channel";
 import { createRpcMethodCaller } from "@vibestudio/shared/rpcMethods";
-import { schemaRpcCaller, schemaRpcStream, type RpcWireCaller } from "@vibestudio/rpc/internal";
+import { schemaRpcCaller, type RpcWireCaller } from "@vibestudio/rpc/internal";
 import { logIdForChannel } from "@vibestudio/trajectory-identity";
 import {
   CHANNEL_PROTOCOL,
@@ -83,15 +83,16 @@ function channelCaller(client: RpcClient, target: string) {
   const wire: RpcWireCaller = {
     call: (targetId, method, args) => client.callTarget(targetId, method, args),
     stream: (targetId, method, args, options) => client.stream(targetId, method, args, options),
+    streamReadable: (targetId, method, args, options) =>
+      client.streamReadable(targetId, method, args, options),
   };
   const rpc = schemaRpcCaller(wire);
   const call = createRpcMethodCaller(rpc, target, channelClientRpcMethods);
-  const stream = schemaRpcStream(wire.stream);
   return Object.assign(call, {
     subscribe: (
       args: Parameters<ChannelCliRpc["subscribe"]>,
       options?: import("@vibestudio/rpc").RpcCallOptions
-    ) => stream(target, channelClientRpcMethods.subscribe, args, options),
+    ) => rpc.streamReadable(target, channelClientRpcMethods.subscribe, args, options),
   });
 }
 

@@ -156,7 +156,7 @@ describe("canonical browser cookie projection", () => {
       serverClient: {
         onRecovery: vi.fn(() => () => {}),
         onConnectionStatusChange: vi.fn(() => () => {}),
-        stream: vi.fn(),
+        streamReadable: vi.fn(),
         call: vi.fn(),
       } as never,
       hostId: "desktop:test",
@@ -209,7 +209,7 @@ describe("canonical browser cookie projection", () => {
       serverClient: {
         onRecovery: vi.fn(() => () => {}),
         onConnectionStatusChange: vi.fn(() => () => {}),
-        stream: vi.fn(),
+        streamReadable: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
       } as never,
       hostId: "desktop:test",
@@ -248,7 +248,7 @@ describe("canonical browser cookie projection", () => {
       serverClient: {
         onRecovery: vi.fn(() => () => {}),
         onConnectionStatusChange: vi.fn(() => () => {}),
-        stream: vi.fn(),
+        streamReadable: vi.fn(),
         call: vi.fn(),
       } as never,
       hostId: "desktop:test",
@@ -291,7 +291,7 @@ describe("canonical browser cookie projection", () => {
         serverClient: {
           onRecovery,
           onConnectionStatusChange: vi.fn(() => () => {}),
-          stream: vi.fn(),
+          streamReadable: vi.fn(),
           call: vi.fn().mockResolvedValue(null),
         } as never,
         hostId: "desktop:test",
@@ -346,7 +346,7 @@ describe("canonical browser cookie projection", () => {
           return () => {};
         },
         onConnectionStatusChange: () => () => {},
-        stream: vi.fn(),
+        streamReadable: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
       } as never,
       hostId: "host",
@@ -406,7 +406,7 @@ describe("canonical browser cookie projection", () => {
       serverClient: {
         onRecovery: vi.fn(() => () => {}),
         onConnectionStatusChange: vi.fn(() => () => {}),
-        stream: vi.fn(),
+        streamReadable: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
       } as never,
       hostId: "desktop:test",
@@ -475,7 +475,7 @@ describe("canonical browser cookie projection", () => {
       serverClient: {
         onRecovery: vi.fn(() => () => {}),
         onConnectionStatusChange: vi.fn(() => () => {}),
-        stream: vi.fn(),
+        streamReadable: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
       } as never,
       hostId: "desktop:test",
@@ -528,7 +528,7 @@ describe("canonical browser cookie projection", () => {
       serverClient: {
         onRecovery: vi.fn(() => () => {}),
         onConnectionStatusChange: vi.fn(() => () => {}),
-        stream: vi.fn(),
+        streamReadable: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
       } as never,
       hostId: "desktop:test",
@@ -595,7 +595,7 @@ describe("canonical browser cookie projection", () => {
       serverClient: {
         onRecovery: () => () => {},
         onConnectionStatusChange: () => () => {},
-        stream: vi.fn(),
+        streamReadable: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
       } as never,
       hostId: "host",
@@ -646,7 +646,7 @@ describe("canonical browser cookie projection", () => {
       serverClient: {
         onRecovery: vi.fn(() => () => {}),
         onConnectionStatusChange: vi.fn(() => () => {}),
-        stream: vi.fn(),
+        streamReadable: vi.fn(),
         call: vi.fn().mockResolvedValue(null),
       } as never,
       hostId: "desktop:test",
@@ -691,7 +691,7 @@ describe("canonical browser cookie projection", () => {
     const reads = originScopedReads(1, []);
     const encoder = new TextEncoder();
     let watchController: ReadableStreamDefaultController<Uint8Array> | null = null;
-    const stream = vi.fn(
+    const streamReadable = vi.fn(
       async (
         _service: string,
         _method: string,
@@ -730,7 +730,7 @@ describe("canonical browser cookie projection", () => {
       serverClient: {
         onRecovery: vi.fn(() => () => {}),
         onConnectionStatusChange: vi.fn(() => () => {}),
-        stream,
+        streamReadable,
         call: vi.fn().mockResolvedValue(null),
       } as never,
       hostId: "desktop:test",

@@ -102,6 +102,12 @@ export interface InternalRpcEvent extends RpcEvent {
 
 /** Wire dispatch is host/runtime infrastructure; application callers use schema contracts. */
 export interface RpcWireCaller {
+  streamReadable(
+    targetId: string,
+    method: string,
+    args: unknown[],
+    options?: import("./types.js").RpcStreamOptions
+  ): Promise<import("./types.js").DecodedFramedStream>;
   call(
     targetId: string,
     method: string,
@@ -120,12 +126,6 @@ export type RpcWireClient = Omit<
   "call" | "stream" | "streamReadable" | "peer"
 > &
   RpcWireCaller & {
-    streamReadable(
-      targetId: string,
-      method: string,
-      args: unknown[],
-      options?: import("./types.js").RpcStreamOptions
-    ): Promise<import("./types.js").DecodedFramedStream>;
     peer(
       targetId: string,
       options?: import("./types.js").RpcTargetOptions

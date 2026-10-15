@@ -1411,8 +1411,7 @@ async function startupApprovalPort(scope: SessionScope): Promise<{
   const eventRpc = await scope.client.openSiblingConnection();
   const events = new EventsClient(
     schemaRpcCaller({
-      call: eventRpc.callTarget.bind(eventRpc),
-      stream: eventRpc.stream.bind(eventRpc),
+      streamReadable: eventRpc.streamReadable.bind(eventRpc),
     })
   );
   let revision = 0;

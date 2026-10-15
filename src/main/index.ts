@@ -1,5 +1,5 @@
 import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
-import { schemaRpcStream } from "@vibestudio/rpc/internal";
+import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import { RpcBoundaryError } from "@vibestudio/rpc/errors";
 import { CLOSE_TOKEN_REVOKED } from "@vibestudio/rpc/protocol/closeCodes";
 import { problemReportingConversation } from "@vibestudio/shared/problemReportingConversation";
@@ -2941,17 +2941,19 @@ app.on("ready", async () => {
 
     // Native workspace lifetime follows the authenticated catalog, independently
     // of which UI happens to list or select workspaces.
-    const catalogEvents = new EventsClient({
-      stream: schemaRpcStream((_target, method, args, options) => {
-        const separator = method.indexOf(".");
-        return conn.hubControlClient.stream(
-          method.slice(0, separator),
-          method.slice(separator + 1),
-          args,
-          options
-        );
-      }),
-    });
+    const catalogEvents = new EventsClient(
+      schemaRpcCaller({
+        streamReadable: (_target, method, args, options) => {
+          const separator = method.indexOf(".");
+          return conn.hubControlClient.streamReadable(
+            method.slice(0, separator),
+            method.slice(separator + 1),
+            args,
+            options
+          );
+        },
+      })
+    );
     let catalogClosed = false;
     let catalogTail = Promise.resolve();
     const stopCatalog = catalogEvents.on("hub:workspace-catalog-changed", ({ workspaces }) => {

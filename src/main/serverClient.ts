@@ -213,6 +213,13 @@ export interface ServerClient {
     args: unknown[],
     options?: RpcStreamOptions
   ): Promise<Response>;
+  /** Platform-neutral owned response body, preserving the session transport. */
+  streamReadable(
+    service: string,
+    method: string,
+    args: unknown[],
+    options?: RpcStreamOptions
+  ): Promise<DecodedFramedStream>;
   /** Stream a backend service as an Electron-hosted runtime principal. */
   streamAs(
     caller: ScopedServerCaller,
@@ -533,6 +540,9 @@ export async function createServerClient(
       options?: RpcStreamOptions
     ): Promise<Response> {
       return rpc.stream("main", `${service}.${method}`, args, options);
+    },
+    streamReadable(service, method, args, options) {
+      return rpc.streamReadable("main", `${service}.${method}`, args, options);
     },
     onDirectEvent(event, listener) {
       return rpc.on(event, ({ payload }) => listener(payload as never), {

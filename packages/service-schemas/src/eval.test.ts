@@ -370,6 +370,21 @@ describe("eval lifecycle contract", () => {
     expect(call).not.toHaveBeenCalled();
   });
 
+  it("uses the installed AbortSignal default without a DOMException global", async () => {
+    const signal = AbortSignal.abort("stop before admission");
+    const call = vi.fn();
+    vi.stubGlobal("DOMException", undefined);
+    try {
+      const execute = createEvalExecutor(call, { signal });
+      await expect(
+        execute({ runId: "run:unstarted", source: { kind: "inline", code: "return 42" } })
+      ).rejects.toMatchObject({ name: "AbortError" });
+      expect(call).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("cancels the same caller-owned run when aborted", async () => {
     const abort = new AbortController();
     const call = vi.fn(async (method: string) => {

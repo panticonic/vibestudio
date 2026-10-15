@@ -12,19 +12,23 @@ function makeRpc() {
   const controllers: ReadableStreamDefaultController<Uint8Array>[] = [];
   const signals: AbortSignal[] = [];
   const watchControllers = new Map<string, ReadableStreamDefaultController<Uint8Array>>();
-  const stream = vi.fn(
+  const streamReadable = vi.fn(
     async (
       _target: string,
       _method: string,
       args: unknown[],
       options?: { signal?: AbortSignal }
-    ) => {
+    ): Promise<import("@vibestudio/rpc").DecodedFramedStream> => {
       const requested = (args[0] ?? []) as EventName[];
       const watchId = String(args[1]);
       const signal = options?.signal ?? new AbortController().signal;
       signals.push(signal);
-      return new Response(
-        new ReadableStream<Uint8Array>({
+      return {
+        status: 200,
+        statusText: "OK",
+        headers: [],
+        finalUrl: "",
+        body: new ReadableStream<Uint8Array>({
           start(controller) {
             controllers.push(controller);
             const previous = watchControllers.get(watchId);
@@ -47,18 +51,15 @@ function makeRpc() {
               }
             });
           },
-        })
-      );
+        }),
+      };
     }
   );
   return {
     rpc: schemaRpcCaller({
-      stream,
-      call: async () => {
-        throw new Error("Unexpected unary call");
-      },
+      streamReadable,
     }),
-    stream,
+    streamReadable,
     controllers,
     signals,
     restartServer() {
@@ -89,15 +90,17 @@ describe("EventsClient", () => {
   it("joins the same admission failure for concurrent subscribers", async () => {
     const failure = new Error("upstream event admission failed");
     let rejectAdmission!: (error: Error) => void;
-    const opening = new Promise<Response>((_resolve, reject) => {
-      rejectAdmission = reject;
-    });
-    const rpc = { stream: vi.fn(() => opening) };
+    const opening = new Promise<import("@vibestudio/rpc").DecodedFramedStream>(
+      (_resolve, reject) => {
+        rejectAdmission = reject;
+      }
+    );
+    const rpc = { streamReadable: vi.fn(() => opening) };
     const events = new EventsClient(rpc);
     const first = events.subscribe("panel-tree-invalidated");
     const second = events.subscribe("panel-tree-invalidated");
     const checks = [expect(first).rejects.toBe(failure), expect(second).rejects.toBe(failure)];
-    await vi.waitFor(() => expect(rpc.stream).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(rpc.streamReadable).toHaveBeenCalledOnce());
     rejectAdmission(failure);
     await Promise.all(checks);
     await events.unsubscribeAll();
@@ -108,10 +111,10 @@ describe("EventsClient", () => {
     const replacement = client.subscribe("panel-tree-invalidated");
     await Promise.all([first, replacement]);
 
-    expect(fixture.stream).toHaveBeenCalledTimes(1);
+    expect(fixture.streamReadable).toHaveBeenCalledTimes(1);
     await client.unsubscribe("panel-tree-invalidated");
     expect(fixture.signals[0]!.aborted).toBe(false);
-    expect(fixture.stream).toHaveBeenCalledTimes(1);
+    expect(fixture.streamReadable).toHaveBeenCalledTimes(1);
 
     await client.unsubscribe("panel-tree-invalidated");
     expect(fixture.signals[0]!.aborted).toBe(true);
@@ -131,17 +134,21 @@ describe("EventsClient", () => {
       admitted = resolve;
     });
     const pendingClient = new EventsClient({
-      stream: async (_target, _method, _args, options) => {
+      streamReadable: async (_target, _method, _args, options) => {
         signal = options!.signal!;
-        return new Response(
-          new ReadableStream<Uint8Array>({
+        return {
+          status: 200,
+          statusText: "OK",
+          headers: [],
+          finalUrl: "",
+          body: new ReadableStream<Uint8Array>({
             start(controller) {
               response = controller;
               signal.addEventListener("abort", closeResponse, { once: true });
               admitted();
             },
-          })
-        );
+          }),
+        };
       },
     });
     const opening = pendingClient.subscribe("panel-tree-invalidated");
@@ -170,7 +177,7 @@ describe("EventsClient", () => {
 
     await portableClient.subscribe("panel-tree-invalidated");
 
-    expect(fixture.stream.mock.calls.at(-1)?.[2]).toEqual([
+    expect(fixture.streamReadable.mock.calls.at(-1)?.[2]).toEqual([
       ["panel-tree-invalidated"],
       "2a".repeat(16),
     ]);
@@ -204,7 +211,7 @@ describe("EventsClient", () => {
         }),
       })
     );
-    const mobileClient = new EventsClient({ stream, streamReadable } as never);
+    const mobileClient = new EventsClient(schemaRpcCaller({ streamReadable }));
 
     await mobileClient.subscribe("panel-tree-invalidated");
 
@@ -218,7 +225,7 @@ describe("EventsClient", () => {
     client.on("panel-tree-invalidated", listener);
 
     await client.subscribe("panel-tree-invalidated");
-    expect(fixture.stream).toHaveBeenCalledWith(
+    expect(fixture.streamReadable).toHaveBeenCalledWith(
       "main",
       "events.watch",
       [["panel-tree-invalidated"], expect.any(String)],
@@ -263,7 +270,7 @@ describe("EventsClient", () => {
 
     await desktopEvents.subscribe("system-theme-changed");
 
-    expect(fixture.stream).toHaveBeenCalledWith(
+    expect(fixture.streamReadable).toHaveBeenCalledWith(
       "main",
       "desktopEvents.watch",
       [["system-theme-changed"], expect.any(String)],
@@ -277,7 +284,7 @@ describe("EventsClient", () => {
     await client.subscribe("panel-tree-invalidated");
 
     expect(fixture.signals[0]!.aborted).toBe(false);
-    expect(fixture.stream).toHaveBeenNthCalledWith(
+    expect(fixture.streamReadable).toHaveBeenNthCalledWith(
       2,
       "main",
       "events.watch",
@@ -287,7 +294,7 @@ describe("EventsClient", () => {
 
     await client.unsubscribe("system-theme-changed");
     expect(fixture.signals[1]!.aborted).toBe(false);
-    expect(fixture.stream).toHaveBeenNthCalledWith(
+    expect(fixture.streamReadable).toHaveBeenNthCalledWith(
       3,
       "main",
       "events.watch",
@@ -302,7 +309,7 @@ describe("EventsClient", () => {
     await client.unsubscribeAll();
 
     expect(fixture.signals[0]!.aborted).toBe(true);
-    expect(fixture.stream).toHaveBeenCalledTimes(1);
+    expect(fixture.streamReadable).toHaveBeenCalledTimes(1);
   });
 
   it("reopens the desired topic set on transport recovery", async () => {
@@ -310,8 +317,8 @@ describe("EventsClient", () => {
     await client.recover();
 
     expect(fixture.signals[0]!.aborted).toBe(false);
-    expect(fixture.stream).toHaveBeenCalledTimes(2);
-    expect(fixture.stream.mock.calls[1]?.[2]).toEqual([
+    expect(fixture.streamReadable).toHaveBeenCalledTimes(2);
+    expect(fixture.streamReadable.mock.calls[1]?.[2]).toEqual([
       ["panel-tree-invalidated", "system-theme-changed"],
       expect.any(String),
     ]);
@@ -333,8 +340,8 @@ describe("EventsClient", () => {
     expect(recoveries.size).toBe(1);
 
     for (const listener of recoveries) listener("resubscribe");
-    await vi.waitFor(() => expect(fixture.stream).toHaveBeenCalledTimes(2));
-    expect(fixture.stream.mock.calls[1]?.[2]).toEqual([
+    await vi.waitFor(() => expect(fixture.streamReadable).toHaveBeenCalledTimes(2));
+    expect(fixture.streamReadable.mock.calls[1]?.[2]).toEqual([
       ["panel-tree-invalidated"],
       expect.any(String),
     ]);
@@ -344,14 +351,14 @@ describe("EventsClient", () => {
   });
 
   it("keeps desired topics discoverable after an opening failure", async () => {
-    fixture.stream.mockRejectedValueOnce(new Error("transport unavailable"));
+    fixture.streamReadable.mockRejectedValueOnce(new Error("transport unavailable"));
     await expect(client.subscribe("panel-tree-invalidated")).rejects.toThrow(
       "transport unavailable"
     );
 
     await client.recover();
-    expect(fixture.stream).toHaveBeenCalledTimes(2);
-    expect(fixture.stream.mock.calls[1]?.[2]).toEqual([
+    expect(fixture.streamReadable).toHaveBeenCalledTimes(2);
+    expect(fixture.streamReadable.mock.calls[1]?.[2]).toEqual([
       ["panel-tree-invalidated"],
       expect.any(String),
     ]);
@@ -363,10 +370,10 @@ describe("EventsClient", () => {
     fixture.close(0);
 
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(fixture.stream).toHaveBeenCalledTimes(1);
+    expect(fixture.streamReadable).toHaveBeenCalledTimes(1);
 
     await client.recover();
-    expect(fixture.stream.mock.calls[1]?.[2]).toEqual([
+    expect(fixture.streamReadable.mock.calls[1]?.[2]).toEqual([
       ["panel-tree-invalidated"],
       expect.any(String),
     ]);
@@ -376,7 +383,7 @@ describe("EventsClient", () => {
   it("preserves terminal and replacement failures across recovery", async () => {
     const replacementFailure = new Error("replacement admission failed");
     await client.subscribe("panel-tree-invalidated");
-    fixture.stream.mockRejectedValueOnce(replacementFailure);
+    fixture.streamReadable.mockRejectedValueOnce(replacementFailure);
     fixture.close(0);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
@@ -393,14 +400,16 @@ describe("EventsClient", () => {
     const activeFailure = new Error("active watch failed");
     const replacementFailure = new Error("replacement admission failed");
     let rejectReplacement!: (error: Error) => void;
-    const replacement = new Promise<Response>((_resolve, reject) => {
-      rejectReplacement = reject;
-    });
+    const replacement = new Promise<import("@vibestudio/rpc").DecodedFramedStream>(
+      (_resolve, reject) => {
+        rejectReplacement = reject;
+      }
+    );
     await client.subscribe("panel-tree-invalidated");
-    fixture.stream.mockImplementationOnce(() => replacement);
+    fixture.streamReadable.mockImplementationOnce(() => replacement);
 
     const replacing = client.subscribe("system-theme-changed");
-    await vi.waitFor(() => expect(fixture.stream).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(fixture.streamReadable).toHaveBeenCalledTimes(2));
     fixture.controllers[0]!.error(activeFailure);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     rejectReplacement(replacementFailure);
@@ -456,7 +465,7 @@ describe("EventsClient", () => {
     expect(failure).toBeInstanceOf(AggregateError);
     expect((failure as AggregateError).errors).toEqual([registrationFailure, cleanupFailure]);
     expect(release).toHaveBeenCalledOnce();
-    expect(fixture.stream).not.toHaveBeenCalled();
+    expect(fixture.streamReadable).not.toHaveBeenCalled();
     await events.unsubscribeAll();
   });
 
