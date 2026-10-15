@@ -192,6 +192,21 @@ and activation authority. Clean-room runs use their private derived root.
 Manager shutdown cancels owned probe requests, joins their retirement, then
 stops native workerd; unrelated failures remain observable.
 
+Installed packages additionally carry `schema-evidence.json` beside their other
+release resources. The existing fresh-consumer release verifier stages only
+successfully completed canonical probe receipts for the sealed runtime artifact
+inventory. Its owning publisher joins the verifier before atomically publishing
+the readable installation component; the private probe cache remains private.
+The npm and desktop publication gates use that same verifier and publisher.
+
+Each manager admits this component once for its actual host/SDK installation,
+platform, architecture, and advertised recipe inventory. It replays an exact
+receipt into the current workspace's execution identity without starting a
+disposable probe. Missing, conflicting, or malformed advertised receipts fail;
+unadvertised recipes still execute the ordinary canonical probe. Existing
+storage-schema and activation-authority admission remains required. Neither a
+mutable workspace database nor its execution authority is shipped as evidence.
+
 Dependency metadata resolution and the operation's one current host SDK capture
 run independently and join before either cache lookup. The metadata resolver
 admits manifest epochs, repository ownership, overrides, and exact transitive

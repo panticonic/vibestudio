@@ -69,8 +69,14 @@ in the sealed build report and absent from both actual startup resource lists.
 Pairing listeners, core shell UI, and first-use reporting consent remain eager.
 Its initial bundle is 2,985,936 bytes across 88 requests; the old production
 artifact used a different SDK/dependency fingerprint, so its 3,226,201 bytes
-cannot establish the amount saved by this change. A same-SDK comparison and
-final published-pin installed measurements are still required.
+cannot establish the amount saved by this change. The subsequent same-instance,
+same-SDK canonical context comparison verified exact cache keys and reduced
+initial JavaScript from 2,273,077 to 2,171,967 bytes (4.45%). Total initial bytes
+fell 101,110 bytes (3.28%), while initial requests increased from 76 to 88 and
+the whole emitted bundle grew 45,668 bytes. These are byte-attribution results,
+not an end-to-end speedup claim. Both comparison contexts, its private local Git
+clone, and its client were retired. Final published-pin installed measurements
+are still required.
 
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
