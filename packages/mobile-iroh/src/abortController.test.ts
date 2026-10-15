@@ -43,8 +43,19 @@ describe("React Native standard cancellation platform", () => {
         const combined: AbortSignal = AbortSignal.any([controller.signal]);
         const immediate: AbortSignal = AbortSignal.abort(reason);
         void combined; void immediate;
+        const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+        decoder.decode(Uint8Array.of(0xe2), { stream: true });
+        decoder.decode();
+        new TextEncoder().encodeInto("native", new Uint8Array(16));
+        // @ts-expect-error Hermes implements the standard UTF-8-only constructor.
+        new TextEncoder("latin1");
+        const stream = new ReadableStream<Uint8Array>({ start(controller) { controller.close(); } });
+        const reader: ReadableStreamDefaultReader<Uint8Array> = stream.getReader();
+        void reader; btoa(atob("eA=="));
         // @ts-expect-error The native cancellation contract does not invent DOM.
         document.createElement("div");
+        // @ts-expect-error Native fetch does not expose a web-stream response body.
+        new Response().body.getReader();
       `
       );
       fs.writeFileSync(

@@ -222,7 +222,7 @@ async function waitForMobileBootstrap(
     } catch (error) {
       if (!retryableMobileBootstrapError(error) || Date.now() >= deadline) throw error;
       options.smokePhase?.("embedded-host-target-preparing");
-      await new Promise((resolve) => setTimeout(resolve, MOBILE_BOOTSTRAP_RETRY_MS));
+      await new Promise<void>((resolve) => setTimeout(resolve, MOBILE_BOOTSTRAP_RETRY_MS));
     }
   }
 }

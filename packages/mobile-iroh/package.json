@@ -25,11 +25,12 @@
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
+    "@kayahr/text-encoding": "2.2.0",
+    "@react-native-community/netinfo": "^11.4.1",
     "@vibestudio/iroh-transport": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
-    "@react-native-community/netinfo": "^11.4.1",
     "react-native-keychain": "^9.2.2",
     "web-streams-polyfill": "^3.3.3",
     "whatwg-fetch": "3.6.20"
@@ -39,9 +40,9 @@
     "react-native": "^0.79.0"
   },
   "devDependencies": {
-    "abort-controller": "3.0.0",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.4",
+    "abort-controller": "3.0.0",
     "typescript": "7.0.2"
   }
 }

@@ -959,6 +959,9 @@ importers:
 
   packages/mobile-iroh:
     dependencies:
+      '@kayahr/text-encoding':
+        specifier: 2.2.0
+        version: 2.2.0
       '@react-native-async-storage/async-storage':
         specifier: ^2.2.0
         version: 2.2.0(react-native@0.79.7(patch_hash=ffd50cbf5758f9251e228ad537ef249cfcce06fa456dbe4dfd418aac138e31cf)(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.2.4))
@@ -3022,6 +3025,9 @@ packages:
 
   '@js-sdsl/ordered-map@4.4.2':
     resolution: {integrity: sha512-iUKgm52T8HOE/makSxjqoWhe95ZJA1/G1sYsGev2JDKUSS14KAgg1LHb+Ba+IPow0xflbnSkOsZcO08C7w1gYw==}
+
+  '@kayahr/text-encoding@2.2.0':
+    resolution: {integrity: sha512-9jjWumQ9+fI1SfiRo1oSqMm4Wz95A/XtRDXB1C4pyNLo8HhtiyZMAzVPGplhMreymaroGyPqRyOy3h+3khPJVg==}
 
   '@malept/cross-spawn-promise@2.0.0':
     resolution: {integrity: sha512-1DpKU0Z5ThltBwjNySMC14g0CkbyhCaz9FkhxqNsZI6uAPJXFS8cMXlBKo26FJ8ZuW6S9GCMcR9IO5k2X5/9Fg==}
@@ -11791,6 +11797,8 @@ snapshots:
   '@js-sdsl/ordered-map@4.4.2':
     optional: true
 
+  '@kayahr/text-encoding@2.2.0': {}
+
   '@malept/cross-spawn-promise@2.0.0':
     dependencies:
       cross-spawn: 7.0.6
@@ -13185,9 +13193,7 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 
