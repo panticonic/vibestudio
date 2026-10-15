@@ -117,6 +117,18 @@ System release can consume its new public export. Both releases retain their
 normal review and publication gates. These prerequisite fixes are not startup
 speed measurements.
 
+The task worktrees were subsequently synchronized with current local main in
+the host, Base, and System. Main's terminal and platform-neutral lineage-store
+owners are retained; their actual callers use the same required readable-body
+contract. Retired Ink/WASM worker paths remain removed. After synchronization,
+the four host typecheck programs and the three System composition programs
+(desktop, native app, and Node/Jest) pass. The merged host's seven focused
+regression files pass 226 tests; the three affected System terminal files pass
+43 tests. The earlier failed managed bootstrap used a stale Base snapshot with
+no PTY package, while the current catalog test tooling already required it;
+that instance was stopped and its temporary state retired. None of these
+correctness checks establishes a startup latency improvement.
+
 Private bounded logs, profiles, and retirement receipts are retained outside the
 repository under the operation's performance evidence directory. They are not
 release artifacts or a reason to retain workspace databases and dependency trees.
