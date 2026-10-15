@@ -499,7 +499,7 @@ requires published terminal template versions and a matching package; neither
 the stale local installation nor current published pins represent this branch.
 Publication has not been performed.
 
-### UX completion pass (2026-10-14, in progress)
+### UX completion pass (2026-10-15, source acceptance complete)
 
 This pass follows the end-to-end review, not merely the original feature list.
 Completion requires both the behavior and evidence for its adverse boundaries.
@@ -545,8 +545,8 @@ bundle regressions cover calls, events, peers, streams and cancellation. The
 smoke's readiness assertion also now requires active alternate-screen chrome;
 matching words in pairing prose are not evidence that the browser started.
 The failed smoke's owned processes and scratch were retired; bounded failure
-evidence is retained privately. A fresh source smoke and the extended managed
-fork/resume journey remain required before this pass is complete.
+evidence is retained privately. That failure required a fresh source smoke and
+the extended managed fork/resume journey; both passed as recorded below.
 
 Durable queued delivery now distinguishes publication acceptance from retained
 attachment retirement. Accepted entries can only retry cleanup, never hydrate
@@ -555,3 +555,38 @@ of rejecting the whole queue; a failed release does not hide or block independen
 pending messages. Failed discard cleanup is likewise non-publishable. The final
 42 focused lifecycle/UI cases and Base composition/integration typechecks pass,
 including restart while release still fails followed by in-place repair.
+
+Fresh source smoke passed on 2026-10-15: the real pseudo-terminal CLI paired,
+rendered active browser chrome, quit with code zero, and stopped and joined its
+owned server. Owned preparation/cache scratch was removed. The preceding smoke
+exposed normal quit racing the initial approval projection: observer retirement
+created an unrelated error instead of preserving the browser's cancellation
+reason. `DurableObservation.stop(reason)` now preserves that exact owner reason
+and joins admission, read and leave independently, retaining genuine late read
+and cleanup failures. The 23 host helper/consumer cases, 32 browser cases, final
+host typecheck and System composition typecheck pass. All four source worktrees
+are checkpointed locally; the host commit passed the full mandatory hook.
+
+The first managed run (`st_c0b635f1338c4e05b7c1ae872d3386df`) exposed an
+invalid panel identity at the real terminal-app lease boundary before any model
+turn. Sessions now persist one key from the canonical panel-history allocator
+before launching and reuse it across retry, resume and restart. Valid older
+registry identities are preserved at load. The 22 service regressions now use
+the real panel runtime coordinator, including caller registration, lease
+retirement and grant revocation rather than a permissive lease mock.
+
+Fresh managed run `st_870eae060bcd4d34b61a7d15409c4f1a` passed
+`terminal-chat-approval-fork-resume` in 41.843 seconds with concurrency 1 and
+zero tool failures. It covers complete-history search, export followed by
+attachment inspection/removal, independent parent/fork drafts, and kill/resume
+restoration with the original tool title preserved. Doctor passed on the fresh
+instance. Its background artifact producer was joined before the latency-judged
+run, and no other host build or test overlapped that run. Both owned managed
+instances were stopped and their temporary roots removed; private run evidence
+is retained. No check assertion, production timeout or approval policy was
+weakened to obtain the pass.
+
+Source acceptance is complete. Exact installed-package acceptance remains the
+explicit publication boundary above: it needs matching published templates and
+a native package. Nothing in this pass was pushed or published, and this source
+evidence is not presented as installed-release evidence.

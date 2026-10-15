@@ -6,6 +6,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { cleanupRuntimeEntity } from "../runtimeEntityCleanup.js";
+import { PanelRuntimeCoordinator } from "../panelRuntimeCoordinator.js";
 import {
   createVerifiedCaller,
   type ServiceContext,
@@ -46,6 +47,7 @@ async function harness(registryPath?: string) {
   let entity = 0;
   const retired: string[] = [];
   const events: Array<{ userId: string; sessions: unknown[] }> = [];
+  const coordinator = new PanelRuntimeCoordinator();
   const deps: TerminalAppsServiceDeps = {
     workspaceLabel: () => "Personal",
     registryPath: registryPath ?? path.join(root, "terminal-sessions.json"),
@@ -65,13 +67,14 @@ async function harness(registryPath?: string) {
       targetId: `panel:${spec.key}`,
     })),
     retireEntity: vi.fn(async (id: string) => {
+      coordinator.retireRuntimeEntity(id);
       retired.push(id);
     }),
     createContext: vi.fn(async () => `ctx-${++entity}`),
     entityStateArgs: vi.fn(async () => ({ channelName: "kept" })),
     primaryArtifactPath: vi.fn(async () => "/builds/chat/bundle.js"),
     grantConnection: vi.fn(() => "grant-token"),
-    holdLease: vi.fn(),
+    holdLease: vi.fn((input) => coordinator.holdEntityForHost(input)),
     dispatch: vi.fn(async (ctx, service, method, args) => {
       expect([service, method]).toEqual(["extensions", "invoke"]);
       const [name, shellMethod, shellArgs] = args as [string, string, unknown[]];
@@ -93,7 +96,19 @@ async function harness(registryPath?: string) {
   const service = createTerminalAppsService(deps);
   const call = (method: string, ctx: ServiceContext, ...args: unknown[]) =>
     service.handler(ctx, method, args) as Promise<unknown>;
-  return { root, deps, service, call, shellCalls, exits, exitFailures, retired, events, deadPtys };
+  return {
+    root,
+    deps,
+    service,
+    call,
+    shellCalls,
+    exits,
+    exitFailures,
+    retired,
+    events,
+    deadPtys,
+    coordinator,
+  };
 }
 
 function deferred<T>() {
@@ -469,7 +484,9 @@ describe("terminalApps launch service", () => {
       running: true,
       shellSessionId: "pty-1",
     });
-    expect(entry.principalId).toBe(`panel:terminal-session-${entry.sessionId}`);
+    expect(entry.principalId).toMatch(/^panel:nav-[0-9a-f]{16}$/);
+    const stored = JSON.parse(await readFile(h.deps.registryPath, "utf8"));
+    expect(`panel:${stored.sessions[0].entityKey}`).toBe(entry.principalId);
     expect(h.deps.holdLease).toHaveBeenCalledWith(
       expect.objectContaining({ runtimeEntityId: entry.principalId, authorizedBy: "shell:laptop" })
     );
@@ -547,6 +564,7 @@ describe("terminalApps launch service", () => {
       cache._onRetire(retired);
       await cleanupRuntimeEntity(retired, {
         connectionGrants: grants,
+        panelRuntimeCoordinator: h.coordinator,
         retireAuthorityOwner: () => {},
         egressProxy: { dropCaller: async () => {} },
         approvalQueue: { cancelForCaller: () => {} },
@@ -564,9 +582,29 @@ describe("terminalApps launch service", () => {
       cols: 80,
       rows: 24,
     })) as { sessionId: string; principalId: string };
-    expect(grants.redeem(tokens[0]!)).toMatchObject({ principalId: first.principalId });
+    async function registerLaunchedCaller(index: number) {
+      const open = h.shellCalls.filter((call) => call.method === "open")[index]!;
+      const request = open.args[0] as { env: Record<string, string> };
+      const material = JSON.parse(
+        await readFile(request.env[TERMINAL_LAUNCH_ENV]!, "utf8")
+      ) as TerminalAppLaunchMaterial;
+      const receipt = grants.redeem(material.grant);
+      if (!receipt) throw new Error("Launch grant was not admitted");
+      expect(receipt.principalId).toBe(first.principalId);
+      expect(
+        h.coordinator.authorizePanelConnection(
+          receipt.principalId,
+          material.connectionId,
+          receipt.issuedBy
+        )
+      ).toEqual({ ok: true });
+      h.coordinator.markConnected(receipt.principalId, material.connectionId);
+      expect(h.coordinator.resolveRouteConnection(receipt.principalId)).toBe(material.connectionId);
+    }
+    await registerLaunchedCaller(0);
     h.exits.get("pty-1")!({ exitCode: 0 });
     await vi.waitFor(() => expect(h.retired).toContain(first.principalId));
+    expect(h.coordinator.getHostHeldLease(first.principalId)).toBeNull();
     const listed = (await call(h, "list", personCtx())) as Array<{
       running: boolean;
       exit?: unknown;
@@ -582,7 +620,7 @@ describe("terminalApps launch service", () => {
     expect(resumed.principalId).toBe(first.principalId);
     expect(tokens[1]).not.toBe(tokens[0]);
     expect(grants.validate(tokens[0]!)).toBeNull();
-    expect(grants.redeem(tokens[1]!)).toMatchObject({ principalId: first.principalId });
+    await registerLaunchedCaller(1);
     expect(h.deps.grantConnection).toHaveBeenCalledTimes(2);
     const leases = vi.mocked(h.deps.holdLease).mock.calls;
     expect(leases[1]![0].connectionId).not.toBe(leases[0]![0].connectionId);
@@ -600,7 +638,7 @@ describe("terminalApps launch service", () => {
     expect(restarted.principalId).toBe(first.principalId);
     expect(grants.validate(tokens[1]!)).toBeNull();
     expect(tokens[2]).not.toBe(tokens[1]);
-    expect(grants.redeem(tokens[2]!)).toMatchObject({ principalId: first.principalId });
+    await registerLaunchedCaller(2);
     await h.service.stop();
   });
 
@@ -624,7 +662,7 @@ describe("terminalApps launch service", () => {
     expect(vi.mocked(h.deps.createEntity).mock.calls.at(-1)![1]).toMatchObject({
       contextId: "ctx-1",
     });
-    expect(launched.principalId).toMatch(/^panel:terminal-session-/);
+    expect(launched.principalId).toMatch(/^panel:nav-[0-9a-f]{16}$/);
     await call(h, "launch", testCtx(), { command: "/bin/sh", cols: 80, rows: 24 });
     expect(vi.mocked(h.deps.createContext).mock.calls.at(-1)![0]).toMatchObject({ testPolicy });
     await call(h, "launch", personCtx("terminal-apps/chat"), {
@@ -747,6 +785,52 @@ describe("terminalApps launch service", () => {
     await again.service.stop();
     expect(await readdir(again.root)).toBeDefined();
   });
+
+  it.each(["persisted-key", "legacy-valid-id", "missing-key"] as const)(
+    "persists canonical panel identity across process restart and retries (%s)",
+    async (format) => {
+      const h = await harness();
+      const first = (await call(h, "launch", personCtx("terminal-apps/chat"), {
+        source: "terminal-apps/chat",
+        cols: 80,
+        rows: 24,
+      })) as { sessionId: string; principalId: string };
+      await h.service.stop();
+      const registry = JSON.parse(await readFile(h.deps.registryPath, "utf8"));
+      if (format !== "persisted-key") delete registry.sessions[0].entityKey;
+      if (format === "missing-key") {
+        registry.sessions[0].entityId = `panel:terminal-session-${first.sessionId}`;
+      }
+      fs.writeFileSync(h.deps.registryPath, JSON.stringify(registry));
+      const again = await harness(h.deps.registryPath);
+      onTestFinished(() => again.service.stop());
+      vi.mocked(again.deps.primaryArtifactPath).mockRejectedValueOnce(
+        new Error("artifact unavailable")
+      );
+      await expect(
+        call(again, "resume", personCtx("terminal-apps/chat"), {
+          sessionId: first.sessionId,
+          cols: 80,
+          rows: 24,
+        })
+      ).rejects.toThrow("artifact unavailable");
+      const attemptedId = vi.mocked(again.deps.createEntity).mock.results[0]!.value;
+      const allocated = (await attemptedId).id;
+      expect(allocated).toMatch(/^panel:nav-[0-9a-f]{16}$/);
+      expect(allocated === first.principalId).toBe(format !== "missing-key");
+      const persisted = JSON.parse(await readFile(again.deps.registryPath, "utf8"));
+      expect(`panel:${persisted.sessions[0].entityKey}`).toBe(allocated);
+      const resumed = await call(again, "resume", personCtx("terminal-apps/chat"), {
+        sessionId: first.sessionId,
+        cols: 80,
+        rows: 24,
+      });
+      expect(resumed).toMatchObject({ principalId: allocated, running: true });
+      expect(vi.mocked(again.deps.createEntity).mock.calls[1]![1].key).toBe(
+        persisted.sessions[0].entityKey
+      );
+    }
+  );
 
   it("refuses runs the dispatcher did not prepare, and settings larger than 4 KB", async () => {
     const h = await harness();

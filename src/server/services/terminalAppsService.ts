@@ -26,6 +26,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
+import { isPanelEntityId, mintHistoryEntryKey } from "@vibestudio/shared/panel/idValues";
 import {
   terminalAppsMethods,
   TERMINAL_APPS_RUN_CAPABILITY,
@@ -96,6 +97,8 @@ interface StoredSession {
    * program runs and retired afterwards; its stateArgs carry over to the next.
    */
   entityId?: string;
+  /** Canonically allocated panel identity, persisted once across incarnations. */
+  entityKey?: string;
   shellSessionId: string | null;
   running: boolean;
   failure?: string;
@@ -408,6 +411,11 @@ export function createTerminalAppsService(
     let env: Record<string, string> = { COLORTERM: "truecolor" };
     try {
       ctx.signal?.throwIfAborted();
+      if (session.kind === "app" && !session.entityKey) {
+        session.entityKey = mintHistoryEntryKey();
+        // Admit the durable identity before creating a runtime or its lease.
+        saveRegistry();
+      }
       // The session's context is created once, by this call, so it is the call's
       // test policy (if any) that the context, and so everything the app or
       // shell runs in it, is decided under. An app incarnation is then created
@@ -427,7 +435,7 @@ export function createTerminalAppsService(
             execution: { surface: "code", source },
             // Runtime activation serializes this canonical identity across
             // incarnations; semantic state and owned attachment scopes survive.
-            key: `terminal-session-${session.sessionId}`,
+            key: session.entityKey,
             contextId: session.contextId,
             ...(previousState ? { stateArgs: previousState } : {}),
           }
@@ -743,6 +751,18 @@ function loadRegistry(file: string): RegistryFile {
   const value = JSON.parse(raw) as Partial<RegistryFile>;
   if (value.version !== 1 || !Array.isArray(value.sessions)) {
     throw new Error(`Unrecognized terminal session registry at ${file}`);
+  }
+  // Older registries retained only the runtime ID. Preserve an already valid
+  // panel identity when admitting those records into the persisted-key model.
+  for (const session of value.sessions) {
+    if (
+      session.kind === "app" &&
+      !session.entityKey &&
+      session.entityId &&
+      isPanelEntityId(session.entityId)
+    ) {
+      session.entityKey = session.entityId.slice("panel:".length);
+    }
   }
   return {
     version: 1,
