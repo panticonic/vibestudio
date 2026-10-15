@@ -182,13 +182,13 @@ export function includeDesktopRuntimeScriptClosure(appRoot, config) {
   assertRuntimeScriptDependencies({ packageRoot: appRoot, importedPackages: closure.bareImports });
 
   const added = closure.files.filter((file) => !included.has(file));
-  const files = config.files.map((fileSet) => {
-    const { set, patterns } = asFileSet(fileSet);
-    return { ...set, filter: [...patterns] };
-  });
+  // String rules share electron-builder's ordered root matcher. Converting
+  // them to independent FileSets turns exclusions into separate copy roots
+  // and can ship everything the original ordered rules excluded.
+  const files = [...config.files];
   const unpacked = new Set(config.asarUnpack);
   for (const file of added) {
-    files.push({ filter: [file] });
+    files.push(file);
     unpacked.add(file);
   }
   config.files = files;

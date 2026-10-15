@@ -19,8 +19,14 @@ files:
   - "scripts/owned-process-tree.mjs"
   - "scripts/owned-process-identity.mjs"
   - "scripts/historical-host-snapshot.mjs"
-  - "packages/**/*"
-  - "node_modules/**/*"
+  # Package source exports are compiler inputs, not independent npm installs.
+  # Only electron-builder's production dependency collector owns node_modules,
+  # including any genuine nested versions required by the installed graph.
+  - from: "packages"
+    to: "packages"
+    filter:
+      - "**/*"
+      - "!**/node_modules{,/**/*}"
   - "package.json"
 
 asar: true

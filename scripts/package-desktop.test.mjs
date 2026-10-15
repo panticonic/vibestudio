@@ -12,8 +12,13 @@ import {
 } from "./package-desktop.mjs";
 import { writeAfterPackCompletion } from "./lib/after-pack-completion.mjs";
 import { Platform } from "electron-builder";
-import { getNodeModuleFileMatcher } from "app-builder-lib/out/fileMatcher.js";
+import { parse } from "yaml";
+import { getMainFileMatchers, getNodeModuleFileMatcher } from "app-builder-lib/out/fileMatcher.js";
+import { AppFileWalker } from "app-builder-lib/out/util/AppFileWalker.js";
+import { NodeModuleCopyHelper } from "app-builder-lib/out/util/NodeModuleCopyHelper.js";
 import { PnpmNodeModulesCollector } from "app-builder-lib/out/node-module-collector/pnpmNodeModulesCollector.js";
+import { includeDesktopRuntimeScriptClosure } from "./lib/npm-runtime-script-closure.mjs";
+import includeRuntimeModuleFile from "./electron-runtime-module-files.mjs";
 
 const roots = [];
 function fixture() {
@@ -49,6 +54,126 @@ function fixture() {
 }
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("preserves the canonical ordered package boundary across both closure passes", async () => {
+  const root = fixture();
+  const config = parse(
+    fs.readFileSync(new URL("../electron-builder.yml", import.meta.url), "utf8")
+  );
+  const payloads = [
+    "dist/main.cjs",
+    "dist/host-generations/desktop-old/node_modules/electron/dist/electron",
+    "dist/node/releases/linux-x64/bin/node",
+    "dist/node-payload/releases/linux-x64/bin/node",
+    "dist/native-process-observer/linux-x64/observer",
+    "dist/source-server-prerequisites.lock",
+    "dist/host-build.lock",
+    "packages/env-paths/src/index.ts",
+    "packages/env-paths/dist/index.d.ts",
+    "packages/env-paths/node_modules/electron/dist/electron",
+    "node_modules/.pnpm/development-package/index.js",
+    "node_modules/entities/index.js",
+    "node_modules/htmlparser2/node_modules/entities/index.js",
+    "unrelated-private-source.txt",
+  ];
+  for (const relative of payloads) {
+    const absolute = path.join(root, relative);
+    fs.mkdirSync(path.dirname(absolute), { recursive: true });
+    fs.writeFileSync(absolute, "fixture");
+  }
+  // package-desktop adds the target exclusions between its closure pass and
+  // beforePack's second pass. Neither pass may turn a negative rule into an
+  // independent copy root, or route dependencies around their collector.
+  includeDesktopRuntimeScriptClosure(root, config);
+  config.files.push(
+    ...excludedNativePackages(root, "linux", "x64").map((name) => `!node_modules/${name}{,/**/*}`)
+  );
+  const filesBeforeSecondPass = structuredClone(config.files);
+  includeDesktopRuntimeScriptClosure(root, config);
+  assert.deepEqual(config.files, filesBeforeSecondPass);
+
+  const out = path.join(root, "release");
+  const destination = path.join(out, "app");
+  const packager = {
+    config: { ...config, onNodeModuleFile: includeRuntimeModuleFile },
+    projectDir: root,
+    buildResourcesDir: "build-resources",
+    debugLogger: { isEnabled: false },
+    appInfo: { type: "module" },
+    getWorkspaceRoot: async () => root,
+  };
+  const matchers = getMainFileMatchers(
+    root,
+    destination,
+    (value) => value,
+    {},
+    { info: packager },
+    out,
+    false
+  );
+  const walkers = matchers.map((matcher) => new AppFileWalker(matcher, packager));
+  const admitted = (relative) => {
+    const absolute = path.join(root, relative);
+    return walkers.some(({ matcher, filter }) => {
+      const within = path.relative(matcher.from, absolute);
+      return (
+        !within.startsWith("..") &&
+        !path.isAbsolute(within) &&
+        filter(absolute, fs.statSync(absolute))
+      );
+    });
+  };
+  for (const relative of [
+    "dist/main.cjs",
+    "scripts/cli/entry.mjs",
+    "scripts/lib/runtime-helper.mjs",
+    "packages/env-paths/src/index.ts",
+    "packages/env-paths/dist/index.d.ts",
+  ])
+    assert.equal(admitted(relative), true, relative);
+  for (const relative of payloads.filter(
+    (file) =>
+      ![
+        "dist/main.cjs",
+        "packages/env-paths/src/index.ts",
+        "packages/env-paths/dist/index.d.ts",
+      ].includes(file)
+  ))
+    assert.equal(admitted(relative), false, relative);
+
+  const moduleMatcher = getNodeModuleFileMatcher(root, destination, (value) => value, {}, packager);
+  const moduleFilter = moduleMatcher.createFilter();
+  for (const [name, kept] of [
+    ["workerd-linux-64", true],
+    ["workerd-linux-arm64", false],
+  ]) {
+    const file = path.join(root, "node_modules/@cloudflare", name, "package.json");
+    assert.equal(moduleFilter(file, fs.statSync(file)), kept, name);
+  }
+  // Real linked SDK packages keep source/type exports, but their development
+  // installs are not traversed. Required nested modules are copied separately
+  // at their collector-selected version and destination.
+  const copier = new NodeModuleCopyHelper(moduleMatcher, packager);
+  const sdkRoot = path.join(root, "packages/env-paths");
+  const sdkFiles = await copier.collectNodeModules(
+    { name: "@vibestudio/env-paths", dir: sdkRoot },
+    [".d.ts"],
+    "node_modules/@vibestudio/env-paths"
+  );
+  assert.deepEqual(sdkFiles.map((file) => path.relative(sdkRoot, file)).sort(), [
+    "dist/index.d.ts",
+    "src/index.ts",
+  ]);
+  const nestedRoot = path.join(root, "node_modules/htmlparser2/node_modules/entities");
+  assert.deepEqual(
+    await copier.collectNodeModules(
+      { name: "entities", dir: nestedRoot },
+      [],
+      "node_modules/htmlparser2/node_modules/entities"
+    ),
+    [path.join(nestedRoot, "index.js")]
+  );
 });
 
 test("selects one native architecture using the packager's real file matcher", () => {
@@ -149,12 +274,7 @@ test("promotes final installers and retires each joined staging tree", async () 
         typeof file === "string" && file.startsWith("!node_modules/@cloudflare/workerd-linux-arm64")
     )
   );
-  assert.ok(
-    seen[0].files.some(
-      (fileSet) =>
-        typeof fileSet === "object" && fileSet.filter?.includes("scripts/lib/runtime-helper.mjs")
-    )
-  );
+  assert.ok(seen[0].files.includes("scripts/lib/runtime-helper.mjs"));
   assert.ok(seen[0].asarUnpack.includes("scripts/lib/runtime-helper.mjs"));
   assert.deepEqual(fs.readdirSync(path.join(root, "release")).sort(), ["installer-1.deb"]);
 });
@@ -338,8 +458,8 @@ function validPreparedWorkspaceRelease(arch) {
     commit,
   });
   return {
-    format: "vibestudio-workspace-runtime-release/2",
-    version: 2,
+    format: "vibestudio-workspace-runtime-release/3",
+    version: 3,
     platform: "linux",
     arch,
     appDependencyFingerprint: "a".repeat(64),
@@ -357,6 +477,11 @@ function validPreparedWorkspaceRelease(arch) {
       base: pin("1".repeat(40)),
       personal: pin("2".repeat(40)),
       system: pin("3".repeat(40)),
+    },
+    layers: {
+      base: [pin("1".repeat(40))],
+      personal: [pin("2".repeat(40))],
+      system: [pin("3".repeat(40))],
     },
     preparedTemplates: ["base", "personal", "system"].map((workspace, index) => ({
       workspace,
