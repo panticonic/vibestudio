@@ -8,11 +8,17 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts",
+    ".": {
+      "react-native": "./src/index.native.ts",
+      "default": "./src/index.ts"
+    },
     "./connectLink": "./src/connectLink.ts",
     "./bundleDelivery": "./src/bundleDelivery.ts",
     "./nativeBridge": "./src/nativeBridge.ts",
-    "./polyfills": "./src/polyfills.ts"
+    "./polyfills": {
+      "react-native": "./src/polyfills.native.ts",
+      "default": "./src/polyfills.ts"
+    }
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/mobile-iroh/src",
@@ -25,13 +31,15 @@
     "@vibestudio/shared": "workspace:*",
     "@react-native-community/netinfo": "^11.4.1",
     "react-native-keychain": "^9.2.2",
-    "web-streams-polyfill": "^3.3.3"
+    "web-streams-polyfill": "^3.3.3",
+    "whatwg-fetch": "3.6.20"
   },
   "peerDependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",
     "react-native": "^0.79.0"
   },
   "devDependencies": {
+    "abort-controller": "3.0.0",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.4",
     "typescript": "7.0.2"

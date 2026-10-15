@@ -986,6 +986,9 @@ importers:
       web-streams-polyfill:
         specifier: ^3.3.3
         version: 3.3.3
+      whatwg-fetch:
+        specifier: 3.6.20
+        version: 3.6.20
     devDependencies:
       '@types/node':
         specifier: ^24.10.1
@@ -993,6 +996,9 @@ importers:
       '@types/react':
         specifier: ^19.2.4
         version: 19.2.10
+      abort-controller:
+        specifier: 3.0.0
+        version: 3.0.0
       typescript:
         specifier: 7.0.2
         version: 7.0.2
@@ -13179,7 +13185,9 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 

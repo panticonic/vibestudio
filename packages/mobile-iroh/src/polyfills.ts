@@ -15,6 +15,11 @@
  */
 
 import { ReadableStream as PonyfillReadableStream } from "web-streams-polyfill/ponyfill";
+import "./whatwgFetchTypes.js";
+import { DOMException } from "whatwg-fetch";
+import { installStandardAbortController } from "./abortController.js";
+
+installStandardAbortController(AbortController, AbortSignal, DOMException);
 
 {
   const g = globalThis as { ReadableStream?: unknown };

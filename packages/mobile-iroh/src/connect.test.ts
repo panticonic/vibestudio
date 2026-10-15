@@ -108,7 +108,11 @@ describe("MobileEndpointPool relay configuration", () => {
       makeReturningShellTokenProvider(credential),
       "installed-endpoint",
       "app-scheme",
-      { onRecovery: () => calls.push("account") }
+      {
+        onRecovery: () => {
+          calls.push("account");
+        },
+      }
     );
     const remove = fixture.rpcRecoveryRegistration!(() => calls.push("rpc"));
 
