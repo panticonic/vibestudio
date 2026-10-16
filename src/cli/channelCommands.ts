@@ -303,9 +303,7 @@ export interface ChannelFollow {
 
 /**
  * Follow `channelId` live: each durable event is rendered once, in order, and
- * a recovered transport resubscribes from the last rendered event. This is the
- * one mechanism that reads a channel (`channel tail`, and a background
- * intent's `text-stream` result).
+ * a recovered transport resubscribes from the last rendered event.
  */
 export async function followChannel(
   client: RpcClient,

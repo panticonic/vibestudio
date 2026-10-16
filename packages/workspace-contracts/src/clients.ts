@@ -227,10 +227,8 @@ export interface ClientIntentDecl {
   params?: Record<string, ClientIntentParamType>;
   /** Service method (`<protocol>#<method>`) listing dynamic entries for this intent. */
   dynamic?: string;
-  /** Background intents only: the workspace service method that handles it. */
+  /** Background intents only: the workspace service method that handles it; it returns text. */
   handler?: string;
-  /** Background intents only: the shape of the handler's result. */
-  result?: "text" | "text-stream";
   /** Foreground share-in intents: MIME patterns accepted. */
   accepts?: string[];
 }

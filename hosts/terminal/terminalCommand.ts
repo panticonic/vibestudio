@@ -36,8 +36,7 @@ import {
   selectRemoteWorkspace,
   serverEndpoint,
 } from "../../src/cli/remoteClient.js";
-import { RpcClient, refreshShell, shellCallerId } from "../../src/cli/rpcClient.js";
-import { followChannel, toHistoryEntry } from "../../src/cli/channelCommands.js";
+import { RpcClient, refreshShell } from "../../src/cli/rpcClient.js";
 import { EXIT_INTERRUPTED } from "./clientLaunchGate.js";
 import { deviceCall, terminalHostDescriptor } from "./clientDelivery.js";
 import {
@@ -396,8 +395,6 @@ async function planClient(
         decl,
         params,
         stdout: process.stdout,
-        followStream: (channelId) =>
-          followIntentStream(device, systemRoute.deviceId, channelId, signal),
       });
       return { kind: "ran" as const };
     },
@@ -409,41 +406,6 @@ async function planClient(
     },
     "Client intent and retirement failed"
   );
-}
-
-/** Print what a `text-stream` intent's channel says, through the CLI's one channel reader. */
-async function followIntentStream(
-  device: RpcClient,
-  deviceId: string,
-  channelId: string,
-  signal: AbortSignal
-): Promise<void> {
-  const callerId = shellCallerId(deviceId);
-  const follow = await followChannel(device, {
-    callerId,
-    channelId,
-    replayMessageLimit: 0,
-    render: (event) => {
-      if (event.senderId === callerId) return;
-      const entry = toHistoryEntry(event);
-      if (entry.text)
-        process.stdout.write(entry.text.endsWith("\n") ? entry.text : `${entry.text}\n`);
-    },
-  });
-  const abort = () => void follow.stop().catch(() => undefined);
-  signal.addEventListener("abort", abort, { once: true });
-  try {
-    await Promise.race([
-      follow.ended,
-      new Promise<void>((resolve) =>
-        signal.addEventListener("abort", () => resolve(), { once: true })
-      ),
-    ]);
-  } finally {
-    signal.removeEventListener("abort", abort);
-    await follow.stop();
-  }
-  signal.throwIfAborted();
 }
 
 async function readAll(stream: NodeJS.ReadStream, signal: AbortSignal): Promise<string> {

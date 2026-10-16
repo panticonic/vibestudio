@@ -392,6 +392,14 @@ function validateIntents(value: unknown, options: UnitManifestValidationOptions)
       );
     }
     names.add(name);
+    for (const key of Object.keys(intent)) {
+      if (!INTENT_KEYS.has(key)) {
+        throw clientError(
+          `Client ${options.unitName} intent "${name}" has unknown field "${key}"`,
+          "MANIFEST_CLIENT_INTENT_FIELD"
+        );
+      }
+    }
     const kind = intent["kind"];
     if (kind !== "foreground" && kind !== "background") {
       throw clientError(
@@ -446,13 +454,6 @@ function validateIntents(value: unknown, options: UnitManifestValidationOptions)
           "MANIFEST_CLIENT_INTENT_HANDLER"
         );
       }
-      const result = intent["result"];
-      if (result !== undefined && result !== "text" && result !== "text-stream") {
-        throw clientError(
-          `Client ${options.unitName} intent "${name}" result must be "text" or "text-stream"`,
-          "MANIFEST_CLIENT_INTENT_RESULT"
-        );
-      }
       if (intent["accepts"] !== undefined) {
         throw clientError(
           `Client ${options.unitName} background intent "${name}" cannot accept shared content`,
@@ -460,9 +461,9 @@ function validateIntents(value: unknown, options: UnitManifestValidationOptions)
         );
       }
     } else {
-      if (intent["handler"] !== undefined || intent["result"] !== undefined) {
+      if (intent["handler"] !== undefined) {
         throw clientError(
-          `Client ${options.unitName} foreground intent "${name}" cannot declare a handler or result`,
+          `Client ${options.unitName} foreground intent "${name}" cannot declare a handler`,
           "MANIFEST_CLIENT_INTENT_HANDLER"
         );
       }
@@ -558,6 +559,8 @@ function validateIntegration(
     }
   }
 }
+
+const INTENT_KEYS = new Set(["name", "kind", "title", "params", "dynamic", "handler", "accepts"]);
 
 function validateClientBlock(
   record: Record<string, unknown>,

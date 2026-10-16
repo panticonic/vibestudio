@@ -12,7 +12,6 @@ const ask: ClientIntentDecl = {
   kind: "background",
   params: { prompt: "text" },
   handler: "vibestudio.channel.v1#ask",
-  result: "text-stream",
 };
 const echo: ClientIntentDecl = {
   name: "echo",
@@ -88,10 +87,9 @@ describe("background intents", () => {
       call,
       descriptor,
       clientId: "chat",
-      decl: { name: "echo", kind: "background", result: "text" },
+      decl: { name: "echo", kind: "background" },
       params: { a: "x" },
       stdout: { write: (text: string) => (out.push(text), true) },
-      followStream: vi.fn(),
     });
     expect(call).toHaveBeenCalledTimes(1);
     expect(call).toHaveBeenCalledWith("clients", "invokeIntent", [
@@ -99,22 +97,5 @@ describe("background intents", () => {
       { id: "chat", intent: "echo", params: { a: "x" } },
     ]);
     expect(out).toEqual(["pong\n"]);
-  });
-
-  it("hands a text-stream result's channel to the channel reader", async () => {
-    const call = vi.fn(async () => ({ stream: { channelId: "ch-1" } }));
-    const followStream = vi.fn(async () => undefined);
-    const out: string[] = [];
-    await runBackgroundIntent({
-      call,
-      descriptor,
-      clientId: "chat",
-      decl: ask,
-      params: { prompt: "hi" },
-      stdout: { write: (text: string) => (out.push(text), true) },
-      followStream,
-    });
-    expect(followStream).toHaveBeenCalledWith("ch-1");
-    expect(out).toEqual([]);
   });
 });

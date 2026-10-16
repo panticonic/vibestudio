@@ -76,7 +76,6 @@ const ClientIntentDeclSchema = z
     params: z.record(z.string(), z.enum(["string", "text"])).optional(),
     dynamic: z.string().optional(),
     handler: z.string().optional(),
-    result: z.enum(["text", "text-stream"]).optional(),
     accepts: z.array(z.string()).optional(),
   })
   .strict();
@@ -171,12 +170,8 @@ export const ClientIntentInvocationSchema = z
 
 export const ClientIntentResultSchema = z
   .object({
-    /** The handler's text result. A `text-stream` intent returns a channel id to read. */
-    text: z.string().optional(),
-    stream: z
-      .object({ channelId: z.string().min(1) })
-      .strict()
-      .optional(),
+    /** The handler's text result, once it has finished. */
+    text: z.string(),
   })
   .strict();
 

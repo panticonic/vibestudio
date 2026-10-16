@@ -164,26 +164,12 @@ describe("clients service", () => {
     );
   });
 
-  it("requires a text-stream intent handler to name its stream channel", async () => {
-    const { service, clientHost, callClientHandler, ctx } = fixture();
-    vi.mocked(clientHost!.resolveBackgroundIntent).mockReturnValue({
-      source: "clients/chat-terminal",
-      intent: {
-        name: "ask",
-        kind: "background",
-        handler: "vibestudio.chat.v1#ask",
-        params: { prompt: "text" },
-        result: "text-stream",
-      },
-    });
+  it("requires a background intent handler to return text", async () => {
+    const { service, callClientHandler, ctx } = fixture();
     callClientHandler.mockResolvedValueOnce({ channelId: "ch-1" });
     await expect(
       service.handler(ctx(), "invokeIntent", [HOST, { id: "chat", intent: "ask" }])
-    ).resolves.toEqual({ stream: { channelId: "ch-1" } });
-    callClientHandler.mockResolvedValueOnce("plain");
-    await expect(
-      service.handler(ctx(), "invokeIntent", [HOST, { id: "chat", intent: "ask" }])
-    ).rejects.toThrow("returned no stream channel");
+    ).rejects.toThrow("must return text");
   });
 
   it("runs a background intent through its handler with the declared parameters only", async () => {

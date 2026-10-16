@@ -86,8 +86,6 @@ export interface BackgroundIntentRun {
   decl: ClientIntentDecl;
   params: Record<string, string>;
   stdout: Pick<NodeJS.WriteStream, "write">;
-  /** Reads a `text-stream` result's channel to its end (the CLI's channel follow). */
-  followStream(channelId: string): Promise<void>;
 }
 
 /**
@@ -100,10 +98,6 @@ export async function runBackgroundIntent(run: BackgroundIntentRun): Promise<voi
     intent: run.decl.name,
     params: run.params,
   });
-  if (result.stream) {
-    await run.followStream(result.stream.channelId);
-    return;
-  }
-  const text = result.text ?? "";
+  const { text } = result;
   run.stdout.write(text.endsWith("\n") || text === "" ? text : `${text}\n`);
 }

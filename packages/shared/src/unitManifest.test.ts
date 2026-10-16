@@ -240,6 +240,18 @@ describe("validateUnitManifest", () => {
     ).not.toThrow();
   });
 
+  it("rejects intent fields the contract does not define", () => {
+    expect(() =>
+      validateClient(
+        webClient({
+          intents: [
+            { name: "ask", kind: "background", handler: "chat.v1#ask", result: "text-stream" },
+          ],
+        })
+      )
+    ).toThrow(/intent "ask" has unknown field "result"/);
+  });
+
   it("rejects an entry that escapes the package", () => {
     expect(() => validateClient(webClient({ entry: "../native/App" }))).toThrow(
       /package-relative module path/

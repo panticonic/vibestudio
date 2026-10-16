@@ -27,17 +27,7 @@ const MAX_DYNAMIC_ENTRIES = 32;
 
 type DynamicEntry = { title: string; params: Record<string, string> };
 
-function intentResult(
-  intent: ClientIntentDecl,
-  result: unknown
-): { text: string } | { stream: { channelId: string } } {
-  if (intent.result === "text-stream") {
-    const channelId = (result as { channelId?: unknown } | null)?.channelId;
-    if (typeof channelId !== "string" || channelId.length === 0) {
-      throw new Error(`Intent handler ${intent.handler} returned no stream channel`);
-    }
-    return { stream: { channelId } };
-  }
+function intentResult(intent: ClientIntentDecl, result: unknown): { text: string } {
   if (typeof result !== "string") {
     throw new Error(`Intent handler ${intent.handler} must return text`);
   }
