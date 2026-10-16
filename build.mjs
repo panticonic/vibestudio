@@ -12,7 +12,6 @@ import { prepareNativeDependencyFiles } from "./scripts/native-host-dependencies
 import * as fs from "fs";
 import * as path from "path";
 import { execFileSync } from "node:child_process";
-import { execPnpmSync } from "./scripts/cli/lib/package-manager.mjs";
 import { randomUUID } from "node:crypto";
 import { builtinModules, createRequire } from "node:module";
 import { collectWorkersFromDependencies, workersToArray } from "./scripts/collectWorkers.mjs";
@@ -227,7 +226,7 @@ const dependencyContentMaintenanceConfig = {
 
 // Stub out 'electron' for the standalone ESM server build.
 //
-// Problem: Shared code in src/main/ contains `try { require("electron") } catch`
+// Problem: Shared code in hosts/desktop/main/ contains `try { require("electron") } catch`
 // guards that esbuild hoists to top-level ESM `import` statements. These fail
 // at module load time when electron isn't installed.
 //
@@ -483,7 +482,7 @@ const releaseVerifierRunnerConfig = {
 };
 
 const adblockWorkerConfig = {
-  entryPoints: ["src/main/adblock/filterEngineWorker.ts"],
+  entryPoints: ["hosts/desktop/main/adblock/filterEngineWorker.ts"],
   bundle: true,
   platform: "node",
   target: "node20",
@@ -495,7 +494,7 @@ const adblockWorkerConfig = {
 };
 
 const mainConfig = {
-  entryPoints: ["src/main/index.ts"],
+  entryPoints: ["hosts/desktop/main/index.ts"],
   bundle: true,
   platform: "node",
   target: "node20",
@@ -517,7 +516,7 @@ const __injected_dirname__ = typeof __dirname !== 'undefined' ? __dirname : (typ
 
 function createPreloadConfig(name) {
   return {
-    entryPoints: [`src/preload/${name}.ts`],
+    entryPoints: [`hosts/desktop/preload/${name}.ts`],
     bundle: true,
     platform: "node",
     target: "node20",
@@ -620,7 +619,7 @@ const bootstrapExternalsPlugin = {
 };
 
 const bootstrapConfig = {
-  entryPoints: ["src/bootstrap/index.ts"],
+  entryPoints: ["hosts/desktop/bootstrap/index.ts"],
   bundle: true,
   platform: "browser",
   target: "es2022",
@@ -663,9 +662,9 @@ function copyBrandAssets() {
 }
 
 function copyAssets() {
-  fs.copyFileSync("src/bootstrap/index.html", "dist/index.html");
-  fs.copyFileSync("src/main/browserPrivacy.html", "dist/browserPrivacy.html");
-  fs.copyFileSync("src/main/displayCapture.html", "dist/displayCapture.html");
+  fs.copyFileSync("hosts/desktop/bootstrap/index.html", "dist/index.html");
+  fs.copyFileSync("hosts/desktop/main/browserPrivacy.html", "dist/browserPrivacy.html");
+  fs.copyFileSync("hosts/desktop/main/displayCapture.html", "dist/displayCapture.html");
   copySqlJsRuntimeAsset("dist");
   copyBrandAssets();
   fs.mkdirSync("dist/baked-app", { recursive: true });
@@ -698,15 +697,17 @@ async function buildVibestudioPackages() {
   }
 }
 
-async function buildHeadlessHost() {
-  console.log("Building @vibestudio/headless-host...");
+// @vibestudio/headless-renderer is an infrastructure package: buildVibestudioPackages()
+// builds it once, in dependency order, with the others. Staging only copies its output
+// to the runtime location the server and packaging expect.
+async function stageHeadlessHost() {
+  console.log("Staging @vibestudio/headless-renderer as dist/headless-host...");
   try {
-    execPnpmSync(["--filter", "@vibestudio/headless-host", "build"], { stdio: "inherit" });
     fs.rmSync("dist/headless-host", { recursive: true, force: true });
-    copyDirectoryRecursive("apps/headless-host/dist", "dist/headless-host");
-    console.log("@vibestudio/headless-host built successfully!");
+    copyDirectoryRecursive("packages/headless-renderer/dist", "dist/headless-host");
+    console.log("@vibestudio/headless-renderer staged successfully!");
   } catch (error) {
-    console.error("Failed to build @vibestudio/headless-host:", error);
+    console.error("Failed to stage @vibestudio/headless-renderer:", error);
     throw error;
   }
 }
@@ -835,7 +836,7 @@ async function build() {
           assertHostBuildMetafiles,
           buildHostArtifact
         ),
-      () => buildHeadlessHost(),
+      () => stageHeadlessHost(),
     ]);
     await joinBuildOperations([
       () => buildDependencyWorkers(),
@@ -999,7 +1000,7 @@ async function buildSourceServerPrerequisites() {
           assertHostBuildMetafiles,
           buildHostArtifact
         ),
-      () => buildHeadlessHost(),
+      () => stageHeadlessHost(),
     ]);
     await buildServerArtifacts(["standalone"], programs);
     copySqlJsRuntimeAsset("dist");

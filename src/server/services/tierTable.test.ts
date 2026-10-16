@@ -30,7 +30,7 @@ describe("reviewed host method tiers", () => {
     for (const matrix of [
       readMatrix("./__serviceAuthorityMatrix.golden.json"),
       readMatrix("../__hubServiceAuthorityMatrix.golden.json"),
-      readMatrix("../../main/services/__serviceAuthorityMatrix.golden.json"),
+      readMatrix("../../../hosts/desktop/main/services/__serviceAuthorityMatrix.golden.json"),
     ]) {
       for (const [service, entry] of Object.entries(matrix)) {
         for (const [method, declaration] of Object.entries(entry.methods)) {

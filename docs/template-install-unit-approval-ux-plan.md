@@ -215,7 +215,7 @@ The clean-state startup observed on 2026-07-30:
   sets `caller.codeApproved` → `grantCode` → `productAuthorityGrants` synthesizes
   an allow for every declared request (`productAuthorityGrants.ts:54-67`,
   `src/server/index.ts:869`, `src/server/rpcServer.ts:3510`,
-  `src/main/index.ts:1922`);
+  `hosts/desktop/main/index.ts:1922`);
 - `UnitBatchEntryKind` models neither Durable Objects nor providers.
 
 The decision semantics are wrong, not the card size. And note what the fix is
@@ -928,7 +928,7 @@ It is also, after §7.1, the **only** review these units ever get, including for
 third-party root. So it is specified properly here rather than treated as chrome.
 
 **The surface is more capable than "pre-shell" suggests.** It is a host-owned web
-page (`src/bootstrap/index.html`, `src/bootstrap/index.ts`), not a system dialog.
+page (`hosts/desktop/bootstrap/index.html`, `hosts/desktop/bootstrap/index.ts`), not a system dialog.
 It cannot use components built from workspace source, but it can render whatever
 the host ships. Nothing below is constrained by the surface; it is constrained by
 what is worth saying at this moment.
@@ -1392,7 +1392,7 @@ Smallest phase, largest visible win, no new UI. Worth landing alone.
 4. Mint clearance grants into `capabilityGrantStore` at admission, per unit
    version, per policy.
 5. Delete the `app`/`extension` bypass in `isCodeApproved` and the unconditional
-   `grantCode` in `src/main/index.ts:1922`.
+   `grantCode` in `hosts/desktop/main/index.ts:1922`.
 6. Add the `review-pending` non-acquirable outcome (U6) and wire the review kinds
    to it.
 7. Delete development approval state at cutover. No backfill.

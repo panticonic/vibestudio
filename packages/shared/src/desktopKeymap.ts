@@ -1,7 +1,7 @@
 /**
  * The one place a desktop key binding is decided.
  *
- * There used to be three. `src/main/menu.ts` registered the accelerators that
+ * There used to be three. `hosts/desktop/main/menu.ts` registered the accelerators that
  * actually fire, `panelCommands.ts` told context menus what to print next to
  * each command, and the keyboard-shortcuts about page kept its own table
  * "mirroring" the menu. They disagreed, which is what a reader would predict

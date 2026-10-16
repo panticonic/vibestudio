@@ -66,8 +66,8 @@ describe("host build fingerprint", () => {
 
   it("ignores mutable local Wrangler state under app sources", () => {
     const cwd = fixture();
-    const appSource = path.join(cwd, "apps", "signaling", "src", "index.ts");
-    const wranglerState = path.join(cwd, "apps", "signaling", ".wrangler", "state.sqlite");
+    const appSource = path.join(cwd, "services", "signaling", "src", "index.ts");
+    const wranglerState = path.join(cwd, "services", "signaling", ".wrangler", "state.sqlite");
     fs.mkdirSync(path.dirname(appSource), { recursive: true });
     fs.mkdirSync(path.dirname(wranglerState), { recursive: true });
     fs.writeFileSync(appSource, "export default {}\n");

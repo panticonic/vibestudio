@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 export function loadHostServiceAuthorityMatrices(root) {
   return [
     "src/server/services/__serviceAuthorityMatrix.golden.json",
-    "src/main/services/__serviceAuthorityMatrix.golden.json",
+    "hosts/desktop/main/services/__serviceAuthorityMatrix.golden.json",
     "src/server/__hubServiceAuthorityMatrix.golden.json",
   ].map((relative) => JSON.parse(fs.readFileSync(path.join(root, relative), "utf8")));
 }

@@ -1,0 +1,9 @@
+# React Native
+node_modules/
+
+# Metro
+.metro-health-check*
+
+# Bundle output
+*.jsbundle
+*.bundle

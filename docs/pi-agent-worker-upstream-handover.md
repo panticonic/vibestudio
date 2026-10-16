@@ -339,7 +339,7 @@ handover note:
 
 ```sh
 pnpm install --frozen-lockfile
-pnpm --dir apps/mobile exec jest --runInBand
+pnpm --dir hosts/react-native exec jest --runInBand
 pnpm vitest run workspace/packages/harness/src/pi-runner.test.ts workspace/packages/agentic-do/src/content-block-projector.test.ts workspace/packages/agentic-do/src/turn-dispatcher.test.ts workspace/packages/agentic-do/src/agent-worker-base.integration.test.ts
 pnpm run type-check
 pnpm build

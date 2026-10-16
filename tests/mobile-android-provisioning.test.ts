@@ -2,15 +2,15 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const provisioning = readFileSync(
-  "apps/mobile/android/app/src/main/java/app/vibestudio/mobile/ProvisioningActivity.kt",
+  "hosts/android/app/src/main/java/app/vibestudio/mobile/ProvisioningActivity.kt",
   "utf8"
 );
 const main = readFileSync(
-  "apps/mobile/android/app/src/main/java/app/vibestudio/mobile/MainActivity.kt",
+  "hosts/android/app/src/main/java/app/vibestudio/mobile/MainActivity.kt",
   "utf8"
 );
 const nativeHost = readFileSync(
-  "apps/mobile/android/app/src/main/java/app/vibestudio/mobile/VibestudioMobileHostModule.kt",
+  "hosts/android/app/src/main/java/app/vibestudio/mobile/VibestudioMobileHostModule.kt",
   "utf8"
 );
 

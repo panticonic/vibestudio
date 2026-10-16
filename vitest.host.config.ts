@@ -34,8 +34,10 @@ export default defineConfig({
       "packages/**/*.test.tsx",
       "tests/**/*.test.ts",
       "tests/**/*.test.tsx",
-      "apps/**/*.test.ts",
-      "apps/**/*.test.tsx",
+      "hosts/**/*.test.ts",
+      "hosts/**/*.test.tsx",
+      "services/**/*.test.ts",
+      "services/**/*.test.tsx",
     ],
     exclude: [
       ...vitestSharedConfig.test.exclude,

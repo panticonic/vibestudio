@@ -5,13 +5,13 @@ import path from "node:path";
 import { app, BrowserWindow, session } from "electron";
 import type { BrowserCookieInput, ImportBatchSink } from "@vibestudio/browser-data";
 import { browserEnvironmentPartition } from "@vibestudio/shared/panelInterfaces";
-import { scopedNativePartition } from "../../src/main/nativeStorageScope";
+import { scopedNativePartition } from "../../hosts/desktop/main/nativeStorageScope";
 import {
   createBrowserCookieProjectionService,
   cookieContentHash,
-} from "../../src/main/services/browserCookieProjection";
-import { BrowserImportHostProvider } from "../../src/main/services/browserImportHostProvider";
-import { SensitiveBrowserImportLedger } from "../../src/main/services/sensitiveBrowserImportLedger";
+} from "../../hosts/desktop/main/services/browserCookieProjection";
+import { BrowserImportHostProvider } from "../../hosts/desktop/main/services/browserImportHostProvider";
+import { SensitiveBrowserImportLedger } from "../../hosts/desktop/main/services/sensitiveBrowserImportLedger";
 
 const root = process.env["VIBESTUDIO_COOKIE_NATIVE_ROOT"]!;
 const phase = process.env["VIBESTUDIO_COOKIE_NATIVE_PHASE"]!;

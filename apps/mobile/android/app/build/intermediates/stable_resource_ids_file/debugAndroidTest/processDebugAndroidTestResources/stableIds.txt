@@ -1,0 +1,3 @@
+app.vibestudio.mobile.test:style/WhiteBackgroundTheme = 0x7f020001
+app.vibestudio.mobile.test:style/WhiteBackgroundDialogTheme = 0x7f020000
+app.vibestudio.mobile.test:integer/react_native_dev_server_port = 0x7f010000

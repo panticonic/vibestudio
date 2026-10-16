@@ -59,7 +59,7 @@ if (!existing) {
 const digest = createHash("sha256").update(token).digest("hex");
 const child = spawn(
   "pnpm",
-  ["exec", "wrangler", "secret", "put", "REPORT_KEYS", "--config", "apps/webhook-relay/wrangler.toml"],
+  ["exec", "wrangler", "secret", "put", "REPORT_KEYS", "--config", "services/webhook-relay/wrangler.toml"],
   { stdio: ["pipe", "inherit", "inherit"] }
 );
 child.stdin.end(JSON.stringify([{ id: credentialId, digest }]));

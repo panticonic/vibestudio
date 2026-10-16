@@ -62,7 +62,7 @@ tool selection, and panel binding differ.
   opaque `intent`s out; **no RPC inside the surface**. Chrome-side owner holds
   all state and RPC. Files: `base/apps/shell/overlay/{types,registry,
 OverlaySurfaceHost,overlayBridge}.tsx`, `shell/useShellContentOverlay.ts`,
-  host `src/main/shellContentOverlayView.ts`, wire contract
+  host `hosts/desktop/main/shellContentOverlayView.ts`, wire contract
   `packages/service-schemas/src/view.ts` (`showContentOverlay` etc.).
   Today's only surface key is `"approval-card"`. **Caveat this plan fixes**:
   the main-process view is a singleton — one instance, one loaded surface,
@@ -78,7 +78,7 @@ OverlaySurfaceHost,overlayBridge}.tsx`, `shell/useShellContentOverlay.ts`,
   with arguments and metadata.
 - **Keyboard truth**: panel `WebContentsView`s swallow window keydowns, so the
   desktop entry point must be the Electron menu accelerator
-  (`src/main/menu.ts`; currently `Cmd+K` / `Ctrl+Shift+K` →
+  (`hosts/desktop/main/menu.ts`; currently `Cmd+K` / `Ctrl+Shift+K` →
   `open-command-palette`). The renderer keydown listener is only a fallback.
 - **Focused panel**: desktop derives `focusedPanelId` from
   `layout.focusedPaneId`, mirrors it into main
@@ -100,7 +100,7 @@ OverlaySurfaceHost,overlayBridge}.tsx`, `shell/useShellContentOverlay.ts`,
   `panelCdp` service (`src/server/services/panelCdpService.ts`) with
   `getCdpEndpoint(panelId)` (full WS endpoint) plus **one-RPC helpers**
   `panelCdp.screenshot` and `panelCdp.consoleHistory`. Headless host
-  (`apps/headless-host`) guarantees a CDP-capable lease holder.
+  (`packages/headless-renderer`) guarantees a CDP-capable lease holder.
 - Gating: `panel.inspect` (primary capability) + `context.boundary`
   (`src/server/services/contextBoundary.ts`, resource key
   `context/<targetCtx>/requester/<subjectId>`), severity `critical` for
@@ -232,7 +232,7 @@ long-press on the tab strip.
 │  packages/shared/src/hostCommands.ts              ← extend schema  │
 │  src/server/services/panelContextService.ts       ← NEW (§5.2)     │
 │  src/server/services/runtimeResourceBindings.ts   ← generic bind   │
-│  src/main/menu.ts                                 ← accelerators   │
+│  hosts/desktop/main/menu.ts                                 ← accelerators   │
 │ Base userland                                                       │
 │  workers/quickfire-service:QuickfireSessionsDO ← session owner     │
 │  workers/agent-worker:AiChatWorker ← standard configurable agent   │
@@ -340,7 +340,7 @@ theme}` as props; emits intents `{type: "input", value}`,
 - **Focus**: unlike the approval card, the palette _always_ takes keyboard
   focus on open (one-shot `focusRequest`). `Esc`/dismiss restores focus to
   the previously focused panel via `panel.focusPanel`.
-- **Menu**: `src/main/menu.ts` gains `open-quickfire`
+- **Menu**: `hosts/desktop/main/menu.ts` gains `open-quickfire`
   (`CmdOrCtrl+Shift+K`) and rebinds `open-command-palette` to
   `CmdOrCtrl+K` on all platforms (both menu definitions).
 - `AppCommandPalette.tsx` is deleted once the slate reaches parity (P2);
@@ -845,7 +845,7 @@ One aggregate RPC (`src/server/services/panelContextService.ts`, schema
 `packages/service-schemas/src/panelContext.ts`) for the agent's snapshot
 builder — with an explicit ownership split, because not all the facts live
 server-side. `getChromeState` is an Electron-main service reading the
-main-process panel registry (`src/main/services/panelShellService.ts`);
+main-process panel registry (`hosts/desktop/main/services/panelShellService.ts`);
 favicon, display/editable address, and back/forward state are
 presentation-local and a plain server service cannot read them.
 

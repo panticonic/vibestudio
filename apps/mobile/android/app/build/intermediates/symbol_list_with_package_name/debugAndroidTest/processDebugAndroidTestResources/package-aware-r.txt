@@ -1,0 +1,4 @@
+app.vibestudio.mobile.test
+integer react_native_dev_server_port
+style WhiteBackgroundDialogTheme
+style WhiteBackgroundTheme

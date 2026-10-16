@@ -1058,9 +1058,9 @@ audit-time hints; names and responsibilities are controlling.
 | Workspace-service enforcement | `src/server/rpcServer.ts`, `src/server/buildV2/authorityFold.ts` | Preserve envelope and leaf enforcement; compose acquisition only |
 | Unit admission/review | `src/server/unitInstallReviewCoordinator.ts`, `packages/unit-host/src/index.ts` | Make admission plus selected clearance one atomic transaction |
 | Governance types | `packages/shared/src/governance/types.ts` | Extend from resolution provenance to the full operation/grant lifecycle |
-| Desktop attention | `src/main/approvalAttention.ts`, `src/main/serverEventBridge.ts` | Presenter for the canonical decision ID |
+| Desktop attention | `hosts/desktop/main/approvalAttention.ts`, `hosts/desktop/main/serverEventBridge.ts` | Presenter for the canonical decision ID |
 | Mobile/push | `packages/shared/src/approvalContract.ts`, `src/server/services/approvalPushBridge.ts` | Presenter/fan-out only |
-| Bootstrap/terminal | `packages/shared/src/bootstrapLaunchGate.ts`, `src/bootstrap/index.ts`, `src/cli/terminalLaunchGate.ts` | Preserve distinct launch question; use shared decision identity |
+| Bootstrap/terminal | `packages/shared/src/bootstrapLaunchGate.ts`, `hosts/desktop/bootstrap/index.ts`, `hosts/terminal/terminalLaunchGate.ts` | Preserve distinct launch question; use shared decision identity |
 | Attached host | `src/server/services/attachedHostApprovalPresenter.ts` | Preserve signed evidence, eliminate duplicate-looking local decision |
 
 ### 14.1 Existing mechanisms worth keeping

@@ -6,7 +6,7 @@
  * Android AAR are overridden onto a build carrying stream and endpoint-readiness
  * cancellation repairs. Those
  * substitutions are enforced where they are resolved -- root `pnpm.overrides`
- * plus the lockfile for Node, and `apps/mobile/android/gradle/verification-
+ * plus the lockfile for Node, and `hosts/android/gradle/verification-
  * metadata.xml` for the AAR -- so read the digests below as upstream's, not as
  * the bytes shipped.
  */

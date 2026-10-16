@@ -20,15 +20,15 @@ import type {
   ImportPreviewSummary,
 } from "@vibestudio/browser-data";
 import { BrowserImportAdmissions, ImportHostSummarySchema } from "@vibestudio/browser-data";
-import type { BrowserEnvironmentImportRouter } from "../../main/services/browserEnvironmentService.js";
-import { BrowserImportHostProvider } from "../../main/services/browserImportHostProvider.js";
+import type { BrowserEnvironmentImportRouter } from "../../../hosts/desktop/main/services/browserEnvironmentService.js";
+import { BrowserImportHostProvider } from "../../../hosts/desktop/main/services/browserImportHostProvider.js";
 import type {
   BrowserImportProviderFrame,
   BrowserPublicImportDataType,
   BrowserSensitiveImportDataType,
   SensitiveBrowserImportStatus,
-} from "../../main/services/browserImportHostProvider.js";
-import { SensitiveBrowserImportLedger } from "../../main/services/sensitiveBrowserImportLedger.js";
+} from "../../../hosts/desktop/main/services/browserImportHostProvider.js";
+import { SensitiveBrowserImportLedger } from "../../../hosts/desktop/main/services/sensitiveBrowserImportLedger.js";
 import { browserEnvironmentIdentityFromContext } from "../browserEnvironmentIdentity.js";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 

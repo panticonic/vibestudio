@@ -1,0 +1,1014 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="app.vibestudio.mobile.internal"
+4    android:versionCode="1"
+5    android:versionName="0.1.52-internal" >
+6
+7    <uses-sdk
+8        android:minSdkVersion="24"
+9        android:targetSdkVersion="34" />
+10
+11    <uses-permission android:name="android.permission.INTERNET" />
+11-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:5:5-67
+11-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:5:22-64
+12    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+12-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:6:5-77
+12-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:6:22-74
+13    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+13-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:7:5-87
+13-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:7:22-84
+14    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+14-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:8:5-77
+14-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:8:22-74
+15    <uses-permission android:name="android.permission.CAMERA" />
+15-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:9:5-65
+15-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:9:22-62
+16    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+16-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:10:5-71
+16-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:10:22-68
+17    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+17-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:11:5-81
+17-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:11:22-78
+18    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+18-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:12:5-79
+18-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:12:22-76
+19    <uses-permission android:name="android.permission.USE_BIOMETRIC" />
+19-->[:react-native-keychain] /home/werg/vibestudio/node_modules/react-native-keychain/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:10:5-72
+19-->[:react-native-keychain] /home/werg/vibestudio/node_modules/react-native-keychain/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:10:22-69
+20    <uses-permission android:name="android.permission.USE_FINGERPRINT" />
+20-->[:react-native-keychain] /home/werg/vibestudio/node_modules/react-native-keychain/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:11:5-74
+20-->[:react-native-keychain] /home/werg/vibestudio/node_modules/react-native-keychain/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:11:22-71
+21
+22    <queries>
+22-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:7:5-17:15
+23        <intent>
+23-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:8:9-10:18
+24            <action android:name="org.chromium.intent.action.PAY" />
+24-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:9:13-69
+24-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:9:21-66
+25        </intent>
+26        <intent>
+26-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:11:9-13:18
+27            <action android:name="org.chromium.intent.action.IS_READY_TO_PAY" />
+27-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:12:13-81
+27-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:12:21-78
+28        </intent>
+29        <intent>
+29-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:14:9-16:18
+30            <action android:name="org.chromium.intent.action.UPDATE_PAYMENT_DETAILS" />
+30-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:15:13-88
+30-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:15:21-85
+31        </intent>
+32        <intent>
+32-->[androidx.camera:camera-extensions:1.5.3] /home/werg/.gradle/caches/8.11.1/transforms/654655309d97ebbe1fa1d0eb94b5a8ba/transformed/camera-extensions-1.5.3/AndroidManifest.xml:23:9-25:18
+33            <action android:name="androidx.camera.extensions.action.VENDOR_ACTION" />
+33-->[androidx.camera:camera-extensions:1.5.3] /home/werg/.gradle/caches/8.11.1/transforms/654655309d97ebbe1fa1d0eb94b5a8ba/transformed/camera-extensions-1.5.3/AndroidManifest.xml:24:13-86
+33-->[androidx.camera:camera-extensions:1.5.3] /home/werg/.gradle/caches/8.11.1/transforms/654655309d97ebbe1fa1d0eb94b5a8ba/transformed/camera-extensions-1.5.3/AndroidManifest.xml:24:21-83
+34        </intent>
+35    </queries>
+36
+37    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+37-->[:react-native-community_netinfo] /home/werg/vibestudio/node_modules/@react-native-community/netinfo/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:7:5-79
+37-->[:react-native-community_netinfo] /home/werg/vibestudio/node_modules/@react-native-community/netinfo/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:7:22-76
+38    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+38-->[:react-native-community_netinfo] /home/werg/vibestudio/node_modules/@react-native-community/netinfo/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:8:5-76
+38-->[:react-native-community_netinfo] /home/werg/vibestudio/node_modules/@react-native-community/netinfo/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:8:22-73
+39    <uses-permission android:name="android.permission.WAKE_LOCK" />
+39-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:8:5-68
+39-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:8:22-65
+40    <uses-permission android:name="android.permission.VIBRATE" />
+40-->[:react-native-haptic-feedback] /home/werg/vibestudio/node_modules/react-native-haptic-feedback/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:7:5-66
+40-->[:react-native-haptic-feedback] /home/werg/vibestudio/node_modules/react-native-haptic-feedback/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:7:22-63
+41    <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
+41-->[:react-native-tcp-socket] /home/werg/vibestudio/node_modules/react-native-tcp-socket/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:8:5-79
+41-->[:react-native-tcp-socket] /home/werg/vibestudio/node_modules/react-native-tcp-socket/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:8:22-76
+42    <!--
+43    This manifest file is used only by Gradle to configure debug-only capabilities
+44    for React Native Apps.
+45    -->
+46    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+46-->[com.facebook.react:react-android:0.79.7] /home/werg/.gradle/caches/8.11.1/transforms/fb651c48ad43096cc959e73db341b0f7/transformed/react-android-0.79.7-debug/AndroidManifest.xml:16:5-78
+46-->[com.facebook.react:react-android:0.79.7] /home/werg/.gradle/caches/8.11.1/transforms/fb651c48ad43096cc959e73db341b0f7/transformed/react-android-0.79.7-debug/AndroidManifest.xml:16:22-75
+47    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" /> <!-- Required by older versions of Google Play services to create IID tokens -->
+47-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:25:5-81
+47-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:25:22-78
+48    <uses-permission android:name="com.google.android.c2dm.permission.RECEIVE" />
+48-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:26:5-82
+48-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:26:22-79
+49
+50    <permission
+50-->[androidx.core:core:1.16.0] /home/werg/.gradle/caches/8.11.1/transforms/6ff7d198ee6070c4680509ae529a802e/transformed/core-1.16.0/AndroidManifest.xml:22:5-24:47
+51        android:name="app.vibestudio.mobile.internal.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION"
+51-->[androidx.core:core:1.16.0] /home/werg/.gradle/caches/8.11.1/transforms/6ff7d198ee6070c4680509ae529a802e/transformed/core-1.16.0/AndroidManifest.xml:23:9-81
+52        android:protectionLevel="signature" />
+52-->[androidx.core:core:1.16.0] /home/werg/.gradle/caches/8.11.1/transforms/6ff7d198ee6070c4680509ae529a802e/transformed/core-1.16.0/AndroidManifest.xml:24:9-44
+53
+54    <uses-permission android:name="app.vibestudio.mobile.internal.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+54-->[androidx.core:core:1.16.0] /home/werg/.gradle/caches/8.11.1/transforms/6ff7d198ee6070c4680509ae529a802e/transformed/core-1.16.0/AndroidManifest.xml:26:5-97
+54-->[androidx.core:core:1.16.0] /home/werg/.gradle/caches/8.11.1/transforms/6ff7d198ee6070c4680509ae529a802e/transformed/core-1.16.0/AndroidManifest.xml:26:22-94
+55    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+55-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:16:5-79
+55-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:16:22-76
+56    <uses-permission
+56-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:17:5-19:38
+57        android:name="android.permission.BROADCAST_CLOSE_SYSTEM_DIALOGS"
+57-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:18:9-73
+58        android:maxSdkVersion="30" /> <!-- For Xiaomi devices to enable heads-up notifications as default (https://github.com/invertase/notifee/issues/296) -->
+58-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:19:9-35
+59    <uses-permission
+59-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:21:5-23:38
+60        android:name="android.permission.ACCESS_NOTIFICATION_POLICY"
+60-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:22:9-69
+61        android:minSdkVersion="23" />
+61-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:23:9-35
+62
+63    <application
+63-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:14:5-114:19
+64        android:name="app.vibestudio.mobile.MainApplication"
+64-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:15:9-40
+65        android:allowBackup="false"
+65-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:19:9-36
+66        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+66-->[androidx.core:core:1.16.0] /home/werg/.gradle/caches/8.11.1/transforms/6ff7d198ee6070c4680509ae529a802e/transformed/core-1.16.0/AndroidManifest.xml:28:18-86
+67        android:debuggable="true"
+68        android:extractNativeLibs="false"
+69        android:icon="@mipmap/ic_launcher"
+69-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:17:9-43
+70        android:label="@string/app_name"
+70-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:16:9-41
+71        android:networkSecurityConfig="@xml/network_security_config"
+71-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:21:9-69
+72        android:roundIcon="@mipmap/ic_launcher_round"
+72-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:18:9-54
+73        android:supportsRtl="true"
+73-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:22:9-35
+74        android:theme="@style/AppTheme" >
+74-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:20:9-40
+75        <meta-data
+75-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:24:9-27:45
+76            android:name="com.google.firebase.messaging.default_notification_channel_id"
+76-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:25:13-89
+77            android:value="approvals" />
+77-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:26:13-38
+78
+79        <service
+79-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:29:9-35:19
+80            android:name="io.invertase.firebase.messaging.ReactNativeFirebaseMessagingService"
+80-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:30:13-95
+81            android:exported="false" >
+81-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:31:13-37
+82            <intent-filter>
+82-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:32:13-34:29
+83                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+83-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:33:17-78
+83-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:33:25-75
+84            </intent-filter>
+85        </service>
+86        <service
+86-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:37:9-40:56
+87            android:name="app.vibestudio.mobile.OAuthLoopbackKeepAliveService"
+87-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:38:13-58
+88            android:exported="false"
+88-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:39:13-37
+89            android:foregroundServiceType="dataSync" />
+89-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:40:13-53
+90
+91        <activity
+91-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:42:9-100:20
+92            android:name="app.vibestudio.mobile.MainActivity"
+92-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:43:13-41
+93            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+93-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:45:13-122
+94            android:exported="true"
+94-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:48:13-36
+95            android:label="@string/app_name"
+95-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:44:13-45
+96            android:launchMode="singleTask"
+96-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:46:13-44
+97            android:windowSoftInputMode="adjustResize" >
+97-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:47:13-55
+98
+99            <!-- Main launcher intent -->
+100            <intent-filter>
+100-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:51:13-54:29
+101                <action android:name="android.intent.action.MAIN" />
+101-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:52:17-69
+101-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:52:25-66
+102
+103                <category android:name="android.intent.category.LAUNCHER" />
+103-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:53:17-77
+103-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:53:27-74
+104            </intent-filter>
+105
+106            <!-- vibestudio://connect onboarding and vibestudio://panel navigation links. -->
+107            <intent-filter>
+107-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:57:13-67:29
+108                <action android:name="android.intent.action.VIEW" />
+108-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:58:17-69
+108-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:58:25-66
+109
+110                <category android:name="android.intent.category.DEFAULT" />
+110-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:59:17-76
+110-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:59:27-73
+111                <category android:name="android.intent.category.BROWSABLE" />
+111-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:60:17-78
+111-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:60:27-75
+112
+113                <data
+113-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:61:17-63:46
+114                    android:host="connect"
+114-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:63:21-43
+115                    android:scheme="vibestudio" />
+115-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:62:21-48
+116                <data
+116-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:61:17-63:46
+117                    android:host="panel"
+117-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:63:21-43
+118                    android:scheme="vibestudio" />
+118-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:62:21-48
+119            </intent-filter>
+120
+121            <!--
+122                Verified Android App Link for OAuth callbacks. With
+123                android:autoVerify="true" + a valid assetlinks.json served
+124                from https://vibestudio.app/.well-known/assetlinks.json
+125                (served by apps/webhook-relay), Android binds this
+126                intent-filter to *only* this app's signing certificate.
+127                Other apps registering the same host cannot intercept the
+128                authorization code. See
+129                docs/audit/08-mobile-supply-chain.md H-1 / H-2.
+130
+131                Verify post-install with:
+132                  adb shell pm get-app-links app.vibestudio.mobile
+133                Expected state for vibestudio.app: `verified`.
+134            -->
+135            <intent-filter android:autoVerify="true" >
+135-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:83:13-99:29
+135-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:83:28-53
+136                <action android:name="android.intent.action.VIEW" />
+136-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:58:17-69
+136-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:58:25-66
+137
+138                <category android:name="android.intent.category.DEFAULT" />
+138-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:59:17-76
+138-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:59:27-73
+139                <category android:name="android.intent.category.BROWSABLE" />
+139-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:60:17-78
+139-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:60:27-75
+140
+141                <data
+141-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:61:17-63:46
+142                    android:host="vibestudio.app"
+142-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:63:21-43
+143                    android:pathPrefix="/oauth/"
+143-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:90:21-49
+144                    android:scheme="https" />
+144-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:62:21-48
+145                <data
+145-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:61:17-63:46
+146                    android:host="vibestudio.app"
+146-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:63:21-43
+147                    android:path="/p"
+147-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:94:21-38
+148                    android:scheme="https" />
+148-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:62:21-48
+149                <data
+149-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:61:17-63:46
+150                    android:host="vibestudio.app"
+150-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:63:21-43
+151                    android:path="/panel"
+151-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:94:21-38
+152                    android:scheme="https" />
+152-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:62:21-48
+153            </intent-filter>
+154        </activity>
+155
+156        <!--
+157            Exact-device USB provisioning. `adb shell` holds DUMP; ordinary
+158            Android apps do not, so only the already-authorized desktop path
+159            can request immediate pairing without the in-app confirmation.
+160        -->
+161        <activity
+161-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:107:9-113:47
+162            android:name="app.vibestudio.mobile.ProvisioningActivity"
+162-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:108:13-49
+163            android:excludeFromRecents="true"
+163-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:110:13-46
+164            android:exported="true"
+164-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:109:13-36
+165            android:noHistory="true"
+165-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:111:13-37
+166            android:permission="android.permission.DUMP"
+166-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:112:13-57
+167            android:theme="@style/AppTheme" />
+167-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:113:13-44
+168
+169        <provider
+169-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:20:9-28:20
+170            android:name="com.reactnativecommunity.webview.RNCWebViewFileProvider"
+170-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:21:13-83
+171            android:authorities="app.vibestudio.mobile.internal.fileprovider"
+171-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:22:13-64
+172            android:exported="false"
+172-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:23:13-37
+173            android:grantUriPermissions="true" >
+173-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:24:13-47
+174            <meta-data
+174-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:25:13-27:63
+175                android:name="android.support.FILE_PROVIDER_PATHS"
+175-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:26:17-67
+176                android:resource="@xml/file_provider_paths" />
+176-->[:react-native-webview] /home/werg/vibestudio/node_modules/react-native-webview/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:27:17-60
+177        </provider>
+178        <provider
+178-->[:notifee_react-native] /home/werg/vibestudio/node_modules/@notifee/react-native/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:8:9-12:40
+179            android:name="io.invertase.notifee.NotifeeInitProvider"
+179-->[:notifee_react-native] /home/werg/vibestudio/node_modules/@notifee/react-native/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:9:13-68
+180            android:authorities="app.vibestudio.mobile.internal.notifee-init-provider"
+180-->[:notifee_react-native] /home/werg/vibestudio/node_modules/@notifee/react-native/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:10:13-73
+181            android:exported="false"
+181-->[:notifee_react-native] /home/werg/vibestudio/node_modules/@notifee/react-native/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:11:13-37
+182            android:initOrder="-100" />
+182-->[:notifee_react-native] /home/werg/vibestudio/node_modules/@notifee/react-native/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:12:13-37
+183
+184        <service
+184-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:12:9-14:40
+185            android:name="io.invertase.firebase.messaging.ReactNativeFirebaseMessagingHeadlessService"
+185-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:13:13-103
+186            android:exported="false" />
+186-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:14:13-37
+187
+188        <receiver
+188-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:23:9-30:20
+189            android:name="io.invertase.firebase.messaging.ReactNativeFirebaseMessagingReceiver"
+189-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:24:13-96
+190            android:exported="true"
+190-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:25:13-36
+191            android:permission="com.google.android.c2dm.permission.SEND" >
+191-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:26:13-73
+192            <intent-filter>
+192-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:27:13-29:29
+193                <action android:name="com.google.android.c2dm.intent.RECEIVE" />
+193-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:28:17-81
+193-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:28:25-78
+194            </intent-filter>
+195        </receiver>
+196
+197        <meta-data
+197-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:32:9-34:37
+198            android:name="delivery_metrics_exported_to_big_query_enabled"
+198-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:33:13-74
+199            android:value="false" />
+199-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:34:13-34
+200        <meta-data
+200-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:35:9-37:36
+201            android:name="firebase_messaging_auto_init_enabled"
+201-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:36:13-64
+202            android:value="true" />
+202-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:37:13-33
+203        <meta-data
+203-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:38:9-40:37
+204            android:name="firebase_messaging_notification_delegation_enabled"
+204-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:39:13-78
+205            android:value="false" />
+205-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:40:13-34
+206        <meta-data
+206-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:44:9-46:47
+207            android:name="com.google.firebase.messaging.default_notification_color"
+207-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:45:13-84
+208            android:resource="@color/white" />
+208-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:46:13-44
+209        <meta-data
+209-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:9:9-11:36
+210            android:name="app_data_collection_default_enabled"
+210-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:10:13-63
+211            android:value="true" />
+211-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:11:13-33
+212
+213        <service
+213-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:13:9-21:19
+214            android:name="com.google.firebase.components.ComponentDiscoveryService"
+214-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:14:13-84
+215            android:directBootAware="true"
+215-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:15:13-43
+216            android:exported="false" >
+216-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:16:13-37
+217            <meta-data
+217-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:18:13-20:85
+218                android:name="com.google.firebase.components:io.invertase.firebase.app.ReactNativeFirebaseAppRegistrar"
+218-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:19:17-120
+219                android:value="com.google.firebase.components.ComponentRegistrar" />
+219-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:20:17-82
+220            <meta-data
+220-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:57:13-59:85
+221                android:name="com.google.firebase.components:com.google.firebase.messaging.FirebaseMessagingKtxRegistrar"
+221-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:58:17-122
+222                android:value="com.google.firebase.components.ComponentRegistrar" />
+222-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:59:17-82
+223            <meta-data
+223-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:60:13-62:85
+224                android:name="com.google.firebase.components:com.google.firebase.messaging.FirebaseMessagingRegistrar"
+224-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:61:17-119
+225                android:value="com.google.firebase.components.ComponentRegistrar" />
+225-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:62:17-82
+226            <meta-data
+226-->[com.google.firebase:firebase-installations:19.1.0] /home/werg/.gradle/caches/8.11.1/transforms/394aa9eed98c02ff2d9e3e75b1c287d5/transformed/firebase-installations-19.1.0/AndroidManifest.xml:15:13-17:85
+227                android:name="com.google.firebase.components:com.google.firebase.installations.FirebaseInstallationsKtxRegistrar"
+227-->[com.google.firebase:firebase-installations:19.1.0] /home/werg/.gradle/caches/8.11.1/transforms/394aa9eed98c02ff2d9e3e75b1c287d5/transformed/firebase-installations-19.1.0/AndroidManifest.xml:16:17-130
+228                android:value="com.google.firebase.components.ComponentRegistrar" />
+228-->[com.google.firebase:firebase-installations:19.1.0] /home/werg/.gradle/caches/8.11.1/transforms/394aa9eed98c02ff2d9e3e75b1c287d5/transformed/firebase-installations-19.1.0/AndroidManifest.xml:17:17-82
+229            <meta-data
+229-->[com.google.firebase:firebase-installations:19.1.0] /home/werg/.gradle/caches/8.11.1/transforms/394aa9eed98c02ff2d9e3e75b1c287d5/transformed/firebase-installations-19.1.0/AndroidManifest.xml:18:13-20:85
+230                android:name="com.google.firebase.components:com.google.firebase.installations.FirebaseInstallationsRegistrar"
+230-->[com.google.firebase:firebase-installations:19.1.0] /home/werg/.gradle/caches/8.11.1/transforms/394aa9eed98c02ff2d9e3e75b1c287d5/transformed/firebase-installations-19.1.0/AndroidManifest.xml:19:17-127
+231                android:value="com.google.firebase.components.ComponentRegistrar" />
+231-->[com.google.firebase:firebase-installations:19.1.0] /home/werg/.gradle/caches/8.11.1/transforms/394aa9eed98c02ff2d9e3e75b1c287d5/transformed/firebase-installations-19.1.0/AndroidManifest.xml:20:17-82
+232            <meta-data
+232-->[com.google.firebase:firebase-common:22.0.1] /home/werg/.gradle/caches/8.11.1/transforms/b787483d85dd6d5e0ab907d02a2ad1bf/transformed/firebase-common-22.0.1/AndroidManifest.xml:35:13-37:85
+233                android:name="com.google.firebase.components:com.google.firebase.FirebaseCommonKtxRegistrar"
+233-->[com.google.firebase:firebase-common:22.0.1] /home/werg/.gradle/caches/8.11.1/transforms/b787483d85dd6d5e0ab907d02a2ad1bf/transformed/firebase-common-22.0.1/AndroidManifest.xml:36:17-109
+234                android:value="com.google.firebase.components.ComponentRegistrar" />
+234-->[com.google.firebase:firebase-common:22.0.1] /home/werg/.gradle/caches/8.11.1/transforms/b787483d85dd6d5e0ab907d02a2ad1bf/transformed/firebase-common-22.0.1/AndroidManifest.xml:37:17-82
+235            <meta-data
+235-->[com.google.firebase:firebase-datatransport:18.2.0] /home/werg/.gradle/caches/8.11.1/transforms/585c4c06e8715a150e8c0d650020d99c/transformed/firebase-datatransport-18.2.0/AndroidManifest.xml:25:13-27:85
+236                android:name="com.google.firebase.components:com.google.firebase.datatransport.TransportRegistrar"
+236-->[com.google.firebase:firebase-datatransport:18.2.0] /home/werg/.gradle/caches/8.11.1/transforms/585c4c06e8715a150e8c0d650020d99c/transformed/firebase-datatransport-18.2.0/AndroidManifest.xml:26:17-115
+237                android:value="com.google.firebase.components.ComponentRegistrar" />
+237-->[com.google.firebase:firebase-datatransport:18.2.0] /home/werg/.gradle/caches/8.11.1/transforms/585c4c06e8715a150e8c0d650020d99c/transformed/firebase-datatransport-18.2.0/AndroidManifest.xml:27:17-82
+238        </service>
+239
+240        <provider
+240-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:23:9-27:38
+241            android:name="io.invertase.firebase.app.ReactNativeFirebaseAppInitProvider"
+241-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:24:13-88
+242            android:authorities="app.vibestudio.mobile.internal.reactnativefirebaseappinitprovider"
+242-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:25:13-86
+243            android:exported="false"
+243-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:26:13-37
+244            android:initOrder="99" />
+244-->[:react-native-firebase_app] /home/werg/vibestudio/node_modules/@react-native-firebase/app/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:27:13-35
+245
+246        <activity
+246-->[com.facebook.react:react-android:0.79.7] /home/werg/.gradle/caches/8.11.1/transforms/fb651c48ad43096cc959e73db341b0f7/transformed/react-android-0.79.7-debug/AndroidManifest.xml:19:9-21:40
+247            android:name="com.facebook.react.devsupport.DevSettingsActivity"
+247-->[com.facebook.react:react-android:0.79.7] /home/werg/.gradle/caches/8.11.1/transforms/fb651c48ad43096cc959e73db341b0f7/transformed/react-android-0.79.7-debug/AndroidManifest.xml:20:13-77
+248            android:exported="false" />
+248-->[com.facebook.react:react-android:0.79.7] /home/werg/.gradle/caches/8.11.1/transforms/fb651c48ad43096cc959e73db341b0f7/transformed/react-android-0.79.7-debug/AndroidManifest.xml:21:13-37
+249
+250        <provider
+250-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:29:9-37:20
+251            android:name="androidx.startup.InitializationProvider"
+251-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:30:13-67
+252            android:authorities="app.vibestudio.mobile.internal.androidx-startup"
+252-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:31:13-68
+253            android:exported="false" >
+253-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:32:13-37
+254            <meta-data
+254-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:34:13-36:52
+255                android:name="androidx.work.WorkManagerInitializer"
+255-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:35:17-68
+256                android:value="androidx.startup" />
+256-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:36:17-49
+257            <meta-data
+257-->[androidx.emoji2:emoji2:1.3.0] /home/werg/.gradle/caches/8.11.1/transforms/35a984c06efef5d82191d4c990995b32/transformed/emoji2-1.3.0/AndroidManifest.xml:29:13-31:52
+258                android:name="androidx.emoji2.text.EmojiCompatInitializer"
+258-->[androidx.emoji2:emoji2:1.3.0] /home/werg/.gradle/caches/8.11.1/transforms/35a984c06efef5d82191d4c990995b32/transformed/emoji2-1.3.0/AndroidManifest.xml:30:17-75
+259                android:value="androidx.startup" />
+259-->[androidx.emoji2:emoji2:1.3.0] /home/werg/.gradle/caches/8.11.1/transforms/35a984c06efef5d82191d4c990995b32/transformed/emoji2-1.3.0/AndroidManifest.xml:31:17-49
+260            <meta-data
+260-->[androidx.lifecycle:lifecycle-process:2.8.7] /home/werg/.gradle/caches/8.11.1/transforms/5bfcdfb5aab80dbd345a9d92f11dbf80/transformed/lifecycle-process-2.8.7/AndroidManifest.xml:29:13-31:52
+261                android:name="androidx.lifecycle.ProcessLifecycleInitializer"
+261-->[androidx.lifecycle:lifecycle-process:2.8.7] /home/werg/.gradle/caches/8.11.1/transforms/5bfcdfb5aab80dbd345a9d92f11dbf80/transformed/lifecycle-process-2.8.7/AndroidManifest.xml:30:17-78
+262                android:value="androidx.startup" />
+262-->[androidx.lifecycle:lifecycle-process:2.8.7] /home/werg/.gradle/caches/8.11.1/transforms/5bfcdfb5aab80dbd345a9d92f11dbf80/transformed/lifecycle-process-2.8.7/AndroidManifest.xml:31:17-49
+263            <meta-data
+263-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:29:13-31:52
+264                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+264-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:30:17-85
+265                android:value="androidx.startup" />
+265-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:31:17-49
+266        </provider>
+267
+268        <service
+268-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:39:9-45:35
+269            android:name="androidx.work.impl.background.systemalarm.SystemAlarmService"
+269-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:40:13-88
+270            android:directBootAware="false"
+270-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:41:13-44
+271            android:enabled="@bool/enable_system_alarm_service_default"
+271-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:42:13-72
+272            android:exported="false" />
+272-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:43:13-37
+273        <service
+273-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:46:9-52:35
+274            android:name="androidx.work.impl.background.systemjob.SystemJobService"
+274-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:47:13-84
+275            android:directBootAware="false"
+275-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:48:13-44
+276            android:enabled="@bool/enable_system_job_service_default"
+276-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:49:13-70
+277            android:exported="true"
+277-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:50:13-36
+278            android:permission="android.permission.BIND_JOB_SERVICE" />
+278-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:51:13-69
+279        <service
+279-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:53:9-59:35
+280            android:name="androidx.work.impl.foreground.SystemForegroundService"
+280-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:54:13-81
+281            android:directBootAware="false"
+281-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:55:13-44
+282            android:enabled="@bool/enable_system_foreground_service_default"
+282-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:56:13-77
+283            android:exported="false" />
+283-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:57:13-37
+284
+285        <receiver
+285-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:61:9-66:35
+286            android:name="androidx.work.impl.utils.ForceStopRunnable$BroadcastReceiver"
+286-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:62:13-88
+287            android:directBootAware="false"
+287-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:63:13-44
+288            android:enabled="true"
+288-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:64:13-35
+289            android:exported="false" />
+289-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:65:13-37
+290        <receiver
+290-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:67:9-77:20
+291            android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryChargingProxy"
+291-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:68:13-106
+292            android:directBootAware="false"
+292-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:69:13-44
+293            android:enabled="false"
+293-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:70:13-36
+294            android:exported="false" >
+294-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:71:13-37
+295            <intent-filter>
+295-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:73:13-76:29
+296                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
+296-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:74:17-87
+296-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:74:25-84
+297                <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED" />
+297-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:75:17-90
+297-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:75:25-87
+298            </intent-filter>
+299        </receiver>
+300        <receiver
+300-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:78:9-88:20
+301            android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$BatteryNotLowProxy"
+301-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:79:13-104
+302            android:directBootAware="false"
+302-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:80:13-44
+303            android:enabled="false"
+303-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:81:13-36
+304            android:exported="false" >
+304-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:82:13-37
+305            <intent-filter>
+305-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:84:13-87:29
+306                <action android:name="android.intent.action.BATTERY_OKAY" />
+306-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:85:17-77
+306-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:85:25-74
+307                <action android:name="android.intent.action.BATTERY_LOW" />
+307-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:86:17-76
+307-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:86:25-73
+308            </intent-filter>
+309        </receiver>
+310        <receiver
+310-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:89:9-99:20
+311            android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$StorageNotLowProxy"
+311-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:90:13-104
+312            android:directBootAware="false"
+312-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:91:13-44
+313            android:enabled="false"
+313-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:92:13-36
+314            android:exported="false" >
+314-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:93:13-37
+315            <intent-filter>
+315-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:95:13-98:29
+316                <action android:name="android.intent.action.DEVICE_STORAGE_LOW" />
+316-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:96:17-83
+316-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:96:25-80
+317                <action android:name="android.intent.action.DEVICE_STORAGE_OK" />
+317-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:97:17-82
+317-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:97:25-79
+318            </intent-filter>
+319        </receiver>
+320        <receiver
+320-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:100:9-109:20
+321            android:name="androidx.work.impl.background.systemalarm.ConstraintProxy$NetworkStateProxy"
+321-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:101:13-103
+322            android:directBootAware="false"
+322-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:102:13-44
+323            android:enabled="false"
+323-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:103:13-36
+324            android:exported="false" >
+324-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:104:13-37
+325            <intent-filter>
+325-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:106:13-108:29
+326                <action android:name="android.net.conn.CONNECTIVITY_CHANGE" />
+326-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:107:17-79
+326-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:107:25-76
+327            </intent-filter>
+328        </receiver>
+329        <receiver
+329-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:110:9-121:20
+330            android:name="androidx.work.impl.background.systemalarm.RescheduleReceiver"
+330-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:111:13-88
+331            android:directBootAware="false"
+331-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:112:13-44
+332            android:enabled="false"
+332-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:113:13-36
+333            android:exported="false" >
+333-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:114:13-37
+334            <intent-filter>
+334-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:116:13-120:29
+335                <action android:name="android.intent.action.BOOT_COMPLETED" />
+335-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:117:17-79
+335-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:117:25-76
+336                <action android:name="android.intent.action.TIME_SET" />
+336-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:118:17-73
+336-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:118:25-70
+337                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+337-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:119:17-81
+337-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:119:25-78
+338            </intent-filter>
+339        </receiver>
+340        <receiver
+340-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:122:9-131:20
+341            android:name="androidx.work.impl.background.systemalarm.ConstraintProxyUpdateReceiver"
+341-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:123:13-99
+342            android:directBootAware="false"
+342-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:124:13-44
+343            android:enabled="@bool/enable_system_alarm_service_default"
+343-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:125:13-72
+344            android:exported="false" >
+344-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:126:13-37
+345            <intent-filter>
+345-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:128:13-130:29
+346                <action android:name="androidx.work.impl.background.systemalarm.UpdateProxies" />
+346-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:129:17-98
+346-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:129:25-95
+347            </intent-filter>
+348        </receiver>
+349        <receiver
+349-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:132:9-142:20
+350            android:name="androidx.work.impl.diagnostics.DiagnosticsReceiver"
+350-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:133:13-78
+351            android:directBootAware="false"
+351-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:134:13-44
+352            android:enabled="true"
+352-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:135:13-35
+353            android:exported="true"
+353-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:136:13-36
+354            android:permission="android.permission.DUMP" >
+354-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:137:13-57
+355            <intent-filter>
+355-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:139:13-141:29
+356                <action android:name="androidx.work.diagnostics.REQUEST_DIAGNOSTICS" />
+356-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:140:17-88
+356-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:140:25-85
+357            </intent-filter>
+358        </receiver>
+359
+360        <uses-library
+360-->[androidx.camera:camera-extensions:1.5.3] /home/werg/.gradle/caches/8.11.1/transforms/654655309d97ebbe1fa1d0eb94b5a8ba/transformed/camera-extensions-1.5.3/AndroidManifest.xml:29:9-31:40
+361            android:name="androidx.camera.extensions.impl"
+361-->[androidx.camera:camera-extensions:1.5.3] /home/werg/.gradle/caches/8.11.1/transforms/654655309d97ebbe1fa1d0eb94b5a8ba/transformed/camera-extensions-1.5.3/AndroidManifest.xml:30:13-59
+362            android:required="false" />
+362-->[androidx.camera:camera-extensions:1.5.3] /home/werg/.gradle/caches/8.11.1/transforms/654655309d97ebbe1fa1d0eb94b5a8ba/transformed/camera-extensions-1.5.3/AndroidManifest.xml:31:13-37
+363
+364        <service
+364-->[androidx.camera:camera-camera2:1.5.3] /home/werg/.gradle/caches/8.11.1/transforms/c832aa0da9f22b05e4963437ea9304f1/transformed/camera-camera2-1.5.3/AndroidManifest.xml:24:9-33:19
+365            android:name="androidx.camera.core.impl.MetadataHolderService"
+365-->[androidx.camera:camera-camera2:1.5.3] /home/werg/.gradle/caches/8.11.1/transforms/c832aa0da9f22b05e4963437ea9304f1/transformed/camera-camera2-1.5.3/AndroidManifest.xml:25:13-75
+366            android:enabled="false"
+366-->[androidx.camera:camera-camera2:1.5.3] /home/werg/.gradle/caches/8.11.1/transforms/c832aa0da9f22b05e4963437ea9304f1/transformed/camera-camera2-1.5.3/AndroidManifest.xml:26:13-36
+367            android:exported="false" >
+367-->[androidx.camera:camera-camera2:1.5.3] /home/werg/.gradle/caches/8.11.1/transforms/c832aa0da9f22b05e4963437ea9304f1/transformed/camera-camera2-1.5.3/AndroidManifest.xml:27:13-37
+368            <meta-data
+368-->[androidx.camera:camera-camera2:1.5.3] /home/werg/.gradle/caches/8.11.1/transforms/c832aa0da9f22b05e4963437ea9304f1/transformed/camera-camera2-1.5.3/AndroidManifest.xml:30:13-32:89
+369                android:name="androidx.camera.core.impl.MetadataHolderService.DEFAULT_CONFIG_PROVIDER"
+369-->[androidx.camera:camera-camera2:1.5.3] /home/werg/.gradle/caches/8.11.1/transforms/c832aa0da9f22b05e4963437ea9304f1/transformed/camera-camera2-1.5.3/AndroidManifest.xml:31:17-103
+370                android:value="androidx.camera.camera2.Camera2Config$DefaultProvider" />
+370-->[androidx.camera:camera-camera2:1.5.3] /home/werg/.gradle/caches/8.11.1/transforms/c832aa0da9f22b05e4963437ea9304f1/transformed/camera-camera2-1.5.3/AndroidManifest.xml:32:17-86
+371        </service>
+372        <service
+372-->[com.google.android.gms:play-services-mlkit-barcode-scanning:18.3.1] /home/werg/.gradle/caches/8.11.1/transforms/b3feb13f824c5d1f8ded9734b2b4dd7e/transformed/play-services-mlkit-barcode-scanning-18.3.1/AndroidManifest.xml:9:9-15:19
+373            android:name="com.google.mlkit.common.internal.MlKitComponentDiscoveryService"
+373-->[com.google.android.gms:play-services-mlkit-barcode-scanning:18.3.1] /home/werg/.gradle/caches/8.11.1/transforms/b3feb13f824c5d1f8ded9734b2b4dd7e/transformed/play-services-mlkit-barcode-scanning-18.3.1/AndroidManifest.xml:10:13-91
+374            android:directBootAware="true"
+374-->[com.google.mlkit:common:18.11.0] /home/werg/.gradle/caches/8.11.1/transforms/7f6fc61a55d579dcec94a74c8b60700d/transformed/common-18.11.0/AndroidManifest.xml:17:13-43
+375            android:exported="false" >
+375-->[com.google.android.gms:play-services-mlkit-barcode-scanning:18.3.1] /home/werg/.gradle/caches/8.11.1/transforms/b3feb13f824c5d1f8ded9734b2b4dd7e/transformed/play-services-mlkit-barcode-scanning-18.3.1/AndroidManifest.xml:11:13-37
+376            <meta-data
+376-->[com.google.android.gms:play-services-mlkit-barcode-scanning:18.3.1] /home/werg/.gradle/caches/8.11.1/transforms/b3feb13f824c5d1f8ded9734b2b4dd7e/transformed/play-services-mlkit-barcode-scanning-18.3.1/AndroidManifest.xml:12:13-14:85
+377                android:name="com.google.firebase.components:com.google.mlkit.vision.barcode.internal.BarcodeRegistrar"
+377-->[com.google.android.gms:play-services-mlkit-barcode-scanning:18.3.1] /home/werg/.gradle/caches/8.11.1/transforms/b3feb13f824c5d1f8ded9734b2b4dd7e/transformed/play-services-mlkit-barcode-scanning-18.3.1/AndroidManifest.xml:13:17-120
+378                android:value="com.google.firebase.components.ComponentRegistrar" />
+378-->[com.google.android.gms:play-services-mlkit-barcode-scanning:18.3.1] /home/werg/.gradle/caches/8.11.1/transforms/b3feb13f824c5d1f8ded9734b2b4dd7e/transformed/play-services-mlkit-barcode-scanning-18.3.1/AndroidManifest.xml:14:17-82
+379            <meta-data
+379-->[com.google.mlkit:vision-common:17.3.0] /home/werg/.gradle/caches/8.11.1/transforms/f12db6de0145b2c330d737e0012a061b/transformed/vision-common-17.3.0/AndroidManifest.xml:12:13-14:85
+380                android:name="com.google.firebase.components:com.google.mlkit.vision.common.internal.VisionCommonRegistrar"
+380-->[com.google.mlkit:vision-common:17.3.0] /home/werg/.gradle/caches/8.11.1/transforms/f12db6de0145b2c330d737e0012a061b/transformed/vision-common-17.3.0/AndroidManifest.xml:13:17-124
+381                android:value="com.google.firebase.components.ComponentRegistrar" />
+381-->[com.google.mlkit:vision-common:17.3.0] /home/werg/.gradle/caches/8.11.1/transforms/f12db6de0145b2c330d737e0012a061b/transformed/vision-common-17.3.0/AndroidManifest.xml:14:17-82
+382            <meta-data
+382-->[com.google.mlkit:common:18.11.0] /home/werg/.gradle/caches/8.11.1/transforms/7f6fc61a55d579dcec94a74c8b60700d/transformed/common-18.11.0/AndroidManifest.xml:20:13-22:85
+383                android:name="com.google.firebase.components:com.google.mlkit.common.internal.CommonComponentRegistrar"
+383-->[com.google.mlkit:common:18.11.0] /home/werg/.gradle/caches/8.11.1/transforms/7f6fc61a55d579dcec94a74c8b60700d/transformed/common-18.11.0/AndroidManifest.xml:21:17-120
+384                android:value="com.google.firebase.components.ComponentRegistrar" />
+384-->[com.google.mlkit:common:18.11.0] /home/werg/.gradle/caches/8.11.1/transforms/7f6fc61a55d579dcec94a74c8b60700d/transformed/common-18.11.0/AndroidManifest.xml:22:17-82
+385        </service>
+386
+387        <provider
+387-->[com.google.mlkit:common:18.11.0] /home/werg/.gradle/caches/8.11.1/transforms/7f6fc61a55d579dcec94a74c8b60700d/transformed/common-18.11.0/AndroidManifest.xml:9:9-13:38
+388            android:name="com.google.mlkit.common.internal.MlKitInitProvider"
+388-->[com.google.mlkit:common:18.11.0] /home/werg/.gradle/caches/8.11.1/transforms/7f6fc61a55d579dcec94a74c8b60700d/transformed/common-18.11.0/AndroidManifest.xml:10:13-78
+389            android:authorities="app.vibestudio.mobile.internal.mlkitinitprovider"
+389-->[com.google.mlkit:common:18.11.0] /home/werg/.gradle/caches/8.11.1/transforms/7f6fc61a55d579dcec94a74c8b60700d/transformed/common-18.11.0/AndroidManifest.xml:11:13-69
+390            android:exported="false"
+390-->[com.google.mlkit:common:18.11.0] /home/werg/.gradle/caches/8.11.1/transforms/7f6fc61a55d579dcec94a74c8b60700d/transformed/common-18.11.0/AndroidManifest.xml:12:13-37
+391            android:initOrder="99" />
+391-->[com.google.mlkit:common:18.11.0] /home/werg/.gradle/caches/8.11.1/transforms/7f6fc61a55d579dcec94a74c8b60700d/transformed/common-18.11.0/AndroidManifest.xml:13:13-35
+392
+393        <activity
+393-->[com.google.android.gms:play-services-auth:21.5.0] /home/werg/.gradle/caches/8.11.1/transforms/cd65449a41b00d868862fe3d750b3cd1/transformed/play-services-auth-21.5.0/AndroidManifest.xml:23:9-27:75
+394            android:name="com.google.android.gms.auth.api.signin.internal.SignInHubActivity"
+394-->[com.google.android.gms:play-services-auth:21.5.0] /home/werg/.gradle/caches/8.11.1/transforms/cd65449a41b00d868862fe3d750b3cd1/transformed/play-services-auth-21.5.0/AndroidManifest.xml:24:13-93
+395            android:excludeFromRecents="true"
+395-->[com.google.android.gms:play-services-auth:21.5.0] /home/werg/.gradle/caches/8.11.1/transforms/cd65449a41b00d868862fe3d750b3cd1/transformed/play-services-auth-21.5.0/AndroidManifest.xml:25:13-46
+396            android:exported="false"
+396-->[com.google.android.gms:play-services-auth:21.5.0] /home/werg/.gradle/caches/8.11.1/transforms/cd65449a41b00d868862fe3d750b3cd1/transformed/play-services-auth-21.5.0/AndroidManifest.xml:26:13-37
+397            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+397-->[com.google.android.gms:play-services-auth:21.5.0] /home/werg/.gradle/caches/8.11.1/transforms/cd65449a41b00d868862fe3d750b3cd1/transformed/play-services-auth-21.5.0/AndroidManifest.xml:27:13-72
+398        <!--
+399            Service handling Google Sign-In user revocation. For apps that do not integrate with
+400            Google Sign-In, this service will never be started.
+401        -->
+402        <service
+402-->[com.google.android.gms:play-services-auth:21.5.0] /home/werg/.gradle/caches/8.11.1/transforms/cd65449a41b00d868862fe3d750b3cd1/transformed/play-services-auth-21.5.0/AndroidManifest.xml:33:9-37:51
+403            android:name="com.google.android.gms.auth.api.signin.RevocationBoundService"
+403-->[com.google.android.gms:play-services-auth:21.5.0] /home/werg/.gradle/caches/8.11.1/transforms/cd65449a41b00d868862fe3d750b3cd1/transformed/play-services-auth-21.5.0/AndroidManifest.xml:34:13-89
+404            android:exported="true"
+404-->[com.google.android.gms:play-services-auth:21.5.0] /home/werg/.gradle/caches/8.11.1/transforms/cd65449a41b00d868862fe3d750b3cd1/transformed/play-services-auth-21.5.0/AndroidManifest.xml:35:13-36
+405            android:permission="com.google.android.gms.auth.api.signin.permission.REVOCATION_NOTIFICATION"
+405-->[com.google.android.gms:play-services-auth:21.5.0] /home/werg/.gradle/caches/8.11.1/transforms/cd65449a41b00d868862fe3d750b3cd1/transformed/play-services-auth-21.5.0/AndroidManifest.xml:36:13-107
+406            android:visibleToInstantApps="true" />
+406-->[com.google.android.gms:play-services-auth:21.5.0] /home/werg/.gradle/caches/8.11.1/transforms/cd65449a41b00d868862fe3d750b3cd1/transformed/play-services-auth-21.5.0/AndroidManifest.xml:37:13-48
+407
+408        <receiver
+408-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:29:9-40:20
+409            android:name="com.google.firebase.iid.FirebaseInstanceIdReceiver"
+409-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:30:13-78
+410            android:exported="true"
+410-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:31:13-36
+411            android:permission="com.google.android.c2dm.permission.SEND" >
+411-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:32:13-73
+412            <intent-filter>
+412-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:27:13-29:29
+413                <action android:name="com.google.android.c2dm.intent.RECEIVE" />
+413-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:28:17-81
+413-->[:react-native-firebase_messaging] /home/werg/vibestudio/node_modules/@react-native-firebase/messaging/android/build/intermediates/merged_manifest/debug/processDebugManifest/AndroidManifest.xml:28:25-78
+414            </intent-filter>
+415
+416            <meta-data
+416-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:37:13-39:40
+417                android:name="com.google.android.gms.cloudmessaging.FINISHED_AFTER_HANDLED"
+417-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:38:17-92
+418                android:value="true" />
+418-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:39:17-37
+419        </receiver>
+420        <!--
+421             FirebaseMessagingService performs security checks at runtime,
+422             but set to not exported to explicitly avoid allowing another app to call it.
+423        -->
+424        <service
+424-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:46:9-53:19
+425            android:name="com.google.firebase.messaging.FirebaseMessagingService"
+425-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:47:13-82
+426            android:directBootAware="true"
+426-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:48:13-43
+427            android:exported="false" >
+427-->[com.google.firebase:firebase-messaging:25.0.1] /home/werg/.gradle/caches/8.11.1/transforms/f6fb8637cac86dd1c13f216dfc5a232d/transformed/firebase-messaging-25.0.1/AndroidManifest.xml:49:13-37
+428            <intent-filter android:priority="-500" >
+428-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:32:13-34:29
+429                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+429-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:33:17-78
+429-->/home/werg/vibestudio/apps/mobile/android/app/src/main/AndroidManifest.xml:33:25-75
+430            </intent-filter>
+431        </service>
+432
+433        <activity
+433-->[com.google.android.gms:play-services-base:18.5.0] /home/werg/.gradle/caches/8.11.1/transforms/ba683a3a8b07987e358515f94b656eb0/transformed/play-services-base-18.5.0/AndroidManifest.xml:5:9-173
+434            android:name="com.google.android.gms.common.api.GoogleApiActivity"
+434-->[com.google.android.gms:play-services-base:18.5.0] /home/werg/.gradle/caches/8.11.1/transforms/ba683a3a8b07987e358515f94b656eb0/transformed/play-services-base-18.5.0/AndroidManifest.xml:5:19-85
+435            android:exported="false"
+435-->[com.google.android.gms:play-services-base:18.5.0] /home/werg/.gradle/caches/8.11.1/transforms/ba683a3a8b07987e358515f94b656eb0/transformed/play-services-base-18.5.0/AndroidManifest.xml:5:146-170
+436            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+436-->[com.google.android.gms:play-services-base:18.5.0] /home/werg/.gradle/caches/8.11.1/transforms/ba683a3a8b07987e358515f94b656eb0/transformed/play-services-base-18.5.0/AndroidManifest.xml:5:86-145
+437
+438        <provider
+438-->[com.google.firebase:firebase-common:22.0.1] /home/werg/.gradle/caches/8.11.1/transforms/b787483d85dd6d5e0ab907d02a2ad1bf/transformed/firebase-common-22.0.1/AndroidManifest.xml:23:9-28:39
+439            android:name="com.google.firebase.provider.FirebaseInitProvider"
+439-->[com.google.firebase:firebase-common:22.0.1] /home/werg/.gradle/caches/8.11.1/transforms/b787483d85dd6d5e0ab907d02a2ad1bf/transformed/firebase-common-22.0.1/AndroidManifest.xml:24:13-77
+440            android:authorities="app.vibestudio.mobile.internal.firebaseinitprovider"
+440-->[com.google.firebase:firebase-common:22.0.1] /home/werg/.gradle/caches/8.11.1/transforms/b787483d85dd6d5e0ab907d02a2ad1bf/transformed/firebase-common-22.0.1/AndroidManifest.xml:25:13-72
+441            android:directBootAware="true"
+441-->[com.google.firebase:firebase-common:22.0.1] /home/werg/.gradle/caches/8.11.1/transforms/b787483d85dd6d5e0ab907d02a2ad1bf/transformed/firebase-common-22.0.1/AndroidManifest.xml:26:13-43
+442            android:exported="false"
+442-->[com.google.firebase:firebase-common:22.0.1] /home/werg/.gradle/caches/8.11.1/transforms/b787483d85dd6d5e0ab907d02a2ad1bf/transformed/firebase-common-22.0.1/AndroidManifest.xml:27:13-37
+443            android:initOrder="100" />
+443-->[com.google.firebase:firebase-common:22.0.1] /home/werg/.gradle/caches/8.11.1/transforms/b787483d85dd6d5e0ab907d02a2ad1bf/transformed/firebase-common-22.0.1/AndroidManifest.xml:28:13-36
+444
+445        <meta-data
+445-->[com.google.android.gms:play-services-basement:18.9.0] /home/werg/.gradle/caches/8.11.1/transforms/cdcf0d562b8d0754781bb5cda0da9b88/transformed/play-services-basement-18.9.0/AndroidManifest.xml:21:9-23:69
+446            android:name="com.google.android.gms.version"
+446-->[com.google.android.gms:play-services-basement:18.9.0] /home/werg/.gradle/caches/8.11.1/transforms/cdcf0d562b8d0754781bb5cda0da9b88/transformed/play-services-basement-18.9.0/AndroidManifest.xml:22:13-58
+447            android:value="@integer/google_play_services_version" />
+447-->[com.google.android.gms:play-services-basement:18.9.0] /home/werg/.gradle/caches/8.11.1/transforms/cdcf0d562b8d0754781bb5cda0da9b88/transformed/play-services-basement-18.9.0/AndroidManifest.xml:23:13-66
+448
+449        <service
+449-->[androidx.room:room-runtime:2.5.0] /home/werg/.gradle/caches/8.11.1/transforms/734045e8d5dbe4830cd3278a44c076f4/transformed/room-runtime-2.5.0/AndroidManifest.xml:24:9-28:63
+450            android:name="androidx.room.MultiInstanceInvalidationService"
+450-->[androidx.room:room-runtime:2.5.0] /home/werg/.gradle/caches/8.11.1/transforms/734045e8d5dbe4830cd3278a44c076f4/transformed/room-runtime-2.5.0/AndroidManifest.xml:25:13-74
+451            android:directBootAware="true"
+451-->[androidx.room:room-runtime:2.5.0] /home/werg/.gradle/caches/8.11.1/transforms/734045e8d5dbe4830cd3278a44c076f4/transformed/room-runtime-2.5.0/AndroidManifest.xml:26:13-43
+452            android:exported="false" />
+452-->[androidx.room:room-runtime:2.5.0] /home/werg/.gradle/caches/8.11.1/transforms/734045e8d5dbe4830cd3278a44c076f4/transformed/room-runtime-2.5.0/AndroidManifest.xml:27:13-37
+453
+454        <receiver
+454-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:34:9-52:20
+455            android:name="androidx.profileinstaller.ProfileInstallReceiver"
+455-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:35:13-76
+456            android:directBootAware="false"
+456-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:36:13-44
+457            android:enabled="true"
+457-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:37:13-35
+458            android:exported="true"
+458-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:38:13-36
+459            android:permission="android.permission.DUMP" >
+459-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:39:13-57
+460            <intent-filter>
+460-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:40:13-42:29
+461                <action android:name="androidx.profileinstaller.action.INSTALL_PROFILE" />
+461-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:41:17-91
+461-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:41:25-88
+462            </intent-filter>
+463            <intent-filter>
+463-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:43:13-45:29
+464                <action android:name="androidx.profileinstaller.action.SKIP_FILE" />
+464-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:44:17-85
+464-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:44:25-82
+465            </intent-filter>
+466            <intent-filter>
+466-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:46:13-48:29
+467                <action android:name="androidx.profileinstaller.action.SAVE_PROFILE" />
+467-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:47:17-88
+467-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:47:25-85
+468            </intent-filter>
+469            <intent-filter>
+469-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:49:13-51:29
+470                <action android:name="androidx.profileinstaller.action.BENCHMARK_OPERATION" />
+470-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:50:17-95
+470-->[androidx.profileinstaller:profileinstaller:1.3.1] /home/werg/.gradle/caches/8.11.1/transforms/2c1d266684146de4fbc7b864c6cd745b/transformed/profileinstaller-1.3.1/AndroidManifest.xml:50:25-92
+471            </intent-filter>
+472        </receiver>
+473
+474        <service
+474-->[com.google.android.datatransport:transport-backend-cct:3.1.9] /home/werg/.gradle/caches/8.11.1/transforms/0bd69e8fd9a47bab7982f3eb8b0c03ba/transformed/transport-backend-cct-3.1.9/AndroidManifest.xml:28:9-34:19
+475            android:name="com.google.android.datatransport.runtime.backends.TransportBackendDiscovery"
+475-->[com.google.android.datatransport:transport-backend-cct:3.1.9] /home/werg/.gradle/caches/8.11.1/transforms/0bd69e8fd9a47bab7982f3eb8b0c03ba/transformed/transport-backend-cct-3.1.9/AndroidManifest.xml:29:13-103
+476            android:exported="false" >
+476-->[com.google.android.datatransport:transport-backend-cct:3.1.9] /home/werg/.gradle/caches/8.11.1/transforms/0bd69e8fd9a47bab7982f3eb8b0c03ba/transformed/transport-backend-cct-3.1.9/AndroidManifest.xml:30:13-37
+477            <meta-data
+477-->[com.google.android.datatransport:transport-backend-cct:3.1.9] /home/werg/.gradle/caches/8.11.1/transforms/0bd69e8fd9a47bab7982f3eb8b0c03ba/transformed/transport-backend-cct-3.1.9/AndroidManifest.xml:31:13-33:39
+478                android:name="backend:com.google.android.datatransport.cct.CctBackendFactory"
+478-->[com.google.android.datatransport:transport-backend-cct:3.1.9] /home/werg/.gradle/caches/8.11.1/transforms/0bd69e8fd9a47bab7982f3eb8b0c03ba/transformed/transport-backend-cct-3.1.9/AndroidManifest.xml:32:17-94
+479                android:value="cct" />
+479-->[com.google.android.datatransport:transport-backend-cct:3.1.9] /home/werg/.gradle/caches/8.11.1/transforms/0bd69e8fd9a47bab7982f3eb8b0c03ba/transformed/transport-backend-cct-3.1.9/AndroidManifest.xml:33:17-36
+480        </service>
+481        <service
+481-->[com.google.android.datatransport:transport-runtime:3.1.9] /home/werg/.gradle/caches/8.11.1/transforms/924cf23d2944cbb52631a3d8eb3b8295/transformed/transport-runtime-3.1.9/AndroidManifest.xml:26:9-30:19
+482            android:name="com.google.android.datatransport.runtime.scheduling.jobscheduling.JobInfoSchedulerService"
+482-->[com.google.android.datatransport:transport-runtime:3.1.9] /home/werg/.gradle/caches/8.11.1/transforms/924cf23d2944cbb52631a3d8eb3b8295/transformed/transport-runtime-3.1.9/AndroidManifest.xml:27:13-117
+483            android:exported="false"
+483-->[com.google.android.datatransport:transport-runtime:3.1.9] /home/werg/.gradle/caches/8.11.1/transforms/924cf23d2944cbb52631a3d8eb3b8295/transformed/transport-runtime-3.1.9/AndroidManifest.xml:28:13-37
+484            android:permission="android.permission.BIND_JOB_SERVICE" >
+484-->[com.google.android.datatransport:transport-runtime:3.1.9] /home/werg/.gradle/caches/8.11.1/transforms/924cf23d2944cbb52631a3d8eb3b8295/transformed/transport-runtime-3.1.9/AndroidManifest.xml:29:13-69
+485        </service>
+486
+487        <receiver
+487-->[com.google.android.datatransport:transport-runtime:3.1.9] /home/werg/.gradle/caches/8.11.1/transforms/924cf23d2944cbb52631a3d8eb3b8295/transformed/transport-runtime-3.1.9/AndroidManifest.xml:32:9-34:40
+488            android:name="com.google.android.datatransport.runtime.scheduling.jobscheduling.AlarmManagerSchedulerBroadcastReceiver"
+488-->[com.google.android.datatransport:transport-runtime:3.1.9] /home/werg/.gradle/caches/8.11.1/transforms/924cf23d2944cbb52631a3d8eb3b8295/transformed/transport-runtime-3.1.9/AndroidManifest.xml:33:13-132
+489            android:exported="false" /> <!-- Receiver Service -->
+489-->[com.google.android.datatransport:transport-runtime:3.1.9] /home/werg/.gradle/caches/8.11.1/transforms/924cf23d2944cbb52631a3d8eb3b8295/transformed/transport-runtime-3.1.9/AndroidManifest.xml:34:13-37
+490        <service
+490-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:28:9-30:40
+491            android:name="app.notifee.core.ReceiverService"
+491-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:29:13-60
+492            android:exported="false" />
+492-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:30:13-37
+493
+494        <activity
+494-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:32:9-38:75
+495            android:name="app.notifee.core.NotificationReceiverActivity"
+495-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:33:13-73
+496            android:excludeFromRecents="true"
+496-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:34:13-46
+497            android:exported="true"
+497-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:35:13-36
+498            android:noHistory="true"
+498-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:36:13-37
+499            android:taskAffinity=""
+499-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:37:13-36
+500            android:theme="@android:style/Theme.Translucent.NoTitleBar" /> <!-- Foreground Service -->
+500-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:38:13-72
+501        <service
+501-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:41:9-44:60
+502            android:name="app.notifee.core.ForegroundService"
+502-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:42:13-62
+503            android:exported="false"
+503-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:43:13-37
+504            android:foregroundServiceType="shortService" />
+504-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:44:13-57
+505
+506        <receiver
+506-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:46:9-54:20
+507            android:name="app.notifee.core.RebootBroadcastReceiver"
+507-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:47:13-68
+508            android:exported="false" >
+508-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:48:13-37
+509            <intent-filter>
+509-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:49:13-53:29
+510                <action android:name="android.intent.action.BOOT_COMPLETED" />
+510-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:117:17-79
+510-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:117:25-76
+511                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+511-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:51:17-82
+511-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:51:25-79
+512                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+512-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:52:17-82
+512-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:52:25-79
+513            </intent-filter>
+514        </receiver>
+515        <receiver
+515-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:55:9-61:20
+516            android:name="app.notifee.core.AlarmPermissionBroadcastReceiver"
+516-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:56:13-77
+517            android:exported="true" >
+517-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:57:13-36
+518            <intent-filter>
+518-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:58:13-60:29
+519                <action android:name="android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED" />
+519-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:59:17-107
+519-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:59:25-104
+520            </intent-filter>
+521        </receiver>
+522        <receiver
+522-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:62:9-70:20
+523            android:name="app.notifee.core.NotificationAlarmReceiver"
+523-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:63:13-70
+524            android:exported="false" >
+524-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:64:13-37
+525            <intent-filter>
+525-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:49:13-53:29
+526                <action android:name="android.intent.action.BOOT_COMPLETED" />
+526-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:117:17-79
+526-->[androidx.work:work-runtime:2.8.0] /home/werg/.gradle/caches/8.11.1/transforms/0be3c10ce5c4dc8b50fdb483fb337778/transformed/work-runtime-2.8.0/AndroidManifest.xml:117:25-76
+527                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+527-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:51:17-82
+527-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:51:25-79
+528                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+528-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:52:17-82
+528-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:52:25-79
+529            </intent-filter>
+530        </receiver> <!-- Broadcast Receiver -->
+531        <receiver
+531-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:73:9-81:20
+532            android:name="app.notifee.core.BlockStateBroadcastReceiver"
+532-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:74:13-72
+533            android:exported="false" >
+533-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:75:13-37
+534            <intent-filter>
+534-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:76:13-80:29
+535                <action android:name="android.app.action.APP_BLOCK_STATE_CHANGED" />
+535-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:77:17-85
+535-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:77:25-82
+536                <action android:name="android.app.action.NOTIFICATION_CHANNEL_BLOCK_STATE_CHANGED" />
+536-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:78:17-102
+536-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:78:25-99
+537                <action android:name="android.app.action.NOTIFICATION_CHANNEL_GROUP_BLOCK_STATE_CHANGED" />
+537-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:79:17-108
+537-->[app.notifee:core:202108261754] /home/werg/.gradle/caches/8.11.1/transforms/66227f4486caf9748f20a72f636513ba/transformed/core-202108261754/AndroidManifest.xml:79:25-105
+538            </intent-filter>
+539        </receiver>
+540
+541        <meta-data
+541-->[com.facebook.soloader:soloader:0.12.1] /home/werg/.gradle/caches/8.11.1/transforms/f94f2fa7b151c1731d75fa385fee7c53/transformed/soloader-0.12.1/AndroidManifest.xml:12:9-14:37
+542            android:name="com.facebook.soloader.enabled"
+542-->[com.facebook.soloader:soloader:0.12.1] /home/werg/.gradle/caches/8.11.1/transforms/f94f2fa7b151c1731d75fa385fee7c53/transformed/soloader-0.12.1/AndroidManifest.xml:13:13-57
+543            android:value="false" />
+543-->[com.facebook.soloader:soloader:0.12.1] /home/werg/.gradle/caches/8.11.1/transforms/f94f2fa7b151c1731d75fa385fee7c53/transformed/soloader-0.12.1/AndroidManifest.xml:14:13-34
+544    </application>
+545
+546</manifest>

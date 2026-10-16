@@ -57,8 +57,8 @@ and are not causally connected to the panel-slot churn.
 1. `ViewManager` no longer falls back to the just-removed `visiblePanelId`
    when the last focused native slot is cleared. The old fallback could leave
    the manager reporting a panel as visible after its slot and native view had
-   both been released. See `src/main/viewManager.ts` and the regression in
-   `src/main/viewManager.test.ts`.
+   both been released. See `hosts/desktop/main/viewManager.ts` and the regression in
+   `hosts/desktop/main/viewManager.test.ts`.
 
 2. `PanelTreeProvider` now treats `panel-presentation-changed.revision` as a
    monotonic sequence. Older events are ignored, and an async read belonging
@@ -71,7 +71,7 @@ and are not causally connected to the panel-slot churn.
 Validation completed:
 
 ```text
-pnpm exec vitest run src/main/viewManager.test.ts \
+pnpm exec vitest run hosts/desktop/main/viewManager.test.ts \
   workspace/apps/shell/shell/hooks/PanelTreeContext.pins.test.tsx \
   workspace/apps/shell/components/PanelSurface.test.tsx
 86 tests passed
@@ -90,10 +90,10 @@ break a real fallback path.
 
 Relevant code:
 
-- `src/main/panelOrchestrator.ts` around `panel-created` emission
-- `src/main/panelOrchestrator.ts` around `attachCreatedPanel()` and
+- `hosts/desktop/main/panelOrchestrator.ts` around `panel-created` emission
+- `hosts/desktop/main/panelOrchestrator.ts` around `attachCreatedPanel()` and
   `focusPanel()`
-- `src/main/index.ts` where the local presentation snapshot is fanned out as
+- `hosts/desktop/main/index.ts` where the local presentation snapshot is fanned out as
   `panel-presentation-changed`
 
 Recommended handoff:
@@ -117,7 +117,7 @@ therefore steal focus from shell chrome, the address bar, or another native
 surface. The binding path also installs a WebContents focus listener, so an
 imperative focus can feed back into shell focus bookkeeping.
 
-Relevant code: `src/main/viewManager.ts` around `bindPanelSlot()`,
+Relevant code: `hosts/desktop/main/viewManager.ts` around `bindPanelSlot()`,
 `setFocusedNativePanelSlot()`, and `handleNativeSlotViewFocus()`.
 
 Recommended handoff:
@@ -188,7 +188,7 @@ lifecycle work, but disabling StrictMode would only hide the race.
 
 Relevant code: `workspace/apps/shell/components/PanelSurface.tsx` around
 `clearSlot()`, `syncSlot()`, the `bindingKey` effect, and the unmount cleanup;
-`src/main/viewManager.ts` around `bindPanelSlot()` and
+`hosts/desktop/main/viewManager.ts` around `bindPanelSlot()` and
 `clearPanelSlot()`.
 
 Desired invariant:

@@ -14,7 +14,7 @@ export function iosMarketingVersion(version) {
 function main() {
   const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const version = iosMarketingVersion(pkg.version);
-  const output = path.join(root, "apps/mobile/ios/Vibestudio.Version.xcconfig");
+  const output = path.join(root, "hosts/ios/Vibestudio.Version.xcconfig");
   const content =
     "// Generated from package.json by scripts/generate-mobile-version.mjs.\n" +
     `MARKETING_VERSION = ${version}\n`;

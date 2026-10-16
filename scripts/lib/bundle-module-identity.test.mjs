@@ -38,7 +38,7 @@ test("checks package-owned builds relative to their actual working directory", (
           "../../packages/rpc/dist/schemaClient.js"
         ),
         "/fixture",
-        "/fixture/apps/headless-host"
+        "/fixture/packages/headless-renderer"
       ),
     /mixes source and compiled modules for @vibestudio\/rpc/
   );

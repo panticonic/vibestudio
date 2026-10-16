@@ -3,11 +3,11 @@
  *
  * The home server has NO public inbound endpoint. Every third-party callback
  * (OAuth redirects, provider webhooks) arrives at the apex relay
- * (apps/webhook-relay) and is pushed down a persistent, authenticated
+ * (services/webhook-relay) and is pushed down a persistent, authenticated
  * WebSocket this module holds open to `wss://<relay>/backhaul`. This is the
  * trust anchor: the relay verifies a fresh signature from the workspace's
  * persistent P-256 identity, and webhook ownership is first-writer-wins on its
- * self-certifying relay id (see apps/webhook-relay/src/registry.ts).
+ * self-certifying relay id (see services/webhook-relay/src/registry.ts).
  *
  * Responsibilities:
  *   - Dial `/backhaul` with the auth handshake the worker verifies
@@ -22,7 +22,7 @@
  *   - Reconnect with exponential backoff and FAIL LOUD (structured logs) while
  *     down — never silently swallow a dead backhaul.
  *
- * Frame schemas mirror the worker EXACTLY (apps/webhook-relay/src/registry.ts).
+ * Frame schemas mirror the worker EXACTLY (services/webhook-relay/src/registry.ts).
  */
 
 import * as crypto from "node:crypto";

@@ -49,10 +49,10 @@ behavior, plus an ad-hoc vocabulary of WebSocket close codes (4091/4093/4094/ 40
    (`createRuntime.ts:60`) and by host CDP probe
    (`PANEL_PAGE_OBSERVATION_EXPRESSION`). Inspection separately reports
    `observed | unavailable`; probe availability is not a boot lifecycle phase.
-2. **Desktop host-local readiness** — `src/main/panelReadiness.ts`:
+2. **Desktop host-local readiness** — `hosts/desktop/main/panelReadiness.ts`:
    `isPanelContentReady` checks lease/artifacts/native-slot/`view.isLoading`
    and **never reads the boot phase**. Its only production consumer is
-   `src/main/testApi.ts` — it is a test-diagnostic predicate, not a live
+   `hosts/desktop/main/testApi.ts` — it is a test-diagnostic predicate, not a live
    lifecycle gate — but it is still a second _definition_ of ready that e2e
    assertions rely on, so it must be replaced, not left to drift.
 3. **Browser-panel bypass** — `panelRuntime.ts:438` forces phase to `"ready"`
@@ -344,7 +344,7 @@ invariants that matter — a _superseded_ or _foreign_ attempt cannot publish,
 and no phase regresses — are enforced at the principal/attempt level, which
 the server can verify.
 
-Desktop `src/main/panelReadiness.ts` is **deleted as an independent
+Desktop `hosts/desktop/main/panelReadiness.ts` is **deleted as an independent
 predicate**. Its legitimate inputs (native slot bound, artifacts present)
 become host-side _gates for when the host reports_ — they stop being a second
 definition of ready. Anything in it that gated UI chrome reads the canonical

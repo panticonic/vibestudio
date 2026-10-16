@@ -46,7 +46,7 @@ function parseArgs(argv) {
     deviceId: undefined,
     pairUrl: undefined,
     packageId: undefined,
-    bundleId: readIosSigningConfig(path.join(repoRoot, "apps/mobile/ios")).bundleId,
+    bundleId: readIosSigningConfig(path.join(repoRoot, "hosts/ios")).bundleId,
   };
   for (let index = 0; index < rest.length; index += 1) {
     const arg = rest[index];

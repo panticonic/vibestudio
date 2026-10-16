@@ -27,8 +27,8 @@ import { app, BaseWindow, session } from "electron";
 import { once } from "node:events";
 import http from "node:http";
 import assert from "node:assert/strict";
-import { ViewManager } from "./src/main/viewManager.ts";
-import { nativeViewMayUsePermission } from "./src/main/nativeViewPermissionPolicy.ts";
+import { ViewManager } from "./hosts/desktop/main/viewManager.ts";
+import { nativeViewMayUsePermission } from "./hosts/desktop/main/nativeViewPermissionPolicy.ts";
 
 app.setPath("userData", ${JSON.stringify(path.join(scratch, "profile"))});
 console.log("[fullscreen-smoke] waiting for app readiness");

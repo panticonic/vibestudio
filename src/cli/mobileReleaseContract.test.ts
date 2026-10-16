@@ -26,7 +26,10 @@ describe("Android release asset contract", () => {
   });
 
   it("keeps the JavaScript native bootstrap on the live launch-gate API", () => {
-    const bootstrap = fs.readFileSync(path.join(repoRoot, "apps", "mobile", "index.js"), "utf8");
+    const bootstrap = fs.readFileSync(
+      path.join(repoRoot, "hosts", "react-native", "index.js"),
+      "utf8"
+    );
     const importList = bootstrap.match(
       /import\s*\{([^}]+)\}\s*from\s*["']@vibestudio\/shared\/bootstrapLaunchGate["']/u
     )?.[1];

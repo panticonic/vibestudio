@@ -34,10 +34,10 @@ import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import type { PanelLifecycleResult } from "@vibestudio/shared/types";
 import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
-import type { PanelReadinessSnapshot, TestApi } from "../../src/main/testApi.js";
-import type { MainProcessErrorRecord } from "../../src/main/mainProcessErrorLedger.js";
+import type { PanelReadinessSnapshot, TestApi } from "../../hosts/desktop/main/testApi.js";
+import type { MainProcessErrorRecord } from "../../hosts/desktop/main/mainProcessErrorLedger.js";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
-import type { PanelInitializationFailure } from "../../src/main/panelInitializationFailure.js";
+import type { PanelInitializationFailure } from "../../hosts/desktop/main/panelInitializationFailure.js";
 import {
   isAutomationContextReplacement,
   retryIdempotentAutomationRead,

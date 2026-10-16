@@ -31,7 +31,7 @@ That said, the audit found **several exploitable or latent weaknesses** that war
 12. **`/rpc` HTTP endpoint has a 200 MB body limit**, error responses return HTTP 200 with `{ error }` (semantic errors encoded in JSON — OK), but the **200MB cap is 200× typical bodies** and enables memory pressure / DoS. **Severity: Medium.**
 13. **Panel error page renders the build error in a `<pre>` block**; `escapeHtml` escapes `<>"&` but NOT the single-quote `'`. An HTML attribute-context injection in an upstream concatenation could still be crafted. Not exploitable as written (error only ever appears in `<pre>`). **Severity: Info/hardening.**
 
-No findings affect the core TLS-pinning implementation (`src/main/tlsPinning.ts`), which is correctly designed and tested.
+No findings affect the core TLS-pinning implementation (`hosts/desktop/main/tlsPinning.ts`), which is correctly designed and tested.
 
 ---
 
@@ -69,7 +69,7 @@ CORS on `/api/*`: `Access-Control-Allow-Origin: *`, `Allow-Methods: GET, OPTIONS
 | ------ | ------ | ----------------------------------------------------------------------------------- |
 | POST   | `/rpc` | `Authorization: Bearer <token>` — per-caller tokens only; admin tokens are rejected |
 
-### Webhook relay (Cloudflare Worker) — `apps/webhook-relay/src/index.ts`
+### Webhook relay (Cloudflare Worker) — `services/webhook-relay/src/index.ts`
 
 | Method        | Path                                 | Auth                                     |
 | ------------- | ------------------------------------ | ---------------------------------------- |
@@ -79,7 +79,7 @@ CORS on `/api/*`: `Access-Control-Allow-Origin: *`, `Allow-Methods: GET, OPTIONS
 
 Wrangler config has `[vars] ENVIRONMENT = "production"` — no `[[kv_namespaces]]` or secrets. The relay is a scaffold; it does not actually verify or forward anything.
 
-### Apex well-known routes — `apps/webhook-relay`
+### Apex well-known routes — `services/webhook-relay`
 
 The apex relay Worker owns the two stateless mobile association routes:
 
@@ -90,7 +90,7 @@ Both are generated from `VIBESTUDIO_APPLE_APP_ID`,
 `VIBESTUDIO_ANDROID_PACKAGE_NAME`, and
 `VIBESTUDIO_ANDROID_SHA256_CERT_FINGERPRINTS`. Incomplete configuration fails
 loud with HTTP 503. The former standalone `apps/well-known` source was removed;
-`apps/webhook-relay` is the single apex owner.
+`services/webhook-relay` is the single apex owner.
 
 ### Egress proxy (loopback only) — `src/server/services/egressProxy.ts`
 
@@ -117,13 +117,13 @@ clients must exchange admin authority for a caller token before connecting.
 
 **Files:**
 
-- `apps/webhook-relay/src/index.ts:23–35` — accepts `POST /webhook/{instanceId}/{providerId}` and returns `{ received: true }`, no forwarding, no HMAC check, no KV.
+- `services/webhook-relay/src/index.ts:23–35` — accepts `POST /webhook/{instanceId}/{providerId}` and returns `{ received: true }`, no forwarding, no HMAC check, no KV.
 - `src/server/services/webhookService.ts` — manages subscriptions only; no HTTP handler.
 - `packages/shared/src/webhooks/verifier.ts` — verifier library with **correct** `crypto.timingSafeEqual` usage for GitHub / Slack / Stripe, but never invoked from any ingress path.
 
 **Attack:** if an integrator points a provider (GitHub, Stripe, Slack) at the webhook-relay's `POST /webhook/...`, the relay accepts and discards the payload, and never verifies the signature. The actual server has no `/webhook` route at all — `/_r/s/webhooks/...` is not registered in `webhookService.ts` (that service is RPC-only).
 
-**Code snippet (apps/webhook-relay/src/index.ts:23–35):**
+**Code snippet (services/webhook-relay/src/index.ts:23–35):**
 
 ```ts
 if (request.method === "POST" && segments.length === 3 && segments[0] === "webhook") {
@@ -355,7 +355,7 @@ No `'` → `&#39;`. All current call sites use the output inside `"..."` attribu
 
 ### F-14 — LOW — Reconnection error exposes admin-token via `redactTokenIn`
 
-**File:** `src/main/serverClient.ts:162, 240`
+**File:** `hosts/desktop/main/serverClient.ts:162, 240`
 
 `redactTokenIn(err.message, adminToken)` is invoked with the token as the redaction key. If `redactTokenIn` does a naive `indexOf` scan, it works — but if the error is not a string or contains the token in a slightly re-encoded form, redaction silently fails.
 
@@ -365,7 +365,7 @@ This is only a concern on the _client_ side (console-log), not the server, but a
 
 ### F-15 — REMEDIATED — Universal-link configuration fails loud
 
-**Files:** `apps/webhook-relay/src/oauthLanding.ts`, `apps/webhook-relay/src/index.ts`
+**Files:** `services/webhook-relay/src/oauthLanding.ts`, `services/webhook-relay/src/index.ts`
 
 The former static app and placeholder `config.json` no longer exist. The apex
 relay parses deployment-owned identifiers and signing fingerprints, normalizes
@@ -439,7 +439,7 @@ res.setHeader("X-Frame-Options", "DENY");
 
 ## Positive Findings (things done right)
 
-- **TLS fingerprint pinning** (`src/main/tlsPinning.ts`): correct design. Fingerprint comparison happens in `secureConnect` before any user-level write; `rejectUnauthorized: false` is paired with `checkServerIdentity: () => undefined` and a factory-installed `createConnection` so SNI-on-IP quirk is handled. Bytes-on-wire test (`serverClient.tls.test.ts:135–187`) confirms `ws:auth` never reaches a mismatched peer.
+- **TLS fingerprint pinning** (`hosts/desktop/main/tlsPinning.ts`): correct design. Fingerprint comparison happens in `secureConnect` before any user-level write; `rejectUnauthorized: false` is paired with `checkServerIdentity: () => undefined` and a factory-installed `createConnection` so SNI-on-IP quirk is handled. Bytes-on-wire test (`serverClient.tls.test.ts:135–187`) confirms `ws:auth` never reaches a mismatched peer.
 - **OAuth state/code verification** (`loopbackPkce.ts:111`, `authFlowService.ts:87`): state nonce and PKCE code verifier are cryptographically random, lengths 16/32 bytes respectively. Callback path mismatch rejected (`authFlowService.ts:80–82`).
 - **Webhook verifiers** (`packages/shared/src/webhooks/verifier.ts`): GitHub/Slack/Stripe use `crypto.timingSafeEqual` correctly with length check. Multi-signature Stripe handled.
 - **Egress proxy HTTP path** (`egressProxy.ts:148–271`): full pipeline consent → capability → rate limit → circuit breaker → audit.
@@ -506,12 +506,12 @@ res.setHeader("X-Frame-Options", "DENY");
 - `src/server/services/credentialService.ts`
 - `src/server/services/oauthProviders/codexTokenProvider.ts`
 - `src/server/index.ts`
-- `src/main/tlsPinning.ts`
-- `src/main/serverClient.ts` / `serverClient.tls.test.ts`
-- `apps/webhook-relay/src/index.ts`
-- `apps/webhook-relay/wrangler.toml`
-- `apps/webhook-relay/src/oauthLanding.ts`
-- `apps/webhook-relay/src/index.test.ts`
+- `hosts/desktop/main/tlsPinning.ts`
+- `hosts/desktop/main/serverClient.ts` / `serverClient.tls.test.ts`
+- `services/webhook-relay/src/index.ts`
+- `services/webhook-relay/wrangler.toml`
+- `services/webhook-relay/src/oauthLanding.ts`
+- `services/webhook-relay/src/index.test.ts`
 - `packages/shared/src/webhooks/verifier.ts` (+ test)
 - `packages/shared/src/webhooks/ingress.ts`
 - `packages/credential-client/src/audit.ts`

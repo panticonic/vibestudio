@@ -31,7 +31,7 @@ describe("multi-user cutover regression rules", () => {
     expect(ruleIds('process.env.VIBESTUDIO_FORCE_WORKSPACE_SERVER = "1";')).toContain(
       "forced-workspace-process-role"
     );
-    expect(ruleIds("const ready = { adminToken: token };", "src/main/startup.ts")).toContain(
+    expect(ruleIds("const ready = { adminToken: token };", "hosts/desktop/main/startup.ts")).toContain(
       "ready-file-credential-secret"
     );
     expect(ruleIds("const ready = { pairingCode: code };", "src/cli/start.ts")).toContain(

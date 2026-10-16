@@ -153,7 +153,7 @@ path:
   [03-F-05].
 - **Webhook verifiers** in `webhookVerifierRegistry` (HMAC with
   `timingSafeEqual` — correctly implemented) are never invoked by any
-  HTTP ingress. The `apps/webhook-relay/` Cloudflare Worker is a 64-line
+  HTTP ingress. The `services/webhook-relay/` Cloudflare Worker is a 64-line
   stub returning `{received: true}` with no signature verification,
   replay guard, or forwarding. [06-F-02, 03-F-07]
 - Slack and Stripe verifiers extract the webhook timestamp but never

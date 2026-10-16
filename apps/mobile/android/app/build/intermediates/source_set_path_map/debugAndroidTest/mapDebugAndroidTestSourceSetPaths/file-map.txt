@@ -1,0 +1,6 @@
+app.vibestudio.mobile.test.app-tracing-1.2.0-0 /home/werg/.gradle/caches/8.11.1/transforms/2725fb7009225cf0042ba7f18af851dc/transformed/tracing-1.2.0/res
+app.vibestudio.mobile.test.app-core-1.6.1-1 /home/werg/.gradle/caches/8.11.1/transforms/4ae5b257312ebd7540394814333dfe7d/transformed/core-1.6.1/res
+app.vibestudio.mobile.test.app-androidTest-2 /home/werg/vibestudio/apps/mobile/android/app/build/generated/res/resValues/androidTest/debug
+app.vibestudio.mobile.test.app-mergeDebugAndroidTestResources-3 /home/werg/vibestudio/apps/mobile/android/app/build/intermediates/incremental/debugAndroidTest/mergeDebugAndroidTestResources/merged.dir
+app.vibestudio.mobile.test.app-mergeDebugAndroidTestResources-4 /home/werg/vibestudio/apps/mobile/android/app/build/intermediates/incremental/debugAndroidTest/mergeDebugAndroidTestResources/stripped.dir
+app.vibestudio.mobile.test.app-debugAndroidTest-5 /home/werg/vibestudio/apps/mobile/android/app/build/intermediates/merged_res/debugAndroidTest/mergeDebugAndroidTestResources

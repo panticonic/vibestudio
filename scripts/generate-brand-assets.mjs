@@ -236,12 +236,11 @@ try {
     developmentTemplateConfig.requireDevelopmentTemplateCheckouts(repoRoot).checkouts;
   const workspaceUiAssetsDir = path.join(templateRoots.base, "packages", "ui", "src", "assets");
   const mobileWorkspaceAssets = path.join(templateRoots.system, "apps", "mobile", "src", "assets");
-  const mobileHostAssets = path.join(repoRoot, "apps", "mobile", "assets");
-  const androidRes = path.join(repoRoot, "apps", "mobile", "android", "app", "src", "main", "res");
+  const mobileHostAssets = path.join(repoRoot, "hosts", "react-native", "assets");
+  const androidRes = path.join(repoRoot, "hosts", "android", "app", "src", "main", "res");
   const iosIconDir = path.join(
     repoRoot,
-    "apps",
-    "mobile",
+    "hosts",
     "ios",
     "Vibestudio",
     "Images.xcassets",
@@ -249,8 +248,7 @@ try {
   );
   const iosLaunchLogoDir = path.join(
     repoRoot,
-    "apps",
-    "mobile",
+    "hosts",
     "ios",
     "Vibestudio",
     "Images.xcassets",
@@ -258,8 +256,7 @@ try {
   );
   const iosLaunchStoryboard = path.join(
     repoRoot,
-    "apps",
-    "mobile",
+    "hosts",
     "ios",
     "Vibestudio",
     "LaunchScreen.storyboard"

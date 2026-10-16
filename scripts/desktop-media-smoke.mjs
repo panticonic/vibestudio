@@ -23,7 +23,7 @@ try {
     write: false,
   });
   await build({
-    entryPoints: [join(root, "src/preload/displayCapturePreload.ts")],
+    entryPoints: [join(root, "hosts/desktop/preload/displayCapturePreload.ts")],
     outfile: join(temp, "picker-preload.cjs"),
     bundle: true,
     platform: "node",
@@ -35,7 +35,7 @@ import { app, BrowserWindow, session, ipcMain } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import assert from 'node:assert/strict';
-import { BrowserPermissionController } from ${JSON.stringify(join(root, "src/main/services/browserPermissionController.ts"))};
+import { BrowserPermissionController } from ${JSON.stringify(join(root, "hosts/desktop/main/services/browserPermissionController.ts"))};
 async function run() {
 app.setPath('userData', ${JSON.stringify(join(temp, "user-data"))});
 app.commandLine.appendSwitch('use-fake-device-for-media-stream');
@@ -112,7 +112,7 @@ try {
     selection = index;
   });
   try {
-    await picker.loadFile(${JSON.stringify(join(root, "src/main/displayCapture.html"))});
+    await picker.loadFile(${JSON.stringify(join(root, "hosts/desktop/main/displayCapture.html"))});
     await new Promise(resolve => setTimeout(resolve, 150));
     assert.equal(await picker.webContents.executeJavaScript('document.querySelectorAll(".source").length'), 2);
     assert.equal(await picker.webContents.executeJavaScript('document.getElementById("share").disabled'), true);

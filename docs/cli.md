@@ -98,7 +98,7 @@ readiness data, and successful readiness are distinct terminal outcomes.
 
 Electron local mode spawns the bundled `dist/server-electron.cjs` as one
 **detached machine hub** (`process.execPath` with `ELECTRON_RUN_AS_NODE=1`, see
-`src/main/hubProcessManager.ts`). The desktop shell pairs one global device with
+`hosts/desktop/main/hubProcessManager.ts`). The desktop shell pairs one global device with
 that hub and asks it to route into the selected workspace child; it never starts
 or authenticates a workspace child directly.
 
@@ -403,7 +403,7 @@ pnpm deploy:cloudflare
 pnpm smoke:cloudflare
 ```
 
-`vibestudio.app` is owned by `apps/webhook-relay` for `/p`, `/panel`,
+`vibestudio.app` is owned by `services/webhook-relay` for `/p`, `/panel`,
 `.well-known`, OAuth callbacks, webhooks, and backhaul. Iroh relays are operated
 separately as documented in [iroh-relay-operations.md](iroh-relay-operations.md).
 

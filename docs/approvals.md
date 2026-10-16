@@ -68,12 +68,12 @@ Electron approval bar is present.
    - `VIBESTUDIO_FIREBASE_SERVICE_ACCOUNT_PATH=/path/to/firebase-service-account.json`
    - `VIBESTUDIO_FIREBASE_SERVICE_ACCOUNT_JSON='<json>'`
    - `GOOGLE_APPLICATION_CREDENTIALS=/path/to/firebase-service-account.json`
-5. For Android, copy `apps/mobile/android/app/google-services.template.json` to
-   `apps/mobile/android/app/google-services.json` and replace it with the real
+5. For Android, copy `hosts/android/app/google-services.template.json` to
+   `hosts/android/app/google-services.json` and replace it with the real
    project config. The Gradle plugin is applied only when this file exists.
 6. For iOS, add an APNs auth key or certificate in Firebase, then copy
-   `apps/mobile/ios/Vibestudio/GoogleService-Info.template.plist` to
-   `apps/mobile/ios/Vibestudio/GoogleService-Info.plist` and replace it with the
+   `hosts/ios/Vibestudio/GoogleService-Info.template.plist` to
+   `hosts/ios/Vibestudio/GoogleService-Info.plist` and replace it with the
    real project config.
 7. Build and run the mobile app once so it can register its FCM token through
    the `push.register` RPC.

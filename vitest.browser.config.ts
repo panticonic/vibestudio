@@ -91,7 +91,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
           "packages/**/*.browser.test.tsx",
           "src/**/*.browser.test.tsx",
         ],
-        exclude: ["**/node_modules/**", "dist", "apps/mobile/**"],
+        exclude: ["**/node_modules/**", "dist", "hosts/react-native/**"],
         browser: {
           enabled: true,
           provider: "playwright",

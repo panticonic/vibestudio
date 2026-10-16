@@ -25,7 +25,8 @@ const WS_ROOT = "/repo/workspace/";
 const HOST_PRIVATE_ROOTS = [
   "/repo/src/",
   "/repo/packages/",
-  "/repo/apps/",
+  "/repo/hosts/",
+  "/repo/services/",
   "/repo/scripts/",
   "/repo/tests/",
 ];

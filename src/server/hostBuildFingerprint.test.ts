@@ -60,19 +60,23 @@ describe("host build fingerprint", () => {
 
   it("includes untracked source while excluding ignored outputs under source roots", () => {
     const cwd = fixture();
-    mkdirSync(join(cwd, "apps", "mobile", "android", "app", "build"), { recursive: true });
-    writeFileSync(join(cwd, "apps", "mobile", ".gitignore"), "android/app/build/\n");
+    mkdirSync(join(cwd, "hosts", "android", "app", "build"), { recursive: true });
+    writeFileSync(join(cwd, "hosts", "android", ".gitignore"), "app/build/\n");
     const before = computeHostBuildFingerprint({ cwd, mode: "development" });
 
     writeFileSync(
-      join(cwd, "apps", "mobile", "android", "app", "build", "generated.apk"),
+      join(cwd, "hosts", "android", "app", "build", "generated.apk"),
       "generated output\n"
     );
     expect(
       sameHostBuildFingerprint(before, computeHostBuildFingerprint({ cwd, mode: "development" }))
     ).toBe(true);
 
-    writeFileSync(join(cwd, "apps", "mobile", "new-source.ts"), "export const added = true;\n");
+    mkdirSync(join(cwd, "hosts", "react-native"), { recursive: true });
+    writeFileSync(
+      join(cwd, "hosts", "react-native", "new-source.ts"),
+      "export const added = true;\n"
+    );
     expect(
       sameHostBuildFingerprint(before, computeHostBuildFingerprint({ cwd, mode: "development" }))
     ).toBe(false);

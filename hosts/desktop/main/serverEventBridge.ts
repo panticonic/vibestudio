@@ -1,0 +1,386 @@
+import type { EventService } from "@vibestudio/shared/eventsService";
+import type { EventName, SupervisionChange } from "@vibestudio/shared/events";
+import type { PanelRuntimeLeaseChangedEvent } from "@vibestudio/shared/panel/panelLease";
+import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
+import type { PendingApproval } from "@vibestudio/shared/approvals";
+import type { ApprovalResolvedEvent } from "@vibestudio/shared/governance/types";
+import {
+  credentialsMethods,
+  type CredentialCaptureCompletion,
+} from "@vibestudio/service-schemas/credentials";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { serializeRpcFailure } from "@vibestudio/rpc";
+import type { ServerClient } from "./serverClient.js";
+import type { PanelOrchestrator } from "./panelOrchestrator.js";
+import {
+  handleExternalOpenPayload,
+  type ExternalOpenPayload,
+} from "../../../src/node/oauthLoopbackHandoff.js";
+
+export interface ServerEventBridgeDeps {
+  eventService: EventService;
+  getPanelOrchestrator(): PanelOrchestrator | null;
+  getServerClient(): ServerClient | null;
+  openExternal(url: string): Promise<void>;
+  warn(message: string): void;
+  notifyError?(title: string, message: string): void;
+  onAttentionRequired?(title: string, message: string): void;
+  /** OS-level attention (badge/flash/notification) for pending approvals. */
+  onApprovalPendingChanged?(pending: PendingApproval[]): void;
+  /** A review was answered. Launches that waited on it continue or stand down. */
+  onApprovalResolved?(resolved: ApprovalResolvedEvent): void;
+  /**
+   * A supervised unit changed. The desktop host adopts Electron apps through its
+   * single launch coordinator and retries host-target launch from this.
+   */
+  onSupervisionChanged?(change: SupervisionChange): Promise<void> | void;
+  /** Retain the latest level-triggered tree reset for newly opened shell watches. */
+  onPanelTreeInvalidated?(event: PanelTreeInvalidation): void;
+  /**
+   * The server asked the shell to run an interactive session credential
+   * capture. The handler answers with `credentials.completeCapture`.
+   */
+  onCredentialCaptureRequest?(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
+  /** Apply actions whose implementation is owned by this desktop host. */
+  onNotificationAction?(id: string, actionId: string): void | Promise<void>;
+}
+
+const HOST_DIRECT_EVENT_NAMES = [
+  "external-open:open",
+  "browser-panel:open",
+  "panel-created",
+  "navigate-to-panel",
+  "panel:stateArgsChanged",
+] as const;
+
+/**
+ * Bind connection-addressed events whose side effects are owned by Electron
+ * main. Direct EventService delivery bypasses the response-owned event watch,
+ * so these handlers must live on the authenticated ServerClient transport.
+ */
+export function bindHostDirectServerEvents(
+  client: Pick<ServerClient, "onDirectEvent">,
+  handleEvent: (event: EventName, payload: unknown) => void
+): () => void {
+  const releases = HOST_DIRECT_EVENT_NAMES.map((event) =>
+    client.onDirectEvent(event, (payload) => handleEvent(event, payload))
+  );
+  return () => {
+    for (const release of releases.reverse()) release();
+  };
+}
+
+/** Parse the one notification shape that asks the desktop host for OS-level attention. */
+export function notificationAttention(
+  event: EventName,
+  payload: unknown
+): { title: string; message: string } | null {
+  if (event !== "notification:show") return null;
+  const notification = payload as { id?: unknown; title?: unknown; message?: unknown };
+  if (
+    typeof notification.id !== "string" ||
+    !notification.id.startsWith("chat-attention:") ||
+    typeof notification.title !== "string"
+  ) {
+    return null;
+  }
+  return {
+    title: notification.title,
+    message: typeof notification.message === "string" ? notification.message : "",
+  };
+}
+
+/**
+ * Applies typed workspace events from the response-owned server watch before
+ * they enter the local shell event bus. Events requiring Electron state, ID
+ * translation, or side effects are consumed here; all others are re-emitted.
+ */
+export function createServerEventBridge(
+  deps: ServerEventBridgeDeps
+): (event: EventName, payload: unknown) => void {
+  const emitNormalized = (event: EventName, payload: unknown): void => {
+    (deps.eventService.emit as (e: EventName, d: unknown) => void)(event, payload);
+  };
+  const credentialsClientFor = (client: ServerClient) =>
+    createTypedServiceClient("credentials", credentialsMethods, (service, method, args) =>
+      client.call(service, method, args)
+    );
+
+  return function handleServerEvent(bareEvent: EventName, payload: unknown): void {
+    const panelOrchestrator = deps.getPanelOrchestrator();
+
+    if (bareEvent === "build:complete") {
+      const { source, error } = payload as { source?: unknown; error?: unknown };
+      if (typeof source !== "string") {
+        deps.warn("[build] ignored malformed build:complete event without a source");
+        return;
+      }
+      if (!panelOrchestrator) {
+        deps.warn(`[build] could not apply completion for ${source}: panel host is not ready`);
+        return;
+      }
+      panelOrchestrator.applyBuildComplete(source, typeof error === "string" ? error : undefined);
+      return;
+    }
+    if (bareEvent === "external-open:open") {
+      const external = payload as ExternalOpenPayload;
+      const transactionId = external.oauthLoopback?.transactionId;
+      const pendingNotificationId = transactionId ? `oauth-pending-${transactionId}` : null;
+      if (pendingNotificationId && transactionId) {
+        emitNormalized("notification:show", {
+          id: pendingNotificationId,
+          type: "info",
+          title: "Finish signing in in your browser",
+          message: "Vibestudio is waiting for the provider to return you to the app.",
+          ttl: 0,
+          actions: [
+            { id: `oauth-cancel:${transactionId}`, label: "Cancel sign-in", variant: "soft" },
+          ],
+        });
+      }
+      void handleExternalOpenPayload(external, {
+        openExternal: deps.openExternal,
+        forwardOAuthCallback: (request) => {
+          const client = deps.getServerClient();
+          if (!client) throw new Error("The workspace server connection is unavailable");
+          return credentialsClientFor(client).forwardOAuthCallback(request);
+        },
+        cancelOAuth: (transactionId) => {
+          const client = deps.getServerClient();
+          if (!client) throw new Error("The workspace server connection is unavailable");
+          return credentialsClientFor(client).cancelOAuth({ transactionId });
+        },
+      })
+        .catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          deps.warn(`[externalOpen] OAuth browser handoff failed: ${message}`);
+          deps.notifyError?.("Sign-in could not continue", message);
+        })
+        .finally(() => {
+          if (pendingNotificationId) {
+            emitNormalized("notification:dismiss", { id: pendingNotificationId });
+          }
+        });
+      return;
+    }
+
+    const attention = notificationAttention(bareEvent, payload);
+    if (attention) deps.onAttentionRequired?.(attention.title, attention.message);
+
+    if (bareEvent === "notification:action") {
+      const action = payload as { id?: unknown; actionId?: unknown };
+      if (typeof action.id === "string" && typeof action.actionId === "string") {
+        void Promise.resolve(deps.onNotificationAction?.(action.id, action.actionId)).catch(
+          (error: unknown) => {
+            deps.warn(
+              `[notification] desktop action failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            );
+          }
+        );
+      }
+    }
+
+    if (bareEvent === "credential:capture-request") {
+      const request = payload as Record<string, unknown>;
+      const captureId = request["captureId"];
+      const captureRequest = deps.onCredentialCaptureRequest;
+      if (typeof captureId !== "string" || !captureRequest) return;
+      void (async () => {
+        let result: CredentialCaptureCompletion;
+        try {
+          result = { kind: "success", value: await captureRequest(request) };
+        } catch (err) {
+          result = { kind: "failure", failure: serializeRpcFailure(err) };
+        }
+        const client = deps.getServerClient();
+        if (!client) {
+          deps.warn("[credentialCapture] no server client to complete capture");
+          return;
+        }
+        await credentialsClientFor(client)
+          .completeCapture(captureId, result)
+          .catch((err) => {
+            deps.warn(
+              `[credentialCapture] completeCapture failed: ${
+                err instanceof Error ? err.message : String(err)
+              }`
+            );
+          });
+      })();
+      return;
+    }
+
+    if (bareEvent === "browser-panel:open") {
+      const request = payload as {
+        url?: unknown;
+        parentPanelId?: unknown;
+        transactionId?: unknown;
+      };
+      const client = deps.getServerClient();
+      if (
+        !client ||
+        !panelOrchestrator ||
+        typeof request.url !== "string" ||
+        typeof request.parentPanelId !== "string"
+      ) {
+        const message =
+          !client || !panelOrchestrator
+            ? "The workspace panel host is unavailable"
+            : "The OAuth browser handoff was malformed";
+        deps.warn(`[browserPanel] OAuth panel creation failed: ${message}`);
+        deps.notifyError?.("Sign-in could not continue", message);
+        if (client && typeof request.transactionId === "string") {
+          void credentialsClientFor(client)
+            .cancelOAuth({ transactionId: request.transactionId })
+            .catch((error: unknown) => {
+              deps.warn(
+                `[browserPanel] OAuth cancellation failed: ${
+                  error instanceof Error ? error.message : String(error)
+                }`
+              );
+            });
+        }
+        return;
+      }
+      void panelOrchestrator
+        .createBrowserUrlPanel(request.parentPanelId, request.url, {
+          focus: true,
+          placement: "child",
+        })
+        .catch(async (error: unknown) => {
+          const message = error instanceof Error ? error.message : String(error);
+          deps.warn(`[browserPanel] OAuth panel creation failed: ${message}`);
+          deps.notifyError?.("Sign-in could not continue", message);
+          if (typeof request.transactionId === "string") {
+            try {
+              await credentialsClientFor(client).cancelOAuth({
+                transactionId: request.transactionId,
+              });
+            } catch (cancelError) {
+              deps.warn(
+                `[browserPanel] OAuth cancellation failed: ${
+                  cancelError instanceof Error ? cancelError.message : String(cancelError)
+                }`
+              );
+            }
+          }
+        });
+      return;
+    }
+
+    if (bareEvent === "panel:runtimeLeaseChanged") {
+      const leaseEvent = payload as PanelRuntimeLeaseChangedEvent;
+      void panelOrchestrator?.handleRuntimeLeaseChanged(leaseEvent).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        deps.warn(
+          `[panelRuntime] failed to apply lease change for ${leaseEvent.slotId}/${leaseEvent.runtimeEntityId}: ${
+            message
+          }`
+        );
+        deps.notifyError?.("Panel connection could not be updated", message);
+      });
+      return;
+    }
+
+    if (bareEvent === "panel:executionActivated") {
+      const activation =
+        payload as import("@vibestudio/shared/events").EventPayloads["panel:executionActivated"];
+      void panelOrchestrator?.applyPanelExecutionActivated(activation).catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        deps.warn(
+          `[panelRuntime] failed to apply execution activation for ${activation.panelId}/${activation.runtimeEntityId}: ${message}`
+        );
+        deps.notifyError?.("Panel runtime could not be activated", message);
+      });
+      return;
+    }
+
+    if (bareEvent === "panel:executionFailed") {
+      const failure =
+        payload as import("@vibestudio/shared/events").EventPayloads["panel:executionFailed"];
+      panelOrchestrator?.applyPanelExecutionFailed(failure);
+      return;
+    }
+
+    if (bareEvent === "panel:stateArgsChanged") {
+      const update =
+        payload as import("@vibestudio/shared/events").EventPayloads["panel:stateArgsChanged"];
+      try {
+        panelOrchestrator?.applyServerPanelStateArgsUpdate(update);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        deps.warn(`[panelRuntime] failed to apply state args for ${update.panelId}: ${message}`);
+        deps.notifyError?.("Panel state could not be updated", message);
+      }
+      return;
+    }
+
+    if (bareEvent === "panel-presentation-changed") {
+      const change =
+        payload as import("@vibestudio/shared/events").EventPayloads["panel-presentation-changed"];
+      if (!panelOrchestrator) {
+        emitNormalized(bareEvent, change);
+        return;
+      }
+      void panelOrchestrator
+        .refreshPanelPresentations(change.panelIds)
+        .catch((error: unknown) => {
+          deps.warn(
+            `[panelPresentation] failed to refresh changed panels: ${
+              error instanceof Error ? error.message : String(error)
+            }`
+          );
+        })
+        .finally(() => emitNormalized(bareEvent, change));
+      return;
+    }
+
+    if (bareEvent === "supervision:changed") {
+      void Promise.resolve(deps.onSupervisionChanged?.(payload as SupervisionChange)).catch(
+        (err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          deps.warn(`[supervision] failed to apply unit change: ${message}`);
+          deps.notifyError?.("App update could not be applied", message);
+        }
+      );
+      emitNormalized(bareEvent, payload);
+      return;
+    }
+
+    if (bareEvent === "extensions:error") {
+      const record =
+        payload && typeof payload === "object" ? (payload as Record<string, unknown>) : {};
+      const source = typeof record["source"] === "string" ? record["source"] : "An extension";
+      const message =
+        typeof record["error"] === "string"
+          ? record["error"]
+          : typeof record["message"] === "string"
+            ? record["message"]
+            : "The extension failed to build or start.";
+      deps.notifyError?.(`${source} failed`, message);
+    }
+
+    if (bareEvent === "panel-tree-invalidated") {
+      deps.onPanelTreeInvalidated?.(payload as PanelTreeInvalidation);
+      emitNormalized(bareEvent, payload);
+      return;
+    }
+
+    if (bareEvent === "shell-approval:resolved") {
+      deps.onApprovalResolved?.(payload as ApprovalResolvedEvent);
+      // Fall through - the approval bar renders the same event.
+    }
+
+    if (bareEvent === "shell-approval:pending-changed") {
+      const { pending } = payload as { pending?: unknown };
+      if (Array.isArray(pending)) {
+        deps.onApprovalPendingChanged?.(pending as PendingApproval[]);
+      }
+      // Fall through — the renderer's approval bar consumes the same event.
+    }
+
+    emitNormalized(bareEvent, payload);
+  };
+}

@@ -26,9 +26,9 @@ move as a unit.
 
 | Current owner                          | Exact facts                                                 | Current key                                                                     | Classification | Safe next action                                                                          |
 | -------------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------- |
-| `src/main/shellCore/localViewState.ts` | collapsed slot ids, focused slot id, local title projection | implicit resolved client/workspace state path in `local-view-state/panels.json` | product        | Inventory only; move with all local records after A0                                      |
-| `src/main/panelLayoutStore.ts`         | opaque multi-column layout                                  | device + workspace + account                                                    | product        | Preserve this exact scope in the future generic record store                              |
-| `src/main/panelPinStore.ts`            | pinned slot ids                                             | device + workspace                                                              | product        | Preserve this scope; publish retention intent rather than exposing the store to native GC |
+| `hosts/desktop/main/shellCore/localViewState.ts` | collapsed slot ids, focused slot id, local title projection | implicit resolved client/workspace state path in `local-view-state/panels.json` | product        | Inventory only; move with all local records after A0                                      |
+| `hosts/desktop/main/panelLayoutStore.ts`         | opaque multi-column layout                                  | device + workspace + account                                                    | product        | Preserve this exact scope in the future generic record store                              |
+| `hosts/desktop/main/panelPinStore.ts`            | pinned slot ids                                             | device + workspace                                                              | product        | Preserve this scope; publish retention intent rather than exposing the store to native GC |
 
 These are three records with different corruption and keying behavior. They are
 not one `PanelManager` state blob and must not be migrated by one all-or-nothing
@@ -51,7 +51,7 @@ Current behavioral evidence:
 
 - `packages/shared/src/panel/panelGc.test.ts` checks idle hard-retention, cap
   soft-priority, focus protection, and automation protection.
-- `src/main/panelResourcePolicy.test.ts` checks Electron/headless resource
+- `hosts/desktop/main/panelResourcePolicy.test.ts` checks Electron/headless resource
   bookkeeping and native residency.
 - `workspace/apps/mobile/src/components/webViewStack.test.ts` checks the same
   selector semantics through the mobile product pin adapter.

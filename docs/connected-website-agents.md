@@ -1,6 +1,6 @@
 # Agents inside a connected website
 
-The working example is `apps/webhook-relay/src/connect.js`. The generated UI
+The working example is `services/webhook-relay/src/connect.js`. The generated UI
 stays inside the website; it shares the parent's authenticated SDK instance.
 `connect.browser.test.ts` exercises that composition at desktop and mobile sizes.
 `tests/e2e/flows/websiteWorkspaceConnection.spec.ts` exercises the real connection,

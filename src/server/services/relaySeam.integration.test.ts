@@ -2,7 +2,7 @@
  * Server ↔ apex-relay SEAM integration test.
  *
  * This is the coverage whose absence let the two sides drift. It wires the REAL
- * relay Durable Object (apps/webhook-relay/src/registry.ts `RelayRegistry`) to
+ * relay Durable Object (services/webhook-relay/src/registry.ts `RelayRegistry`) to
  * the REAL server backhaul client (relayBackhaulClient.ts) over an in-memory
  * bridge that mirrors the on-the-wire framing, and drives a full round-trip for
  * BOTH profiles:
@@ -26,7 +26,7 @@ import {
   RelayRegistry,
   verifyBackhaulAuth,
   type Env,
-} from "../../../apps/webhook-relay/src/registry.js";
+} from "../../../services/webhook-relay/src/registry.js";
 import {
   createRelayBackhaulClient,
   type RelayBackhaulClient,

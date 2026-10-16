@@ -49,9 +49,9 @@ describe("mobileNative service", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-mobile-plan-"));
     try {
       for (const relative of [
-        "apps/mobile/android/gradlew",
-        "apps/mobile/package.json",
-        "apps/mobile/index.js",
+        "hosts/android/gradlew",
+        "hosts/react-native/package.json",
+        "hosts/react-native/index.js",
         "node_modules/react-native/package.json",
       ]) {
         const target = path.join(root, relative);

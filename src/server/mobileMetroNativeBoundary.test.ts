@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { exactTemplateRoots } from "../../tests/exactUserlandRoot";
 
 const require = createRequire(import.meta.url);
-const { createNativeBoundary } = require("../../apps/mobile/metroNativeBoundary.cjs") as {
+const { createNativeBoundary } = require("../../hosts/react-native/metroNativeBoundary.cjs") as {
   createNativeBoundary(workspaceAppRoot: string): {
     guardNativeModuleImport(moduleName: string, originModulePath?: string): void;
   };
@@ -61,7 +61,7 @@ describe("mobile Metro native capability boundary", () => {
     expect(() =>
       boundary.guardNativeModuleImport(
         "@react-native-async-storage/async-storage",
-        path.resolve("apps/mobile/index.js")
+        path.resolve("hosts/react-native/index.js")
       )
     ).not.toThrow();
   });
@@ -70,7 +70,7 @@ describe("mobile Metro native capability boundary", () => {
     expect(() =>
       boundary.guardNativeModuleImport(
         "@react-native-clipboard/clipboard",
-        path.resolve("apps/mobile/index.js")
+        path.resolve("hosts/react-native/index.js")
       )
     ).not.toThrow();
   });
@@ -97,7 +97,7 @@ describe("mobile Metro native capability boundary", () => {
   });
 
   it("keeps the shipped mobile entrypoint host-only", () => {
-    const entrypoint = fs.readFileSync(path.resolve("apps/mobile/index.js"), "utf-8");
+    const entrypoint = fs.readFileSync(path.resolve("hosts/react-native/index.js"), "utf-8");
 
     expect(entrypoint).toContain("VibestudioMobileHost");
     expect(entrypoint).toContain("activateApprovedWorkspaceApp");
@@ -109,12 +109,12 @@ describe("mobile Metro native capability boundary", () => {
   it("exposes the persisted active bundle identity on both native hosts", () => {
     const android = fs.readFileSync(
       path.resolve(
-        "apps/mobile/android/app/src/main/java/app/vibestudio/mobile/VibestudioMobileHostModule.kt"
+        "hosts/android/app/src/main/java/app/vibestudio/mobile/VibestudioMobileHostModule.kt"
       ),
       "utf-8"
     );
     const ios = fs.readFileSync(
-      path.resolve("apps/mobile/ios/Vibestudio/VibestudioMobileHost.mm"),
+      path.resolve("hosts/ios/Vibestudio/VibestudioMobileHost.mm"),
       "utf-8"
     );
     expect(android).toContain('"activeBundleBuildKey"');

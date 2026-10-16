@@ -58,7 +58,7 @@ const walkTypeScript = (relativeRoot) => {
 const lineTotal = (files) =>
   files.reduce((total, file) => total + fs.readFileSync(file, "utf8").split(/\r?\n/u).length, 0);
 
-const mainServiceFiles = walkTypeScript("src/main/services");
+const mainServiceFiles = walkTypeScript("hosts/desktop/main/services");
 const mainServiceCompositionFiles = mainServiceFiles.filter((file) =>
   /\bcreateTypedServiceClient\s*\(/u.test(fs.readFileSync(file, "utf8"))
 );
@@ -92,8 +92,8 @@ const computed = {
   residencyMixedServiceFamilies,
   hostTreeNonTestLines: lineTotal([
     ...walkTypeScript("src/server"),
-    ...walkTypeScript("src/main"),
-    ...walkTypeScript("apps/headless-host"),
+    ...walkTypeScript("hosts/desktop/main"),
+    ...walkTypeScript("packages/headless-renderer"),
   ]),
   serverIndexLines: sourceLines("src/server/index.ts"),
   builtinTreeLines: lineTotal(walkTypeScript("packages/builtin")),

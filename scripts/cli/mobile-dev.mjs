@@ -19,7 +19,7 @@ const developmentTemplateResolver = path.join(
   "resolve-development-templates.ts"
 );
 const runInstanceEntry = path.join(repoRoot, "src", "dev", "runInstance.ts");
-const mobileDir = path.join(repoRoot, "apps", "mobile");
+const mobileDir = path.join(repoRoot, "hosts", "react-native");
 const appPackage = INTERNAL_ANDROID_PACKAGE;
 const appActivity = `${appPackage}/app.vibestudio.mobile.MainActivity`;
 const metroPort = 8081;

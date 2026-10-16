@@ -1,6 +1,6 @@
 /**
  * HeadlessHostManager — spawns the standalone headless Chromium panel host
- * (apps/headless-host) on demand, making it the renderer of last resort: when
+ * (packages/headless-renderer) on demand, making it the renderer of last resort: when
  * a worker/agent needs a panel hosted and no CDP-capable client is connected,
  * the manager forks the host, waits for it to register, and the caller
  * retries lease assignment.
@@ -258,7 +258,9 @@ export class HeadlessHostManager {
   private async spawnAndWait(timeoutMs?: number): Promise<ClientSession | null> {
     const entryPath = this.config.entryPath ?? resolveHeadlessHostEntryPath();
     if (!fs.existsSync(entryPath) && !this.deps.spawnFn) {
-      log.warn(`headless host entry not found at ${entryPath} — build apps/headless-host first`);
+      log.warn(
+        `headless host entry not found at ${entryPath} — build packages/headless-renderer first`
+      );
       this.recordFailure();
       return null;
     }

@@ -31,7 +31,7 @@ import { pathToFileURL } from "node:url";
 
 const DEFAULT_ROOT = process.cwd();
 
-const SCANNED_ROOTS = ["src", "packages", "apps", "scripts", "skills"];
+const SCANNED_ROOTS = ["src", "packages", "hosts", "services", "scripts", "skills"];
 const SCANNED_FILES = [
   "build.mjs",
   "README.md",
@@ -170,7 +170,7 @@ export const RULES = [
       "client-facing ready files expose one rootInvite and never expose adminToken or parallel pairing-code fields",
     includeTests: false,
     files:
-      /^(?:src\/main\/|src\/cli\/|scripts\/|workspace\/apps\/mobile\/src\/|workspace\/apps\/shell\/)/,
+      /^(?:hosts\/desktop\/main\/|hosts\/terminal\/|src\/cli\/|scripts\/|workspace\/apps\/mobile\/src\/|workspace\/apps\/shell\/)/,
   },
   {
     id: "human-admin-bootstrap",
@@ -187,7 +187,7 @@ export const RULES = [
       "persisted client hubUrl/nested hub credentials are deleted — store one global device credential plus selected child reach",
     includeTests: false,
     files:
-      /^(?:src\/cli\/|src\/main\/services\/(?:remoteCred|deviceCredential)|packages\/service-schemas\/src\/remoteCred|workspace\/apps\/mobile\/src\/)/,
+      /^(?:src\/cli\/|hosts\/terminal\/|hosts\/desktop\/main\/services\/(?:remoteCred|deviceCredential)|packages\/service-schemas\/src\/remoteCred|workspace\/apps\/mobile\/src\/)/,
   },
 ];
 

@@ -74,6 +74,8 @@ function visit(relative) {
   for (const entry of fs.readdirSync(path.join(root, relative), { withFileTypes: true })) {
     const child = path.join(relative, entry.name);
     if (entry.isDirectory()) {
+      if (entry.name === "node_modules" || entry.name === "dist" || entry.name === "build")
+        continue;
       visit(child);
       continue;
     }
@@ -102,7 +104,7 @@ function visit(relative) {
     }
   }
 }
-for (const sourceRoot of ["src", "packages"]) visit(sourceRoot);
+for (const sourceRoot of ["src", "hosts", "packages"]) visit(sourceRoot);
 for (const [candidate, reasons] of candidates) {
   if (!covered.has(candidate)) {
     errors.push(

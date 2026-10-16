@@ -1,0 +1,14 @@
+R_DEF: Internal format may change without notice
+local
+color vibestudio_splash_background
+drawable assets_vibestudiologodark
+drawable assets_vibestudiosymboldark
+drawable assets_vibestudiosymbolondark
+drawable launch_screen
+drawable splash_logo
+integer react_native_dev_server_port
+mipmap ic_launcher
+mipmap ic_launcher_round
+string app_name
+style AppTheme
+xml network_security_config

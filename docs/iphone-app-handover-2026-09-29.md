@@ -104,7 +104,7 @@ non-iOS devices, no booted simulator, and ambiguous selection.
 
 ### Honest verification documentation
 
-Updated `apps/mobile/ios/README.md` and `docs/ios-integration-plan.md`:
+Updated `hosts/ios/README.md` and `docs/ios-integration-plan.md`:
 
 - Native host ABI is `rn-host-5`; the old integration record still said `rn-host-3`.
 - Corrected the claim that iOS end-to-end smoke exists.
@@ -142,7 +142,7 @@ The only actual compile attempt was an unsigned **Release simulator build**,
 using a generic simulator destination while the runtime downloaded:
 
 ```sh
-cd /Users/gabe/vibestudio/apps/mobile/ios
+cd /Users/gabe/vibestudio/hosts/ios
 env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
   xcodebuild -workspace Vibestudio.xcworkspace -scheme Vibestudio \
   -configuration Release -sdk iphonesimulator \
@@ -240,7 +240,7 @@ They were not rerun against all final native/dependency edits before handover.
    preparation needs to be retried, from the **host** iOS project directory:
 
    ```sh
-   cd /Users/gabe/vibestudio/apps/mobile/ios
+   cd /Users/gabe/vibestudio/hosts/ios
    env DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
      pod update fmt RCT-Folly
    ```

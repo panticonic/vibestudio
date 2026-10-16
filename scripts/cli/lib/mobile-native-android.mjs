@@ -8,7 +8,7 @@ export const SUPPORTED_ANDROID_ABIS = Object.freeze(["arm64-v8a", "armeabi-v7a",
 const supportedAndroidAbis = new Set(SUPPORTED_ANDROID_ABIS);
 
 export function androidDir(appRoot) {
-  return path.join(appRoot, "apps", "mobile", "android");
+  return path.join(appRoot, "hosts", "android");
 }
 
 export function internalAndroidApkPath(appRoot) {
@@ -26,11 +26,11 @@ export function internalAndroidApkPath(appRoot) {
 export function hasCompleteAndroidSourceProject(appRoot) {
   const projectFiles = [
     path.join(androidDir(appRoot), "gradlew"),
-    path.join(appRoot, "apps", "mobile", "package.json"),
-    path.join(appRoot, "apps", "mobile", "index.js"),
+    path.join(appRoot, "hosts", "react-native", "package.json"),
+    path.join(appRoot, "hosts", "react-native", "index.js"),
   ];
   const dependencyRoots = [
-    path.join(appRoot, "apps", "mobile", "node_modules", "react-native", "package.json"),
+    path.join(appRoot, "hosts", "react-native", "node_modules", "react-native", "package.json"),
     path.join(appRoot, "node_modules", "react-native", "package.json"),
   ];
   return (

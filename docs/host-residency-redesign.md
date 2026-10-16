@@ -23,8 +23,8 @@ not the current implementation state:
   `panelCdp`, `adblock`, `workers`). 55 methods are declared on _both_ the server and
   main RPC planes. The full authority ledger, counting the workspace-DO plane, is 940
   rows.
-- **166,806 non-test TypeScript lines** across `src/server` (136,669), `src/main`
-  (27,309), and `apps/headless-host` (2,828).
+- **166,806 non-test TypeScript lines** across `src/server` (136,669), `hosts/desktop/main`
+  (27,309), and `packages/headless-renderer` (2,828).
 - **~57,700 lines of authority metadata**: 7,360 TS lines under
   `packages/shared/src/authority/**` + approval copy, plus the generated 38,617-line
   `docs/runtime-foundations/authority-ledger.json` and 11,720 lines of golden matrices.
@@ -411,7 +411,7 @@ The audited facts: `BrowserDataDO` already extends the shared `DurableObjectBase
 15 tables, AES-GCM code, and `@rpc` policies run in workerd unchanged; the "password
 encryption" key is stored in the DO's own state table (a co-located key, not a host
 privilege boundary); the only genuinely native pieces — Electron cookie-jar projection
-(`src/main/services/browserCookieProjection.ts`) and `DownloadItem`/`shell` control
+(`hosts/desktop/main/services/browserCookieProjection.ts`) and `DownloadItem`/`shell` control
 (`browserDownloadManager.ts`) — already live in Electron main and are merely proxied
 through the extension.
 
@@ -747,7 +747,7 @@ gates. Tracked:
 - hand-written authority-metadata line count (→ generated only, H5);
 - residency-mixed handler modules (monotonic down; new mixed modules forbidden — the
   import-lint exemption set, H2);
-- **host-tree non-test line count** (`src/server` + `src/main` + `apps/headless-host`),
+- **host-tree non-test line count** (`src/server` + `hosts/desktop/main` + `packages/headless-renderer`),
   **`src/server/index.ts` line count**, and **builtin-tree line count**
   (`packages/builtin/`) are advisory measurements. They make relocation and footprint
   trends reviewable, but do not reject legitimate kernel wiring or encourage packing
