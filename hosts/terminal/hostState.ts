@@ -20,9 +20,17 @@ export interface TerminalHostStateData {
   develop: Record<string, true>;
   /** `vibestudio <command>` -> client, from the last `clients.list`. */
   commands: Record<string, { clientId: string }>;
+  /** Terminal clients from the last `clients.list`, for shell completion (no network at Tab). */
+  clients: Record<string, { intents: string[] }>;
 }
 
-const EMPTY: TerminalHostStateData = { schemaVersion: 1, shims: {}, develop: {}, commands: {} };
+const EMPTY: TerminalHostStateData = {
+  schemaVersion: 1,
+  shims: {},
+  develop: {},
+  commands: {},
+  clients: {},
+};
 
 export function terminalHostStatePath(root = cliConfigRoot()): string {
   return path.join(root, "terminal-host.json");
@@ -98,6 +106,7 @@ export class TerminalHostState {
       shims: parsed.shims ?? {},
       develop: parsed.develop ?? {},
       commands: parsed.commands ?? {},
+      clients: parsed.clients ?? {},
     };
   }
 
@@ -123,9 +132,11 @@ export class TerminalHostState {
     return this.read().commands[command]?.clientId ?? null;
   }
 
-  setCommands(commands: CommandTable["commands"]): void {
+  /** Replace what the last `clients.list` taught this host, in one write. */
+  setClientIndex(index: Pick<TerminalHostStateData, "commands" | "clients">): void {
     this.update((data) => {
-      data.commands = commands;
+      data.commands = index.commands;
+      data.clients = index.clients;
     });
   }
 

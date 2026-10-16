@@ -156,3 +156,19 @@ describe("development mode", () => {
     expect(ctx.state.isDevelopment("chat")).toBe(false);
   });
 });
+
+describe("client index for completions", () => {
+  it("records terminal clients with their intents (open first) alongside the command table", () => {
+    const ctx = context();
+    syncClientIndex(ctx, [
+      {
+        ...chat,
+        intents: [{ name: "ask", kind: "background", handler: "svc#ask" }],
+      },
+      { id: "web", runtime: "web" },
+    ]);
+    const data = ctx.state.read();
+    expect(data.commands).toEqual({ chat: { clientId: "chat" } });
+    expect(data.clients).toEqual({ chat: { intents: ["open", "ask"] } });
+  });
+});

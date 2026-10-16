@@ -224,6 +224,21 @@ end and the command reports it ("Vibestudio no longer trusts <client> to act as
 this device"); a client that held that power only optionally is launched again
 without it.
 
+### Shell completions
+
+```sh
+eval "$(vibestudio completions bash)"     # or zsh, in ~/.bashrc / ~/.zshrc
+vibestudio completions fish | source      # in ~/.config/fish/config.fish
+```
+
+The script completes command groups, subcommands and flags, client commands
+(`vibestudio chat`), and `vibestudio open <client> <intent>`. Client words come
+from the client list this device last fetched, which the host keeps in
+`<stateDir>/terminal-host.json`; Tab reads that file through
+`vibestudio completions dynamic <commands|clients|intents>` and never calls the
+network, so run `vibestudio clients list` to refresh it. Without a cache the
+dynamic words are simply absent.
+
 ## Workspace template registry
 
 The workspace chooser reads the versioned JSON catalog at

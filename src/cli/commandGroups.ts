@@ -6,6 +6,7 @@ export const GROUP_DESCRIPTIONS: Record<string, string> = {
   terminal: "open the terminal browser, starting a local server when needed",
   open: "open a terminal client by id, or run one of its background intents",
   clients: "list terminal clients and put their commands in ~/.local/bin",
+  completions: "print a bash, zsh, or fish completion script",
   mobile: "develop, install, inspect, and pair mobile clients",
   model: "connect and renew model-provider credentials",
   agent: "sessions, diagnostics, services, and workspace skills",

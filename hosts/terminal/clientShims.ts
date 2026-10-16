@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ClientListing } from "@vibestudio/workspace-contracts/clients";
-import { RESERVED_TERMINAL_COMMANDS } from "@vibestudio/workspace-contracts/clients";
+import { RESERVED_TERMINAL_COMMANDS, clientIntents } from "@vibestudio/workspace-contracts/clients";
 import { writeFileAtomicSync } from "../../src/atomicFile.js";
 import { UsageError } from "../../src/cli/output.js";
 import {
@@ -14,7 +14,8 @@ import {
 const MARKER = "# vibestudio-client-shim";
 const SHIM_NAME = /^[a-z][a-z0-9-]{0,62}$/u;
 
-type Listing = Pick<ClientListing, "id" | "runtime" | "terminalCommand">;
+type Listing = Pick<ClientListing, "id" | "runtime" | "terminalCommand"> &
+  Partial<Pick<ClientListing, "intents">>;
 
 /** What a client's shim runs: its registered command, else `open <id>`. */
 export function clientInvocation(listing: Listing, table: CommandTable): string {
@@ -101,7 +102,17 @@ export interface IndexSync {
  */
 export function syncClientIndex(context: ShimContext, listings: readonly Listing[]): IndexSync {
   const table = buildCommandTable(listings, context.isBuiltIn);
-  context.state.setCommands(table.commands);
+  context.state.setClientIndex({
+    commands: table.commands,
+    clients: Object.fromEntries(
+      listings
+        .filter((listing) => listing.runtime === "terminal")
+        .map((listing) => [
+          listing.id,
+          { intents: clientIntents({ intents: listing.intents }).map((intent) => intent.name) },
+        ])
+    ),
+  });
   const removedShims: string[] = [];
   const directory = context.directory ?? shimDirectory();
   for (const [name, shim] of Object.entries(context.state.read().shims)) {

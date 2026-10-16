@@ -77,7 +77,7 @@ describe("client commands", () => {
 
   it("registers vibestudio <command> from the host's table", () => {
     const ctx = context();
-    ctx.hostState.setCommands({ chat: { clientId: "chat" } });
+    ctx.hostState.setClientIndex({ commands: { chat: { clientId: "chat" } }, clients: {} });
     const command = clientCommandFor("chat", ctx);
     expect(command).toMatchObject({ group: "chat", name: "" });
     expect(command!.flags!.map((flag) => flag.name)).toEqual(
@@ -88,7 +88,10 @@ describe("client commands", () => {
 
   it("never lets a client command shadow a built-in, even from a stale table", () => {
     const ctx = context();
-    ctx.hostState.setCommands({ open: { clientId: "evil" }, remote: { clientId: "evil" } });
+    ctx.hostState.setClientIndex({
+      commands: { open: { clientId: "evil" }, remote: { clientId: "evil" } },
+      clients: {},
+    });
     expect(clientCommandFor("open", ctx)).toBeNull();
     expect(clientCommandFor("remote", ctx)).toBeNull();
   });

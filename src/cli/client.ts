@@ -42,6 +42,8 @@ import {
   type TerminalCommandContext,
 } from "../../hosts/terminal/terminalCommand.js";
 import { GROUP_DESCRIPTIONS, GROUP_ORDER, isCliBuiltInCommand } from "./commandGroups.js";
+import { createCompletionsCommand } from "./completions.js";
+import { TerminalHostState } from "../../hosts/terminal/hostState.js";
 import { isTerminalHangup } from "../../hosts/terminal/ttyRestore.js";
 import { workspaceLabel } from "../node/workspaceLabel.js";
 import { agentCommands, createSelectedWorkspaceClient } from "./agent/index.js";
@@ -827,6 +829,10 @@ const commandRegistry: CliCommand[] = [
   createTerminalCommand(terminalHostContext),
   createOpenCommand(terminalHostContext),
   ...createClientsCommands(terminalHostContext),
+  createCompletionsCommand({
+    registry: () => commandRegistry,
+    state: () => terminalHostContext.hostState ?? new TerminalHostState(),
+  }),
   ...mobileCommands,
   ...createModelCommands({
     connect: (providerId, options) =>
