@@ -20,14 +20,14 @@ describe("unit source origin", () => {
     const origins = await resolver({
       recorded: {
         "extensions/tools": {
-          url: "https://github.com/acme/tools.git",
+          url: "https://github.com/acme/tools",
           version: "v2",
           selfName: "Acme Tools",
         },
       },
     }).originsFor(["extensions/tools"]);
     expect(origins.get("extensions/tools")).toMatchObject({
-      url: "https://github.com/acme/tools.git",
+      url: "https://github.com/acme/tools",
       version: "v2",
       selfName: "Acme Tools",
       isHostBuild: false,
@@ -35,11 +35,11 @@ describe("unit source origin", () => {
   });
   it("uses the immutable workspace root provenance for bootstrap repositories", async () => {
     const origins = await resolver({
-      root: { url: "https://github.com/acme/workspace.git", ref: "refs/tags/v3", version: "v3" },
+      root: { url: "https://github.com/acme/workspace", ref: "refs/tags/v3", version: "v3" },
       bootstrap: new Set(["workers/agent"]),
     }).originsFor(["workers/agent"]);
     expect(origins.get("workers/agent")).toMatchObject({
-      url: "https://github.com/acme/workspace.git",
+      url: "https://github.com/acme/workspace",
       version: "v3",
       isWorkspaceRoot: true,
     });

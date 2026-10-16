@@ -205,7 +205,8 @@ describe("development template selection", () => {
       },
       pin: {
         url: "git+https://github.com/acme/example.git",
-        ref: "refs/heads/vibestudio-dev-checkpoint",
+        // Named for the branch the checkout is on: that is the version a review shows.
+        ref: "refs/heads/main",
       },
     });
     const [registered] = hubControlMethods.registerLocalTemplateSource.args.parse([

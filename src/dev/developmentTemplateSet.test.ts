@@ -127,25 +127,25 @@ describe("resolveDevelopmentTemplateSet", () => {
       },
       pins: {
         base: {
-          ref: "refs/heads/vibestudio-dev-checkpoint",
+          ref: "refs/heads/main",
           url: "git+https://example.test/base.git",
         },
         personal: {
-          ref: "refs/heads/vibestudio-dev-checkpoint",
+          ref: "refs/heads/main",
           url: "git+https://example.test/personal.git",
         },
         system: {
-          ref: "refs/heads/vibestudio-dev-checkpoint",
+          ref: "refs/heads/main",
           url: "git+https://example.test/system.git",
         },
       },
       sourcePins: {
         "system-testing": {
-          ref: "refs/heads/vibestudio-dev-checkpoint",
+          ref: "refs/heads/main",
           url: "git+https://example.test/system-testing.git",
         },
         examples: {
-          ref: "refs/heads/vibestudio-dev-checkpoint",
+          ref: "refs/heads/main",
           url: "git+https://example.test/examples.git",
         },
       },

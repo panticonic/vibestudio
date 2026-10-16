@@ -86,6 +86,9 @@ export async function checkpointWorkspaceSource(input: {
   // Always seal a private clone, so downstream exact readers never observe a
   // live checkout or need to interpret its .git indirection.
   const commit = (await git(sourceCheckout, ["rev-parse", "--verify", "HEAD"])).trim();
+  // The checkpoint is named for the branch it was taken from: that name is the
+  // template's version wherever a review shows it. A detached checkout has none.
+  const sourceBranch = (await git(sourceCheckout, ["branch", "--show-current"])).trim();
   const changedPaths = [
     ...new Set([
       ...(
@@ -110,7 +113,7 @@ export async function checkpointWorkspaceSource(input: {
   await git(target, ["init", "--quiet"]);
   await git(target, ["remote", "add", "origin", sourceCheckout]);
   await git(target, ["fetch", "--no-tags", "--depth=1", "origin", commit]);
-  await git(target, ["checkout", "-B", "vibestudio-dev-checkpoint", commit]);
+  await git(target, ["checkout", "-B", sourceBranch || "local-checkout", commit]);
   for (const relativePath of changedPaths) copyWorktreePath(sourceCheckout, target, relativePath);
   await git(target, ["add", "-A"]);
   try {

@@ -32,6 +32,32 @@ function rejoin(text: string, from: InstallReviewOrigin): string {
     .join("");
 }
 
+describe("a template's address and version as a person reads them", () => {
+  it("shows the https URL a git+https template names, without Git's suffix", () => {
+    const from = templateOrigin({
+      url: "git+https://github.com/acme/studio.git",
+      version: "refs/heads/main",
+      admittedOriginKeys: new Set(),
+    });
+    expect(from.url).toBe("https://github.com/acme/studio");
+    expect(from.originKey).toBe("github.com/acme");
+    expect(from.version).toBe("main");
+    expect(
+      templateOrigin({
+        url: "https://github.com/acme/studio",
+        version: "refs/tags/v2.1",
+        admittedOriginKeys: new Set(),
+      }).version
+    ).toBe("v2.1");
+  });
+
+  it("punycodes a git+https host like any other", () => {
+    expect(origin("git+https://аpple.com/acme/studio.git").registrableDomain).toBe(
+      "xn--pple-43d.com"
+    );
+  });
+});
+
 describe("the registrable domain is computed, never guessed", () => {
   it("is the real boundary under a multi-label public suffix", () => {
     // "Last two labels" would say `co.uk`, which is not anybody's domain.
