@@ -68,6 +68,12 @@ export type UserInboxPushRequest = z.infer<typeof UserInboxPushRequestSchema>;
 export const NotificationActionSchema = z.object({
   id: z.string().describe("Stable action identifier reported back via reportAction."),
   label: z.string().describe("Button label shown to the user."),
+  input: z
+    .literal("text")
+    .optional()
+    .describe(
+      "The action takes reply text: hosts render a native reply field and report the text with the action."
+    ),
   variant: z
     .enum(["solid", "soft", "ghost"])
     .optional()
@@ -230,7 +236,7 @@ export const notificationMethods = defineServiceMethods({
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
     },
     description:
-      "Dismiss a notification previously issued to this caller, rejecting any pending waitForAction for it.",
+      "Dismiss a notification previously issued to this caller.",
     args: z.tuple([z.string()]),
     returns: z.void(),
     access: WRITE_ACCESS,
@@ -251,8 +257,8 @@ export const notificationMethods = defineServiceMethods({
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
     },
     description:
-      "Chrome-only: report a user action on an addressed notification and resolve its pending waitForAction.",
-    args: z.tuple([z.string(), z.string()]),
+      "Host-only: report a person's action on an addressed notification, with reply text for an action that takes input; the producer observes it as a notification:action event.",
+    args: z.tuple([z.string(), z.string(), z.string().max(65_536).optional()]),
     returns: z.void(),
     access: WRITE_ACCESS,
     examples: [{ args: ["notif-123", "approve"] }],

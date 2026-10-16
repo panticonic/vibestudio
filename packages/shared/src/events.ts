@@ -153,6 +153,8 @@ export type EventName =
 export interface NotificationAction {
   id: string;
   label: string;
+  /** The action takes reply text, reported with the action. */
+  input?: "text";
   variant?: "solid" | "soft" | "ghost";
   command?:
     | {
@@ -477,7 +479,7 @@ export interface EventPayloads {
   };
   "notification:show": NotificationPayload;
   "notification:dismiss": { id: string };
-  "notification:action": { id: string; actionId: string };
+  "notification:action": { id: string; actionId: string; text?: string };
   /** Opaque account-targeted nudge; consumers reconcile from the durable inbox. */
   "user-notifications-changed": { changedAt: number };
   "server-connection-changed": {

@@ -37,8 +37,10 @@ More at [vibestudio.app](https://vibestudio.app).
   access. You never hand your login to an agent and hope.
 - **Your browser, imported.** Bring over tabs and cookies and stay logged in.
   With your permission, agents can read and automate those pages.
-- **Desktop, server and phone.** The same sandbox runs the desktop app, a
-  headless home server, the CLI and the mobile app.
+- **Desktop, server, terminal and phone.** A headless home server runs the
+  sandbox; the desktop, terminal and phone hosts run clients your System
+  workspace builds and delivers, so you can change any of them without
+  reinstalling.
 
 Under the hood, apps and agents are isolated with browser/JS isolates, the
 lightest and most widely deployed sandbox around. Background processes and

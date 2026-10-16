@@ -148,6 +148,50 @@ describe("server notification service", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("relays reply text only for an action that takes input", async () => {
+    const eventService = {
+      emit: vi.fn(),
+      emitToUser: vi.fn(() => true),
+    };
+    const result = createNotificationService({ eventService: eventService as never });
+    const shell = createVerifiedCaller("shell:alice", "shell", null, null, {
+      userId: "usr_alice",
+      handle: "alice",
+    });
+    const show = () =>
+      result.internal.show(
+        {
+          type: "info",
+          title: "Agent asks",
+          actions: [
+            { id: "reply", label: "Reply", input: "text" },
+            { id: "open", label: "Open" },
+          ],
+        },
+        "usr_alice"
+      );
+
+    const first = show();
+    await expect(
+      result.definition.handler({ caller: shell }, "reportAction", [first, "open", "hi"])
+    ).rejects.toThrow("does not take reply text");
+    await expect(
+      result.definition.handler({ caller: shell }, "reportAction", [first, "reply", "on it"])
+    ).resolves.toBeUndefined();
+    expect(eventService.emitToUser).toHaveBeenLastCalledWith("usr_alice", "notification:action", {
+      id: first,
+      actionId: "reply",
+      text: "on it",
+    });
+
+    const second = show();
+    await result.definition.handler({ caller: shell }, "reportAction", [second, "open"]);
+    expect(eventService.emitToUser).toHaveBeenLastCalledWith("usr_alice", "notification:action", {
+      id: second,
+      actionId: "open",
+    });
+  });
+
   it("routes an opaque durable-inbox nudge only to the requested verified account", async () => {
     const eventService = {
       emit: vi.fn(),

@@ -101,18 +101,17 @@ cache validation.
 ## Startup preparation and transfer closure
 
 Remote readiness is a bounded product contract, not workspace-wide prewarming.
-After declarations are reconciled, the server prepares the selected Electron
-shell artifact and the deduplicated panel sources named by `initPanels`. It uses
-the ordinary runtime-image cache path and does not create panels or execute
-workspace code. A pairing link is published only after that finite set is
-ready. All other panels, workers, extensions, and optional app features remain
-lazy.
+After declarations are reconciled, the server prepares the default client of
+the host named by `--require-client-ready <host>` and the deduplicated panel
+sources named by `initPanels`. It uses the ordinary runtime-image cache path and
+does not create panels or execute workspace code. A pairing link is published
+only after that finite set is ready. All other panels, workers, extensions, and
+optional client features remain lazy.
 
-Apps can declare package-root-relative `vibestudio.app.startupModules`. These
-modules stay dynamically executed, but their emitted static closures are added
-to the initial artifact bundle. This removes a request-by-request Iroh
-waterfall without eagerly evaluating optional code. The Base shell declares its
-normal `App` module; feature toolchains below it remain lazy.
+The measurements below predate the client model: they were taken when the
+desktop shell declared its startup modules so their static closures joined the
+initial artifact bundle. Clients no longer declare startup modules; a client's
+build is one verified artifact set the host caches by integrity.
 
 On a completely empty isolated desktop-pairing state, this reduced the shell
 app's artifact HTTP request count to five. In the same smoke environment,

@@ -2,8 +2,9 @@
  * Notification Service — centralized notification management.
  *
  * Bridges server-side code (OAuth, import, etc.) with the shell's
- * NotificationBar via the EventService. Also provides `waitForAction()`
- * for blocking consent flows.
+ * NotificationBar via the EventService. A host relays the person's choice
+ * (and reply text, for an action that takes input) back through
+ * `reportAction`; producers observe it as a `notification:action` event.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -25,7 +26,6 @@ import type { PushServiceInternal } from "./pushService.js";
 export interface NotificationServiceInternal {
   show(notification: Omit<NotificationPayload, "id">, targetUserId?: string): string;
   dismiss(id: string, targetUserId?: string): void;
-  waitForAction(id: string, timeoutMs?: number): Promise<string>;
 }
 
 export interface NotificationServiceDeps {
@@ -103,20 +103,18 @@ export function createNotificationService(deps: NotificationServiceDeps): {
     }
   };
 
-  /** Pending action resolvers keyed by notification ID */
-  const pendingActions = new Map<
-    string,
-    {
-      resolve: (actionId: string) => void;
-      reject: (reason: Error) => void;
-      timer: ReturnType<typeof setTimeout>;
-    }
-  >();
-
-  type NotificationOwner =
-    | { kind: "caller"; runtimeKey: string; targetUserId?: string }
-    | { kind: "host"; targetUserId?: string };
+  type NotificationOwner = (
+    | { kind: "caller"; runtimeKey: string }
+    | { kind: "host" }
+  ) & {
+    targetUserId?: string;
+    /** Actions that take reply text (`input: "text"`). */
+    textActions: ReadonlySet<string>;
+  };
   const notificationOwners = new Map<string, NotificationOwner>();
+
+  const textActionsOf = (opts: Pick<NotificationPayload, "actions">): ReadonlySet<string> =>
+    new Set((opts.actions ?? []).filter((action) => action.input === "text").map((a) => a.id));
 
   const callerRuntimeKey = (caller: VerifiedCaller): string =>
     `${caller.runtime.kind}\0${caller.runtime.id}`;
@@ -144,6 +142,7 @@ export function createNotificationService(deps: NotificationServiceDeps): {
       kind: "caller",
       runtimeKey: callerRuntimeKey(caller),
       ...(targetUserId ? { targetUserId } : {}),
+      textActions: textActionsOf(opts),
     });
     emit("notification:show", payload, targetUserId);
     return id;
@@ -160,7 +159,11 @@ export function createNotificationService(deps: NotificationServiceDeps): {
     show(opts, targetUserId) {
       const id = `notif-host-${randomUUID()}`;
       const payload: NotificationPayload = { ...opts, id };
-      notificationOwners.set(id, { kind: "host", ...(targetUserId ? { targetUserId } : {}) });
+      notificationOwners.set(id, {
+        kind: "host",
+        ...(targetUserId ? { targetUserId } : {}),
+        textActions: textActionsOf(opts),
+      });
       emit("notification:show", payload, targetUserId);
       return id;
     },
@@ -168,24 +171,6 @@ export function createNotificationService(deps: NotificationServiceDeps): {
     dismiss(id, targetUserId) {
       notificationOwners.delete(id);
       emit("notification:dismiss", { id }, targetUserId);
-      // Also reject any pending waitForAction
-      const pending = pendingActions.get(id);
-      if (pending) {
-        clearTimeout(pending.timer);
-        pending.reject(new Error("Notification dismissed"));
-        pendingActions.delete(id);
-      }
-    },
-
-    waitForAction(id, timeoutMs = 120_000) {
-      return new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          pendingActions.delete(id);
-          reject(new Error(`Notification action timed out after ${timeoutMs}ms`));
-        }, timeoutMs);
-
-        pendingActions.set(id, { resolve, reject, timer });
-      });
     },
   };
 
@@ -204,7 +189,7 @@ export function createNotificationService(deps: NotificationServiceDeps): {
         assertCallerOwns(id, ctx.caller);
         internal.dismiss(id, ctx.caller.subject?.userId);
       },
-      reportAction: (ctx, [id, actionId]) => {
+      reportAction: (ctx, [id, actionId, text]) => {
         if (!isTrustedDeviceCaller(ctx.caller, deps)) {
           throw new Error("Only trusted workspace chrome can report a notification action");
         }
@@ -217,15 +202,14 @@ export function createNotificationService(deps: NotificationServiceDeps): {
         ) {
           throw new Error("Notification does not belong to this user");
         }
-        // Emit action event for any listeners
-        emit("notification:action", { id, actionId }, targetUserId);
-        // Resolve any pending waitForAction promise
-        const pending = pendingActions.get(id);
-        if (pending) {
-          clearTimeout(pending.timer);
-          pending.resolve(actionId);
-          pendingActions.delete(id);
+        if (text !== undefined && !owner?.textActions.has(actionId)) {
+          throw new Error(`Notification action ${actionId} does not take reply text`);
         }
+        emit(
+          "notification:action",
+          { id, actionId, ...(text !== undefined ? { text } : {}) },
+          targetUserId
+        );
         notificationOwners.delete(id);
       },
       signalUserInbox: (_ctx, [userId]) =>
