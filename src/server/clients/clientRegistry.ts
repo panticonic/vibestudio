@@ -1094,6 +1094,10 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   /** Launch surfaces every host projects onto its OS: intents per runnable client. */
   async integrationSnapshot(host: HostDescriptor): Promise<{
     clients: Array<{
+      /** Names the client principal its dynamic-entries methods run as. */
+      source: string;
+      /** Dynamic entries come from the active build; a client without one has none yet. */
+      activeBuildKey: string | null;
       id: string;
       title: string;
       icon?: string;
@@ -1106,6 +1110,8 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       clients: listings
         .filter((listing) => listing.unavailableReason === undefined)
         .map((listing) => ({
+          source: listing.source,
+          activeBuildKey: listing.activeBuildKey,
           id: listing.id,
           title: listing.title,
           ...(listing.icon ? { icon: listing.icon } : {}),

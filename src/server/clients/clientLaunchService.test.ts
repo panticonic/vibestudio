@@ -19,7 +19,29 @@ function fixture(opts: { host?: Partial<Record<keyof ClientHost, unknown>> | nul
           launch: vi.fn(async () => ({ state: "unavailable", reason: "nope" })),
           listClients: vi.fn(async () => []),
           integrationSnapshot: vi.fn(async () => ({
-            clients: [{ id: "chat", title: "Chat", intents: [] }],
+            clients: [
+              {
+                source: "clients/chat-terminal",
+                activeBuildKey: "build-1",
+                id: "chat",
+                title: "Chat",
+                intents: [
+                  {
+                    name: "open-conversation",
+                    kind: "foreground",
+                    params: { conversation: "string" },
+                    dynamic: "vibestudio.chat.v1#recentConversations",
+                  },
+                ],
+              },
+              {
+                source: "clients/notes",
+                activeBuildKey: null,
+                id: "notes",
+                title: "Notes",
+                intents: [{ name: "recent", kind: "foreground", dynamic: "notes.v1#recent" }],
+              },
+            ],
           })),
           resolveBackgroundIntent: vi.fn(() => ({
             source: "clients/chat-terminal",
@@ -32,14 +54,19 @@ function fixture(opts: { host?: Partial<Record<keyof ClientHost, unknown>> | nul
           })),
           ...opts.host,
         } as unknown as ClientHost);
-  const invokeIntentHandler = vi.fn(async () => ({ text: "hello" }));
+  const callClientHandler = vi.fn(
+    async ({ handler }: { handler: string }): Promise<unknown> =>
+      handler === "vibestudio.chat.v1#recentConversations"
+        ? [{ title: "Trip plans", params: { conversation: "c-1" } }]
+        : "hello"
+  );
   const service = createClientLaunchService({
     getClientHost: () => clientHost,
-    invokeIntentHandler,
+    callClientHandler,
   });
   const ctx = (caller = createVerifiedCaller("shell:device-1", "shell")) =>
     ({ caller }) as ServiceContext;
-  return { service, clientHost, invokeIntentHandler, ctx };
+  return { service, clientHost, callClientHandler, ctx };
 }
 
 describe("clients service", () => {
@@ -105,23 +132,74 @@ describe("clients service", () => {
     });
   });
 
-  it("projects the integration snapshot with an entries slot per client", async () => {
-    const { service, ctx } = fixture();
-    await expect(service.handler(ctx(), "integrationSnapshot", [HOST])).resolves.toEqual({
-      clients: [{ id: "chat", title: "Chat", intents: [], entries: {} }],
+  it("projects dynamic entries of running clients into the integration snapshot", async () => {
+    const { service, callClientHandler, ctx } = fixture();
+    const snapshot = (await service.handler(ctx(), "integrationSnapshot", [HOST])) as {
+      clients: Array<{ id: string; entries: unknown }>;
+    };
+    expect(snapshot.clients.map(({ id, entries }) => ({ id, entries }))).toEqual([
+      {
+        id: "chat",
+        entries: {
+          "open-conversation": [{ title: "Trip plans", params: { conversation: "c-1" } }],
+        },
+      },
+      { id: "notes", entries: {} },
+    ]);
+    expect(callClientHandler).toHaveBeenCalledTimes(1);
+    expect(callClientHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "clients/chat-terminal",
+        handler: "vibestudio.chat.v1#recentConversations",
+        params: {},
+      })
+    );
+  });
+
+  it("rejects dynamic entries that carry parameters the intent does not declare", async () => {
+    const { service, callClientHandler, ctx } = fixture();
+    callClientHandler.mockResolvedValueOnce([{ title: "Bad", params: { other: "x" } }]);
+    await expect(service.handler(ctx(), "integrationSnapshot", [HOST])).rejects.toThrow(
+      /does not declare/
+    );
+  });
+
+  it("requires a text-stream intent handler to name its stream channel", async () => {
+    const { service, clientHost, callClientHandler, ctx } = fixture();
+    vi.mocked(clientHost!.resolveBackgroundIntent).mockReturnValue({
+      source: "clients/chat-terminal",
+      intent: {
+        name: "ask",
+        kind: "background",
+        handler: "vibestudio.chat.v1#ask",
+        params: { prompt: "text" },
+        result: "text-stream",
+      },
     });
+    callClientHandler.mockResolvedValueOnce({ channelId: "ch-1" });
+    await expect(
+      service.handler(ctx(), "invokeIntent", [HOST, { id: "chat", intent: "ask" }])
+    ).resolves.toEqual({ stream: { channelId: "ch-1" } });
+    callClientHandler.mockResolvedValueOnce("plain");
+    await expect(
+      service.handler(ctx(), "invokeIntent", [HOST, { id: "chat", intent: "ask" }])
+    ).rejects.toThrow("returned no stream channel");
   });
 
   it("runs a background intent through its handler with the declared parameters only", async () => {
-    const { service, invokeIntentHandler, ctx } = fixture();
+    const { service, callClientHandler, ctx } = fixture();
     await expect(
       service.handler(ctx(), "invokeIntent", [
         HOST,
         { id: "chat", intent: "ask", params: { prompt: "hi" } },
       ])
     ).resolves.toEqual({ text: "hello" });
-    expect(invokeIntentHandler).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "clients/chat-terminal", params: { prompt: "hi" } })
+    expect(callClientHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: "clients/chat-terminal",
+        handler: "vibestudio.chat.v1#ask",
+        params: { prompt: "hi" },
+      })
     );
     await expect(
       service.handler(ctx(), "invokeIntent", [
@@ -129,6 +207,6 @@ describe("clients service", () => {
         { id: "chat", intent: "ask", params: { nope: "x" } },
       ])
     ).rejects.toMatchObject({ code: "EINVAL" });
-    expect(invokeIntentHandler).toHaveBeenCalledTimes(1);
+    expect(callClientHandler).toHaveBeenCalledTimes(1);
   });
 });

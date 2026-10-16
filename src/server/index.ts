@@ -2946,17 +2946,17 @@ async function main() {
     container.registerRpc(
       createClientLaunchService({
         getClientHost: () => clientHostForGateway,
-        invokeIntentHandler: async ({ caller, signal, source, intent, params }) => {
+        callClientHandler: async ({ caller, signal, source, handler, params }) => {
           const clientHost = assertPresent(clientHostForGateway);
           const rpcServer = assertPresent(rpcServerForGateway);
           if (!caller.runtime.id.startsWith("shell:")) {
-            throw new Error("Background intents run for a paired device");
+            throw new Error("Client handlers run for a paired device");
           }
           const principal = await clientHost.intentPrincipal(
             caller.runtime.id.slice("shell:".length),
             source
           );
-          const [protocol, method] = intent.handler!.split("#") as [string, string];
+          const [protocol, method] = handler.split("#") as [string, string];
           const workers = assertPresent(
             container.get<ReturnType<typeof createWorkerService>>("workersRpc")
           );
@@ -2969,26 +2969,15 @@ async function main() {
           );
           if (service.kind !== "durable-object") {
             throw new Error(
-              `Intent handler ${intent.handler} must be a Durable Object-backed workspace service`
+              `Client handler ${handler} must be a Durable Object-backed workspace service`
             );
           }
           const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-          const result = await doDispatch.dispatch(
+          return doDispatch.dispatch(
             { source: service.source, className: service.className, objectKey: service.objectKey },
             method,
             { params, principalId: principal.principalId }
           );
-          if (intent.result === "text-stream") {
-            const channelId = (result as { channelId?: unknown } | null)?.channelId;
-            if (typeof channelId !== "string") {
-              throw new Error(`Intent handler ${intent.handler} returned no stream channel`);
-            }
-            return { stream: { channelId } };
-          }
-          if (typeof result !== "string") {
-            throw new Error(`Intent handler ${intent.handler} must return text`);
-          }
-          return { text: result };
         },
       })
     );

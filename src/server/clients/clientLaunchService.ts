@@ -8,18 +8,65 @@ import type { ClientHost } from "./clientRegistry.js";
 export interface ClientLaunchServiceDeps {
   getClientHost(): ClientHost | null;
   /**
-   * Run a background intent's handler (`<protocol>#<method>`) as the device
-   * that asked, with the intent's parameters. The handler's own authority
+   * Call a client's declared workspace service method (`<protocol>#<method>`:
+   * a background intent's handler or an intent's dynamic-entries method) as
+   * that client's principal on the asking device. The method's own authority
    * applies, so the same review and grants govern it as any other call.
    */
-  invokeIntentHandler(input: {
+  callClientHandler(input: {
     /** The device host that asked; its device id names the principal. */
     caller: VerifiedCaller;
     signal?: AbortSignal;
     source: string;
-    intent: ClientIntentDecl;
+    handler: string;
     params: Record<string, string>;
-  }): Promise<{ text?: string; stream?: { channelId: string } }>;
+  }): Promise<unknown>;
+}
+
+const MAX_DYNAMIC_ENTRIES = 32;
+
+type DynamicEntry = { title: string; params: Record<string, string> };
+
+function intentResult(
+  intent: ClientIntentDecl,
+  result: unknown
+): { text: string } | { stream: { channelId: string } } {
+  if (intent.result === "text-stream") {
+    const channelId = (result as { channelId?: unknown } | null)?.channelId;
+    if (typeof channelId !== "string" || channelId.length === 0) {
+      throw new Error(`Intent handler ${intent.handler} returned no stream channel`);
+    }
+    return { stream: { channelId } };
+  }
+  if (typeof result !== "string") {
+    throw new Error(`Intent handler ${intent.handler} must return text`);
+  }
+  return { text: result };
+}
+
+function dynamicEntries(intent: ClientIntentDecl, result: unknown): DynamicEntry[] {
+  const fail = (defect: string): never => {
+    throw new Error(`Dynamic entries method ${intent.dynamic} ${defect}`);
+  };
+  if (!Array.isArray(result)) return fail("must return a list of {title, params}");
+  if (result.length > MAX_DYNAMIC_ENTRIES) {
+    return fail(`returned ${result.length} entries; at most ${MAX_DYNAMIC_ENTRIES} are projected`);
+  }
+  return result.map((entry: unknown) => {
+    const { title, params } = (entry ?? {}) as { title?: unknown; params?: unknown };
+    if (typeof title !== "string" || title.length === 0) return fail("returned an untitled entry");
+    const values = params === undefined ? {} : params;
+    if (
+      !values ||
+      typeof values !== "object" ||
+      Object.entries(values).some(
+        ([name, value]) => typeof value !== "string" || !intent.params || !(name in intent.params)
+      )
+    ) {
+      return fail(`returned entry "${title}" with parameters ${intent.name} does not declare`);
+    }
+    return { title, params: values as Record<string, string> };
+  });
 }
 
 /**
@@ -77,7 +124,30 @@ export function createClientLaunchService(deps: ClientLaunchServiceDeps): Servic
           host as HostDescriptor
         );
         return {
-          clients: snapshot.clients.map((client) => ({ ...client, entries: {} })),
+          clients: await Promise.all(
+            snapshot.clients.map(async ({ source, activeBuildKey, ...client }) => ({
+              ...client,
+              entries: Object.fromEntries(
+                await Promise.all(
+                  client.intents
+                    .filter((intent) => intent.dynamic && activeBuildKey !== null)
+                    .map(async (intent) => [
+                      intent.name,
+                      dynamicEntries(
+                        intent,
+                        await deps.callClientHandler({
+                          caller: ctx.caller,
+                          ...(ctx.signal ? { signal: ctx.signal } : {}),
+                          source,
+                          handler: intent.dynamic!,
+                          params: {},
+                        })
+                      ),
+                    ])
+                )
+              ),
+            }))
+          ),
         };
       },
       invokeIntent: async (ctx, [host, request]) => {
@@ -97,13 +167,16 @@ export function createClientLaunchService(deps: ClientLaunchServiceDeps): Servic
             );
           }
         }
-        return deps.invokeIntentHandler({
-          caller: ctx.caller,
-          ...(ctx.signal ? { signal: ctx.signal } : {}),
-          source: resolved.source,
-          intent: resolved.intent,
-          params,
-        });
+        return intentResult(
+          resolved.intent,
+          await deps.callClientHandler({
+            caller: ctx.caller,
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+            source: resolved.source,
+            handler: resolved.intent.handler!,
+            params,
+          })
+        );
       },
     }),
   };
