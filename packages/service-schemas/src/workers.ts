@@ -196,8 +196,12 @@ export const workersMethods = defineServiceMethods({
     },
     description:
       "Resolve a live workspace service by name or protocol. In eval use the top-level workers import from @workspace/runtime; inside an installed worker use runtime.workers on the createWorkerRuntime(env) result. The returned target is called through the matching top-level or worker-runtime rpc API.",
-    args: z.tuple([z.string(), z.string().nullable().optional()]),
-    argumentNames: ["query", "objectKey"],
+    args: z.tuple([
+      z.string(),
+      z.string().nullable().optional(),
+      z.string().nullable().optional(),
+    ]),
+    argumentNames: ["query", "objectKey", "contextId"],
     returns: ResolvedWorkspaceServiceSchema,
     access: { sensitivity: "read" as const, crossWorkspace: true },
     authority: preparedResolutionAuthority("resolveService"),

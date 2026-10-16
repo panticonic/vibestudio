@@ -131,7 +131,8 @@ export function createWorkerService(deps: {
   resolveService(
     ctx: ServiceContext,
     query: string,
-    objectKey?: string | null
+    objectKey?: string | null,
+    contextId?: string | null
   ): Promise<ResolvedWorkspaceService>;
 } {
   const { buildSystem, workspaceDecls } = deps;
@@ -347,7 +348,8 @@ export function createWorkerService(deps: {
           }),
         ];
       },
-      resolveService: (ctx, [query, objectKey]) => resolveService(ctx, query, objectKey),
+      resolveService: (ctx, [query, objectKey, contextId]) =>
+        resolveService(ctx, query, objectKey, contextId),
       resolveDurableObject: async (ctx, [source, className, objectKey]) => {
         const resolvedObjectKey = resolvedDurableObjectKey(ctx, source, className, objectKey);
         const scoped = await resolveDurableObjectForCaller(ctx, source, className);
@@ -429,16 +431,15 @@ export function createWorkerService(deps: {
   async function resolveService(
     ctx: ServiceContext,
     query: string,
-    objectKey?: string | null
+    objectKey?: string | null,
+    requestedContextId?: string | null
   ): Promise<ResolvedWorkspaceService> {
     const scoped = await resolveWorkspaceServiceForCaller(ctx, query, objectKey);
     await assertForeignServiceExported(ctx, scoped.service);
     const service = scoped.service;
     if (service.kind === "durable-object") {
       const creatorContextId =
-        service.context === "creator"
-          ? deps.getCallerContextId?.(ctx.caller.runtime.id)
-          : undefined;
+        service.context === "creator" ? creatorContextFor(ctx, requestedContextId) : undefined;
       if (service.context === "creator" && !creatorContextId) {
         throw new Error(`Workspace service ${service.name} requires a creator runtime context`);
       }
@@ -453,6 +454,21 @@ export function createWorkerService(deps: {
       });
     }
     return service;
+  }
+
+  /**
+   * The context a creator-context service is placed in: the one the host
+   * recorded for the calling runtime, never one a runtime names. A device shell
+   * is no runtime and has none, so it names the context it acts in, as it does
+   * for the file service.
+   */
+  function creatorContextFor(
+    ctx: ServiceContext,
+    requested: string | null | undefined
+  ): string | null | undefined {
+    const own = deps.getCallerContextId?.(ctx.caller.runtime.id);
+    if (own) return own;
+    return ctx.caller.runtime.kind === "shell" && requested ? requested : undefined;
   }
 
   async function declarationsForCallerContext(

@@ -1212,6 +1212,68 @@ describe("workerService workspace service resolution", () => {
     });
   });
 
+  it("places a creator-context service for a device shell in the context it names", async () => {
+    const deps = createDeps();
+    const channel = deps.workspaceDecls.services.find((s) => s.name === "panel-channel")!;
+    channel.authority = { principals: ["code", "user"] };
+    const activateDurableObject = vi.fn(async () => {});
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({ ...(deps as object), activateDurableObject } as never)
+    );
+    dispatcher.markInitialized();
+    const shell = { caller: createVerifiedCaller("shell:dev_1", "shell") };
+
+    await dispatcher.dispatch(shell, "workers", "resolveService", [
+      "example.panel-store.v1",
+      "conversation-1",
+      "ctx-named",
+    ]);
+    expect(activateDurableObject).toHaveBeenCalledWith({
+      source: "workers/example-store",
+      className: "ExampleStoreDO",
+      objectKey: "conversation-1",
+      contextId: "ctx-named",
+      contextPolicy: "initial",
+      buildRef: "main",
+    });
+
+    await expect(
+      dispatcher.dispatch(shell, "workers", "resolveService", [
+        "example.panel-store.v1",
+        "conversation-2",
+      ])
+    ).rejects.toThrow(/requires a creator runtime context/);
+  });
+
+  it("never lets a runtime name a context other than its own", async () => {
+    const deps = createDeps();
+    const activateDurableObject = vi.fn(async () => {});
+    const dispatcher = createTestServiceDispatcher();
+    dispatcher.registerService(
+      createWorkerService({ ...(deps as object), activateDurableObject } as never)
+    );
+    dispatcher.markInitialized();
+
+    await dispatcher.dispatch(ownedPanelCtx, "workers", "resolveService", [
+      "example.panel-store.v1",
+      "conversation-1",
+      "ctx-other",
+    ]);
+    expect(activateDurableObject).toHaveBeenCalledWith(
+      expect.objectContaining({ contextId: "ctx-panel-owned" })
+    );
+
+    await expect(
+      dispatcher.dispatch(
+        { caller: createVerifiedCaller("worker:stateless", "worker") },
+        "workers",
+        "resolveService",
+        ["example.panel-store.v1", "chat-1", "ctx-other"]
+      )
+    ).rejects.toThrow(/requires a creator runtime context/);
+  });
+
   it("resolves the system-owned model-settings singleton without reattributing ownership", async () => {
     const deps = createDeps();
     deps.workspaceDecls.singletons = new SingletonRegistry([

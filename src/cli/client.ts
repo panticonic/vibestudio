@@ -1042,6 +1042,17 @@ function packageVersion(): string {
   return "0.0.0";
 }
 
+/**
+ * stdout belongs to command results (including binary and JSON output).
+ * Library diagnostics must not corrupt that machine-readable channel, so they
+ * go to stderr. Every entry point that runs `main` installs this.
+ */
+export function routeDiagnosticsToStderr(): void {
+  const diagnostics = new Console({ stdout: process.stderr, stderr: process.stderr });
+  console.info = diagnostics.info.bind(diagnostics);
+  console.debug = diagnostics.debug.bind(diagnostics);
+}
+
 export function installBrokenPipeHandler(
   stream: NodeJS.EventEmitter & { isTTY?: boolean },
   terminate: () => void = () => process.exit(0)
@@ -1064,11 +1075,7 @@ export function installBrokenPipeHandler(
 export { createSelectedWorkspaceClient };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
-  // stdout belongs to command results (including binary and JSON output).
-  // Library diagnostics must not corrupt that machine-readable channel.
-  const diagnostics = new Console({ stdout: process.stderr, stderr: process.stderr });
-  console.info = diagnostics.info.bind(diagnostics);
-  console.debug = diagnostics.debug.bind(diagnostics);
+  routeDiagnosticsToStderr();
 
   // Unix consumers such as `head` may intentionally close a pipe before a
   // large JSON response finishes. Treat that as successful consumption rather

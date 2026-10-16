@@ -81,7 +81,10 @@ export interface IntegrationArtifact {
 
 export interface ShellResult {
   exitCode: number;
+  /** What the command printed on stdout: its result, which a pipe consumes. */
   output: string;
+  /** What it printed on stderr: diagnostics, which a pipe does not consume. */
+  stderr: string;
 }
 
 /**

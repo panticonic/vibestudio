@@ -36,3 +36,24 @@ describe("CLI broken-pipe handling", () => {
     uninstall();
   });
 });
+
+describe("routeDiagnosticsToStderr", () => {
+  it("keeps library diagnostics off stdout, which belongs to command results", async () => {
+    const { routeDiagnosticsToStderr } = await import("./client.js");
+    const { info, debug } = console;
+    const out = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+    const err = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    try {
+      routeDiagnosticsToStderr();
+      console.info("trace");
+      console.debug("detail");
+      expect(out).not.toHaveBeenCalled();
+      expect(err).toHaveBeenCalledTimes(2);
+    } finally {
+      console.info = info;
+      console.debug = debug;
+      out.mockRestore();
+      err.mockRestore();
+    }
+  });
+});

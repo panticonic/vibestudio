@@ -312,24 +312,27 @@ export function createTerminalDevice(
       shells.add(owner);
       const stop = AbortSignal.any([signal, owner.signal]);
       try {
-        return await new Promise<{ exitCode: number; output: string }>((resolve, reject) => {
-          // Not a TTY, like a script: a command's piped output is what it prints for a pipe.
-          const child = spawnProcess("/bin/sh", ["-c", commandLine], {
-            cwd: options.home,
-            env: options.env,
-            stdio: ["pipe", "pipe", "pipe"],
-            signal: stop,
-          });
-          let output = "";
-          child.stdout.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
-          child.stderr.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
-          child.once("error", reject);
-          child.once("close", (code, exitSignal) =>
-            resolve({ exitCode: code ?? (exitSignal ? 128 : 1), output })
-          );
-          if (stdin !== undefined) child.stdin.end(stdin);
-          else child.stdin.end();
-        });
+        return await new Promise<{ exitCode: number; output: string; stderr: string }>(
+          (resolve, reject) => {
+            // Not a TTY, like a script: a command's piped output is what it prints for a pipe.
+            const child = spawnProcess("/bin/sh", ["-c", commandLine], {
+              cwd: options.home,
+              env: options.env,
+              stdio: ["pipe", "pipe", "pipe"],
+              signal: stop,
+            });
+            let output = "";
+            let stderr = "";
+            child.stdout.setEncoding("utf8").on("data", (chunk: string) => (output += chunk));
+            child.stderr.setEncoding("utf8").on("data", (chunk: string) => (stderr += chunk));
+            child.once("error", reject);
+            child.once("close", (code, exitSignal) =>
+              resolve({ exitCode: code ?? (exitSignal ? 128 : 1), output, stderr })
+            );
+            if (stdin !== undefined) child.stdin.end(stdin);
+            else child.stdin.end();
+          }
+        );
       } finally {
         shells.delete(owner);
       }

@@ -31,7 +31,12 @@ async function main(): Promise<void> {
     if (instance.kind === "server") await waitForDevInstanceReady(instance);
   }
 
-  const { installBrokenPipeHandler, main: runCli } = await import("../cli/client.js");
+  const {
+    installBrokenPipeHandler,
+    main: runCli,
+    routeDiagnosticsToStderr,
+  } = await import("../cli/client.js");
+  routeDiagnosticsToStderr();
   installBrokenPipeHandler(process.stdout);
   installBrokenPipeHandler(process.stderr);
   process.exitCode = await runCli(parsed.argv);

@@ -237,8 +237,18 @@ describe("terminal device", () => {
     expect(await f.op("shell", { commandLine: "vibestudio chat ask" })).toEqual({
       exitCode: 0,
       output: "args: chat ask\n",
+      stderr: "",
     });
     expect(await f.op("binDirectory", {})).toBe(bin);
+  });
+
+  it("keeps a command's stdout apart from its diagnostics on stderr", async () => {
+    const f = fixture();
+    expect(await f.op("shell", { commandLine: "echo trace >&2; echo answer" })).toEqual({
+      exitCode: 0,
+      output: "answer\n",
+      stderr: "trace\n",
+    });
   });
 
   it("tracks launcher shims and settles their removal on the bin directory's file events", async () => {
