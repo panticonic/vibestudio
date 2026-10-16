@@ -2,6 +2,17 @@ import Foundation
 import XCTest
 @testable import Vibestudio
 
+/// Stands in for the host instance's bridge: modules read only its launch options.
+private final class HostBridgeStub: NSObject {
+  @objc let launchOptions: [AnyHashable: Any] = ["vibestudio.instance.role": "host"]
+}
+
+private func hostIroh() -> VibestudioIroh {
+  let module = VibestudioIroh()
+  module.setValue(HostBridgeStub(), forKey: "bridge")
+  return module
+}
+
 final class IrohLifecycleTests: XCTestCase {
   private func result(_ invoke: (@escaping (Any?) -> Void, @escaping (String?, String?, Error?) -> Void) -> Void) async throws -> Any? {
     try await withCheckedThrowingContinuation { continuation in
@@ -13,7 +24,7 @@ final class IrohLifecycleTests: XCTestCase {
   }
 
   private func withIdentity(_ body: (String) async throws -> Void) async throws {
-    let keys = VibestudioIroh()
+    let keys = hostIroh()
     defer { keys.invalidate() }
     let value = try await result { keys.createIdentity($0, rejecter: $1) }
     let identity = try XCTUnwrap((value as? [String: String])?["identityId"])
@@ -35,7 +46,7 @@ final class IrohLifecycleTests: XCTestCase {
 
   func testInvalidationReleasesPendingNativeAcceptAndPreservesIdentity() async throws {
     try await withIdentity { identity in
-      var module: VibestudioIroh? = VibestudioIroh()
+      var module: VibestudioIroh? = hostIroh()
       defer { module?.invalidate() }
       let handle = try await bind(module!, identity: identity)
       let completed = expectation(description: "Pending native accept ends on invalidation")
@@ -47,7 +58,7 @@ final class IrohLifecycleTests: XCTestCase {
       let released = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in retired == nil }, object: nil)
       await fulfillment(of: [released], timeout: 5)
 
-      let replacement = VibestudioIroh()
+      let replacement = hostIroh()
       defer { replacement.invalidate() }
       let rebound = try await bind(replacement, identity: identity)
       _ = try await result { replacement.shutdownEndpoint(rebound, resolver: $0, rejecter: $1) }
@@ -56,7 +67,7 @@ final class IrohLifecycleTests: XCTestCase {
 
   func testInvalidatedRuntimeRejectsNewBindingsAndIsIdempotent() async throws {
     try await withIdentity { identity in
-      let module = VibestudioIroh()
+      let module = hostIroh()
       module.invalidate()
       module.invalidate()
       do {

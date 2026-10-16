@@ -85,6 +85,7 @@
     "dist",
     "**/dist",
     "packages/mobile-iroh",
+    "packages/rn-client-api",
     "packages/headless-renderer",
     "src/server/workerdPrograms",
     "src/server/services/relaySeam.integration.test.ts"

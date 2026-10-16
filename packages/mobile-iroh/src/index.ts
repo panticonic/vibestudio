@@ -1,12 +1,7 @@
 import "./polyfills.js";
 
-export { activateApprovedWorkspaceApp } from "./bundleDelivery.js";
-export type {
-  BundleDeliveryRpc,
-  BundleDeliveryTransport,
-  NativeBundleHost,
-  ActivateWorkspaceAppOptions,
-} from "./bundleDelivery.js";
+export { createGatewayArtifactFetch, createMobileArtifactStore } from "./bundleDelivery.js";
+export type { NativeArtifactStore } from "./bundleDelivery.js";
 export { completeFreshMobilePairing } from "./freshPairing.js";
 export { MobileConnectionAggregateError, combineMobileFailures } from "./connectionPair.js";
 export {
@@ -47,5 +42,6 @@ export type {
   StoredRoutedMobileConnection,
   ShellTokenProvider,
   IrohConnection,
+  AuxiliarySessionOptions,
   IrohConnectionHandlers,
 } from "./connect.js";

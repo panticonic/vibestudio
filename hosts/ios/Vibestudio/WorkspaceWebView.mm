@@ -1,5 +1,7 @@
 #import <React/RCTViewManager.h>
 #import <React/RCTUIManager.h>
+#import <React/RCTLog.h>
+#import "VibestudioInstances.h"
 #import <React/UIView+React.h>
 #import <RNCWebViewManager.h>
 #import <RNCWebViewImpl.h>
@@ -400,5 +402,15 @@ RCT_EXPORT_METHOD(emitWebsiteNotificationEvent:(nonnull NSNumber *)reactTag noti
 }
 + (BOOL)requiresMainQueueSetup { return YES; }
 - (NSDictionary *)constantsToExport { return @{ @"profilesSupported": @YES }; }
-- (UIView *)view { return [WorkspaceWebView new]; }
+// Only a client instance granted `panel-hosting` gets a website host. Native view
+// managers are registered process-wide, so the grant is checked where the view
+// is created; every other command here addresses views by tag and finds none.
+- (UIView *)view
+{
+  if (!VibestudioBridgeHasCapability(self.bridge, @"panel-hosting")) {
+    RCTLogError(@"VibestudioWorkspaceWebView requires the panel-hosting capability");
+    return [UIView new];
+  }
+  return [WorkspaceWebView new];
+}
 @end

@@ -209,8 +209,13 @@ export class ClientLauncher {
         `${client.id} needs host ABI ${client.hostAbi}; this host implements ${expected ?? `no ${client.runtime} runtime`}.`
       );
     }
+    // A React Native build carries one bundle per platform; a host fetches only its own.
+    const platformArtifacts = client.artifacts.filter(
+      (artifact) =>
+        artifact.platform === undefined || artifact.platform === this.options.descriptor.host
+    );
     const artifacts = await Promise.all(
-      client.artifacts.map(
+      platformArtifacts.map(
         async (artifact): Promise<VerifiedArtifact> => ({
           ...artifact,
           handle: await this.options.cache.ensure({

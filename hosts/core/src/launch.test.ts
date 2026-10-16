@@ -3,6 +3,7 @@ import { ClientArtifactCache } from "./artifactCache.js";
 import { buildHostDescriptor } from "./hostDescriptor.js";
 import { ClientLauncher, type Call, type LaunchState } from "./launch.js";
 import { MemoryStore, integrityOf, responseOf } from "./testing.js";
+import type { ReadyClient } from "@vibestudio/workspace-contracts/clients";
 
 const descriptor = buildHostDescriptor({
   host: "terminal",
@@ -20,7 +21,7 @@ const grantResponse = {
   workspaceId: "w",
 };
 
-async function readyClient(over: Record<string, unknown> = {}) {
+async function readyClient(over: Record<string, unknown> = {}): Promise<ReadyClient> {
   return {
     source: "clients/chat-terminal",
     id: "chat",
@@ -94,6 +95,21 @@ describe("ClientLauncher", () => {
       { source: "clients/chat-terminal", buildKey: "bk1", executionDigest: DIGEST },
     ]);
     expect(t.calls[0]!.args[0]).toMatchObject({ host: descriptor, select: { default: true } });
+  });
+
+  it("fetches only artifacts for this host's platform", async () => {
+    const client = await readyClient();
+    client.artifacts.push({
+      path: "android/index.bundle",
+      role: "primary",
+      contentType: "application/javascript",
+      platform: "android",
+      integrity: await integrityOf("android"),
+    });
+    const t = setup([{ state: "ready", client }]);
+    const state = await t.launcher.launch({ default: true });
+    expect(state.state).toBe("ready");
+    expect(t.routes).toEqual(["/_a/bk1/main.mjs"]);
   });
 
   it("fails with host-abi-mismatch before fetching or granting", async () => {

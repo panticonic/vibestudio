@@ -70,8 +70,6 @@ export const vitestSharedConfig = {
       "dist",
       "workspace/.context-projections",
       "workspace/.contexts",
-      "hosts/react-native/**",
-      "workspace/apps/mobile/**",
       "**/*.browser.test.tsx",
     ],
     setupFiles: [path.resolve(__dirname, "tests/setup/vitest.setup.ts")],

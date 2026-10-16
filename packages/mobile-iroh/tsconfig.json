@@ -11,6 +11,8 @@
     "isolatedModules": true,
     "types": ["node", "react", "react-native"],
     "paths": {
+      "@vibestudio/client-host-core/*": ["../../hosts/core/src/*"],
+      "@vibestudio/workspace-contracts/*": ["../workspace-contracts/src/*"],
       "@vibestudio/iroh-transport": ["../iroh-transport/src/index.ts"],
       "@vibestudio/rpc": ["../rpc/src/index.ts"],
       "@vibestudio/rpc/*": ["../rpc/src/*"],

@@ -27,6 +27,12 @@
 		AF3026093000000000000001 /* RuntimeResourceTests.mm in Sources */ = {isa = PBXBuildFile; fileRef = AF3026093000000000000002 /* RuntimeResourceTests.mm */; };
 		AF3026093000000000000003 /* AuthenticationServices.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 4E2D41202C00000000000020 /* AuthenticationServices.framework */; };
 		AF3026093000000000000004 /* WebKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = AF3026093000000000000005 /* WebKit.framework */; };
+		4E2D42022C00000000000202 /* VibestudioInstances.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D42012C00000000000201 /* VibestudioInstances.mm */; };
+		4E2D42042C00000000000204 /* VibestudioArtifactStore.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D42032C00000000000203 /* VibestudioArtifactStore.mm */; };
+		4E2D42062C00000000000206 /* VibestudioClientManager.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D42052C00000000000205 /* VibestudioClientManager.mm */; };
+		4E2D42082C00000000000208 /* VibestudioHostRuntime.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D42072C00000000000207 /* VibestudioHostRuntime.mm */; };
+		4E2D420A2C0000000000020A /* VibestudioClientBroker.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D42092C00000000000209 /* VibestudioClientBroker.mm */; };
+		4E2D420C2C0000000000020C /* VibestudioPanelHost.mm in Sources */ = {isa = PBXBuildFile; fileRef = 4E2D420B2C0000000000020B /* VibestudioPanelHost.mm */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -69,6 +75,15 @@
 		FB66C65CD3C6C96C194861B4 /* IrohLifecycleTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IrohLifecycleTests.swift; sourceTree = "<group>"; };
 		AF3026093000000000000002 /* RuntimeResourceTests.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = RuntimeResourceTests.mm; sourceTree = "<group>"; };
 		AF3026093000000000000005 /* WebKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WebKit.framework; path = System/Library/Frameworks/WebKit.framework; sourceTree = SDKROOT; };
+		4E2D42012C00000000000201 /* VibestudioInstances.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = VibestudioInstances.mm; path = Vibestudio/VibestudioInstances.mm; sourceTree = "<group>"; };
+		4E2D42032C00000000000203 /* VibestudioArtifactStore.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = VibestudioArtifactStore.mm; path = Vibestudio/VibestudioArtifactStore.mm; sourceTree = "<group>"; };
+		4E2D42052C00000000000205 /* VibestudioClientManager.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = VibestudioClientManager.mm; path = Vibestudio/VibestudioClientManager.mm; sourceTree = "<group>"; };
+		4E2D42072C00000000000207 /* VibestudioHostRuntime.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = VibestudioHostRuntime.mm; path = Vibestudio/VibestudioHostRuntime.mm; sourceTree = "<group>"; };
+		4E2D42092C00000000000209 /* VibestudioClientBroker.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = VibestudioClientBroker.mm; path = Vibestudio/VibestudioClientBroker.mm; sourceTree = "<group>"; };
+		4E2D420B2C0000000000020B /* VibestudioPanelHost.mm */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.cpp.objcpp; name = VibestudioPanelHost.mm; path = Vibestudio/VibestudioPanelHost.mm; sourceTree = "<group>"; };
+		4E2D420D2C0000000000020D /* VibestudioInstances.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = VibestudioInstances.h; path = Vibestudio/VibestudioInstances.h; sourceTree = "<group>"; };
+		4E2D420E2C0000000000020E /* VibestudioArtifactStore.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = VibestudioArtifactStore.h; path = Vibestudio/VibestudioArtifactStore.h; sourceTree = "<group>"; };
+		4E2D420F2C0000000000020F /* VibestudioClientManager.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; name = VibestudioClientManager.h; path = Vibestudio/VibestudioClientManager.h; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -104,6 +119,15 @@
 				4E2D41302C00000000000030 /* SceneDelegate.mm */,
 				13B07FB01A68108700A75B9A /* AppDelegate.mm */,
 				4E2D41002C00000000000001 /* VibestudioMobileHost.mm */,
+				4E2D42012C00000000000201 /* VibestudioInstances.mm */,
+				4E2D42032C00000000000203 /* VibestudioArtifactStore.mm */,
+				4E2D42052C00000000000205 /* VibestudioClientManager.mm */,
+				4E2D42072C00000000000207 /* VibestudioHostRuntime.mm */,
+				4E2D42092C00000000000209 /* VibestudioClientBroker.mm */,
+				4E2D420B2C0000000000020B /* VibestudioPanelHost.mm */,
+				4E2D420D2C0000000000020D /* VibestudioInstances.h */,
+				4E2D420E2C0000000000020E /* VibestudioArtifactStore.h */,
+				4E2D420F2C0000000000020F /* VibestudioClientManager.h */,
 				4E2D41902C00000000000090 /* WorkspaceWebView.mm */,
 				4E2D41042C00000000000004 /* VibestudioAuthSession.mm */,
 				4E2D41102C00000000000010 /* VibestudioIroh.swift */,
@@ -411,6 +435,12 @@
 				13B07FBC1A68108700A75B9A /* AppDelegate.mm in Sources */,
 				4E2D41312C00000000000031 /* SceneDelegate.mm in Sources */,
 				4E2D41012C00000000000001 /* VibestudioMobileHost.mm in Sources */,
+				4E2D42022C00000000000202 /* VibestudioInstances.mm in Sources */,
+				4E2D42042C00000000000204 /* VibestudioArtifactStore.mm in Sources */,
+				4E2D42062C00000000000206 /* VibestudioClientManager.mm in Sources */,
+				4E2D42082C00000000000208 /* VibestudioHostRuntime.mm in Sources */,
+				4E2D420A2C0000000000020A /* VibestudioClientBroker.mm in Sources */,
+				4E2D420C2C0000000000020C /* VibestudioPanelHost.mm in Sources */,
 				4E2D41912C00000000000091 /* WorkspaceWebView.mm in Sources */,
 				4E2D41052C00000000000005 /* VibestudioAuthSession.mm in Sources */,
 				4E2D41112C00000000000011 /* VibestudioIroh.swift in Sources */,

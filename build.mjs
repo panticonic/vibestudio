@@ -532,7 +532,7 @@ function createPreloadConfig(name) {
 const preloadConfigs = [
   "bootstrapPreload",
   "panelPreload",
-  "appPreload",
+  "clientPreload",
   "browserPreload",
   "autofillOverlayPreload",
   "browserPrivacyPreload",

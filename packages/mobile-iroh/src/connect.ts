@@ -60,6 +60,17 @@ export interface IrohConnectionHandlers {
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
 }
 
+export interface AuxiliarySessionOptions {
+  /**
+   * The exact connection identity the server expects (a panel's lease connection
+   * id). Without it the session is `label` beneath this connection's own identity.
+   */
+  connectionId?: string;
+  getToken?: (signal?: AbortSignal) => string | Promise<string>;
+  onRecovery?: (kind: RecoveryKind) => void | Promise<void>;
+  onTerminalClose?: (error: Error) => void;
+}
+
 export interface IrohConnection {
   rpc: RpcClient;
   session: IrohClientSession;
@@ -71,6 +82,16 @@ export interface IrohConnection {
   endpointPool: MobileEndpointPool;
   deviceId?: string | null;
   hubControlRpc?: RpcClient;
+  /**
+   * Another logical session on this connection's physical pipe, with its own
+   * connection identity (`label` distinguishes it). It authenticates with the
+   * device credential unless `getToken` supplies another token (a client
+   * principal's one-use grant, a panel's lease token). Its owner closes it;
+   * closing this connection retires the pipe and with it every session on it.
+   * This is how the host runtime serves a client's sessions without a second
+   * physical connection.
+   */
+  openAuxiliarySession(label: string, options?: AuxiliarySessionOptions): IrohClientSession;
   waitUntilConnected(timeoutMs: number): Promise<void>;
   close(): Promise<void>;
 }
@@ -391,6 +412,16 @@ export async function establishIrohConnection(
     callerId,
     endpointIdentityId,
     endpointPool,
+    openAuxiliarySession: (label, auxiliary = {}) =>
+      transport.openSession({
+        connectionId: auxiliary.connectionId ?? `${connectionId}:${label}`,
+        clientLabel: "Mobile device",
+        clientPlatform: "mobile",
+        oauthCallbackMode,
+        getToken: auxiliary.getToken ?? (() => tokenProvider.getToken()),
+        ...(auxiliary.onRecovery ? { onRecovery: (kind) => auxiliary.onRecovery!(kind) } : {}),
+        ...(auxiliary.onTerminalClose ? { onTerminalClose: auxiliary.onTerminalClose } : {}),
+      }),
     waitUntilConnected: (timeoutMs) => waitUntilConnected(transport, session, timeoutMs),
     async close() {
       removeLifecycle();

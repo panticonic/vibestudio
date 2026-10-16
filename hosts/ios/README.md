@@ -102,7 +102,7 @@ xcodebuild -workspace Vibestudio.xcworkspace -scheme Vibestudio \
 
 Use `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` if the Mac's global
 developer directory selects Command Line Tools. Native coverage also includes
-explicit asset-cache misses, picker cancellation, and concurrent descriptor
+explicit asset-cache misses (`VibestudioPanelHost`), host-only and capability gating of native modules, picker cancellation, and concurrent descriptor
 construction. Interactive workspace acceptance uses the separate checklist below.
 
 `mobile smoke --platform ios` is currently unsupported. The Android runner
@@ -113,11 +113,14 @@ to track the remaining simulator and physical-device verification.
 
 ## Pairing And OAuth
 
-The native host handles `vibestudio://connect` and
-`https://vibestudio.app/p#...` pairing links, clears any active OTA bundle,
-and starts the shipped bootstrap with the URL as a standard launch input. Cold
-and warm pairing links share this runtime creation path, so the request survives
-replacing a loaded workspace runtime. OAuth URLs continue to use Linking events.
+The host runtime (module `VibestudioHostRuntime`) starts in the app delegate,
+before any scene, and runs the app's own bundle headlessly; the first scene
+presents its root view. `vibestudio://connect` and
+`https://vibestudio.app/p#...` pairing links never restart React Native: the
+scene delegate hands them to `VibestudioClientManager`, which delivers them to
+the host's JavaScript through the Linking module once the host has called
+`markReady`. Client apps run in their own React Native instances from verified
+bundle files (`VibestudioClientBroker` is their only door to the device).
 
 iOS OAuth uses `VibestudioAuthSession` (`ASWebAuthenticationSession`) with
 `vibestudio://oauth/callback/<provider>` callbacks. Those OAuth-shaped URLs are

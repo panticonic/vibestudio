@@ -26,6 +26,7 @@
     "@vibestudio/browser-data": "workspace:*",
     "@vibestudio/client-host-core": "workspace:*",
     "@vibestudio/mobile-iroh": "workspace:*",
+    "@vibestudio/rn-client-api": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",

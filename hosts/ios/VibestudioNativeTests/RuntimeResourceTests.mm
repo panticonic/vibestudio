@@ -267,10 +267,41 @@ ComponentDescriptor::Unique constructDescriptorWithConcurrentReader(const Compon
 
 @interface VibestudioMobileHost : NSObject
 - (void)documentPickerWasCancelled:(UIDocumentPickerViewController *)controller;
+- (void)readBrowserImportEntry:(NSString *)handle name:(NSString *)name offset:(double)offset maxBytes:(double)maxBytes resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject;
+- (dispatch_queue_t)methodQueue;
+- (void)invalidate;
+@end
+
+@interface VibestudioPanelHost : NSObject
 - (void)assetStoreLookup:(NSDictionary *)assetNamespace key:(NSString *)key resolver:(RCTPromiseResolveBlock)resolve rejecter:(RCTPromiseRejectBlock)reject;
 - (dispatch_queue_t)methodQueue;
 - (void)invalidate;
 @end
+
+// Modules read only the launch options of the bridge they were given.
+@interface InstanceBridgeStub : NSObject
+@property(nonatomic, copy) NSDictionary *launchOptions;
+@end
+@implementation InstanceBridgeStub
+@end
+
+static InstanceBridgeStub *HostBridgeStub(void)
+{
+  InstanceBridgeStub *stub = [InstanceBridgeStub new];
+  stub.launchOptions = @{@"vibestudio.instance.role": @"host"};
+  return stub;
+}
+
+static InstanceBridgeStub *ClientBridgeStub(NSArray<NSString *> *capabilities)
+{
+  InstanceBridgeStub *stub = [InstanceBridgeStub new];
+  stub.launchOptions = @{
+    @"vibestudio.instance.role": @"client",
+    @"vibestudio.instance.tag": @"client:test:react-native:device",
+    @"vibestudio.instance.capabilities": capabilities,
+  };
+  return stub;
+}
 
 @interface MobileHostLifecycleTests : XCTestCase
 @end
@@ -299,9 +330,48 @@ ComponentDescriptor::Unique constructDescriptorWithConcurrentReader(const Compon
   [self waitForExpectations:@[cancelled] timeout:5];
 }
 
-- (void)testAssetCacheMissResolvesExplicitNull
+- (void)testMobileHostRejectsEveryInstanceButTheHost
 {
   VibestudioMobileHost *module = [VibestudioMobileHost new];
+  [module setValue:ClientBridgeStub(@[@"panel-hosting"]) forKey:@"bridge"];
+  XCTestExpectation *rejected = [self expectationWithDescription:@"A client instance is refused"];
+  [module readBrowserImportEntry:@"handle" name:@"entry" offset:0 maxBytes:1
+      resolver:^(id result) { XCTFail(@"A client instance used the host's device module"); [rejected fulfill]; }
+      rejecter:^(NSString *code, NSString *message, NSError *error) {
+        XCTAssertEqualObjects(code, @"not-host");
+        [rejected fulfill];
+      }];
+  [self waitForExpectations:@[rejected] timeout:5];
+  [module invalidate];
+}
+
+- (void)testPanelHostRequiresThePanelHostingCapability
+{
+  VibestudioPanelHost *module = [VibestudioPanelHost new];
+  NSDictionary *assetNamespace = @{
+    @"serverEndpointId": [@"a" stringByPaddingToLength:64 withString:@"a" startingAtIndex:0],
+    @"workspaceIdentity": NSUUID.UUID.UUIDString,
+  };
+  for (InstanceBridgeStub *bridge in @[HostBridgeStub(), ClientBridgeStub(@[])]) {
+    [module setValue:bridge forKey:@"bridge"];
+    XCTestExpectation *rejected = [self expectationWithDescription:@"Instance without the grant is refused"];
+    dispatch_async([module methodQueue], ^{
+      [module assetStoreLookup:assetNamespace key:@"/missing-native-test-asset"
+          resolver:^(id result) { XCTFail(@"Panel hosting was usable without its grant"); [rejected fulfill]; }
+          rejecter:^(NSString *code, NSString *message, NSError *error) {
+            XCTAssertEqualObjects(code, @"capability-denied");
+            [rejected fulfill];
+          }];
+    });
+    [self waitForExpectations:@[rejected] timeout:5];
+  }
+  [module invalidate];
+}
+
+- (void)testAssetCacheMissResolvesExplicitNull
+{
+  VibestudioPanelHost *module = [VibestudioPanelHost new];
+  [module setValue:ClientBridgeStub(@[@"panel-hosting"]) forKey:@"bridge"];
   NSDictionary *assetNamespace = @{
     @"serverEndpointId": [@"a" stringByPaddingToLength:64 withString:@"a" startingAtIndex:0],
     @"workspaceIdentity": NSUUID.UUID.UUIDString,
@@ -322,33 +392,39 @@ ComponentDescriptor::Unique constructDescriptorWithConcurrentReader(const Compon
 
 - (void)testRuntimeRetirementRemovesOnlyOwnedTransientFiles
 {
-  VibestudioMobileHost *module = [VibestudioMobileHost new];
-  XCTAssertEqual([module methodQueue], [module methodQueue]);
+  VibestudioMobileHost *host = [VibestudioMobileHost new];
+  VibestudioPanelHost *panel = [VibestudioPanelHost new];
+  XCTAssertEqual([host methodQueue], [host methodQueue]);
+  XCTAssertEqual([panel methodQueue], [panel methodQueue]);
   NSString *root = [NSTemporaryDirectory() stringByAppendingPathComponent:NSUUID.UUID.UUIDString];
   [NSFileManager.defaultManager createDirectoryAtPath:root withIntermediateDirectories:YES attributes:nil error:nil];
-  NSString *transfer = [root stringByAppendingPathComponent:@"bundle.transfer"];
   NSString *asset = [root stringByAppendingPathComponent:@"asset.transfer"];
   NSString *archive = [root stringByAppendingPathComponent:@"browser.zip"];
   NSString *committed = [root stringByAppendingPathComponent:@"committed.bundle"];
-  for (NSString *path in @[transfer, asset, archive, committed]) {
+  for (NSString *path in @[asset, archive, committed]) {
     [NSFileManager.defaultManager createFileAtPath:path contents:[@"test" dataUsingEncoding:NSUTF8StringEncoding] attributes:nil];
   }
   XCTestExpectation *cleaned = [self expectationWithDescription:@"Native staging resources retired"];
-  dispatch_async([module methodQueue], ^{
-    [module setValue:[NSFileHandle fileHandleForWritingAtPath:transfer] forKey:@"bundleStream"];
-    [module setValue:transfer forKey:@"bundleTransferPath"];
-    [module setValue:committed forKey:@"bundleFinalPath"];
-    [module setValue:[@{@"write": [@{@"transferPath": asset, @"stream": [NSFileHandle fileHandleForWritingAtPath:asset]} mutableCopy]} mutableCopy] forKey:@"assetWrites"];
-    [module setValue:[@{@"archive": [@{@"path": archive} mutableCopy]} mutableCopy] forKey:@"browserImportArchives"];
-    [module invalidate];
-    [module invalidate];
-    dispatch_async([module methodQueue], ^{
-      XCTAssertNil([module valueForKey:@"bundleStream"]);
-      XCTAssertEqual([(NSDictionary *)[module valueForKey:@"assetWrites"] count], 0U);
-      XCTAssertEqual([(NSDictionary *)[module valueForKey:@"browserImportArchives"] count], 0U);
-      for (NSString *path in @[transfer, asset, archive]) XCTAssertFalse([NSFileManager.defaultManager fileExistsAtPath:path]);
-      XCTAssertTrue([NSFileManager.defaultManager fileExistsAtPath:committed]);
-      [cleaned fulfill];
+  dispatch_group_t retired = dispatch_group_create();
+  dispatch_group_async(retired, [host methodQueue], ^{
+    [host setValue:[@{@"archive": [@{@"path": archive} mutableCopy]} mutableCopy] forKey:@"browserImportArchives"];
+    [host invalidate];
+    [host invalidate];
+  });
+  dispatch_group_async(retired, [panel methodQueue], ^{
+    [panel setValue:[@{@"write": [@{@"transferPath": asset, @"stream": [NSFileHandle fileHandleForWritingAtPath:asset]} mutableCopy]} mutableCopy] forKey:@"assetWrites"];
+    [panel invalidate];
+    [panel invalidate];
+  });
+  dispatch_group_notify(retired, dispatch_get_main_queue(), ^{
+    dispatch_async([host methodQueue], ^{
+      dispatch_async([panel methodQueue], ^{
+        XCTAssertEqual([(NSDictionary *)[host valueForKey:@"browserImportArchives"] count], 0U);
+        XCTAssertEqual([(NSDictionary *)[panel valueForKey:@"assetWrites"] count], 0U);
+        for (NSString *path in @[asset, archive]) XCTAssertFalse([NSFileManager.defaultManager fileExistsAtPath:path]);
+        XCTAssertTrue([NSFileManager.defaultManager fileExistsAtPath:committed]);
+        [cleaned fulfill];
+      });
     });
   });
   [self waitForExpectations:@[cleaned] timeout:5];

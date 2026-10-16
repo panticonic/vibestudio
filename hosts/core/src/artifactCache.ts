@@ -25,7 +25,14 @@ export interface ClientArtifactStore {
  * is fetched; a failed transfer fails the caller and the next launch fetches
  * again.
  */
-export type ClientArtifactFetch = (route: string) => Promise<Response>;
+export type ClientArtifactFetch = (route: string) => Promise<ClientArtifactResponse>;
+
+/** What the cache reads from a fetch: a `Response` satisfies it, as does a decoded RPC stream. */
+export interface ClientArtifactResponse {
+  ok: boolean;
+  status: number;
+  body: ReadableStream<Uint8Array> | null;
+}
 
 /** The gateway route of one file of an immutable client build: `/_a/<buildKey>/<path>`. */
 export function clientArtifactRoute(buildKey: string, path: string): string {

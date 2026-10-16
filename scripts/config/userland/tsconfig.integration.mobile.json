@@ -1,5 +1,5 @@
 {
-  "//": "The Jest harness runs in Node with native component mocks and browser-compatible web APIs. The separate mandatory tsconfig.mobile.json validates the actual Hermes app without these globals.",
+  "//": "The Jest harness runs in Node with native component mocks and browser-compatible web APIs. The separate mandatory tsconfig.mobile.json validates the actual Hermes client without these globals.",
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
@@ -7,6 +7,12 @@
     "allowImportingTsExtensions": true,
     "isolatedModules": true
   },
-  "include": ["apps/mobile/**/*.ts", "apps/mobile/**/*.tsx", "packages/mobile-navigation/**/*.ts"],
+  "include": [
+    "clients/mobile-browser/**/*.ts",
+    "clients/mobile-browser/**/*.tsx",
+    "packages/client-kit-native/**/*.ts",
+    "packages/client-kit-native/**/*.tsx",
+    "packages/mobile-navigation/**/*.ts"
+  ],
   "exclude": ["node_modules", "../node_modules", "**/dist", "**/node_modules", "**/*.native.d.ts"]
 }

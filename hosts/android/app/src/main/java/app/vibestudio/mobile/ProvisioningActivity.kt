@@ -13,7 +13,7 @@ import java.security.MessageDigest
  * This activity is protected by android.permission.DUMP, which the Android
  * shell used by adb holds and ordinary applications do not. It converts the
  * desktop's already-authorized provisioning action into a one-use approval
- * consumed by the React Native bootstrap. Browser/QR links still require an
+ * consumed by the host runtime. Browser/QR links still require an
  * explicit tap in MainActivity.
  */
 class ProvisioningActivity : Activity() {
@@ -35,20 +35,16 @@ class ProvisioningActivity : Activity() {
             .edit()
             .putString(PAIR_URL_DIGEST, approvalDigest)
             .putLong(APPROVED_AT, System.currentTimeMillis())
-            // MainActivity may immediately terminate this process to unload an
-            // active workspace bundle. The one-use trust receipt must reach
-            // disk before that restart or the new bootstrap falls back to the
-            // interactive Pair screen.
+            // The one-use trust receipt must reach disk before the host
+            // runtime consumes it, even if this process is killed right
+            // after handing the link to MainActivity.
             .commit()
 
         startActivity(Intent(this, MainActivity::class.java).apply {
             action = Intent.ACTION_VIEW
             data = intent.data
-            // MainActivity is singleTask. Reuse its native-bootstrap React root
-            // so overlapping desktop retries are coalesced by the one active
-            // pairing flow instead of destroying that flow and creating a
-            // second bundle transfer. MainActivity still performs a full reset
-            // itself when a workspace bundle is currently active.
+            // MainActivity is singleTask. Reuse its React root so overlapping
+            // desktop retries are coalesced by the one active pairing flow.
             addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         })
         finish()

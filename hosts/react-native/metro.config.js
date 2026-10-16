@@ -2,8 +2,6 @@ const { getDefaultConfig, mergeConfig } = require("@react-native/metro-config");
 const { execFileSync } = require("node:child_process");
 const fs = require("fs");
 const path = require("path");
-const { createNativeBoundary } = require("./metroNativeBoundary.cjs");
-const developmentTemplateConfig = require("../../src/dev/developmentTemplateConfig.cjs");
 
 const projectRoot = __dirname;
 const monorepoRoot = path.resolve(projectRoot, "..", "..");
@@ -16,43 +14,16 @@ execFileSync(
   [path.join(monorepoRoot, "scripts", "build-infrastructure-packages.mjs")],
   { cwd: monorepoRoot, stdio: "inherit" }
 );
-const templateReleaseRoot = process.env.VIBESTUDIO_TEMPLATE_RELEASE_ROOT?.trim();
-const templateRoots = templateReleaseRoot
-  ? Object.fromEntries(
-      ["base", "personal", "system"].map((name) => {
-        const checkout = path.resolve(templateReleaseRoot, name);
-        if (!fs.statSync(checkout).isDirectory()) {
-          throw new Error(`Pinned ${name} template checkout is not a directory: ${checkout}`);
-        }
-        return [name, fs.realpathSync(checkout)];
-      })
-    )
-  : developmentTemplateConfig.requireDevelopmentTemplateCheckouts(monorepoRoot).checkouts;
-const workspaceAppRoot = process.env.VIBESTUDIO_WORKSPACE_APP_ROOT
-  ? path.resolve(process.env.VIBESTUDIO_WORKSPACE_APP_ROOT)
-  : path.resolve(templateRoots.system, "apps", "mobile");
 const workspaceNodeModules = process.env.VIBESTUDIO_WORKSPACE_NODE_MODULES
   ? path.resolve(process.env.VIBESTUDIO_WORKSPACE_NODE_MODULES)
   : path.resolve(monorepoRoot, "node_modules");
-const workspacePackages = new Map();
-for (const templateRoot of [templateRoots.base, templateRoots.system]) {
-  for (const category of ["packages", "apps", "extensions", "panels", "workers"]) {
-    const directory = path.join(templateRoot, category);
-    if (!fs.existsSync(directory)) continue;
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const unit = path.join(directory, entry.name);
-      const manifest = path.join(unit, "package.json");
-      if (!fs.existsSync(manifest)) continue;
-      const name = JSON.parse(fs.readFileSync(manifest, "utf8")).name;
-      if (typeof name === "string") workspacePackages.set(name, unit);
-    }
-  }
-}
-const nativeBoundary = createNativeBoundary(workspaceAppRoot);
 
 /**
- * Metro bundler configuration for Vibestudio mobile.
+ * Metro bundler configuration for the Vibestudio mobile HOST runtime.
+ *
+ * This bundles only the shipped host (`index.js`): clients are built by the
+ * server's React Native build provider, not here, so there is no client
+ * source, template checkout or native-module boundary in this configuration.
  *
  * Extends the default React Native config to resolve workspace packages
  * and handle a few Metro resolution quirks:
@@ -65,8 +36,6 @@ const nativeBoundary = createNativeBoundary(workspaceAppRoot);
  */
 const nodeBuiltinPolyfills = {
   path: require.resolve("path-browserify"),
-  crypto: path.resolve(workspaceAppRoot, "src", "polyfills", "crypto.js"),
-  "node:crypto": path.resolve(workspaceAppRoot, "src", "polyfills", "crypto.js"),
   "node:path": require.resolve("path-browserify"),
 };
 
@@ -74,13 +43,10 @@ const config = {
   watchFolders: [
     // Allow Metro to resolve workspace packages
     path.resolve(monorepoRoot, "packages"),
-    // Workspace-owned RN app JS loaded by the native host
-    workspaceAppRoot,
-    templateRoots.base,
-    templateRoots.system,
+    // @vibestudio/client-host-core, the launch pipeline the host runs
+    path.resolve(monorepoRoot, "hosts", "core"),
     // Root node_modules for hoisted dependencies
     path.resolve(monorepoRoot, "node_modules"),
-    // Userland workspace dependencies for transitive @workspace/* packages.
     workspaceNodeModules,
   ].filter((candidate) => fs.existsSync(candidate)),
 
@@ -93,8 +59,6 @@ const config = {
     ].filter((candidate) => fs.existsSync(candidate)),
 
     resolveRequest: (context, moduleName, platform) => {
-      nativeBoundary.guardNativeModuleImport(moduleName, context.originModulePath);
-
       // Node.js built-in polyfills for shared code running in React Native
       if (nodeBuiltinPolyfills[moduleName]) {
         return { type: "sourceFile", filePath: nodeBuiltinPolyfills[moduleName] };
@@ -129,21 +93,6 @@ const config = {
       // available before Metro resolves them.
       if (moduleName.startsWith("@vibestudio/")) {
         return context.resolveRequest(context, moduleName, platform);
-      }
-
-      if (moduleName.startsWith("@workspace")) {
-        const packageName = [...workspacePackages.keys()]
-          .sort((left, right) => right.length - left.length)
-          .find((name) => moduleName === name || moduleName.startsWith(`${name}/`));
-        if (packageName) {
-          const packageRoot = workspacePackages.get(packageName);
-          const subpath = moduleName.slice(packageName.length).replace(/^\//, "");
-          return context.resolveRequest(
-            context,
-            subpath ? path.join(packageRoot, subpath) : packageRoot,
-            platform
-          );
-        }
       }
 
       // 0b. Resolve react-native-screens via pre-built lib/ output.

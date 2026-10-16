@@ -100,6 +100,19 @@
         </activity>
 
         <!--
+            One client instance in its own task. Started only by the host
+            runtime (explicit intent from this process), so it is not exported.
+            Every client gets its own Recents entry: the host launches it with
+            FLAG_ACTIVITY_NEW_DOCUMENT | FLAG_ACTIVITY_MULTIPLE_TASK.
+        -->
+        <activity
+            android:name=".ClientActivity"
+            android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/AppTheme"
+            android:exported="false" />
+
+        <!--
             Exact-device USB provisioning. `adb shell` holds DUMP; ordinary
             Android apps do not, so only the already-authorized desktop path
             can request immediate pairing without the in-app confirmation.

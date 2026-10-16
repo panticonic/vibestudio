@@ -334,7 +334,7 @@ export interface ClientArtifactDescriptor {
   role: string;
   contentType: string;
   platform?: string;
-  /** `sha256-<base64>` of the artifact bytes; every client artifact has one. */
+  /** `sha256-<hex>` of the artifact bytes; every client artifact has one. */
   integrity: string;
 }
 

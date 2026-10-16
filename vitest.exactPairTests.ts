@@ -6,7 +6,7 @@ type TestOwnership = { path: string; template: string };
  * Host tests whose subject is the exact host/template composition.
  *
  * Templates are independent repositories, so a pair test also names which
- * composed workspace it needs: one that reads `apps/mobile` only holds where
+ * composed workspace it needs: one that reads `clients/mobile-browser` only holds where
  * System is composed, and running it against Base alone asserts nothing except
  * that the directory is missing.
  */

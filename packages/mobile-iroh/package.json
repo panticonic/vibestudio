@@ -27,6 +27,7 @@
   "dependencies": {
     "@kayahr/text-encoding": "2.2.0",
     "@react-native-community/netinfo": "^11.4.1",
+    "@vibestudio/client-host-core": "workspace:*",
     "@vibestudio/iroh-transport": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",

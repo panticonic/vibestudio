@@ -538,6 +538,9 @@ importers:
       '@vibestudio/mobile-iroh':
         specifier: workspace:*
         version: link:../../packages/mobile-iroh
+      '@vibestudio/rn-client-api':
+        specifier: workspace:*
+        version: link:../../packages/rn-client-api
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../../packages/rpc
@@ -981,6 +984,9 @@ importers:
       '@react-native-community/netinfo':
         specifier: ^11.4.1
         version: 11.5.2(react-native@0.79.7(patch_hash=ffd50cbf5758f9251e228ad537ef249cfcce06fa456dbe4dfd418aac138e31cf)(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.2.4))(react@19.2.4)
+      '@vibestudio/client-host-core':
+        specifier: workspace:*
+        version: link:../../hosts/core
       '@vibestudio/iroh-transport':
         specifier: workspace:*
         version: link:../iroh-transport
@@ -1042,6 +1048,28 @@ importers:
       '@microsoft/mxc-sdk':
         specifier: 0.8.0
         version: 0.8.0
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.10.9
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+
+  packages/rn-client-api:
+    dependencies:
+      '@vibestudio/rpc':
+        specifier: workspace:*
+        version: link:../rpc
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../workspace-contracts
+      react-native:
+        specifier: ^0.79.0
+        version: 0.79.7(patch_hash=ffd50cbf5758f9251e228ad537ef249cfcce06fa456dbe4dfd418aac138e31cf)(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.2.4)
+    devDependencies:
       '@types/node':
         specifier: ^24.10.1
         version: 24.10.9
@@ -13212,7 +13240,9 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
+      - bufferutil
       - supports-color
+      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 

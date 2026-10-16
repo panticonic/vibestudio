@@ -160,6 +160,25 @@ describe("MobileEndpointPool relay configuration", () => {
   });
 });
 
+describe("additional shell sessions", () => {
+  it("open on the same pipe with their own identity and the device credential", async () => {
+    const connection = await establishIrohConnection(
+      pairing,
+      makeReturningShellTokenProvider(credential),
+      "installed-endpoint",
+      "app-scheme"
+    );
+    const [primary] = fixture.connectionIds;
+
+    connection.openAuxiliarySession("client:browser");
+
+    expect(fixture.connectionIds).toHaveLength(2);
+    expect(fixture.connectionIds[1]).toBe(`${primary}:client:browser`);
+    expect(fixture.connectionIds[1]).not.toBe(primary);
+    await connection.close();
+  });
+});
+
 describe("mobile reach connection identity", () => {
   it("replaces a cold process incarnation for the same endpoint and reach", async () => {
     const first = await establishIrohConnection(

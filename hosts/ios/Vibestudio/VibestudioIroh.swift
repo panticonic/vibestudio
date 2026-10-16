@@ -21,6 +21,16 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
   static func moduleName() -> String! { "VibestudioIroh" }
   static func requiresMainQueueSetup() -> Bool { false }
 
+  // Set by React Native. Iroh holds the device's identity keys, so only the host
+  // runtime's instance may use it; client instances reach the device through the
+  // broker. The role is written into each instance's launch options by native
+  // code (VibestudioInstances.h).
+  @objc var bridge: RCTBridge!
+
+  private var isHostInstance: Bool {
+    (bridge?.launchOptions?["vibestudio.instance.role"] as? String) == "host"
+  }
+
   private let lock = NSLock()
   private var active = true
   private var endpoints: [String: Endpoint] = [:]
@@ -256,6 +266,7 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
   }
 
   @objc func closeConnection(_ handle: String, errorCode: String, reasonBase64: String) {
+    guard isHostInstance else { return }
     guard let code = Int64(errorCode), let reason = Data(base64Encoded: reasonBase64) else { return }
     let connection = retireConnection(handle)
     guard let connection else { return }
@@ -310,6 +321,7 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
                        operation: @escaping () async throws -> Any?) {
     Task {
       do {
+        guard self.isHostInstance else { throw BridgeError.notHost }
         guard self.isActive else { throw BridgeError.runtimeInvalidated }
         let result = try await operation()
         guard self.isActive else { throw BridgeError.runtimeInvalidated }
@@ -455,7 +467,7 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
   }
 
   private enum BridgeError: LocalizedError {
-    case unknownHandle(String), closedStream(String), invalidBase64, invalidCode, invalidRead, boundIdentity, runtimeInvalidated, keychain(OSStatus)
+    case unknownHandle(String), closedStream(String), invalidBase64, invalidCode, invalidRead, boundIdentity, runtimeInvalidated, notHost, keychain(OSStatus)
     var errorDescription: String? {
       switch self {
       case .unknownHandle(let kind): return "Unknown Iroh \(kind) handle"
@@ -465,6 +477,7 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
       case .invalidRead: return "Invalid bounded stream read size"
       case .boundIdentity: return "Cannot delete an identity while its endpoint is bound"
       case .runtimeInvalidated: return "Iroh runtime has been invalidated"
+      case .notHost: return "VibestudioIroh is available to the host runtime only"
       case .keychain(let status): return "Iroh Keychain operation failed (\(status))"
       }
     }

@@ -4,28 +4,47 @@ Workspace browser profiles require iOS 17 or later. Android requires a System
 WebView supporting AndroidX WebKit's `MULTI_PROFILE` capability. The native host
 binds each browser view to one account/workspace profile before loading content;
 unsupported engines show an update message and never use shared browser storage.
-The native contract version is `RN_HOST_ABI` in `@vibestudio/shared/buildProvider`.
+The host ABI (`rn-host-6`) is `CURRENT_HOST_ABI["react-native"]` in `@vibestudio/workspace-contracts/clients`.
 
 This directory contains the React Native JavaScript half of the shipped native
-host: first-pairing and recovery bootstrap, Metro boundary and configuration.
-The native projects are its siblings, `hosts/android` and `hosts/ios`
-(`react-native.config.js` points the React Native CLI at them); they own native
-modules, signing, and release packaging. All of it is trusted host code and
-changes only with a native app release.
+host: the **host runtime** (`index.js`, `src/host/`), its own screen
+(`src/HostScreen.tsx`: pairing, the launch review, messages), the Metro
+configuration and the jest runner for the clients' tests. The native projects
+are its siblings, `hosts/android` and `hosts/ios` (`react-native.config.js`
+points the React Native CLI at them); they own native modules, signing, and
+release packaging. All of it is trusted host code and changes only with a native
+app release.
 
-The hot-updatable React Native product UI lives separately in
-the exact external Base release selected by the server. The server builds that
-workspace app from content-addressed workspace state and streams it through
-this native host after pairing. Keep product screens and workspace
-services there; keep OS integration and recovery code here.
+The host runtime starts with the process (Android `Application.onCreate`, iOS
+app delegate), before any activity or scene, and owns the device: the
+credential, the one physical Iroh connection per reach, pairing, push, and the
+verified artifact cache. It runs each **client** (a System workspace unit under
+`clients/`, for example `mobile-browser`) in its own React Native instance,
+launched through `clients.launch` and loaded only from a bundle whose SHA-256
+matches the integrity the server sealed. A client reaches the host only through
+the capability broker and `@vibestudio/rn-client-api` (`packages/rn-client-api`);
+raw device modules are not registered in client instances. Updates reload only
+the affected client's instance (the client prompts; development mode reloads at
+once). A session closed with the `trust-revoked` reason tears the client down
+with a message on the host screen.
+
+`src/host/` map: `hostRuntime.ts` (state machine: pair, connect, launch,
+update, revoke), `clientInstance.ts` + `clientBroker.ts` (per-client identity
+and capability enforcement), `sessionRelay.ts` (logical sessions held for a
+client, identity stamped by the host), `hostConnections.ts` (shared workspace
+connections), `deviceConnection.ts` (credential and pairing),
+`nativeHostRuntime.ts` (the contract native implements), `notifications/`
+(device-level push), `nativeBindings.ts` (the only file wiring real modules).
+Tests for `src/host` run in the host vitest suite; the clients' tests run here
+with jest (`pnpm test:mobile`).
 
 ## Pairing And Install
 
-The shipped native bootstrap owns first pairing. It accepts the HTTPS pair
+The host runtime owns first pairing. It accepts the HTTPS pair
 carrier (`https://vibestudio.app/p#...`) and the custom scheme
 (`vibestudio://connect/...`) through the same shared compact-v3 parser, and also exposes
 in-app Scan QR and Paste pairing link actions for fresh installs and recovery.
-After activation, the streamed workspace app owns ordinary device management:
+Once a client runs, it owns ordinary device management through the host API:
 **Settings** → **Devices** → **Connect another device** creates and shares a
 server-minted one-time link for the exact current workspace. That flow does not
 reset or expose the current phone's native credential.
@@ -98,6 +117,8 @@ For Android Iroh pairing and local relay testing, see
 [docs/Iroh-local-e2e.md](../../docs/Iroh-local-e2e.md) and
 [docs/Iroh-deployment.md](../../docs/Iroh-deployment.md).
 
-The shipped native host exposes only reset/clear plus streamed bundle
-activation. Pairing, credential refresh, bootstrap fetch, and bundle delivery
-run through `@vibestudio/mobile-iroh` over the active Iroh pipe.
+The shipped native host exposes the host runtime module (client instances, the
+verified artifact store, the broker), browser import and USB provisioning.
+Pairing, credential refresh, launch and bundle delivery run in the host runtime
+through `@vibestudio/mobile-iroh` and `@vibestudio/client-host-core` over the
+device's Iroh pipe.

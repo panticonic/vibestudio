@@ -2,7 +2,7 @@
   "compilerOptions": {
     "target": "ES2022",
     "module": "ESNext",
-    "lib": ["ES2022"],
+    "lib": ["ES2022", "DOM"],
     "jsx": "react-jsx",
     "noEmit": true,
     "strict": true,
@@ -27,11 +27,16 @@
       "@vibestudio/service-schemas/*": ["../../packages/service-schemas/src/*"],
       "@vibestudio/shell-core/*": ["../../packages/shell-core/src/*"],
       "@vibestudio/workspace-contracts/*": ["../../packages/workspace-contracts/src/*"],
+      "@vibestudio/client-host-core": ["../core/src/index.ts"],
+      "@vibestudio/client-host-core/*": ["../core/src/*"],
       "@vibestudio/dev-log": ["../../packages/dev-log/src/index.ts"],
       "@vibestudio/env-paths": ["../../packages/env-paths/src/index.ts"],
       "@vibestudio/browser-data": ["../../packages/browser-data/src/index.ts"],
       "@vibestudio/browser-data/client": ["../../packages/browser-data/src/client.ts"],
       "@vibestudio/mobile-iroh": ["../../packages/mobile-iroh/src/index.ts"],
+      "@vibestudio/mobile-iroh/*": ["../../packages/mobile-iroh/src/*"],
+      "@vibestudio/rn-client-api": ["../../packages/rn-client-api/src/index.ts"],
+      "@vibestudio/rn-client-api/*": ["../../packages/rn-client-api/src/*"],
       "@vibestudio/iroh-transport": ["../../packages/iroh-transport/src/index.ts"],
       "@vibestudio/credential-client": ["../../packages/credential-client/src/index.ts"],
       "@vibestudio/credential-client/*": ["../../packages/credential-client/src/*"],
@@ -40,6 +45,6 @@
       "@vibestudio/types": ["../../packages/types/src/index.ts"]
     }
   },
-  "include": ["*.js"],
-  "exclude": ["node_modules", "ios", "android"]
+  "include": ["*.js", "src/**/*.ts", "src/**/*.tsx"],
+  "exclude": ["node_modules", "ios", "android", "src/**/*.test.ts", "src/**/testSupport.ts"]
 }

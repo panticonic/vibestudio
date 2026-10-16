@@ -1,12 +1,16 @@
 /**
- * The React Native app's tests live in the System template; its test runner lives here.
+ * The React Native clients' tests live in the System template; their test runner lives here.
  *
  * The host keeps the native shell and the only React Native jest preset in the
- * repository, while `apps/mobile/src` and its 39 test files are userland. So
- * this config resolves the selected Base checkout exactly as `test:userland`
- * and `type-check:userland` do, and points the RN runner at it. Without it the
- * host runs jest over a directory with no tests and Base has no runner at all,
- * which is how these tests stopped running after the external-Base cutover.
+ * repository, while `clients/mobile-browser` and `packages/client-kit-native`
+ * (and their test files) are userland. So this config resolves the selected
+ * Base and System checkouts exactly as `test:userland` and
+ * `type-check:userland` do, and points the RN runner at them. Without it the
+ * host runs jest over a directory with no tests and the template has no runner
+ * for them at all.
+ *
+ * Host-runtime tests (`hosts/react-native/src/**`, `packages/rn-client-api`)
+ * are plain TypeScript with injected ports and run in the host vitest suite.
  */
 const fs = require("node:fs");
 const path = require("node:path");
@@ -55,10 +59,10 @@ const repoRoot = path.resolve(__dirname, "..", "..");
  * Registry dependencies declared by Base packages, materialized the same way
  * `test:userland` and `type-check:userland` materialize them.
  *
- * `apps/mobile` itself stays out of that projection — its React pin and its
- * native modules must come from the APK's own install — but the *libraries* it
- * imports are ordinary userland units, and their npm dependencies have to be
- * resolvable or the RN runner cannot load them at all.
+ * The clients themselves stay out of that projection — their React pin and
+ * their native modules must come from the APK's own install — but the
+ * *libraries* they import are ordinary userland units, and their npm
+ * dependencies have to be resolvable or the RN runner cannot load them at all.
  */
 function userlandDependencyModules(selectedTemplates) {
   const { register } = require(require.resolve("tsx/cjs/api", { paths: [repoRoot] }));
@@ -96,7 +100,8 @@ const { requireDevelopmentTemplateCheckouts } = require(
 
 const selectedTemplates = requireDevelopmentTemplateCheckouts(repoRoot);
 const templateRoots = selectedTemplates.checkouts;
-const mobileRoot = path.join(templateRoots.system, "apps", "mobile");
+const mobileBrowserRoot = path.join(templateRoots.system, "clients", "mobile-browser");
+const clientKitNativeRoot = path.join(templateRoots.system, "packages", "client-kit-native");
 const hostModules = path.join(repoRoot, "node_modules");
 const packageSource = (name) => path.join(repoRoot, "packages", name, "src");
 
@@ -112,8 +117,9 @@ module.exports = (async () => {
     // module name still resolve against the host install. Only test discovery
     // points at userland.
     rootDir: __dirname,
-    roots: [mobileRoot],
-    setupFilesAfterEnv: [path.join(mobileRoot, "jest.setup.ts")],
+    roots: [mobileBrowserRoot, clientKitNativeRoot],
+    // The kit's tests render through the same native mocks as the browser's.
+    setupFilesAfterEnv: [path.join(mobileBrowserRoot, "jest.setup.ts")],
     // Babel resolves config from the file being compiled, which now lives in
     // Base — and Base declares no babel config, so React Native's own Flow-typed
     // sources would go through untransformed. Name the host's config explicitly.
@@ -147,6 +153,8 @@ module.exports = (async () => {
       "^react-native$": path.join(hostModules, "react-native"),
       "^react-test-renderer$": path.join(hostModules, "react-test-renderer"),
       "^@vibestudio/mobile-iroh$": path.join(packageSource("mobile-iroh"), "index.ts"),
+      "^@vibestudio/rn-client-api$": path.join(packageSource("rn-client-api"), "index.ts"),
+      "^@vibestudio/rn-client-api/(.*)$": path.join(packageSource("rn-client-api"), "$1"),
       "^@vibestudio/rpc$": path.join(packageSource("rpc"), "index.ts"),
       "^@vibestudio/rpc/(.*)$": path.join(packageSource("rpc"), "$1"),
       "^@vibestudio/shared$": path.join(packageSource("shared"), "index.ts"),

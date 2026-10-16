@@ -244,18 +244,6 @@ export const ALLOWLIST = [
     substring: "There are **no JSON identity stores**",
     reason: "current state documentation explicitly records that the stores are absent",
   },
-  {
-    rule: "single-user-assertion",
-    file: "workspace/apps/shell/components/LazyPanelTreeSidebar.tsx",
-    substring: "silently restore the old single-user",
-    reason: "invariant comment explains why owner headers may not be dropped",
-  },
-  {
-    rule: "single-user-assertion",
-    file: "workspace/apps/mobile/src/state/shellClientAtom.ts",
-    substring: "never collapsed to a single-user tree",
-    reason: "invariant comment documents the canonical owner-grouped forest",
-  },
 ];
 
 export function isAllowlisted(finding) {

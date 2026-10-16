@@ -29,10 +29,8 @@
     "../node_modules",
     "**/dist",
     "**/node_modules",
-    "apps/mobile/**/*",
-    "packages/mobile-navigation/**/*",
-    "apps/mobile/jest.setup.ts",
-    "apps/mobile/**/*.test.ts",
-    "apps/mobile/**/*.test.tsx"
+    "clients/mobile-browser/**/*",
+    "packages/client-kit-native/**/*",
+    "packages/mobile-navigation/**/*"
   ]
 }

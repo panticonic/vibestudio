@@ -293,7 +293,9 @@ export default defineConfig(async (): Promise<UserConfig> => {
               ...exactPairTestPaths,
               ...excludedIntegrationTestsFor(template),
               ...vitestSharedConfig.test.exclude,
-              `${workspaceGlob}/apps/mobile/**`,
+              // Jest suites (React Native mocks); hosts/react-native/jest.config.cjs runs them.
+              `${workspaceGlob}/clients/mobile-browser/**`,
+              `${workspaceGlob}/packages/client-kit-native/**`,
               `${workspaceGlob}/**/*.browser.test.ts`,
               `${workspaceGlob}/**/*.browser.test.tsx`,
               // These files use @workspace/test-runtime and run in workerd,

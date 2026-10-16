@@ -4,5 +4,7 @@
     "../tests/workspace-integration/credentialService.test.ts",
     "../tests/workspace-integration/vcsHost/**/*.test.ts"
   ],
-  "exclude": ["apps/mobile/**/*", "node_modules", "../node_modules", "**/dist", "**/node_modules"]
+  "exclude": [
+    "clients/mobile-browser/**/*",
+    "packages/client-kit-native/**/*", "node_modules", "../node_modules", "**/dist", "**/node_modules"]
 }
