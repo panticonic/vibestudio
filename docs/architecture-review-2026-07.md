@@ -98,7 +98,7 @@ design decision and the code honors it consistently.
   not a re-implementation; framing primitives (`streamCodec`,
   `controlFraming`, `bulkMux`, `frameScheduler`) are reused across the
   former peer and HTTP paths.
-- **`apps/headless-host` as a separate app is correct.** It is a spawned
+- **`packages/headless-renderer` as a separate app is correct.** It is a spawned
   child-process bundle with only a process contract
   (`src/server/headlessHostManager.ts`); the server never imports it. Do not
   fold it into `src/server`.
@@ -113,8 +113,8 @@ design decision and the code honors it consistently.
   uniform and worth keeping as the god files are decomposed around it.
 - **Preload is thin and interface-driven** (`ipcTransport` and `wsTransport`
   share the `TransportBridge` interface); test density on the client side is
-  high (58 test files against 87 sources in `src/cli` + `src/main`).
-- **The former signaling edge app and `apps/webhook-relay` having no `workspace:*` deps is
+  high (58 test files against 87 sources in `src/cli` + `hosts/desktop/main`).
+- **The former signaling edge app and `services/webhook-relay` having no `workspace:*` deps is
   intentional** (edge build isolation), not an oversight.
 
 ## 3. The six structural problems that matter
@@ -165,7 +165,7 @@ the weak `returns` schemas with real ones where the payloads are JSON-shaped.
   `users/` (1,326), `panel/` (894) plus 115 top-level files.
 - Worse, it is the **escape hatch through the host/userland boundary**: the
   boundary checker deliberately exempts `@vibestudio/shared`, and
-  `shell/panelManager.ts` is imported simultaneously by `src/main` (system),
+  `shell/panelManager.ts` is imported simultaneously by `hosts/desktop/main` (system),
   `src/server/panelRuntimeRegistration.ts` (system), and
   `workspace/apps/mobile` (userland). The userland line runs *through* the
   shell, not around it. This is the root cause of the panel-logic scatter
@@ -241,12 +241,12 @@ the seams in most of them.
 | `src/server/index.ts` | 4,957 | one `main()` spanning `:308-4908`; ~15 file-backed stores; 55 `container.register*` calls; ordering dependencies documented only via "lazily built once doDispatch is resolvable" comments (`:261-276,440-445,607-610`) |
 | `src/server/rpcServer.ts` | 4,419 | one `RpcServer` class (`:568`→EOF), 83+ methods: transport, session lifecycle, caller-subject resolution, upload preopen, streaming |
 | `src/cli/agent/vcsCommands.ts` | 1,602 | ~12 vcs subcommands, 67 command entries, 49 helpers |
-| `src/main/index.ts` | 3,300 | crash-recovery argv parsing (`:52-77`), GPU flags, diagnostics (`:231-248`), window creation (`:1554+`), lifecycle wiring (`:1761+`); module-level `let` singletons |
+| `hosts/desktop/main/index.ts` | 3,300 | crash-recovery argv parsing (`:52-77`), GPU flags, diagnostics (`:231-248`), window creation (`:1554+`), lifecycle wiring (`:1761+`); module-level `let` singletons |
 | `src/server/appHost.ts` | 3,108 | unit/build/workspace hosting + token minting + residual panel wiring |
 | `src/server/workerdManager.ts` | 2,815 | includes ~3 worker programs embedded as untyped template strings: `generateWorkerHostCode:1661`, `generateUniversalDOCode:1739`, `generateRouterCode:1557` |
 | `src/server/vcsHost/workspaceVcs.ts` | 2,620 | substantial host-side VCS logic despite the narrow-host plan's "dumb primitives" target |
-| `src/main/viewManager.ts` | 2,534 | — |
-| `src/main/panelOrchestrator.ts` | 2,087 | — |
+| `hosts/desktop/main/viewManager.ts` | 2,534 | — |
+| `hosts/desktop/main/panelOrchestrator.ts` | 2,087 | — |
 | `src/server/panelRuntimeRegistration.ts` | 1,640 | header says "panel trees no longer live here" — residual code from a migrated ownership |
 | `src/cli/client.ts` | 1,327 | entrypoint + three command registries + ~200 lines of the former headless-host peer bootstrap (`:836-1033`) |
 
@@ -337,22 +337,22 @@ captured by the current subsystem architecture documents.
 
 Panel-tree/navigation/hosting responsibility spans at least five roots with
 no single owner: `packages/shared/src/shell/` (2,171) +
-`packages/shared/src/panel*` (~894 + 16 loose files) + `src/main/` (6,857 in
+`packages/shared/src/panel*` (~894 + 16 loose files) + `hosts/desktop/main/` (6,857 in
 panel/view/shell-named files) + `src/server/` (3,197) +
 `workspace/apps/shell` (15,609, userland) + `workspace/apps/mobile` (14,225,
 userland). Fifty panel-named source files exist repo-wide.
 
-Concrete fork: `src/main/shellCore/localViewState.ts` (53) and
+Concrete fork: `hosts/desktop/main/shellCore/localViewState.ts` (53) and
 `workspace/apps/mobile/src/shellCore/localViewState.ts` (68) are parallel
 implementations of the same `LocalPanelViewStateStore` interface (identical
 shape; only fs vs AsyncStorage differs), as are
 `createElectronShellCore.ts` (113) vs `createMobileShellCore.ts` (112).
 Collapse onto one injectable core parameterized by a storage adapter.
 
-Also non-obvious and worth documenting: `apps/mobile` is only the native
+Also non-obvious and worth documenting: `hosts/react-native` (formerly `apps/mobile`) is only the native
 shell + recovery surface; the real mobile app is `workspace/apps/mobile`
 (hot-updatable bundle). This split is explained only in a comment at the top
-of `apps/mobile/index.js`.
+of `hosts/react-native/index.js`.
 
 ## 4. Additional findings (smaller, concrete)
 
@@ -415,7 +415,7 @@ of `apps/mobile/index.js`.
    and `stateLayout` module (§3.5).
 9. Decompose the god files (§3.4) in order of fragility:
    `src/server/index.ts` `main()`, then `credentialService.ts`, then
-   `rpcServer.ts`, then the `src/main` trio and `vcsCommands.ts` /
+   `rpcServer.ts`, then the `hosts/desktop/main` trio and `vcsCommands.ts` /
    `client.ts` — each along seams the existing refactor plans already name.
 10. Unify the error contract across unary/streaming RPC (§3.5) and derive
     Electron-local routing from registration metadata (§3.3.6).

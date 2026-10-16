@@ -1,7 +1,7 @@
 import { createRpcClient, createRpcInitiatorTransport, type RpcEnvelope } from "@vibestudio/rpc";
 import { serverRpcWsUrl } from "@vibestudio/shared/connect";
 import { PanelShellClient } from "@vibestudio/service-schemas/clients/panelShellClient";
-import { createWsTransport } from "../preload/wsTransport.js";
+import { createWsTransport } from "../../hosts/desktop/preload/wsTransport.js";
 
 export type PanelInitPayload = {
   workspaceId?: unknown;

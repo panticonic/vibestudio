@@ -28,8 +28,8 @@ import { readIosSigningConfig } from "./lib/mobile-ios-signing.mjs";
 import { flagValue } from "./lib/args.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const androidDir = path.join(repoRoot, "apps", "mobile", "android");
-const iosDir = path.join(repoRoot, "apps", "mobile", "ios");
+const androidDir = path.join(repoRoot, "hosts", "android");
+const iosDir = path.join(repoRoot, "hosts", "ios");
 const pkgPath = path.join(repoRoot, "package.json");
 const pkg = fs.existsSync(pkgPath)
   ? JSON.parse(fs.readFileSync(pkgPath, "utf8"))

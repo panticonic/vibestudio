@@ -48,12 +48,12 @@ Generated surfaces include:
 - `build-resources/brand/vibestudio-symbol*`
 - `workspace/packages/ui/src/assets/*`
 - `workspace/apps/mobile/src/assets/*`
-- `apps/mobile/assets/*`
-- `apps/mobile/android/app/src/main/res/mipmap-*`
-- `apps/mobile/android/app/src/main/res/drawable/launch_screen.xml`
-- `apps/mobile/android/app/src/main/res/drawable/splash_logo.xml`
-- `apps/mobile/ios/Vibestudio/Images.xcassets/AppIcon.appiconset`
-- `apps/mobile/ios/Vibestudio/Images.xcassets/LaunchLogo.imageset`
+- `hosts/react-native/assets/*`
+- `hosts/android/app/src/main/res/mipmap-*`
+- `hosts/android/app/src/main/res/drawable/launch_screen.xml`
+- `hosts/android/app/src/main/res/drawable/splash_logo.xml`
+- `hosts/ios/Vibestudio/Images.xcassets/AppIcon.appiconset`
+- `hosts/ios/Vibestudio/Images.xcassets/LaunchLogo.imageset`
 
 ## Usage Rules
 
@@ -61,7 +61,7 @@ Use the shared components instead of importing PNGs directly in product UI:
 
 - Web/workspace UI: `VibestudioLogo` from `@workspace/ui`
 - Workspace mobile app: `VibestudioLogo` from `workspace/apps/mobile/src/components/VibestudioLogo`
-- Shipped native host fallback: `VibestudioLogo` from `apps/mobile/VibestudioLogo.js`
+- Shipped native host fallback: `VibestudioLogo` from `hosts/react-native/VibestudioLogo.js`
 
 The web component uses the vector masters directly. Native surfaces consume
 generated PNGs because React Native's core image component does not load SVGs.

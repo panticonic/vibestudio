@@ -15,4 +15,5 @@ supportedArchitectures:
 
 packages:
   - "packages/*"
-  - "apps/*"
+  - "hosts/react-native"
+  - "services/*"

@@ -44,8 +44,8 @@ Use these existing mechanisms as evidence sources:
 | Typed service failures      | `packages/shared/src/serviceDispatcher.ts`, `packages/rpc/src/errors.ts`, RPC reply contracts                | Observe operation outcomes; preserve failure identity through forwarding.     |
 | Unit diagnostics            | `src/server/runtimeDiagnosticsStore.ts`, `src/server/bootstrap/runtimeObservability.ts`, runtime supervision | Attach exact unit health and bounded retained logs.                           |
 | Host logs                   | `src/server/services/serverLogStore.ts`                                                                      | Attach bounded records with boot identity and sequence coordinates.           |
-| Panel lifecycle             | `src/main/cdpHostProvider.ts`, `src/main/workspaceRuntimeController.ts`                                      | Observe crashes/load failures and retain their panel coordinates.             |
-| Startup/main-process errors | `src/main/index.ts`, `src/main/startupDiagnostics.ts`                                                        | Persist incidents before workspace services are available.                    |
+| Panel lifecycle             | `hosts/desktop/main/cdpHostProvider.ts`, `hosts/desktop/main/workspaceRuntimeController.ts`                                      | Observe crashes/load failures and retain their panel coordinates.             |
+| Startup/main-process errors | `hosts/desktop/main/index.ts`, `hosts/desktop/main/startupDiagnostics.ts`                                                        | Persist incidents before workspace services are available.                    |
 | Agent failures              | Base `packages/agentic-protocol/src/tool-failure.ts`, `gad.diagnoseInvocation()`                             | Keep the existing failure value and exact causal packet.                      |
 | UI-to-agent feedback        | Base `packages/agentic-do/src/feedback-ingest.ts`, chat `CustomMessage.tsx`                                  | Associate UI failure evidence; retain existing local agent recovery behavior. |
 | Panel investigation         | Base `packages/runtime/src/panel/errorDebugChat.ts`                                                          | Open investigation from an incident using the existing diagnostic launcher.   |
@@ -359,7 +359,7 @@ Define a transport-independent HTTP contract:
 
 ### Hosting decision: existing Cloudflare Worker, D1 index, private R2 bundles
 
-Add the intake module to `apps/webhook-relay`, served under the existing
+Add the intake module to `services/webhook-relay`, served under the existing
 `https://vibestudio.app/v1/problem-reports` route. Bind a dedicated D1 database
 and private R2 bucket in that Worker's deployment configuration. Keep intake
 independent of `RelayRegistry`, OAuth handoff, and workspace backhaul availability:
@@ -619,10 +619,10 @@ Do not require the broader System Agent/log-watcher programme to complete first.
 | Host `src/server/services/problemReporting/`                                         | `store`, `capture`, `consent`, `collection`, `exportPolicy`, `bundle`, `delivery` modules; one canonical writer per installation. |
 | Host `src/server/stateLayout.ts` and reporting bootstrap                             | Dedicated reporting state paths, owned lifecycle, database initialization, queue recovery and shutdown.                           |
 | Host service/RPC/runtime/build lifecycle owners                                      | Outcome observations and preserved diagnostic origin identity; no console-only claim of coverage.                                 |
-| Host `src/main/` startup and client observation paths                                | Early device capture, first-use/consent bridge, typed shell opening, crash recovery/export.                                       |
+| Host `hosts/desktop/main/` startup and client observation paths                                | Early device capture, first-use/consent bridge, typed shell opening, crash recovery/export.                                       |
 | Base `packages/runtime/src/shared/problemReports.ts` and `skills/problem-reporting/` | Public typed client and ordinary user-assistance skill with narrative/privacy/API references.                                     |
 | System `about/problem-reports/`, shell first-use/settings/error components           | Reporting conversation/history, mandatory choice, settings and discoverable actions.                                              |
-| Cloudflare `apps/webhook-relay/src/problemReports/` and deployment config            | Auth, rate limits, intake/read/status/delete/SQL routes, D1 schema, R2 bindings and scheduled cleanup.                            |
+| Cloudflare `services/webhook-relay/src/problemReports/` and deployment config            | Auth, rate limits, intake/read/status/delete/SQL routes, D1 schema, R2 bindings and scheduled cleanup.                            |
 | New external `vibestudio-dev` template                                               | Error dashboard, ordinary `errorReports` service, developer skill, SQL views/recipes, self-development setup.                     |
 
 Tests live beside their owner. Do not introduce an independent telemetry SDK,

@@ -743,9 +743,9 @@ protocol) to prevent scope confusion.
 
 ---
 
-### 2.17 [Info] `apps/webhook-relay` is a stub
+### 2.17 [Info] `services/webhook-relay` is a stub
 
-**File:** `apps/webhook-relay/src/index.ts`
+**File:** `services/webhook-relay/src/index.ts`
 
 The entire webhook-relay worker is 64 lines: it accepts any POST to
 `/webhook/{instanceId}/{providerId}`, returns `{received: true}`, and
@@ -861,15 +861,15 @@ in before this worker ships.
 - `src/server/panelRuntimeRegistration.ts`
 
 ### Main-process auth / session
-- `src/main/services/authService.ts`
-- `src/main/services/contextMiddleware.ts`
-- `src/main/serverSession.ts`
-- `src/main/serverClient.ts`
-- `src/main/remoteCredentialStore.ts`
-- `src/main/startupMode.ts`
-- `src/main/remoteHealthPoll.ts`
-- `src/main/servicePolicy.test.ts`
-- `src/main/serviceDispatcher.test.ts`
+- `hosts/desktop/main/services/authService.ts`
+- `hosts/desktop/main/services/contextMiddleware.ts`
+- `hosts/desktop/main/serverSession.ts`
+- `hosts/desktop/main/serverClient.ts`
+- `hosts/desktop/main/remoteCredentialStore.ts`
+- `hosts/desktop/main/startupMode.ts`
+- `hosts/desktop/main/remoteHealthPoll.ts`
+- `hosts/desktop/main/servicePolicy.test.ts`
+- `hosts/desktop/main/serviceDispatcher.test.ts`
 
 ### Auth-flow package
 - `packages/auth-flow/src/index.ts`
@@ -900,7 +900,7 @@ in before this worker ships.
 - `apps/mobile/src/components/LoginScreen.tsx`
 
 ### Webhook relay
-- `apps/webhook-relay/src/index.ts`
+- `services/webhook-relay/src/index.ts`
 
 ---
 

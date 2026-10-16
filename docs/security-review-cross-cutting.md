@@ -347,7 +347,7 @@ material, coherent remediation:
 
 - Electron shell and panel views use `nodeIntegration: false`,
   `contextIsolation: true`, and `sandbox: true`
-  (`src/main/viewManager.ts:293-303`, `src/main/viewManager.ts:553-576`).
+  (`hosts/desktop/main/viewManager.ts:293-303`, `hosts/desktop/main/viewManager.ts:553-576`).
 - The service dispatcher refuses undeclared methods and performs authority evaluation
   before handler invocation (`packages/shared/src/serviceDispatcher.ts:832-901`).
 - Promptable methods without reviewed capabilities and methods without authority

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { createHash } from "node:crypto";
 import YAML from "yaml";
 import { inspectNativeApprovalInvocation } from "../../fixtures/nativeApprovalEvidence.js";
-import type { PanelReadinessSnapshot } from "../../../src/main/panelReadiness.js";
+import type { PanelReadinessSnapshot } from "../../../hosts/desktop/main/panelReadiness.js";
 
 import {
   NATIVE_APPROVAL_MODEL,

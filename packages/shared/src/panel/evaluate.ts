@@ -2,8 +2,8 @@
  * Panel expression evaluation — the shared half of `panelCdp.evaluate`
  * (quickfire-overlay-spec §5.3).
  *
- * Both CDP host providers (Electron `src/main/cdpHostProvider.ts` and
- * `apps/headless-host`) run the *same* wrapper around the caller's expression
+ * Both CDP host providers (Electron `hosts/desktop/main/cdpHostProvider.ts` and
+ * `packages/headless-renderer`) run the *same* wrapper around the caller's expression
  * and return the *same* serialized shape, so a caller cannot tell which host
  * answered. The wrapper does the serialization in-page because that is the only
  * place a live object graph exists; what crosses the wire is always a string.

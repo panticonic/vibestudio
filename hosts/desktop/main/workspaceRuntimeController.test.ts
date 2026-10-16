@@ -1,0 +1,924 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  createDesktopWorkspaceRuntime,
+  prepareDesktopWorkspaceRuntime,
+} from "./workspaceRuntimeController.js";
+import type { WorkspaceSessionConnection } from "./serverSession.js";
+import type { ApplicationWindowController } from "./applicationWindowController.js";
+import type { CdpHostProvider } from "./cdpHostProvider.js";
+import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { readEventWatchRecords } from "@vibestudio/shared/events";
+
+const edges = vi.hoisted(() => ({
+  controller: vi.fn(),
+  rendererRecovery: vi.fn(),
+  partition: vi.fn(),
+  permissionStop: vi.fn(),
+  downloads: vi.fn(),
+  cdp: vi.fn(),
+  watch: vi.fn(),
+  personal: vi.fn(),
+  reportingRoot: "",
+}));
+
+vi.mock("electron", () => ({
+  app: { getPath: () => "/tmp/runtime-test", getVersion: () => "0.1.52" },
+  session: { fromPartition: (partition: string) => ({ partition }) },
+}));
+vi.mock("@vibestudio/env-paths", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@vibestudio/env-paths")>()),
+  getCentralDataPath: () => edges.reportingRoot,
+}));
+vi.mock("./rendererRecovery.js", () => ({ recoverRenderer: edges.rendererRecovery }));
+vi.mock("./desktopWorkspaceController.js", () => ({
+  createDesktopWorkspaceController: edges.controller,
+}));
+vi.mock("./services/browserPermissionController.js", () => ({
+  BrowserPermissionController: class {
+    attachBrowserEnvironment = edges.partition;
+    stop = edges.permissionStop;
+    getEnvironmentKey = () => "environment";
+  },
+}));
+vi.mock("./services/browserDownloadManager.js", () => ({
+  BrowserDownloadManager: class {
+    constructor(deps: unknown) {
+      return edges.downloads(deps);
+    }
+  },
+}));
+vi.mock("./cdpHostProvider.js", () => ({
+  CdpHostProvider: class {
+    constructor(deps: unknown) {
+      return edges.cdp(deps);
+    }
+  },
+}));
+vi.mock("./remoteCdpHostProviderSocket.js", () => ({
+  RemoteCdpHostProviderSocket: class {},
+  whenServerChannelAvailable: () => Promise.resolve(),
+}));
+vi.mock("../../../src/server/runtimeDiagnosticsStore.js", () => ({
+  RuntimeDiagnosticsStore: class {},
+}));
+vi.mock("./panelPinStore.js", () => ({ PanelPinStore: class {} }));
+vi.mock("./serverEventSubscriptionBridge.js", () => ({
+  createServerEventSubscriptionBridge: edges.watch,
+}));
+// Service behavior has separate receiver tests. Keep the real container here:
+// it must start and stop the same registered resources for every workspace.
+vi.mock("./services/viewService.js", () => ({
+  createViewService: () => ({ name: "view", methods: {}, handler: async () => undefined }),
+}));
+vi.mock("./services/menuService.js", () => ({
+  createMenuService: () => ({ name: "menu", methods: {}, handler: async () => undefined }),
+}));
+vi.mock("./services/browserVaultNativeClient.js", () => ({
+  createBrowserVaultNativeClient: () => ({}),
+}));
+vi.mock("./services/browserEnvironmentService.js", () => ({
+  createBrowserEnvironmentService: () => ({
+    name: "browserEnvironment",
+    methods: {},
+    handler: async () => undefined,
+  }),
+  localBrowserEnvironmentImportRouter: () => ({}),
+}));
+vi.mock("./personalBrowserServices.js", () => ({
+  registerPersonalBrowserServices: edges.personal,
+}));
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: Error) => void;
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
+}
+
+const closing: Array<ReturnType<typeof createDesktopWorkspaceRuntime>> = [];
+
+describe("prepareDesktopWorkspaceRuntime", () => {
+  it("keeps routing callers behind the local-service readiness boundary", async () => {
+    let releaseStart!: () => void;
+    const startPending = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    const runtime = {
+      start: vi.fn(() => startPending),
+      close: vi.fn(async () => {}),
+    };
+    const runtimes = new Map<string, Promise<typeof runtime>>();
+
+    const publication = prepareDesktopWorkspaceRuntime(runtimes, "system", runtime);
+    expect(runtimes.get("system")).toBe(publication.ready);
+    let observed = false;
+    void runtimes.get("system")!.then(() => {
+      observed = true;
+    });
+    await Promise.resolve();
+    expect(observed).toBe(false);
+
+    const starting = publication.start();
+    releaseStart();
+    await expect(starting).resolves.toBe(runtime);
+    expect(observed).toBe(true);
+  });
+
+  it("removes a runtime whose local-service startup rejects", async () => {
+    const failure = new Error("desktop services failed");
+    const runtime = {
+      start: vi.fn(async () => {
+        throw failure;
+      }),
+      close: vi.fn(async () => {}),
+    };
+    const runtimes = new Map<string, Promise<typeof runtime>>();
+
+    const publication = prepareDesktopWorkspaceRuntime(runtimes, "system", runtime);
+    await expect(publication.start()).rejects.toBe(failure);
+    expect(runtimes.has("system")).toBe(false);
+    expect(runtime.close).toHaveBeenCalledOnce();
+  });
+
+  it("closes a startup superseded by workspace removal", async () => {
+    let releaseStart!: () => void;
+    const runtime = {
+      start: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseStart = resolve;
+          })
+      ),
+      close: vi.fn(async () => {}),
+    };
+    const runtimes = new Map<string, Promise<typeof runtime>>();
+    const publication = prepareDesktopWorkspaceRuntime(runtimes, "system", runtime);
+    const ready = publication.start();
+    await Promise.resolve();
+    runtimes.delete("system");
+
+    releaseStart();
+    await expect(ready).rejects.toThrow("Workspace access was removed during startup");
+    expect(runtime.close).toHaveBeenCalledOnce();
+  });
+
+  it("terminalizes an aborted publication even when cleanup rejects", async () => {
+    const cleanupFailure = new Error("cleanup failed");
+    const runtime = {
+      start: vi.fn(async () => {}),
+      close: vi.fn(async () => {
+        throw cleanupFailure;
+      }),
+    };
+    const runtimes = new Map<string, Promise<typeof runtime>>();
+    const publication = prepareDesktopWorkspaceRuntime(runtimes, "system", runtime);
+
+    await expect(publication.abort(new Error("startup stopped"))).rejects.toThrow(
+      "Workspace runtime startup and cleanup failed"
+    );
+    await expect(publication.ready).rejects.toThrow("startup stopped");
+    await expect(publication.start()).rejects.toThrow("startup stopped");
+    expect(runtime.start).not.toHaveBeenCalled();
+    expect(runtime.close).toHaveBeenCalledOnce();
+    expect(runtimes.has("system")).toBe(false);
+  });
+
+  it("rejects readiness before an aborted runtime finishes closing", async () => {
+    let releaseClose!: () => void;
+    const runtime = {
+      start: vi.fn(async () => {}),
+      close: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseClose = resolve;
+          })
+      ),
+    };
+    const runtimes = new Map<string, Promise<typeof runtime>>();
+    const publication = prepareDesktopWorkspaceRuntime(runtimes, "system", runtime);
+    const failure = new Error("startup stopped");
+    const aborting = publication.abort(failure);
+    let cleanupFinished = false;
+    void aborting.then(() => {
+      cleanupFinished = true;
+    });
+
+    await expect(publication.ready).rejects.toBe(failure);
+    expect(cleanupFinished).toBe(false);
+    await expect(publication.start()).rejects.toBe(failure);
+    expect(runtime.start).not.toHaveBeenCalled();
+
+    releaseClose();
+    await aborting;
+    expect(cleanupFinished).toBe(true);
+  });
+});
+
+beforeEach(() => {
+  vi.resetAllMocks();
+  edges.reportingRoot = mkdtempSync(join(tmpdir(), "workspace-runtime-reporting-"));
+  edges.partition.mockResolvedValue("persist:workspace-test");
+  edges.personal.mockResolvedValue({ publishedServices: [] });
+});
+afterEach(async () => {
+  await Promise.allSettled(closing.splice(0).map((runtime) => runtime.close()));
+  rmSync(edges.reportingRoot, { recursive: true, force: true });
+  vi.useRealTimers();
+});
+
+function fixture(
+  workspaceId: string,
+  personal = false,
+  serverOwnership: WorkspaceSessionConnection["serverOwnership"] = "desktop-local"
+) {
+  const orchestrator = {
+    registerRuntimeClient: vi.fn(async (): Promise<void> => undefined),
+    recoverRuntimeClientRegistration: vi.fn(async (): Promise<void> => undefined),
+    unregisterRuntimeClient: vi.fn(async () => undefined),
+    getRuntimeClientSessionId: () => `${workspaceId}-lease-client`,
+    getLocalPresentationSnapshots: vi.fn(() => [] as unknown[]),
+    initializePanelTree: vi.fn(async () => undefined),
+    recoverShellSnapshot: vi.fn(async () => undefined),
+  };
+  const shutdown = vi.fn();
+  const registry = {
+    listPanels: () => [{ panelId: "same-local-panel" }],
+    getPanel: () => ({ snapshot: { source: "about/new", contextId: "context", options: {} } }),
+  };
+  edges.controller.mockImplementationOnce(() => ({
+    registry,
+    orchestrator,
+    core: { shutdown },
+    workspaceId,
+  }));
+  const watch = {
+    recover: vi.fn(async (): Promise<void> => undefined),
+    close: vi.fn(async () => undefined),
+    retainAll: vi.fn(async () => () => {}),
+  };
+  edges.watch.mockReturnValueOnce(watch);
+  const download = { start: vi.fn(async () => undefined), stop: vi.fn(async () => undefined) };
+  edges.downloads.mockReturnValueOnce(download);
+  const cdp = { start: vi.fn(), stop: vi.fn() };
+  edges.cdp.mockReturnValueOnce(cdp);
+  const release = vi.fn();
+  const directEvents = new Map<string, (payload: unknown) => void>();
+  const serverClient = {
+    call: vi.fn(
+      async (_service: string, _method: string, _args: unknown[]): Promise<unknown> => undefined
+    ),
+    isConnected: () => true,
+    getConnectionStatus: () => "connected",
+    onDirectEvent: vi.fn((event: string, handler: (payload: unknown) => void) => {
+      directEvents.set(event, handler);
+      return release;
+    }),
+    onRecovery: vi.fn(() => release),
+    onConnectionStatusChange: vi.fn((_listener: (status: string) => void) => release),
+  };
+  edges.rendererRecovery.mockImplementation(async (contents, kind, id) => {
+    contents.send("vibestudio:rpc:recovery", kind, id);
+  });
+  const send = vi.fn();
+  const chromeSend = vi.fn();
+  const ownPanel = { getWebContents: vi.fn(() => ({ isDestroyed: () => false, send })) };
+  const window = {
+    getWorkspacePanelView: vi.fn((id: string) => (id === workspaceId ? ownPanel : null)),
+    attachWorkspaceServices: vi.fn(),
+    detachWorkspace: vi.fn(),
+    handleWebsiteNotificationAction: vi.fn(),
+    viewManager: {
+      getViewInfo: vi.fn((): unknown => null),
+      getHostedShellWebContents: () => ({ isDestroyed: () => false, send: chromeSend }),
+    },
+  };
+  const events = {
+    onNotificationAction: vi.fn(async () => undefined),
+    onAttentionRequired: vi.fn(),
+  };
+  if (personal)
+    edges.personal.mockResolvedValueOnce({
+      publishedServices: [],
+    });
+  const openShellSurface = vi.fn();
+  const releaseAdBlocking = vi.fn();
+  const attachAdBlocking = vi.fn(() => releaseAdBlocking);
+  const runtime = createDesktopWorkspaceRuntime({
+    connection: {
+      workspaceId,
+      nativeStorageScope: `test:${workspaceId}`,
+      serverOwnership,
+      statePath: `/tmp/${workspaceId}`,
+      connectionMode: serverOwnership === "external" ? "iroh" : "local",
+      gatewayConfig: { serverUrl: "http://localhost/" },
+      serverClient,
+    } as unknown as WorkspaceSessionConnection,
+    personal,
+    app: { shellSurfaces: () => ["settings", "about"], onOpenShellSurface: openShellSurface },
+    events,
+    window: window as unknown as ApplicationWindowController,
+    authorize: async () => {
+      throw new Error("No service call expected in lifecycle test");
+    },
+    adBlockManager: { attachToSession: attachAdBlocking } as unknown as Parameters<
+      typeof createDesktopWorkspaceRuntime
+    >[0]["adBlockManager"],
+    openExternal: vi.fn(async () => undefined),
+  });
+  closing.push(runtime);
+  const managedStop = vi.fn(async () => undefined);
+  runtime.container.registerManaged({
+    name: "owned-resource",
+    start: async () => ({}),
+    stop: managedStop,
+  });
+  return {
+    runtime,
+    orchestrator,
+    shutdown,
+    watch,
+    download,
+    cdp,
+    serverClient,
+    window,
+    send,
+    chromeSend,
+    managedStop,
+    release,
+    directEvents,
+    events,
+    openShellSurface,
+    attachAdBlocking,
+    releaseAdBlocking,
+  };
+}
+
+async function connectionSnapshot(owner: ReturnType<typeof fixture>) {
+  owner.window.viewManager.getViewInfo.mockReturnValue({
+    type: "app",
+    hostChrome: true,
+    capabilities: ["panel-hosting"],
+    workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
+    codeIdentity: { source: "apps/shell" },
+  });
+  const definition = owner.runtime.dispatcher
+    .getServiceDefinitions()
+    .find((service) => service.name === "desktopEvents")!;
+  const response = (await definition.handler!(
+    { caller: createHostCaller("native-system-shell", "shell") },
+    "watch",
+    [["server-connection-changed"], "connection-state"]
+  )) as Response;
+  const reader = response.body!.getReader();
+  try {
+    const ready = await reader.read();
+    expect(JSON.parse(new TextDecoder().decode(ready.value))).toMatchObject({ kind: "watching" });
+    const snapshot = await reader.read();
+    const record = JSON.parse(new TextDecoder().decode(snapshot.value));
+    expect(record).toMatchObject({ kind: "snapshot", event: "server-connection-changed" });
+    const payload = record.payload as { status: string; isRemote: boolean };
+    expect(owner.runtime.getConnectionStatus()).toBe(payload.status);
+    return payload;
+  } finally {
+    await reader.cancel();
+  }
+}
+
+describe("workspace runtime ownership", () => {
+  it("retains execution lifecycle events and replays held panel failures whenever a desktop watch opens", async () => {
+    const owner = fixture("system");
+    await owner.runtime.start();
+    expect(owner.watch.retainAll).toHaveBeenCalledWith(
+      expect.arrayContaining(["panel:executionActivated", "panel:executionFailed"])
+    );
+    owner.window.viewManager.getViewInfo.mockReturnValue({
+      type: "app",
+      hostChrome: true,
+      capabilities: ["panel-hosting"],
+      workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
+      codeIdentity: { source: "apps/shell" },
+    });
+    const held = ["panel:tree/a", "panel:tree/b"].map((slotId) => ({
+      revision: 5,
+      presentation: { state: "failed", slotId, message: "original compile failure" },
+    }));
+    owner.orchestrator.getLocalPresentationSnapshots.mockReturnValue(held);
+    const definition = owner.runtime.dispatcher
+      .getServiceDefinitions()
+      .find((service) => service.name === "desktopEvents")!;
+    for (const watchId of ["initial", "recovered"]) {
+      const response = (await definition.handler!(
+        { caller: createHostCaller("native-system-shell", "shell") },
+        "watch",
+        [["panel-local-presentation-changed"], watchId]
+      )) as Response;
+      const records = readEventWatchRecords(response);
+      try {
+        await expect(records.next()).resolves.toMatchObject({ value: { kind: "watching" } });
+        for (const payload of held) {
+          await expect(records.next()).resolves.toMatchObject({
+            value: {
+              kind: "snapshot",
+              event: "panel-local-presentation-changed",
+              payload,
+            },
+          });
+        }
+      } finally {
+        await records.return();
+      }
+    }
+  });
+
+  it("owns browser ad blocking without a Personal cookie projection", async () => {
+    const owner = fixture("system");
+    await owner.runtime.start();
+    expect(owner.attachAdBlocking).toHaveBeenCalledWith({ partition: "persist:workspace-test" });
+    expect(edges.personal).not.toHaveBeenCalled();
+    await owner.runtime.close();
+    expect(owner.releaseAdBlocking).toHaveBeenCalledOnce();
+  });
+  it.each(["desktop-local", "external"] as const)(
+    "forwards a trusted user's server choice over the authenticated connection to a %s server",
+    async (ownership) => {
+      const owner = fixture("reporting", false, ownership);
+      const undecided = {
+        state: "undecided",
+        revision: 0,
+        policy: "problem-reporting.v2",
+        decidedAt: null,
+        pseudonym: null,
+      };
+      owner.serverClient.call.mockImplementation(async (service, method, args) => {
+        if (service === "account" && method === "getProfile")
+          return { userId: "alice", handle: "alice", displayName: "Alice", role: "member" };
+        if (service === "problemReports" && method === "consent") return undecided;
+        if (service === "problemReports" && method === "decide")
+          return { ...undecided, state: args[1], revision: 1 };
+        return undefined;
+      });
+      await owner.runtime.start();
+      const definition = owner.runtime.dispatcher
+        .getServiceDefinitions()
+        .find((service) => service.name === "problemReports")!;
+      const human = {
+        caller: createVerifiedCaller("native-system-shell", "shell", null, null, {
+          userId: "alice",
+          handle: "alice",
+        }),
+      };
+      expect(await definition.handler!(human, "serverConsent", [])).toEqual(undecided);
+      expect(await definition.handler!(human, "decideServer", [0, "on"])).toMatchObject({
+        state: "on",
+        revision: 1,
+      });
+      expect(owner.serverClient.call).toHaveBeenCalledWith("problemReports", "decide", [0, "on"]);
+      expect(await definition.handler!(human, "consent", [])).toMatchObject({ state: "undecided" });
+      const agent = {
+        caller: createVerifiedCaller("agent", "do", null, null, {
+          userId: "alice",
+          handle: "alice",
+        }),
+      };
+      await expect(definition.handler!(agent, "decideServer", [1, "off"])).rejects.toThrow(
+        "trusted reporting UI"
+      );
+      expect(
+        owner.serverClient.call.mock.calls.filter(([, method]) => method === "decide")
+      ).toHaveLength(1);
+    }
+  );
+
+  it("registers the runtime while browser permissions are still loading", async () => {
+    const permissions = deferred<string>();
+    edges.partition.mockReturnValueOnce(permissions.promise);
+    const owner = fixture("parallel");
+    const starting = owner.runtime.start();
+    await vi.waitFor(() => expect(owner.orchestrator.registerRuntimeClient).toHaveBeenCalledOnce());
+    expect(owner.window.attachWorkspaceServices).not.toHaveBeenCalled();
+    permissions.resolve("partition");
+    await starting;
+    expect(owner.window.attachWorkspaceServices).toHaveBeenCalledOnce();
+  });
+
+  it("drains a late lease acquisition before cleaning a failed parallel start", async () => {
+    const permissions = deferred<string>();
+    const lease = deferred<void>();
+    edges.partition.mockReturnValueOnce(permissions.promise);
+    const owner = fixture("parallel-failure");
+    owner.orchestrator.registerRuntimeClient.mockReturnValueOnce(lease.promise);
+    const starting = owner.runtime.start();
+    const failed = expect(starting).rejects.toThrow("permission snapshot failed");
+    permissions.reject(new Error("permission snapshot failed"));
+    await vi.waitFor(() => expect(owner.orchestrator.registerRuntimeClient).toHaveBeenCalledOnce());
+    expect(owner.orchestrator.unregisterRuntimeClient).not.toHaveBeenCalled();
+    lease.resolve();
+    await failed;
+    expect(owner.orchestrator.unregisterRuntimeClient).toHaveBeenCalledOnce();
+    expect(owner.window.attachWorkspaceServices).not.toHaveBeenCalled();
+  });
+
+  it("offers the same native navigation service in Personal, System and ordinary workspaces", async () => {
+    const owners = [fixture("personal", true), fixture("system"), fixture("project")];
+    for (const owner of owners) {
+      await owner.runtime.start();
+      const service = owner.runtime.dispatcher
+        .getServiceDefinitions()
+        .find((entry) => entry.name === "app")!;
+      expect(service).toBeDefined();
+      const context = { caller: createVerifiedCaller("panel:onboarding", "panel") };
+      await service.handler!(context, "openShellSurface", [
+        { kind: "settings", section: "devices" },
+      ]);
+      expect(owner.openShellSurface).toHaveBeenCalledExactlyOnceWith({
+        kind: "settings",
+        section: "devices",
+      });
+    }
+  });
+
+  it.each(["app", "panel", "shell"] as const)(
+    "rejects an unadmitted %s watch before it can observe already-retained private host events",
+    async (kind) => {
+      const owner = fixture("shared");
+      await owner.runtime.start();
+      const definition = owner.runtime.dispatcher
+        .getServiceDefinitions()
+        .find((service) => service.name === "desktopEvents")!;
+      const openWatch = vi.spyOn(owner.runtime.eventService, "openWatch");
+      await expect(
+        definition.handler!(
+          {
+            caller:
+              kind === "shell"
+                ? createHostCaller("shell", "shell")
+                : createVerifiedCaller(`ordinary-${kind}`, kind, null),
+          },
+          "watch",
+          [["shell-approval:pending-changed"], "unprivileged-watch"]
+        )
+      ).rejects.toThrow();
+      expect(owner.watch.retainAll).toHaveBeenCalledTimes(1);
+      expect(openWatch).not.toHaveBeenCalled();
+    }
+  );
+
+  it("returns the upstream watch failure instead of acknowledging false readiness", async () => {
+    const owner = fixture("shared");
+    await owner.runtime.start();
+    owner.window.viewManager.getViewInfo.mockReturnValue({
+      type: "app",
+      hostChrome: true,
+      capabilities: ["panel-hosting"],
+      workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
+      codeIdentity: { source: "apps/shell" },
+    });
+    const failure = new Error("upstream event admission failed");
+    owner.watch.retainAll.mockRejectedValueOnce(failure);
+    const definition = owner.runtime.dispatcher
+      .getServiceDefinitions()
+      .find((service) => service.name === "desktopEvents")!;
+    await expect(
+      definition.handler!({ caller: createHostCaller("native-system-shell", "shell") }, "watch", [
+        ["panel-local-presentation-changed"],
+        "failed-watch",
+      ])
+    ).rejects.toBe(failure);
+  });
+
+  it("retains native chrome's topics for precisely its response lifetime", async () => {
+    const owner = fixture("shared");
+    await owner.runtime.start();
+    owner.window.viewManager.getViewInfo.mockReturnValue({
+      type: "app",
+      hostChrome: true,
+      capabilities: ["panel-hosting"],
+      workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
+      codeIdentity: { source: "apps/shell" },
+    });
+    const definition = owner.runtime.dispatcher
+      .getServiceDefinitions()
+      .find((service) => service.name === "desktopEvents")!;
+    const releaseTopics = vi.fn();
+    owner.watch.retainAll.mockResolvedValueOnce(releaseTopics);
+    const response = (await definition.handler!(
+      { caller: createHostCaller("native-system-shell", "shell") },
+      "watch",
+      [["shell-approval:pending-changed"], "chrome-watch"]
+    )) as Response;
+    try {
+      expect(owner.watch.retainAll).toHaveBeenCalledWith(
+        ["shell-approval:pending-changed"],
+        undefined
+      );
+      expect(releaseTopics).not.toHaveBeenCalled();
+    } finally {
+      await response.body!.cancel();
+    }
+    expect(releaseTopics).toHaveBeenCalledOnce();
+  });
+
+  it.each(["personal", "system", "shared"])(
+    "handles %s notification actions and native attention without duplicating UI events",
+    async (workspaceId) => {
+      const owner = fixture(workspaceId, workspaceId === "personal");
+      await owner.runtime.start();
+      const emit = vi.spyOn(owner.runtime.eventService, "emit");
+      owner.directEvents.get("notification:action")!({
+        id: "website-notification",
+        actionId: "open",
+      });
+      expect(owner.window.handleWebsiteNotificationAction).toHaveBeenCalledWith(
+        workspaceId,
+        "website-notification",
+        "open"
+      );
+      expect(owner.events.onNotificationAction).toHaveBeenCalledWith(
+        "website-notification",
+        "open"
+      );
+      owner.directEvents.get("notification:action")!({
+        id: "oauth-notification",
+        actionId: "oauth-cancel:own-transaction",
+      });
+      await vi.waitFor(() =>
+        expect(owner.serverClient.call).toHaveBeenCalledWith("credentials", "cancelOAuth", [
+          { transactionId: "own-transaction" },
+        ])
+      );
+      owner.directEvents.get("notification:show")!({ id: "ordinary-toast", title: "Ordinary" });
+      expect(owner.events.onAttentionRequired).not.toHaveBeenCalled();
+      owner.directEvents.get("notification:show")!({
+        id: "chat-attention:owned",
+        title: "Attention",
+        message: "Owned message",
+      });
+      expect(owner.events.onAttentionRequired).toHaveBeenCalledOnce();
+      expect(owner.events.onAttentionRequired).toHaveBeenCalledWith("Attention", "Owned message");
+      expect(emit).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(["system", "personal", "shared"])(
+    "owns the same ordinary lifecycle for %s",
+    async (id) => {
+      const owner = fixture(id, id === "personal");
+      const start = owner.runtime.start();
+      expect(owner.runtime.start()).toBe(start);
+      await start;
+      expect(owner.orchestrator.registerRuntimeClient).toHaveBeenCalledOnce();
+      expect(owner.orchestrator.initializePanelTree).toHaveBeenCalledOnce();
+      expect(edges.downloads).toHaveBeenCalledWith(
+        expect.objectContaining({ hostId: `desktop:${id}-lease-client` })
+      );
+      expect(owner.runtime.dispatcher.hasService("view")).toBe(true);
+      expect(owner.runtime.dispatcher.hasService("desktopEvents")).toBe(true);
+      await owner.runtime.recover("cold-recover");
+      expect(owner.window.getWorkspacePanelView).toHaveBeenCalledWith(id);
+      expect(owner.send).toHaveBeenCalledWith("vibestudio:rpc:recovery", "cold-recover", id);
+      expect(owner.chromeSend).toHaveBeenCalledWith("vibestudio:rpc:recovery", "cold-recover", id);
+      expect(owner.watch.recover).toHaveBeenCalledOnce();
+      expect(owner.orchestrator.recoverShellSnapshot).toHaveBeenCalledWith({
+        loadFocusedView: false,
+      });
+      expect(owner.watch.recover.mock.invocationCallOrder[0]).toBeLessThan(
+        owner.orchestrator.recoverShellSnapshot.mock.invocationCallOrder[0]!
+      );
+      expect(owner.orchestrator.recoverShellSnapshot.mock.invocationCallOrder[0]).toBeLessThan(
+        owner.send.mock.invocationCallOrder[0]!
+      );
+      await owner.runtime.close();
+      await owner.runtime.close();
+      expect(owner.managedStop).toHaveBeenCalledOnce();
+      expect(owner.download.stop).toHaveBeenCalledOnce();
+      expect(owner.cdp.stop).toHaveBeenCalledOnce();
+      expect(owner.shutdown).toHaveBeenCalledOnce();
+      expect(owner.orchestrator.unregisterRuntimeClient).toHaveBeenCalledOnce();
+      expect(owner.window.detachWorkspace).toHaveBeenCalledWith(id);
+      expect(owner.release).toHaveBeenCalledTimes(
+        owner.serverClient.onDirectEvent.mock.calls.length +
+          owner.serverClient.onRecovery.mock.calls.length +
+          owner.serverClient.onConnectionStatusChange.mock.calls.length
+      );
+    }
+  );
+
+  it("keeps recovery and diagnostic writes with the captured workspace despite equal local panel IDs", async () => {
+    const system = fixture("system");
+    await system.runtime.start();
+    const personal = fixture("personal", true);
+    await personal.runtime.start();
+    await personal.runtime.recover("resubscribe");
+    expect(system.send).not.toHaveBeenCalled();
+    expect(personal.send).toHaveBeenCalledOnce();
+    const cdpOptions = edges.cdp.mock.calls[1]![0] as ConstructorParameters<
+      typeof CdpHostProvider
+    >[0];
+    cdpOptions.forwardDiagnostic!("same-local-panel", {
+      timestamp: Date.now(),
+      level: "warning",
+      message: "owned warning",
+      source: "console",
+    } as Parameters<NonNullable<typeof cdpOptions.forwardDiagnostic>>[1]);
+    await personal.runtime.close();
+    expect(personal.serverClient.call).toHaveBeenCalledWith("panelLog", "append", [
+      [
+        expect.objectContaining({
+          panelId: "same-local-panel",
+          unitSource: "about/new",
+          level: "warn",
+        }),
+      ],
+    ]);
+    expect(system.serverClient.call).not.toHaveBeenCalled();
+  });
+
+  it("retires a pending lease registration without attaching a closed workspace", async () => {
+    const owner = fixture("shared");
+    const lease = deferred<void>();
+    owner.orchestrator.registerRuntimeClient.mockReturnValueOnce(lease.promise);
+    const started = owner.runtime.start();
+    const rejected = expect(started).rejects.toThrow("Workspace runtime is closed");
+    await vi.waitFor(() => expect(owner.orchestrator.registerRuntimeClient).toHaveBeenCalledOnce());
+    const closed = owner.runtime.close();
+    lease.resolve();
+    await rejected;
+    await closed;
+    expect(owner.window.attachWorkspaceServices).not.toHaveBeenCalled();
+    expect(owner.orchestrator.unregisterRuntimeClient).toHaveBeenCalledOnce();
+    expect(owner.shutdown).toHaveBeenCalledOnce();
+  });
+
+  it("cancels the startup watch before joining startup on close", async () => {
+    const owner = fixture("system");
+    const acknowledgement = deferred<void>();
+    const original = new Error("watch cancelled");
+    owner.watch.retainAll.mockReturnValueOnce(acknowledgement.promise.then(() => () => {}));
+    owner.watch.close.mockImplementationOnce(async () => {
+      acknowledgement.reject(original);
+    });
+    const started = owner.runtime.start();
+    const rejected = expect(started).rejects.toBe(original);
+    await vi.waitFor(() => expect(owner.watch.retainAll).toHaveBeenCalledOnce());
+    try {
+      await owner.runtime.close();
+      await rejected;
+      expect(owner.watch.close).toHaveBeenCalledOnce();
+      expect(owner.shutdown).toHaveBeenCalledOnce();
+    } finally {
+      acknowledgement.reject(original);
+      await rejected;
+    }
+  });
+
+  it("cleans allocated resources after startup failure", async () => {
+    const owner = fixture("system");
+    owner.download.start.mockRejectedValueOnce(new Error("download startup failed"));
+    await expect(owner.runtime.start()).rejects.toThrow("download startup failed");
+    expect(owner.download.stop).toHaveBeenCalledOnce();
+    expect(owner.watch.close).toHaveBeenCalledOnce();
+    expect(owner.orchestrator.unregisterRuntimeClient).toHaveBeenCalledOnce();
+    expect(owner.shutdown).toHaveBeenCalledOnce();
+    expect(owner.window.attachWorkspaceServices).not.toHaveBeenCalled();
+  });
+
+  it("restores panel registration before admitting recovered event snapshots", async () => {
+    const owner = fixture("shared");
+    await owner.runtime.start();
+    owner.watch.recover.mockImplementationOnce(async () => {
+      expect(owner.orchestrator.recoverRuntimeClientRegistration).toHaveBeenCalledOnce();
+      expect(owner.orchestrator.recoverShellSnapshot).not.toHaveBeenCalled();
+    });
+    try {
+      await owner.runtime.recover("cold-recover");
+    } finally {
+      await owner.runtime.close();
+    }
+  });
+
+  it("does not resume event recovery after the workspace retires during registration", async () => {
+    const owner = fixture("shared");
+    await owner.runtime.start();
+    const registration = deferred<void>();
+    owner.orchestrator.recoverRuntimeClientRegistration.mockReturnValueOnce(registration.promise);
+    const recovery = owner.runtime.recover("cold-recover");
+    await owner.runtime.close();
+    registration.resolve();
+    await recovery;
+    expect(owner.watch.recover).not.toHaveBeenCalled();
+  });
+
+  it("keeps each workspace disconnected until its subscription and panel recovery finish", async () => {
+    const owner = fixture("personal", true);
+    await owner.runtime.start();
+    expect(await connectionSnapshot(owner)).toEqual({ status: "connected", isRemote: false });
+    const emit = vi.spyOn(owner.runtime.eventService, "emit");
+    const status = owner.serverClient.onConnectionStatusChange.mock.calls[0]![0];
+    const replay = deferred<void>();
+    const snapshot = deferred<undefined>();
+    const renderer = deferred<void>();
+    edges.rendererRecovery.mockReturnValue(renderer.promise);
+    owner.watch.recover.mockReturnValueOnce(replay.promise);
+    owner.orchestrator.recoverShellSnapshot.mockReturnValueOnce(snapshot.promise);
+    status("disconnected");
+    expect(emit).toHaveBeenLastCalledWith("server-connection-changed", {
+      status: "disconnected",
+      isRemote: false,
+    });
+    emit.mockClear();
+    status("connected");
+    expect(emit).not.toHaveBeenCalled();
+    expect(await connectionSnapshot(owner)).toEqual({ status: "disconnected", isRemote: false });
+    const recovery = owner.runtime.recover("resubscribe");
+    expect(emit).not.toHaveBeenCalled();
+    expect(await connectionSnapshot(owner)).toEqual({ status: "disconnected", isRemote: false });
+    await vi.waitFor(() => expect(owner.watch.recover).toHaveBeenCalledOnce());
+    expect(owner.orchestrator.recoverShellSnapshot).not.toHaveBeenCalled();
+    expect(owner.send).not.toHaveBeenCalled();
+    replay.resolve();
+    await vi.waitFor(() => expect(owner.orchestrator.recoverShellSnapshot).toHaveBeenCalledOnce());
+    snapshot.resolve(undefined);
+    await vi.waitFor(() => expect(edges.rendererRecovery).toHaveBeenCalled());
+    expect(emit).not.toHaveBeenCalled();
+    expect(await connectionSnapshot(owner)).toEqual({ status: "disconnected", isRemote: false });
+    renderer.resolve();
+    await recovery;
+    expect(owner.orchestrator.recoverShellSnapshot).toHaveBeenCalledOnce();
+    expect(emit).toHaveBeenCalledOnce();
+    expect(emit).toHaveBeenCalledWith("server-connection-changed", {
+      status: "connected",
+      isRemote: false,
+    });
+    expect(await connectionSnapshot(owner)).toEqual({ status: "connected", isRemote: false });
+    await owner.runtime.close();
+    emit.mockClear();
+    status("disconnected");
+    status("connected");
+    await owner.runtime.recover("cold-recover");
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("propagates renderer replay failure without reporting the workspace connected", async () => {
+    const owner = fixture("personal", true);
+    await owner.runtime.start();
+    const status = owner.serverClient.onConnectionStatusChange.mock.calls[0]![0];
+    status("disconnected");
+    const failure = new Error("Renderer watch replay failed");
+    edges.rendererRecovery.mockRejectedValueOnce(failure);
+    await expect(owner.runtime.recover("resubscribe")).rejects.toBe(failure);
+    expect(await connectionSnapshot(owner)).toEqual({ status: "disconnected", isRemote: false });
+    await owner.runtime.close();
+  });
+
+  it("joins every renderer replay and retains all independent recovery failures", async () => {
+    const owner = fixture("personal", true);
+    await owner.runtime.start();
+    const status = owner.serverClient.onConnectionStatusChange.mock.calls[0]![0];
+    status("disconnected");
+    const panelFailure = new Error("Panel replay failed");
+    const chromeFailure = new Error("Chrome replay failed");
+    const chrome = deferred<void>();
+    edges.rendererRecovery.mockRejectedValueOnce(panelFailure).mockReturnValueOnce(chrome.promise);
+    let settled = false;
+    const recovery = owner.runtime.recover("resubscribe");
+    void recovery.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      }
+    );
+    await vi.waitFor(() => expect(edges.rendererRecovery).toHaveBeenCalledTimes(2));
+    expect(settled).toBe(false);
+    chrome.reject(chromeFailure);
+    await expect(recovery).rejects.toMatchObject({
+      errors: [panelFailure, chromeFailure],
+      cause: panelFailure,
+    });
+    expect(await connectionSnapshot(owner)).toEqual({ status: "disconnected", isRemote: false });
+    await owner.runtime.close();
+  });
+
+  it("reports failed lease cleanup after stopping the remaining owned resources", async () => {
+    const owner = fixture("personal", true);
+    await owner.runtime.start();
+    owner.orchestrator.unregisterRuntimeClient.mockRejectedValueOnce(
+      new Error("lease release failed")
+    );
+    await expect(owner.runtime.close()).rejects.toThrow("Workspace runtime cleanup failed");
+    await owner.runtime.close();
+    expect(owner.orchestrator.unregisterRuntimeClient).toHaveBeenCalledTimes(2);
+    expect(owner.managedStop).toHaveBeenCalledOnce();
+    expect(owner.download.stop).toHaveBeenCalledOnce();
+    expect(owner.cdp.stop).toHaveBeenCalledOnce();
+    expect(owner.shutdown).toHaveBeenCalledOnce();
+    expect(owner.window.detachWorkspace).toHaveBeenCalledWith("personal");
+  });
+});

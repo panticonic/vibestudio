@@ -70,7 +70,7 @@ export const vitestSharedConfig = {
       "dist",
       "workspace/.context-projections",
       "workspace/.contexts",
-      "apps/mobile/**",
+      "hosts/react-native/**",
       "workspace/apps/mobile/**",
       "**/*.browser.test.tsx",
     ],

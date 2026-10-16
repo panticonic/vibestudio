@@ -331,7 +331,7 @@ trigger a full recompute on the next startup.
 
 Encrypted (Electron `safeStorage`) paired-device credentials for the single
 detached loopback hub and one selected WebRTC remote
-(`src/main/services/deviceCredentialStore.ts`). Entries are keyed by `serverId`
+(`hosts/desktop/main/services/deviceCredentialStore.ts`). Entries are keyed by `serverId`
 and include `{ transport, deviceId, refreshToken, pairedAt }`. The loopback
 credential is machine-global and never workspace-bound. The schema-v3 WebRTC
 entry carries distinct `controlPairing` and `workspacePairing` coordinates,
@@ -415,6 +415,6 @@ This ensures the app continues to work even in restricted environments.
 
 ## Implementation
 
-See [`src/main/paths.ts`](src/main/paths.ts) and
+See [`hosts/desktop/main/paths.ts`](hosts/desktop/main/paths.ts) and
 [`docs/architecture/storage.md`](docs/architecture/storage.md) for the
 implementation details.

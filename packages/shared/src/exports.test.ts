@@ -7,7 +7,7 @@ import { init, parse } from "es-module-lexer";
 await init;
 
 const ROOT = path.resolve(import.meta.dirname, "../../..");
-const SOURCE_ROOTS = ["src", "packages", "apps", "workspace", "scripts", "tests"];
+const SOURCE_ROOTS = ["src", "packages", "hosts", "services", "workspace", "scripts", "tests"];
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".js", ".mjs"]);
 
 function sourceFiles(dir: string): string[] {

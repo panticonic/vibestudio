@@ -1,6 +1,6 @@
 # 04 — RPC / IPC Transport & Service Authorization Audit
 
-Scope: `packages/rpc/`, `src/server/rpcServer*`, `src/server/wsServerTransport*`, `src/server/workerdRpcRelay*`, `src/server/gateway*`, `src/server/routeRegistry*`, `src/server/panelHttpServer*`, `src/server/headlessServiceRegistration*`, `src/server/panelRuntimeRegistration*`, `src/server/browserTransportEntry*`, `src/preload/{ipcTransport,wsTransport}*`, `src/main/ipcDispatcher*`, `src/main/ipc/*`, a sample of server services (`gitService`, `buildService`, `workspaceService`, `workerService`, `webhookService`, `pushService`, `settingsServiceStandalone`, `credentialService`, `authService`, `tokensService`, `fsService`), plus `packages/shared/src/{serviceDispatcher,servicePolicy,serviceDefinition,tokenManager}.ts`.
+Scope: `packages/rpc/`, `src/server/rpcServer*`, `src/server/wsServerTransport*`, `src/server/workerdRpcRelay*`, `src/server/gateway*`, `src/server/routeRegistry*`, `src/server/panelHttpServer*`, `src/server/headlessServiceRegistration*`, `src/server/panelRuntimeRegistration*`, `src/server/browserTransportEntry*`, `hosts/desktop/preload/{ipcTransport,wsTransport}*`, `hosts/desktop/main/ipcDispatcher*`, `hosts/desktop/main/ipc/*`, a sample of server services (`gitService`, `buildService`, `workspaceService`, `workerService`, `webhookService`, `pushService`, `settingsServiceStandalone`, `credentialService`, `authService`, `tokensService`, `fsService`), plus `packages/shared/src/{serviceDispatcher,servicePolicy,serviceDefinition,tokenManager}.ts`.
 
 Date: 2026-04-23 · Branch: audit · Auditor: Claude (Opus 4.7 1M) · Mode: read-only.
 
@@ -18,7 +18,7 @@ At audit time, the RPC framework in `@vibestudio/rpc` was a transport-agnostic b
 
 However, the implementation has substantive gaps between the declared policy model and the effective enforcement surface. The most important findings:
 
-1. **Policy is not enforced on Electron IPC** (`src/main/index.ts` `vibestudio:serviceCall` and `src/main/ipcDispatcher.ts`). `ServiceDispatcher.dispatch()` never calls `checkServiceAccess`; only the WS/HTTP RPC server does. In Electron mode panels can invoke Electron-local services with policies like `{ allowed: ["shell"] }` (app/panel/view/menu/adblock/settings services) simply by issuing `__vibestudioShell.serviceCall("app.xxx", …)`. The `callerKind` at dispatch is heuristically set to `"panel"` for non-shell webContents but the dispatcher ignores it.
+1. **Policy is not enforced on Electron IPC** (`hosts/desktop/main/index.ts` `vibestudio:serviceCall` and `hosts/desktop/main/ipcDispatcher.ts`). `ServiceDispatcher.dispatch()` never calls `checkServiceAccess`; only the WS/HTTP RPC server does. In Electron mode panels can invoke Electron-local services with policies like `{ allowed: ["shell"] }` (app/panel/view/menu/adblock/settings services) simply by issuing `__vibestudioShell.serviceCall("app.xxx", …)`. The `callerKind` at dispatch is heuristically set to `"panel"` for non-shell webContents but the dispatcher ignores it.
 
 2. **Several server services over-allow `panel` callers on privilege-sensitive methods.** Examples: `authTokens.getProviderToken` (any panel can read stored OAuth/API keys), `authTokens.persist` / `authTokens.logout` (any panel can overwrite/delete them), `auth.startOAuthLogin` / `auth.logout`, `credentials.revokeConsent` (destructive and unbounded), `credentials.renameConnection`, `workspace.setConfigField` (arbitrary config write by a panel), `workspace.select` (forces a workspace relaunch). The old `git.getTokenForPanel` / `git.revokeTokenForPanel` RPC surface has been removed.
 
@@ -123,14 +123,14 @@ Single-port front door:
 - `ServicePolicy = { allowed: CallerKind[] }`.
 - `checkServiceAccess(service, callerKind, registry, method?)` looks up the method-level policy first, falling back to the service-level policy, and throws if `callerKind` is not in `allowed`. There is no role hierarchy (server ⊂ shell ⊂ panel) — it's a pure set membership check.
 
-### 2.7 Electron IPC path (`src/main/ipcDispatcher.ts`, `src/main/index.ts`)
+### 2.7 Electron IPC path (`hosts/desktop/main/ipcDispatcher.ts`, `hosts/desktop/main/index.ts`)
 
 Two separate IPC surfaces:
 
-- **Hand-written handlers in `src/main/index.ts`** (registered in `app.whenReady`): `vibestudio:getPanelInit`, `vibestudio:bridge.*`, `vibestudio:openFolderDialog`, `vibestudio:openExternal`, `vibestudio:serviceCall`, `vibestudio:navigate`, etc. Caller identity is derived from `event.sender.id` via `viewManager.findViewIdByWebContentsId` (`resolveCallerId`), defaulting to `"shell"` for the shell webContents. For `vibestudio:serviceCall` the kind is set as `callerKind = callerId === "shell" ? "shell" : "panel"`.
+- **Hand-written handlers in `hosts/desktop/main/index.ts`** (registered in `app.whenReady`): `vibestudio:getPanelInit`, `vibestudio:bridge.*`, `vibestudio:openFolderDialog`, `vibestudio:openExternal`, `vibestudio:serviceCall`, `vibestudio:navigate`, etc. Caller identity is derived from `event.sender.id` via `viewManager.findViewIdByWebContentsId` (`resolveCallerId`), defaulting to `"shell"` for the shell webContents. For `vibestudio:serviceCall` the kind is set as `callerKind = callerId === "shell" ? "shell" : "panel"`.
 - **`IpcDispatcher`** — a separate `ipcMain.on("vibestudio:rpc:send", …)` handler used by the shell's IPC transport. This one hardcodes `callerKind: "shell"` (line 142) regardless of which webContents is talking. Because only the shell has `nodeIntegration: true` and only the shell preload is loaded into the shell webContents, this is safe in the current layout — but there is no runtime check that the sender actually is the shell.
 
-### 2.8 Browser/mobile/panel transport (`src/preload/wsTransport.ts`, `src/server/browserTransportEntry.ts`)
+### 2.8 Browser/mobile/panel transport (`hosts/desktop/preload/wsTransport.ts`, `src/server/browserTransportEntry.ts`)
 
 - `createWsTransport({viewId, wsPort, authToken, callerKind, wsUrl?})` opens a WebSocket, sends `ws:auth`, reconnects with jittered exponential backoff on non-terminal closes. `callerKind` in the config is ignored by the server — the server derives caller kind from the token's entry.
 - `browserTransportEntry.ts` exposes `globalThis.__vibestudioTransport` into panel pages served by the gateway. It reads `__vibestudioGatewayToken` / `__vibestudioGatewayRpcWsUrl` that `panelBootstrapScript.js` populates from sessionStorage or the `__vibestudioShell.getPanelInit()` IPC call.
@@ -211,7 +211,7 @@ same authenticated RPC relay used by other participants.
 
 ### 4.5 HIGH — `ServiceDispatcher.dispatch` does not enforce policy; IPC path is unchecked
 
-- Files: `packages/shared/src/serviceDispatcher.ts:125-177`, `src/main/index.ts:821-827`, `src/main/ipcDispatcher.ts:119-161`.
+- Files: `packages/shared/src/serviceDispatcher.ts:125-177`, `hosts/desktop/main/index.ts:821-827`, `hosts/desktop/main/ipcDispatcher.ts:119-161`.
 - Snippet (`main/index.ts`):
 
   ```ts
@@ -231,7 +231,7 @@ same authenticated RPC relay used by other participants.
 
 ### 4.6 HIGH — `IpcDispatcher` hard-codes `callerKind: "shell"`
 
-- File: `src/main/ipcDispatcher.ts:119-144`.
+- File: `hosts/desktop/main/ipcDispatcher.ts:119-144`.
 - Snippet:
 
   ```ts
@@ -296,7 +296,7 @@ are routed only by the server-owned workerd relay.
 
 ### 4.11 HIGH — Electron-local services declared `{ allowed: ["shell"] }` are reachable from panels via IPC
 
-- Files: `src/main/services/{menuService,settingsService,adblockService,appService,panelShellService,viewService,remoteCredService}.ts`, `src/main/index.ts:821`.
+- Files: `hosts/desktop/main/services/{menuService,settingsService,adblockService,appService,panelShellService,viewService,remoteCredService}.ts`, `hosts/desktop/main/index.ts:821`.
 - All of these declare `policy: { allowed: ["shell"] }`, but the `vibestudio:serviceCall` handler never checks policy (see 4.5). Panels can invoke `settings.getData`, `view.*` (focus/blur/close panels), `menu.*`, `adblock.*`, `app.*`, `panel-shell.*`.
 - Attack path: as 4.5. Specifically, `settings.getData()` can leak configured model role identifiers (which may include provider keys depending on the concrete implementation of `settingsService.ts` in main — worth re-checking outside this scope). `view.close` / `view.focus` let a panel influence the panel/shell UI tree, enabling a fake-UI phishing attack.
 - Remediation: enforce policy in the IPC dispatch surface (same patch as 4.5).
@@ -475,7 +475,7 @@ are routed only by the server-owned workerd relay.
 
 1. **Enforce policy inside `ServiceDispatcher.dispatch`.** Add a `ctx.callerKind` check against the resolved policy before invoking the handler. Every transport (WS, HTTP, Electron IPC, IpcDispatcher, serverClient forward) then inherits the check. Delete the redundant call in `rpcServer.handleRpc`.
 
-2. **Patch the IPC bypass.** `src/main/index.ts` `vibestudio:serviceCall` handler must call `checkServiceAccess` (or drop into the unified dispatch path from #1). Similarly, sanity-check `event.sender.id === shellContents.id` in `IpcDispatcher`.
+2. **Patch the IPC bypass.** `hosts/desktop/main/index.ts` `vibestudio:serviceCall` handler must call `checkServiceAccess` (or drop into the unified dispatch path from #1). Similarly, sanity-check `event.sender.id === shellContents.id` in `IpcDispatcher`.
 
 3. **Re-audit each server service's method list** for panel-reachable destructive/credential methods. Specifically:
    - `authTokens.getProviderToken / persist / logout` → tighten to `shell/worker/server`.
@@ -559,10 +559,10 @@ Service policy / dispatcher / token manager:
 - `/home/werg/vibestudio/packages/shared/src/fsService.ts` (partial)
 - `/home/werg/vibestudio/packages/shared/src/ws/protocol.ts`
 - `/home/werg/vibestudio/packages/shared/src/db/databaseManager.ts`
-- `/home/werg/vibestudio/src/main/servicePolicy.test.ts`
-- `/home/werg/vibestudio/src/main/serviceDispatcher.test.ts`
-- `/home/werg/vibestudio/src/main/serviceDefinition.test.ts`
-- `/home/werg/vibestudio/src/main/ipc/dbHandlers.test.ts`
+- `/home/werg/vibestudio/hosts/desktop/main/servicePolicy.test.ts`
+- `/home/werg/vibestudio/hosts/desktop/main/serviceDispatcher.test.ts`
+- `/home/werg/vibestudio/hosts/desktop/main/serviceDefinition.test.ts`
+- `/home/werg/vibestudio/hosts/desktop/main/ipc/dbHandlers.test.ts`
 
 Services sampled:
 
@@ -586,15 +586,15 @@ Services sampled:
 
 Electron IPC:
 
-- `/home/werg/vibestudio/src/main/ipcDispatcher.ts`
-- `/home/werg/vibestudio/src/main/index.ts` (ipc handler region, lines ~680-860)
-- `/home/werg/vibestudio/src/main/viewManager.ts` (preload region, lines ~120-260)
+- `/home/werg/vibestudio/hosts/desktop/main/ipcDispatcher.ts`
+- `/home/werg/vibestudio/hosts/desktop/main/index.ts` (ipc handler region, lines ~680-860)
+- `/home/werg/vibestudio/hosts/desktop/main/viewManager.ts` (preload region, lines ~120-260)
 
 Preload / browser transport:
 
-- `/home/werg/vibestudio/src/preload/ipcTransport.ts`
-- `/home/werg/vibestudio/src/preload/wsTransport.ts`
-- `/home/werg/vibestudio/src/preload/panelPreload.ts`
-- `/home/werg/vibestudio/src/preload/index.ts`
+- `/home/werg/vibestudio/hosts/desktop/preload/ipcTransport.ts`
+- `/home/werg/vibestudio/hosts/desktop/preload/wsTransport.ts`
+- `/home/werg/vibestudio/hosts/desktop/preload/panelPreload.ts`
+- `/home/werg/vibestudio/hosts/desktop/preload/index.ts`
 
 Out of scope but touched: workerd-runtime verifier surface (searched, confirmed no token verification); main/services tree (policy lines only); credential/audit/auth-flow (briefly, for policy surface); `/home/werg/vibestudio/packages/shared/src/webhooks/*` (not inspected — flagged for the credential audit).

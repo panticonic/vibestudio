@@ -3,7 +3,17 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
-const ROOTS = ["src", "packages", "apps", "extensions", "skills", "scripts", "tests", "docs"];
+const ROOTS = [
+  "src",
+  "packages",
+  "hosts",
+  "services",
+  "extensions",
+  "skills",
+  "scripts",
+  "tests",
+  "docs",
+];
 const TOP_LEVEL = ["README.md", "HOST_BUILD_SYSTEM.md", "package.json", "tsconfig.json"];
 const EXTENSIONS = new Set([
   ".ts",
@@ -22,7 +32,7 @@ const EXCLUDED_FILES = new Set([
   "scripts/check-iroh-cutover.mjs",
   "docs/iroh-remote-transport-plan.md",
   "docs/measurements/mobile-physical-baseline-2026-08-10.md",
-  "apps/mobile/android/gradle/verification-metadata.xml",
+  "hosts/android/gradle/verification-metadata.xml",
   "packages/typecheck/src/lib/typescript-libs.ts",
 ]);
 
@@ -42,7 +52,7 @@ const forbiddenPaths = [
   ["packages", "mobile-webrtc"],
   ["src", "node", "webrtc"],
   ["src", "cli", "webrtcClient.ts"],
-  ["src", "main", "webrtcServerClient.ts"],
+  ["hosts", "desktop", "main", "webrtcServerClient.ts"],
   ["src", "server", "webrtcIngress.ts"],
   ["src", "server", "webrtcSessionShim.ts"],
 ];

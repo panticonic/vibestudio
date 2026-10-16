@@ -49,7 +49,7 @@ The primitives the stack is supposed to enforce:
 
 **Files**: `src/server/services/egressProxy.ts:1-590`, `src/server/workerdManager.ts:382-406`, `src/server/workerdManager.ts:462-491`
 
-The proxy is implemented — attribution headers, consent check via `providerRegistry.getCapabilityDeclarations`, credential injection, rate limiter, circuit breaker, audit log. No caller in `src/` ever instantiates it. A grep for `createEgressProxy`, `new EgressProxy` across `src/server/` and `src/main/` returns only the declaration itself:
+The proxy is implemented — attribution headers, consent check via `providerRegistry.getCapabilityDeclarations`, credential injection, rate limiter, circuit breaker, audit log. No caller in `src/` ever instantiates it. A grep for `createEgressProxy`, `new EgressProxy` across `src/server/` and `hosts/desktop/main/` returns only the declaration itself:
 
 ```
 $ grep -rn "createEgressProxy\|new EgressProxy" src/
@@ -139,7 +139,7 @@ Severity: **Critical** when the proxy is enabled; dormant until then.
 
 ### S3 — Critical: Autofill leaks top-origin credentials into untrusted sub-frames (main world)
 
-**File**: `src/main/autofill/autofillManager.ts:360-397`, `src/main/autofill/autofillManager.ts:512-559`, `src/main/autofill/contentScript.ts:439-460`
+**File**: `hosts/desktop/main/autofill/autofillManager.ts:360-397`, `hosts/desktop/main/autofill/autofillManager.ts:512-559`, `hosts/desktop/main/autofill/contentScript.ts:439-460`
 
 `scanSubFrames` iterates every frame in the subtree and uses `frame.executeJavaScript(...)` — which runs in the **main world** of the target frame, not an isolated world:
 
@@ -285,7 +285,7 @@ Severity: **High** — exposed to worker code today.
 
 ### S6 — High: CDP is a full RCE primitive
 
-**Files**: `src/main/cdpServer.ts`, `src/server/cdpBridge.ts`
+**Files**: `hosts/desktop/main/cdpServer.ts`, `src/server/cdpBridge.ts`
 
 - Electron CDP now binds to loopback explicitly (`127.0.0.1`).
 - CDP authentication no longer uses URL query strings. `getCdpEndpoint` returns `{ wsEndpoint, token }`; browser WebSocket clients open the token-free URL and send a first-frame `{ type: "vibestudio:cdp-auth", token }` message. This is intentional because browser `WebSocket` cannot set `Authorization: Bearer` headers.
@@ -418,7 +418,7 @@ Severity: **Medium**.
 
 ### S11 — Medium: CDP / egress / workerd / git servers bind wildcard
 
-**Files**: `src/main/cdpServer.ts:205`, `src/server/workerdManager.ts:550-554`, `packages/git-server/src/server.ts:312`
+**Files**: `hosts/desktop/main/cdpServer.ts:205`, `src/server/workerdManager.ts:550-554`, `packages/git-server/src/server.ts:312`
 
 Multiple services pass only `port` to `http.Server.listen` — Node binds the unspecified address (`::` with dual-stack), reachable from any interface. Panel HTTP server correctly uses `this.host` (`src/server/panelHttpServer.ts:248`), the egress proxy correctly uses `127.0.0.1` (`egressProxy.ts:123`), but CDP, git, and the workerd router socket do not.
 
@@ -442,7 +442,7 @@ Severity: **Medium** in a single-dev box; **High** on shared networks.
 
 ### S12 — Medium: Autofill `executeJavaScript` cross-frame tree traversal runs in destroyed / cross-origin frames without try-gate around side effects
 
-**File**: `src/main/autofill/autofillManager.ts:360-397`
+**File**: `hosts/desktop/main/autofill/autofillManager.ts:360-397`
 
 Related to S3. Even if the origin match is fixed, `mainFrame.framesInSubtree` iterates every frame including cross-origin ones. The `try`/`catch` swallows errors but the *injection* itself still lands in the frame; if the script throws mid-execution the attacker-controlled frame has already observed it. Defence-in-depth: serialise origin check *before* the executeJavaScript call, not after.
 
@@ -570,10 +570,10 @@ A second chain, targeting the UI host:
 - `src/server/buildV2/builder.ts`, `src/server/buildV2/externalDeps.ts`, `src/server/buildV2/effectiveVersion.ts`, `src/server/buildV2/index.ts`
 - `src/server/panelRuntimeRegistration.ts`, `src/server/headlessServiceRegistration.ts`
 - `src/server/cdpBridge.ts`
-- `src/main/shellCore/createElectronShellCore.ts`, `src/main/shellCore/panelStoreSqlite.ts`
-- `src/main/cdpServer.ts`
-- `src/main/adblock/adBlockManager.ts`, `src/main/services/adblockService.ts`
-- `src/main/autofill/autofillManager.ts`, `src/main/autofill/contentScript.ts`
+- `hosts/desktop/main/shellCore/createElectronShellCore.ts`, `hosts/desktop/main/shellCore/panelStoreSqlite.ts`
+- `hosts/desktop/main/cdpServer.ts`
+- `hosts/desktop/main/adblock/adBlockManager.ts`, `hosts/desktop/main/services/adblockService.ts`
+- `hosts/desktop/main/autofill/autofillManager.ts`, `hosts/desktop/main/autofill/contentScript.ts`
 - `packages/git-server/src/server.ts`, `packages/git-server/src/auth.ts`
 - `packages/git/src/*` (surface only)
 - `workspace/packages/harness/src/index.ts`, `workspace/packages/harness/src/tools/path-utils.ts`, `workspace/packages/harness/src/tools/grep.ts`, `workspace/packages/harness/src/pi-extension-runtime.ts`

@@ -55,7 +55,7 @@ Findings from the current codebase, which drive every decision below:
    separate OS process, but inside it, dependency code shares intrinsics _and
    globals_ with the panel runtime: the bootstrap payload is installed on
    `globalThis.__vibestudioPanelInit` before navigation
-   (`apps/headless-host/src/pageHost.ts`), and whatever holds the RPC bridge is
+   (`packages/headless-renderer/src/pageHost.ts`), and whatever holds the RPC bridge is
    reachable from any code in the realm.
 6. **Workers and userland DOs already sit behind the right boundary.** Each runs in
    its own workerd isolate with explicit capability bindings served by

@@ -1,0 +1,369 @@
+import { serializeRpcFailure, isRpcAbortedBy } from "@vibestudio/rpc";
+/**
+ * CdpHostBridgeClient — the host side of the server's CDP bridge protocol
+ * (src/server/cdpBridge.ts), a port of Electron's CdpHostProvider transport
+ * (hosts/desktop/main/cdpHostProvider.ts) without the webContents specifics.
+ *
+ * Connects to ws(s)://server[/_workspace/name]/api/cdp-host?hostConnectionId=...,
+ * authenticates during the HTTP upgrade, re-registers all targets on every
+ * connection, and dispatches server commands to injected handlers.
+ */
+import { WebSocket } from "ws";
+import { createDevLogger } from "@vibestudio/dev-log";
+import { serverCdpHostWsUrl } from "@vibestudio/shared/connect";
+import { webSocketAuthProtocol } from "@vibestudio/rpc/protocol/webSocketAuthProtocol";
+
+const log = createDevLogger("HeadlessHost:bridge");
+
+const RECONNECT_DELAY_MS = 1_000;
+
+export interface HostBridgeHandlers {
+  cdpCommand(
+    targetId: string,
+    method: string,
+    params: Record<string, unknown> | undefined,
+    sessionId?: string
+  ): Promise<unknown>;
+  navCommand(targetId: string, action: string, url?: string): Promise<void>;
+  hostCommand(
+    targetId: string,
+    action: string,
+    args: unknown[],
+    signal: AbortSignal
+  ): Promise<unknown>;
+  hostOperation(action: string, args: unknown[]): Promise<unknown>;
+  detach(targetId: string): Promise<void>;
+  /** Server rejected our registration for this target (lease moved etc.). */
+  registerRejected(targetId: string, reason: string): void;
+}
+
+export interface CdpHostBridgeSocket {
+  readyState: number;
+  send(data: string): void;
+  close(code?: number, reason?: string): void;
+  on(event: "open", listener: () => void): this;
+  on(event: "message", listener: (data: unknown) => void): this;
+  on(event: "close", listener: (code?: number, reason?: unknown) => void): this;
+  on(event: "error", listener: (error: unknown) => void): this;
+}
+
+interface BridgeMessage {
+  type?: string;
+  requestId?: string;
+  targetId?: string;
+  method?: string;
+  params?: Record<string, unknown>;
+  sessionId?: string;
+  action?: string;
+  args?: unknown[];
+  url?: string;
+  reason?: string;
+}
+
+export type CdpHostBridgeDiagnosticState =
+  | "idle"
+  | "acquiring-credential"
+  | "connecting"
+  | "admitted"
+  | "closed"
+  | "error"
+  | "retrying";
+
+export interface CdpHostBridgeDiagnostic {
+  state: CdpHostBridgeDiagnosticState;
+  attempt: number;
+  url: string;
+  lastError?: string;
+  lastCloseCode?: number;
+  lastCloseReason?: string;
+  lastMessageType?: string;
+  nextRetryMs?: number;
+}
+
+export class CdpHostBridgeClient {
+  private readonly hostCommands = new Map<string, AbortController>();
+
+  private socket: CdpHostBridgeSocket | null = null;
+  private stopped = false;
+  private admitted = false;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private readonly targets = new Map<
+    string,
+    { tabId: number; metadata?: { kind?: string; source?: string } }
+  >();
+  private diagnostic: CdpHostBridgeDiagnostic = {
+    state: "idle",
+    attempt: 0,
+    url: "",
+  };
+
+  constructor(
+    private readonly opts: {
+      serverUrl: string;
+      hostConnectionId: string;
+      getToken: () => string | Promise<string>;
+      handlers: HostBridgeHandlers;
+      onAuthenticated?: () => void;
+      onDiagnostic?: (diagnostic: CdpHostBridgeDiagnostic) => void;
+      socketFactory?: (url: string, protocols: string[]) => CdpHostBridgeSocket;
+    }
+  ) {}
+
+  start(): void {
+    this.stopped = false;
+    this.connect();
+  }
+
+  stop(): void {
+    for (const owner of this.hostCommands.values())
+      owner.abort(new Error("CDP host bridge stopped"));
+    this.stopped = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.socket?.close(1000, "host shutting down");
+    this.socket = null;
+    this.admitted = false;
+  }
+
+  isConnected(): boolean {
+    return this.admitted && this.socket?.readyState === WebSocket.OPEN;
+  }
+
+  getDiagnostic(): CdpHostBridgeDiagnostic {
+    return { ...this.diagnostic };
+  }
+
+  registerTarget(
+    targetId: string,
+    tabId: number,
+    metadata?: { kind?: string; source?: string }
+  ): void {
+    this.targets.set(targetId, { tabId, metadata });
+    this.send({ type: "cdp:register", targetId, tabId, ...metadata });
+  }
+
+  unregisterTarget(targetId: string): void {
+    this.targets.delete(targetId);
+    this.send({ type: "cdp:unregister", targetId });
+  }
+
+  sendEvent(targetId: string, method: string, params: unknown, sessionId?: string): void {
+    this.send({ type: "cdp:event", targetId, method, params, ...(sessionId ? { sessionId } : {}) });
+  }
+
+  private wsUrl(): string {
+    return serverCdpHostWsUrl(this.opts.serverUrl, this.opts.hostConnectionId);
+  }
+
+  private connect(): void {
+    void this.connectWithToken();
+  }
+
+  private async connectWithToken(): Promise<void> {
+    if (this.stopped) return;
+    const url = this.wsUrl();
+    this.updateDiagnostic({
+      state: "acquiring-credential",
+      attempt: this.diagnostic.attempt + 1,
+      url,
+      lastError: undefined,
+      lastCloseCode: undefined,
+      lastCloseReason: undefined,
+      nextRetryMs: undefined,
+    });
+    let token: string;
+    try {
+      token = await this.opts.getToken();
+    } catch (error) {
+      const message = errorMessage(error);
+      this.updateDiagnostic({ state: "error", lastError: `failed to get token: ${message}` });
+      log.warn(`failed to get bridge token: ${message}`);
+      this.scheduleReconnect();
+      return;
+    }
+    if (this.stopped) return;
+    this.updateDiagnostic({ state: "connecting" });
+    const protocols = [webSocketAuthProtocol("cdp-host", token)];
+    const socket =
+      this.opts.socketFactory?.(url, protocols) ??
+      new WebSocket(url, protocols, { maxPayload: 256 * 1024 * 1024 });
+    this.socket = socket;
+    this.admitted = false;
+
+    socket.on("open", () => {
+      this.admitted = true;
+      this.updateDiagnostic({ state: "admitted" });
+      for (const [targetId, registration] of this.targets) {
+        this.send({
+          type: "cdp:register",
+          targetId,
+          tabId: registration.tabId,
+          ...registration.metadata,
+        });
+      }
+      this.opts.onAuthenticated?.();
+    });
+    socket.on("message", (data) => {
+      void this.handleMessage(String(data));
+    });
+    socket.on("close", (code, reason) => {
+      for (const owner of this.hostCommands.values())
+        owner.abort(new Error("CDP host bridge disconnected"));
+      this.admitted = false;
+      if (this.socket === socket) this.socket = null;
+      this.updateDiagnostic({
+        state: "closed",
+        lastCloseCode: typeof code === "number" ? code : undefined,
+        lastCloseReason: closeReasonText(reason),
+      });
+      this.scheduleReconnect();
+    });
+    socket.on("error", (error) => {
+      const message = errorMessage(error);
+      this.updateDiagnostic({ state: "error", lastError: message });
+      log.warn(`bridge socket error: ${message}`);
+    });
+  }
+
+  private scheduleReconnect(): void {
+    if (this.stopped || this.reconnectTimer) return;
+    this.updateDiagnostic({ state: "retrying", nextRetryMs: RECONNECT_DELAY_MS });
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      this.connect();
+    }, RECONNECT_DELAY_MS);
+  }
+
+  private send(message: Record<string, unknown>): void {
+    if (!this.isConnected()) return;
+    this.socket?.send(JSON.stringify(message));
+  }
+
+  private async handleMessage(raw: string): Promise<void> {
+    let message: BridgeMessage;
+    try {
+      message = JSON.parse(raw);
+    } catch {
+      this.updateDiagnostic({ lastMessageType: "<invalid-json>" });
+      return;
+    }
+    if (message.type) this.updateDiagnostic({ lastMessageType: message.type });
+    switch (message.type) {
+      case "cdp:command": {
+        const { requestId, targetId, method, params, sessionId } = message;
+        if (!requestId || !targetId || !method) return;
+        try {
+          const result = await this.opts.handlers.cdpCommand(targetId, method, params, sessionId);
+          this.send({ type: "cdp:result", requestId, targetId, result });
+        } catch (error) {
+          this.send({
+            type: "cdp:error",
+            requestId,
+            targetId,
+            error: serializeRpcFailure(error),
+          });
+        }
+        return;
+      }
+      case "cdp:detach": {
+        if (message.targetId)
+          await this.opts.handlers.detach(message.targetId).catch(() => undefined);
+        return;
+      }
+      case "cdp:register-rejected": {
+        if (message.targetId) {
+          log.warn(`register rejected for ${message.targetId}: ${message.reason ?? "unknown"}`);
+          this.targets.delete(message.targetId);
+          this.opts.handlers.registerRejected(message.targetId, message.reason ?? "unknown");
+        }
+        return;
+      }
+      case "nav:command": {
+        const { requestId, targetId, action, url } = message;
+        if (!requestId || !targetId || !action) return;
+        try {
+          await this.opts.handlers.navCommand(targetId, action, url);
+          this.send({ type: "nav:result", requestId, targetId });
+        } catch (error) {
+          this.send({
+            type: "nav:error",
+            requestId,
+            targetId,
+            error: serializeRpcFailure(error),
+          });
+        }
+        return;
+      }
+      case "host:cancel":
+        if (message.requestId)
+          this.hostCommands
+            .get(message.requestId)
+            ?.abort(new Error("Host command cancelled by its caller"));
+        return;
+      case "host:command": {
+        const { requestId, targetId, action, args } = message;
+        if (!requestId || !targetId || !action) return;
+        const owner = new AbortController();
+        this.hostCommands.set(requestId, owner);
+        try {
+          const result = await this.opts.handlers.hostCommand(
+            targetId,
+            action,
+            args ?? [],
+            owner.signal
+          );
+          this.send({ type: "host:result", requestId, targetId, result });
+        } catch (error) {
+          if (owner.signal.aborted && isRpcAbortedBy(error, owner.signal.reason)) {
+            this.send({ type: "host:result", requestId, targetId });
+          } else
+            this.send({
+              type: "host:error",
+              requestId,
+              targetId,
+              error: serializeRpcFailure(error),
+            });
+        } finally {
+          this.hostCommands.delete(requestId);
+        }
+        return;
+      }
+      case "host:operation": {
+        const { requestId, action, args } = message;
+        if (!requestId || !action) return;
+        try {
+          const result = await this.opts.handlers.hostOperation(action, args ?? []);
+          this.send({ type: "host:operation-result", requestId, result });
+        } catch (error) {
+          this.send({
+            type: "host:operation-error",
+            requestId,
+            error: serializeRpcFailure(error),
+          });
+        }
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  private updateDiagnostic(patch: Partial<CdpHostBridgeDiagnostic>): void {
+    this.diagnostic = { ...this.diagnostic, ...patch };
+    this.opts.onDiagnostic?.(this.getDiagnostic());
+  }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function closeReasonText(reason: unknown): string | undefined {
+  if (reason === undefined || reason === null) return undefined;
+  if (typeof reason === "string") return reason || undefined;
+  if (Buffer.isBuffer(reason)) {
+    const text = reason.toString();
+    return text || undefined;
+  }
+  return String(reason) || undefined;
+}

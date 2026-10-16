@@ -124,11 +124,11 @@ belongs to someone else.
 - **Entry points.** `pnpm dev:terminal` is `src/dev/runInstance.ts terminal
   --ephemeral`; `pnpm start:terminal` is `src/dev/runProduct.ts terminal`,
   which runs the product command `vibestudio terminal`
-  (`src/cli/terminal/terminalCommand.ts`) with product semantics.
-- **Starting the server.** `src/cli/terminal/localServer.ts` attaches to a
+  (`hosts/terminal/terminalCommand.ts`) with product semantics.
+- **Starting the server.** `hosts/terminal/localServer.ts` attaches to a
   server or starts an owned one. `ttyRestore.ts` restores the terminal.
   `terminalHost.ts` hosts the downloaded browser module.
-- **Startup progress.** `src/cli/terminal/launchProgress.ts` prints numbered,
+- **Startup progress.** `hosts/terminal/launchProgress.ts` prints numbered,
   timed steps.
 - **Template scope.** Template preparation has a scope, `sources` or
   `release` (`runInstance.ts`). Only the terminal path uses `sources`, which

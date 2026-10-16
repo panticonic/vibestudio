@@ -44,7 +44,7 @@ import { mobileApprovalSurfaceState } from "./lib/mobile-approval-surface.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
-const androidDir = path.join(repoRoot, "apps", "mobile", "android");
+const androidDir = path.join(repoRoot, "hosts", "android");
 const defaultPackage = "app.vibestudio.mobile.internal";
 const defaultActivity = "app.vibestudio.mobile.MainActivity";
 const smokePrefix = "[VibestudioMobileSmoke]";
@@ -2386,7 +2386,7 @@ async function runSmoke(
 
     await adb(options.device, "logcat", "-c");
 
-    // Embedded Iroh flow. Phases are emitted by apps/mobile/index.js.
+    // Embedded Iroh flow. Phases are emitted by hosts/react-native/index.js.
     const phases = [
       "embedded-deep-link-received",
       "embedded-usb-provisioning-approved",

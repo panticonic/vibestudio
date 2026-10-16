@@ -1,7 +1,7 @@
 /**
  * The repaired Android binding the mobile build resolves, in one place: the
  * build script stamps this version, the install script fetches this archive,
- * and `apps/mobile/android/app/build.gradle` depends on this coordinate.
+ * and `hosts/android/app/build.gradle` depends on this coordinate.
  *
  * Upstream's own coordinate is kept. Only the version carries the repair, so
  * returning to upstream is a version change rather than a rename.

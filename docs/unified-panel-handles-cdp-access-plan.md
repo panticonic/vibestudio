@@ -22,7 +22,7 @@ sharing one userland runtime. Today's connectivity model is fragmented and restr
   _no_ RPC. A child can RPC its parent but can't CDP it; a parent can CDP a child but the two
   surfaces don't match.
 - **CDP is ancestor→descendant + browser-kind only.** `cdpServer.canAccessBrowser()`
-  (`src/main/cdpServer.ts:204`) grants only the owner + tree ancestors;
+  (`hosts/desktop/main/cdpServer.ts:204`) grants only the owner + tree ancestors;
   `browserAutomation.ts:26` (`assertBrowser`) throws unless `kind === "browser"`. A child
   cannot drive its parent and siblings cannot drive each other.
 - **No approval on CDP today.** The only capability approval is `externalOpenService`
@@ -33,7 +33,7 @@ sharing one userland runtime. Today's connectivity model is fragmented and restr
   works — `src/server/rpcServer.ts:1999 checkRelayAuth` returns OK unconditionally — and the
   CDP service policy already lists `worker`/`do`.)
 - **No load lifecycle for connecting.** On startup only the focused panel gets a live view
-  (`src/main/panelOrchestrator.ts:720 initializePanelTree` + `restorePolicy`); other tree
+  (`hosts/desktop/main/panelOrchestrator.ts:720 initializePanelTree` + `restorePolicy`); other tree
   members exist in the registry with no `webContents`, and `unloadPanel` tears views down.
   CDP to such a panel fails.
 
@@ -128,7 +128,7 @@ The CDP connection simply **errors out** if its host provider disconnects or the
 away — no reconnect logic.
 
 (CORS is unrelated and stays as-is: it is genuinely main-originated, firing inside main's
-`webRequest` interception, and keeps its `serverClient` hop — `src/main/index.ts:409-435`.)
+`webRequest` interception, and keeps its `serverClient` hop — `hosts/desktop/main/index.ts:409-435`.)
 
 ## 4. Authorization + approval — the core refactor
 
@@ -296,7 +296,7 @@ openPanel(source, opts): Promise<PanelHandle>
 Wraps `packages/shared/src/panelRegistry.ts` (`listPanels`/`getChildren`/`findParentId`).
 
 **Two-service split (do NOT widen the shell service).** The existing
-`src/main/services/panelShellService.ts` stays **shell-only** with full unguarded access (it
+`hosts/desktop/main/services/panelShellService.ts` stays **shell-only** with full unguarded access (it
 backs the trusted shell renderer, reachable over Electron IPC). Add a **new userland panel
 service on the server** (policy `allowed: ["panel","worker","do"]`) that runs every op through
 §4.1 `accessDecision`, and when a capability is required, runs §4.3 approval **in-process**.
@@ -333,7 +333,7 @@ Export `panelTree` + `PanelHandle` from `workspace/packages/runtime/src/panel/in
   is built (`packages/shell-core/src/panelManager.ts:236-243`, mirroring
   `autoArchiveWhenEmpty`; also `packages/shared/src/panelFactory.ts:182`).
 - **Registration / root:** `registerBrowser`→`registerTarget(panelId, wcId, { privileged })`
-  (`src/main/cdpServer.ts:126`, called from `src/main/panelView.ts:156/235`); keep a
+  (`hosts/desktop/main/cdpServer.ts:126`, called from `hosts/desktop/main/panelView.ts:156/235`); keep a
   `privilegedTargets: Set`. Remove the `if (parentId)` guard at `panelView.ts:154/233` so the
   root panel is also a registered target.
 - **Rename** `browser`→`target`/`panel` across the server broker (`cdpBridge.ts`), the host
@@ -351,7 +351,7 @@ target's runtime: `cdp.*`, RPC `call`/`emit`, and `_agent` introspection
 (`tree`/`state`/`routes`/`setMode`, `handle.ts:89-92`).
 
 - Add `PanelOrchestrator.ensureLoaded(panelId): Promise<LoadResult>` reusing the private
-  `loadPanelIntoView` (`src/main/panelOrchestrator.ts:1056`) **without** focus/visibility/event
+  `loadPanelIntoView` (`hosts/desktop/main/panelOrchestrator.ts:1056`) **without** focus/visibility/event
   side effects (idempotent; `{loaded, reason}`: already_loaded / not_in_registry /
   build_error / view_creation_failed). Inverse of `unloadPanel`. **Verify** a not-yet-visible
   `WebContentsView` is debugger-attachable so loading-without-focus still permits CDP.
@@ -380,7 +380,7 @@ explicit scope extension.
 
 ### 9.1 What exists today (the seam we build on)
 
-- **`PanelOrchestrator` exists only in desktop Electron main** (`src/main/index.ts`); the
+- **`PanelOrchestrator` exists only in desktop Electron main** (`hosts/desktop/main/index.ts`); the
   server has **no** orchestrator and **no** view host (no `WebContentsView` under `src/server`).
   Mobile renders panels in iOS WebViews and has **no CDP** (`bridgeAdapter.ts:135`). So CDP +
   view loading is an Electron-`WebContentsView` capability.

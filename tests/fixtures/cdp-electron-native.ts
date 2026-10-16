@@ -1,7 +1,7 @@
 import { app, BaseWindow, WebContentsView } from "electron";
 import { EventEmitter } from "node:events";
 import assert from "node:assert/strict";
-import { CdpHostProvider, type CdpHostProviderSocket } from "../../src/main/cdpHostProvider";
+import { CdpHostProvider, type CdpHostProviderSocket } from "../../hosts/desktop/main/cdpHostProvider";
 
 class LocalSocket extends EventEmitter implements CdpHostProviderSocket {
   readyState = 1;

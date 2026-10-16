@@ -76,12 +76,13 @@
       "@vibestudio/workspace-contracts/*": ["./packages/workspace-contracts/src/*"]
     }
   },
-  "include": ["src/**/*", "packages/**/*"],
+  "include": ["src/**/*", "packages/**/*", "hosts/desktop/**/*", "hosts/terminal/**/*"],
   "exclude": [
     "node_modules",
     "dist",
     "**/dist",
     "packages/mobile-iroh",
+    "packages/headless-renderer",
     "src/server/workerdPrograms",
     "src/server/services/relaySeam.integration.test.ts"
   ]

@@ -4227,7 +4227,7 @@ async function main() {
 
   {
     const { createBrowserEnvironmentService } =
-      await import("../main/services/browserEnvironmentService.js");
+      await import("../../hosts/desktop/main/services/browserEnvironmentService.js");
     const { ServerBrowserImportHostRegistry } =
       await import("./services/serverBrowserImportHostRegistry.js");
     const { workspaceProviderExtensionRepoPath } =

@@ -10,7 +10,7 @@ const mocks = vi.hoisted(() => ({
   onRecovery: vi.fn(),
 }));
 
-vi.mock("../preload/wsTransport.js", () => ({
+vi.mock("../../hosts/desktop/preload/wsTransport.js", () => ({
   createWsTransport: mocks.createWsTransport,
 }));
 

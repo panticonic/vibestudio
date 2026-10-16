@@ -41,5 +41,5 @@ Run the focused copy and surface checks after edits:
 
 ```sh
 pnpm vitest run packages/shared/src/approvalCopy.test.ts packages/shared/src/authorityPresentation.test.ts workspace/apps/shell/components/ApprovalCard.test.tsx
-pnpm --dir apps/mobile exec jest --runInBand --runTestsByPath ../../workspace/apps/mobile/src/components/ApprovalSheet.test.tsx
+pnpm --dir hosts/react-native exec jest --runInBand --runTestsByPath ../../workspace/apps/mobile/src/components/ApprovalSheet.test.tsx
 ```

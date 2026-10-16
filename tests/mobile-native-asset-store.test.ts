@@ -5,13 +5,13 @@ import { join } from "node:path";
 
 const android = readFileSync(
   new URL(
-    "../apps/mobile/android/app/src/main/java/app/vibestudio/mobile/VibestudioMobileHostModule.kt",
+    "../hosts/android/app/src/main/java/app/vibestudio/mobile/VibestudioMobileHostModule.kt",
     import.meta.url
   ),
   "utf8"
 );
 const ios = readFileSync(
-  new URL("../apps/mobile/ios/Vibestudio/VibestudioMobileHost.mm", import.meta.url),
+  new URL("../hosts/ios/Vibestudio/VibestudioMobileHost.mm", import.meta.url),
   "utf8"
 );
 const tcpPatch = readFileSync(

@@ -35,7 +35,7 @@ The host build performs these dependency-ordered stages:
 
 1. Build `@vibestudio/*` infrastructure packages.
 2. Build userland workspace packages that later host bundles consume.
-3. Build `apps/headless-host` and copy its `main.js`/`index.js` bundles to the
+3. Build `packages/headless-renderer` and copy its `main.js`/`index.js` bundles to the
    canonical `dist/headless-host/` runtime location.
 4. Build Electron main, preloads/overlays, browser transport, bootstrap UI,
    CLI, and the standalone/Electron server bundles. The internal-DO bundle is

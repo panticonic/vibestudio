@@ -108,7 +108,7 @@ export function createPanelContextService(deps: PanelContextServiceDeps): Servic
       // canGoForward from the active lease holder over the CDP host-provider
       // connection (`src/server/cdpBridge.ts` sendHostCommand) once a
       // `describePresentation` host command exists on both the Electron shell
-      // (src/main/services/panelShellService.ts) and apps/headless-host. Until
+      // (hosts/desktop/main/services/panelShellService.ts) and packages/headless-renderer. Until
       // then this stays an honest absence — never a fabricated address.
       address: { available: false, reason: "presentation-local" },
     };

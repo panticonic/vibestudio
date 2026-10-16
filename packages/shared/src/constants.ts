@@ -50,7 +50,7 @@ export const PANEL_UI_MAX_LOADED_MOBILE = 5; // replaces local MAX_WEBVIEWS
 
 /**
  * Headless hosts (the always-on in-app headless host and the standalone
- * `apps/headless-host` browser host) shed panels far more aggressively than an
+ * `packages/headless-renderer` browser host) shed panels far more aggressively than an
  * interactive client: no human is watching, so an idle automation surface is
  * pure cost. They share the GC selectors but with a tighter threshold + a
  * finer sweep cadence (no pins apply; `keepLoaded` still protects automation).

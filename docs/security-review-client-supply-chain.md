@@ -115,7 +115,7 @@ enough that the user and the receiver can reason about them.
 - `workspace/packages/harness/src/system-prompt.ts:41-50` explicitly teaches the model to
   emit MDX/JSX. The instruction not to emit arbitrary JavaScript is useful product guidance,
   but prompts are not a security boundary.
-- `src/preload/panelPreload.ts:28-68` exposes the RPC envelope transport, bootstrap/init
+- `hosts/desktop/preload/panelPreload.ts:28-68` exposes the RPC envelope transport, bootstrap/init
   data, native services, and external-opening calls to the panel main world.
 - `packages/shell-core/src/panelManager.ts:1085-1111` shows that panel bootstrap data
   contains the caller-bound gateway token, panel identity, environment, and state arguments.
@@ -332,13 +332,13 @@ that execute later when the Gradle step receives secrets.
 
 ### Evidence
 
-- `src/main/index.ts:1660-1671` defines a finite handwritten set of sensitive permission
+- `hosts/desktop/main/index.ts:1660-1671` defines a finite handwritten set of sensitive permission
   strings.
-- `src/main/index.ts:1724-1757` applies special policy only to that set and then calls
+- `hosts/desktop/main/index.ts:1724-1757` applies special policy only to that set and then calls
   `callback(true)` for every other request, explicitly including clipboard reads.
-- `src/main/index.ts:1758-1774` also returns `true` for every omitted permission in the check
+- `hosts/desktop/main/index.ts:1758-1774` also returns `true` for every omitted permission in the check
   handler.
-- `src/main/services/browserPermissionController.ts:107-223` has substantially stronger
+- `hosts/desktop/main/services/browserPermissionController.ts:107-223` has substantially stronger
   top-level-origin, panel-type, OS-permission, navigation-cancellation, and grant checks for
   media, location, and notifications. This is a good foundation.
 
@@ -372,12 +372,12 @@ ordinary fullscreen/media behavior without treating all future permissions as ha
 
 ### Evidence
 
-- `src/main/viewManager.ts:774-784` offers "Open Link Externally" for any nonempty
+- `hosts/desktop/main/viewManager.ts:774-784` offers "Open Link Externally" for any nonempty
   `params.linkURL` and passes the raw value directly to Electron
   `shell.openExternal`.
 - `src/server/services/externalOpenService.ts:20`, `:35-91`, and `:103-116` provide the
   canonical approval-aware path and restrict schemes to HTTP, HTTPS, and `mailto`.
-- `src/main/panelView.ts:719-745` rejects unsupported schemes for normal window-open
+- `hosts/desktop/main/panelView.ts:719-745` rejects unsupported schemes for normal window-open
   navigation, showing that the context menu is inconsistent with the standard path.
 
 ### Exploit preconditions and impact
@@ -474,10 +474,10 @@ refresh/cold-recovery UX.
   serialized `data` field without encryption or redaction at this layer.
 - `workspace/packages/agentic-chat/utils/localStorageScopePersistence.ts:73-125` enumerates
   every row under a predictable prefix and filters authorization only after reading it.
-- `src/main/panelView.ts:266-296` selects the Electron session partition from `contextId`.
+- `hosts/desktop/main/panelView.ts:266-296` selects the Electron session partition from `contextId`.
   Panels in one context consequently share a partition; panel URLs also share the loopback
   origin.
-- `src/main/viewManager.ts:553-556` confirms that storage/session isolation is partition
+- `hosts/desktop/main/viewManager.ts:553-556` confirms that storage/session isolation is partition
   based.
 
 ### Exploit preconditions and impact
@@ -512,8 +512,8 @@ a key delivered to every same-origin panel would not fix the boundary.
 
 ### Evidence
 
-- `src/main/updateCheck.ts:115-133` discovers updates from the npm registry.
-- `src/main/updateCheck.ts:165-206` requires an explicit update action and warns before
+- `hosts/desktop/main/updateCheck.ts:115-133` discovers updates from the npm registry.
+- `hosts/desktop/main/updateCheck.ts:165-206` requires an explicit update action and warns before
   restarting an owned local hub. This is good UX and consent handling.
 - `scripts/npm-update-launcher.mjs:438-463` runs `npm install --global` for an exact version,
   but supplies `env: process.env`.
@@ -544,11 +544,11 @@ rollback-friendly flow.
 
 ### Evidence
 
-- `src/main/services/browserDownloadManager.ts:86-137` automatically chooses a Downloads
+- `hosts/desktop/main/services/browserDownloadManager.ts:86-137` automatically chooses a Downloads
   path for each browser download and tracks progress.
-- `src/main/services/browserDownloadManager.ts:213-225` uses `basename`, sanitization, and
+- `hosts/desktop/main/services/browserDownloadManager.ts:213-225` uses `basename`, sanitization, and
   collision handling, which correctly addresses filename traversal and overwrite.
-- `src/main/services/browserDownloadManager.ts:75-83` opens a completed download without an
+- `hosts/desktop/main/services/browserDownloadManager.ts:75-83` opens a completed download without an
   extension/risk-specific warning.
 
 ### Risk
@@ -640,14 +640,14 @@ The review found several controls worth preserving:
 
 - Every Electron view is created with `nodeIntegration: false`,
   `contextIsolation: true`, `sandbox: true`, and `webviewTag: false`
-  (`src/main/viewManager.ts:548-568`).
+  (`hosts/desktop/main/viewManager.ts:548-568`).
 - External browser panels use a reduced browser/autofill preload and a dedicated persistent
-  browser partition (`src/main/panelView.ts:390-444`), rather than the privileged workspace
+  browser partition (`hosts/desktop/main/panelView.ts:390-444`), rather than the privileged workspace
   panel preload.
 - Normal navigation/window-open handling rejects non-HTTP(S) external schemes
-  (`src/main/panelView.ts:719-745`).
+  (`hosts/desktop/main/panelView.ts:719-745`).
 - Sensitive browser permission handling verifies top-level origin, panel type, stored grant,
-  OS state, and navigation lifetime (`src/main/services/browserPermissionController.ts`).
+  OS state, and navigation lifetime (`hosts/desktop/main/services/browserPermissionController.ts`).
 - The external-open service normalizes destinations, limits schemes, and integrates
   authority presentation (`src/server/services/externalOpenService.ts`).
 - Download filenames use basename sanitization and collision-free paths.

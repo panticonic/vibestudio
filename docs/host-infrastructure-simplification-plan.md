@@ -8,7 +8,7 @@ nothing in it is committed beyond the scope boundary itself.
 ## Why this plan exists
 
 After the residency plan's P1–P9, an estimated ~130–145k non-test lines remain in
-`src/server` + `src/main` + `apps/headless-host`. That remainder is kernel
+`src/server` + `hosts/desktop/main` + `packages/headless-renderer`. That remainder is kernel
 infrastructure that residency migration cannot touch — code whose H2 residency
 reasons are legitimate but whose *size* is its own maintenance, comprehension, and
 boot-complexity burden. Raw kernel mass is a goal in its own right (residency plan

@@ -5,14 +5,7 @@ import { fileURLToPath } from "node:url";
 import { flagValue } from "./lib/args.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const defaultOutput = path.join(
-  repoRoot,
-  "apps",
-  "mobile",
-  "ios",
-  "Generated",
-  "Vibestudio.entitlements"
-);
+const defaultOutput = path.join(repoRoot, "hosts", "ios", "Generated", "Vibestudio.entitlements");
 
 function parseArgs(argv) {
   const options = {
@@ -49,21 +42,14 @@ Environment:
 }
 
 function plistString(value) {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
+  return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 function renderEntitlements({ configuration }) {
   const debug = configuration.toLowerCase() !== "release";
   const domains = associatedDomains({ debug });
   const apsEnvironment = process.env.VIBESTUDIO_IOS_APS_ENV;
-  if (
-    apsEnvironment &&
-    apsEnvironment !== "development" &&
-    apsEnvironment !== "production"
-  ) {
+  if (apsEnvironment && apsEnvironment !== "development" && apsEnvironment !== "production") {
     throw new Error("VIBESTUDIO_IOS_APS_ENV must be development or production");
   }
   const apsBlock = apsEnvironment
@@ -93,10 +79,7 @@ function associatedDomains({ debug }) {
   }
   const pairHost = process.env.VIBESTUDIO_IOS_PAIR_HOST?.trim();
   if (!pairHost) return [];
-  return [
-    `applinks:${pairHost}${debug ? "?mode=developer" : ""}`,
-    `webcredentials:${pairHost}`,
-  ];
+  return [`applinks:${pairHost}${debug ? "?mode=developer" : ""}`, `webcredentials:${pairHost}`];
 }
 
 const options = parseArgs(process.argv.slice(2));

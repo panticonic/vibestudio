@@ -6,7 +6,9 @@ on:
     tags: ["mobile-v*"]
   pull_request:
     paths:
-      - "apps/mobile/**"
+      - "hosts/android/**"
+      - "hosts/ios/**"
+      - "hosts/react-native/**"
       - "packages/rpc/**"
       - "packages/shared/**"
       - "scripts/cli/mobile-*.mjs"
@@ -33,11 +35,11 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Java 17
+      - name: Set up Java 21
         uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           distribution: zulu
-          java-version: 17
+          java-version: 21
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -64,7 +66,7 @@ jobs:
           path: |
             ~/.gradle/caches
             ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('apps/mobile/android/**/*.gradle*', 'apps/mobile/android/gradle/wrapper/gradle-wrapper.properties') }}
+          key: ${{ runner.os }}-gradle-${{ hashFiles('hosts/android/**/*.gradle*', 'hosts/android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: ${{ runner.os }}-gradle-
 
       - name: Install dependencies
@@ -84,12 +86,13 @@ jobs:
 
       - name: Link node_modules for Gradle
         run: |
-          # Gradle resolves node_modules from apps/mobile/android/ via
-          # settings.gradle path: ../node_modules = apps/mobile/node_modules/
+          # The React Native autolinking command runs in hosts/react-native
+          # (see hosts/android/settings.gradle), which resolves node_modules
+          # from hosts/react-native/node_modules.
           # pnpm hoisted may not put all deps there, so symlink to root.
-          if [ ! -L apps/mobile/node_modules ]; then
-            rm -rf apps/mobile/node_modules
-            ln -s ../../node_modules apps/mobile/node_modules
+          if [ ! -L hosts/react-native/node_modules ]; then
+            rm -rf hosts/react-native/node_modules
+            ln -s ../../node_modules hosts/react-native/node_modules
           fi
 
       - name: Set up Android SDK
@@ -122,16 +125,16 @@ jobs:
             echo "No release keystore configured, PR build will use debug signing"
           else
             echo "has_keystore=true" >> "$GITHUB_OUTPUT"
-            echo "$KEYSTORE_BASE64" | base64 -d > apps/mobile/android/app/release.keystore
-            echo "RELEASE_STORE_FILE=release.keystore" >> apps/mobile/android/gradle.properties
-            echo "RELEASE_KEY_ALIAS=$RELEASE_KEY_ALIAS" >> apps/mobile/android/gradle.properties
+            echo "$KEYSTORE_BASE64" | base64 -d > hosts/android/app/release.keystore
+            echo "RELEASE_STORE_FILE=release.keystore" >> hosts/android/gradle.properties
+            echo "RELEASE_KEY_ALIAS=$RELEASE_KEY_ALIAS" >> hosts/android/gradle.properties
           fi
 
       - name: Build release APK and AAB
         # Passwords are injected via ORG_GRADLE_PROJECT_* so Gradle picks
         # them up as project properties (`RELEASE_STORE_PASSWORD`,
         # `RELEASE_KEY_PASSWORD`) without touching gradle.properties.
-        # NOTE: apps/mobile/android/app/build.gradle currently reads
+        # NOTE: hosts/android/app/build.gradle currently reads
         # `RELEASE_STORE_PASSWORD` / `RELEASE_KEY_PASSWORD` via
         # `project.hasProperty(...)`. ORG_GRADLE_PROJECT_<name> env vars
         # surface as project properties in Gradle, so the existing build
@@ -142,18 +145,18 @@ jobs:
         env:
           ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        working-directory: apps/mobile/android
+        working-directory: hosts/android
         run: ./gradlew assembleRelease bundleRelease --no-daemon
 
       - name: Remove release signing material
         if: ${{ always() && steps.signing.outputs.has_keystore == 'true' }}
         run: |
-          rm -f apps/mobile/android/app/release.keystore
-          sed -i '/^RELEASE_STORE_FILE=/d; /^RELEASE_KEY_ALIAS=/d' apps/mobile/android/gradle.properties
+          rm -f hosts/android/app/release.keystore
+          sed -i '/^RELEASE_STORE_FILE=/d; /^RELEASE_KEY_ALIAS=/d' hosts/android/gradle.properties
 
       - name: Generate checksums
         run: |
-          cd apps/mobile/android/app/build/outputs
+          cd hosts/android/app/build/outputs
           mkdir -p release-artifacts
           find . -type f \( -name "*.apk" -o -name "*.aab" \) -print0 \
             | sort -z \
@@ -166,9 +169,9 @@ jobs:
         with:
           name: vibestudio-mobile-${{ github.sha }}
           path: |
-            apps/mobile/android/app/build/outputs/apk/release/*.apk
-            apps/mobile/android/app/build/outputs/bundle/release/*.aab
-            apps/mobile/android/app/build/outputs/release-artifacts/SHA256SUMS-android
+            hosts/android/app/build/outputs/apk/release/*.apk
+            hosts/android/app/build/outputs/bundle/release/*.aab
+            hosts/android/app/build/outputs/release-artifacts/SHA256SUMS-android
           if-no-files-found: error
           retention-days: 30
 
@@ -225,14 +228,14 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Install CocoaPods
-        working-directory: apps/mobile/ios
+        working-directory: hosts/ios
         run: pod install
 
       - name: Check iOS application version
         run: pnpm check:mobile-version
 
       - name: Build iOS Debug simulator shell
-        working-directory: apps/mobile/ios
+        working-directory: hosts/ios
         run: |
           xcodebuild \
             -workspace Vibestudio.xcworkspace \
@@ -246,7 +249,7 @@ jobs:
             build
 
       - name: Run native iOS regression tests
-        working-directory: apps/mobile/ios
+        working-directory: hosts/ios
         run: |
           simulator_id=$(node --input-type=module <<'NODE'
           import { execFileSync } from "node:child_process";
@@ -282,6 +285,6 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: vibestudio-ios-native-tests-${{ github.sha }}
-          path: apps/mobile/ios/build/native-tests.xcresult
+          path: hosts/ios/build/native-tests.xcresult
           if-no-files-found: warn
           retention-days: 14

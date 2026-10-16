@@ -625,7 +625,7 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs, desktopEnvi
   );
   // The desktop shell ingests the pairing material via the vibestudio://connect
   // deep link passed as an argv: protocolHandler.enqueueFirstArgvLink(process.argv)
-  // (src/main/index.ts) scans argv on first launch, the bootstrap chooser drains
+  // (hosts/desktop/main/index.ts) scans argv on first launch, the bootstrap chooser drains
   // it (vibestudio:drain-pair-link), and the shell dials the server over Iroh.
   const app = await electron.launch({
     executablePath: electronBinary,

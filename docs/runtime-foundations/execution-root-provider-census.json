@@ -45,7 +45,7 @@
       "id": "development-run",
       "backingSources": [
         "src/server/services/developmentClientExecutorService.ts",
-        "src/main/currentHostDevelopmentClientExecutor.ts"
+        "hosts/desktop/main/currentHostDevelopmentClientExecutor.ts"
       ],
       "reviewedReaders": ["src/server/services/developmentExecutor.ts"],
       "note": "The durable development run retains the exact BuildStore execution while the selected client executor owns only a verified materialized copy and subordinate process lifecycle."
@@ -90,11 +90,11 @@
       "reason": "Launch adapter reading app-generation state; AppHost remains the durable artifact owner."
     },
     {
-      "source": "src/main/appOrchestrator.ts",
+      "source": "hosts/desktop/main/appOrchestrator.ts",
       "reason": "Desktop observer of host-owned state."
     },
     {
-      "source": "src/main/index.ts",
+      "source": "hosts/desktop/main/index.ts",
       "reason": "Desktop bootstrap and observer, not an artifact owner."
     }
   ]

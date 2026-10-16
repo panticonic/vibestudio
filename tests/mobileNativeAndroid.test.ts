@@ -38,10 +38,10 @@ describe("host Android native primitive", () => {
   it("runs the resource-bounded Gradle build from the host-owned scaffold", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-mobile-native-"));
     roots.push(root);
-    const android = path.join(root, "apps/mobile/android");
-    fs.mkdirSync(path.join(root, "apps/mobile"), { recursive: true });
-    fs.writeFileSync(path.join(root, "apps/mobile/package.json"), "{}");
-    fs.writeFileSync(path.join(root, "apps/mobile/index.js"), "");
+    const android = path.join(root, "hosts/android");
+    fs.mkdirSync(path.join(root, "hosts/react-native"), { recursive: true });
+    fs.writeFileSync(path.join(root, "hosts/react-native/package.json"), "{}");
+    fs.writeFileSync(path.join(root, "hosts/react-native/index.js"), "");
     fs.mkdirSync(path.join(root, "node_modules/react-native"), { recursive: true });
     fs.writeFileSync(path.join(root, "node_modules/react-native/package.json"), "{}");
     const apk = path.join(android, "app/build/outputs/apk/internal/app-internal.apk");
@@ -57,7 +57,7 @@ describe("host Android native primitive", () => {
     );
     fs.writeFileSync(
       gradlew,
-      "#!/bin/sh\ntest -f ../../../native-installed || exit 17\nprintf '%s\\n' \"$@\" > gradle-args.txt\n"
+      "#!/bin/sh\ntest -f ../../native-installed || exit 17\nprintf '%s\\n' \"$@\" > gradle-args.txt\n"
     );
     fs.chmodSync(gradlew, 0o755);
 

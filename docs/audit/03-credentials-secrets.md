@@ -75,7 +75,7 @@ written to disk verbatim. There is **no encryption-at-rest**, **no keychain
 integration**, no envelope-encryption KEK. The `0o600` mode + the containing
 directory's mode is the *only* protection.
 
-Compare to `src/main/remoteCredentialStore.ts` which correctly uses Electron
+Compare to `hosts/desktop/main/remoteCredentialStore.ts` which correctly uses Electron
 `safeStorage` (OS keychain / DPAPI / libsecret) for the remote-server token.
 The remote-admin-token path is the one that got the keychain treatment; the
 third-party OAuth tokens — which are arguably *more* dangerous because they
@@ -416,7 +416,7 @@ There is no:
 
 ### F-07 — Webhook relay has no authentication or signature verification  [**High**]
 
-**File / Line:** `apps/webhook-relay/src/index.ts` (full file, 65 lines).
+**File / Line:** `services/webhook-relay/src/index.ts` (full file, 65 lines).
 
 ```ts
 if (request.method === "POST" && segments.length === 3 && segments[0] === "webhook") {
@@ -536,7 +536,7 @@ against Vibestudio users.
 
 ### F-10 — Silent plaintext fallback for `remoteCredentialStore`  [**Medium**]
 
-**File / Line:** `src/main/remoteCredentialStore.ts:82-103`.
+**File / Line:** `hosts/desktop/main/remoteCredentialStore.ts:82-103`.
 
 ```ts
 const encrypted = safeStorage.isEncryptionAvailable();
@@ -575,8 +575,8 @@ encrypted on this machine".
 ### F-11 — TOFU fingerprint UX for remote-server TLS pinning  [**Medium**]
 
 **Files:**
-- `src/main/services/remoteCredService.ts:58-84, 241-277` — probe + prompt flow.
-- `src/main/tlsPinning.ts:55-82` — pinning implementation.
+- `hosts/desktop/main/services/remoteCredService.ts:58-84, 241-277` — probe + prompt flow.
+- `hosts/desktop/main/tlsPinning.ts:55-82` — pinning implementation.
 
 The flow accepts an "observedFingerprint" on first use (`:272-277`) and asks
 the user to confirm. This is standard TOFU, but with human-readable
@@ -842,10 +842,10 @@ is the standard to measure other secret-bearing files against.
 | `src/server/workerdManager.ts` | `PROXY_AUTH_TOKEN` minting |
 | `src/server/panelBootstrapScript.ts` | Panel bootstrap loader script |
 | `src/server/panelHttpServer.ts` | Loader + bundle serving + cache headers |
-| `src/main/remoteCredentialStore.ts` | Remote admin-token `safeStorage` |
-| `src/main/services/remoteCredService.ts` | Remote-server creds RPC / TOFU |
-| `src/main/tlsPinning.ts` | Fingerprint pinning primitives |
-| `src/main/serverClient.ts` | WebSocket client with TLS pinning |
+| `hosts/desktop/main/remoteCredentialStore.ts` | Remote admin-token `safeStorage` |
+| `hosts/desktop/main/services/remoteCredService.ts` | Remote-server creds RPC / TOFU |
+| `hosts/desktop/main/tlsPinning.ts` | Fingerprint pinning primitives |
+| `hosts/desktop/main/serverClient.ts` | WebSocket client with TLS pinning |
 | `packages/credential-client/src/store.ts` | Plaintext JSON credential store |
 | `packages/shared/src/credentials/consent.ts` | Consent grant records |
 | `packages/credential-client/src/audit.ts` | Append-only JSONL audit log |
@@ -859,8 +859,8 @@ is the standard to measure other secret-bearing files against.
 | `packages/shared/src/redact.ts` | Token redaction helper |
 | `packages/auth-flow/src/providers/openaiCodex.ts` | Client-side OAuth |
 | `packages/auth-flow/src/index.ts` | Auth-flow package surface |
-| `apps/webhook-relay/src/index.ts` | Webhook relay (stub) |
-| `apps/webhook-relay/wrangler.toml` | Relay Cloudflare config |
+| `services/webhook-relay/src/index.ts` | Webhook relay (stub) |
+| `services/webhook-relay/wrangler.toml` | Relay Cloudflare config |
 | `apps/mobile/src/services/auth.ts` | Shell token in Keychain |
 | `apps/mobile/src/services/credentialConsent.ts` | Mobile consent bridge |
 | `apps/mobile/src/components/PanelWebView.tsx` | WebView panelInit plumbing |

@@ -11,7 +11,7 @@ const omitted = new Set([".git", "dist", "node_modules", "workspace"]);
 function linkInstalledDependencies(checkoutRoot) {
   const localPackages = new Map();
   const unitRoots = [];
-  for (const category of ["packages", "apps"]) {
+  for (const category of ["packages", "hosts", "services"]) {
     for (const entry of fs.readdirSync(path.join(repositoryRoot, category), {
       withFileTypes: true,
     })) {

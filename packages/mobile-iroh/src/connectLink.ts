@@ -1,5 +1,5 @@
 // Deep-link recognition + one-time-replay guard for Vibestudio pairing links,
-// shared by BOTH the native host bootstrap (`apps/mobile/index.js`) and the
+// shared by BOTH the native host bootstrap (`hosts/react-native/index.js`) and the
 // workspace app so there is exactly ONE copy of this logic (the native shell and
 // the workspace bundle both import `@vibestudio/mobile-iroh`). RN-only
 // (AsyncStorage); the STRUCTURAL link grammar/validation lives in

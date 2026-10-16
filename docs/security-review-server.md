@@ -200,14 +200,14 @@ Redirects that remain inside the already-approved audience should remain invisib
 
 #### Evidence
 
-- The implementation explicitly says the shared secret is “too weak for tenant isolation” at `apps/webhook-relay/src/registry.ts:25-29`.
+- The implementation explicitly says the shared secret is “too weak for tenant isolation” at `services/webhook-relay/src/registry.ts:25-29`.
 - Deployment instructs the home server and relay worker to share the same global value (`docs/iroh-deployment.md:279-288`).
-- Backhaul authentication signs attacker-supplied `<serverId>\n<timestamp>` under that one secret (`apps/webhook-relay/src/registry.ts:169-190`).
-- Once verified, the relay accepts that asserted identity without an installation-specific key (`apps/webhook-relay/src/registry.ts:232-240`).
-- A new connection for the same `serverId` evicts the incumbent at `apps/webhook-relay/src/registry.ts:248-266`. The behavior is intentional and covered by `apps/webhook-relay/src/registry.test.ts:441-461`.
-- Webhook ownership considers an existing registration valid when the asserted server ID matches (`apps/webhook-relay/src/registry.ts:309-322`).
-- Delivery selects any open socket tagged with that ID (`apps/webhook-relay/src/registry.ts:468-490`, `apps/webhook-relay/src/registry.ts:543-552`).
-- OAuth transaction registration likewise stores the self-asserted ID (`apps/webhook-relay/src/registry.ts:333-344`).
+- Backhaul authentication signs attacker-supplied `<serverId>\n<timestamp>` under that one secret (`services/webhook-relay/src/registry.ts:169-190`).
+- Once verified, the relay accepts that asserted identity without an installation-specific key (`services/webhook-relay/src/registry.ts:232-240`).
+- A new connection for the same `serverId` evicts the incumbent at `services/webhook-relay/src/registry.ts:248-266`. The behavior is intentional and covered by `services/webhook-relay/src/registry.test.ts:441-461`.
+- Webhook ownership considers an existing registration valid when the asserted server ID matches (`services/webhook-relay/src/registry.ts:309-322`).
+- Delivery selects any open socket tagged with that ID (`services/webhook-relay/src/registry.ts:468-490`, `services/webhook-relay/src/registry.ts:543-552`).
+- OAuth transaction registration likewise stores the self-asserted ID (`services/webhook-relay/src/registry.ts:333-344`).
 - Server IDs are random 18-byte base64url values (`src/server/hostCore/deviceAuthStore.ts:336-365`), which mitigates discovery but makes the ID function as a second bearer secret rather than a verifiable identity.
 
 #### Impact
@@ -390,7 +390,7 @@ Preserve enterprise/custom OIDC by reviewing a custom issuer/metadata trust bund
 - `handleIngressRoute` reads the entire body before looking up the subscription at `src/server/services/webhookIngressService.ts:479-491`.
 - `readRawBody` appends all chunks and `Buffer.concat`s them without a ceiling (`src/server/services/webhookIngressService.ts:780-786`).
 - Direct webhook URLs are currently loopback-only (`src/server/index.ts:2539-2545`), limiting reach.
-- The public Cloudflare relay already has a 1.5 MB body ceiling and a per-subscription durable-buffer cap (`apps/webhook-relay/src/registry.ts:65-77`, `apps/webhook-relay/src/registry.ts:398-426`). The missing budget is specific to the direct path.
+- The public Cloudflare relay already has a 1.5 MB body ceiling and a per-subscription durable-buffer cap (`services/webhook-relay/src/registry.ts:65-77`, `services/webhook-relay/src/registry.ts:398-426`). The missing budget is specific to the direct path.
 
 #### Impact
 

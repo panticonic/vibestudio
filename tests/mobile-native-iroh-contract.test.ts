@@ -4,13 +4,13 @@ import { IROH_CONCURRENT_BI_STREAM_WINDOW } from "../packages/iroh-transport/src
 
 const android = readFileSync(
   new URL(
-    "../apps/mobile/android/app/src/main/java/app/vibestudio/mobile/VibestudioIrohModule.kt",
+    "../hosts/android/app/src/main/java/app/vibestudio/mobile/VibestudioIrohModule.kt",
     import.meta.url
   ),
   "utf8"
 );
 const ios = readFileSync(
-  new URL("../apps/mobile/ios/Vibestudio/VibestudioIroh.swift", import.meta.url),
+  new URL("../hosts/ios/Vibestudio/VibestudioIroh.swift", import.meta.url),
   "utf8"
 );
 

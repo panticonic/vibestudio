@@ -1,7 +1,7 @@
 import {
   createSuccessfulConnectCoalescer,
   routeIncomingConnectLink,
-} from "../apps/mobile/connectLinkRouter.js";
+} from "../hosts/react-native/connectLinkRouter.js";
 import { describe, expect, it, vi } from "vitest";
 
 function dependencies(overrides: Record<string, unknown> = {}) {

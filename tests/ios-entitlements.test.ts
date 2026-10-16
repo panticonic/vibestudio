@@ -36,7 +36,7 @@ function generate(env: Record<string, string | undefined>, configuration = "Debu
 
 describe("ios-entitlements", () => {
   it("keeps the iOS Podfile compatible with the pnpm workspace layout", () => {
-    const podfile = fs.readFileSync(path.join(process.cwd(), "apps/mobile/ios/Podfile"), "utf8");
+    const podfile = fs.readFileSync(path.join(process.cwd(), "hosts/ios/Podfile"), "utf8");
     expect(podfile).toContain('require.resolve("react-native/scripts/react_native_pods.rb"');
     expect(podfile).toContain("prepare_react_native_project!");
     expect(podfile).not.toContain("require_relative '../node_modules");

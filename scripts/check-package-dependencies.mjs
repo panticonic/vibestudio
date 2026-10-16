@@ -13,7 +13,7 @@ import {
 } from "./lib/package-import-audit.mjs";
 
 const repositoryRoot = path.resolve(import.meta.dirname, "..");
-const workspaceRoots = ["packages", "apps"].map((part) => path.join(repositoryRoot, part));
+const workspaceRoots = ["packages", "hosts", "services"].map((part) => path.join(repositoryRoot, part));
 const directories = (
   await Promise.all(workspaceRoots.map((root) => findPackageDirectories(root)))
 ).flat();

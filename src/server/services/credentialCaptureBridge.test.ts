@@ -9,7 +9,7 @@ import { describe, it, expect, vi } from "vitest";
 import { EventService } from "@vibestudio/shared/eventsService";
 import type { EventName } from "@vibestudio/shared/events";
 import { RemoteRpcAggregateError, serializeRpcFailure } from "@vibestudio/rpc";
-import { createServerEventBridge } from "../../main/serverEventBridge.js";
+import { createServerEventBridge } from "../../../hosts/desktop/main/serverEventBridge.js";
 import type { CredentialCaptureCompletion } from "@vibestudio/service-schemas/credentials";
 import {
   createCredentialCaptureBridge,

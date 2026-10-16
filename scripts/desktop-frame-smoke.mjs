@@ -23,8 +23,8 @@ try {
       contents: `
 import { app, BaseWindow, nativeImage, webContents } from 'electron';
 import assert from 'node:assert/strict';
-import { ViewManager } from './src/main/viewManager.ts';
-import { CdpHostProvider } from './src/main/cdpHostProvider.ts';
+import { ViewManager } from './hosts/desktop/main/viewManager.ts';
+import { CdpHostProvider } from './hosts/desktop/main/cdpHostProvider.ts';
 app.setPath('userData', ${JSON.stringify(join(temp, "profile"))});
 async function run() {
   await app.whenReady();

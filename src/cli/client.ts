@@ -34,8 +34,8 @@ import {
   serverEndpoint,
 } from "./remoteClient.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
-import { createTerminalCommand } from "./terminal/terminalCommand.js";
-import { isTerminalHangup } from "./terminal/ttyRestore.js";
+import { createTerminalCommand } from "../../hosts/terminal/terminalCommand.js";
+import { isTerminalHangup } from "../../hosts/terminal/ttyRestore.js";
 import { workspaceLabel } from "../node/workspaceLabel.js";
 import { agentCommands, createSelectedWorkspaceClient } from "./agent/index.js";
 import { fsCommands } from "./agent/fsCommands.js";

@@ -1176,7 +1176,7 @@ signaling rooms, DTLS fingerprints, or WebRTC is not transport-neutral.
 ### Host clients and servers
 
 - `src/server/webrtcIngress.ts`, `src/server/webrtcSessionShim.ts`, and tests;
-- `src/main/webrtcServerClient.ts` and WebRTC session/client wiring;
+- `hosts/desktop/main/webrtcServerClient.ts` and WebRTC session/client wiring;
 - CLI WebRTC clients, flags, URL handling, and test harness. The cross-process
   connection lock survives as an endpoint-identity lock: it is renamed and
   re-keyed from the signaling room, not deleted;

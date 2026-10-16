@@ -141,7 +141,7 @@ measure that scheduler, not propose a second conditional scheduling path.
 4. **Interaction spans** — click → RPC dispatched → op queued → slot reserved → entity
    prepared → view allocated → first response → first panel paint. Fix the Electron marks:
    server-spawned/server-connected are recorded consecutively and post-connect ends at a
-   window-created mark that can predate connection (`src/main/index.ts:2807`).
+   window-created mark that can predate connection (`hosts/desktop/main/index.ts:2807`).
 5. **Mobile interaction spans, same schema** — tap → bridge RPC dispatched → façade asset
    fetch → WebView load → first panel paint. Emit through the same span vocabulary as
    desktop so the two are comparable. Direct façade counters are: requests, memory-LRU

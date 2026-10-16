@@ -1,0 +1,68 @@
+import { describe, expect, it } from "vitest";
+import {
+  FRESH_REMOTE_STARTUP_CONNECTION_PHASES,
+  LOCAL_STARTUP_CONNECTION_PHASES,
+  startupConnectionProgress,
+} from "../../../src/startupConnectionProgress.js";
+import { connectionTimeline, startupTimeline } from "./startupTimeline.js";
+
+describe("startup timeline", () => {
+  it("keeps completed local connection stages as the next stage becomes active", () => {
+    const progress = startupConnectionProgress(
+      LOCAL_STARTUP_CONNECTION_PHASES,
+      "connect-workspace"
+    );
+
+    expect(connectionTimeline(progress)).toEqual([
+      {
+        id: "start-local-server",
+        label: "Starting Vibestudio",
+        state: "complete",
+      },
+      { id: "connect-workspace", label: "Connecting to your workspace", state: "active" },
+      {
+        id: "prepare-workspace-session",
+        label: "Getting your workspace ready",
+        state: "pending",
+      },
+    ]);
+  });
+
+  it("marks the exact active connection stage as failed", () => {
+    const progress = startupConnectionProgress(
+      FRESH_REMOTE_STARTUP_CONNECTION_PHASES,
+      "resolve-workspace"
+    );
+
+    expect(connectionTimeline(progress, "failed").map(({ id, state }) => ({ id, state }))).toEqual([
+      { id: "check-credential-storage", state: "complete" },
+      { id: "redeem-pairing-link", state: "complete" },
+      { id: "resolve-workspace", state: "failed" },
+      { id: "connect-workspace", state: "pending" },
+      { id: "prepare-workspace-session", state: "pending" },
+    ]);
+  });
+
+  it("uses a stable generic connection row before the host reports a plan", () => {
+    expect(startupTimeline(null)[0]).toEqual({
+      id: "connect-workspace",
+      label: "Connecting to your workspace",
+      state: "active",
+    });
+  });
+  it("completes connection before showing only observed app launch work", () => {
+    const progress = startupConnectionProgress(
+      LOCAL_STARTUP_CONNECTION_PHASES,
+      "prepare-workspace-session"
+    );
+    const timeline = startupTimeline(progress, "active", [
+      { phase: "resolve-target", state: "complete" },
+      { phase: "prepare-app", state: "blocked" },
+    ]);
+    expect(timeline.slice(0, 3).every((step) => step.state === "complete")).toBe(true);
+    expect(timeline.slice(3)).toEqual([
+      { id: "resolve-target", label: "Find desktop app", state: "complete" },
+      { id: "prepare-app", label: "Prepare desktop app", state: "blocked" },
+    ]);
+  });
+});

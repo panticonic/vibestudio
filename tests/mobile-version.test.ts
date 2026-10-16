@@ -10,10 +10,10 @@ describe("native mobile application version", () => {
   });
 
   it("uses the same generated app version in Debug and Release without Pod overrides", () => {
-    const project = fs.readFileSync("apps/mobile/ios/Vibestudio.xcodeproj/project.pbxproj", "utf8");
+    const project = fs.readFileSync("hosts/ios/Vibestudio.xcodeproj/project.pbxproj", "utf8");
     expect(project).not.toContain("MARKETING_VERSION =");
     for (const mode of ["Debug", "Release"]) {
-      expect(fs.readFileSync(`apps/mobile/ios/Vibestudio.${mode}.xcconfig`, "utf8")).toContain(
+      expect(fs.readFileSync(`hosts/ios/Vibestudio.${mode}.xcconfig`, "utf8")).toContain(
         '#include "Vibestudio.Version.xcconfig"'
       );
     }

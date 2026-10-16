@@ -1,0 +1,8 @@
+Generated/
+Signing.local.xcconfig
+.xcode.env.local
+**/xcuserdata/
+
+# Dependencies and build output
+Pods/
+build/

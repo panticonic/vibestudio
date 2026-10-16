@@ -71,7 +71,7 @@ export function createMobileNativeService(deps: { appRoot: string }): ServiceDef
         const apkPath = internalAndroidApkPath(root);
         const androidSourceBuildAvailable = hasCompleteAndroidSourceProject(root);
         const iosSourceBuildAvailable = fs.existsSync(
-          path.join(root, "apps", "mobile", "ios", "Vibestudio.xcodeproj", "project.pbxproj")
+          path.join(root, "hosts", "ios", "Vibestudio.xcodeproj", "project.pbxproj")
         );
         const issues: string[] = [];
         if (!adb) issues.push("adb is not on PATH");
@@ -134,9 +134,7 @@ export function createMobileNativeService(deps: { appRoot: string }): ServiceDef
       },
       installIos: async (_ctx, [input]) => {
         if (
-          !fs.existsSync(
-            path.join(root, "apps", "mobile", "ios", "Vibestudio.xcodeproj", "project.pbxproj")
-          )
+          !fs.existsSync(path.join(root, "hosts", "ios", "Vibestudio.xcodeproj", "project.pbxproj"))
         ) {
           throw Object.assign(
             new Error("iOS source installs require a complete Vibestudio source checkout"),

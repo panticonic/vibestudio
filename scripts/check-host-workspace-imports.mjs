@@ -3,11 +3,11 @@
 //
 // Enforces the host/userland boundary:
 //
-//   - HOST code (src/, packages/, apps/, scripts/, tests/, build.mjs) must never
+//   - HOST code (src/, packages/, hosts/, services/, scripts/, tests/, build.mjs) must never
 //     depend on or assume WORKSPACE (userland, workspace/) code beyond defined
 //     interfaces. Package scope is never residency evidence.
 //   - WORKSPACE code must never import host implementation roots by relative
-//     source path (`src/`, `packages/`, `apps/`, `scripts/`, or root `tests/`).
+//     source path (`src/`, `packages/`, `hosts/`, `services/`, `scripts/`, or root `tests/`).
 //     Shared public package specifiers such as `@vibestudio/shared` remain the
 //     intentional platform boundary.
 //
@@ -50,10 +50,10 @@ import { parse } from "@babel/parser";
 const DEFAULT_ROOT = process.cwd();
 
 // Host-side roots scanned recursively, plus individual files.
-const HOST_SCANNED_ROOTS = ["src", "packages", "apps", "scripts", "tests"];
+const HOST_SCANNED_ROOTS = ["src", "packages", "hosts", "services", "scripts", "tests"];
 const HOST_SCANNED_FILES = ["build.mjs"];
 const WORKSPACE_SCANNED_ROOTS = ["workspace"];
-const HOST_PRIVATE_IMPORT_ROOTS = ["src", "packages", "apps", "scripts", "tests"];
+const HOST_PRIVATE_IMPORT_ROOTS = ["src", "packages", "hosts", "services", "scripts", "tests"];
 const NEUTRAL_BOUNDARY_TEST_ROOTS = new Set(["tests/workspace-integration"]);
 
 const SOURCE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
@@ -333,7 +333,7 @@ function* walkSourceFiles(root, scannedRoots, scannedFiles = []) {
 }
 
 function isProductionHostSource(relativePath) {
-  if (!/^(?:src|packages|apps)\//u.test(relativePath)) return false;
+  if (!/^(?:src|packages|hosts|services)\//u.test(relativePath)) return false;
   return !/(?:^|\/)(?:testFixtures?\/|[^/]+\.(?:test|spec|testFixture)\.[cm]?[jt]sx?$)/u.test(
     relativePath
   );
@@ -408,7 +408,8 @@ export function scanRepository(root = DEFAULT_ROOT) {
   for (const manifest of [
     path.join(root, "package.json"),
     ...walkPackageManifests(path.join(root, "packages")),
-    ...walkPackageManifests(path.join(root, "apps")),
+    ...walkPackageManifests(path.join(root, "hosts")),
+    ...walkPackageManifests(path.join(root, "services")),
   ]) {
     if (!fs.existsSync(manifest)) continue;
     const parsed = JSON.parse(fs.readFileSync(manifest, "utf8"));

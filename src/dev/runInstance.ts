@@ -19,8 +19,8 @@ import {
   runStep,
   type LaunchProgress,
   type LaunchStep,
-} from "../cli/terminal/launchProgress.js";
-import { routeProcessWarnings, tolerateTerminalHangup } from "../cli/terminal/ttyRestore.js";
+} from "../../hosts/terminal/launchProgress.js";
+import { routeProcessWarnings, tolerateTerminalHangup } from "../../hosts/terminal/ttyRestore.js";
 import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
 import {
   clearDevInstanceReady,
@@ -497,9 +497,9 @@ async function runOwnedTerminal(
 ): Promise<number> {
   const [{ runTerminalSessions }, { loadCliCredentials, requireDeviceCliCredentials }, command] =
     await Promise.all([
-      import("../cli/terminal/terminalSessions.js"),
+      import("../../hosts/terminal/terminalSessions.js"),
       import("../cli/credentialStore.js"),
-      import("../cli/terminal/terminalCommand.js"),
+      import("../../hosts/terminal/terminalCommand.js"),
     ]);
   try {
     const loaded = loadCliCredentials();

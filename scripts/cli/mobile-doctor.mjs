@@ -7,8 +7,8 @@ import process from "node:process";
 import { readIosSigningConfig } from "./lib/mobile-ios-signing.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const iosDir = path.join(repoRoot, "apps", "mobile", "ios");
-const androidDir = path.join(repoRoot, "apps", "mobile", "android");
+const iosDir = path.join(repoRoot, "hosts", "ios");
+const androidDir = path.join(repoRoot, "hosts", "android");
 
 function has(command, args = ["--version"]) {
   const result = spawnSync(command, args, { stdio: "ignore" });
@@ -86,7 +86,7 @@ export function checks(options, deps = {}) {
       ok: fileExists(androidGoogle),
       severity: "warn",
       fix: fileExists(androidGoogleTemplate)
-        ? "Copy apps/mobile/android/app/google-services.template.json to google-services.json and fill Firebase values for push."
+        ? "Copy hosts/android/app/google-services.template.json to google-services.json and fill Firebase values for push."
         : "Add Android Firebase google-services.json if push is required.",
     },
     {
@@ -117,7 +117,7 @@ export function checks(options, deps = {}) {
       name: "ios.signing-config",
       ok: signing.exists && Boolean(signing.team),
       severity: "error",
-      fix: "Copy apps/mobile/ios/Signing.template.xcconfig to Signing.local.xcconfig and set VIBESTUDIO_IOS_TEAM_ID.",
+      fix: "Copy hosts/ios/Signing.template.xcconfig to Signing.local.xcconfig and set VIBESTUDIO_IOS_TEAM_ID.",
       detail: signing.exists
         ? `team=${signing.team || "(missing)"} bundle=${signing.bundleId || "(missing)"}`
         : "Signing.local.xcconfig missing",

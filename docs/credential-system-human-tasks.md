@@ -9,7 +9,7 @@ consent, or non-interactive deployment flows.
 The server binds loopback only and remote clients reach it over Iroh, so there
 is no per-server public URL for OAuth providers to redirect to. Provider redirect
 URIs that need a public HTTPS endpoint resolve through the **callback relay**
-(`apps/webhook-relay`, plan §7): the relay owns the stable
+(`services/webhook-relay`, plan §7): the relay owns the stable
 `https://vibestudio.app` product origin, receives the provider's redirect, and backhauls
 the authorization code to the originating loopback server over its pipe. Each user
 registers the relay's `…/oauth/callback` URL with their own OAuth provider clients
@@ -185,7 +185,7 @@ Follow-up:
 
 ### TODO: Apex Worker Deployment Hardening
 
-1. Done: the standalone Pages app is gone. The apex `apps/webhook-relay` Worker
+1. Done: the standalone Pages app is gone. The apex `services/webhook-relay` Worker
    owns pair links and app-link metadata.
 2. Done: `scripts/smoke-cloudflare-apex.mjs` checks the landing and well-known
    URLs, then opens a real authenticated backhaul and verifies registration and

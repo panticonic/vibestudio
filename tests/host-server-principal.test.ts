@@ -13,7 +13,7 @@ import { describe, expect, it } from "vitest";
  * then fail a workspace-membership check they can never pass, and the failure
  * surfaces far away as a missing panel, a missing credential, or an empty list.
  */
-const HOST_SOURCE_ROOTS = ["src", "packages"];
+const HOST_SOURCE_ROOTS = ["src", "hosts", "packages"];
 const SERVER_CALLER = /createVerifiedCaller\(\s*[^,)]+,\s*"server"/;
 
 function sourceFiles(dir: string): string[] {

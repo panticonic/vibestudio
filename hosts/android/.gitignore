@@ -1,0 +1,13 @@
+.gradle/
+.kotlin/
+app/build/
+build/
+local.properties
+# Keep gradle wrapper (gradlew, gradle/wrapper/) for CI builds
+app/src/main/assets/index.android.bundle
+app/src/main/res/drawable-*
+app/src/main/res/raw/
+
+# Bundle output
+*.jsbundle
+*.bundle

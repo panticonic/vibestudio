@@ -2,14 +2,14 @@ import { expect, test, type Page } from "@playwright/test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as http from "node:http";
-import { buildWebsiteAssets } from "../../apps/webhook-relay/build-website-assets.mjs";
+import { buildWebsiteAssets } from "../../services/webhook-relay/build-website-assets.mjs";
 import { runWithOwnedCleanup } from "../../scripts/lib/owned-cleanup.mjs";
 import { retireUserlandProjectionProcess } from "../../scripts/lib/userland-projection-process-owner.js";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 const { handleApexLanding } = createRequire(import.meta.url)(
-  "../../apps/webhook-relay/src/oauthLanding.ts"
-) as typeof import("../../apps/webhook-relay/src/oauthLanding");
+  "../../services/webhook-relay/src/oauthLanding.ts"
+) as typeof import("../../services/webhook-relay/src/oauthLanding");
 import { launchManagedServerApp } from "../setup/managedServerApp";
 import {
   approvePendingStartupUnits,

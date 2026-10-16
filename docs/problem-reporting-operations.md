@@ -18,9 +18,9 @@ reporting destination.
 Run these from the host checkout, after reviewing the Worker change:
 
 ```sh
-pnpm exec wrangler d1 migrations apply REPORT_DB --remote --config apps/webhook-relay/wrangler.toml
-node apps/webhook-relay/build-website-assets.mjs
-pnpm exec wrangler deploy --config apps/webhook-relay/wrangler.toml
+pnpm exec wrangler d1 migrations apply REPORT_DB --remote --config services/webhook-relay/wrangler.toml
+node services/webhook-relay/build-website-assets.mjs
+pnpm exec wrangler deploy --config services/webhook-relay/wrangler.toml
 ```
 
 Preserve existing relay bindings, routes, and secrets. Public submission,
