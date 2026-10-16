@@ -25,8 +25,6 @@ import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
 import {
   clearDevInstanceReady,
   createEphemeralInstanceRoot,
-  readDevInstanceRecord,
-  waitForDevInstanceReady,
   generatedInstanceId,
   persistentInstanceRoot,
   publishDevInstanceReady,
@@ -49,10 +47,10 @@ type Mode = DevInstanceRecord["kind"];
 type LaunchMode = Mode | "terminal";
 
 /**
- * `pnpm terminal` keeps the terminal for the browser: build, template and
+ * `pnpm dev:terminal` keeps the terminal for the browser: build, template and
  * server output go to `<instanceRoot>/logs/server.log` instead.
  */
-/** Steps `pnpm terminal` runs before the browser owns the screen. */
+/** Steps `pnpm dev:terminal` runs before the browser owns the screen. */
 const TERMINAL_LAUNCH_STEPS = 6;
 
 interface TerminalLaunch {
@@ -451,18 +449,21 @@ async function runDesktop(
   );
 }
 
-const TERMINAL_HELP = `pnpm terminal — run this checkout's server and open the terminal browser
+const TERMINAL_HELP = `pnpm dev:terminal — build this checkout and open the terminal browser
+on an ephemeral developer instance (the terminal counterpart of pnpm dev)
 
-Usage: pnpm terminal [--instance <id>] [--ephemeral] [--workspace <name>] [--yes]
+Usage: pnpm dev:terminal [--instance <id>] [--workspace <name>] [--yes]
 
-  --instance <id>     Use a named persistent isolated instance (default: source).
-                      When that instance is already running, attach to it.
-  --ephemeral         Use a temporary instance root, removed on exit.
+  --instance <id>     Name the ephemeral instance, so parallel logs and
+                      \`pnpm cli --instance <id>\` commands have a stable target.
   --workspace <name>  Show this workspace (default: your Personal workspace).
   --yes               Approve startup approvals once without asking.
 
 Build, template and server output go to <instanceRoot>/logs/server.log.
-Quitting the browser stops and joins the server this command started.
+Quitting the browser stops the server and removes the instance.
+Attach to an instance that is already running with
+\`pnpm cli --instance <id> terminal\`; run the product profile with
+\`pnpm start:terminal\`.
 Template checkout options are the same as for \`pnpm server:live --help\`.
 `;
 
@@ -488,40 +489,6 @@ function extractTerminalOptions(argv: string[]): {
   return { yes: argv.includes("--yes"), ...(workspace ? { workspace } : {}), forwarded };
 }
 
-/** A live instance with this id, or null when none is running. */
-function liveInstance(repoRoot: string, id: string): DevInstanceRecord | null {
-  let record: DevInstanceRecord;
-  try {
-    record = readDevInstanceRecord(repoRoot, id);
-  } catch {
-    return null;
-  }
-  try {
-    process.kill(record.supervisorPid, 0);
-    return record;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Open the terminal browser against an instance another supervisor owns,
- * through the same command a user runs: `vibestudio terminal`.
- */
-async function attachTerminal(
-  repoRoot: string,
-  instance: DevInstanceRecord,
-  terminalArgs: string[]
-): Promise<number> {
-  process.env["VIBESTUDIO_APP_ROOT"] = repoRoot;
-  process.env["VIBESTUDIO_INSTANCE_ROOT"] = instance.root;
-  process.env["VIBESTUDIO_INSTANCE"] = instance.id;
-  console.log(`Instance ${instance.id} is already running; attaching to it.`);
-  if (instance.kind === "server") await waitForDevInstanceReady(instance);
-  const { main: runCli } = await import("../cli/client.js");
-  return await runCli(["terminal", ...terminalArgs]);
-}
-
 /** Run the browser against the server this supervisor owns; returns the exit status. */
 async function runOwnedTerminal(
   terminal: TerminalLaunch,
@@ -542,7 +509,7 @@ async function runOwnedTerminal(
           "Start a fresh instance with --ephemeral, or pair this instance from a device."
       );
     }
-    const credentials = requireDeviceCliCredentials(loaded, "pnpm terminal");
+    const credentials = requireDeviceCliCredentials(loaded, "pnpm dev:terminal");
     const exit = await runTerminalSessions({
       credentials,
       ...(terminal.workspace ? { workspace: terminal.workspace } : {}),
@@ -622,21 +589,6 @@ async function main(): Promise<void> {
   const parsed = terminalOptions
     ? { ...instanceArgs, forwarded: terminalOptions.forwarded }
     : instanceArgs;
-  if (
-    terminalOptions &&
-    !hasFlag(parsed.forwarded, "--ephemeral") &&
-    liveInstance(repoRoot, parsed.instanceId ?? "source")
-  ) {
-    process.exitCode = await attachTerminal(
-      repoRoot,
-      liveInstance(repoRoot, parsed.instanceId ?? "source")!,
-      [
-        ...(terminalOptions.workspace ? ["--workspace", terminalOptions.workspace] : []),
-        ...(terminalOptions.yes ? ["--yes"] : []),
-      ]
-    );
-    return;
-  }
   if (mode === "server" && hasFlag(parsed.forwarded, "--help")) {
     console.log(`Developer instance options:
   --instance <id>  Use a named persistent isolated instance (default: source)

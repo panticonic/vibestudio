@@ -121,9 +121,10 @@ belongs to someone else.
 
 ### CLI and the one command
 
-- **Entry points.** `pnpm terminal [--ephemeral]` is `src/dev/runInstance.ts
-terminal`. The product command is `vibestudio terminal`, in
-  `src/cli/terminal/terminalCommand.ts`.
+- **Entry points.** `pnpm dev:terminal` is `src/dev/runInstance.ts terminal
+  --ephemeral`; `pnpm start:terminal` is `src/dev/runProduct.ts terminal`,
+  which runs the product command `vibestudio terminal`
+  (`src/cli/terminal/terminalCommand.ts`) with product semantics.
 - **Starting the server.** `src/cli/terminal/localServer.ts` attaches to a
   server or starts an owned one. `ttyRestore.ts` restores the terminal.
   `terminalHost.ts` hosts the downloaded browser module.
@@ -260,7 +261,7 @@ terminal`. The product command is `vibestudio terminal`, in
 | Replay and invocation projection regressions      | Replay 88 and canonical protocol 73 passed; final Base composition typecheck passed                                                                                                                                                                                                            |
 | Ordered replay readiness and connection ownership | 101 focused replay tests, 17 independently rerun connection tests and 3 signal-store tests passed; Base main/integration composition checks passed                                                                                                                                             |
 | Terminal browser tests                            | 108 passed                                                                                                                                                                                                                                                                                     |
-| Live `pnpm terminal` checks                       | Launcher, Chat streaming, detach/resume, kill/relaunch with transcript, shell cwd, quit with a live PTY (~10 s, clean). Fork plus fork-agent reply checked only before the upstream merge                                                                                                      |
+| Live `pnpm dev:terminal` checks                   | Launcher, Chat streaming, detach/resume, kill/relaunch with transcript, shell cwd, quit with a live PTY (~10 s, clean). Fork plus fork-agent reply checked only before the upstream merge                                                                                                      |
 | Cold start to launcher                            | Before: about 26 min to template-preparation done. After: ~70 s on a quiet host; ~27.5 s with a warm derived cache                                                                                                                                                                             |
 | `extensions.invoke` p50                           | ~225 ms → 9.1 ms. Shell echo p50 ≈ 58 ms, measured before the last extension fix                                                                                                                                                                                                               |
 | Full host test suite on the final branch          | **Not run**                                                                                                                                                                                                                                                                                    |

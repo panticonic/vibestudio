@@ -76,7 +76,7 @@ export async function startLocalServer(options: LocalServerOptions): Promise<Loc
   if (!fs.existsSync(serverEntry)) {
     throw new CliError(
       `This Vibestudio installation has no server build (${serverEntry}). ` +
-        "Reinstall Vibestudio; from a source checkout, run `pnpm terminal` instead."
+        "Reinstall Vibestudio; from a source checkout, run `pnpm start:terminal` instead."
     );
   }
   fs.mkdirSync(path.dirname(logFile), { recursive: true, mode: 0o700 });

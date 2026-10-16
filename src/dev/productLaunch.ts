@@ -18,12 +18,32 @@ const DEVELOPMENT_ONLY_ARGUMENTS = new Set([
   "--dev-iroh-remote",
 ]);
 
-export function assertProductDesktopArguments(argv: readonly string[]): void {
+/** What a product launch opens: the desktop app (`pnpm start`) or the terminal browser (`pnpm start:terminal`). */
+export type ProductSurface = "desktop" | "terminal";
+
+const PRODUCT_COMMANDS: Record<ProductSurface, { start: string; dev: string }> = {
+  desktop: { start: "pnpm start", dev: "pnpm dev" },
+  terminal: { start: "pnpm start:terminal", dev: "pnpm dev:terminal" },
+};
+
+export function assertProductLaunchArguments(
+  argv: readonly string[],
+  surface: ProductSurface
+): void {
+  const { start, dev } = PRODUCT_COMMANDS[surface];
   for (const arg of argv) {
     const name = arg.split("=", 1)[0]!;
     if (DEVELOPMENT_ONLY_ARGUMENTS.has(name)) {
       throw new Error(
-        `${name} is a developer-instance option and is not supported by pnpm start; use pnpm dev or pnpm server:live`
+        `${name} is a developer-instance option and is not supported by ${start}; use ${dev} or pnpm server:live`
+      );
+    }
+    // The launch owns the build and templates the server runs from, and
+    // retires them when the browser quits; a retained server would outlive them.
+    if (surface === "terminal" && name === "--keep-server") {
+      throw new Error(
+        `--keep-server is not supported by ${start}: the server runs this launch's build, which ends with it. ` +
+          "Use an installed `vibestudio terminal --keep-server`."
       );
     }
   }
@@ -35,7 +55,7 @@ export function assertProductDesktopArguments(argv: readonly string[]): void {
  * the optional Base is only the initial workspace template and exact-byte
  * acquisition source.
  */
-export function productDesktopEnvironment(input: {
+export function productLaunchEnvironment(input: {
   parent: NodeJS.ProcessEnv;
   repoRoot: string;
   defaultTemplates?: DevelopmentTemplateSet;

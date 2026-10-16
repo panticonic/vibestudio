@@ -146,6 +146,6 @@ describe("startLocalServer", () => {
         retain: false,
         stateRoot,
       })
-    ).rejects.toThrow("pnpm terminal");
+    ).rejects.toThrow("pnpm start:terminal");
   });
 });

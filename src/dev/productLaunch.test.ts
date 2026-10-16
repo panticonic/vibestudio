@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  assertProductDesktopArguments,
-  productDesktopEnvironment,
-} from "./productDesktopLaunch.js";
+import { assertProductLaunchArguments, productLaunchEnvironment } from "./productLaunch.js";
 
 const systemPin = {
   url: "git+https://example.test/base.git",
@@ -53,7 +50,7 @@ const templates = [
   },
 ];
 
-describe("product desktop source launch", () => {
+describe("product source launch", () => {
   it.each([
     "--ephemeral",
     "--instance=other",
@@ -63,17 +60,31 @@ describe("product desktop source launch", () => {
     "--production-templates",
     "--dev-iroh-remote",
   ])("rejects developer-only option %s", (option) => {
-    expect(() => assertProductDesktopArguments([option])).toThrow(/not supported by pnpm start/);
+    expect(() => assertProductLaunchArguments([option], "desktop")).toThrow(
+      /not supported by pnpm start; use pnpm dev/
+    );
+    expect(() => assertProductLaunchArguments([option], "terminal")).toThrow(
+      /not supported by pnpm start:terminal; use pnpm dev:terminal/
+    );
+  });
+
+  it("keeps a terminal launch's server from outliving the build it owns", () => {
+    expect(() => assertProductLaunchArguments(["--keep-server"], "terminal")).toThrow(
+      /--keep-server is not supported by pnpm start:terminal/
+    );
+    expect(() =>
+      assertProductLaunchArguments(["--workspace", "system", "--yes"], "terminal")
+    ).not.toThrow();
   });
 
   it("retains ordinary desktop arguments", () => {
     expect(() =>
-      assertProductDesktopArguments(["--workspace", "default", "vibestudio://panel?v=1"])
+      assertProductLaunchArguments(["--workspace", "default", "vibestudio://panel?v=1"], "desktop")
     ).not.toThrow();
   });
 
   it("uses production behavior and the ordinary profile", () => {
-    const env = productDesktopEnvironment({
+    const env = productLaunchEnvironment({
       parent: {
         NODE_ENV: "development",
         VIBESTUDIO_INSTANCE_ROOT: "/instance",
@@ -104,7 +115,7 @@ describe("product desktop source launch", () => {
   });
 
   it("clears ambient selectors when no development templates are provided", () => {
-    const env = productDesktopEnvironment({
+    const env = productLaunchEnvironment({
       parent: {
         VIBESTUDIO_INITIAL_WORKSPACE_TEMPLATE: "stale",
         VIBESTUDIO_DEFAULT_WORKSPACE_TEMPLATES: "stale",
@@ -116,7 +127,7 @@ describe("product desktop source launch", () => {
   });
 
   it("keeps production runtime semantics while explicitly enabling local template acquisition", () => {
-    const env = productDesktopEnvironment({
+    const env = productLaunchEnvironment({
       parent: {
         VIBESTUDIO_WORKSPACE_SOURCES: "stale",
       },

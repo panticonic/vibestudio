@@ -238,7 +238,7 @@ Out of scope for v1: dictation (speech extension) and image rendering protocols
   - It runs the launch gate, then the browser.
   - When the browser exits it stops and joins the owned server, unless
     `--keep-server` is given.
-- **Dev:** `pnpm terminal [--instance ID] [--ephemeral]` is a new
+- **Dev:** `pnpm dev:terminal` (originally `pnpm terminal`) is a new
   `runInstance.ts terminal` mode. It uses the same supervisor as
   `server:live`, writes server stdio to `<instanceRoot>/logs/server.log`, and
   launches the browser from the current checkout's build.
@@ -250,7 +250,7 @@ Phases 1 and 2 are independent and can run in parallel with separate owners.
 Phase 3 depends on 1; phase 4 depends on 2 and 3.
 
 1. **Client-hosted browser.** Add the `terminal-app` principal grant, the CLI
-   artifact fetch + local launch, and `vibestudio terminal` / `pnpm terminal`
+   artifact fetch + local launch, and `vibestudio terminal` / `pnpm dev:terminal`
    with owned-server lifecycle and unified local pairing. Point `hostTargets`
    at terminal-browser. Delete the server-side terminal process path and
    `remote-cli`. Port `scripts/terminal-app-smoke.mjs` to drive the real

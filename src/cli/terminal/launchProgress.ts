@@ -1,5 +1,5 @@
 /**
- * What `pnpm terminal` and `vibestudio terminal` tell the person while the
+ * What `pnpm dev:terminal`, `pnpm start:terminal` and `vibestudio terminal` tell the person while the
  * terminal browser is still being made ready.
  *
  * Every line is the report of something that really happened: a step began, a

@@ -12,10 +12,7 @@ import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
 import { LaunchTermination, joinProducer, runOwnedChild } from "./launchTermination.js";
 import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
 import { resolveDevelopmentTemplateSet } from "./developmentTemplateSet.js";
-import {
-  assertProductDesktopArguments,
-  productDesktopEnvironment,
-} from "./productDesktopLaunch.js";
+import { assertProductLaunchArguments, productLaunchEnvironment } from "./productLaunch.js";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
 import {
   inspectWorkspaceSources,
@@ -34,9 +31,21 @@ function profileHasWorkspace(): boolean {
   }
 }
 
+/**
+ * Build this checkout and run it with installed-product semantics: the
+ * ordinary profile, production runtime behavior and the canonical templates.
+ * `desktop` opens the desktop app (`pnpm start`); `terminal` opens the
+ * product's own `vibestudio terminal` (`pnpm start:terminal`), which starts or
+ * reuses the profile's local server exactly as an installation does.
+ */
 async function main(): Promise<void> {
-  assertProductDesktopArguments(process.argv.slice(2));
-  const templateOptions = extractDevelopmentTemplateCheckoutArguments(process.argv.slice(2));
+  const surface = process.argv[2];
+  if (surface !== "desktop" && surface !== "terminal") {
+    throw new Error("usage: runProduct.ts desktop|terminal [options]");
+  }
+  const argv = process.argv.slice(3);
+  assertProductLaunchArguments(argv, surface);
+  const templateOptions = extractDevelopmentTemplateCheckoutArguments(argv);
   const forwarded = templateOptions.forwarded;
 
   const repoRoot = fs.realpathSync(process.cwd());
@@ -68,7 +77,7 @@ async function main(): Promise<void> {
       checkpointRoot: path.join(temporaryRoot, "template-checkpoints"),
     });
 
-    const env = productDesktopEnvironment({
+    const env = productLaunchEnvironment({
       parent: process.env,
       repoRoot,
       defaultTemplates,
@@ -95,6 +104,10 @@ async function main(): Promise<void> {
     termination.onRequest(() => void owned.stop().catch(() => {}));
     await owned.completed;
     termination.signal.throwIfAborted();
+    if (surface === "terminal") {
+      process.exitCode = await runProductTerminal(env, forwarded);
+      return;
+    }
     const supervisor = new DevInstanceSupervisor({
       sourceRoot: repoRoot,
       command: process.execPath,
@@ -161,6 +174,19 @@ async function main(): Promise<void> {
     throw retirementFailure;
   }
   if (launchFailure) throw launchFailure;
+}
+
+/**
+ * The product's `vibestudio terminal`, in this process: the browser must own
+ * this terminal, which a supervised child in its own process group cannot
+ * read. It sees the prepared environment exactly as an installed CLI would,
+ * and starts and stops the profile's local server itself.
+ */
+async function runProductTerminal(env: NodeJS.ProcessEnv, args: string[]): Promise<number> {
+  for (const key of Object.keys(process.env)) if (!(key in env)) delete process.env[key];
+  Object.assign(process.env, env);
+  const { main: runCli } = await import("../cli/client.js");
+  return await runCli(["terminal", ...args]);
 }
 
 main().catch((error) => {

@@ -318,11 +318,12 @@ mode concurrently with other native-input work.
 pnpm bootstrap        # install the complete host and userland workspace graph
 pnpm dev:templates setup # clone and remember the Base, Personal and System templates
 pnpm start           # build + start Electron with normal desktop semantics
+pnpm start:terminal  # build + open the terminal browser with normal product semantics
 pnpm dev             # launch a fresh disposable development workspace
+pnpm dev:terminal    # the same disposable instance, in the terminal browser
 pnpm dev:production  # fresh disposable instance using the pinned production templates
 pnpm dev:iroh        # build + start a local hub, then connect through Iroh
 pnpm cli --help      # run the CLI live from TypeScript
-pnpm terminal        # run this checkout's server and open the terminal browser
 pnpm server:live --help
 ```
 
@@ -423,7 +424,10 @@ See [docs/cli.md](docs/cli.md). (The published npm packages above replace the ol
 and launches it against the ordinary desktop profile. It reopens the most
 recently used registered workspace, creating `default` from the selected Base
 template only when the profile has no workspace yet. It does not expose
-developer instances. `pnpm dev` launches into a disposable
+developer instances. `pnpm start:terminal` is the same launch with the terminal
+browser in place of the desktop app: it runs the product's `vibestudio terminal`,
+which starts (or reuses) the profile's local server. `pnpm dev` and
+`pnpm dev:terminal` launch into a disposable
 instance root — its own identity, catalog and workspaces under a temporary
 directory — and always stops its hub on quit, so the whole instance is removed
 with it. Persistent and disposable launches therefore exercise the same
@@ -492,7 +496,8 @@ Windows builds include MXC's `wxc-host-prep.exe` alongside the executor so its O
 - `pnpm deploy:cloudflare` - Deploy the callback/apex Worker
 - `pnpm smoke:cloudflare` - Smoke the deployed callback/apex Worker
 - `pnpm start` - Build unpublished code and launch it with normal desktop semantics
-- `pnpm terminal` - Run this checkout's server (same supervisor as `pnpm server:live`; output in `<instanceRoot>/logs/server.log`) and open the terminal browser; quitting stops the server
+- `pnpm start:terminal` - Build unpublished code and open the terminal browser with normal product semantics (the ordinary profile and its local server, like `vibestudio terminal`)
+- `pnpm dev:terminal` - Build and open the terminal browser on a fresh disposable developer instance, like `pnpm dev` (output in `<instanceRoot>/logs/server.log`); quitting removes the instance
 - `pnpm lint` - Run ESLint with strict rules
 - `pnpm format` - Format code with Prettier
 - `pnpm format:check` - Check formatting

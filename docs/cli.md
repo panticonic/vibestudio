@@ -25,20 +25,30 @@ standalone server from `src/server/index.ts`.
 
 ```sh
 pnpm server:live --help
-pnpm terminal --help
+pnpm dev:terminal --help
 pnpm system-test --instance test-a doctor --approve-startup
 ```
 
-`pnpm terminal [--instance ID] [--ephemeral] [--workspace <name>] [--yes]`
-runs this checkout's server under the same instance supervisor as
-`pnpm server:live` and then opens the terminal browser through the same code
-path as `vibestudio terminal`. Build, template, and server output, and the
-launcher's own warnings, go to `<instanceRoot>/logs/server.log`, so the
-terminal stays free for the browser. Quitting the browser, closing the
-terminal (a hang-up), SIGTERM, or Ctrl-C during startup stops and joins what
-this command started and removes an `--ephemeral` instance. When the selected
-instance is already running, it attaches to it instead (through
-`vibestudio terminal`) and leaves that server alone.
+The two terminal launchers mirror the desktop ones:
+
+- `pnpm dev:terminal [--instance ID] [--workspace <name>] [--yes]` is the
+  terminal counterpart of `pnpm dev`. It builds this checkout, runs its server
+  on a fresh disposable instance under the same supervisor as
+  `pnpm server:live`, and opens the terminal browser through the same code path
+  as `vibestudio terminal`. Build, template, and server output, and the
+  launcher's own warnings, go to `<instanceRoot>/logs/server.log`, so the
+  terminal stays free for the browser. Quitting the browser, closing the
+  terminal (a hang-up), SIGTERM, or Ctrl-C during startup stops and joins what
+  it started and removes the instance.
+- `pnpm start:terminal [--workspace <name>] [--yes]` is the terminal
+  counterpart of `pnpm start`. It builds this checkout with production
+  semantics and runs the product's own `vibestudio terminal` against the
+  ordinary profile, which starts the profile's local server (or reuses a
+  running one) and stops a server it started when you quit. Developer-instance
+  options and `--keep-server` are refused: the server runs this launch's build.
+
+To open the browser on a developer instance that is already running, use
+`pnpm cli --instance ID terminal`.
 
 `pnpm dev` and `pnpm server:live` use the same instance supervisor. A developer
 instance owns one isolated hub state root: lease, server/device identity,
@@ -174,7 +184,8 @@ The terminal browser is a client app: the command fetches the build that the
 server made for the workspace's `hostTargets.terminal.app` over its own
 connection and runs it in this process. A newer adopted build is loaded the
 next time the browser reconnects or the command is run again. From a source
-checkout, use `pnpm terminal` (see [Development](#development)).
+checkout, use `pnpm start:terminal` or `pnpm dev:terminal` (see
+[Development](#development)).
 
 ## Workspace template registry
 

@@ -305,8 +305,9 @@ Rendering:
 ### How `vibestudio terminal` starts the browser
 
 The browser is a client app, like the desktop shell: the server builds it and
-the client runs it. `vibestudio terminal` (or `pnpm terminal` from a source
-checkout; see [cli.md](cli.md#terminal)) does the following:
+the client runs it. `vibestudio terminal` (or `pnpm start:terminal` /
+`pnpm dev:terminal` from a source checkout; see [cli.md](cli.md#terminal))
+does the following:
 
 1. Connects with its paired device credential. It starts this machine's local
    server first when the device is not paired or that server is not running.
