@@ -6,8 +6,10 @@ const pipe = vi.hoisted(() => ({
   close: vi.fn(async () => undefined),
 }));
 vi.mock("@vibestudio/iroh-transport/node", () => ({
-  loadIrohNodeBinding: () => ({ SecretKey: { fromBytes: () => ({}) } }),
-  createNodeEndpointBinding: () => ({}),
+  createNodeDeviceEndpoint: () => ({
+    owner: { close: async () => undefined, dial: vi.fn() },
+    delegation: { deviceKey: "a".repeat(64), signature: "b".repeat(128) },
+  }),
 }));
 vi.mock("@vibestudio/rpc/transports/reconnectingIrohClient", () => ({
   createReconnectingIrohClientPipe: () => ({
@@ -36,7 +38,7 @@ describe("IrohRpcClient direct RPC method contract", () => {
     });
     const client = new IrohRpcClient({
       reach: { v: 5, endpointId: "a".repeat(64), relays: ["https://relay.example/"] },
-      endpointSecret: new Uint8Array(32),
+      deviceSecret: new Uint8Array(32),
       callerId: "shell:cli",
       getToken: () => "token",
     });
@@ -54,7 +56,7 @@ describe("IrohRpcClient direct RPC method contract", () => {
     pipe.close.mockRejectedValueOnce(retirement);
     const client = new IrohRpcClient({
       reach: { v: 5, endpointId: "a".repeat(64), relays: ["https://relay.example/"] },
-      endpointSecret: new Uint8Array(32),
+      deviceSecret: new Uint8Array(32),
       callerId: "shell:cli",
       getToken: () => "token",
     });
@@ -76,7 +78,7 @@ describe("IrohRpcClient direct RPC method contract", () => {
     });
     const client = new IrohRpcClient({
       reach: { v: 5, endpointId: "a".repeat(64), relays: ["https://relay.example/"] },
-      endpointSecret: new Uint8Array(32),
+      deviceSecret: new Uint8Array(32),
       callerId: "shell:cli",
       getToken: () => "token",
       signal: owner.signal,

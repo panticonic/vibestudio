@@ -1,4 +1,8 @@
-import { IROH_WIRE_VERSION } from "@vibestudio/iroh-transport";
+import {
+  IROH_WIRE_VERSION,
+  assertEndpointDelegation,
+  type EndpointDelegation,
+} from "@vibestudio/iroh-transport";
 import type { CallerKind } from "../types.js";
 import type { RecoveryKind } from "./recoveryCoordinator.js";
 import type {
@@ -9,6 +13,7 @@ import type {
 } from "./wsProtocol.js";
 
 export const IROH_SESSION_HELLO = "hello" as const;
+export const IROH_SESSION_DELEGATE = "delegate" as const;
 export const IROH_SESSION_OPEN = "open" as const;
 export const IROH_SESSION_OPEN_RESULT = "open-result" as const;
 export const IROH_SESSION_CLOSE = "close" as const;
@@ -18,6 +23,15 @@ export interface IrohSessionHelloFrame {
   t: typeof IROH_SESSION_HELLO;
   protocolVersion: typeof IROH_WIRE_VERSION;
   contractVersion: number;
+}
+
+/**
+ * Client-only, sent once right after the hello: the device key's delegation of
+ * this connection's endpoint. The server binds the connection to the device it
+ * proves, before any session may open.
+ */
+export interface IrohSessionDelegateFrame extends EndpointDelegation {
+  t: typeof IROH_SESSION_DELEGATE;
 }
 
 export interface IrohSessionOpenFrame {
@@ -76,6 +90,7 @@ export interface IrohSessionClosedFrame {
 
 export type IrohSessionControlFrame =
   | IrohSessionHelloFrame
+  | IrohSessionDelegateFrame
   | IrohSessionOpenFrame
   | IrohSessionOpenResultFrame
   | IrohSessionCloseFrame
@@ -83,6 +98,7 @@ export type IrohSessionControlFrame =
 
 const CONTROL_TAGS = new Set<string>([
   IROH_SESSION_HELLO,
+  IROH_SESSION_DELEGATE,
   IROH_SESSION_OPEN,
   IROH_SESSION_OPEN_RESULT,
   IROH_SESSION_CLOSE,
@@ -129,6 +145,10 @@ export function assertIrohSessionControlFrame(
     ) {
       throw new Error("Iroh session hello has an incompatible protocol or contract version");
     }
+    return;
+  }
+  if (tag === IROH_SESSION_DELEGATE) {
+    assertEndpointDelegation({ deviceKey: value["deviceKey"], signature: value["signature"] });
     return;
   }
   if (typeof value["sid"] !== "string" || value["sid"].length === 0) {

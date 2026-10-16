@@ -72,7 +72,7 @@ function fixture(
     rpc: { call },
     close,
     callerId: `shell:${credential.deviceId}`,
-    endpointIdentityId: "identity-1",
+    deviceIdentityId: "identity-1",
   } as unknown as IrohConnection;
   const workspaceClose = vi.fn(async () => events.push("workspace-close"));
   const workspaceConnection = {
@@ -113,7 +113,7 @@ describe("fresh mobile Iroh pairing commit", () => {
         schemaVersion: 5,
         transport: "iroh",
         phase: "paired",
-        endpointIdentityId: "identity-1",
+        deviceIdentityId: "identity-1",
         controlPairing: expect.not.objectContaining({ code: expect.anything() }),
       }),
       expect.objectContaining({

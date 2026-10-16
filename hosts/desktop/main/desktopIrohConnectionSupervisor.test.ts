@@ -106,10 +106,13 @@ describe("desktop Iroh process connection supervisor", () => {
       throw failure;
     });
     const supervisor = new DesktopIrohConnectionSupervisor(new Uint8Array(32), relays, {
-      endpointOwner: owner as unknown as EndpointGenerationOwner<
-        NodePhysicalConnection,
-        NodePhysicalEndpoint
-      >,
+      deviceEndpoint: {
+        owner: owner as unknown as EndpointGenerationOwner<
+          NodePhysicalConnection,
+          NodePhysicalEndpoint
+        >,
+        delegation: { deviceKey: "a".repeat(64), signature: "b".repeat(128) },
+      },
       createClient: vi.fn(async () => {
         admitted();
         await retired;
@@ -150,10 +153,13 @@ describe("desktop Iroh process connection supervisor", () => {
       await retired;
     });
     const supervisor = new DesktopIrohConnectionSupervisor(new Uint8Array(32), relays, {
-      endpointOwner: owner as unknown as EndpointGenerationOwner<
-        NodePhysicalConnection,
-        NodePhysicalEndpoint
-      >,
+      deviceEndpoint: {
+        owner: owner as unknown as EndpointGenerationOwner<
+          NodePhysicalConnection,
+          NodePhysicalEndpoint
+        >,
+        delegation: { deviceKey: "a".repeat(64), signature: "b".repeat(128) },
+      },
       createClient: vi.fn(async () => client) as never,
     });
     await supervisor.connect(reach(HUB_ID), {
@@ -188,10 +194,13 @@ describe("desktop Iroh process connection supervisor", () => {
       fakeClient(invalidations.get(args.reach.endpointId)!)
     );
     const supervisor = new DesktopIrohConnectionSupervisor(new Uint8Array(32), relays, {
-      endpointOwner: owner as unknown as EndpointGenerationOwner<
-        NodePhysicalConnection,
-        NodePhysicalEndpoint
-      >,
+      deviceEndpoint: {
+        owner: owner as unknown as EndpointGenerationOwner<
+          NodePhysicalConnection,
+          NodePhysicalEndpoint
+        >,
+        delegation: { deviceKey: "a".repeat(64), signature: "b".repeat(128) },
+      },
       createClient: createClient as never,
     });
     await Promise.all([

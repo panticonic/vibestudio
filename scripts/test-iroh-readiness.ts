@@ -62,7 +62,6 @@ try {
       },
     },
     waitUntilOnline: (endpoint) => endpoint.native.online(),
-    admitPeer: () => false,
     attach: async () => {},
   });
   let ready = false;

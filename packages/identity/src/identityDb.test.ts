@@ -16,6 +16,28 @@ const RESTORE_LEGACY_HUB_LEASE = `DROP TABLE hub_process_owner;
     expires_at INTEGER NOT NULL CHECK(expires_at > heartbeat_at)
   )`;
 
+// Version 19 named the device signing key `endpoint_id`; fixtures that start
+// from it must hold that shape for the 19 -> 20 migration to rename.
+function restoreV19Devices(db: DatabaseSync): void {
+  db.exec(`DROP INDEX devices_by_device_key;
+    DROP INDEX devices_by_user;
+    ALTER TABLE devices RENAME TO devices_current;
+    CREATE TABLE devices (
+      device_id TEXT PRIMARY KEY, refresh_token_hash TEXT NOT NULL, transport_kind TEXT NOT NULL,
+      endpoint_id TEXT, user_id TEXT NOT NULL REFERENCES users(id), label TEXT NOT NULL,
+      platform TEXT, created_at INTEGER NOT NULL, last_used_at INTEGER, revoked_at INTEGER,
+      CHECK (
+        (transport_kind = 'local' AND endpoint_id IS NULL)
+        OR
+        (transport_kind = 'iroh' AND endpoint_id IS NOT NULL AND length(endpoint_id) = 64 AND endpoint_id = lower(endpoint_id))
+      )
+    );
+    INSERT INTO devices SELECT * FROM devices_current;
+    DROP TABLE devices_current;
+    CREATE INDEX devices_by_user ON devices(user_id);
+    CREATE UNIQUE INDEX devices_by_endpoint ON devices(endpoint_id) WHERE endpoint_id IS NOT NULL`);
+}
+
 function restoreV13Membership(db: DatabaseSync): void {
   db.exec(`DROP INDEX membership_by_workspace;
     ALTER TABLE membership RENAME TO membership_current;
@@ -79,6 +101,7 @@ describe("identity package schema cut", () => {
     identity.close();
     const old = new DatabaseSync(databasePath);
     old.exec(RESTORE_LEGACY_HUB_LEASE);
+    restoreV19Devices(old);
     old.exec(`ALTER TABLE pairing_codes RENAME TO pairing_codes_current;
       CREATE TABLE pairing_codes (
         code TEXT PRIMARY KEY, user_id TEXT,
@@ -97,7 +120,9 @@ describe("identity package schema cut", () => {
         .prepare(
           table === "workspaces"
             ? "SELECT workspace_id, name, last_opened, creation_intent_json FROM workspaces"
-            : `SELECT * FROM ${table}`
+            : table === "devices"
+              ? "SELECT device_id, refresh_token_hash, transport_kind, user_id, label, platform, created_at, last_used_at, revoked_at FROM devices"
+              : `SELECT * FROM ${table}`
         )
         .all();
     const before = tables.map((table) => rows(old, table));
@@ -116,7 +141,7 @@ describe("identity package schema cut", () => {
         expiresAt: entry["expires_at"],
       }))
     );
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 19 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
     verified.close();
     migrated.insertPairingInvite({
       code: "account-only",
@@ -128,6 +153,37 @@ describe("identity package schema cut", () => {
     const reader = new IdentityDb({ path: databasePath, readOnly: true, now: () => 10 });
     expect(reader.listPairingCodes().some((entry) => entry.code === "account-only")).toBe(true);
     reader.close();
+  });
+
+  it("renames the device signing key column without changing any device's key", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-identity-v19-"));
+    roots.push(root);
+    const databasePath = path.join(root, "identity.db");
+    const identity = new IdentityDb({ path: databasePath, readOnly: false });
+    identity.insertUser({
+      id: "usr_kept",
+      handle: "kept",
+      displayName: "Kept",
+      role: "root",
+      createdAt: 1,
+    });
+    identity.upsertDevice({
+      deviceId: "dev_remote",
+      userId: "usr_kept",
+      refreshTokenHash: "token-hash",
+      transport: { kind: "iroh", deviceKey: "d".repeat(64) },
+      label: "Remote",
+      createdAt: 1,
+    });
+    identity.close();
+    const old = new DatabaseSync(databasePath);
+    restoreV19Devices(old);
+    old.exec("PRAGMA user_version = 19");
+    old.close();
+
+    const migrated = new IdentityDb({ path: databasePath, readOnly: false });
+    expect(migrated.getDeviceForKey("d".repeat(64))?.deviceId).toBe("dev_remote");
+    migrated.close();
   });
 
   it("rejects unexpected legacy tables instead of retaining them", () => {
@@ -202,7 +258,7 @@ describe("identity package schema cut", () => {
     old.exec(`
       DROP TABLE user_workspaces;
       DROP TABLE workspace_rpc_policy;
-      DROP INDEX devices_by_endpoint;
+      DROP INDEX devices_by_device_key;
       DROP INDEX devices_by_user;
       ALTER TABLE devices RENAME TO devices_v13;
       CREATE TABLE devices (
@@ -247,7 +303,7 @@ describe("identity package schema cut", () => {
     });
     migrated.close();
     const verified = new DatabaseSync(databasePath);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 19 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
     expect(
       verified.prepare("SELECT name FROM sqlite_schema WHERE name = 'control_rooms'").get()
     ).toBeUndefined();
@@ -285,6 +341,7 @@ describe("identity package schema cut", () => {
 
     const old = new DatabaseSync(databasePath);
     old.exec(RESTORE_LEGACY_HUB_LEASE);
+    restoreV19Devices(old);
     restoreV13Membership(old);
     old.exec(
       "DROP TABLE user_workspaces; DROP TABLE workspace_rpc_policy; DROP TABLE workspace_creation_operations; ALTER TABLE workspaces DROP COLUMN display_name; PRAGMA user_version = 13"
@@ -303,7 +360,7 @@ describe("identity package schema cut", () => {
     reopened.close();
 
     const verified = new DatabaseSync(databasePath);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 19 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
     expect(verified.prepare("SELECT * FROM user_workspaces").all()).toEqual([]);
     expect(verified.prepare("SELECT * FROM workspace_rpc_policy").all()).toEqual([]);
     verified.close();
@@ -326,6 +383,7 @@ describe("identity package schema cut", () => {
     central.close();
     const old = new DatabaseSync(databasePath);
     old.exec(RESTORE_LEGACY_HUB_LEASE);
+    restoreV19Devices(old);
     restoreV13Membership(old);
     old.exec(
       "DROP TABLE user_workspaces; DROP TABLE workspace_rpc_policy; DROP TABLE workspace_creation_operations; ALTER TABLE workspaces DROP COLUMN display_name; PRAGMA user_version = 13"
@@ -432,7 +490,7 @@ describe("identity package schema cut", () => {
     const device = {
       deviceId: `dev_${"d".repeat(24)}`,
       refreshTokenHash: "b".repeat(64),
-      transport: { kind: "iroh" as const, endpointId: "c".repeat(64) },
+      transport: { kind: "iroh" as const, deviceKey: "c".repeat(64) },
       userId: "usr_alice",
       label: "Phone",
       createdAt: 1_000,
@@ -443,9 +501,7 @@ describe("identity package schema cut", () => {
     });
     expect(completed).toMatchObject({ device });
     expect(identity.getPairingCode(codeHash)).toBeNull();
-    expect(identity.getDeviceForEndpoint(device.transport.endpointId)?.deviceId).toBe(
-      device.deviceId
-    );
+    expect(identity.getDeviceForKey(device.transport.deviceKey)?.deviceId).toBe(device.deviceId);
     expect(
       identity.completePairing({
         code: codeHash,

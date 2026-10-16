@@ -63,7 +63,7 @@ describe("grantClientPrincipal", () => {
     await expect(
       grantClientPrincipal(
         { ...baseDeps, connectionGrants: { grant }, grantClientPrincipal: grantPrincipal },
-        { ...request, remoteEndpointId: "endpoint-1" }
+        { ...request, remoteDeviceKey: "endpoint-1" }
       )
     ).resolves.toEqual({
       connectionGrant: "grant-token",
@@ -81,7 +81,7 @@ describe("grantClientPrincipal", () => {
     });
     expect(grant).toHaveBeenCalledWith(principal.principalId, "shell:dev_one", {
       subject: request.subject,
-      remoteEndpointId: "endpoint-1",
+      remoteDeviceKey: "endpoint-1",
     });
   });
 });

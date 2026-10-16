@@ -2,10 +2,10 @@ import type { CanonicalSqliteMigration, CanonicalSqliteSchema } from "@vibestudi
 
 /**
  * Identity and machine-control share one file and therefore one atomic schema.
- * Version 19 is the current schema. The explicitly enumerated final
+ * Version 20 is the current schema. The explicitly enumerated final
  * pre-cutover schema below migrates transactionally; every other shape is rejected.
  */
-export const IDENTITY_DATABASE_SCHEMA_VERSION = 19;
+export const IDENTITY_DATABASE_SCHEMA_VERSION = 20;
 
 const HUB_PROCESS_OWNER_SQL = `CREATE TABLE hub_process_owner (
   singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -73,7 +73,7 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
         device_id TEXT PRIMARY KEY,
         refresh_token_hash TEXT NOT NULL,
         transport_kind TEXT NOT NULL,
-        endpoint_id TEXT,
+        device_key TEXT,
         user_id TEXT NOT NULL REFERENCES users(id),
         label TEXT NOT NULL,
         platform TEXT,
@@ -81,9 +81,9 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
         last_used_at INTEGER,
         revoked_at INTEGER,
         CHECK (
-          (transport_kind = 'local' AND endpoint_id IS NULL)
+          (transport_kind = 'local' AND device_key IS NULL)
           OR
-          (transport_kind = 'iroh' AND endpoint_id IS NOT NULL AND length(endpoint_id) = 64 AND endpoint_id = lower(endpoint_id))
+          (transport_kind = 'iroh' AND device_key IS NOT NULL AND length(device_key) = 64 AND device_key = lower(device_key))
         )
       )`,
     },
@@ -94,8 +94,8 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
     },
     {
       type: "index",
-      name: "devices_by_endpoint",
-      sql: "CREATE UNIQUE INDEX devices_by_endpoint ON devices(endpoint_id) WHERE endpoint_id IS NOT NULL",
+      name: "devices_by_device_key",
+      sql: "CREATE UNIQUE INDEX devices_by_device_key ON devices(device_key) WHERE device_key IS NOT NULL",
     },
     {
       type: "table",
@@ -219,6 +219,47 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
  * rooms and makes unbound devices local-only before this cutover runs.
  */
 export const IDENTITY_DATABASE_MIGRATIONS: readonly CanonicalSqliteMigration[] = [
+  {
+    fromVersion: 19,
+    toVersion: 20,
+    migrate(db) {
+      // The column always held the device's ed25519 public key. It is now only
+      // a signing identity (never a transport endpoint), so it is named for
+      // what it is. Values are unchanged: a device keeps its identity.
+      db.exec(`
+        DROP INDEX devices_by_endpoint;
+        ALTER TABLE devices RENAME TO devices_v19;
+        CREATE TABLE devices (
+          device_id TEXT PRIMARY KEY,
+          refresh_token_hash TEXT NOT NULL,
+          transport_kind TEXT NOT NULL,
+          device_key TEXT,
+          user_id TEXT NOT NULL REFERENCES users(id),
+          label TEXT NOT NULL,
+          platform TEXT,
+          created_at INTEGER NOT NULL,
+          last_used_at INTEGER,
+          revoked_at INTEGER,
+          CHECK (
+            (transport_kind = 'local' AND device_key IS NULL)
+            OR
+            (transport_kind = 'iroh' AND device_key IS NOT NULL AND length(device_key) = 64 AND device_key = lower(device_key))
+          )
+        );
+        INSERT INTO devices (
+          device_id, refresh_token_hash, transport_kind, device_key, user_id,
+          label, platform, created_at, last_used_at, revoked_at
+        )
+        SELECT
+          device_id, refresh_token_hash, transport_kind, endpoint_id, user_id,
+          label, platform, created_at, last_used_at, revoked_at
+        FROM devices_v19;
+        DROP TABLE devices_v19;
+        CREATE INDEX devices_by_user ON devices(user_id);
+        CREATE UNIQUE INDEX devices_by_device_key ON devices(device_key) WHERE device_key IS NOT NULL;
+      `);
+    },
+  },
   {
     fromVersion: 18,
     toVersion: 19,

@@ -47,7 +47,6 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
     private val lifecycleLock = Any()
     @Volatile private var active = true
     private val endpoints = ConcurrentHashMap<String, Endpoint>()
-    private val endpointIdentities = ConcurrentHashMap<String, String>()
     private val connections = ConcurrentHashMap<String, Connection>()
     private val sends = ConcurrentHashMap<String, SendEntry>()
     private val receives = ConcurrentHashMap<String, ReceiveEntry>()
@@ -80,7 +79,6 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
             val ownedEndpoints = synchronized(lifecycleLock) {
                 endpoints.values.toList().also {
                     endpoints.clear()
-                    endpointIdentities.clear()
                 }
             }
             ownedEndpoints.forEach { endpoint ->
@@ -93,7 +91,7 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
 
     @ReactMethod
     fun createIdentity(promise: Promise) = launch(promise) {
-        Log.i(TAG, "Creating encrypted endpoint identity")
+        Log.i(TAG, "Creating encrypted device identity")
         val identityId = UUID.randomUUID().toString()
         val secret = SecretKey.generate()
         preferences.edit().putString(identityId, encrypt(secret.toBytes())).commit().also {
@@ -101,16 +99,31 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
         }
         Arguments.createMap().apply {
             putString("identityId", identityId)
-            putString("endpointId", secret.`public`().toString())
+            putString("deviceKey", secret.`public`().toString())
         }
-            .also { Log.i(TAG, "Encrypted endpoint identity ready") }
+            .also { Log.i(TAG, "Encrypted device identity ready") }
+    }
+
+    /** The device identity only signs; it is never bound as a transport endpoint. */
+    private fun identitySecret(identityId: String): SecretKey =
+        SecretKey.fromBytes(decrypt(preferences.getString(identityId, null)
+            ?: throw IllegalStateException("Iroh device identity is missing")))
+
+    @ReactMethod
+    fun identityPublicKey(identityId: String, promise: Promise) = launch(promise) {
+        identitySecret(identityId).`public`().toString()
     }
 
     @ReactMethod
-    fun deleteIdentity(identityId: String, promise: Promise) = launch(promise) {
-        if (endpointIdentities.containsValue(identityId)) {
-            throw IllegalStateException("Cannot delete an identity while its endpoint is bound")
+    fun signWithIdentity(identityId: String, messageBase64: String, promise: Promise) =
+        launch(promise) {
+            val signature = identitySecret(identityId)
+                .sign(Base64.decode(messageBase64, Base64.NO_WRAP))
+            Base64.encodeToString(signature.toBytes(), Base64.NO_WRAP)
         }
+
+    @ReactMethod
+    fun deleteIdentity(identityId: String, promise: Promise) = launch(promise) {
         if (!preferences.edit().remove(identityId).commit()) {
             throw IllegalStateException("Encrypted identity storage refused the deletion")
         }
@@ -118,11 +131,12 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun bind(identityId: String, relays: ReadableArray, alpnBase64: String, promise: Promise) =
+    fun bind(endpointSecretBase64: String, relays: ReadableArray, alpnBase64: String, promise: Promise) =
         launch(promise) {
             Log.i(TAG, "Binding endpoint with ${relays.size()} configured relay(s)")
-            val secretBytes = decrypt(preferences.getString(identityId, null)
-                ?: throw IllegalStateException("Iroh endpoint identity is missing"))
+            // The secret is the process's fresh in-memory endpoint secret, never
+            // the device identity; the device key delegates the endpoint it names.
+            val secretBytes = Base64.decode(endpointSecretBase64, Base64.NO_WRAP)
             val relayUrls = (0 until relays.size()).map { relays.getString(it)
                 ?: throw IllegalArgumentException("Relay URL must be a string") }
             val endpoint = Endpoint.bind(EndpointOptions(
@@ -136,7 +150,6 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
             val adopted = synchronized(lifecycleLock) {
                 if (!active) false else {
                     endpoints[handle] = endpoint
-                    endpointIdentities[handle] = identityId
                     true
                 }
             }
@@ -159,7 +172,6 @@ class VibestudioIrohModule(context: ReactApplicationContext) :
                 endpoint.close()
                 synchronized(lifecycleLock) {
                     endpoints.remove(handle, endpoint)
-                    endpointIdentities.remove(handle)
                 }
             }
         }

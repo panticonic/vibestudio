@@ -56,7 +56,7 @@ export interface RawTokenCredential {
   url: string;
   token: string;
   workspacePairing?: CliStoredPairing;
-  endpointSecret?: string;
+  deviceSecret?: string;
 }
 
 export type RefreshAgentResponse = z.infer<typeof RefreshAgentResponseSchema>;
@@ -72,7 +72,7 @@ export interface DeviceEndpointCredential {
   deviceId: string;
   refreshToken: string;
   pairing?: CliStoredPairing;
-  endpointSecret?: string;
+  deviceSecret?: string;
 }
 
 export type RpcClientCredential = CliCredentials | DeviceEndpointCredential | RawTokenCredential;
@@ -298,7 +298,7 @@ export class RpcClient {
   private readonly pairing: CliStoredPairing | undefined;
   /** Hub control reach of a complete Iroh device credential. */
   private readonly controlPairing: CliStoredPairing | undefined = undefined;
-  private readonly endpointSecret: string | undefined;
+  private readonly deviceSecret: string | undefined;
   /** Envelope self-id + kind. The server re-derives the authenticated caller
    *  from the redeemed token, so these are informational for routing/logging. */
   private callerId: string;
@@ -306,7 +306,6 @@ export class RpcClient {
 
   private irohClient: Promise<import("../node/iroh/irohRpcClient.js").IrohRpcClient> | null = null;
   private ownsIrohClient = true;
-  private releaseEndpointLock: (() => void) | null = null;
   private wsClient: Promise<import("./wsClient.js").WsRpcClient> | null = null;
   private httpDispatcher: Agent | null = null;
   private keepPushOpen = false;
@@ -326,7 +325,7 @@ export class RpcClient {
     this.url = creds.url;
     if (isAgentCliCredentials(creds)) {
       this.pairing = creds.transport === "iroh" ? creds.workspacePairing : undefined;
-      this.endpointSecret = creds.transport === "iroh" ? creds.endpointSecret : undefined;
+      this.deviceSecret = creds.transport === "iroh" ? creds.deviceSecret : undefined;
       this.rawToken = creds.agentToken;
       this.deviceId = null;
       this.refreshToken = null;
@@ -334,7 +333,7 @@ export class RpcClient {
       this.callerKind = "agent";
     } else if (isRawTokenCredential(creds)) {
       this.pairing = creds.workspacePairing;
-      this.endpointSecret = creds.endpointSecret;
+      this.deviceSecret = creds.deviceSecret;
       this.rawToken = creds.token;
       this.deviceId = null;
       this.refreshToken = null;
@@ -344,10 +343,10 @@ export class RpcClient {
       if (isCompleteDeviceCredentials(creds)) {
         this.pairing = creds.transport === "iroh" ? creds.workspacePairing : undefined;
         this.controlPairing = creds.transport === "iroh" ? creds.controlPairing : undefined;
-        this.endpointSecret = creds.transport === "iroh" ? creds.endpointSecret : undefined;
+        this.deviceSecret = creds.transport === "iroh" ? creds.deviceSecret : undefined;
       } else {
         this.pairing = creds.pairing;
-        this.endpointSecret = creds.endpointSecret;
+        this.deviceSecret = creds.deviceSecret;
       }
       this.rawToken = null;
       this.deviceId = creds.deviceId;
@@ -692,7 +691,7 @@ export class RpcClient {
         url: this.url,
         ...device,
         pairing: controlPairing,
-        endpointSecret: this.endpointSecret,
+        deviceSecret: this.deviceSecret,
       },
       this.owner
     );
@@ -734,7 +733,7 @@ export class RpcClient {
               url: this.url,
               token: this.rawToken,
               workspacePairing: this.pairing,
-              endpointSecret: this.endpointSecret,
+              deviceSecret: this.deviceSecret,
             },
             this.owner
           )
@@ -743,7 +742,7 @@ export class RpcClient {
               url: this.url,
               ...this.deviceCredential(),
               pairing: this.pairing,
-              endpointSecret: this.endpointSecret,
+              deviceSecret: this.deviceSecret,
             },
             this.owner
           );
@@ -829,8 +828,6 @@ export class RpcClient {
     if (failures.length > 1) {
       throw new AggregateError(failures, "CLI connections could not all be closed");
     }
-    this.releaseEndpointLock?.();
-    this.releaseEndpointLock = null;
   }
 
   private assertOpen(): void {
@@ -858,10 +855,7 @@ export class RpcClient {
       released = true;
       this.retainedConnections = Math.max(0, this.retainedConnections - 1);
       const ownsResources =
-        this.irohClient !== null ||
-        this.wsClient !== null ||
-        this.httpDispatcher !== null ||
-        this.releaseEndpointLock !== null;
+        this.irohClient !== null || this.wsClient !== null || this.httpDispatcher !== null;
       if (
         this.retainedConnections === 0 &&
         !this.keepPushOpen &&
@@ -1018,32 +1012,27 @@ export class RpcClient {
 
   private ensureIrohClient(): Promise<import("../node/iroh/irohRpcClient.js").IrohRpcClient> {
     this.assertOpen();
-    if (!this.pairing || !this.endpointSecret) {
+    if (!this.pairing || !this.deviceSecret) {
       throw new Error("Stored credential does not contain Iroh reach and endpoint identity");
     }
     if (!this.irohClient) {
       const pairing = this.pairing;
-      const endpointSecret = this.endpointSecret;
-      this.irohClient = Promise.all([
-        import("../node/iroh/irohRpcClient.js"),
-        import("./irohEndpointLock.js"),
-      ])
-        .then(async ([{ IrohRpcClient }, { acquireIrohEndpointLock }]) => {
-          this.releaseEndpointLock = await acquireIrohEndpointLock(endpointSecret);
-          return new IrohRpcClient({
-            reach: pairing,
-            endpointSecret: Buffer.from(endpointSecret, "base64url"),
-            callerId: this.callerId,
-            callerKind: this.callerKind,
-            getToken: () => this.authToken(),
-            clientLabel: "Vibestudio CLI",
-            onPaired: () => undefined,
-            ...(this.owner.signal ? { signal: this.owner.signal } : {}),
-          });
-        })
+      const deviceSecret = this.deviceSecret;
+      this.irohClient = import("../node/iroh/irohRpcClient.js")
+        .then(
+          ({ IrohRpcClient }) =>
+            new IrohRpcClient({
+              reach: pairing,
+              deviceSecret: Buffer.from(deviceSecret, "base64url"),
+              callerId: this.callerId,
+              callerKind: this.callerKind,
+              getToken: () => this.authToken(),
+              clientLabel: "Vibestudio CLI",
+              onPaired: () => undefined,
+              ...(this.owner.signal ? { signal: this.owner.signal } : {}),
+            })
+        )
         .catch((error) => {
-          this.releaseEndpointLock?.();
-          this.releaseEndpointLock = null;
           this.irohClient = null;
           throw error;
         });

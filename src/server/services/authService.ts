@@ -420,7 +420,7 @@ export function createAuthService(deps: {
         await deps.resolveRuntimeEntity?.(principalId);
         return deps.connectionGrants.grant(principalId, ctx.caller.runtime.id, {
           ...(ctx.caller.subject ? { subject: ctx.caller.subject } : {}),
-          ...(ctx.caller.remoteEndpointId ? { remoteEndpointId: ctx.caller.remoteEndpointId } : {}),
+          ...(ctx.caller.remoteDeviceKey ? { remoteDeviceKey: ctx.caller.remoteDeviceKey } : {}),
         });
       },
       getConnectionInfo: (ctx) => ({
@@ -447,9 +447,7 @@ export function createAuthService(deps: {
             deviceId,
             subject,
             issuedBy: ctx.caller.runtime.id,
-            ...(ctx.caller.remoteEndpointId
-              ? { remoteEndpointId: ctx.caller.remoteEndpointId }
-              : {}),
+            ...(ctx.caller.remoteDeviceKey ? { remoteDeviceKey: ctx.caller.remoteDeviceKey } : {}),
           }
         );
       },

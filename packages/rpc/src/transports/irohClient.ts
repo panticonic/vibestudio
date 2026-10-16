@@ -18,6 +18,7 @@ import {
   type IrohPhysicalConnection,
   type IrohConnectionDiagnostics,
   type IrohPhysicalReceiveStream,
+  type EndpointDelegation,
 } from "@vibestudio/iroh-transport";
 import type {
   EnvelopeRpcTransport,
@@ -41,6 +42,7 @@ import {
   IROH_SESSION_CLOSE,
   IROH_SESSION_CLOSED,
   IROH_SESSION_HELLO,
+  IROH_SESSION_DELEGATE,
   IROH_SESSION_OPEN,
   IROH_SESSION_OPEN_RESULT,
   type IrohSessionControlFrame,
@@ -901,6 +903,7 @@ class ClientPipe implements IrohClientPipe {
 
   constructor(
     connection: IrohPhysicalConnection,
+    private readonly delegation: EndpointDelegation,
     private readonly dialMetadata?: {
       relayUrl: string;
       attempts: number;
@@ -1063,6 +1066,7 @@ class ClientPipe implements IrohClientPipe {
       protocolVersion: IROH_WIRE_VERSION,
       contractVersion: RPC_CONTRACT_VERSION,
     });
+    await this.controlWriter.write({ t: IROH_SESSION_DELEGATE, ...this.delegation });
     this.ownLifecycle(this.readControl(control).catch((error) => this.failPipe(asError(error))));
     this.ownLifecycle(this.acceptStreams().catch((error) => this.failPipe(asError(error))));
     this.ownLifecycle(
@@ -1095,6 +1099,7 @@ class ClientPipe implements IrohClientPipe {
         case IROH_SESSION_CLOSED:
           this.sessions.get(frame.sid)?.handleClosed(frame);
           break;
+        case IROH_SESSION_DELEGATE:
         case IROH_SESSION_OPEN:
         case IROH_SESSION_CLOSE:
           throw new Error(`Client received invalid Iroh control frame ${frame.t}`);
@@ -1187,11 +1192,16 @@ class ClientPipe implements IrohClientPipe {
   }
 }
 
+/**
+ * `delegation` is the device key's signature over this process's own endpoint;
+ * the server admits the connection only on that proof.
+ */
 export function createIrohClientPipe(
   connection: IrohPhysicalConnection,
+  delegation: EndpointDelegation,
   dialMetadata?: { relayUrl: string; attempts: number; generation: number }
 ): IrohClientPipe {
-  return new ClientPipe(connection, dialMetadata);
+  return new ClientPipe(connection, delegation, dialMetadata);
 }
 
 export function irohReceiveStreamBody(

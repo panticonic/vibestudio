@@ -32,13 +32,8 @@ import {
 import { createReconnectingIrohClientPipe } from "@vibestudio/rpc/transports/reconnectingIrohClient";
 import type { LifecycleIrohClientPipe } from "@vibestudio/rpc/transports/reconnectingIrohClient";
 import type { DeviceCredential } from "@vibestudio/rpc/protocol/wsProtocol";
-import { EndpointGenerationOwner, type IrohReach } from "@vibestudio/iroh-transport";
-import {
-  createNodeEndpointBinding,
-  loadIrohNodeBinding,
-  type NodePhysicalConnection,
-  type NodePhysicalEndpoint,
-} from "@vibestudio/iroh-transport/node";
+import type { IrohReach } from "@vibestudio/iroh-transport";
+import { createNodeDeviceEndpoint, type NodeDeviceEndpoint } from "@vibestudio/iroh-transport/node";
 import { authMethods } from "@vibestudio/service-schemas/auth";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import type {
@@ -58,8 +53,9 @@ import type { RemoteTransportDiagnostics } from "@vibestudio/shared/types";
 
 export interface IrohServerClientArgs {
   reach: IrohReach;
-  endpointSecret?: Uint8Array;
-  endpointOwner?: EndpointGenerationOwner<NodePhysicalConnection, NodePhysicalEndpoint>;
+  deviceSecret?: Uint8Array;
+  /** This process's endpoint and delegation, shared with its other peers. */
+  deviceEndpoint?: NodeDeviceEndpoint;
   /** The shell's caller id, e.g. `shell:<deviceId>`. */
   callerId: string;
   /**
@@ -134,19 +130,13 @@ function remoteDiagnosticsOf(
 export async function createIrohServerClient(
   args: IrohServerClientArgs
 ): Promise<IrohServerClient> {
-  if (!args.pipe && !args.endpointOwner && args.endpointSecret?.byteLength !== 32) {
-    throw new Error("Iroh endpoint secret must contain exactly 32 bytes");
+  if (!args.pipe && !args.deviceEndpoint && !args.deviceSecret) {
+    throw new Error("Iroh server client needs a device secret or a shared device endpoint");
   }
-  const ownsEndpoint = !args.pipe && !args.endpointOwner;
-  const endpointOwner = args.pipe
+  const ownsEndpoint = !args.pipe && !args.deviceEndpoint;
+  const deviceEndpoint = args.pipe
     ? null
-    : (args.endpointOwner ??
-      new EndpointGenerationOwner<NodePhysicalConnection, NodePhysicalEndpoint>(
-        createNodeEndpointBinding({
-          secretKey: loadIrohNodeBinding().SecretKey.fromBytes([...args.endpointSecret!]),
-          relayUrls: args.reach.relays,
-        })
-      ));
+    : (args.deviceEndpoint ?? createNodeDeviceEndpoint(args.deviceSecret!, args.reach.relays));
   let transport: IrohClientPipe;
   let lifecycleTransport: LifecycleIrohClientPipe | null = null;
   if (args.pipe) {
@@ -155,15 +145,15 @@ export async function createIrohServerClient(
     lifecycleTransport = createReconnectingIrohClientPipe({
       peerEndpointId: args.reach.endpointId,
       dial: async () => {
-        const dialed = await endpointOwner!.dial({
+        const dialed = await deviceEndpoint!.owner.dial({
           reach: args.reach,
           overallDeadlineMs: 30_000,
           perAttemptDeadlineMs: 12_000,
         });
-        return createIrohClientPipe(dialed.connection, dialed);
+        return createIrohClientPipe(dialed.connection, deviceEndpoint!.delegation, dialed);
       },
       closeEndpoint: async () => {
-        if (ownsEndpoint) await endpointOwner!.close();
+        if (ownsEndpoint) await deviceEndpoint!.owner.close();
       },
       onReconnectAttempt: (attempt, delayMs) =>
         args.onReconnectProgress?.({

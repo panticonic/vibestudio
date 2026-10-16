@@ -120,7 +120,7 @@ test("reports the thrown error rather than the minified source that precedes it"
     `?cDt.test(e.data)||(zt(i,{validation:"base64url"${"x".repeat(3000)}`,
     "           ^",
     "",
-    "ZodError: Invalid base64url string at reach.endpointSecret",
+    "ZodError: Invalid base64url string at reach.deviceSecret",
     "    at parseReach (/opt/app/dist/server.mjs:1:2)",
   ].join("\n");
 

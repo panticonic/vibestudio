@@ -18,8 +18,11 @@ export interface IrohIngressOptions<
 > {
   binding: IrohEndpointBinding<Connection, Endpoint>;
   maxConnections?: number;
-  /** Runs after the authenticated QUIC handshake and before any stream is accepted. */
-  admitPeer(endpointId: string): boolean | Promise<boolean>;
+  /**
+   * Runs after the authenticated QUIC handshake. The peer's endpoint is
+   * ephemeral and says nothing about who it is, so ingress admits every peer
+   * into attach, where the device delegation decides.
+   */
   attach(connection: Connection): Promise<IrohIngressAttachment>;
   log?(message: string, error?: unknown): void;
 }
@@ -47,8 +50,8 @@ export interface IrohIngress<Endpoint = IrohPhysicalEndpoint<IrohPhysicalConnect
 
 /**
  * Owns one server endpoint and its full-handshake accept loop. Admission is
- * deliberately before `attach`: rejected peers can never open the lifecycle
- * stream or consume application framing/authentication budgets.
+ * `attach`'s first duty: a peer that cannot prove a delegation from an admitted
+ * device is closed before it can open a session.
  * Binding establishes ingress readiness. Relay discovery and reconnection stay
  * on the same endpoint and never prevent local startup or direct peer admission.
  */
@@ -174,25 +177,10 @@ export function startIrohIngress<
         await closure;
         continue;
       }
-      let admitted = false;
-      try {
-        admitted = await options.admitPeer(connection.peerEndpointId);
-      } catch (error) {
-        options.log?.(`Iroh peer admission failed: ${String(error)}`);
-      }
-      if (stopped) {
-        connection.close(SERVER_STOPPED, new TextEncoder().encode("server stopped"));
-        await closure;
-        break;
-      }
-      if (!admitted) {
-        connection.close(ADMISSION_REJECTED, new TextEncoder().encode("peer not admitted"));
-        continue;
-      }
       candidateByPeer.set(connection.peerEndpointId, connection);
       const selectedPath = connection.diagnostics?.().paths.find((path) => path.selected);
       options.log?.(
-        `Iroh peer admitted endpoint=${connection.peerEndpointId.slice(0, 12)} path=${
+        `Iroh peer accepted endpoint=${connection.peerEndpointId.slice(0, 12)} path=${
           selectedPath?.kind ?? "unknown"
         }${selectedPath?.remoteAddress ? ` remote=${selectedPath.remoteAddress}` : ""}`
       );

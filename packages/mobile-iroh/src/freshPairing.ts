@@ -53,7 +53,7 @@ export async function completeFreshMobilePairing(
       credential,
       controlPairing,
       pair.system.workspaceId,
-      controlConnection.endpointIdentityId
+      controlConnection.deviceIdentityId
     );
     await persistConnection(source);
     const route = await hub.routeWorkspace({ workspaceId: source.selectedWorkspaceId });

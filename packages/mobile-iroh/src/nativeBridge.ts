@@ -1,6 +1,8 @@
 import { NativeModules } from "react-native";
 import {
   VIBESTUDIO_IROH_ALPN,
+  endpointDelegationStatement,
+  type EndpointDelegation,
   type IrohEndpointBinding,
   type IrohPhysicalBiStream,
   type IrohPhysicalConnection,
@@ -27,17 +29,24 @@ interface NativeEndpointResult {
 
 interface NativeIdentityResult {
   identityId: string;
-  endpointId: string;
+  /** The device signing public key. */
+  deviceKey: string;
 }
 
 interface IrohNativeModule {
   createIdentity(): Promise<NativeIdentityResult>;
   deleteIdentity(identityId: string): Promise<void>;
+  /**
+   * Binds the endpoint named by a process-fresh in-memory secret. The device
+   * identity never carries transport; it only signs.
+   */
   bind(
-    identityId: string,
+    endpointSecretBase64: string,
     relays: readonly string[],
     alpnBase64: string
   ): Promise<NativeEndpointResult>;
+  identityPublicKey(identityId: string): Promise<string>;
+  signWithIdentity(identityId: string, messageBase64: string): Promise<string>;
   shutdownEndpoint(endpointHandle: string): Promise<void>;
   dial(
     endpointHandle: string,
@@ -175,18 +184,39 @@ export class MobileEndpoint implements IrohPhysicalEndpoint<MobileConnection> {
 }
 
 export function createMobileEndpointBinding(
-  identityId: string,
+  endpointSecret: Uint8Array,
   relayUrls: readonly string[]
 ): IrohEndpointBinding<MobileConnection, MobileEndpoint> {
   return {
     async bind() {
       const result = await module().bind(
-        identityId,
+        encodeBase64(endpointSecret),
         relayUrls,
         encodeBase64(Uint8Array.from(VIBESTUDIO_IROH_ALPN))
       );
       return new MobileEndpoint(result.endpointHandle, result.endpointId);
     },
+  };
+}
+
+/**
+ * The device identity (kept in the OS secure store, never bound as an
+ * endpoint) delegates this process's fresh `endpointId`.
+ */
+export async function signMobileEndpointDelegation(
+  identityId: string,
+  endpointId: string
+): Promise<EndpointDelegation> {
+  const deviceKey = await module().identityPublicKey(identityId);
+  const signature = decodeBase64(
+    await module().signWithIdentity(
+      identityId,
+      encodeBase64(endpointDelegationStatement(deviceKey, endpointId))
+    )
+  );
+  return {
+    deviceKey,
+    signature: Array.from(signature, (byte) => byte.toString(16).padStart(2, "0")).join(""),
   };
 }
 

@@ -1,5 +1,6 @@
 package app.vibestudio.mobile
 
+import android.util.Base64
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.facebook.react.bridge.Callback
@@ -35,14 +36,15 @@ class IrohLifecycleTest {
         val first = module()
         val identity = result { first.createIdentity(it) }.await() as ReadableMap
         val identityId = identity.getString("identityId")!!
+        val secret = Base64.encodeToString(ByteArray(32) { 7 }, Base64.NO_WRAP)
         val relays = JavaOnlyArray.of("https://euc1-1.relay.n0.iroh.link/")
-        val endpoint = result { first.bind(identityId, relays, "dGVzdA==", it) }.await() as ReadableMap
+        val endpoint = result { first.bind(secret, relays, "dGVzdA==", it) }.await() as ReadableMap
         val pendingAccept = result { first.accept(endpoint.getString("endpointHandle")!!, it) }
         val replacement = module()
         try {
             first.invalidate()
             assertTrue(runCatching { pendingAccept.await() }.isFailure)
-            val rebound = result { replacement.bind(identityId, relays, "dGVzdA==", it) }.await() as ReadableMap
+            val rebound = result { replacement.bind(secret, relays, "dGVzdA==", it) }.await() as ReadableMap
             assertTrue(rebound.getString("endpointId") == endpoint.getString("endpointId"))
             result { replacement.shutdownEndpoint(rebound.getString("endpointHandle")!!, it) }.await()
             result { replacement.deleteIdentity(identityId, it) }.await()

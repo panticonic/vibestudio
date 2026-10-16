@@ -37,8 +37,8 @@ final class IrohLifecycleTests: XCTestCase {
     _ = try await result { keys.deleteIdentity(identity, resolver: $0, rejecter: $1) }
   }
 
-  private func bind(_ module: VibestudioIroh, identity: String) async throws -> String {
-    let value = try await result { module.bind(identity, relays: [],
+  private func bind(_ module: VibestudioIroh) async throws -> String {
+    let value = try await result { module.bind(Data(repeating: 7, count: 32).base64EncodedString(), relays: [],
       alpnBase64: Data("vibestudio-native-lifecycle-test".utf8).base64EncodedString(),
       resolver: $0, rejecter: $1) }
     return try XCTUnwrap((value as? [String: String])?["endpointHandle"])
@@ -48,7 +48,7 @@ final class IrohLifecycleTests: XCTestCase {
     try await withIdentity { identity in
       var module: VibestudioIroh? = hostIroh()
       defer { module?.invalidate() }
-      let handle = try await bind(module!, identity: identity)
+      let handle = try await bind(module!)
       let completed = expectation(description: "Pending native accept ends on invalidation")
       module!.accept(handle, resolver: { _ in completed.fulfill() }, rejecter: { _, _, _ in completed.fulfill() })
       weak var retired = module
@@ -60,7 +60,7 @@ final class IrohLifecycleTests: XCTestCase {
 
       let replacement = hostIroh()
       defer { replacement.invalidate() }
-      let rebound = try await bind(replacement, identity: identity)
+      let rebound = try await bind(replacement)
       _ = try await result { replacement.shutdownEndpoint(rebound, resolver: $0, rejecter: $1) }
     }
   }
@@ -71,7 +71,7 @@ final class IrohLifecycleTests: XCTestCase {
       module.invalidate()
       module.invalidate()
       do {
-        _ = try await bind(module, identity: identity)
+        _ = try await bind(module)
         XCTFail("An invalidated runtime must not publish a new endpoint")
       } catch {
         XCTAssertTrue(error.localizedDescription.contains("invalidated"))

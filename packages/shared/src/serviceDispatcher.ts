@@ -277,8 +277,8 @@ export interface VerifiedCaller {
     id: string;
     kind: CallerKind;
   };
-  /** Verified Iroh endpoint carrying this caller, when the caller is remote. */
-  remoteEndpointId?: string;
+  /** Device key the caller's Iroh connection is bound to, when the caller is remote. */
+  remoteDeviceKey?: string;
   /**
    * Host-attested operation origin. This is deliberately independent of
    * runtime.kind: a transport or runtime labelled "server" does not acquire

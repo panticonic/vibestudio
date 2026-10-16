@@ -17,7 +17,7 @@ export interface ShellCredential {
 interface StoredMobileConnectionBase {
   schemaVersion: 5;
   transport: "iroh";
-  endpointIdentityId: string;
+  deviceIdentityId: string;
   credential: ShellCredential;
   controlPairing: StoredShellPairing;
   selectedWorkspaceId: string;
@@ -66,21 +66,21 @@ export function createPairedMobileConnection(
   deviceCredential: ShellCredential,
   controlPairing: FreshShellPairing,
   selectedWorkspaceId: string,
-  endpointIdentityId: string,
+  deviceIdentityId: string,
   pairedAt = Date.now()
 ): StoredPairedMobileConnection {
   const currentCredential = credential(deviceCredential);
   const currentReach = reach(controlPairing);
   if (!currentCredential || !currentReach)
     throw new Error("Cannot persist invalid Iroh pairing state");
-  if (!validText(selectedWorkspaceId) || !validText(endpointIdentityId, 256)) {
+  if (!validText(selectedWorkspaceId) || !validText(deviceIdentityId, 256)) {
     throw new Error("Cannot persist invalid Iroh mobile identity state");
   }
   return {
     schemaVersion: 5,
     transport: "iroh",
     phase: "paired",
-    endpointIdentityId,
+    deviceIdentityId,
     credential: currentCredential,
     controlPairing: currentReach,
     selectedWorkspaceId,
@@ -130,7 +130,7 @@ export function parseStoredMobileConnection(
       !currentCredential ||
       !controlPairing ||
       (value["phase"] === "routed" && !workspacePairing) ||
-      !validText(value["endpointIdentityId"], 256) ||
+      !validText(value["deviceIdentityId"], 256) ||
       !validText(value["selectedWorkspaceId"]) ||
       !Number.isSafeInteger(value["pairedAt"]) ||
       (value["pairedAt"] as number) <= 0
@@ -140,7 +140,7 @@ export function parseStoredMobileConnection(
     const base = {
       schemaVersion: 5 as const,
       transport: "iroh" as const,
-      endpointIdentityId: value["endpointIdentityId"],
+      deviceIdentityId: value["deviceIdentityId"],
       credential: currentCredential,
       controlPairing,
       selectedWorkspaceId: value["selectedWorkspaceId"],

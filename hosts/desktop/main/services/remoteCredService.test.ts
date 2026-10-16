@@ -48,7 +48,7 @@ const NEXT_REFRESH_TOKEN = "n".repeat(43);
 const sampleStored: StoredRemote = {
   serverId: `srv_${"s".repeat(24)}`,
   transport: "iroh",
-  endpointSecret: "E".repeat(43),
+  deviceSecret: "E".repeat(43),
   controlPairing: {
     endpointId: "aa".repeat(32),
     relays: ["https://relay.example/"],

@@ -63,7 +63,7 @@ export function encodeWebSocketStreamFrame(
   };
 }
 
-export type RpcSessionTransportBinding = { kind: "local" } | { kind: "iroh"; endpointId: string };
+export type RpcSessionTransportBinding = { kind: "local" } | { kind: "iroh"; deviceKey: string };
 
 /**
  * One authenticated logical RPC session, independent of its physical carrier.

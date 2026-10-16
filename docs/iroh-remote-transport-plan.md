@@ -212,58 +212,76 @@ stable across ordinary restarts.
 
 ### Client
 
-- The endpoint secret belongs to the device credential, not to the install. A
-  paired record stores exactly one Iroh secret beside its device credential, in
-  the same encrypted credential boundary. Desktop and CLI already pair
-  separately into separate credential stores, so they own separate endpoint
-  identities and run concurrently without coordination.
-- Exactly one live process binds a given credential's endpoint. The CLI's
-  existing cross-process connection lock is re-scoped from the signaling room to
-  the endpoint identity, so concurrent CLI invocations serialize exactly as they
-  do today. Binding one secret from two processes would advertise one Endpoint
-  ID from two endpoints and make relay routing and dial delivery ambiguous.
-- iOS stores it in Keychain. Android stores it with the platform's encrypted
-  credential facility.
+A device's identity and its transport are separate keys.
+
+- The **device key** is a long-term Ed25519 key. It is stored beside the device
+  credential, in the same encrypted credential boundary (iOS Keychain, Android
+  encrypted credential facility, desktop and CLI credential stores). It only
+  signs. It is never bound as a transport endpoint.
+- Every host process that connects binds its **own fresh, random, in-memory
+  endpoint** and never persists its secret. Hub control and workspace dials from
+  one process share that endpoint. Two processes of one device (a CLI next to the
+  terminal client) therefore hold two distinct Endpoint IDs and never supersede
+  each other at the relay; nothing serializes them.
 - On mobile background, shut down the endpoint cleanly; on foreground, bind a
-  new endpoint instance using the same secret. This follows Iroh's documented
-  mobile lifecycle and keeps the Endpoint ID stable.
-- A lost endpoint secret is equivalent to a lost device credential: clear the
+  new fresh endpoint and delegate it again.
+- A lost device key is equivalent to a lost device credential: clear the
   incomplete remote record and require fresh pairing.
 
-### Bind endpoint identity to the device credential
+### Delegation: binding an endpoint to the device
 
-The clean model uses both factors rather than leaving the Iroh client identity
-as diagnostic decoration:
+Before opening any session, the client sends one `delegate` control frame right
+after its hello: the device public key and the device key's Ed25519 signature
+over
 
-- fresh pairing observes the client's Endpoint ID only after the completed QUIC
-  handshake;
+```
+vibestudio-endpoint-delegation-v1 \n <device public key hex> \n <endpoint id hex>
+```
+
+Replaying a delegation is useless, because QUIC/TLS already authenticates the
+endpoint ID, so only the holder of that endpoint's secret can use a statement
+that names it. It therefore carries no expiry. The statement format, frame shape
+and signing/verification live in `packages/iroh-transport`
+(`deviceDelegation.ts`, `nodeDelegation.ts`); React Native signs through the
+native module's `signWithIdentity`, so no host hand-rolls crypto.
+
+The server verifies the signature against the peer's authenticated endpoint ID
+in the pre-auth phase of `attachIrohConnection`, then binds the connection to
+that device key. Every later device lookup (credential redemption, connection
+grants, revocation) uses the connection's bound device key, never the raw
+endpoint ID.
+
+### Bind the device key to the device credential
+
 - `DeviceRow` stores an explicit transport binding when the credential is
   issued: either `{ kind: "local" }` for the co-located loopback topology or
-  `{ kind: "iroh", endpointId }` for remote transport;
+  `{ kind: "iroh", deviceKey }` for remote transport. Fresh pairing registers the
+  device key that the connection's delegation proved;
 - refresh authentication succeeds only when both the refresh secret and the
-  live connection's Endpoint ID match;
-- because the secret is owned by the credential rather than by the install,
-  this stays one Endpoint ID per device row: there is no set-valued binding, no
-  per-process identity, and no way for two credentials to share an endpoint;
+  connection's bound device key match;
+- a device has one device key and any number of live connections (one per host
+  process);
 - workspace children perform the same comparison through the shared read-only
   identity database;
-- revocation remains device-credential revocation and immediately covers all
-  reaches for that endpoint.
+- revocation remains device-credential revocation: it closes every connection
+  bound to the device's key, on the hub and in every workspace.
 
 This is one credential-binding rule, not a second login channel. It makes a
 copied refresh token insufficient by itself and prevents a local credential
 from being replayed over Iroh. Represent the binding with an unambiguous SQL
-kind plus an Endpoint ID constrained to be present only for `iroh`; do not use a
-nullable Endpoint ID whose absence could mean either local or legacy. The
-shipped version-11 identity database is migrated transactionally to version 13:
+kind plus a device key constrained to be present only for `iroh`; do not use a
+nullable key whose absence could mean either local or legacy. The `devices`
+column is `device_key` (formerly `endpoint_id`; the identity database migrates it
+in place at schema version 20 and every device keeps its key). The shipped
+version-11 identity database is migrated transactionally to version 13:
 account, workspace, membership, and device records survive; obsolete signaling
 rooms and outstanding WebRTC pairing links are deleted; and old unbound device
 credentials become local-only. Remote devices pair once through Iroh to acquire
-an Endpoint-ID-bound credential. Unknown versions and non-canonical shapes are
-still rejected without mutation. The same endpoint binding must be
-available to every auth entry point; if any path cannot prove the peer Endpoint
-ID, that path is not remote authentication and must not accept an Iroh-bound
-device credential.
+a device-key-bound credential. Unknown versions and non-canonical shapes are
+still rejected without mutation. The same binding must be available to every
+auth entry point; if any path cannot prove the connection's device key, that
+path is not remote authentication and must not accept an Iroh-bound device
+credential.
 
 ## Reach and pairing protocol
 
@@ -334,13 +352,14 @@ Pairing flow:
 
 1. The hub creates the existing one-time invite and advertises its stable Iroh
    reach.
-2. The client binds its persisted endpoint and the shared connection owner dials
+2. The client binds its fresh endpoint and the shared connection owner dials
    the hub Endpoint ID through the ordered advertised relay set.
 3. Both sides wait for the complete TLS handshake.
-4. The client opens the connection-control stream and redeems the pairing code.
+4. The client opens the connection-control stream, delegates its endpoint with
+   its device key, and redeems the pairing code.
 5. The hub atomically consumes the code, creates a device credential bound to
-   the client Endpoint ID, and returns the credential plus exact `workspaceId`.
-6. The client durably stores endpoint secret, device credential, control reach,
+   the delegating device key, and returns the credential plus exact `workspaceId`.
+6. The client durably stores device secret, device credential, control reach,
    and workspace selection before declaring pairing complete.
 7. Over the stable hub connection it calls `hubControl.routeWorkspace`; the
    returned child reach replaces only the saved workspace reach.
@@ -364,19 +383,21 @@ workspace child accepts a connection only into a room the hub armed for one
 device; an Iroh child endpoint is dialable by anyone who learns its Endpoint ID,
 from any network, through the relays.
 
-- A workspace child accepts only Endpoint IDs that appear as a device transport
-  binding in the shared read-only identity database. The check runs when the
-  handshake completes and before any stream is accepted; an unrecognized peer is
-  closed with a QUIC application error code and never reaches the control
-  stream.
-- The hub is the only endpoint that accepts an unknown Endpoint ID, and only
-  while at least one invite is open. Those connections stay under the pre-auth
-  connection, stream, byte, and time budgets until a pairing code is redeemed.
-- Revoking a device removes its binding, so admission and authorization revoke
-  together.
+- Endpoint IDs are ephemeral, so ingress admits every handshaken peer into the
+  pre-auth phase and the delegation decides. A peer that sends no valid
+  delegation for its own authenticated endpoint is closed with a QUIC
+  application error code before any session opens.
+- A workspace child then requires the proven device key to belong to a live
+  device in the shared read-only identity database whose owner is a workspace
+  member.
+- The hub also accepts an unknown device key, and only while at least one invite
+  is open. Those connections stay under the pre-auth connection, stream, byte,
+  and time budgets until a pairing code is redeemed.
+- Revoking a device closes every connection bound to its key, so admission and
+  authorization revoke together.
 
 This is admission, not authorization. An admitted connection still proves the
-endpoint-bound device credential before any RPC is served, and admission alone
+device-key-bound device credential before any RPC is served, and admission alone
 grants nothing.
 
 ### Connection-control stream
@@ -603,7 +624,7 @@ WebRTC-shaped repair path.
 - Add the official pinned `IrohLib` XCFramework/Swift package and
   `Network.framework` linkage.
 - Implement the same narrow native endpoint/connection/stream adapter used by
-  the React Native app, with the endpoint secret in Keychain.
+  the React Native app, with the device key in Keychain (it signs; endpoints are fresh per process).
 - Verify physical device and simulator builds, foreground/background shutdown
   and rebind, network-interface changes, direct path, relayed path, cancellation,
   and app termination during an active stream.
@@ -703,7 +724,7 @@ one supported admission model using stock `iroh-relay` facilities:
 
 Do not embed one global long-lived relay token in every application. Do not let
 relay authorization become application authorization: the hub still validates
-the endpoint-bound device credential. The registry's initial-admission flow must
+the device-key-bound device credential. The registry's initial-admission flow must
 be designed as an explicit bootstrap protocol; it must not smuggle application
 RPC, assets, or a second remote transport through the callback relay. If the
 stock hook cannot support fresh pairing and returning devices without that
@@ -924,7 +945,7 @@ close/cancel duration becomes part of the measured reconnect bound.
 The repository implementation completes the code-owned workstreams in two
 separate branches/worktrees:
 
-- host: shared QUIC RPC/session/reconnect kernel, endpoint-bound identity and
+- host: shared QUIC RPC/session/reconnect kernel, device-key-bound identity and
   auth, hub/child ingress and reaches, desktop/CLI/mobile host adapters,
   Swift/Kotlin native modules, packaging, deployment tools, doctor, endpoint
   rotation, relay fixture, observability, and bounded relay-online startup;
@@ -1016,7 +1037,7 @@ contract tests over real local Iroh QUIC, with no WebRTC modules imported.
 3. Accept one control stream per connection and enforce pre-auth limits.
 4. Thread the authenticated peer Endpoint ID into every remote auth decision.
 5. Add the checked `DeviceRow` transport-binding union and enforce local versus
-   endpoint-bound refresh validation in hub and read-only workspace child.
+   device-key-bound refresh validation in hub and read-only workspace child.
 6. Return child Iroh reach from `routeWorkspace`; retain exact workspace ID
    routing and no hub data proxy.
 7. Replace server health/doctor/ready records and supervisor diagnostics.
@@ -1029,7 +1050,7 @@ pass over Iroh on an isolated managed instance.
 1. Replace desktop/CLI WebRTC clients with the shared Iroh connection owner.
 2. Replace stored remote schema atomically; an old WebRTC record produces a
    clear re-pair state and is removed, never translated.
-3. Persist the per-credential endpoint secret and its endpoint-bound device
+3. Persist the per-credential device key and its device-key-bound device
    credential as one valid/invalid unit, and re-scope the CLI's cross-process
    connection lock from the signaling room to the endpoint identity.
 4. Replace connection UI, diagnostics, pair-link parsing, CLI output, and
@@ -1046,7 +1067,7 @@ revocation, updates, and installed CLI work on every retained desktop target.
 2. Integrate the pinned Swift XCFramework and verified official Android AAR.
 3. Implement the one pull-based endpoint/connection/stream bridge contract on
    both platforms with identical JS semantics and conformance tests.
-4. Persist endpoint secrets securely and make foreground/background lifecycle
+4. Persist the device key securely and make foreground/background lifecycle
    explicit.
 5. Adapt the shared TypeScript transport owner; do not fork the wire/session
    protocol by platform.
@@ -1270,7 +1291,7 @@ The migration is complete only when:
 3. production works through the explicit shipped public relay set without
    address lookup or owned infrastructure, while an optional owned override is
    validated before selection;
-4. direct/relayed paths, failover, recovery, resource bounds, and endpoint-bound
+4. direct/relayed paths, failover, recovery, resource bounds, and device-key-bound
    auth are observable and tested;
 5. native performance measurements meet the precommitted gates;
 6. every item in the deletion register and absence checks is satisfied;

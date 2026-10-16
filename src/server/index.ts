@@ -5887,12 +5887,12 @@ async function main() {
         const secretKey = loadOrCreateNodeEndpointSecret(workspaceIrohIdentityFile);
         const ingress = startIrohIngress({
           binding: createNodeEndpointBinding({ secretKey, relayUrls }),
-          admitPeer: async (endpointId) => {
-            if (!(await workspaceReadyForPeers)) return false;
-            const device = identityDb.getDeviceForEndpoint(endpointId);
-            return !!device && membershipStore.has(device.userId, entryWorkspaceId);
-          },
-          attach: (connection) => rpc.attachIrohConnection(connection),
+          attach: (connection) =>
+            rpc.attachIrohConnection(connection, async (deviceKey) => {
+              if (!(await workspaceReadyForPeers)) return false;
+              const device = identityDb.getDeviceForKey(deviceKey);
+              return !!device && membershipStore.has(device.userId, entryWorkspaceId);
+            }),
           log: (message, error) => console.warn(`[iroh-workspace] ${message}`, error),
         });
         await ingress.ready;
@@ -5956,6 +5956,22 @@ async function main() {
       },
       callerIds
     );
+  // Sessions drain first (so a revoking request's own response is delivered);
+  // then every Iroh connection bound to the revoked devices closes.
+  const retireWorkspaceDevices = async (
+    callerIds: readonly string[],
+    devices: readonly import("@vibestudio/identity/identityDb").DeviceRow[]
+  ): Promise<void> => {
+    await retireWorkspaceCallers(callerIds);
+    const rpc = assertPresent(rpcServerForGateway);
+    await Promise.all(
+      devices.flatMap((device) =>
+        device.transport.kind === "iroh"
+          ? [rpc.closeDeviceConnections(device.transport.deviceKey, "device revoked")]
+          : []
+      )
+    );
+  };
   const observeReachRetirement = (retirement: Promise<void>): void => {
     void retirement.catch((error) => {
       console.error("[Sessions] Routed reach retirement failed:", error);
@@ -6093,7 +6109,10 @@ async function main() {
           })
         );
         observeReachRetirement(
-          retireWorkspaceCallers(connections.map((connection) => connection.caller.runtime.id))
+          retireWorkspaceDevices(
+            connections.map((connection) => connection.caller.runtime.id),
+            identityDb.listDevicesForUser(userId)
+          )
         );
       },
     },
@@ -6174,7 +6193,8 @@ async function main() {
         }
         const callerId = `shell:${deviceId}`;
         const connections = rpcServerForGateway.getPrincipalConnections(callerId);
-        const retirement = retireWorkspaceCallers([callerId]);
+        const device = identityDb.getDevice(deviceId);
+        const retirement = retireWorkspaceDevices([callerId], device ? [device] : []);
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ closed: connections.length }));
         observeReachRetirement(retirement);
@@ -6203,8 +6223,9 @@ async function main() {
           return;
         }
         const connections = rpcServerForGateway.getUserConnections(userId);
-        const retirement = retireWorkspaceCallers(
-          connections.map((connection) => connection.caller.runtime.id)
+        const retirement = retireWorkspaceDevices(
+          connections.map((connection) => connection.caller.runtime.id),
+          identityDb.listDevicesForUser(userId)
         );
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ closed: connections.length }));

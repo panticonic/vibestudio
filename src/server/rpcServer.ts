@@ -87,12 +87,14 @@ import {
   IROH_SESSION_CLOSE,
   IROH_SESSION_CLOSED,
   IROH_SESSION_HELLO,
+  IROH_SESSION_DELEGATE,
   IROH_SESSION_OPEN,
   IROH_SESSION_OPEN_RESULT,
   type IrohSessionControlFrame,
 } from "@vibestudio/rpc/protocol/irohSession";
 import { irohReceiveStreamBody } from "@vibestudio/rpc/transports/irohClient";
 import type { IrohIngressAttachment } from "./irohIngress.js";
+import { verifyEndpointDelegation } from "@vibestudio/iroh-transport/node";
 import { beginIrohLogicalRetirement, settleIrohPhysicalClosure } from "./irohAttachmentLifetime.js";
 import { IrohRpcSessionChannel } from "./irohRpcSessionChannel.js";
 import { WebSocketSessionChannel, type RpcSessionChannel } from "./rpcServer/sessionChannel.js";
@@ -219,6 +221,13 @@ import { describeCapability } from "@vibestudio/shared/authorityPresentation";
 import { resolveHttpRuntimeCaller } from "./httpRuntimeIdentity.js";
 
 const log = createDevLogger("RpcServer");
+/** Native close code for a physical connection retired because its device was revoked. */
+const IROH_DEVICE_REVOKED = 0x204n;
+
+interface IrohDeviceConnection {
+  close(reason: string): Promise<void>;
+}
+
 const RPC_RUNTIME_ID_HEADER = "x-vibestudio-runtime-id";
 const ADMIN_RPC_AUTH_ERROR =
   "Admin token cannot authenticate RPC; use a caller-scoped token or connection grant.";
@@ -1883,9 +1892,9 @@ export class RpcServer {
   /** Authenticate a runtime bearer using the same live identity on RPC and HTTP. */
   async authenticateConnectionGrant(
     token: string,
-    remoteEndpointId?: string
+    remoteDeviceKey?: string
   ): Promise<{ caller: VerifiedCaller; authorizedBy: string } | null> {
-    const authenticated = await this.resolveConnectionGrantIdentity(token, remoteEndpointId);
+    const authenticated = await this.resolveConnectionGrantIdentity(token, remoteDeviceKey);
     if (
       authenticated?.caller.runtime.kind === "panel" &&
       this.deps.runtimeCoordinator?.resolveAuthorizerForRuntime(authenticated.caller.runtime.id) !==
@@ -1898,9 +1907,9 @@ export class RpcServer {
   /** Credential identity stays valid while a presentation lease is being restored. */
   private async resolveConnectionGrantIdentity(
     token: string,
-    remoteEndpointId?: string
+    remoteDeviceKey?: string
   ): Promise<{ caller: VerifiedCaller; authorizedBy: string } | null> {
-    const grant = this.deps.connectionGrants?.validate(token, remoteEndpointId);
+    const grant = this.deps.connectionGrants?.validate(token, remoteDeviceKey);
     if (!grant) return null;
     try {
       const kind = this.callerKindForRuntimePrincipal(grant.principalId);
@@ -1950,10 +1959,10 @@ export class RpcServer {
       return { ok: false, code: "admin_credential", message: ADMIN_RPC_AUTH_ERROR };
     }
 
-    const remoteEndpointId = transport.kind === "iroh" ? transport.endpointId : undefined;
+    const remoteDeviceKey = transport.kind === "iroh" ? transport.deviceKey : undefined;
     const connectionGrant =
-      this.deps.connectionGrants?.redeem(token, remoteEndpointId) ??
-      this.deps.connectionGrants?.validate(token, remoteEndpointId) ??
+      this.deps.connectionGrants?.redeem(token, remoteDeviceKey) ??
+      this.deps.connectionGrants?.validate(token, remoteDeviceKey) ??
       null;
     let entry: import("@vibestudio/shared/tokenManager").TokenEntry | null;
     let agentBinding: import("@vibestudio/identity/types").AgentBinding | undefined;
@@ -1969,7 +1978,7 @@ export class RpcServer {
       resolvedFromTokenManager = !connectionGrant && entry !== null;
       if (entry?.agentBinding) agentBinding = entry.agentBinding;
       if (connectionGrant) {
-        const authenticated = await this.resolveConnectionGrantIdentity(token, remoteEndpointId);
+        const authenticated = await this.resolveConnectionGrantIdentity(token, remoteDeviceKey);
         if (!authenticated) return rejectedCredential();
         subject = authenticated.caller.subject;
       }
@@ -1989,7 +1998,7 @@ export class RpcServer {
       const resolvedEntry = entry;
       const isValidAtUpgrade = async (): Promise<boolean> => {
         if (connectionGrant) {
-          const current = await this.resolveConnectionGrantIdentity(token, remoteEndpointId);
+          const current = await this.resolveConnectionGrantIdentity(token, remoteDeviceKey);
           return (
             current?.caller.runtime.id === resolvedEntry.callerId &&
             current.caller.runtime.kind === resolvedEntry.callerKind
@@ -2202,7 +2211,7 @@ export class RpcServer {
     if (ws.readyState !== ws.OPEN) return;
     const caller: VerifiedCaller =
       ws.transportBinding.kind === "iroh"
-        ? { ...verifiedCaller, remoteEndpointId: ws.transportBinding.endpointId }
+        ? { ...verifiedCaller, remoteDeviceKey: ws.transportBinding.deviceKey }
         : verifiedCaller;
     // Denormalize the host-verified owning user once, at admission (WP4 §2.1).
     // Defensive invariant: only the in-process server can synthesize a subject;
@@ -5416,6 +5425,28 @@ export class RpcServer {
 
   private static readonly IROH_PREAUTH_TIMEOUT_MS = 10_000;
 
+  /** Live Iroh connections by the device key their delegation bound them to. */
+  private readonly irohDeviceConnections = new Map<string, Set<IrohDeviceConnection>>();
+
+  /**
+   * Close every Iroh connection bound to `deviceKey`. Each connection first
+   * retires its logical sessions, joining their in-flight response writes, and
+   * only then closes the physical connection. Returns how many were closed.
+   */
+  async closeDeviceConnections(deviceKey: string, reason: string): Promise<number> {
+    const connections = [...(this.irohDeviceConnections.get(deviceKey) ?? [])];
+    const results = await Promise.allSettled(connections.map((entry) => entry.close(reason)));
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []
+    );
+    if (failures.length) {
+      throw new AggregateError(failures, "Iroh device connection closure failed", {
+        cause: failures[0],
+      });
+    }
+    return connections.length;
+  }
+
   private sendToSession(ws: RpcSessionChannel, msg: WsServerMessage): void {
     if (ws.readyState !== ws.OPEN) return;
     const buffered = ws.bufferedAmount;
@@ -5748,8 +5779,18 @@ export class RpcServer {
    * is the sole lifecycle control stream; every subsequent RPC owns its own
    * QUIC stream and enters the same handleConnection/auth/dispatch machinery as
    * loopback WebSocket.
+   *
+   * Every process binds its own endpoint, so the endpoint id says nothing about
+   * which device is calling. Before any session may open, the peer presents the
+   * device key's delegation of this exact endpoint. A valid delegation binds the
+   * connection to that device key; `admitDevice` decides whether that device may
+   * use this server (it may be unknown, for pairing). Every later device lookup
+   * uses the bound key, never the endpoint id.
    */
-  async attachIrohConnection(connection: IrohPhysicalConnection): Promise<IrohIngressAttachment> {
+  async attachIrohConnection(
+    connection: IrohPhysicalConnection,
+    admitDevice: (deviceKey: string) => boolean | Promise<boolean>
+  ): Promise<IrohIngressAttachment> {
     if (this.isShuttingDown()) {
       throw new Error("RpcServer has stopped and cannot attach an Iroh connection");
     }
@@ -5780,6 +5821,19 @@ export class RpcServer {
     );
     if (hello.t !== IROH_SESSION_HELLO || hello.contractVersion !== RPC_CONTRACT_VERSION) {
       throw new Error("Iroh peer has an incompatible RPC contract");
+    }
+    const delegation = decodeIrohSessionControlFrame(
+      await preauth(readFrame(control.recv, MAX_CONTROL_FRAME_BYTES))
+    );
+    if (delegation.t !== IROH_SESSION_DELEGATE) {
+      throw new Error("Iroh peer must delegate its endpoint to a device right after hello");
+    }
+    if (!verifyEndpointDelegation(delegation, connection.peerEndpointId)) {
+      throw new Error("Iroh endpoint delegation is not valid for this endpoint");
+    }
+    const deviceKey = delegation.deviceKey;
+    if (!(await admitDevice(deviceKey))) {
+      throw new Error("Iroh device is not admitted");
     }
 
     let controlTail = Promise.resolve();
@@ -5868,6 +5922,7 @@ export class RpcServer {
             const session = new IrohRpcSessionChannel({
               sid: frame.sid,
               connection,
+              deviceKey,
               writeControl,
               onClosed: (sid) => sessions.delete(sid),
               log: (message) => log.warn(message),
@@ -6015,6 +6070,30 @@ export class RpcServer {
         });
       }
     })();
+
+    // Several connections per device are normal (one per host process), so the
+    // registry holds a set. Revoking the device closes every one of them.
+    const deviceConnection: IrohDeviceConnection = {
+      close: async (reason) => {
+        try {
+          await closeAll(reason);
+        } finally {
+          connection.close(IROH_DEVICE_REVOKED, new TextEncoder().encode(reason));
+        }
+      },
+    };
+    let deviceConnections = this.irohDeviceConnections.get(deviceKey);
+    if (!deviceConnections) {
+      deviceConnections = new Set();
+      this.irohDeviceConnections.set(deviceKey, deviceConnections);
+    }
+    deviceConnections.add(deviceConnection);
+    const forgetDeviceConnection = (): void => {
+      const remaining = this.irohDeviceConnections.get(deviceKey);
+      remaining?.delete(deviceConnection);
+      if (remaining?.size === 0) this.irohDeviceConnections.delete(deviceKey);
+    };
+    void lifetime.then(forgetDeviceConnection, forgetDeviceConnection);
 
     return {
       activate: () => {

@@ -51,7 +51,7 @@ const loopback: DeviceCredentialEntry = {
 const iroh: DeviceCredentialEntry = {
   serverId: REMOTE_SERVER_ID,
   transport: "iroh",
-  endpointSecret: "E".repeat(43),
+  deviceSecret: "E".repeat(43),
   controlPairing: {
     endpointId: "aa".repeat(32),
     relays: ["https://relay-a.example/"],
@@ -65,7 +65,7 @@ const iroh: DeviceCredentialEntry = {
 const iroh2: DeviceCredentialEntry = {
   serverId: OTHER_SERVER_ID,
   transport: "iroh",
-  endpointSecret: "F".repeat(43),
+  deviceSecret: "F".repeat(43),
   controlPairing: {
     endpointId: "cc".repeat(32),
     relays: ["https://relay-b.example/"],

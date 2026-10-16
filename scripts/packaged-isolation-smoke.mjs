@@ -108,7 +108,7 @@ export function readableTail(captured, { maxLines = 60, maxLineLength = 400 } = 
     )
     // Mask the material rather than dropping the line. Discarding every line
     // that mentions a secret also discards "Invalid base64url string at
-    // reach.endpointSecret" — the one line that says what went wrong.
+    // reach.deviceSecret" — the one line that says what went wrong.
     .map((line) =>
       /(invite|pairurl|deeplink|token|secret|credential)/iu.test(line)
         ? line.replace(/[A-Za-z0-9_-]{20,}/gu, "[redacted]")

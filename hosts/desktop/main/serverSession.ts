@@ -514,10 +514,10 @@ type RemoteConnectArgs = {
 };
 
 function createDesktopIrohSupervisor(
-  endpointSecret: Uint8Array,
+  deviceSecret: Uint8Array,
   relays: readonly string[]
 ): DesktopIrohConnectionSupervisor {
-  return new DesktopIrohConnectionSupervisor(endpointSecret, relays);
+  return new DesktopIrohConnectionSupervisor(deviceSecret, relays);
 }
 
 /**
@@ -546,7 +546,7 @@ async function establishRemoteSession(
   };
   const auth = () => `refresh:${current.deviceId}:${current.refreshToken}`;
   const supervisor = createDesktopIrohSupervisor(
-    Buffer.from(stored.endpointSecret, "base64url"),
+    Buffer.from(stored.deviceSecret, "base64url"),
     stored.controlPairing.relays
   );
   const phase = createStartupPhaseReporter(
@@ -617,9 +617,9 @@ async function establishFreshPairSession(
   label?: string
 ): Promise<ConnectedSession> {
   assertIrohReach(pairing);
-  const endpointSecretBytes = randomBytes(32);
-  const endpointSecret = endpointSecretBytes.toString("base64url");
-  const supervisor = createDesktopIrohSupervisor(endpointSecretBytes, pairing.relays);
+  const deviceSecretBytes = randomBytes(32);
+  const deviceSecret = deviceSecretBytes.toString("base64url");
+  const supervisor = createDesktopIrohSupervisor(deviceSecretBytes, pairing.relays);
   const paired: {
     current: {
       credential: { deviceId: string; refreshToken: string };
@@ -708,7 +708,7 @@ async function establishFreshPairSession(
     currentStored = {
       serverId: route.serverId,
       transport: "iroh",
-      endpointSecret,
+      deviceSecret,
       controlPairing,
       deviceId: issued.credential.deviceId,
       refreshToken: issued.credential.refreshToken,

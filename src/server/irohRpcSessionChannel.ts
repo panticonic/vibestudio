@@ -65,6 +65,8 @@ function envelopeOperation(envelope: RpcEnvelope): string {
 export interface IrohRpcSessionChannelOptions {
   sid: string;
   connection: IrohPhysicalConnection;
+  /** Device key the connection's endpoint delegation proved. */
+  deviceKey: string;
   writeControl(frame: IrohSessionControlFrame): Promise<void>;
   onClosed(sid: string): void;
   log?(message: string): void;
@@ -99,7 +101,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
   readonly transportBinding: RpcSessionTransportBinding;
 
   constructor(private readonly options: IrohRpcSessionChannelOptions) {
-    this.transportBinding = { kind: "iroh", endpointId: options.connection.peerEndpointId };
+    this.transportBinding = { kind: "iroh", deviceKey: options.deviceKey };
     this.lifetimePromise = new Promise<void>((resolve, reject) => {
       this.resolveLifetime = resolve;
       this.rejectLifetime = reject;

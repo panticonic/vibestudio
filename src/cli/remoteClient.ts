@@ -80,7 +80,7 @@ async function withControl<T>(
       refreshToken: creds.refreshToken,
       ...(local || creds.transport === "local"
         ? {}
-        : { pairing: creds.controlPairing, endpointSecret: creds.endpointSecret }),
+        : { pairing: creds.controlPairing, deviceSecret: creds.deviceSecret }),
     },
     options
   );
@@ -140,14 +140,14 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
   }
   // Also refuse unreadable existing state before consuming a one-use invite.
   assertCliProfileIsUnpaired(options.credentialFile);
-  const endpointSecret = randomBytes(32).toString("base64url");
+  const deviceSecret = randomBytes(32).toString("base64url");
   const pairedRef: { current: CliAccountDeviceCredentials | null } = {
     current: null,
   };
   const { IrohRpcClient } = await import("../node/iroh/irohRpcClient.js");
   const client = new IrohRpcClient({
     reach: pairing,
-    endpointSecret: Buffer.from(endpointSecret, "base64url"),
+    deviceSecret: Buffer.from(deviceSecret, "base64url"),
     callerId: "shell:pairing",
     getToken: () => pairing.code,
     clientLabel: options.label ?? `${os.userInfo().username}@${os.hostname()}`,
@@ -161,7 +161,7 @@ export async function pairRemoteServer(options: PairOptions): Promise<DeviceCred
         url: `iroh://${pairing.endpointId}`,
         deviceId: credential.deviceId,
         refreshToken: credential.refreshToken,
-        endpointSecret,
+        deviceSecret,
         controlPairing: storeReach(controlReach),
         pairedAt: Date.now(),
       };

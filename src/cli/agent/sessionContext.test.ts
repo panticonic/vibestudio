@@ -50,7 +50,7 @@ const deviceCreds = {
   phase: "workspace" as const,
   kind: "device" as const,
   transport: "iroh" as const,
-  endpointSecret: "E".repeat(43),
+  deviceSecret: "E".repeat(43),
   url: `iroh://${"bb".repeat(32)}/_workspace/ws`,
   workspaceId: "workspace-1",
   workspaceName: "ws",

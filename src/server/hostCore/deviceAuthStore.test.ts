@@ -102,11 +102,11 @@ describe("DeviceAuthStore", () => {
 
   it("requires the live Iroh Endpoint ID bound when the credential was issued", () => {
     const { store, userId } = makeStore();
-    const endpointId = "a".repeat(64);
+    const deviceKey = "a".repeat(64);
     const credential = store.issueDevice({
       userId,
       label: "Remote laptop",
-      transport: { kind: "iroh", endpointId },
+      transport: { kind: "iroh", deviceKey },
     });
 
     expect(() =>
@@ -115,15 +115,15 @@ describe("DeviceAuthStore", () => {
     expect(() =>
       store.validateRefresh(credential.deviceId, credential.refreshToken, {
         kind: "iroh",
-        endpointId: "b".repeat(64),
+        deviceKey: "b".repeat(64),
       })
     ).toThrow(/transport identity/i);
     expect(
       store.validateRefresh(credential.deviceId, credential.refreshToken, {
         kind: "iroh",
-        endpointId,
+        deviceKey,
       }).transport
-    ).toEqual({ kind: "iroh", endpointId });
+    ).toEqual({ kind: "iroh", deviceKey });
   });
 
   it("throttles lastUsedAt persistence for a churny reconnecting device", () => {

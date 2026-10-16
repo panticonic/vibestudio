@@ -137,7 +137,7 @@ export function createDevicePorts(options: {
       } catch (error) {
         smoke("embedded-pairing-failed");
         const stored = await loadShellCredential().catch(() => null);
-        if (stored?.endpointIdentityId !== identity.identityId) {
+        if (stored?.deviceIdentityId !== identity.identityId) {
           await deleteMobileIrohIdentity(identity.identityId).catch(() => undefined);
         }
         throw error;

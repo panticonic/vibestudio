@@ -1,16 +1,7 @@
 import { createInternalRpcClient, type RpcWireClient } from "@vibestudio/rpc/internal";
 import { randomUUID } from "node:crypto";
-import {
-  EndpointGenerationOwner,
-  assertIrohReach,
-  type IrohReach,
-} from "@vibestudio/iroh-transport";
-import {
-  createNodeEndpointBinding,
-  loadIrohNodeBinding,
-  type NodePhysicalConnection,
-  type NodePhysicalEndpoint,
-} from "@vibestudio/iroh-transport/node";
+import { assertIrohReach, type IrohReach } from "@vibestudio/iroh-transport";
+import { createNodeDeviceEndpoint, type NodeDeviceEndpoint } from "@vibestudio/iroh-transport/node";
 import {
   type RpcStreamOptions,
   type RpcCallOptions,
@@ -33,7 +24,8 @@ import {
 
 export interface IrohRpcClientOptions {
   reach: IrohReach;
-  endpointSecret: Uint8Array;
+  /** The device's long-term signing secret. It signs; it is never a transport endpoint. */
+  deviceSecret: Uint8Array;
   callerId: string;
   callerKind?: CallerKind;
   getToken(signal?: AbortSignal): string | Promise<string>;
@@ -57,10 +49,8 @@ interface Connected {
 
 /** Node host client shared by Electron, CLI, and the headless host. */
 export class IrohRpcClient {
-  private readonly endpointOwner: EndpointGenerationOwner<
-    NodePhysicalConnection,
-    NodePhysicalEndpoint
-  >;
+  /** This process's own fresh endpoint and the device's delegation of it. */
+  private readonly deviceEndpoint: NodeDeviceEndpoint;
   private connected: Promise<Connected> | null = null;
   private pipe: IrohClientPipe | null = null;
   private pipeRetirement: Promise<void> | null = null;
@@ -72,22 +62,16 @@ export class IrohRpcClient {
 
   constructor(
     private readonly options: IrohRpcClientOptions,
-    sharedEndpoint?: EndpointGenerationOwner<NodePhysicalConnection, NodePhysicalEndpoint>
+    sharedEndpoint?: NodeDeviceEndpoint
   ) {
     assertIrohReach(options.reach);
     if (sharedEndpoint) {
-      this.endpointOwner = sharedEndpoint;
+      this.deviceEndpoint = sharedEndpoint;
       this.ownsEndpoint = false;
       options.signal?.addEventListener("abort", this.cancel, { once: true });
       return;
     }
-    if (options.endpointSecret.byteLength !== 32) {
-      throw new Error("Iroh endpoint secret must contain exactly 32 bytes");
-    }
-    const secretKey = loadIrohNodeBinding().SecretKey.fromBytes([...options.endpointSecret]);
-    this.endpointOwner = new EndpointGenerationOwner(
-      createNodeEndpointBinding({ secretKey, relayUrls: options.reach.relays })
-    );
+    this.deviceEndpoint = createNodeDeviceEndpoint(options.deviceSecret, options.reach.relays);
     this.ownsEndpoint = true;
     options.signal?.addEventListener("abort", this.cancel, { once: true });
   }
@@ -97,20 +81,19 @@ export class IrohRpcClient {
 
   /**
    * A client for another peer (for example the hub control endpoint next to a
-   * workspace endpoint) dialed from this client's endpoint identity. A device
-   * holds one endpoint per credential; peers share it instead of binding the
-   * same Endpoint ID twice. The peer closes its own connection; the endpoint
-   * stays owned by this client.
+   * workspace endpoint) dialed from this client's endpoint. A process binds one
+   * endpoint and delegates it to the device once; peers share both. The peer
+   * closes its own connection; the endpoint stays owned by this client.
    */
-  peer(options: Omit<IrohRpcClientOptions, "endpointSecret">): IrohRpcClient {
+  peer(options: Omit<IrohRpcClientOptions, "deviceSecret">): IrohRpcClient {
     if (this.closed) throw new Error("Iroh RPC client is closed");
     return new IrohRpcClient(
       {
         ...options,
         signal: options.signal ?? this.options.signal,
-        endpointSecret: this.options.endpointSecret,
+        deviceSecret: this.options.deviceSecret,
       },
-      this.endpointOwner
+      this.deviceEndpoint
     );
   }
 
@@ -180,7 +163,7 @@ export class IrohRpcClient {
    * Open another authenticated logical session on this client's connection,
    * for a second principal of the same device (for example the app principal
    * a terminal client runs). The session shares the physical QUIC connection
-   * and the endpoint identity, so grants bound to this endpoint redeem on it.
+   * and the device binding, so grants bound to this device redeem on it.
    * The caller owns the returned session and closes it.
    */
   async openSession(
@@ -252,7 +235,7 @@ export class IrohRpcClient {
   private retirePipe(): Promise<void> {
     const pipe = this.pipe;
     return (this.pipeRetirement ??= Promise.resolve().then(() =>
-      pipe ? pipe.close() : this.ownsEndpoint ? this.endpointOwner.close() : undefined
+      pipe ? pipe.close() : this.ownsEndpoint ? this.deviceEndpoint.owner.close() : undefined
     ));
   }
 
@@ -269,14 +252,15 @@ export class IrohRpcClient {
     const pipe = createReconnectingIrohClientPipe({
       peerEndpointId: this.options.reach.endpointId,
       dial: async () => {
-        const dialed = await this.endpointOwner.dial({
+        const dialed = await this.deviceEndpoint.owner.dial({
           reach: this.options.reach,
           overallDeadlineMs: this.options.overallDialDeadlineMs ?? 30_000,
           perAttemptDeadlineMs: this.options.perRelayDeadlineMs ?? 12_000,
         });
-        return createIrohClientPipe(dialed.connection, dialed);
+        return createIrohClientPipe(dialed.connection, this.deviceEndpoint.delegation, dialed);
       },
-      closeEndpoint: () => (this.ownsEndpoint ? this.endpointOwner.close() : Promise.resolve()),
+      closeEndpoint: () =>
+        this.ownsEndpoint ? this.deviceEndpoint.owner.close() : Promise.resolve(),
     });
     this.pipe = pipe;
     this.pipeRetirement = null;

@@ -231,7 +231,7 @@ export class DeviceAuthStore {
       record.transport.kind === presentedTransport.kind &&
       (record.transport.kind === "local" ||
         (presentedTransport.kind === "iroh" &&
-          constantTimeStringEqual(record.transport.endpointId, presentedTransport.endpointId)));
+          constantTimeStringEqual(record.transport.deviceKey, presentedTransport.deviceKey)));
     if (!bindingMatches) {
       throw authError(
         "DEVICE_TRANSPORT_MISMATCH",

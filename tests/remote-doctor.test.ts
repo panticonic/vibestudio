@@ -81,12 +81,12 @@ describe("remote-doctor", () => {
   });
 
   it("derives the client Endpoint ID owned by a paired credential", () => {
-    const endpointSecret = Buffer.alloc(32, 0xcd).toString("base64url");
-    expect(inspectCredentialEndpoint({ endpointSecret }, fakeLoader())).toMatchObject({
+    const deviceSecret = Buffer.alloc(32, 0xcd).toString("base64url");
+    expect(inspectCredentialEndpoint({ deviceSecret }, fakeLoader())).toMatchObject({
       ok: true,
       endpointId: "cd".repeat(32),
     });
-    expect(inspectCredentialEndpoint({ endpointSecret: "bad" }, fakeLoader())).toMatchObject({
+    expect(inspectCredentialEndpoint({ deviceSecret: "bad" }, fakeLoader())).toMatchObject({
       ok: false,
     });
   });

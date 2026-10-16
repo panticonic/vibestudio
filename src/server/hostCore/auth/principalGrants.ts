@@ -24,16 +24,16 @@ export interface PrincipalGrantRequest {
   subject: UserSubject;
   /** Runtime id of the authenticated connection that requested the grant. */
   issuedBy: string;
-  /** Endpoint of the requesting Iroh connection; absent for loopback callers. */
-  remoteEndpointId?: string;
+  /** Device key the requesting Iroh connection is bound to; absent for loopback callers. */
+  remoteDeviceKey?: string;
 }
 
 /**
  * Exchange an authenticated device for the principal of the exact client build
  * it verified and runs itself, and mint a one-use connection grant for it.
  *
- * The grant is bound to the requesting transport endpoint, so only a session
- * the same device opens over the same connection path can redeem it, and the
+ * The grant is bound to the requesting connection's device key, so only a session
+ * the same device opens (over any of its connections) can redeem it, and the
  * principal to the exact build (`buildKey`, `executionDigest`) the host checked.
  */
 export async function grantClientPrincipal(
@@ -65,7 +65,7 @@ export async function grantClientPrincipal(
   }
   const granted = deps.connectionGrants.grant(principal.principalId, request.issuedBy, {
     subject: request.subject,
-    ...(request.remoteEndpointId ? { remoteEndpointId: request.remoteEndpointId } : {}),
+    ...(request.remoteDeviceKey ? { remoteDeviceKey: request.remoteDeviceKey } : {}),
   });
   return {
     connectionGrant: granted.token,

@@ -65,6 +65,7 @@ describe("IrohRpcSessionChannel one-way stream lifecycle", () => {
   it("consumes the clean request FIN independently of unary response work", async () => {
     const channel = new IrohRpcSessionChannel({
       sid: "shell",
+      deviceKey: "d".repeat(64),
       connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
       writeControl: vi.fn(async () => undefined),
       onClosed: vi.fn(),
@@ -80,6 +81,7 @@ describe("IrohRpcSessionChannel one-way stream lifecycle", () => {
   it("keeps the original response route and authenticated caller after unary cancellation", async () => {
     const channel = new IrohRpcSessionChannel({
       sid: "shell",
+      deviceKey: "d".repeat(64),
       connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
       writeControl: vi.fn(async () => undefined),
       onClosed: vi.fn(),
@@ -119,6 +121,7 @@ describe("IrohRpcSessionChannel one-way stream lifecycle", () => {
   it("keeps routed unary cancellation on the routed dispatch path", async () => {
     const channel = new IrohRpcSessionChannel({
       sid: "shell",
+      deviceKey: "d".repeat(64),
       connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
       writeControl: vi.fn(async () => undefined),
       onClosed: vi.fn(),
@@ -151,6 +154,7 @@ describe("IrohRpcSessionChannel one-way stream lifecycle", () => {
     } as IrohPhysicalConnection;
     const channel = new IrohRpcSessionChannel({
       sid: "shell",
+      deviceKey: "d".repeat(64),
       connection,
       writeControl: vi.fn(async () => undefined),
       onClosed: vi.fn(),
@@ -171,6 +175,7 @@ describe("IrohRpcSessionChannel one-way stream lifecycle", () => {
     } as unknown as IrohPhysicalConnection;
     const channel = new IrohRpcSessionChannel({
       sid: "shell",
+      deviceKey: "d".repeat(64),
       connection,
       writeControl: vi.fn(async () => undefined),
       onClosed: vi.fn(),
@@ -193,6 +198,7 @@ describe("IrohRpcSessionChannel one-way stream lifecycle", () => {
     } as unknown as IrohPhysicalConnection;
     const channel = new IrohRpcSessionChannel({
       sid: "shell",
+      deviceKey: "d".repeat(64),
       connection,
       writeControl: vi.fn(async () => undefined),
       onClosed: vi.fn(),
@@ -227,6 +233,7 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
   it("fences dispatch immediately and joins outstanding drains, resets, and stops", async () => {
     const channel = new IrohRpcSessionChannel({
       sid: "shell",
+      deviceKey: "d".repeat(64),
       connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
       writeControl: vi.fn(async () => undefined),
       onClosed: vi.fn(),
@@ -259,6 +266,7 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
     const log = vi.fn();
     const channel = new IrohRpcSessionChannel({
       sid: "shell",
+      deviceKey: "d".repeat(64),
       connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
       writeControl: vi.fn(async () => undefined),
       onClosed: vi.fn(),
@@ -293,6 +301,7 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
   it("preserves a non-closure failure nested beside connection retirement", async () => {
     const channel = new IrohRpcSessionChannel({
       sid: "shell",
+      deviceKey: "d".repeat(64),
       connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
       writeControl: vi.fn(async () => undefined),
       onClosed: vi.fn(),
@@ -323,6 +332,7 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
     const log = vi.fn();
     const channel = new IrohRpcSessionChannel({
       sid: "shell",
+      deviceKey: "d".repeat(64),
       connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
       writeControl: vi.fn(async () => {
         throw Object.assign(new Error("ConnectionLost(LocallyClosed)"), {
@@ -350,6 +360,7 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
     const log = vi.fn();
     const channel = new IrohRpcSessionChannel({
       sid: "shell",
+      deviceKey: "d".repeat(64),
       connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
       writeControl: vi.fn(async () => {
         throw Object.assign(new Error("ConnectionLost(LocallyClosed)"), {
@@ -378,6 +389,7 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
     const original = new Error("control frame encoding failed");
     const channel = new IrohRpcSessionChannel({
       sid: "shell",
+      deviceKey: "d".repeat(64),
       connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
       writeControl: vi.fn(async () => {
         throw original;
@@ -405,6 +417,7 @@ describe("IrohRpcSessionChannel close notification ownership", () => {
       const log = vi.fn();
       const channel = new IrohRpcSessionChannel({
         sid: "replay",
+        deviceKey: "d".repeat(64),
         connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
         writeControl: vi.fn(() => write),
         onClosed,

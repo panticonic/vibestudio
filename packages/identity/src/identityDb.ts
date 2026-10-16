@@ -29,7 +29,7 @@ import {
 } from "./workspaceRpcPolicy.js";
 
 /** A device credential row. Mirrors `DeviceRecord` plus the owning `userId`. */
-export type DeviceTransportBinding = { kind: "local" } | { kind: "iroh"; endpointId: string };
+export type DeviceTransportBinding = { kind: "local" } | { kind: "iroh"; deviceKey: string };
 
 export interface DeviceRow {
   deviceId: string;
@@ -235,12 +235,12 @@ export class IdentityDb {
     return row ? rowToDevice(row) : null;
   }
 
-  /** Live device bound to a verified Iroh peer, used for pre-stream child admission. */
-  getDeviceForEndpoint(endpointId: string): DeviceRow | null {
+  /** Live device whose signing public key is `deviceKey`, used for Iroh admission. */
+  getDeviceForKey(deviceKey: string): DeviceRow | null {
     const row = this.stmt(
       `SELECT * FROM devices
-       WHERE transport_kind = 'iroh' AND endpoint_id = ? AND revoked_at IS NULL`
-    ).get(endpointId);
+       WHERE transport_kind = 'iroh' AND device_key = ? AND revoked_at IS NULL`
+    ).get(deviceKey);
     return row ? rowToDevice(row) : null;
   }
 
@@ -500,12 +500,12 @@ export class IdentityDb {
   upsertDevice(device: DeviceRow): void {
     this.assertWritable();
     this.stmt(
-      `INSERT INTO devices (device_id, refresh_token_hash, transport_kind, endpoint_id, user_id, label, platform, created_at, last_used_at, revoked_at)
+      `INSERT INTO devices (device_id, refresh_token_hash, transport_kind, device_key, user_id, label, platform, created_at, last_used_at, revoked_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(device_id) DO UPDATE SET
          refresh_token_hash = excluded.refresh_token_hash,
          transport_kind = excluded.transport_kind,
-         endpoint_id = excluded.endpoint_id,
+         device_key = excluded.device_key,
          user_id = excluded.user_id,
          label = excluded.label,
          platform = excluded.platform,
@@ -515,7 +515,7 @@ export class IdentityDb {
       device.deviceId,
       device.refreshTokenHash,
       device.transport.kind,
-      device.transport.kind === "iroh" ? device.transport.endpointId : null,
+      device.transport.kind === "iroh" ? device.transport.deviceKey : null,
       device.userId,
       device.label,
       device.platform ?? null,
@@ -811,7 +811,7 @@ function rowToDevice(row: Row): DeviceRow {
     transport:
       row["transport_kind"] === "local"
         ? { kind: "local" }
-        : { kind: "iroh", endpointId: row["endpoint_id"] as string },
+        : { kind: "iroh", deviceKey: row["device_key"] as string },
     userId: row["user_id"] as string,
     label: row["label"] as string,
     createdAt: row["created_at"] as number,

@@ -2,11 +2,12 @@
 
 Remote Vibestudio uses one authenticated Iroh QUIC connection per reach. The
 server Endpoint ID is authenticated during the QUIC handshake; the client keeps
-one durable native endpoint identity across reconnects. Loopback clients use the
+one fresh in-memory endpoint (delegated to its device by the device's signing key) across reconnects. Loopback clients use the
 existing WebSocket transport and never expose a remote network surface.
 
-The server indexes admitted physical connections by that authenticated client
-Endpoint ID. A completed control handshake is only a readiness receipt: the
+The server indexes admitted physical connections by the authenticated client
+Endpoint ID for replacement, and by the device key the connection's delegation
+proved for admission, grants and revocation. A completed control handshake is only a readiness receipt: the
 successor remains inactive while ingress synchronously fences and then joins
 the previous attachment's lifetime receipt. That lifetime includes the control
 and stream admission loops, pending stream headers, logical sessions, and their
@@ -64,7 +65,7 @@ One reconnect owner dials the reach, retains the same client Endpoint ID, and
 reopens every desired logical session with the same session ID. Iroh owns live
 direct/relay path changes. A lost QUIC connection triggers bounded redial across
 the advertised relay order; mobile suspend closes the endpoint generation and
-resume binds a new generation from the same durable secret.
+resume binds a new generation and delegates it again (a rebind within one process keeps its endpoint secret and so its Endpoint ID).
 
 - `resubscribe` reopens response-owned subscriptions after transport recovery.
 - `cold-recover` additionally rejects state tied to a prior server boot and

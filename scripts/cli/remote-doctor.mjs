@@ -172,11 +172,11 @@ export function loadPairedCredential(filename = cliCredentialPath()) {
 
 export function inspectCredentialEndpoint(credential, loader = require) {
   if (!credential) return skip("credential-endpoint", "no paired Iroh credential on this host");
-  if (typeof credential.endpointSecret !== "string") {
+  if (typeof credential.deviceSecret !== "string") {
     return check(false, "credential-endpoint", "", "paired endpoint secret is missing");
   }
   try {
-    const secret = Buffer.from(credential.endpointSecret, "base64url");
+    const secret = Buffer.from(credential.deviceSecret, "base64url");
     if (secret.byteLength !== 32) throw new Error("secret must contain exactly 32 bytes");
     const endpointId = loadBinding(loader)
       .SecretKey.fromBytes([...secret])
@@ -249,13 +249,13 @@ async function probePairedReach(credential, loader = require) {
   if (!reach || !validateRelays(reach.relays) || !/^[0-9a-f]{64}$/.test(reach.endpointId ?? "")) {
     return check(false, "iroh-probe", "", "paired control reach is malformed");
   }
-  if (typeof credential.endpointSecret !== "string") {
+  if (typeof credential.deviceSecret !== "string") {
     return check(false, "iroh-probe", "", "paired endpoint secret is missing");
   }
   const binding = loadBinding(loader);
   let endpoint;
   try {
-    const secret = Buffer.from(credential.endpointSecret, "base64url");
+    const secret = Buffer.from(credential.deviceSecret, "base64url");
     if (secret.byteLength !== 32) throw new Error("paired endpoint secret is malformed");
     const builder = binding.Endpoint.builder();
     builder.applyMinimal();

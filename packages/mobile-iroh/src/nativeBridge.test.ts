@@ -5,6 +5,8 @@ const native = vi.hoisted(() => ({
   createIdentity: vi.fn(),
   deleteIdentity: vi.fn(),
   bind: vi.fn(),
+  identityPublicKey: vi.fn(),
+  signWithIdentity: vi.fn(),
   shutdownEndpoint: vi.fn(),
   dial: vi.fn(),
   accept: vi.fn(),
@@ -24,7 +26,13 @@ const native = vi.hoisted(() => ({
 
 vi.mock("react-native", () => ({ NativeModules: { VibestudioIroh: native } }));
 
-import { createMobileEndpointBinding, mobileIrohIdentity } from "./nativeBridge.js";
+import { loadIrohNodeBinding } from "@vibestudio/iroh-transport/node";
+import { verifyEndpointDelegation } from "@vibestudio/iroh-transport/node";
+import {
+  createMobileEndpointBinding,
+  mobileIrohIdentity,
+  signMobileEndpointDelegation,
+} from "./nativeBridge.js";
 
 const reach = {
   endpointId: "ab".repeat(32),
@@ -47,11 +55,17 @@ beforeEach(() => {
   native.connectionClosed.mockResolvedValue("closed");
 });
 
+const endpointSecret = new Uint8Array(32).fill(9);
+
 describe("mobile Iroh native bridge", () => {
   it("binds and dials with the exact product ALPN and expected Endpoint ID", async () => {
-    const endpoint = await createMobileEndpointBinding("identity-1", reach.relays).bind();
+    const endpoint = await createMobileEndpointBinding(endpointSecret, reach.relays).bind();
     const alpn = Buffer.from(VIBESTUDIO_IROH_ALPN).toString("base64");
-    expect(native.bind).toHaveBeenCalledWith("identity-1", reach.relays, alpn);
+    expect(native.bind).toHaveBeenCalledWith(
+      Buffer.from(endpointSecret).toString("base64"),
+      reach.relays,
+      alpn
+    );
     const connection = await endpoint.connect(reach, reach.relays[0]!);
     expect(native.dial).toHaveBeenCalledWith("endpoint-1", reach.endpointId, reach.relays[0], alpn);
     expect(connection.peerEndpointId).toBe(reach.endpointId);
@@ -62,7 +76,7 @@ describe("mobile Iroh native bridge", () => {
       connectionHandle: "wrong",
       peerEndpointId: "ef".repeat(32),
     });
-    const endpoint = await createMobileEndpointBinding("identity-1", reach.relays).bind();
+    const endpoint = await createMobileEndpointBinding(endpointSecret, reach.relays).bind();
     await expect(endpoint.connect(reach, reach.relays[0]!)).rejects.toThrow(
       /different peer Endpoint ID/
     );
@@ -70,7 +84,7 @@ describe("mobile Iroh native bridge", () => {
   });
 
   it("preserves bounded reads and QUIC stream reset/stop lifecycle", async () => {
-    const endpoint = await createMobileEndpointBinding("identity-1", reach.relays).bind();
+    const endpoint = await createMobileEndpointBinding(endpointSecret, reach.relays).bind();
     const connection = await endpoint.connect(reach, reach.relays[0]!);
     const stream = await connection.openBi();
     expect(await stream.recv.read(4096)).toEqual(new Uint8Array([1, 2, 3]));
@@ -101,5 +115,20 @@ describe("mobile Iroh native bridge", () => {
     });
     await mobileIrohIdentity.delete("identity-1");
     expect(native.deleteIdentity).toHaveBeenCalledWith("identity-1");
+  });
+
+  it("delegates a fresh endpoint with the native device identity so the server accepts it", async () => {
+    const device = loadIrohNodeBinding().SecretKey.generate();
+    native.identityPublicKey.mockResolvedValue(device.public().toString());
+    native.signWithIdentity.mockImplementation(async (_id: string, messageBase64: string) =>
+      Buffer.from(device.sign([...Buffer.from(messageBase64, "base64")]).toBytes()).toString(
+        "base64"
+      )
+    );
+    const endpointId = loadIrohNodeBinding().SecretKey.generate().public().toString();
+    const delegation = await signMobileEndpointDelegation("identity-1", endpointId);
+    expect(delegation.deviceKey).toBe(device.public().toString());
+    expect(verifyEndpointDelegation(delegation, endpointId)).toBe(true);
+    expect(verifyEndpointDelegation(delegation, "ab".repeat(32))).toBe(false);
   });
 });

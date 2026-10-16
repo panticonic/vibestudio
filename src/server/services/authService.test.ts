@@ -407,7 +407,7 @@ describe("auth.grantClientPrincipal", () => {
   ) {
     const identity = makeIdentity({ withRoot: true });
     const device = identity.deviceAuthStore.issueDevice({
-      transport: { kind: "iroh", endpointId: "c".repeat(64) },
+      transport: { kind: "iroh", deviceKey: "c".repeat(64) },
       userId: identity.rootId!,
       label: "Laptop",
     });
@@ -440,9 +440,9 @@ describe("auth.grantClientPrincipal", () => {
       grantClientPrincipal,
     });
     const subject = { userId: identity.rootId!, handle: "root" };
-    const shellCaller = (remoteEndpointId?: string) => ({
+    const shellCaller = (remoteDeviceKey?: string) => ({
       ...createVerifiedCaller(`shell:${device.deviceId}`, "shell", null, null, subject),
-      ...(remoteEndpointId ? { remoteEndpointId } : {}),
+      ...(remoteDeviceKey ? { remoteDeviceKey } : {}),
     });
     return {
       service,
@@ -531,7 +531,7 @@ describe("auth.grantClientPrincipal", () => {
         principalId,
         issuedBy: `shell:${device.deviceId}`,
         subject,
-        remoteEndpointId: endpoint,
+        remoteDeviceKey: endpoint,
       });
     } finally {
       connectionGrants.stop();

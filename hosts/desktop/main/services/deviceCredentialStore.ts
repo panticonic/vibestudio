@@ -39,7 +39,7 @@ export type LoopbackDeviceCredential = DeviceCredentialBase & {
 
 export type StoredRemote = DeviceCredentialBase & {
   transport: "iroh";
-  endpointSecret: string;
+  deviceSecret: string;
   controlPairing: StoredPairing;
 };
 
@@ -95,10 +95,10 @@ function isEntry(value: unknown): value is DeviceCredentialEntry {
   if (v.transport === "loopback") {
     if (Object.keys(v).some((key) => !allowedBase.has(key))) return false;
   } else {
-    const allowedRemote = new Set([...allowedBase, "controlPairing", "endpointSecret"]);
+    const allowedRemote = new Set([...allowedBase, "controlPairing", "deviceSecret"]);
     if (Object.keys(v).some((key) => !allowedRemote.has(key))) return false;
     if (!isStoredPairing(v.controlPairing)) return false;
-    if (typeof v.endpointSecret !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(v.endpointSecret)) {
+    if (typeof v.deviceSecret !== "string" || !/^[A-Za-z0-9_-]{43}$/.test(v.deviceSecret)) {
       return false;
     }
   }

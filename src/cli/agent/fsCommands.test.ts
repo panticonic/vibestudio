@@ -56,7 +56,7 @@ function writeCredentials(tmpDir: string, url = `iroh://${"bb".repeat(32)}/_work
       phase: "workspace",
       kind: "device",
       transport: "iroh",
-      endpointSecret: "E".repeat(43),
+      deviceSecret: "E".repeat(43),
       url,
       workspaceId: "ws_dev",
       workspaceName: "dev",

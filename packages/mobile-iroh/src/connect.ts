@@ -1,7 +1,7 @@
 import "@vibestudio/rn-client-api/polyfills";
 import { AppState, type AppStateStatus } from "react-native";
 import * as Keychain from "react-native-keychain";
-import { EndpointGenerationOwner } from "@vibestudio/iroh-transport";
+import { EndpointGenerationOwner, type EndpointDelegation } from "@vibestudio/iroh-transport";
 import {
   CLOSE_TOKEN_REVOKED,
   createRpcClient,
@@ -22,6 +22,7 @@ import type { OAuthCallbackMode } from "@vibestudio/rpc/protocol/wsProtocol";
 import {
   createMobileEndpointBinding,
   mobileIrohIdentity,
+  signMobileEndpointDelegation,
   type MobileConnection,
   type MobileEndpoint,
 } from "./nativeBridge.js";
@@ -77,7 +78,7 @@ export interface IrohConnection {
   transport: LifecycleIrohClientPipe;
   callerId: string;
   serverId?: string;
-  endpointIdentityId: string;
+  deviceIdentityId: string;
   /** Shared physical endpoint owner for the retained hub/workspace pair. */
   endpointPool: MobileEndpointPool;
   deviceId?: string | null;
@@ -97,7 +98,10 @@ export interface IrohConnection {
 }
 
 export class MobileEndpointPool {
-  private owner: EndpointGenerationOwner<MobileConnection, MobileEndpoint> | null = null;
+  private owner: {
+    owner: EndpointGenerationOwner<MobileConnection, MobileEndpoint>;
+    delegation: Promise<EndpointDelegation>;
+  } | null = null;
   private references = 0;
   private closed = false;
 
@@ -117,22 +121,43 @@ export class MobileEndpointPool {
     this.references += 1;
   }
 
-  dial(reach: StoredShellPairing) {
-    if (this.closed) return Promise.reject(new Error("Mobile Iroh endpoint pool is closed"));
-    this.owner ??= new EndpointGenerationOwner(
-      createMobileEndpointBinding(this.identityId, this.relays)
-    );
-    return this.owner.dial({
-      reach,
-      overallDeadlineMs: 30_000,
-      perAttemptDeadlineMs: 12_000,
-    });
+  /**
+   * Each owner binds one endpoint named by a fresh in-memory secret, so a
+   * rebind after suspension is a new endpoint and needs a new delegation. The
+   * device identity signs it once per owner; every peer dialed from the owner
+   * (hub and workspace) shares it.
+   */
+  async dial(reach: StoredShellPairing) {
+    if (this.closed) throw new Error("Mobile Iroh endpoint pool is closed");
+    const current = (this.owner ??= (() => {
+      const owner = new EndpointGenerationOwner(
+        createMobileEndpointBinding(
+          globalThis.crypto.getRandomValues(new Uint8Array(32)),
+          this.relays
+        )
+      );
+      return {
+        owner,
+        delegation: owner
+          .ready()
+          .then(({ endpointId }) => signMobileEndpointDelegation(this.identityId, endpointId)),
+      };
+    })());
+    const [dialed, delegation] = await Promise.all([
+      current.owner.dial({
+        reach,
+        overallDeadlineMs: 30_000,
+        perAttemptDeadlineMs: 12_000,
+      }),
+      current.delegation,
+    ]);
+    return { ...dialed, delegation };
   }
 
   async suspend(): Promise<void> {
     const current = this.owner;
     this.owner = null;
-    await current?.close();
+    await current?.owner.close();
   }
 
   async release(): Promise<void> {
@@ -155,11 +180,8 @@ export function randomRequestId(prefix = "mobile-shell"): string {
  * either the native endpoint identity or the authenticated server reach creates
  * a distinct connection owner.
  */
-function mobileReachConnectionId(
-  endpointIdentityId: string,
-  peerEndpointId: string
-): string {
-  return `mobile-shell:${endpointIdentityId.length}:${endpointIdentityId}:${peerEndpointId}`;
+function mobileReachConnectionId(deviceIdentityId: string, peerEndpointId: string): string {
+  return `mobile-shell:${deviceIdentityId.length}:${deviceIdentityId}:${peerEndpointId}`;
 }
 
 export function makeFreshShellTokenProvider(pairing: FreshShellPairing): ShellTokenProvider {
@@ -201,7 +223,7 @@ export async function loadShellCredential(): Promise<StoredMobileConnection | nu
 }
 
 export async function clearShellCredential(expected?: {
-  endpointIdentityId: string;
+  deviceIdentityId: string;
   deviceId: string;
 }): Promise<void> {
   await serializeByKey(credentialWrites, KEYCHAIN_SERVICE, async () => {
@@ -209,13 +231,13 @@ export async function clearShellCredential(expected?: {
     if (
       expected &&
       (!stored ||
-        stored.endpointIdentityId !== expected.endpointIdentityId ||
+        stored.deviceIdentityId !== expected.deviceIdentityId ||
         stored.credential.deviceId !== expected.deviceId)
     )
       return;
     const cleared = await Keychain.resetGenericPassword({ service: KEYCHAIN_SERVICE });
     if (!cleared) throw new Error("The OS secure store refused to clear the Iroh credential");
-    if (stored) await mobileIrohIdentity.delete(stored.endpointIdentityId);
+    if (stored) await mobileIrohIdentity.delete(stored.deviceIdentityId);
   });
 }
 
@@ -297,14 +319,14 @@ async function waitUntilConnected(
 export async function establishIrohConnection(
   pairing: StoredShellPairing,
   tokenProvider: ShellTokenProvider,
-  endpointIdentityId: string,
+  deviceIdentityId: string,
   oauthCallbackMode: OAuthCallbackMode,
   handlers: IrohConnectionHandlers = {},
   sharedEndpointPool?: MobileEndpointPool
 ): Promise<IrohConnection> {
   const endpointPool =
-    sharedEndpointPool ?? new MobileEndpointPool(endpointIdentityId, pairing.relays);
-  if (endpointPool.identityId !== endpointIdentityId) {
+    sharedEndpointPool ?? new MobileEndpointPool(deviceIdentityId, pairing.relays);
+  if (endpointPool.identityId !== deviceIdentityId) {
     throw new Error("Hub and workspace attempted to use different mobile endpoint identities");
   }
   endpointPool.acquire(pairing.relays);
@@ -315,7 +337,7 @@ export async function establishIrohConnection(
       console.log("[mobile-iroh] physical dial requested");
       const dialed = await endpointPool.dial(pairing);
       console.log("[mobile-iroh] physical dial connected");
-      return createIrohClientPipe(dialed.connection, dialed);
+      return createIrohClientPipe(dialed.connection, dialed.delegation, dialed);
     },
     suspendEndpoint: () => endpointPool.suspend(),
     closeEndpoint: () => endpointPool.release(),
@@ -332,7 +354,7 @@ export async function establishIrohConnection(
   let removeLifecycle = () => {};
   const rpcRecoveryHandlers = new Set<(kind: RecoveryKind) => void>();
   console.log("[mobile-iroh] reconnect owner created");
-  const connectionId = mobileReachConnectionId(endpointIdentityId, pairing.endpointId);
+  const connectionId = mobileReachConnectionId(deviceIdentityId, pairing.endpointId);
   console.log("[mobile-iroh] logical session identity created");
   const session = transport.openSession({
     connectionId,
@@ -352,7 +374,7 @@ export async function establishIrohConnection(
       removeLifecycle();
       terminalRetirement ??= (async () => {
         const results = await Promise.allSettled([
-          deviceId ? clearShellCredential({ endpointIdentityId, deviceId }) : Promise.resolve(),
+          deviceId ? clearShellCredential({ deviceIdentityId, deviceId }) : Promise.resolve(),
           transport.close(),
         ]);
         const failures = results.flatMap((result) =>
@@ -410,7 +432,7 @@ export async function establishIrohConnection(
     session,
     transport,
     callerId,
-    endpointIdentityId,
+    deviceIdentityId,
     endpointPool,
     openAuxiliarySession: (label, auxiliary = {}) =>
       transport.openSession({
@@ -451,7 +473,7 @@ export async function reconnectViaIroh(
   const connection = await establishIrohConnection(
     pairing,
     tokenProvider,
-    stored.endpointIdentityId,
+    stored.deviceIdentityId,
     oauthCallbackMode,
     {
       onPaired: async (next) => {
@@ -490,7 +512,7 @@ export async function connectMobileAccount(
   const control = await establishIrohConnection(
     stored.controlPairing,
     provider,
-    stored.endpointIdentityId,
+    stored.deviceIdentityId,
     oauthCallbackMode,
     { onPaired }
   );
@@ -499,7 +521,7 @@ export async function connectMobileAccount(
     const child = await establishIrohConnection(
       reach,
       provider,
-      stored.endpointIdentityId,
+      stored.deviceIdentityId,
       oauthCallbackMode,
       { onPaired, onRecovery },
       control.endpointPool

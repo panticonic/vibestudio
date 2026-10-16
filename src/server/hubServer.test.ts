@@ -2277,6 +2277,43 @@ describe("hub RPC pairing surfacing (§5)", () => {
     await retired;
   });
 
+  it("closes every connection bound to a revoked Iroh device only after its caller drains", async () => {
+    const runtime = fakeRuntime(9, {});
+    const { state, rootUserId } = makeState(runtime);
+    const deviceKey = "e".repeat(64);
+    const invite = state.deviceAuthStore.createPairingInvite(30_000, {
+      userId: rootUserId,
+      intent: "pair-device",
+    });
+    const paired = state.deviceAuthStore.completePairing({
+      code: invite.code,
+      label: "laptop",
+      transport: { kind: "iroh", deviceKey },
+    });
+    let release!: () => void;
+    const drained = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const order: string[] = [];
+    const retireCaller = vi.fn(() => drained.then(() => void order.push("drained")));
+    const closeDeviceConnections = vi.fn(async () => {
+      order.push("closed");
+      return 2;
+    });
+    state.controlTransport!.rpcServer = { retireCaller, closeDeviceConnections } as never;
+    await revokeHubDevice(
+      state,
+      { userId: rootUserId, handle: "root", role: "root" },
+      paired.deviceId
+    );
+    expect(closeDeviceConnections).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() =>
+      expect(closeDeviceConnections).toHaveBeenCalledWith(deviceKey, "device revoked")
+    );
+    expect(order).toEqual(["drained", "closed"]);
+  });
+
   it("retires every authenticated device caller when a user is revoked", async () => {
     const runtime = fakeRuntime(9, {});
     const { state, rootUserId } = makeState(runtime);

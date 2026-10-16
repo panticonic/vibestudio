@@ -34,7 +34,6 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
   private let lock = NSLock()
   private var active = true
   private var endpoints: [String: Endpoint] = [:]
-  private var endpointIdentities: [String: String] = [:]
   private var connections: [String: Connection] = [:]
   private var sends: [String: NativeStreamEntry<SendStream>] = [:]
   private var receives: [String: NativeStreamEntry<RecvStream>] = [:]
@@ -46,7 +45,6 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
     let ownedEndpoints = Array(endpoints.values)
     let ownedConnections = Array(connections.values)
     endpoints.removeAll()
-    endpointIdentities.removeAll()
     connections.removeAll()
     sends.values.forEach { $0.retiring = true }
     receives.values.forEach { $0.retiring = true }
@@ -82,7 +80,26 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
       let identityId = UUID().uuidString
       let secret = SecretKey.generate()
       try self.storeSecret(secret.toBytes(), identityId: identityId)
-      return ["identityId": identityId, "endpointId": secret.`public`().description]
+      return ["identityId": identityId, "deviceKey": secret.`public`().description]
+    }
+  }
+
+  // The device identity only signs; it is never bound as a transport endpoint.
+  @objc func identityPublicKey(_ identityId: String,
+                               resolver resolve: @escaping RCTPromiseResolveBlock,
+                               rejecter reject: @escaping RCTPromiseRejectBlock) {
+    perform(resolve, reject) {
+      SecretKey.fromBytes(bytes: try self.loadSecret(identityId: identityId)).`public`().description
+    }
+  }
+
+  @objc func signWithIdentity(_ identityId: String,
+                              messageBase64: String,
+                              resolver resolve: @escaping RCTPromiseResolveBlock,
+                              rejecter reject: @escaping RCTPromiseRejectBlock) {
+    perform(resolve, reject) {
+      let secret = SecretKey.fromBytes(bytes: try self.loadSecret(identityId: identityId))
+      return secret.sign(message: try self.data(messageBase64)).toBytes().base64EncodedString()
     }
   }
 
@@ -90,29 +107,27 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
                             resolver resolve: @escaping RCTPromiseResolveBlock,
                             rejecter reject: @escaping RCTPromiseRejectBlock) {
     perform(resolve, reject) {
-      guard !self.hasBoundEndpoint(identityId: identityId) else {
-        throw BridgeError.boundIdentity
-      }
       try self.deleteSecret(identityId: identityId)
       return nil
     }
   }
 
-  @objc func bind(_ identityId: String,
+  @objc func bind(_ endpointSecretBase64: String,
                   relays: [String],
                   alpnBase64: String,
                   resolver resolve: @escaping RCTPromiseResolveBlock,
                   rejecter reject: @escaping RCTPromiseRejectBlock) {
     perform(resolve, reject) {
-      let secret = try self.loadSecret(identityId: identityId)
+      // The process's fresh in-memory endpoint secret, never the device identity;
+      // the device key delegates the endpoint it names.
       let endpoint = try await Endpoint.bind(options: EndpointOptions(
         preset: nil,
-        secretKey: secret,
+        secretKey: try self.data(endpointSecretBase64),
         alpns: [try self.data(alpnBase64)],
         relayMode: try RelayMode.customFromUrls(urls: relays),
         protocols: nil
       ))
-      guard let handle = self.putEndpoint(endpoint, identityId: identityId) else {
+      guard let handle = self.putEndpoint(endpoint) else {
         try await endpoint.close()
         throw BridgeError.runtimeInvalidated
       }
@@ -331,11 +346,11 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
     }
   }
 
-  private func putEndpoint(_ value: Endpoint, identityId: String) -> String? {
+  private func putEndpoint(_ value: Endpoint) -> String? {
     lock.lock(); defer { lock.unlock() }
     guard active else { return nil }
     let handle = UUID().uuidString
-    endpoints[handle] = value; endpointIdentities[handle] = identityId; return handle
+    endpoints[handle] = value; return handle
   }
   private func putConnection(_ value: Connection) -> String? {
     lock.lock(); defer { lock.unlock() }
@@ -344,10 +359,7 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
   }
   private func removeEndpoint(_ handle: String) -> Endpoint? {
     lock.lock(); defer { lock.unlock() }
-    endpointIdentities.removeValue(forKey: handle); return endpoints.removeValue(forKey: handle)
-  }
-  private func hasBoundEndpoint(identityId: String) -> Bool {
-    lock.lock(); defer { lock.unlock() }; return endpointIdentities.values.contains(identityId)
+    return endpoints.removeValue(forKey: handle)
   }
   private func retireConnection(_ handle: String) -> Connection? {
     lock.lock(); defer { lock.unlock() }
@@ -467,7 +479,7 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
   }
 
   private enum BridgeError: LocalizedError {
-    case unknownHandle(String), closedStream(String), invalidBase64, invalidCode, invalidRead, boundIdentity, runtimeInvalidated, notHost, keychain(OSStatus)
+    case unknownHandle(String), closedStream(String), invalidBase64, invalidCode, invalidRead, runtimeInvalidated, notHost, keychain(OSStatus)
     var errorDescription: String? {
       switch self {
       case .unknownHandle(let kind): return "Unknown Iroh \(kind) handle"
@@ -475,7 +487,6 @@ final class VibestudioIroh: NSObject, RCTBridgeModule, RCTInvalidating {
       case .invalidBase64: return "Invalid base64 bridge payload"
       case .invalidCode: return "Invalid Iroh application error code"
       case .invalidRead: return "Invalid bounded stream read size"
-      case .boundIdentity: return "Cannot delete an identity while its endpoint is bound"
       case .runtimeInvalidated: return "Iroh runtime has been invalidated"
       case .notHost: return "VibestudioIroh is available to the host runtime only"
       case .keychain(let status): return "Iroh Keychain operation failed (\(status))"

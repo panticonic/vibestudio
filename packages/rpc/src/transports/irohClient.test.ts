@@ -30,6 +30,7 @@ import { encodeHeadFrame, encodeDataFrame, encodeEndFrame } from "../protocol/st
 import {
   decodeIrohSessionControlFrame,
   encodeIrohSessionControlFrame,
+  IROH_SESSION_DELEGATE,
   IROH_SESSION_HELLO,
   IROH_SESSION_OPEN,
   IROH_SESSION_OPEN_RESULT,
@@ -115,6 +116,20 @@ const irohTransportMethods = createRpcMethods(
   ""
 );
 
+/** The client's first two control frames: hello, then the device's delegation of its endpoint. */
+async function readHelloAndDelegation(control: { recv: IrohPhysicalBiStream["recv"] }) {
+  const hello = decodeIrohSessionControlFrame(
+    await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES)
+  );
+  const delegation = decodeIrohSessionControlFrame(
+    await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES)
+  );
+  expect(delegation.t).toBe(IROH_SESSION_DELEGATE);
+  return hello;
+}
+
+const TEST_DELEGATION = { deviceKey: "a".repeat(64), signature: "b".repeat(128) };
+
 describe("Iroh RPC client over real local QUIC", () => {
   const endpoints = new Set<Awaited<ReturnType<typeof bindNodeEndpoint>>>();
 
@@ -163,9 +178,7 @@ describe("Iroh RPC client over real local QUIC", () => {
         const task = (async () => {
           const control = await server.acceptBi();
           await readIrohStreamPreamble(control.recv);
-          const hello = decodeIrohSessionControlFrame(
-            await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES)
-          );
+          const hello = await readHelloAndDelegation(control);
           expect(hello.t).toBe(IROH_SESSION_HELLO);
           await writeFrame(
             control.send,
@@ -190,7 +203,7 @@ describe("Iroh RPC client over real local QUIC", () => {
         })();
         void task.catch(() => undefined);
         serving.push(task);
-        return createIrohClientPipe(new NodePhysicalConnection(clientNative));
+        return createIrohClientPipe(new NodePhysicalConnection(clientNative), TEST_DELEGATION);
       },
     });
     const session = owner.openSession({
@@ -224,7 +237,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       close: vi.fn(),
       closed: vi.fn(async () => "closed"),
     };
-    const pipe = createIrohClientPipe(connection);
+    const pipe = createIrohClientPipe(connection, TEST_DELEGATION);
     await pipe.close();
     expect(connection.close).toHaveBeenCalledOnce();
     expect(connection.openBi).not.toHaveBeenCalled();
@@ -278,13 +291,11 @@ describe("Iroh RPC client over real local QUIC", () => {
       close: (code, reason) => client.close(code, reason),
       closed: () => client.closed(),
     };
-    const pipe = createIrohClientPipe(ownedClient);
+    const pipe = createIrohClientPipe(ownedClient, TEST_DELEGATION);
     const serving = (async () => {
       const control = await server.acceptBi();
       await readIrohStreamPreamble(control.recv);
-      const hello = decodeIrohSessionControlFrame(
-        await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES)
-      );
+      const hello = await readHelloAndDelegation(control);
       if (hello.t !== IROH_SESSION_HELLO) throw new Error("Expected client hello");
       await writeFrame(control.send, encodeIrohSessionControlFrame(hello), MAX_CONTROL_FRAME_BYTES);
       // Leave a peer-opened stream before its preamble. The client owns the
@@ -327,7 +338,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       configureNodeConnection(serverNative);
       configureNodeConnection(clientNative);
       const server = new NodePhysicalConnection(serverNative);
-      const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative));
+      const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative), TEST_DELEGATION);
       const physical = vi.fn();
       const logical = vi.fn();
       const physicalReady = pipe.ready().catch(physical);
@@ -429,7 +440,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       const serverTask = (async () => {
         const control = await server.acceptBi();
         await readIrohStreamPreamble(control.recv);
-        await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES);
+        await readHelloAndDelegation(control);
         await writeFrame(
           control.send,
           encodeIrohSessionControlFrame({
@@ -440,7 +451,7 @@ describe("Iroh RPC client over real local QUIC", () => {
           MAX_CONTROL_FRAME_BYTES
         );
       })();
-      const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative));
+      const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative), TEST_DELEGATION);
       let releaseToken!: (value: string) => void;
       let rejectToken!: (error: unknown) => void;
       let tokenSignal: AbortSignal | undefined;
@@ -517,7 +528,7 @@ describe("Iroh RPC client over real local QUIC", () => {
     configureNodeConnection(serverNative);
     configureNodeConnection(clientNative);
     const server = new NodePhysicalConnection(serverNative);
-    const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative));
+    const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative), TEST_DELEGATION);
     let requestRefresh!: () => void;
     const refreshing = new Promise<void>((resolve) => {
       requestRefresh = resolve;
@@ -531,7 +542,7 @@ describe("Iroh RPC client over real local QUIC", () => {
     const serverTask = (async () => {
       const control = await server.acceptBi();
       await readIrohStreamPreamble(control.recv);
-      await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES);
+      await readHelloAndDelegation(control);
       await writeFrame(
         control.send,
         encodeIrohSessionControlFrame({
@@ -617,7 +628,7 @@ describe("Iroh RPC client over real local QUIC", () => {
     configureNodeConnection(serverNative);
     configureNodeConnection(clientNative);
     const server = new NodePhysicalConnection(serverNative);
-    const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative));
+    const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative), TEST_DELEGATION);
     let firstAdmitted!: () => void;
     const admitted = new Promise<void>((resolve) => {
       firstAdmitted = resolve;
@@ -625,7 +636,7 @@ describe("Iroh RPC client over real local QUIC", () => {
     const serverTask = (async () => {
       const control = await server.acceptBi();
       await readIrohStreamPreamble(control.recv);
-      await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES);
+      await readHelloAndDelegation(control);
       await writeFrame(
         control.send,
         encodeIrohSessionControlFrame({
@@ -719,9 +730,7 @@ describe("Iroh RPC client over real local QUIC", () => {
         k: "control",
         v: IROH_WIRE_VERSION,
       });
-      const hello = decodeIrohSessionControlFrame(
-        await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES)
-      );
+      const hello = await readHelloAndDelegation(control);
       expect(hello).toEqual({
         t: IROH_SESSION_HELLO,
         protocolVersion: IROH_WIRE_VERSION,
@@ -845,7 +854,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       ]);
     })();
 
-    const pipe = createIrohClientPipe(client, {
+    const pipe = createIrohClientPipe(client, TEST_DELEGATION, {
       relayUrl: "https://relay.example/",
       attempts: 2,
       generation: 3,
@@ -991,9 +1000,7 @@ describe("Iroh RPC client over real local QUIC", () => {
     const serverTask = (async () => {
       const control = await server.acceptBi();
       expect((await readIrohStreamPreamble(control.recv)).k).toBe("control");
-      expect(
-        decodeIrohSessionControlFrame(await readFrame(control.recv, MAX_CONTROL_FRAME_BYTES)).t
-      ).toBe(IROH_SESSION_HELLO);
+      expect((await readHelloAndDelegation(control)).t).toBe(IROH_SESSION_HELLO);
       await writeFrame(
         control.send,
         encodeIrohSessionControlFrame({
@@ -1147,7 +1154,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       }
     })();
 
-    const pipe = createIrohClientPipe(client);
+    const pipe = createIrohClientPipe(client, TEST_DELEGATION);
     const session = pipe.openSession({ getToken: () => "token" });
     const rpc = createRpcClient({
       selfId: "shell:device",

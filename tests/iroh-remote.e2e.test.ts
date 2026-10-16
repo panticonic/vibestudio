@@ -21,6 +21,7 @@ import {
   configureNodeConnection,
   loadIrohNodeBinding,
   NodePhysicalConnection,
+  signEndpointDelegation,
   NodePhysicalEndpoint,
   VIBESTUDIO_IROH_ALPN,
 } from "@vibestudio/iroh-transport/node";
@@ -132,15 +133,21 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
   let gatewayHandler: ((args: unknown[]) => Promise<Response>) | null = null;
   let dispatchGate: { method: string; started: number; wait: Promise<void> } | null = null;
 
+  // The device key only signs; every client process binds its own fresh endpoint
+  // and presents the device's delegation of it.
   const createClient = async (
-    secret: SecretKeyType = SecretKey.generate()
+    device: SecretKeyType = SecretKey.generate()
   ): Promise<ConnectedClient> => {
-    const endpoint = await bindNodeEndpoint({ secretKey: secret });
+    const endpointSecret = SecretKey.generate();
+    const endpoint = await bindNodeEndpoint({ secretKey: endpointSecret });
     const nativeConnection = await endpoint.connect(serverEndpoint.addr(), [
       ...VIBESTUDIO_IROH_ALPN,
     ]);
     configureNodeConnection(nativeConnection);
-    const pipe = createIrohClientPipe(new NodePhysicalConnection(nativeConnection));
+    const pipe = createIrohClientPipe(
+      new NodePhysicalConnection(nativeConnection),
+      signEndpointDelegation(device, endpoint.id().toString())
+    );
     const client = { endpoint, pipe };
     clients.add(client);
     await pipe.ready();
@@ -178,13 +185,14 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
 
   const pairFresh = async (
     options: {
-      secret?: SecretKeyType;
+      device?: SecretKeyType;
       sid?: string;
       connectionId?: string;
     } = {}
   ): Promise<PairedClient> => {
-    const client = await createClient(options.secret);
+    // The hub admits an unknown device key only while an invite is open.
     const code = mintInvite();
+    const client = await createClient(options.device);
     let credential: DeviceCredential | null = null;
     const session = client.pipe.openSession({
       clientSessionId: options.sid,
@@ -283,8 +291,12 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
           return new NodePhysicalEndpoint(serverEndpoint);
         },
       },
-      admitPeer: () => true,
-      attach: (connection) => rpcServer.attachIrohConnection(connection),
+      attach: (connection) =>
+        rpcServer.attachIrohConnection(
+          connection,
+          (deviceKey) =>
+            identityDb.getDeviceForKey(deviceKey) !== null || deviceAuthStore.hasLivePairingInvite()
+        ),
     });
     await ingress.ready;
   }, 30_000);
@@ -335,8 +347,8 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
   }, 30_000);
 
   it("rejects replay of a consumed one-time pairing credential", async () => {
-    const client = await createClient();
     const code = mintInvite();
+    const client = await createClient();
     const first = client.pipe.openSession({ clientSessionId: "first", getToken: () => code });
     await first.ready?.();
     const devicesAfterPairing = deviceAuthStore.listDevices().length;
@@ -346,15 +358,18 @@ describe.runIf(RUN)("Iroh complete native remote smoke", () => {
     await closeClient(client);
   }, 30_000);
 
-  it("reconnects the same endpoint with its durable refresh credential", async () => {
-    const secret = SecretKey.generate();
-    const paired = await pairFresh({ secret, sid: "fresh", connectionId: "stable-shell" });
+  it("reconnects the same device from a fresh endpoint with its durable refresh credential", async () => {
+    const device = SecretKey.generate();
+    const paired = await pairFresh({ device, sid: "fresh", connectionId: "stable-shell" });
     const refresh = `refresh:${paired.credential.deviceId}:${paired.credential.refreshToken}`;
     const endpointId = paired.endpoint.id().toString();
     await closeClient(paired);
 
-    const returning = await createClient(secret);
-    expect(returning.endpoint.id().toString()).toBe(endpointId);
+    const returning = await createClient(device);
+    expect(returning.endpoint.id().toString()).not.toBe(endpointId);
+    expect(identityDb.getDeviceForKey(device.public().toString())?.deviceId).toBe(
+      paired.credential.deviceId
+    );
     let issuedAgain = false;
     const session = returning.pipe.openSession({
       clientSessionId: "returning",

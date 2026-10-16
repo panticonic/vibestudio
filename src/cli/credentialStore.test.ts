@@ -23,7 +23,7 @@ const CURRENT: CliIrohDeviceCredentials = {
   deviceId: `dev_${"d".repeat(24)}`,
   refreshToken: "r".repeat(43),
   transport: "iroh",
-  endpointSecret: "E".repeat(43),
+  deviceSecret: "E".repeat(43),
   controlPairing: {
     endpointId: "aa".repeat(32),
     relays: ["https://relay.example/"],
@@ -49,7 +49,7 @@ const AGENT: CliIrohAgentCredentials = {
   agentId: `agt_${"a".repeat(24)}`,
   agentToken: `agent:agt_${"a".repeat(24)}:${"t".repeat(43)}`,
   transport: "iroh",
-  endpointSecret: "F".repeat(43),
+  deviceSecret: "F".repeat(43),
   workspacePairing: CURRENT.workspacePairing,
   signedInAt: 2,
 };
@@ -89,7 +89,7 @@ describe("CLI persisted device credential", () => {
       url: `iroh://${CURRENT.controlPairing.endpointId}`,
       deviceId: CURRENT.deviceId,
       refreshToken: CURRENT.refreshToken,
-      endpointSecret: CURRENT.endpointSecret,
+      deviceSecret: CURRENT.deviceSecret,
       controlPairing: CURRENT.controlPairing,
       pairedAt: CURRENT.pairedAt,
     };
@@ -161,21 +161,21 @@ describe("CLI persisted device credential", () => {
         ...AGENT,
         transport: "local",
         workspacePairing: undefined,
-        endpointSecret: undefined,
+        deviceSecret: undefined,
         url: "https://server.example/arbitrary",
       },
       {
         ...AGENT,
         transport: "local",
         workspacePairing: undefined,
-        endpointSecret: undefined,
+        deviceSecret: undefined,
         url: "https://server.example/_workspace/other",
       },
       {
         ...AGENT,
         transport: "local",
         workspacePairing: undefined,
-        endpointSecret: undefined,
+        deviceSecret: undefined,
         url: "https://user@server.example/",
       },
     ]) {

@@ -60,10 +60,10 @@ async function startFakeGateway(
 function ctxWithBody(
   body?: ReadableStream<Uint8Array>,
   kind: CallerKind = "panel",
-  remoteEndpointId?: string
+  remoteDeviceKey?: string
 ): ServiceContext {
   return {
-    caller: { runtime: { id: `${kind}:test`, kind }, remoteEndpointId },
+    caller: { runtime: { id: `${kind}:test`, kind }, remoteDeviceKey },
     ...(body ? { body } : {}),
   } as unknown as ServiceContext;
 }

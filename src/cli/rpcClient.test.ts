@@ -43,10 +43,6 @@ vi.mock("../node/iroh/irohRpcClient.js", () => ({
   },
 }));
 
-vi.mock("./irohEndpointLock.js", () => ({
-  acquireIrohEndpointLock: vi.fn(async () => () => undefined),
-}));
-
 vi.mock("./wsClient.js", () => ({
   WsRpcClient: class {
     constructor(config: unknown) {
@@ -78,7 +74,7 @@ const PAIRED_CREDS = {
   deviceId: `dev_${"D".repeat(24)}`,
   refreshToken: "R".repeat(43),
   transport: "iroh" as const,
-  endpointSecret: "E".repeat(43),
+  deviceSecret: "E".repeat(43),
   controlPairing: {
     endpointId: "aa".repeat(32),
     relays: ["https://relay.example/"],
@@ -478,7 +474,7 @@ describe("rpcClient", () => {
     expect(irohMocks.ctor).toHaveBeenCalledWith(
       expect.objectContaining({
         reach: PAIRED_CREDS.workspacePairing,
-        endpointSecret: Buffer.from(PAIRED_CREDS.endpointSecret, "base64url"),
+        deviceSecret: Buffer.from(PAIRED_CREDS.deviceSecret, "base64url"),
       })
     );
     await sibling.close();
@@ -544,7 +540,7 @@ describe("rpcClient", () => {
       deviceId: PAIRED_CREDS.deviceId,
       refreshToken: PAIRED_CREDS.refreshToken,
       pairing: PAIRED_CREDS.controlPairing,
-      endpointSecret: PAIRED_CREDS.endpointSecret,
+      deviceSecret: PAIRED_CREDS.deviceSecret,
     });
 
     await client.call("hubControl.listWorkspaces", []);

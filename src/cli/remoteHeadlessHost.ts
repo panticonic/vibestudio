@@ -42,7 +42,7 @@ async function createIrohHeadlessHostOverrides(
   const token = `refresh:${creds.deviceId}:${creds.refreshToken}`;
   const client = new IrohRpcClient({
     reach: creds.workspacePairing,
-    endpointSecret: Buffer.from(creds.endpointSecret, "base64url"),
+    deviceSecret: Buffer.from(creds.deviceSecret, "base64url"),
     callerId: `shell:${creds.deviceId}`,
     getToken: () => token,
     connectionId: clientSessionId,

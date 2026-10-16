@@ -52,7 +52,7 @@ function writeCredentials(tmpDir: string, overrides: Record<string, unknown> = {
       phase: "workspace",
       kind: "device",
       transport: "iroh",
-      endpointSecret: "E".repeat(43),
+      deviceSecret: "E".repeat(43),
       url: `iroh://${"bb".repeat(32)}/_workspace/dev`,
       workspaceId: "ws_dev",
       workspaceName: "dev",

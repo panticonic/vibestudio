@@ -1,11 +1,6 @@
 import { createDevLogger } from "@vibestudio/dev-log";
-import { EndpointGenerationOwner, type IrohReach } from "@vibestudio/iroh-transport";
-import {
-  createNodeEndpointBinding,
-  loadIrohNodeBinding,
-  type NodePhysicalConnection,
-  type NodePhysicalEndpoint,
-} from "@vibestudio/iroh-transport/node";
+import type { IrohReach } from "@vibestudio/iroh-transport";
+import { createNodeDeviceEndpoint, type NodeDeviceEndpoint } from "@vibestudio/iroh-transport/node";
 import {
   createIrohServerClient,
   type IrohServerClient,
@@ -16,11 +11,11 @@ const log = createDevLogger("DesktopIroh");
 
 export type DesktopIrohClientOptions = Omit<
   IrohServerClientArgs,
-  "reach" | "endpointSecret" | "endpointOwner" | "pipe"
+  "reach" | "deviceSecret" | "deviceEndpoint" | "pipe"
 >;
 
 interface DesktopIrohConnectionSupervisorOptions {
-  endpointOwner?: EndpointGenerationOwner<NodePhysicalConnection, NodePhysicalEndpoint>;
+  deviceEndpoint?: NodeDeviceEndpoint;
   createClient?: typeof createIrohServerClient;
 }
 
@@ -28,16 +23,13 @@ interface DesktopIrohConnectionSupervisorOptions {
  * Process-level owner for every remote Iroh connection made by one desktop.
  *
  * Hub control and workspace RPC have different peer Endpoint IDs, but they
- * share one durable local identity and therefore one native endpoint
- * generation. Keeping their creation, relay history, generation replacement,
+ * share this process's one fresh endpoint (delegated once by the durable device
+ * key) and therefore one native endpoint generation. Keeping their creation, relay history, generation replacement,
  * and shutdown here prevents either peer client from acquiring or disposing
  * native endpoint state independently.
  */
 export class DesktopIrohConnectionSupervisor {
-  private readonly endpointOwner: EndpointGenerationOwner<
-    NodePhysicalConnection,
-    NodePhysicalEndpoint
-  >;
+  private readonly deviceEndpoint: NodeDeviceEndpoint;
   private readonly clients = new Set<IrohServerClient>();
   private readonly acquisitions = new Set<Promise<IrohServerClient>>();
   private readonly acquisitionCleanupFailures: unknown[] = [];
@@ -46,23 +38,13 @@ export class DesktopIrohConnectionSupervisor {
   private closing: Promise<void> | null = null;
 
   constructor(
-    endpointSecret: Uint8Array,
+    deviceSecret: Uint8Array,
     relays: readonly string[],
     options: DesktopIrohConnectionSupervisorOptions = {}
   ) {
-    if (endpointSecret.byteLength !== 32) {
-      throw new Error("Stored Iroh endpoint identity is invalid");
-    }
-    this.endpointOwner =
-      options.endpointOwner ??
-      new EndpointGenerationOwner(
-        createNodeEndpointBinding({
-          secretKey: loadIrohNodeBinding().SecretKey.fromBytes([...endpointSecret]),
-          relayUrls: relays,
-        })
-      );
+    this.deviceEndpoint = options.deviceEndpoint ?? createNodeDeviceEndpoint(deviceSecret, relays);
     this.createClient = options.createClient ?? createIrohServerClient;
-    this.unsubscribeInvalidation = this.endpointOwner.onInvalidation((invalidation) => {
+    this.unsubscribeInvalidation = this.deviceEndpoint.owner.onInvalidation((invalidation) => {
       // The most destructive event this process can inflict on itself: every
       // healthy connection on the endpoint dies so that one timed-out dial can
       // be cancelled. It used to happen silently, which is why an oscillation
@@ -87,7 +69,7 @@ export class DesktopIrohConnectionSupervisor {
       if (this.closing) throw new Error("Desktop Iroh connection supervisor is closing");
       const client = await this.createClient({
         reach,
-        endpointOwner: this.endpointOwner,
+        deviceEndpoint: this.deviceEndpoint,
         ...options,
       });
       if (this.closing) {
@@ -127,7 +109,7 @@ export class DesktopIrohConnectionSupervisor {
         ),
         Promise.resolve().then(async () => {
           log.info("Shutdown endpoint started");
-          await this.endpointOwner.close();
+          await this.deviceEndpoint.owner.close();
           log.info("Shutdown endpoint completed");
         }),
       ]);

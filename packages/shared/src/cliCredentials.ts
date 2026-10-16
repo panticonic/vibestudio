@@ -36,7 +36,7 @@ interface CliDeviceCredentialsBase {
 
 export interface CliIrohDeviceCredentials extends CliDeviceCredentialsBase {
   transport: "iroh";
-  endpointSecret: string;
+  deviceSecret: string;
   controlPairing: CliStoredPairing;
   workspacePairing: CliStoredPairing;
 }
@@ -65,7 +65,7 @@ export interface CliLocalAccountCredentials extends CliAccountDeviceCredentialsB
 
 export interface CliIrohAccountCredentials extends CliAccountDeviceCredentialsBase {
   transport: "iroh";
-  endpointSecret: string;
+  deviceSecret: string;
   controlPairing: CliStoredPairing;
 }
 
@@ -91,7 +91,7 @@ interface CliAgentCredentialsBase {
 
 export interface CliIrohAgentCredentials extends CliAgentCredentialsBase {
   transport: "iroh";
-  endpointSecret: string;
+  deviceSecret: string;
   workspacePairing: CliStoredPairing;
 }
 
@@ -114,7 +114,7 @@ const DEVICE_KEYS = new Set([
   "deviceId",
   "refreshToken",
   "transport",
-  "endpointSecret",
+  "deviceSecret",
   "controlPairing",
   "workspacePairing",
   "pairedAt",
@@ -132,13 +132,13 @@ const AGENT_KEYS = new Set([
   "agentId",
   "agentToken",
   "transport",
-  "endpointSecret",
+  "deviceSecret",
   "workspacePairing",
   "signedInAt",
 ]);
 
 const STORED_PAIRING_KEYS = new Set(["endpointId", "relays", "v"]);
-const ENDPOINT_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+const DEVICE_SECRET_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 
 export function isCliStoredPairing(value: unknown): value is CliStoredPairing {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
@@ -168,7 +168,7 @@ export function isCliDeviceCredentials(value: unknown): value is CliDeviceCreden
   if (Object.keys(value).some((key) => !DEVICE_KEYS.has(key))) return false;
   const candidate = value as Partial<CliDeviceCredentialsBase> & {
     transport?: unknown;
-    endpointSecret?: unknown;
+    deviceSecret?: unknown;
     controlPairing?: unknown;
     workspacePairing?: unknown;
   };
@@ -185,7 +185,7 @@ export function isCliDeviceCredentials(value: unknown): value is CliDeviceCreden
   }
   if (candidate.transport === "local") {
     return (
-      candidate.endpointSecret === undefined &&
+      candidate.deviceSecret === undefined &&
       candidate.controlPairing === undefined &&
       candidate.workspacePairing === undefined &&
       isDirectWorkspaceUrl(candidate.url!, candidate.workspaceName!)
@@ -193,8 +193,8 @@ export function isCliDeviceCredentials(value: unknown): value is CliDeviceCreden
   }
   if (candidate.transport !== "iroh") return false;
   if (
-    typeof candidate.endpointSecret !== "string" ||
-    !ENDPOINT_SECRET_PATTERN.test(candidate.endpointSecret) ||
+    typeof candidate.deviceSecret !== "string" ||
+    !DEVICE_SECRET_PATTERN.test(candidate.deviceSecret) ||
     !isCliStoredPairing(candidate.controlPairing) ||
     !isCliStoredPairing(candidate.workspacePairing)
   )
@@ -208,7 +208,7 @@ export function isCliAgentCredentials(value: unknown): value is CliAgentCredenti
   if (Object.keys(value).some((key) => !AGENT_KEYS.has(key))) return false;
   const candidate = value as Partial<CliAgentCredentialsBase> & {
     transport?: unknown;
-    endpointSecret?: unknown;
+    deviceSecret?: unknown;
     workspacePairing?: unknown;
   };
   if (
@@ -229,8 +229,8 @@ export function isCliAgentCredentials(value: unknown): value is CliAgentCredenti
   }
   if (candidate.transport === "iroh") {
     if (
-      typeof candidate.endpointSecret !== "string" ||
-      !ENDPOINT_SECRET_PATTERN.test(candidate.endpointSecret) ||
+      typeof candidate.deviceSecret !== "string" ||
+      !DEVICE_SECRET_PATTERN.test(candidate.deviceSecret) ||
       !isCliStoredPairing(candidate.workspacePairing)
     )
       return false;
@@ -241,7 +241,7 @@ export function isCliAgentCredentials(value: unknown): value is CliAgentCredenti
   }
   if (candidate.transport !== "local") return false;
   return (
-    candidate.endpointSecret === undefined &&
+    candidate.deviceSecret === undefined &&
     candidate.workspacePairing === undefined &&
     isDirectWorkspaceUrl(candidate.url!, candidate.workspaceName!)
   );
@@ -258,7 +258,7 @@ export function isCliAccountDeviceCredentials(
   const candidate = value as Partial<CliAccountDeviceCredentialsBase> & {
     transport?: unknown;
     serverId?: unknown;
-    endpointSecret?: unknown;
+    deviceSecret?: unknown;
     controlPairing?: unknown;
   };
   const keys = new Set([
@@ -273,7 +273,7 @@ export function isCliAccountDeviceCredentials(
   ]);
   if (candidate.transport === "local") keys.add("serverId");
   else {
-    keys.add("endpointSecret");
+    keys.add("deviceSecret");
     keys.add("controlPairing");
   }
   if (
@@ -305,8 +305,8 @@ export function isCliAccountDeviceCredentials(
   }
   return (
     candidate.transport === "iroh" &&
-    typeof candidate.endpointSecret === "string" &&
-    ENDPOINT_SECRET_PATTERN.test(candidate.endpointSecret) &&
+    typeof candidate.deviceSecret === "string" &&
+    DEVICE_SECRET_PATTERN.test(candidate.deviceSecret) &&
     isCliStoredPairing(candidate.controlPairing) &&
     candidate.url === `iroh://${candidate.controlPairing.endpointId}`
   );

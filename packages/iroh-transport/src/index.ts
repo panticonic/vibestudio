@@ -1,4 +1,5 @@
 export * from "./alpn.js";
+export * from "./deviceDelegation.js";
 export * from "./connectionLoss.js";
 export * from "./endpointGeneration.js";
 export * from "./framing.js";

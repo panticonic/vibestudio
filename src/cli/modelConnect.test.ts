@@ -14,7 +14,7 @@ const CREDENTIALS = {
   deviceId: `dev_${"D".repeat(24)}`,
   refreshToken: "R".repeat(43),
   transport: "iroh",
-  endpointSecret: "E".repeat(43),
+  deviceSecret: "E".repeat(43),
   controlPairing: pairing("aa"),
   workspacePairing: pairing("bb"),
   pairedAt: 1,

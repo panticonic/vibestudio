@@ -1314,7 +1314,15 @@ function hubDeviceView(device: {
 function retireDeviceControlReach(state: HubRuntimeState, deviceId: string): void {
   const transport = state.controlTransport;
   if (!transport) return;
-  const retired = transport.rpcServer.retireCaller(shellCallerId(deviceId));
+  const device = state.identityDb.getDevice(deviceId);
+  const deviceKey = device?.transport.kind === "iroh" ? device.transport.deviceKey : null;
+  // Sessions drain first so the revoking request's own response is delivered;
+  // then every connection bound to the device (one per host process) closes.
+  const retired = transport.rpcServer
+    .retireCaller(shellCallerId(deviceId))
+    .then(() =>
+      deviceKey ? transport.rpcServer.closeDeviceConnections(deviceKey, "device revoked") : 0
+    );
   void retired.catch((error) => {
     console.warn(`[Hub] Failed to retire revoked device ${deviceId}:`, error);
   });
@@ -2538,10 +2546,14 @@ async function startHubControlTransport(
   const { startIrohIngress } = await import("./irohIngress.js");
   const ingress = startIrohIngress({
     binding: createNodeEndpointBinding({ secretKey, relayUrls }),
-    admitPeer: (endpointId) =>
-      state.identityDb.getDeviceForEndpoint(endpointId) !== null ||
-      state.deviceAuthStore.hasLivePairingInvite(),
-    attach: (connection) => rpcServer.attachIrohConnection(connection),
+    attach: (connection) =>
+      rpcServer.attachIrohConnection(
+        connection,
+        // A peer with no device row may only be pairing, which needs a live invite.
+        (deviceKey) =>
+          state.identityDb.getDeviceForKey(deviceKey) !== null ||
+          state.deviceAuthStore.hasLivePairingInvite()
+      ),
     log: (message, error) => console.warn(`[iroh-hub] ${message}`, error),
   });
   await ingress.ready;

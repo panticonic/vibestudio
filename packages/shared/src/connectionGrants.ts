@@ -9,8 +9,8 @@ export interface ConnectionGrant {
   token: string;
   principalId: string;
   issuedBy: string;
-  /** Remote endpoint of the authenticated issuer; absent only for loopback grants. */
-  remoteEndpointId?: string;
+  /** Device key of the authenticated issuer; absent only for loopback grants. */
+  remoteDeviceKey?: string;
   /** Authenticated human bound to the issuing connection, when one exists. */
   subject?: UserSubject;
   expiresAt: number;
@@ -23,7 +23,7 @@ export interface ConnectionGrantValidation {
   principalId: string;
   principalKind: CallerKind;
   issuedBy: string;
-  remoteEndpointId?: string;
+  remoteDeviceKey?: string;
   subject?: UserSubject;
 }
 
@@ -84,7 +84,7 @@ export class ConnectionGrantService {
   grant(
     principalId: string,
     issuedBy: string,
-    options: { ttlMs?: number; subject?: UserSubject; remoteEndpointId?: string } = {}
+    options: { ttlMs?: number; subject?: UserSubject; remoteDeviceKey?: string } = {}
   ): { token: string; expiresAt: number } {
     const record = this.entityCache.resolveActive(principalId);
     if (!record) {
@@ -97,7 +97,7 @@ export class ConnectionGrantService {
       token,
       principalId,
       issuedBy,
-      ...(options.remoteEndpointId ? { remoteEndpointId: options.remoteEndpointId } : {}),
+      ...(options.remoteDeviceKey ? { remoteDeviceKey: options.remoteDeviceKey } : {}),
       expiresAt,
       ...(options.subject ? { subject: options.subject } : {}),
       ...(executionDigest ? { executionDigest } : {}),
@@ -107,17 +107,17 @@ export class ConnectionGrantService {
 
   redeem(
     token: string,
-    remoteEndpointId?: string
+    remoteDeviceKey?: string
   ): {
     principalId: string;
     issuedBy: string;
     subject?: UserSubject;
-    remoteEndpointId?: string;
+    remoteDeviceKey?: string;
   } | null {
     const grant = this.grants.get(token);
     if (!grant) return null;
     if (grant.redeemed) return null;
-    if (grant.remoteEndpointId !== remoteEndpointId) return null;
+    if (grant.remoteDeviceKey !== remoteDeviceKey) return null;
     if (grant.expiresAt <= Date.now()) {
       this.grants.delete(token);
       return null;
@@ -138,7 +138,7 @@ export class ConnectionGrantService {
     return {
       principalId: grant.principalId,
       issuedBy: grant.issuedBy,
-      ...(grant.remoteEndpointId ? { remoteEndpointId: grant.remoteEndpointId } : {}),
+      ...(grant.remoteDeviceKey ? { remoteDeviceKey: grant.remoteDeviceKey } : {}),
       ...(grant.subject ? { subject: grant.subject } : {}),
     };
   }
@@ -159,10 +159,10 @@ export class ConnectionGrantService {
     for (let i = 0; i < excess; i++) this.grants.delete(redeemedTokens[i]!);
   }
 
-  validate(token: string, remoteEndpointId?: string): ConnectionGrantValidation | null {
+  validate(token: string, remoteDeviceKey?: string): ConnectionGrantValidation | null {
     const grant = this.grants.get(token);
     if (!grant) return null;
-    if (grant.remoteEndpointId !== remoteEndpointId) return null;
+    if (grant.remoteDeviceKey !== remoteDeviceKey) return null;
     if (!grant.redeemed && grant.expiresAt <= Date.now()) {
       this.grants.delete(token);
       return null;
@@ -183,7 +183,7 @@ export class ConnectionGrantService {
       principalId: grant.principalId,
       principalKind,
       issuedBy: grant.issuedBy,
-      ...(grant.remoteEndpointId ? { remoteEndpointId: grant.remoteEndpointId } : {}),
+      ...(grant.remoteDeviceKey ? { remoteDeviceKey: grant.remoteDeviceKey } : {}),
       ...(grant.subject ? { subject: grant.subject } : {}),
     };
   }
