@@ -1,5 +1,9 @@
 import type { PrincipalGrants, LaunchedClient } from "@vibestudio/client-host-core";
 import type {
+  InstalledLauncher,
+  InstallLauncherOutcome,
+} from "@vibestudio/rn-client-api/integrationProtocol";
+import type {
   BrowserImportArchiveHandle,
   ClientDescription,
   ClientHostEvent,
@@ -30,6 +34,13 @@ export interface DeviceCapabilityPorts {
   };
 }
 
+/** What a client's `integration.*` calls reach: the host runtime's launchers. */
+export interface IntegrationPorts {
+  install(id: string): Promise<{ outcome: InstallLauncherOutcome }>;
+  list(): InstalledLauncher[];
+  remove(id: string): Promise<void>;
+}
+
 /** What the host runtime does on a running client's behalf; each is the host's decision, made when asked. */
 export interface ClientInstanceHooks {
   /** Reload this client's instance onto the build announced (or the newest ready one). */
@@ -49,6 +60,7 @@ export interface ClientInstanceOptions {
   grants: PrincipalGrants;
   state: HostState;
   device: DeviceCapabilityPorts;
+  integration: IntegrationPorts;
   hooks: ClientInstanceHooks;
   /** The `notifications.*` handlers (the notification port owns them). */
   notifications: HostNotifications["handlers"];
@@ -119,6 +131,13 @@ export class ClientInstance {
     this.deliver({ type: "capabilities", granted: [...granted] });
   }
 
+  /** The set of confirmed launchers changed; only a client that may install launchers hears of it. */
+  announceLaunchers(launchers: InstalledLauncher[]): void {
+    if (this.granted.includes("integration.install")) {
+      this.deliver({ type: "integration-launchers", launchers });
+    }
+  }
+
   offerUpdate(offer: UpdateOffer): void {
     this.pendingUpdate = offer;
     this.deliver({ type: "update", update: offer });
@@ -159,7 +178,7 @@ export class ClientInstance {
   };
 
   private handlers(): ClientBrokerOptions["handlers"] {
-    const { device, hooks, notifications } = this.options;
+    const { device, hooks, notifications, integration } = this.options;
     const state = this.options.state.clientState(this.clientId);
     const relay = this.relay;
     return {
@@ -202,6 +221,9 @@ export class ClientInstance {
       "browserImport.readEntry": (handle, name, offset, maxBytes) =>
         device.browserImport.readEntry(handle, name, offset, maxBytes),
       "browserImport.releaseArchive": (handle) => device.browserImport.releaseArchive(handle),
+      "integration.install": ({ id }) => integration.install(id),
+      "integration.list": () => integration.list(),
+      "integration.remove": ({ id }) => integration.remove(id),
       "device.reset": () => hooks.resetDevice(),
       "device.setDevelopmentMode": (enabled) =>
         this.options.state.setDevelopment(this.clientId, enabled),

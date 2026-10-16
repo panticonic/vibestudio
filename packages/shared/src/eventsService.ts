@@ -422,6 +422,38 @@ export class EventService {
       callerKinds.includes(session.callerKind)
     );
     if (addressed.length === 0) return null;
+    return this.sendObserved(addressed, event, data, onAddresseesClosed);
+  }
+
+  /**
+   * Direct-address a request to one caller and observe its addressees:
+   * `onAddresseesClosed` fires once every transport that received the request
+   * has gone away, the authoritative signal that nobody is left to answer it.
+   * Returns a release for the observation, or null when the caller has no live
+   * transport.
+   */
+  requestCaller<E extends EventName>(
+    callerId: string,
+    event: E,
+    data: EventPayloads[E],
+    onAddresseesClosed: () => void
+  ): (() => void) | null {
+    const addressed = [...(this.sessionsByCallerId.get(callerId)?.values() ?? [])];
+    if (addressed.length === 0) return null;
+    return this.sendObserved(addressed, event, data, onAddresseesClosed);
+  }
+
+  /** Whether any transport of this durable caller is live to receive a direct address. */
+  hasLiveCaller(callerId: string): boolean {
+    return (this.sessionsByCallerId.get(callerId)?.size ?? 0) > 0;
+  }
+
+  private sendObserved<E extends EventName>(
+    addressed: DirectEventSession[],
+    event: E,
+    data: EventPayloads[E],
+    onAddresseesClosed: () => void
+  ): () => void {
     let remaining = addressed.length;
     const observer = (): void => {
       remaining -= 1;

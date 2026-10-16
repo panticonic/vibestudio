@@ -20,6 +20,7 @@ import {
   type DevInstanceRecord,
 } from "./instanceRegistry.js";
 import { DEFAULT_IROH_RELAYS } from "../server/irohRelayConfig.js";
+import { DEVICE_KINDS, isDeviceKind, type DeviceKind } from "./deviceExecutors.js";
 import {
   prepareSelfDevelopmentMirrors,
   selfDevelopmentMirrorEnvironment,
@@ -38,6 +39,8 @@ type LauncherArgs = {
   selfDevelopment: boolean;
   /** Which private workspace this instance's CLI opens; System by default. */
   workspace?: CliWorkspaceSelection;
+  /** Device drivers to attach for the command (`--device terminal|desktop`). */
+  devices?: DeviceKind[];
   command: string[];
 };
 
@@ -91,6 +94,7 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
   let persistent = false;
   let selfDevelopment = false;
   let workspace: CliWorkspaceSelection | undefined;
+  const devices: DeviceKind[] = [];
   const command: string[] = [];
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -121,6 +125,18 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
       workspace = value;
       continue;
     }
+    if (arg === "--device" || arg.startsWith("--device=")) {
+      const value = arg.startsWith("--device=")
+        ? arg.slice("--device=".length)
+        : argv[(index += 1)];
+      if (!value || !isDeviceKind(value)) {
+        throw new Error(
+          `--device must name ${DEVICE_KINDS.join(" or ")}, not ${value ?? "nothing"}`
+        );
+      }
+      if (!devices.includes(value)) devices.push(value);
+      continue;
+    }
     if (arg === "--persistent") {
       persistent = true;
       continue;
@@ -137,6 +153,7 @@ export function parseSystemTestLauncherArgs(argv: readonly string[]): LauncherAr
     persistent,
     selfDevelopment,
     ...(workspace ? { workspace } : {}),
+    ...(devices.length > 0 ? { devices } : {}),
     command,
   };
 }

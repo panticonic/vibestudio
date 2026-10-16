@@ -125,3 +125,87 @@ bundle files (`VibestudioClientBroker` is their only door to the device).
 iOS OAuth uses `VibestudioAuthSession` (`ASWebAuthenticationSession`) with
 `vibestudio://oauth/callback/<provider>` callbacks. Those OAuth-shaped URLs are
 not pairing links and are ignored by the normal deep-link router.
+
+## Launch surfaces (App Intents, quick actions, widgets, share extension)
+
+Design: `docs/client-hosts-and-clients-plan.md` sections 4.7 and 5.4. The host
+runtime's JavaScript publishes the whole launch-surface set (`LaunchSurfaces`
+in `hosts/react-native/src/host/integration.ts`) after launch and on every
+`clients:changed` event, through `VibestudioHostRuntime.publishLaunchSurfaces`.
+Native writes that JSON atomically to `launch-surfaces.json` in the App Group
+container and then sets `UIApplication.shortcutItems`, calls
+`VibestudioShortcuts.updateAppShortcutParameters()` and
+`WidgetCenter.shared.reloadAllTimelines()`. Every consumer decodes that one file.
+
+| Piece | Where | Target |
+|---|---|---|
+| Snapshot model, quick-action ordering, share routing | `Vibestudio/LaunchSurfaces/LaunchSurfacesModel.swift` | app, widgets, share extension |
+| App Group snapshot store | `LaunchSnapshotStore.swift` | app, widgets, share extension |
+| `ClientEntity` and its query | `ClientEntity.swift` | app, widgets |
+| Share inbox (enqueue / ordered drain) | `ShareInbox.swift` | app, share extension |
+| Events to the host runtime, publisher | `LaunchSurfacesPublisher.swift` | app |
+| `OpenClientIntent`, `AskIntent`, `AppShortcutsProvider` | `LaunchIntents.swift` | app (not an extension: the app must call `updateAppShortcutParameters()`) |
+| Widget and Control Center control | `VibestudioWidgets/` | widget extension |
+| Share extension | `VibestudioShareExtension/` | share extension |
+| Tests | `VibestudioNativeTests/LaunchSurfacesTests.swift` | native tests |
+
+Flow:
+
+- Intents, quick actions and the host: `OpenClientIntent` (foreground) and
+  home-screen quick actions emit a `link` host event; `AskIntent` emits
+  `background-intent` `{name, text, clientId}` and answers "Asking ...". The
+  headless host instance (started in `AppDelegate`, before any scene) serves it
+  and shows the answer as a notification. Events wait in the client manager until
+  the host runtime calls `markReady`; there is no timeout.
+- Widgets and controls have no text input, so the widget and the iOS 18 control
+  open the client (`Link`, `widgetURL`, `OpenURLIntent`) and the client's composer
+  takes the question. Typed Ask is the Siri / Shortcuts / Action button intent.
+- Share-in: the extension reads `shareIn` from the snapshot to name accepting
+  clients, writes `ShareInbox/<id>.json` to the App Group, and posts a local
+  notification. It never dials the server. `sceneDidBecomeActive` drains the inbox
+  oldest first and emits `share-in` `{mimeType, text}`, deleting each file once its
+  event was handed to the host runtime. The event carries no client id, so the
+  host's JavaScript routes by MIME as on Android.
+- Live Activity: not applicable. No APNs ActivityKit push trigger exists (the
+  server never pushes ActivityKit tokens), so nothing is built.
+
+### Xcode registration
+
+Registered in `project.pbxproj`: the six app sources under
+`Vibestudio/LaunchSurfaces/` (app target Sources phase) and
+`LaunchSurfacesTests.swift` (native tests target). The app's `Info.plist` carries
+`VibestudioAppGroup = group.$(VIBESTUDIO_IOS_BUNDLE_ID)`, which every target reads
+to find its App Group, so a locally overridden bundle id stays consistent.
+
+Not registered (create in Xcode; no Xcode was available when this was written):
+
+1. App Group entitlement. `scripts/cli/ios-entitlements.mjs` generates the app's
+   `Generated/Vibestudio.entitlements`; it must also emit
+   `com.apple.security.application-groups` = `group.<VIBESTUDIO_IOS_BUNDLE_ID>`.
+   Enable the App Groups capability for that identifier in the developer portal.
+2. Widget extension target: File > New > Target > Widget Extension (uncheck Live
+   Activity and Control; the control is in the same source). Name
+   `VibestudioWidgets`, bundle id `$(VIBESTUDIO_IOS_BUNDLE_ID).widgets`, deployment
+   target 17.5, Swift 5. Delete the template sources; add
+   `VibestudioWidgets/VibestudioWidgets.swift` plus, by reference (not copy),
+   `Vibestudio/LaunchSurfaces/LaunchSurfacesModel.swift`,
+   `LaunchSnapshotStore.swift` and `ClientEntity.swift`. Set
+   `INFOPLIST_FILE = VibestudioWidgets/Info.plist` and
+   `CODE_SIGN_ENTITLEMENTS = VibestudioWidgets/VibestudioWidgets.entitlements`.
+   Link WidgetKit, SwiftUI and AppIntents.
+3. Share extension target: File > New > Target > Share Extension, name
+   `VibestudioShareExtension`, bundle id
+   `$(VIBESTUDIO_IOS_BUNDLE_ID).share`, deployment target 17.5, Swift 5. Delete the
+   template sources and storyboard; add
+   `VibestudioShareExtension/ShareViewController.swift` plus by reference
+   `LaunchSurfacesModel.swift`, `LaunchSnapshotStore.swift` and `ShareInbox.swift`.
+   Set `INFOPLIST_FILE = VibestudioShareExtension/Info.plist` (principal class is
+   `$(PRODUCT_MODULE_NAME).ShareViewController`) and
+   `CODE_SIGN_ENTITLEMENTS = VibestudioShareExtension/VibestudioShareExtension.entitlements`.
+4. Embed both: Vibestudio target > General > Frameworks, Libraries, and Embedded
+   Content, or Build Phases > "Embed Foundation Extensions" (destination
+   PlugIns), adding both `.appex` products, and add both as target dependencies.
+5. Podfile: the extensions use no pods. Do not add them to a Podfile target.
+6. Universal links: the generator already emits `applinks:<pair host>`; the
+   host's `apple-app-site-association` must list `/c/*` for
+   `https://vibestudio.app/c/<id>/<intent>` to open the app.

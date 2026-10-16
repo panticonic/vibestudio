@@ -24,6 +24,8 @@
     "./approvalVisibility": "./src/approvalVisibility.ts",
     "./channelTarget": "./src/channelTarget.ts",
     "./approvals": "./src/approvals.ts",
+    "./vtScreen": "./src/vtScreen.ts",
+    "./deviceDriver": "./src/deviceDriver.ts",
     "./assetModules": "./src/assetModules.ts",
     "./asyncStateArgsValidator": "./src/asyncStateArgsValidator.ts",
     "./asyncStateConvergenceLoop": "./src/asyncStateConvergenceLoop.ts",

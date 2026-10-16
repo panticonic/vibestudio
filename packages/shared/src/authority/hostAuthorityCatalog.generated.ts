@@ -3242,6 +3242,52 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "deviceDriver.answer": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "deviceDriver.register",
+      rationale: "The addressed driver settles exactly one operation it was asked to run",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "deviceDriver.devices": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "deviceDriver.drive",
+      rationale: "Read-only discovery of the caller's live test drivers",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "deviceDriver.drive": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "deviceDriver.drive",
+      rationale:
+        "Reaches only a device the person started as a test driver, for the lifetime of that driver's transport",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "deviceDriver.register": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "deviceDriver.register",
+      rationale:
+        "An authenticated device offers itself as the account's test driver for as long as its transport is live; it grants no authority",
+    },
+    capability: null,
+    presentation: null,
+  },
   "docs.describe": {
     tier: {
       tier: "open",

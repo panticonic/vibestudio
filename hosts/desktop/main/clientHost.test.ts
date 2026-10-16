@@ -7,6 +7,9 @@ import type { SupervisionChange } from "@vibestudio/shared/events";
 import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import { MemoryStore, bytesOf } from "../../core/src/testing.js";
 import { DesktopClientHost } from "./clientHost.js";
+import { ClientLaunchHost } from "../connection/clientLaunchHost.js";
+import { ControlChannel, createMessagePortPair } from "../connection/controlChannel.js";
+import { ClientLaunchLink } from "./clientLaunchLink.js";
 import { ClientHostState } from "./clientHostState.js";
 import { SupervisionRelay } from "./supervisionRelay.js";
 import { ClientWindows, type ClientWindow, type ClientWindowSpec } from "./clientWindow.js";
@@ -244,8 +247,10 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
   const offered: string[] = [];
   const supervision = new SupervisionRelay();
   const state = new ClientHostState(join(dir, "state.json"));
-  host = new DesktopClientHost({
-    hostVersion: "1.0.0",
+  // Launch, the artifact cache and grants run behind the control channel, as in the app.
+  const [mainPort, utilityPort] = createMessagePortPair();
+  const launchHost = new ClientLaunchHost({
+    channel: new ControlChannel(utilityPort, "b"),
     call,
     fetchArtifact: async (route) => {
       fetched.push(route);
@@ -253,6 +258,12 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
       return text === undefined ? new Response("missing", { status: 404 }) : new Response(text);
     },
     store,
+  });
+  const launchLink = new ClientLaunchLink(new ControlChannel(mainPort, "a"));
+  host = new DesktopClientHost({
+    hostVersion: "1.0.0",
+    call,
+    launches: launchLink,
     windows,
     supervision,
     state,
@@ -264,7 +275,7 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
     },
     workspaceId: () => "system",
     notify: (title, message) => notices.push([title, message]),
-    updateOffered: (clientId) => offered.push(clientId),
+    updatesChanged: (clientId) => offered.push(clientId),
   });
   host.follow();
   return {
@@ -284,6 +295,8 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
     metadataDigest,
     served,
     dismissed: () => dismissed,
+    principals: launchHost.principalSessions(),
+    launchLink,
     grantCalls: () => calls.filter((c) => c.method === "grantClientPrincipal"),
   };
 }
@@ -511,7 +524,7 @@ describe("DesktopClientHost principal sessions and trust", () => {
   it("grants a fresh connection for the exact verified build, only to its own principal", async () => {
     const t = harness();
     await running(t);
-    const sessions = t.host.principalSessions();
+    const sessions = t.principals;
 
     const before = t.grantCalls().length;
     await expect(sessions.connectionGrant(PRINCIPAL)).resolves.toMatch(/^grant-/);
@@ -525,7 +538,7 @@ describe("DesktopClientHost principal sessions and trust", () => {
       { source: "clients/desktop-browser", buildKey: "bk1", executionDigest: DIGEST(1) },
     ]);
     await expect(sessions.connectionGrant("client:chat:web:dev1")).rejects.toThrow(
-      /No running client/
+      /No client launched/
     );
   });
 
@@ -538,12 +551,10 @@ describe("DesktopClientHost principal sessions and trust", () => {
       missing: { capabilities: ["hub-control"] },
     });
 
-    t.host
-      .principalSessions()
-      .sessionEnded(
-        { callerId: PRINCIPAL, callerKind: "client", instanceId: window.callerId },
-        "trust-revoked"
-      );
+    t.host.sessionEnded(
+      { callerId: PRINCIPAL, callerKind: "client", instanceId: window.callerId },
+      "trust-revoked"
+    );
     await vi.waitFor(() => expect(t.gate.at(-1)!.status.status).toBe("unavailable"));
 
     expect(window.closeCalls).toBe(1);
@@ -564,9 +575,7 @@ describe("DesktopClientHost principal sessions and trust", () => {
       await readyResult(BUILD1, { grantedCapabilities: ["device-session", "panel-hosting"] })
     );
 
-    t.host
-      .principalSessions()
-      .sessionEnded({ callerId: PRINCIPAL, callerKind: "client" }, "trust-revoked");
+    t.host.sessionEnded({ callerId: PRINCIPAL, callerKind: "client" }, "trust-revoked");
     await vi.waitFor(() => expect(t.windowsMade).toHaveLength(2));
     expect(window.closeCalls).toBe(1);
     expect(t.windowsMade[1]!.spec.capabilities).toEqual(["device-session", "panel-hosting"]);
@@ -575,9 +584,7 @@ describe("DesktopClientHost principal sessions and trust", () => {
   it("closes a retired client for good", async () => {
     const t = harness();
     const window = await running(t);
-    t.host
-      .principalSessions()
-      .sessionEnded({ callerId: PRINCIPAL, callerKind: "client" }, "retired");
+    t.host.sessionEnded({ callerId: PRINCIPAL, callerKind: "client" }, "retired");
     await vi.waitFor(() => expect(window.closeCalls).toBe(1));
     expect(t.launches).toEqual([]);
     expect(t.notices[0]![1]).toMatch(/retired/);
@@ -586,9 +593,7 @@ describe("DesktopClientHost principal sessions and trust", () => {
   it("does not act on a session that ended for another reason", async () => {
     const t = harness();
     const window = await running(t);
-    t.host
-      .principalSessions()
-      .sessionEnded({ callerId: PRINCIPAL, callerKind: "client" }, "Token revoked");
+    t.host.sessionEnded({ callerId: PRINCIPAL, callerKind: "client" }, "Token revoked");
     expect(window.closeCalls).toBe(0);
   });
 

@@ -122,3 +122,26 @@ verified artifact store, the broker), browser import and USB provisioning.
 Pairing, credential refresh, launch and bundle delivery run in the host runtime
 through `@vibestudio/mobile-iroh` and `@vibestudio/client-host-core` over the
 device's Iroh pipe.
+
+## Launch surfaces and launchers
+
+The host runtime publishes the whole set of launch surfaces (`LaunchSurfaces` in
+`src/host/integration.ts`) to native after connect and on every `clients:changed`
+event, never on a timer. Android turns it into the launcher's long-press menu
+(dynamic shortcuts), the home-screen widget and the Ask tile; iOS into App
+Intents, quick actions, widgets and the share extension (`hosts/ios/README.md`).
+
+- **Installing a launcher.** A client holding `integration.install` calls
+  `api.integration.install(id)`. The OS launcher asks the person; only its
+  confirmation (`shortcut-pinned`) is recorded, and `api.integration.onChange`
+  reports it. Launchers of clients the server no longer declares are disabled on
+  `clients:changed`.
+- **Conversation notifications.** Android draws pushed inbox entries natively
+  (MessagingStyle, reply field, bubble); notifee draws them on iOS. A client that
+  declares the foreground intent `open-conversation` with a `conversation`
+  parameter (the channel id) receives notification presses and bubbles.
+- **App Links.** `https://vibestudio.app/c/<id>/<intent>` opens in the app only
+  while `https://vibestudio.app/.well-known/assetlinks.json` lists
+  `app.vibestudio.mobile` (and the internal id) with the release signing
+  certificate's SHA-256; check with `adb shell pm get-app-links <package>`.
+  Universal Links on iOS need `/c/*` in the apple-app-site-association file.

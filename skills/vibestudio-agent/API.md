@@ -176,6 +176,19 @@ Authority principals: `code`, `host`, `user`, `website`
 | `credentials.completeCapture` | Complete a pending server-initiated session credential capture (`credential:capture-request` event) with a typed success value or serialized RPC failure graph; callable only by the attached desktop shell. |
 | `credentials.audit` | Query the credential egress audit log (optionally filtered by provider/connection/caller/since, paged by limit/after). |
 
+## `deviceDriver`
+
+Test drivers: devices the person started so the account's system tests can drive them
+
+Authority principals: `code`, `user`
+
+| Method | Description |
+|--------|-------------|
+| `deviceDriver.register` | Offer this authenticated device as a driver of the given kind for the account's system tests. |
+| `deviceDriver.answer` | Settle one drive operation with its value or its complete failure. |
+| `deviceDriver.devices` | List the authenticated user's live device drivers. |
+| `deviceDriver.drive` | Run one operation on the account's registered driver of this kind and return its value. The call settles with the driver's answer, the driver's disconnect, or the caller's cancellation. |
+
 ## `docs`
 
 Agent-facing capability catalog: discover services and runtime APIs with typed schemas, access rules, and examples (results filtered to what the caller may invoke).

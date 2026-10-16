@@ -39,6 +39,12 @@ NS_ASSUME_NONNULL_BEGIN
 /// Links reach the host runtime's JavaScript through the Linking module once the host is ready.
 - (void)openURL:(NSURL *)url options:(NSDictionary *)options;
 - (void)continueUserActivity:(NSUserActivity *)activity;
+/// A launch surface (a quick action) asked to open `url`: delivered to the host runtime as a `link` event.
+- (void)emitLinkEvent:(NSString *)url;
+/// Deliver what the share extension left in the App Group inbox as `share-in` events.
+- (void)ingestShareInbox;
+/// Deliver one `HostRuntimeEvent` JSON string, held until the host runtime is ready.
+- (void)emitHostEventJSON:(NSString *)json;
 
 #pragma mark Host runtime (module VibestudioHostRuntime)
 

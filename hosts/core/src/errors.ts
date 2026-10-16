@@ -4,7 +4,8 @@ export type ClientLaunchErrorCode =
   | "unsupported-integrity"
   | "artifact-fetch-failed"
   | "invalid-host-descriptor"
-  | "stale-launch";
+  | "stale-launch"
+  | "artifact-not-cached";
 
 /** A launch failed after the server resolved a client: the host cannot (safely) run what it was given. */
 export class ClientLaunchError extends Error {

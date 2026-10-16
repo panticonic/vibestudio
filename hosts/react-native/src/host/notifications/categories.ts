@@ -6,7 +6,7 @@ import {
   NOTIFICATION_ACTION_IDS_INPUT_REQUIRED,
   NOTIFICATION_ACTION_IDS_STANDARD,
 } from "@vibestudio/shared/approvalContract";
-import { USER_INBOX_REPLY_CATEGORY, type UserInboxAction } from "@vibestudio/shared/userNotifications";
+import { USER_INBOX_REPLY_CATEGORY } from "@vibestudio/shared/userNotifications";
 
 export const APPROVAL_NOTIFICATION_CHANNEL_ID = "approvals";
 /** Escalated agent messages and other durable inbox entries (messaging plan §4.5). */
@@ -95,19 +95,6 @@ export function getAndroidNotificationActions(
   } catch {
     return fallback;
   }
-}
-
-/** The actions of a reply entry as notifee draws them on Android: each carries a reply field (`RemoteInput`). */
-export function androidReplyActions(actions: readonly UserInboxAction[]): Array<{
-  title: string;
-  pressAction: { id: string };
-  input: { placeholder: string; allowFreeFormInput: true };
-}> {
-  return actions.map((action) => ({
-    title: action.title,
-    pressAction: { id: action.id },
-    input: { placeholder: action.title, allowFreeFormInput: true as const },
-  }));
 }
 
 /** The id of the one reply action iOS can draw: its category is fixed at launch, so the push cannot name others. */

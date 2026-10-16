@@ -13,6 +13,7 @@
     ".": "./src/index.ts",
     "./protocol": "./src/protocol.ts",
     "./notificationsProtocol": "./src/notificationsProtocol.ts",
+    "./integrationProtocol": "./src/integrationProtocol.ts",
     "./native": "./src/native.ts",
     "./testing": "./src/testing.ts",
     "./polyfills": {

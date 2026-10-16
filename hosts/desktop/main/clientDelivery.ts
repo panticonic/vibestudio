@@ -1,4 +1,3 @@
-import { sha256Integrity, type ClientArtifactStore } from "@vibestudio/client-host-core";
 import type { ClientArtifactDescriptor } from "@vibestudio/workspace-contracts/clients";
 
 /**
@@ -12,8 +11,9 @@ import type { ClientArtifactDescriptor } from "@vibestudio/workspace-contracts/c
  *
  * This module is the pure half: the catalog of delivered builds and the
  * responder that answers a request from the verified store. It reads bytes
- * only by the integrity the server declared and verifies them again before
- * serving, so bytes that changed on disk after verification are never served.
+ * only by the integrity the server declared, through the connection process,
+ * which verifies them against it on every read (the one verification point), so
+ * bytes that changed on disk after download are never served.
  */
 
 export const CLIENT_SCHEME = "vs-client";
@@ -124,6 +124,11 @@ export class ClientBuildCatalog {
   }
 }
 
+/** Reads a cached artifact's bytes, verified against the integrity asked for. */
+export interface VerifiedArtifactReader {
+  readVerified(integrity: string): Promise<Uint8Array>;
+}
+
 /**
  * Answer a `vs-client://` request from the verified store. Unknown paths are
  * 404. Bytes that no longer match their declared integrity are never served:
@@ -131,7 +136,7 @@ export class ClientBuildCatalog {
  */
 export function createVerifiedClientResponder(
   catalog: ClientBuildCatalog,
-  store: Pick<ClientArtifactStore, "has" | "read">,
+  reader: VerifiedArtifactReader,
   onIntegrityFailure: (message: string) => void = () => {}
 ): (request: { url: string; method: string }) => Promise<Response> {
   return async (request) => {
@@ -141,17 +146,22 @@ export function createVerifiedClientResponder(
     const found = catalog.lookup(request.url);
     if (!found) return new Response("Client artifact not found", { status: 404 });
     const { artifact } = found;
-    if (!(await store.has(artifact.integrity))) {
-      return new Response("Client artifact is not in the verified cache", { status: 404 });
-    }
-    const bytes = await store.read(artifact.integrity);
-    const actual = await sha256Integrity(bytes);
-    if (actual !== artifact.integrity) {
-      const message =
-        `Refusing to serve ${artifact.path}: the cached bytes no longer match ` +
-        `their declared integrity ${artifact.integrity}`;
-      onIntegrityFailure(message);
-      return new Response(message, { status: 500 });
+    let bytes: Uint8Array;
+    try {
+      bytes = await reader.readVerified(artifact.integrity);
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (code === "artifact-not-cached") {
+        return new Response("Client artifact is not in the verified cache", { status: 404 });
+      }
+      if (code === "integrity-mismatch") {
+        const message =
+          `Refusing to serve ${artifact.path}: the cached bytes no longer match ` +
+          `their declared integrity ${artifact.integrity}`;
+        onIntegrityFailure(message);
+        return new Response(message, { status: 500 });
+      }
+      throw error;
     }
     const headers = new Headers({
       "content-type": artifact.contentType,

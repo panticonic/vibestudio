@@ -10,7 +10,6 @@ import type { RemoteTransportDiagnostics } from "@vibestudio/shared/types";
 import { ControlChannel, StreamReply } from "../connection/controlChannel.js";
 import type { ClientState } from "../connection/connectionProtocol.js";
 import type {
-  ClientPrincipalSessions,
   ConnectionStatus,
   HostServiceHandler,
   HostStreamHandler,
@@ -65,11 +64,10 @@ export class RemoteServerClient implements ServerClient {
   private readonly eventListeners = new Map<string, Set<(payload: never) => void>>();
   private readonly hostMethods = new Map<string, HostServiceHandler>();
   private readonly hostStreams = new Map<string, HostStreamHandler>();
-  private principalSessions: ClientPrincipalSessions | null = null;
   nudge?: () => void;
 
   constructor(
-    private readonly channel: ControlChannel,
+    private readonly owner: { readonly channel: ControlChannel },
     state: ClientState
   ) {
     this.state = state;
@@ -78,6 +76,11 @@ export class RemoteServerClient implements ServerClient {
         void this.channel.request("client.nudge", { handle: this.handle }).catch(() => undefined);
       };
     }
+  }
+
+  /** The control channel of the connection process currently serving this client. */
+  private get channel(): ControlChannel {
+    return this.owner.channel;
   }
 
   get handle(): number {
@@ -121,15 +124,30 @@ export class RemoteServerClient implements ServerClient {
     return handler({ args, signal });
   }
 
-  sessionEnded(caller: ScopedServerCaller, reason: string): void {
-    this.principalSessions?.sessionEnded(caller, reason);
+  /**
+   * The connection process was replaced and re-established this client under a
+   * new handle. The client the rest of main holds stays the same object: its
+   * subscriptions and published host methods are registered again, so callers
+   * see a connection that was lost and recovered, not a different client.
+   */
+  rebind(state: ClientState): void {
+    this.ended = null;
+    this.applyState(state);
+    for (const event of this.eventListeners.keys()) {
+      this.fireAndObserve(
+        this.channel.request("client.subscribe", { handle: this.handle, event }),
+        `subscribe to ${event}`
+      );
+    }
+    for (const method of this.hostMethods.keys()) this.registerHostMethod(method, false);
+    for (const method of this.hostStreams.keys()) this.registerHostMethod(method, true);
   }
 
-  grantConnection(principalId: string): Promise<string> {
-    if (!this.principalSessions) {
-      return Promise.reject(new Error("Client principal sessions are not admitted"));
-    }
-    return this.principalSessions.connectionGrant(principalId);
+  private registerHostMethod(method: string, stream: boolean): void {
+    this.fireAndObserve(
+      this.channel.request("client.expose", { handle: this.handle, method, stream }),
+      `expose ${method}`
+    );
   }
 
   /** The connection process ended: this client is finished, with the exit as the reason. */
@@ -281,29 +299,12 @@ export class RemoteServerClient implements ServerClient {
 
   exposeHostMethod(method: string, handler: HostServiceHandler): void {
     this.hostMethods.set(method, handler);
-    this.fireAndObserve(
-      this.channel.request("client.expose", { handle: this.handle, method, stream: false }),
-      `expose ${method}`
-    );
+    this.registerHostMethod(method, false);
   }
 
   exposeHostStream(method: string, handler: HostStreamHandler): void {
     this.hostStreams.set(method, handler);
-    this.fireAndObserve(
-      this.channel.request("client.expose", { handle: this.handle, method, stream: true }),
-      `expose ${method}`
-    );
-  }
-
-  setClientPrincipalSessions(sessions: ClientPrincipalSessions | null): void {
-    this.principalSessions = sessions;
-    this.fireAndObserve(
-      this.channel.request("client.principal-sessions", {
-        handle: this.handle,
-        enabled: sessions !== null,
-      }),
-      "set client principal sessions"
-    );
+    this.registerHostMethod(method, true);
   }
 
   close(): Promise<void> {
@@ -331,26 +332,33 @@ export class RemoteServerClient implements ServerClient {
 export class RemoteServerClients {
   private readonly clients = new Map<number, RemoteServerClient>();
 
-  constructor(private readonly channel: ControlChannel) {
+  private current: ControlChannel;
+
+  constructor(channel: ControlChannel) {
+    this.current = channel;
+    this.listen(channel);
+  }
+
+  get channel(): ControlChannel {
+    return this.current;
+  }
+
+  /** The connection process was replaced: follow its channel. Clients stay ended until rebound. */
+  attach(channel: ControlChannel): void {
+    this.current = channel;
+    this.listen(channel);
+  }
+
+  private listen(channel: ControlChannel): void {
     channel.on("client.status", (state: ClientState) =>
       this.clients.get(state.handle)?.applyState(state)
     );
     channel.on("client.event", (event: { handle: number; event: string; payload: unknown }) =>
       this.clients.get(event.handle)?.deliverEvent(event.event, event.payload)
     );
-    channel.on(
-      "client.session-ended",
-      (event: { handle: number; caller: ScopedServerCaller; reason: string }) =>
-        this.clients.get(event.handle)?.sessionEnded(event.caller, event.reason)
-    );
     channel.handle("client.recovery", ({ handle, kind }) => {
       const client = this.clients.get(handle);
       return client ? client.runRecovery(kind) : undefined;
-    });
-    channel.handle("clients.connection-grant", ({ handle, principalId }) => {
-      const client = this.clients.get(handle);
-      if (!client) throw new Error("This server client is no longer available");
-      return client.grantConnection(principalId);
     });
     channel.handle("host.call", ({ handle, method, args }, context) => {
       const client = this.clients.get(handle);
@@ -371,8 +379,16 @@ export class RemoteServerClients {
       );
     });
     channel.onClose((reason) => {
+      if (this.current !== channel) return;
       for (const client of this.clients.values()) client.end(reason);
     });
+  }
+
+  /** Re-establish `client` under the handle the new connection process gave it. */
+  rebind(client: RemoteServerClient, state: ClientState): void {
+    this.clients.delete(client.handle);
+    client.rebind(state);
+    this.clients.set(state.handle, client);
   }
 
   /** The client for a state the connection process reported, created once per handle. */
@@ -382,7 +398,7 @@ export class RemoteServerClients {
       existing.applyState(state);
       return existing;
     }
-    const client = new RemoteServerClient(this.channel, state);
+    const client = new RemoteServerClient(this, state);
     this.clients.set(state.handle, client);
     if (this.channel.closedReason) client.end(this.channel.closedReason);
     return client;

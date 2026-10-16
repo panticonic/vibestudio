@@ -37,6 +37,8 @@ export interface ClientWindowSpec {
   codeIdentity: ClientCodeIdentity;
   /** Workspace the client principal is registered in (the System workspace). */
   workspaceId: string;
+  /** A small window for one quick interaction (a global shortcut's intent), beside the client's own. */
+  compact?: boolean;
 }
 
 export interface ClientWindow {

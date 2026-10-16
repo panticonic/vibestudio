@@ -35,6 +35,12 @@ function generate(env: Record<string, string | undefined>, configuration = "Debu
 }
 
 describe("ios-entitlements", () => {
+  it("puts the app in the App Group its widget and share extension use", () => {
+    expect(generate({})).toContain(
+      "<key>com.apple.security.application-groups</key>\n\t<array>\n\t\t<string>group.$(VIBESTUDIO_IOS_BUNDLE_ID)</string>"
+    );
+  });
+
   it("keeps the iOS Podfile compatible with the pnpm workspace layout", () => {
     const podfile = fs.readFileSync(path.join(process.cwd(), "hosts/ios/Podfile"), "utf8");
     expect(podfile).toContain('require.resolve("react-native/scripts/react_native_pods.rb"');

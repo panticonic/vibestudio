@@ -13,7 +13,7 @@ import { Camera, useCameraDevice, useCodeScanner } from "react-native-vision-cam
 import { launchGateView } from "@vibestudio/shared/bootstrapLaunchGate";
 import { VibestudioLogo } from "../VibestudioLogo";
 import type { HostRuntime, HostUiState } from "./host/hostRuntime";
-import type { PinnableShortcut } from "./host/integration";
+import type { LaunchEntry } from "@vibestudio/client-host-core";
 
 function ActionButton({
   title,
@@ -132,7 +132,7 @@ function LaunchTimeline({ ui }: { ui: HostUiState }) {
 
 type ShortcutList =
   | { status: "loading" }
-  | { status: "ready"; shortcuts: PinnableShortcut[] }
+  | { status: "ready"; shortcuts: LaunchEntry[] }
   | { status: "failed"; message: string };
 
 /**
@@ -155,7 +155,7 @@ function HomeScreenShortcuts({ runtime }: { runtime: HostRuntime }) {
       active = false;
     };
   }, [runtime]);
-  const pin = (shortcut: PinnableShortcut) =>
+  const pin = (shortcut: LaunchEntry) =>
     runtime.pinShortcut(shortcut).then(
       (requested) =>
         setResult(
@@ -173,7 +173,7 @@ function HomeScreenShortcuts({ runtime }: { runtime: HostRuntime }) {
       {list.status === "ready"
         ? list.shortcuts.map((shortcut) => (
             <ActionButton
-              key={shortcut.shortcutId}
+              key={shortcut.link}
               title={shortcut.label}
               variant="secondary"
               onPress={() => void pin(shortcut)}

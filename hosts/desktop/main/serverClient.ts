@@ -214,8 +214,6 @@ export interface ServerClient {
     args: unknown[],
     options?: RpcCallOptions
   ): Promise<unknown>;
-  /** Admit client principal sessions on this connection (null withdraws them). */
-  setClientPrincipalSessions(sessions: ClientPrincipalSessions | null): void;
   /**
    * Stream a backend service method's `Response` on the session's native
    * transport. Remote Iroh sessions use one QUIC stream per request; loopback
@@ -267,6 +265,8 @@ export interface ServerClient {
  * these, because only it carries renderer traffic.
  */
 export interface ServerSessionTransports {
+  /** Admit client principal sessions on this connection (null withdraws them). */
+  setClientPrincipalSessions(sessions: ClientPrincipalSessions | null): void;
   openHostUiSession(signal?: AbortSignal): Promise<HostUiSession>;
   /** End one client window's own session of its principal. Idempotent. */
   releaseClientSession(caller: ScopedServerCaller): Promise<void>;

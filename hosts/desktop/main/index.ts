@@ -1,5 +1,6 @@
 import { workspaceLabel } from "../../../src/node/workspaceLabel.js";
 import { hubControlMethods } from "@vibestudio/service-schemas/hubControl";
+import { clientsMethods } from "@vibestudio/service-schemas/clients";
 import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import { RpcBoundaryError } from "@vibestudio/rpc/errors";
 import { CLOSE_TOKEN_REVOKED } from "@vibestudio/rpc/protocol/closeCodes";
@@ -116,7 +117,7 @@ const IS_DEVELOPMENT_CLIENT_EXECUTOR = startupInvocation.isDevelopmentClientExec
 // An executor appliance has no presentation surface. Reuse the established
 // headless startup containment, then stop initialization immediately after its
 // paired executor lease and direct-event subscriptions are live.
-const IS_HEADLESS_HOST = startupInvocation.isHeadlessHost || IS_DEVELOPMENT_CLIENT_EXECUTOR;
+const IS_HEADLESS_HOST = startupInvocation.isHeadlessHost;
 const {
   recoveredExitCode: recoveredLocalServerCrash,
   crashLoopExitCode: localServerCrashLoopCode,
@@ -195,14 +196,18 @@ import { getCentralDataPath } from "@vibestudio/env-paths";
 import { ClientMenus, parseClientMenuModel } from "./clientMenu.js";
 import { ClientWindows, type ClientWindow } from "./clientWindow.js";
 import { createElectronClientWindowFactory } from "./electronClientWindows.js";
-import { DesktopClientHost } from "./clientHost.js";
+import { DesktopClientHost, desktopHostDescriptor } from "./clientHost.js";
+import {
+  createDesktopIntegration,
+  type DesktopIntegration,
+} from "./integration/desktopIntegration.js";
 import { ClientHostState } from "./clientHostState.js";
 import { SupervisionRelay } from "./supervisionRelay.js";
+import { DesktopDriverSignals, startDesktopDeviceDriver } from "./testApiDevice.js";
+import { createElectronWindowText } from "./testApiDeviceWindows.js";
 import { LaunchGate } from "./launchGate.js";
 import { ClientBuildCatalog, createVerifiedClientResponder } from "./clientDelivery.js";
 import { installClientProtocol, registerClientScheme } from "./clientProtocol.js";
-import { NodeArtifactStore } from "@vibestudio/client-host-core/node";
-import { gatewayMethods } from "@vibestudio/service-schemas/gateway";
 import { PanelHostActions, isPanelHostAction } from "./panelHostActions.js";
 import {
   aboutPageWorkspaceRole,
@@ -227,6 +232,8 @@ import type { SessionConnection } from "./sessionConnection.js";
 import { ConnectionLink, type PortBinding } from "./connectionLink.js";
 import type { ClientBindingState } from "../connection/connectionProtocol.js";
 import { launchConnectionProcess, type ConnectionProcessHandle } from "./connectionProcess.js";
+import { ConnectionSupervisor } from "./connectionSupervisor.js";
+import { ClientLaunchLink } from "./clientLaunchLink.js";
 import { RendererPortBroker } from "./rendererPorts.js";
 import { ClientStateStore } from "./clientState.js";
 import { showNativeReplyNotification } from "./nativeNotificationReply.js";
@@ -420,8 +427,10 @@ function shouldAutoPairPendingDevIrohLink(): boolean {
 }
 
 /** The connection utility process, and main's end of the channel to it. */
-let connectionProcess: ConnectionProcessHandle | null = null;
+let connectionSupervisor: ConnectionSupervisor | null = null;
 let connectionLink: ConnectionLink | null = null;
+/** Client launch and verified artifact reads, which run in the connection process. */
+let clientLaunchLink: ClientLaunchLink | null = null;
 /** Hands each renderer document its port to the connection process. */
 let rendererPorts: RendererPortBroker | null = null;
 let panelCycler: import("./panelCycleController.js").PanelCycler | null = null;
@@ -600,8 +609,13 @@ const panelHost = new PanelHostWindow({
     if (hosting) clientWindows.notifyClosed(hosting);
   },
 });
+/** The command that starts this app: what launchers, jump lists and window identities run. */
+const APP_COMMAND: readonly string[] = app.isPackaged
+  ? [process.env["APPIMAGE"] ?? process.execPath]
+  : [process.execPath, app.getAppPath()];
 const clientWindows: ClientWindows = new ClientWindows(
   createElectronClientWindowFactory({
+    appCommand: APP_COMMAND,
     preloadPath: path.join(__dirname, "clientPreload.cjs"),
     iconPath: path.join(__dirname, "assets", "brand", "vibestudio-symbol-512.png"),
     menus: clientMenus,
@@ -626,8 +640,10 @@ const clientWindows: ClientWindows = new ClientWindows(
       });
     },
     closed: (window) => clientWindows.notifyClosed(window),
-    stateChanged: (window) =>
-      connectionLink?.updateClient(window.callerId, clientBindingState(window)),
+    stateChanged: (window) => {
+      connectionLink?.updateClient(window.callerId, clientBindingState(window));
+      driverSignals.changed(window);
+    },
     rendererGone: (window, reason) => {
       surfaceMainProcessFatal(
         `${window.spec.title} stopped`,
@@ -636,7 +652,8 @@ const clientWindows: ClientWindows = new ClientWindows(
     },
   }),
   {
-    closed: (window) => {
+    closed: (window, reason) => {
+      driverSignals.closed(window, reason);
       clientMenus.clear(window.windowId);
       void connectionLink?.releaseCaller(window.callerId).catch((error: unknown) => {
         log.warn(
@@ -644,11 +661,17 @@ const clientWindows: ClientWindows = new ClientWindows(
         );
       });
       clientHost?.windowClosed(window);
+      desktopIntegration?.windowsChanged();
     },
   }
 );
 let clientHost: DesktopClientHost | null = null;
+/** Launchers, OS menus, shortcuts, tray and badge: what clients project onto the OS. */
+let desktopIntegration: DesktopIntegration | null = null;
 const supervisionRelay = new SupervisionRelay();
+/** What the test device driver learns from the events this host already handles. */
+const driverSignals = new DesktopDriverSignals();
+let deviceDriver: { close(): Promise<void> } | null = null;
 
 function broadcastWorkspaceConnectionState(state: WorkspaceConnectionState): void {
   const sent = new Set<number>();
@@ -692,30 +715,63 @@ const pendingCorsApprovals = new Map<string, Promise<{ allowed: boolean; cacheab
  */
 function startConnection(): ConnectionLink {
   if (connectionLink) return connectionLink;
-  const launched = launchConnectionProcess({
-    fork: () =>
-      utilityProcess.fork(path.join(__dirname, "connectionProcess.cjs"), [], {
-        serviceName: "Vibestudio connection",
-        stdio: "inherit",
-      }),
-    createPorts: () => {
-      const { port1, port2 } = new MessageChannelMain();
-      return [port1, port2];
-    },
-  });
-  connectionProcess = launched;
-  connectionLink = new ConnectionLink(launched.channel);
+  const fork = (): ConnectionProcessHandle =>
+    launchConnectionProcess({
+      fork: () =>
+        utilityProcess.fork(path.join(__dirname, "connectionProcess.cjs"), [], {
+          serviceName: "Vibestudio connection",
+          stdio: "inherit",
+        }),
+      createPorts: () => {
+        const { port1, port2 } = new MessageChannelMain();
+        return [port1, port2];
+      },
+    });
+  const launched = fork();
+  const link = new ConnectionLink(launched.channel);
+  connectionLink = link;
+  clientLaunchLink = new ClientLaunchLink(launched.channel);
   // The process's exit is the authoritative end of the connection: every
   // pending call has already failed with its reason (the channel is failed by
-  // the same event), renderers learn the reason from here, and the connection
-  // error is shown rather than retried on a timer.
-  void launched.exited.then((exit) => {
-    rendererPorts?.connectionLost(exit.reason);
-    if (exit.requested) return;
-    log.error(`[connection] ${exit.reason}`);
-    workspaceConnection.failure(exit.reason);
-  });
-  return connectionLink;
+  // the same event). Windows learn the reason and stay open showing the
+  // connection state; one replacement is started and re-established per exit,
+  // never on a timer.
+  connectionSupervisor = new ConnectionSupervisor(
+    {
+      launch: fork,
+      reestablish: async (next) => {
+        clientLaunchLink?.attach(next.channel);
+        const last = link.lastEstablishArgs;
+        if (!last) throw new Error("The connection was never established");
+        await link.reestablish(next.channel, {
+          ...last,
+          prepareInitialWorkspace: false,
+          // A fresh pairing was consumed when it paired; the device now resumes by its credential.
+          pendingPairing: undefined,
+          pendingPairLabel: undefined,
+          storedRemote: loadStoredRemotePairing() ?? last.storedRemote,
+        });
+      },
+      lost: (exit) => {
+        rendererPorts?.connectionLost(exit.reason);
+        log.error(`[connection] ${exit.reason}; restarting it`);
+        workspaceConnection.transport("disconnected");
+        workspaceConnection.failure(exit.reason);
+      },
+      restored: () => {
+        rendererPorts?.connectionRestored();
+        workspaceConnection.transport("connected");
+      },
+      failed: (error, exit) => {
+        const reason = `${exit.reason}, and it could not be restarted: ${formatUnknownError(error)}`;
+        log.error(`[connection] ${reason}`);
+        workspaceConnection.failure(reason);
+        workspaceConnection.end();
+      },
+    },
+    launched
+  );
+  return link;
 }
 
 /** Stop serving renderer RPC before views and the connection are dismantled. */
@@ -1610,11 +1666,14 @@ function clientUpdateOffer(info: import("./clientUpdates.js").PendingClientUpdat
 
 const clientStateStore = new ClientStateStore(path.join(app.getPath("userData"), "client-state"));
 
-/** Verified client bytes live under userData, content-addressed by integrity. */
-const clientArtifactStore = new NodeArtifactStore(
-  path.join(app.getPath("userData"), "client-artifacts")
-);
 const clientCatalog = new ClientBuildCatalog();
+
+/** Re-read the launchable clients and put the OS surfaces in step with them. */
+function refreshIntegration(): void {
+  desktopIntegration?.integration.refresh().catch((error: unknown) => {
+    log.warn(`Could not refresh client integration: ${formatUnknownError(error)}`);
+  });
+}
 
 function showUserNotification(title: string, body: string): void {
   log.warn(`${title}: ${body}`);
@@ -1622,32 +1681,42 @@ function showUserNotification(title: string, body: string): void {
 }
 
 function createDesktopClientHost(conn: SessionConnection): DesktopClientHost {
-  const gateway = createTypedServiceClient("gateway", gatewayMethods, (service, method, args) =>
-    conn.serverClient.stream(service, method, args)
-  );
+  const launches = clientLaunchLink;
+  if (!launches) throw new Error("The desktop connection is not available");
   const host = new DesktopClientHost({
     hostVersion: app.getVersion(),
     call: (service, method, args) => conn.serverClient.call(service, method, args),
-    fetchArtifact: (route) => gateway.fetch({ path: route, method: "GET" }),
-    store: clientArtifactStore,
+    launches,
     catalog: clientCatalog,
     windows: clientWindows,
     supervision: supervisionRelay,
     state: new ClientHostState(path.join(app.getPath("userData"), "client-host-state.json")),
-    updateOffered: (clientId) => {
+    updatesChanged: (clientId) => {
+      // One host state, two views: the client's own offer, and the cross-client list.
       const offer = clientHost ? clientUpdateOffer(clientHost.pendingFor(clientId)) : null;
       for (const window of clientWindows.windowsOf(clientId))
         window.send("vibestudio:client-update", offer);
+      eventService.emit("client-updates-changed", { changedAt: Date.now() });
     },
     gate: launchGate,
     workspaceId: () => conn.workspaceId,
     notify: showUserNotification,
     clientStarted: (_client, window) => {
       if (window.hostsPanels) void initializePanelTreeOnce("client-launch").catch(() => undefined);
+      // A launch refreshes what the OS shows, like the server's announcement does.
+      refreshIntegration();
     },
+    clientStopped: (clientId) => {
+      desktopIntegration?.clientStopped(clientId);
+      desktopIntegration?.windowsChanged();
+    },
+    capabilitiesChanged: (clientId, capabilities) =>
+      desktopIntegration?.capabilitiesChanged(clientId, capabilities),
+    launchObserved: (observation) => driverSignals.launchObserved(observation),
   });
-  // Client sessions are granted by this host for the exact build it verified.
-  conn.serverClient.setClientPrincipalSessions(host.principalSessions());
+  // The connection process grants client sessions for the exact build it verified;
+  // an ended session (trust revoked, client retired) is reported here.
+  connectionLink?.onClientSessionEnded((caller, reason) => host.sessionEnded(caller, reason));
   host.follow();
   onClientLink((link) => {
     void host.openLink(link).catch(() => undefined);
@@ -1657,6 +1726,48 @@ function createDesktopClientHost(conn: SessionConnection): DesktopClientHost {
 }
 
 /** Launch the default client, or the one a link named when the app was opened by one. */
+/**
+ * The development client executor is also the person's desktop for system tests:
+ * it runs the real host with no client launched at startup, and a test
+ * launches, watches and closes clients through the device driver.
+ */
+async function startExecutorDeviceDriver(
+  conn: SessionConnection,
+  host: DesktopClientHost
+): Promise<void> {
+  const integration = () => assertPresent(desktopIntegration);
+  const link = assertPresent(connectionLink);
+  deviceDriver = await startDesktopDeviceDriver({
+    call: (service, method, args) => conn.serverClient.call(service, method, args),
+    transport: {
+      call: (service, method, args) => conn.serverClient.call(service, method, args),
+      onDirectEvent: (event, listener) =>
+        conn.serverClient.onDirectEvent(
+          event as import("@vibestudio/shared/events").EventName,
+          listener
+        ),
+    },
+    descriptor: host.descriptor,
+    hostPid: process.pid,
+    signals: driverSignals,
+    clientHost: host,
+    windows: clientWindows,
+    text: createElectronWindowText(),
+    launchers: {
+      install: (clientId) => integration().launchers.install(clientId),
+      records: () => integration().launchers.records(),
+      onChanged: (listener) => integration().launchers.onChanged(listener),
+    },
+    refreshIntegration: () => integration().integration.refresh(),
+    onSessionEnded: (listener) => link.onClientSessionEnded(listener),
+    onUndelivered: (error) =>
+      log.warn(`[device-driver] an answer was not delivered: ${formatUnknownError(error)}`),
+  });
+  log.info(
+    `[development] desktop device driver ready for workspace ${conn.workspaceId}; executor-only client ready`
+  );
+}
+
 function launchInitialClient(host: DesktopClientHost): void {
   const [link] = drainPendingClientLinks();
   const launching = link ? host.openLink(link) : host.launch({ default: true });
@@ -1976,7 +2087,12 @@ app.on("ready", async () => {
   // (panel partitions, persist:browser, etc.) via the session-created hook.
   const respondToClientRequest = createVerifiedClientResponder(
     clientCatalog,
-    clientArtifactStore,
+    {
+      readVerified: (integrity) => {
+        if (!clientLaunchLink) throw new Error("The desktop connection is not available");
+        return clientLaunchLink.readVerified(integrity);
+      },
+    },
     (message) => log.error(message)
   );
   installPermissionHandlers(session.defaultSession);
@@ -2316,6 +2432,7 @@ app.on("ready", async () => {
       releaseUpdateController?.handleNotificationAction(id, actionId),
     onSupervisionChanged: handleSupervisionChange,
     onApprovalPendingChanged: (pending) => {
+      driverSignals.approvalsChanged();
       approvalAttention?.handlePendingChanged({
         workspaceId: assertPresent(serverSession).workspaceId,
         workspaceLabel: "System",
@@ -2323,7 +2440,11 @@ app.on("ready", async () => {
       });
     },
     onApprovalResolved: (resolved) => clientHost?.approvalResolved(resolved),
-    onClientsChanged: () => clientHost?.clientsChanged(),
+    onClientsChanged: () => {
+      driverSignals.clientsChanged();
+      clientHost?.clientsChanged();
+      refreshIntegration();
+    },
   };
 
   try {
@@ -2491,14 +2612,6 @@ app.on("ready", async () => {
     dispatcher.registerService(desktopPhoneProvider);
     const { publishHostService } = await import("./hostServicePublisher.js");
     publishHostService(serverClientRef, dispatcher, desktopPhoneProvider);
-
-    if (IS_DEVELOPMENT_CLIENT_EXECUTOR) {
-      bootstrapWorkspaceRpcReady = true;
-      log.info(
-        `[development] executor-only client ready for workspace ${workspaceId}; presentation startup skipped`
-      );
-      return;
-    }
 
     performance.mark("startup:server-spawned");
     performance.mark("startup:server-connected");
@@ -3021,6 +3134,43 @@ app.on("ready", async () => {
       }
     );
 
+    {
+      const sessionConn = assertPresent(serverSession);
+      const clientsClient = createTypedServiceClient("clients", clientsMethods, (s, m, a) =>
+        sessionConn.serverClient.call(s, m, a)
+      );
+      const descriptor = desktopHostDescriptor(app.getVersion());
+      const icnsPath = path.join(process.resourcesPath, "icon.icns");
+      desktopIntegration = createDesktopIntegration({
+        userDataPath: app.getPath("userData"),
+        command: APP_COMMAND,
+        iconPath: path.join(__dirname, "assets", "brand", "vibestudio-symbol-512.png"),
+        ...(process.platform === "darwin" && app.isPackaged && fs.existsSync(icnsPath)
+          ? { icnsPath }
+          : {}),
+        askPreloadPath: path.join(__dirname, "askPreload.cjs"),
+        fetchSnapshot: () => clientsClient.integrationSnapshot(descriptor),
+        call: (s, m, a) => sessionConn.serverClient.call(s, m, a),
+        descriptor,
+        windows: clientWindows,
+        openIntentWindow: (clientId, intent) => {
+          if (!clientHost) throw new Error("The client host is not running");
+          return clientHost.openIntentWindow(clientId, intent);
+        },
+        openLink: (link) => {
+          if (!clientHost) throw new Error("The client host is not running");
+          return clientHost.openLink(link);
+        },
+        notify: showUserNotification,
+        // A driver has no person at the screen to answer the dialog: it confirms for them.
+        ...(IS_DEVELOPMENT_CLIENT_EXECUTOR ? { confirmLauncher: async () => true } : {}),
+      });
+      desktopIntegration.registerIpc(
+        (channel, handler) => ipcMain.handle(channel, handler),
+        requireClientWindow
+      );
+    }
+
     ipcMain.handle("vibestudio:getPanelInit", async (event) => {
       const callerId = tryResolveCallerId(event);
       if (!callerId) return null;
@@ -3165,7 +3315,8 @@ app.on("ready", async () => {
       panelHost.open("window:headless");
     } else {
       clientHost = createDesktopClientHost(conn);
-      launchInitialClient(clientHost);
+      if (IS_DEVELOPMENT_CLIENT_EXECUTOR) await startExecutorDeviceDriver(conn, clientHost);
+      else launchInitialClient(clientHost);
     }
 
     performance.mark("startup:workspace-window-attached");
@@ -3244,7 +3395,9 @@ app.on("ready", async () => {
 });
 
 app.on("window-all-closed", () => {
-  app.quit();
+  // The device driver outlives the windows a test opens and closes; its
+  // supervisor stops it.
+  if (!IS_DEVELOPMENT_CLIENT_EXECUTOR) app.quit();
 });
 
 // ── Quit policy for the desktop-owned local hub ──
@@ -3316,13 +3469,17 @@ app.on("will-quit", (event) => {
   const relaunchQuit = quitIntent.kind === "relaunch";
   const hasResourcesToClean =
     serverSession ||
-    connectionProcess ||
+    connectionSupervisor ||
     systemRuntime?.cdpHostProvider ||
     currentHostDevelopmentExecutor ||
     relaunchQuit;
   if (!hasResourcesToClean) return;
   isCleaningUp = true;
   event.preventDefault();
+  void deviceDriver?.close().catch((error: unknown) => {
+    log.warn(`Could not close the device driver: ${formatUnknownError(error)}`);
+  });
+  deviceDriver = null;
   void clientHost?.shutdown();
   approvalAttention?.dispose();
   approvalAttention = null;
@@ -3448,7 +3605,7 @@ app.on("will-quit", (event) => {
     })
     .then(async () => {
       // Last: the hub stop above runs through this process.
-      await connectionProcess?.dispose();
+      await connectionSupervisor?.dispose();
       console.log("[App] Shutdown complete");
       app.exit(quitIntent.kind === "relaunch" ? quitIntent.exitCode : 0);
     })

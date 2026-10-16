@@ -556,6 +556,7 @@ const preloadConfigs = [
   "displayCapturePreload",
   "shellOverlayPreload",
   "contentOverlayPreload",
+  "askPreload",
 ].map(createPreloadConfig);
 
 // Browser transport IIFE — used by PanelHttpServer to inject into panel HTML.

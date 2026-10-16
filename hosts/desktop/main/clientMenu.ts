@@ -33,7 +33,7 @@ const MENU_ROLES = [
 ] as const;
 
 /** Electron accelerator syntax: modifiers joined by `+`, then one key. */
-const ACCELERATOR =
+export const ACCELERATOR =
   /^(?:(?:CmdOrCtrl|CommandOrControl|Cmd|Command|Ctrl|Control|Alt|Option|Shift|Super|Meta)\+)*(?:[A-Za-z0-9]|F(?:[1-9]|1[0-9]|2[0-4])|Up|Down|Left|Right|Enter|Return|Tab|Space|Backspace|Delete|Escape|Esc|Home|End|PageUp|PageDown|Plus|[`~!@#$%^&*()_=[\]{};:'",.<>/?\\|-])$/u;
 
 export interface ClientMenuItem {
@@ -120,6 +120,23 @@ export const ClientMenuModelSchema: z.ZodType<ClientMenuModel> = z
       ctx.addIssue({ code: "custom", message: `A client menu has at most ${MAX_ITEMS} entries` });
     }
   });
+
+/** What a client contributes to the system tray: a tooltip and a menu. */
+export interface ClientTrayModel {
+  tooltip?: string;
+  items: ClientMenuItem[];
+}
+
+export const ClientTrayModelSchema: z.ZodType<ClientTrayModel> = z
+  .object({
+    tooltip: z.string().max(120).optional(),
+    items: z.array(ItemSchema).max(100),
+  })
+  .strict();
+
+export function parseClientTrayModel(value: unknown): ClientTrayModel {
+  return ClientTrayModelSchema.parse(value);
+}
 
 /** Validate what a renderer sent: a client's menu is untrusted input. */
 export function parseClientMenuModel(value: unknown): ClientMenuModel {
@@ -242,7 +259,7 @@ export function chromeOwnedItems(
 // Templates
 // ---------------------------------------------------------------------------
 
-function toElectron(
+export function toElectron(
   items: readonly ClientMenuItem[],
   dispatch: (id: string) => void
 ): MenuItemConstructorOptions[] {

@@ -14,6 +14,10 @@
  *
  * The launched client owns nothing of the developer's: its own HOME, XDG
  * directories, Chromium profile, D-Bus session, and keyring.
+ *
+ * The client is also the account's desktop device driver: it opens real client
+ * windows and answers the operations the client system tests send through the
+ * server's `deviceDriver` service (`pnpm system-test run --device desktop`).
  */
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
@@ -23,6 +27,7 @@ import * as path from "node:path";
 import { startEphemeralLinuxSecretService } from "./lib/linux-secret-service.mjs";
 import { tsImport } from "tsx/esm/api";
 import { runParentOwnedMain } from "./lib/parent-owned-main.mjs";
+import { mintDevicePairingLink } from "./lib/device-pairing-link.mjs";
 
 const { createDevelopmentClientLifetime } = await tsImport("./development-client-lifecycle.ts", import.meta.url);
 
@@ -40,48 +45,6 @@ function parseArguments(argv) {
   }
   if (!instanceId) throw new Error("usage: development-client-executor.mjs --instance ID");
   return { instanceId, ttlMs };
-}
-
-/** Mint one device invite from the running instance through its own CLI. */
-function mintPairingLink(instanceId, ttlMs, acquire) {
-  return new Promise((resolve, reject) => {
-    const child = acquire(() => spawn(
-      process.execPath,
-      [
-        path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs"),
-        "src/dev/runCli.ts",
-        "--instance",
-        instanceId,
-        "remote",
-        "pair-device",
-        "--ttl-ms",
-        String(ttlMs),
-        "--json",
-      ],
-      { cwd: repoRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" }
-    ));
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code !== 0) {
-        reject(new Error(`Could not mint a device invite for ${instanceId}: ${stderr || stdout}`));
-        return;
-      }
-      const line = stdout.trim().split("\n").at(-1) ?? "";
-      try {
-        const deepLink = JSON.parse(line)?.pairing?.deepLink;
-        if (typeof deepLink !== "string") throw new Error("no deep link in the invite");
-        resolve(deepLink);
-      } catch (error) {
-        reject(
-          new Error(`Device invite was not readable: ${error.message}: ${line.slice(0, 200)}`)
-        );
-      }
-    });
-  });
 }
 
 async function main(ownerSignal) {
@@ -117,7 +80,7 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
   process.once("SIGTERM", stop);
 
   try {
-    const deepLink = await mintPairingLink(parsed.instanceId, parsed.ttlMs, lifetime.acquire);
+    const deepLink = await mintDevicePairingLink(repoRoot, parsed.instanceId, parsed.ttlMs, lifetime.acquire);
     if (stopRequested) return;
     console.log(`[client-executor] minted a device invite on ${parsed.instanceId}`);
     secretService = await startEphemeralLinuxSecretService(
@@ -130,8 +93,18 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
 
     const userDataDir = path.join(tempRoot, "electron-user-data");
     const electron = path.join(repoRoot, "node_modules", "electron", "dist", "electron");
+    // The desktop device writes launchers under XDG_DATA_HOME and keeps its
+    // state under XDG_CONFIG_HOME; both belong to this executor, not to the
+    // developer's profile.
+    const home = path.join(tempRoot, "home");
+    await fsp.mkdir(home, { recursive: true });
     const env = {
       ...process.env,
+      HOME: home,
+      XDG_CONFIG_HOME: path.join(home, ".config"),
+      XDG_DATA_HOME: path.join(home, ".local", "share"),
+      XDG_CACHE_HOME: path.join(home, ".cache"),
+      XDG_STATE_HOME: path.join(home, ".local", "state"),
       NODE_ENV: "development",
       VIBESTUDIO_APP_ROOT: repoRoot,
       ELECTRON_DISABLE_GPU: "1",
@@ -171,7 +144,7 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
         console.log(`[client-executor] ${line}`);
         if (!ready && line.includes("executor-only client ready")) {
           ready = true;
-          console.log(`[client-executor] registered with instance ${parsed.instanceId}`);
+          console.log(`[client-executor] desktop device ready (registered with instance ${parsed.instanceId})`);
         }
       }
     };

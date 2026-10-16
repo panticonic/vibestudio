@@ -3497,6 +3497,10 @@ async function main() {
     workspaceMemberUserIds: listWorkspaceMemberUserIds,
   });
   container.registerRpc(notificationResult.definition);
+  {
+    const { createDeviceDriverService } = await import("./services/deviceDriverService.js");
+    container.registerRpc(createDeviceDriverService({ eventService }));
+  }
 
   // ── Shell presence service ──
   {

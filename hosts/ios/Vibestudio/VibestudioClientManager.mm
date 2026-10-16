@@ -1,6 +1,7 @@
 #import "VibestudioClientManager.h"
 #import "VibestudioArtifactStore.h"
 #import "VibestudioInstances.h"
+#import "Vibestudio-Swift.h"
 
 #import <React/RCTBridge.h>
 #import <React/RCTBundleURLProvider.h>
@@ -162,8 +163,28 @@ static NSString *VibestudioJSON(NSDictionary *object)
 
 - (void)emitHostEvent:(NSDictionary *)event
 {
-  NSString *json = VibestudioJSON(event);
-  [self whenReady:^{ [self->_hostSink deliverHostEvent:json]; }];
+  [self emitHostEventJSON:VibestudioJSON(event)];
+}
+
+- (void)emitHostEventJSON:(NSString *)json
+{
+  [self onMain:^{
+    [self whenReady:^{ [self->_hostSink deliverHostEvent:json]; }];
+  }];
+}
+
+- (void)emitLinkEvent:(NSString *)url
+{
+  [self emitHostEvent:@{ @"type": @"link", @"url": url }];
+}
+
+/// The share extension's items become `share-in` events once the host runtime
+/// is ready; an item's file is deleted when its event is handed over.
+- (void)ingestShareInbox
+{
+  [self onMain:^{
+    [self whenReady:^{ [VibestudioLaunchEvents ingestShareInbox]; }];
+  }];
 }
 
 #pragma mark Host instance and scenes
@@ -180,6 +201,9 @@ static NSString *VibestudioJSON(NSDictionary *object)
                                                      launchOptions:VibestudioHostLaunchOptions(launchOptions)];
     UIViewController *controller = [delegate createRootViewController];
     [delegate setRootView:rootView toRootViewController:controller];
+    // Native launch surfaces (App Intents) reach the host runtime through this
+    // sink, with or without a scene.
+    VibestudioLaunchEvents.sink = ^(NSString *json) { [self emitHostEventJSON:json]; };
     self->_hostDelegate = delegate;
     self->_hostFactory = factory;
     self->_hostRootView = rootView;

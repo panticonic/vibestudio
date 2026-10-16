@@ -8,4 +8,15 @@
         <item name="android:editTextBackground">@android:color/transparent</item>
         <item name="android:editTextColor">?android:attr/textColorPrimary</item>
     </style>
+
+    <style name="WidgetEntry">
+        <item name="android:layout_width">match_parent</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:ellipsize">end</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:paddingTop">6dp</item>
+        <item name="android:paddingBottom">6dp</item>
+        <item name="android:textColor">@color/widget_text</item>
+        <item name="android:textSize">14sp</item>
+    </style>
 </resources>

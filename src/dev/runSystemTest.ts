@@ -15,6 +15,7 @@ import {
   assertSystemTestPreparationResult,
   systemTestPreparationFailureDetail,
 } from "./systemTestPreparation.js";
+import { attachDeviceDrivers } from "./deviceExecutors.js";
 import {
   adoptSelfDevelopmentProjects,
   selfDevelopmentProjects,
@@ -47,6 +48,9 @@ Options:
                                  not-installed rather than run.
   --persistent                   Keep this instance's state across restarts
   --self-development             Adopt this checkout as projects/vibestudio
+  --device terminal|desktop      Attach that device driver for the command and stop it
+                                 afterwards; repeat for both. The client system tests
+                                 (client-*) drive a person's device through it.
   -h, --help                     Show this help without starting infrastructure
 `;
 
@@ -185,6 +189,11 @@ async function main(): Promise<void> {
   if (parsed.command.length === 0) {
     throw new Error("usage: pnpm system-test [--instance ID] COMMAND [ARGS...]");
   }
+  if (parsed.devices?.length && parsed.command.includes("--detach")) {
+    throw new Error(
+      "--device drivers live only as long as this command; a detached run would outlive them. Run it attached."
+    );
+  }
   const ensured = await ensureSystemTestInstance(repoRoot, parsed.instanceId, {
     explicitInstance: parsed.explicitInstance,
     persistent: parsed.persistent,
@@ -247,7 +256,32 @@ async function main(): Promise<void> {
     session && commandTakesScope(command) && !command.includes("--session")
       ? [...command, "--session", session]
       : command;
-  process.exitCode = await runCli(ensured.instance.id, scopedCommand);
+  // Device drivers are scoped to the command: attached once the instance is
+  // ready (so they pair into a prepared account), stopped on every exit path.
+  const drivers = parsed.devices?.length
+    ? await attachDeviceDrivers({
+        repoRoot,
+        instanceId: ensured.instance.id,
+        kinds: parsed.devices,
+      })
+    : null;
+  let commandFailure: unknown;
+  try {
+    process.exitCode = await runCli(ensured.instance.id, scopedCommand);
+  } catch (error) {
+    commandFailure = error;
+  }
+  try {
+    await drivers?.stop();
+  } catch (error) {
+    if (commandFailure === undefined) commandFailure = error;
+    else
+      commandFailure = new AggregateError(
+        [commandFailure, error],
+        "The command and device driver retirement both failed"
+      );
+  }
+  if (commandFailure !== undefined) throw commandFailure;
 }
 
 try {

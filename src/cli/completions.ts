@@ -83,9 +83,13 @@ _vibestudio() {
   local candidates=""
   if [[ "$cur" == -* ]]; then
     case "\${before[0]} \${before[1]}" in
-${flagEntries(model, "sub").map(([key, flags]) => `      "${key}") candidates="${flags}" ;;`).join("\n")}
+${flagEntries(model, "sub")
+  .map(([key, flags]) => `      "${key}") candidates="${flags}" ;;`)
+  .join("\n")}
       *) case "\${before[0]}" in
-${flagEntries(model, "group").map(([key, flags]) => `        "${key}") candidates="${flags}" ;;`).join("\n")}
+${flagEntries(model, "group")
+  .map(([key, flags]) => `        "${key}") candidates="${flags}" ;;`)
+  .join("\n")}
       esac ;;
     esac
   elif (( \${#before[@]} == 0 )); then
@@ -96,7 +100,7 @@ ${flagEntries(model, "group").map(([key, flags]) => `        "${key}") candidate
     if (( \${#before[@]} == 1 )); then
       candidates="$(${DYNAMIC("clients")})"
     elif (( \${#before[@]} == 2 )); then
-      candidates="$(${DYNAMIC("intents", ' "\${before[1]}"')})"
+      candidates="$(${DYNAMIC("intents", ' "${before[1]}"')})"
     fi
   elif (( \${#before[@]} == 1 )); then
     case "\${before[0]}" in
@@ -121,9 +125,13 @@ _vibestudio() {
   before=("\${(@)words[2,CURRENT-1]}")
   if [[ "$cur" == -* ]]; then
     case "$before[1] $before[2]" in
-${flagEntries(model, "sub").map(([key, flags]) => `      "${key}") candidates=(${flags}) ;;`).join("\n")}
+${flagEntries(model, "sub")
+  .map(([key, flags]) => `      "${key}") candidates=(${flags}) ;;`)
+  .join("\n")}
       *) case "$before[1]" in
-${flagEntries(model, "group").map(([key, flags]) => `        "${key}") candidates=(${flags}) ;;`).join("\n")}
+${flagEntries(model, "group")
+  .map(([key, flags]) => `        "${key}") candidates=(${flags}) ;;`)
+  .join("\n")}
       esac ;;
     esac
   elif (( $#before == 0 )); then
@@ -157,10 +165,14 @@ function __vibestudio_candidates
   set -l cur (commandline -ct)
   if string match -q -- '-*' $cur
     switch "$before[1] $before[2]"
-${flagEntries(model, "sub").map(([key, flags]) => `      case '${key}'\n        printf '%s\\n' ${flags}`).join("\n")}
+${flagEntries(model, "sub")
+  .map(([key, flags]) => `      case '${key}'\n        printf '%s\\n' ${flags}`)
+  .join("\n")}
       case '*'
         switch "$before[1]"
-${flagEntries(model, "group").map(([key, flags]) => `          case '${key}'\n            printf '%s\\n' ${flags}`).join("\n")}
+${flagEntries(model, "group")
+  .map(([key, flags]) => `          case '${key}'\n            printf '%s\\n' ${flags}`)
+  .join("\n")}
         end
     end
   else if test (count $before) -eq 0
@@ -241,7 +253,9 @@ the scripts call at Tab time.`,
       if (first === "dynamic") {
         const [kind, clientId] = rest;
         if (!DYNAMIC_KINDS.includes(kind as DynamicKind)) {
-          throw new UsageError(`Usage: vibestudio completions dynamic <${DYNAMIC_KINDS.join("|")}>`);
+          throw new UsageError(
+            `Usage: vibestudio completions dynamic <${DYNAMIC_KINDS.join("|")}>`
+          );
         }
         const out = dynamicCompletions(deps.state(), kind as DynamicKind, clientId);
         if (out.length > 0) process.stdout.write(`${out.join("\n")}\n`);

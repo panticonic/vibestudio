@@ -37,6 +37,7 @@ import { developmentMethods } from "./development.js";
 import { developmentNativeMethods } from "./developmentNative.js";
 import { mobileNativeMethods } from "./mobileNative.js";
 import { developmentClientExecutorMethods } from "./developmentClientExecutor.js";
+import { deviceDriverMethods } from "./deviceDriver.js";
 import { attachedHostsMethods } from "./attachedHosts.js";
 import { durableWorkMethods } from "./durableWork.js";
 import { durableWorkOwnerMethods } from "./durableWorkOwner.js";
@@ -160,6 +161,7 @@ const serviceTables: ServiceTable[] = [
     file: "developmentClientExecutor.ts",
     methods: developmentClientExecutorMethods,
   },
+  { service: "deviceDriver", file: "deviceDriver.ts", methods: deviceDriverMethods },
   { service: "durableWork", file: "durableWork.ts", methods: durableWorkMethods },
   {
     service: "durableWorkOwner",

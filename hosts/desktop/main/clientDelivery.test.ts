@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { sha256Integrity } from "@vibestudio/client-host-core";
+import { readVerifiedArtifact } from "../connection/clientLaunchHost.js";
 import { MemoryStore, bytesOf } from "../../core/src/testing.js";
 import {
   CLIENT_DOCUMENT_CSP,
@@ -28,8 +29,10 @@ async function fixture() {
   const catalog = new ClientBuildCatalog();
   catalog.register(build);
   const failures: string[] = [];
-  const respond = createVerifiedClientResponder(catalog, store, (message) =>
-    failures.push(message)
+  const respond = createVerifiedClientResponder(
+    catalog,
+    { readVerified: (integrity) => readVerifiedArtifact(store, integrity) },
+    (message) => failures.push(message)
   );
   return { store, build, catalog, respond, failures };
 }
@@ -89,13 +92,13 @@ describe("verified client delivery", () => {
 
   it("does not read the store for an unknown path", async () => {
     const { catalog } = await fixture();
-    const store = { has: vi.fn(), read: vi.fn() };
+    const reader = { readVerified: vi.fn() };
     const response = await createVerifiedClientResponder(
       catalog,
-      store
+      reader
     )(get("vs-client://browser/bk1/nope.js"));
     expect(response.status).toBe(404);
-    expect(store.has).not.toHaveBeenCalled();
+    expect(reader.readVerified).not.toHaveBeenCalled();
   });
 
   it("rejects paths that could name anything but a build-relative file", () => {

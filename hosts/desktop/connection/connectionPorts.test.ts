@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RpcEnvelope } from "@vibestudio/rpc";
 import { ControlChannel, controlChannelClosed, createMessagePortPair } from "./controlChannel.js";
+import { MemoryStore } from "../../core/src/testing.js";
 import { ConnectionHost } from "./connectionHost.js";
 import type { HostToRenderer, RendererToHost } from "./rendererPortProtocol.js";
 import { ConnectionLink, type ConnectionHandlers } from "../main/connectionLink.js";
@@ -99,6 +100,7 @@ async function setup(services: string[] = []) {
     channel: utilityChannel,
     establish: async () => connected,
     createCentralData: () => ({}) as never,
+    createArtifactStore: () => new MemoryStore(),
   });
   const link = new ConnectionLink(mainChannel);
   const dispatch = vi.fn(async (_ctx: unknown, service: string, method: string) => ({
@@ -324,20 +326,17 @@ describe("connection process", () => {
     release();
   });
 
-  it("reports a client session ending (trust-revoked, retired) to the host that granted it", async () => {
-    const { sessionConnection, workspace } = await setup();
+  it("admits client sessions itself and reports one ending (trust-revoked, retired) to main", async () => {
+    const { link, workspace } = await setup();
     const ended = vi.fn();
-    sessionConnection.serverClient.setClientPrincipalSessions({
-      connectionGrant: async (principal) => `grant:${principal}`,
-      sessionEnded: ended,
-    });
-    await tick();
+    link.onClientSessionEnded(ended);
     const principals = workspace.client.setClientPrincipalSessions.mock.calls.at(-1)?.[0] as {
       connectionGrant(id: string): Promise<string>;
       sessionEnded(caller: unknown, reason: string): void;
     };
-    await expect(principals.connectionGrant("client:chat:web:dev")).resolves.toBe(
-      "grant:client:chat:web:dev"
+    // No client was launched through this process, so it grants nobody a session.
+    await expect(principals.connectionGrant("client:chat:web:dev")).rejects.toThrow(
+      /No client launched/
     );
     principals.sessionEnded(
       { callerId: "client:chat:web:dev", callerKind: "client" },
@@ -358,5 +357,51 @@ describe("connection process", () => {
     await tick();
     expect(doc.received.some((m) => m.t === "closed")).toBe(true);
     expect(connected.close).toHaveBeenCalled();
+  });
+
+  it("re-establishes on a replacement process: the same proxies work again, subscriptions replay, recovery runs", async () => {
+    const { link, mainChannel, sessionConnection } = await setup();
+    const client = sessionConnection.serverClient;
+    const recovered: string[] = [];
+    client.onRecovery((kind) => void recovered.push(kind));
+    const seen = vi.fn();
+    client.onDirectEvent("clients:changed" as never, seen);
+    client.exposeHostMethod("m", async () => "hosted");
+    await tick();
+
+    // The first process dies: everything pending fails with its reason.
+    mainChannel.fail(controlChannelClosed("The connection process exited unexpectedly (code 9)"));
+    await expect(client.call("svc", "x", [])).rejects.toThrow(/exited unexpectedly/);
+    expect(client.isClosed()).toBe(true);
+
+    // A replacement process serves the same link.
+    const [mainPort2, utilityPort2] = createMessagePortPair();
+    const channel2 = new ControlChannel(mainPort2, "a", { endOnPortClose: false });
+    const second = fakeClient();
+    new ConnectionHost({
+      channel: new ControlChannel(utilityPort2, "b"),
+      establish: async () => session(second.client as unknown as ConnectedServerClient),
+      createCentralData: () => ({}) as never,
+      createArtifactStore: () => new MemoryStore(),
+    });
+    await link.reestablish(channel2, {
+      mode: null,
+      prepareInitialWorkspace: false,
+      appVersion: "1",
+      userDataPath: "/u",
+    });
+    await tick();
+
+    expect(link.channel).toBe(channel2);
+    expect(client.isClosed()).toBe(false);
+    await expect(client.call("svc", "again", [7])).resolves.toEqual({ called: 7 });
+    expect(second.client.call).toHaveBeenCalled();
+    expect(second.client.onDirectEvent).toHaveBeenCalledWith(
+      "clients:changed",
+      expect.any(Function)
+    );
+    expect(second.client.exposeHostMethod).toHaveBeenCalledWith("m", expect.any(Function));
+    // The server sessions are new: listeners replay their state.
+    expect(recovered).toEqual(["cold-recover"]);
   });
 });

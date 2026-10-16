@@ -108,6 +108,43 @@ const vibestudioClient = {
       return () => ipcRenderer.off("vibestudio:client-intent", listener);
     },
   },
+  /** `integration.install`: add or remove OS launchers for clients; the host confirms with the person. */
+  integration: {
+    install: (clientId: string) =>
+      ipcRenderer.invoke("vibestudio:integration:install", clientId) as Promise<{
+        installed: boolean;
+      }>,
+    remove: (clientId: string) =>
+      ipcRenderer.invoke("vibestudio:integration:remove", clientId) as Promise<void>,
+    installed: () => ipcRenderer.invoke("vibestudio:integration:installed") as Promise<string[]>,
+  },
+  /** `global-shortcut`: a system-wide chord that runs one of this client's intents. */
+  shortcut: {
+    register: (request: {
+      id: string;
+      accelerator: string;
+      intent: string;
+      params?: Record<string, string>;
+    }) => ipcRenderer.invoke("vibestudio:shortcut:register", request) as Promise<void>,
+    unregister: (id: string) =>
+      ipcRenderer.invoke("vibestudio:shortcut:unregister", id) as Promise<void>,
+    list: () => ipcRenderer.invoke("vibestudio:shortcut:list"),
+  },
+  /** `tray`: this client's system-tray icon and menu. */
+  tray: {
+    set: (model: { tooltip?: string; items: unknown[] }) =>
+      ipcRenderer.invoke("vibestudio:tray:set", model) as Promise<void>,
+    clear: () => ipcRenderer.invoke("vibestudio:tray:clear") as Promise<void>,
+    onAction(handler: (actionId: string) => void) {
+      const listener = (_event: IpcRendererEvent, actionId: string) => handler(actionId);
+      ipcRenderer.on("vibestudio:tray-action", listener);
+      return () => ipcRenderer.off("vibestudio:tray-action", listener);
+    },
+  },
+  /** `badge`: this client's share of the application icon's badge count. */
+  badge: {
+    set: (count: number) => ipcRenderer.invoke("vibestudio:badge:set", count) as Promise<void>,
+  },
   /** `panel-hosting`: what only the compositor can do to the panel surface. */
   panelHost: {
     run: (action: string) =>

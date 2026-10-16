@@ -21,6 +21,11 @@ import type { BridgeBodyChunk, BridgeStreamMessage, BridgeStreamOpen } from "@vi
 import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import type { SupervisionChange } from "@vibestudio/shared/events";
 import {
+  INTEGRATION_METHOD_CAPABILITY,
+  type IntegrationHostEvent,
+  type IntegrationHostMethods,
+} from "./integrationProtocol";
+import {
   NOTIFICATIONS_METHOD_CAPABILITY,
   type NotificationsHostEvent,
   type NotificationsHostMethods,
@@ -100,7 +105,7 @@ export interface UpdateOffer {
   change: SupervisionChange;
 }
 
-export interface ClientHostMethods extends NotificationsHostMethods {
+export interface ClientHostMethods extends NotificationsHostMethods, IntegrationHostMethods {
   "client.describe": { args: []; result: ClientDescription };
 
   /**
@@ -236,6 +241,7 @@ export const METHOD_CAPABILITY: Readonly<Record<ClientHostMethod, ClientCapabili
   "device.reset": "device-session",
   "device.setDevelopmentMode": "device-session",
   ...NOTIFICATIONS_METHOD_CAPABILITY,
+  ...INTEGRATION_METHOD_CAPABILITY,
 };
 
 // ---------------------------------------------------------------------------
@@ -262,7 +268,8 @@ export type ClientHostEvent =
   | { type: "update"; update: UpdateOffer }
   | { type: "intent"; intent: ClientIntent }
   | { type: "capabilities"; granted: ClientCapability[] }
-  | NotificationsHostEvent;
+  | NotificationsHostEvent
+  | IntegrationHostEvent;
 
 /** A failure the broker carries back to a client call, with the host's code. */
 export interface BrokerFailure {

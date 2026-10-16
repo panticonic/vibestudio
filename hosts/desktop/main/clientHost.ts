@@ -1,19 +1,11 @@
 import {
-  ClientArtifactCache,
-  ClientLauncher,
   ClientUpdateObserver,
   IntentLinkError,
   buildHostDescriptor,
   isClientLink,
   parseClientIntentLink,
-  principalGrantsOverCall,
   type Call,
-  type ClientArtifactFetch,
-  type ClientArtifactStore,
   type ClientUpdate,
-  type LaunchState,
-  type LaunchedClient,
-  type PrincipalGrants,
   type SupervisionEvents,
 } from "@vibestudio/client-host-core";
 import type { SupervisionChange } from "@vibestudio/shared/events";
@@ -36,10 +28,12 @@ import {
   type DeliveredBuild,
 } from "./clientDelivery.js";
 import { ClientHostState } from "./clientHostState.js";
+import type { ClientLaunches, RemoteLauncher } from "./clientLaunchLink.js";
+import type { LaunchedClientWire, LaunchStateWire } from "../connection/connectionProtocol.js";
 import { IntentInbox, type ClientIntent } from "./clientIntents.js";
 import type { PendingClientUpdateInfo, PendingClientUpdates } from "./clientUpdates.js";
 import type { ClientWindow, ClientWindowSpec, ClientWindows } from "./clientWindow.js";
-import type { ClientPrincipalSessions, ScopedServerCaller } from "./serverClient.js";
+import type { ScopedServerCaller } from "./serverClient.js";
 import type { LaunchGateStatus } from "../bootstrap/launchGateModel.js";
 
 const log = createDevLogger("ClientHost");
@@ -61,7 +55,20 @@ export const DESKTOP_IMPLEMENTED_CAPABILITIES: readonly ClientCapability[] = [
   "open-external",
   "theme",
   "devtools",
+  "integration.install",
+  "global-shortcut",
+  "tray",
+  "badge",
 ];
+
+/** What this host tells the server about itself: its ABI and the capabilities it implements. */
+export function desktopHostDescriptor(hostVersion: string): HostDescriptor {
+  return buildHostDescriptor({
+    host: "desktop",
+    hostVersion,
+    implemented: DESKTOP_IMPLEMENTED_CAPABILITIES,
+  });
+}
 
 /** The window layer's view of the launch gate: host UI that exists before any client does. */
 export interface LaunchGatePort {
@@ -74,11 +81,8 @@ export interface DesktopClientHostDeps {
   hostVersion: string;
   /** The device's session to the System workspace. */
   call: Call;
-  /** Fetch one artifact route through the device session (`gateway.fetch`). */
-  fetchArtifact: ClientArtifactFetch;
-  store: ClientArtifactStore;
-  /** Grants default to `auth.grantClientPrincipal` over `call`. */
-  grants?: PrincipalGrants;
+  /** Launch, artifact cache and grants, which run in the connection process. */
+  launches: ClientLaunches;
   windows: ClientWindows;
   catalog?: ClientBuildCatalog;
   supervision: SupervisionEvents;
@@ -87,11 +91,24 @@ export interface DesktopClientHostDeps {
   /** The System workspace id: the client principal is registered there. */
   workspaceId(): string;
   notify(title: string, message: string): void;
-  /** A newer build of a running client was announced and is waiting for the person. */
-  updateOffered?(clientId: string): void;
+  /** The pending updates changed: one was offered, taken, or retired. */
+  updatesChanged?(clientId: string): void;
   /** Called once a client has a window, before the gate closes. */
   clientStarted?(client: ReadyClient, window: ClientWindow): void | Promise<void>;
+  /** A client stopped running (its last window closed, or it was retired). */
+  clientStopped?(clientId: string): void;
+  /** The capabilities enforced for a running client changed. */
+  capabilitiesChanged?(clientId: string, capabilities: readonly ClientCapability[]): void;
+  /**
+   * A launch reached a state the host finished handling (a ready client has its
+   * window), or failed. `select` is the object the launch was started with.
+   */
+  launchObserved?(observation: LaunchObservation): void;
 }
+
+export type LaunchObservation =
+  | { select: ClientSelection; state: LaunchStateWire }
+  | { select: ClientSelection; failure: unknown };
 
 interface RunningClient {
   clientId: string;
@@ -106,9 +123,9 @@ interface RunningClient {
 
 interface LaunchSession {
   select: ClientSelection;
-  launcher: ClientLauncher;
+  launcher: RemoteLauncher;
   /** The state the gate is showing, so a decision made elsewhere can continue it. */
-  state: LaunchState | null;
+  state: LaunchStateWire | null;
   /** The handling of the latest state: delivery, activation, or its presentation. */
   processing: Promise<void>;
 }
@@ -122,8 +139,6 @@ interface LaunchSession {
 export class DesktopClientHost implements PendingClientUpdates {
   readonly descriptor: HostDescriptor;
   readonly catalog: ClientBuildCatalog;
-  private readonly cache: ClientArtifactCache;
-  private readonly grants: PrincipalGrants;
   private readonly running = new Map<string, RunningClient>();
   private readonly inbox = new IntentInbox();
   private readonly retiring = new Set<string>();
@@ -132,14 +147,8 @@ export class DesktopClientHost implements PendingClientUpdates {
   private releaseSupervision: (() => void) | null = null;
 
   constructor(private readonly deps: DesktopClientHostDeps) {
-    this.descriptor = buildHostDescriptor({
-      host: "desktop",
-      hostVersion: deps.hostVersion,
-      implemented: DESKTOP_IMPLEMENTED_CAPABILITIES,
-    });
+    this.descriptor = desktopHostDescriptor(deps.hostVersion);
     this.catalog = deps.catalog ?? new ClientBuildCatalog();
-    this.cache = new ClientArtifactCache(deps.store, deps.fetchArtifact);
-    this.grants = deps.grants ?? principalGrantsOverCall(deps.call);
   }
 
   /** Follow capability changes the server announces for running clients. */
@@ -159,9 +168,10 @@ export class DesktopClientHost implements PendingClientUpdates {
    * Resolves with the first state the server reported; a launch that waits on
    * a review or a build continues on events, never on a timer.
    */
-  async launch(select: ClientSelection): Promise<LaunchState> {
-    const launcher = this.newLauncher();
+  async launch(select: ClientSelection): Promise<LaunchStateWire> {
+    const launcher = this.deps.launches.create(this.descriptor);
     const session: LaunchSession = { select, launcher, state: null, processing: Promise.resolve() };
+    this.gating?.launcher.end();
     this.gating = session;
     launcher.subscribe((state) => {
       session.state = state;
@@ -174,6 +184,13 @@ export class DesktopClientHost implements PendingClientUpdates {
     } catch (error) {
       this.launchFailed(session, error);
       throw error;
+    } finally {
+      // A launch that reached a state nothing continues is over; one that waits
+      // on a review or a build stays until it is replaced or finished.
+      if (session.state?.state === "ready" || session.state?.state === "unavailable") {
+        session.launcher.end();
+        if (this.gating === session && session.state.state === "ready") this.gating = null;
+      }
     }
   }
 
@@ -233,7 +250,7 @@ export class DesktopClientHost implements PendingClientUpdates {
       throw new Error("There is no review waiting on the launch gate");
     }
     if (decision === "deny") {
-      await session.launcher.resolveApprovals(state.approvals, "deny");
+      await session.launcher.resolveApprovals("deny");
       // The review is answered: nothing waits on the gate until a new launch.
       session.state = null;
       this.deps.gate.present(null, {
@@ -244,45 +261,38 @@ export class DesktopClientHost implements PendingClientUpdates {
       return;
     }
     this.deps.gate.present(null, { status: "starting", reason: "Approval recorded. Starting..." });
-    await session.launcher.resolveApprovals(state.approvals, "once");
+    await session.launcher.resolveApprovals("once");
   }
 
-  private newLauncher(): ClientLauncher {
-    return new ClientLauncher({
-      call: this.deps.call,
-      descriptor: this.descriptor,
-      cache: this.cache,
-      grants: this.grants,
-    });
-  }
-
-  private async onLaunchState(session: LaunchSession, state: LaunchState): Promise<void> {
+  private async onLaunchState(session: LaunchSession, state: LaunchStateWire): Promise<void> {
     try {
       switch (state.state) {
         case "ready":
           await this.activate(state.launched);
           if (this.gating === session) this.gating = null;
-          return;
+          break;
         case "approval-required":
           this.deps.gate.present(null, { status: "approval-required", approvals: state.approvals });
-          return;
+          break;
         case "preparing":
           this.deps.gate.present(null, {
             status: "preparing",
             phase: state.phase,
             reason: state.reason,
           });
-          return;
+          break;
         case "unavailable":
           this.deps.gate.present(null, { status: "unavailable", reason: state.reason });
-          return;
+          break;
       }
+      this.deps.launchObserved?.({ select: session.select, state });
     } catch (error) {
       this.launchFailed(session, error);
     }
   }
 
   private launchFailed(session: LaunchSession, error: unknown): void {
+    this.deps.launchObserved?.({ select: session.select, failure: error });
     const reason = error instanceof Error ? error.message : String(error);
     log.warn(`Client launch failed: ${reason}`);
     if (this.gating === session) {
@@ -300,9 +310,9 @@ export class DesktopClientHost implements PendingClientUpdates {
    * Make a launched, verified client the one that runs: open its window, or
    * move its running windows to the new build, and deliver a foreground intent.
    */
-  private async activate(launched: LaunchedClient): Promise<void> {
+  private async activate(launched: LaunchedClientWire): Promise<void> {
     const { client } = launched;
-    const spec = await this.windowSpec(client, launched.grant.principalId);
+    const spec = await this.windowSpec(client, launched.principalId);
     const delivered: DeliveredBuild = {
       clientId: client.id,
       buildKey: client.buildKey,
@@ -364,7 +374,7 @@ export class DesktopClientHost implements PendingClientUpdates {
     };
     this.running.set(client.id, running);
     // A launch always yields the server's current build: an offer for another is stale.
-    this.deps.state.clearPending(client.id);
+    this.clearPending(client.id);
     try {
       const window = await this.deps.windows.open(spec);
       await this.deps.clientStarted?.(client, window);
@@ -392,7 +402,7 @@ export class DesktopClientHost implements PendingClientUpdates {
     running.title = client.title;
     running.builds.add(client.buildKey);
     running.observer.adopted(client.buildKey);
-    this.deps.state.clearPending(client.id);
+    this.clearPending(client.id);
     // Nothing loads the previous build once its windows have moved.
     running.builds.delete(previous);
     this.catalog.retire(client.id, previous);
@@ -457,7 +467,9 @@ export class DesktopClientHost implements PendingClientUpdates {
         running.client.artifacts.map((artifact) => artifact.integrity)
       );
     }
-    await this.cache.retain(retained);
+    await this.deps.launches.retain(
+      [...retained].map(([clientId, integrities]) => ({ clientId, integrities: [...integrities] }))
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -484,7 +496,13 @@ export class DesktopClientHost implements PendingClientUpdates {
       effectiveVersion: update.effectiveVersion,
       previousEffectiveVersion: running.client.effectiveVersion,
     });
-    this.deps.updateOffered?.(clientId);
+    this.deps.updatesChanged?.(clientId);
+  }
+
+  private clearPending(clientId: string): void {
+    const had = this.deps.state.pending().some((record) => record.clientId === clientId);
+    this.deps.state.clearPending(clientId);
+    if (had) this.deps.updatesChanged?.(clientId);
   }
 
   list(): PendingClientUpdateInfo[] {
@@ -536,27 +554,6 @@ export class DesktopClientHost implements PendingClientUpdates {
   // Trust and sessions
   // ---------------------------------------------------------------------------
 
-  /** The principal sessions the server connection admits and observes. */
-  principalSessions(): ClientPrincipalSessions {
-    return {
-      connectionGrant: async (principalId) => {
-        const running = this.runningByPrincipal(principalId);
-        if (!running) throw new Error(`No running client holds principal ${principalId}`);
-        const { client } = running;
-        const grant = await this.grants.acquire({
-          source: client.source,
-          buildKey: client.buildKey,
-          executionDigest: client.executionDigest,
-        });
-        if (grant.principalId !== principalId) {
-          throw new Error(`The server granted ${grant.principalId}, not ${principalId}`);
-        }
-        return grant.connectionGrant;
-      },
-      sessionEnded: (caller, reason) => this.sessionEnded(caller, reason),
-    };
-  }
-
   private runningByPrincipal(principalId: string): RunningClient | null {
     for (const running of this.running.values()) {
       if (running.principalId === principalId) return running;
@@ -570,7 +567,7 @@ export class DesktopClientHost implements PendingClientUpdates {
    * client. Either way the person is told, and the client is launched again
    * only if the server still offers it without what was withdrawn.
    */
-  private sessionEnded(caller: ScopedServerCaller, reason: string): void {
+  sessionEnded(caller: ScopedServerCaller, reason: string): void {
     if (this.shuttingDown) return;
     const running = this.runningByPrincipal(caller.callerId);
     if (!running) return;
@@ -622,6 +619,7 @@ export class DesktopClientHost implements PendingClientUpdates {
     running.client = { ...running.client, grantedCapabilities: next };
     for (const window of this.deps.windows.windowsOf(running.clientId))
       window.setCapabilities(next);
+    this.deps.capabilitiesChanged?.(running.clientId, next);
   }
 
   // ---------------------------------------------------------------------------
@@ -638,6 +636,7 @@ export class DesktopClientHost implements PendingClientUpdates {
 
   private forget(running: RunningClient): void {
     this.running.delete(running.clientId);
+    this.deps.clientStopped?.(running.clientId);
     for (const buildKey of running.builds) this.catalog.retire(running.clientId, buildKey);
     void running.observer.stop().catch((error: unknown) => {
       log.warn(`Could not stop observing ${running.clientId}: ${String(error)}`);
@@ -650,6 +649,28 @@ export class DesktopClientHost implements PendingClientUpdates {
   /** A client's renderer takes the intents that arrived before it mounted, then receives them live. */
   subscribeIntents(windowId: string, send: (intent: ClientIntent) => void): void {
     this.inbox.subscribe(windowId, send);
+  }
+
+  /**
+   * Run a foreground intent in a compact window of a running client, for a
+   * global shortcut: one more window of the client, small, beside its own. A
+   * client that is not running is launched with the intent; a client that hosts
+   * panels has one window only, which receives the intent.
+   */
+  async openIntentWindow(clientId: string, intent: ClientIntent): Promise<void> {
+    const running = this.running.get(clientId);
+    const base = this.deps.windows.windowsOf(clientId).at(-1);
+    if (!running || !base) {
+      await this.launch({ id: clientId, intent: intent.name, params: intent.params });
+      return;
+    }
+    if (base.hostsPanels) {
+      this.inbox.deliver(base.windowId, intent);
+      base.show();
+      return;
+    }
+    const window = await this.deps.windows.open({ ...base.spec, compact: true });
+    this.inbox.deliver(window.windowId, intent);
   }
 
   /** A client opened another window of itself, at a page of its own verified build. */

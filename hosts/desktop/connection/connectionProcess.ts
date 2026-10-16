@@ -7,6 +7,8 @@
  * when the control channel does, which is when main closes it or goes away.
  */
 
+import * as path from "node:path";
+import { NodeArtifactStore } from "@vibestudio/client-host-core/node";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { establishServerSession } from "../main/serverSession.js";
 import { ControlChannel, type MessagePortLike } from "./controlChannel.js";
@@ -32,6 +34,8 @@ parentPort.once("message", (event) => {
     channel,
     establish: establishServerSession,
     createCentralData: () => new CentralDataManager(),
+    createArtifactStore: (userDataPath) =>
+      new NodeArtifactStore(path.join(userDataPath, "client-artifacts")),
   });
   // The control channel ending is the end of this process's purpose: release
   // everything the connection owns, then exit.

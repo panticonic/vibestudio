@@ -109,4 +109,19 @@ describe("renderer port broker", () => {
       })
     );
   });
+
+  it("hands out ports again once a replacement connection process is established", async () => {
+    const { instance } = broker();
+    instance.connectionLost("The connection process exited unexpectedly (code 9)");
+    instance.connectionRestored();
+    const doc = document();
+    request(doc.event);
+    await vi.waitFor(() =>
+      expect(doc.frame.postMessage).toHaveBeenCalledWith(
+        RPC_PORT_GRANT_CHANNEL,
+        {},
+        expect.any(Array)
+      )
+    );
+  });
 });

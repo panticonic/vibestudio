@@ -1,4 +1,10 @@
 import {
+  clientIntentLink,
+  launchEntries,
+  textParamOf,
+  type SnapshotClient,
+} from "@vibestudio/client-host-core";
+import {
   clientIntents,
   type ClientIntentDecl,
 } from "@vibestudio/workspace-contracts/clients";
@@ -8,20 +14,9 @@ import {
  * (docs/client-hosts-and-clients-plan.md 4.7). Everything here is generic: it
  * reads declarations, never a client by name. Plain functions over listings
  * and snapshots so the platform halves (a pinned shortcut, a share target, a
- * Quick Settings tile) stay thin.
+ * Quick Settings tile, an App Intent) stay thin. Link grammar and the plain
+ * launch entries are `@vibestudio/client-host-core`'s, shared with every host.
  */
-
-/** `vibestudio://c/<id>/<intent>?<params>`, the link the OS hands back when the surface is used. */
-export function clientIntentLink(
-  id: string,
-  intent: string,
-  params: Readonly<Record<string, string>> = {}
-): string {
-  const query = Object.entries(params)
-    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
-    .join("&");
-  return `vibestudio://c/${encodeURIComponent(id)}/${encodeURIComponent(intent)}${query ? `?${query}` : ""}`;
-}
 
 /** Whether `mime` (parameters ignored) matches a pattern: exact, `type/*` or `*`. */
 export function mimeAccepted(patterns: readonly string[], mime: string): boolean {
@@ -33,12 +28,6 @@ export function mimeAccepted(patterns: readonly string[], mime: string): boolean
     if (wanted.endsWith("/*")) return type.startsWith(wanted.slice(0, -1));
     return type === wanted;
   });
-}
-
-/** The parameter an intent takes free text in: its first `text` parameter. */
-export function textParamOf(intent: Pick<ClientIntentDecl, "params">): string | null {
-  for (const [name, type] of Object.entries(intent.params ?? {})) if (type === "text") return name;
-  return null;
 }
 
 /** The slice of a client listing the routing below reads. */
@@ -84,14 +73,23 @@ export function pickShareTarget(
   return chosen && { id: chosen.listing.id, intent: chosen.intent, textParam: chosen.textParam };
 }
 
-/** The client that declares background intent `name`, preferring the device's default client. */
+/**
+ * The client that declares background intent `name`: the one a surface named
+ * (`clientId`, an App Intent bound to a client), otherwise the device's default
+ * client first.
+ */
 export function pickBackgroundIntent(
   listings: readonly ListedClient[],
-  name: string
+  name: string,
+  clientId?: string
 ): { id: string; intent: ClientIntentDecl } | null {
   const candidates = runnable(listings).flatMap((listing) =>
     listing.intents.flatMap((intent) =>
-      intent.kind === "background" && intent.name === name ? [{ listing, intent }] : []
+      intent.kind === "background" &&
+      intent.name === name &&
+      (clientId === undefined || listing.id === clientId)
+        ? [{ listing, intent }]
+        : []
     )
   );
   const chosen = preferDefault(candidates);
@@ -105,43 +103,83 @@ export function isForegroundIntent(listing: Pick<ListedClient, "intents">, inten
   );
 }
 
-/** One entry of the integration snapshot, as `clients.integrationSnapshot` returns it. */
-export interface SnapshotClient {
-  id: string;
-  title: string;
-  intents: readonly ClientIntentDecl[];
-  entries: Readonly<Record<string, ReadonlyArray<{ title: string; params: Record<string, string> }>>>;
-}
-
-/** A launcher the person can ask the OS to pin. */
-export interface PinnableShortcut {
-  /** Stable per (client, intent, params): pinning twice updates rather than duplicates. */
-  shortcutId: string;
-  clientId: string;
+/** One launchable item of a client, as native surfaces (shortcut menus, widgets, App Intents) receive it. */
+export interface LaunchItem {
+  intent: string;
   label: string;
   link: string;
 }
 
 /**
- * What can be pinned as a home-screen shortcut: a client's plain foreground
- * intents (`open` and any intent without parameters) and each dynamic entry of
- * a parameterized one. Intents that need input the person has not given
- * (share-in, intents with parameters and no entries) are not launchers.
+ * Everything native projects onto the OS, published whole after each refresh:
+ * Android dynamic shortcuts and the widget; iOS App Intents, quick actions,
+ * widgets and the share extension's routing. Native stores and renders it; it
+ * decides nothing a declaration did not.
  */
-export function pinnableShortcuts(clients: readonly SnapshotClient[]): PinnableShortcut[] {
-  return clients.flatMap((client) =>
-    clientIntents({ intents: [...client.intents] }).flatMap((intent): PinnableShortcut[] => {
-      if (intent.kind !== "foreground" || intent.accepts !== undefined) return [];
-      const label = intent.name === "open" ? client.title : `${client.title}: ${intent.title ?? intent.name}`;
-      const parameterless = Object.keys(intent.params ?? {}).length === 0;
-      if (parameterless) {
-        const link = clientIntentLink(client.id, intent.name);
-        return [{ shortcutId: link, clientId: client.id, label, link }];
+export interface LaunchSurfaces {
+  clients: Array<{
+    clientId: string;
+    title: string;
+    /** Plain foreground intents (`open` first). */
+    shortcuts: LaunchItem[];
+    /** The dynamic entries of parameterized foreground intents (recent conversations). */
+    recent: LaunchItem[];
+  }>;
+  /** Background intents that take free text (the `ask` family). */
+  background: Array<{
+    clientId: string;
+    clientTitle: string;
+    intent: string;
+    title: string;
+    textParam: string;
+  }>;
+  /** Foreground intents that accept shared items. */
+  shareIn: Array<{
+    clientId: string;
+    clientTitle: string;
+    intent: string;
+    textParam: string;
+    accepts: string[];
+  }>;
+}
+
+export function launchSurfaces(clients: readonly SnapshotClient[]): LaunchSurfaces {
+  const entries = new Map(launchEntries(clients).map((entry) => [entry.clientId, entry.entries]));
+  const surfaces: LaunchSurfaces = { clients: [], background: [], shareIn: [] };
+  for (const client of clients) {
+    const declared = clientIntents({ intents: [...client.intents] });
+    const dynamicIntents = new Set(
+      declared.filter((intent) => intent.dynamic !== undefined).map((intent) => intent.name)
+    );
+    const items = entries.get(client.id) ?? [];
+    const item = ({ intent, label, link }: (typeof items)[number]): LaunchItem => ({ intent, label, link });
+    surfaces.clients.push({
+      clientId: client.id,
+      title: client.title,
+      shortcuts: items.filter((entry) => !dynamicIntents.has(entry.intent)).map(item),
+      recent: items.filter((entry) => dynamicIntents.has(entry.intent)).map(item),
+    });
+    for (const intent of declared) {
+      const textParam = textParamOf(intent);
+      if (textParam === null) continue;
+      if (intent.kind === "background") {
+        surfaces.background.push({
+          clientId: client.id,
+          clientTitle: client.title,
+          intent: intent.name,
+          title: intent.title ?? intent.name,
+          textParam,
+        });
+      } else if (intent.accepts !== undefined) {
+        surfaces.shareIn.push({
+          clientId: client.id,
+          clientTitle: client.title,
+          intent: intent.name,
+          textParam,
+          accepts: [...intent.accepts],
+        });
       }
-      return (client.entries[intent.name] ?? []).map((entry) => {
-        const link = clientIntentLink(client.id, intent.name, entry.params);
-        return { shortcutId: link, clientId: client.id, label: entry.title, link };
-      });
-    })
-  );
+    }
+  }
+  return surfaces;
 }

@@ -4,11 +4,12 @@ package app.vibestudio.mobile
  * What the OS handed the host's ingress activity, reduced to the one thing the
  * host runtime's JavaScript acts on. Pure so it is unit tested without Android.
  *
- * Only `vibestudio://c/...` client links and shared text are ingress; the
- * pairing and panel links keep their own filter on [MainActivity].
+ * Only client links (`vibestudio://c/...` and the verified App Link form
+ * `https://vibestudio.app/c/...`) and shared text are ingress; the pairing and
+ * panel links keep their own filter on [MainActivity].
  */
 sealed class IngressIntent {
-    /** A `vibestudio://c/<id>/<intent>` link (a pinned shortcut, a launcher menu). */
+    /** A client link (a pinned shortcut, a launcher menu, a web link the OS verified as ours). */
     data class Link(val url: String) : IngressIntent()
 
     /** Text shared with `ACTION_SEND`. */
@@ -17,13 +18,13 @@ sealed class IngressIntent {
     companion object {
         const val ACTION_VIEW = "android.intent.action.VIEW"
         const val ACTION_SEND = "android.intent.action.SEND"
-        private const val CLIENT_LINK_PREFIX = "vibestudio://c/"
+        private val CLIENT_LINK_PREFIXES = listOf("vibestudio://c/", "https://vibestudio.app/c/")
 
         fun classify(action: String?, dataString: String?, mimeType: String?, sharedText: CharSequence?): IngressIntent? =
             when (action) {
                 ACTION_VIEW ->
                     dataString
-                        ?.takeIf { it.startsWith(CLIENT_LINK_PREFIX, ignoreCase = true) }
+                        ?.takeIf { link -> CLIENT_LINK_PREFIXES.any { link.startsWith(it, ignoreCase = true) } }
                         ?.let { Link(it) }
                 ACTION_SEND -> {
                     val text = sharedText?.toString()?.takeIf { it.isNotBlank() }

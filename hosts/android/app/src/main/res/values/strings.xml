@@ -3,4 +3,8 @@
     <string name="ask_tile_label">Ask</string>
     <string name="ask_tile_hint">Ask your workspace</string>
     <string name="ask_tile_send">Send</string>
+    <string name="widget_description">Jump into a conversation or ask a question</string>
+    <string name="widget_empty">Nothing to open yet</string>
+    <string name="conversations_channel_name">Conversations</string>
+    <string name="conversation_reply_label">Reply</string>
 </resources>

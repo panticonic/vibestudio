@@ -13,15 +13,17 @@ import notifee, {
 import * as Keychain from "react-native-keychain";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { NativeModules, Platform } from "react-native";
-import type {
-  DeviceIdPort,
-  DeviceNotification,
-  FirebaseMessagingPort,
-  HostNotificationsPorts,
-  NotificationEvent,
-  NotificationPermission,
-  NotifeePort,
-  RemoteMessage,
+import {
+  notifeeInboxDisplay,
+  type DeviceIdPort,
+  type DeviceNotification,
+  type FirebaseMessagingPort,
+  type HostNotificationsPorts,
+  type InboxDisplayPort,
+  type NotificationEvent,
+  type NotificationPermission,
+  type NotifeePort,
+  type RemoteMessage,
 } from "./hostNotifications";
 
 const DEVICE_ID_SERVICE = "vibestudio-push-device-id";
@@ -119,14 +121,54 @@ function firebaseConfigured(): boolean {
   return (host?.firebaseConfigured ?? host?.getConstants?.()?.firebaseConfigured) !== false;
 }
 
-/** Everything but `decide` and `replyToConversation`, which the host runtime implements over its workspace connections. */
+/**
+ * Android draws pushed inbox entries itself (`VibestudioConversationNotifications`):
+ * MessagingStyle conversation notifications with a long-lived shortcut, a
+ * bubble and a `RemoteInput` reply, none of which notifee can express. What
+ * the person does with them returns as a host-runtime `notification-event`.
+ */
+interface ConversationNotificationsNative {
+  display(spec: {
+    id: string;
+    title: string;
+    body: string;
+    priority: "normal" | "high";
+    actions: Array<{ id: string; title: string }>;
+    dataJson: string;
+    conversation: { link: string; tag: string; clientId: string; title: string } | null;
+  }): Promise<void>;
+  cancel(id: string): Promise<void>;
+}
+
+function androidInboxDisplay(): InboxDisplayPort {
+  const native = NativeModules["VibestudioConversationNotifications"] as
+    | ConversationNotificationsNative
+    | undefined;
+  if (!native) throw new Error("The VibestudioConversationNotifications native module is not installed");
+  return {
+    display: (notification) =>
+      native.display({
+        id: notification.id,
+        title: notification.title,
+        body: notification.body,
+        priority: notification.priority,
+        actions: notification.actions.map(({ id, title }) => ({ id, title })),
+        dataJson: JSON.stringify(notification.data),
+        conversation: notification.conversation,
+      }),
+    cancel: (id) => native.cancel(id),
+  };
+}
+
+/** Everything but what the host runtime implements over its workspace connections: `decide`, `replyToInbox`, `conversationLaunch`. */
 export function createNativeNotificationPorts(): Omit<
   HostNotificationsPorts,
-  "decide" | "replyToConversation"
+  "decide" | "replyToInbox" | "conversationLaunch"
 > {
   return {
     messaging: firebaseMessaging,
     notifee: notifeePort,
+    inbox: Platform.OS === "android" ? androidInboxDisplay() : notifeeInboxDisplay(notifeePort),
     store: AsyncStorage,
     deviceId: deviceIdPort,
     platform: Platform.OS === "ios" ? "ios" : "android",

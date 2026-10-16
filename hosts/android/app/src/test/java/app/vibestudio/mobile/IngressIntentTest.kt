@@ -14,7 +14,22 @@ class IngressIntentTest {
     }
 
     @Test
+    fun verifiedAppLinkIsForwardedAsLink() {
+        assertEquals(
+            IngressIntent.Link("https://vibestudio.app/c/chat/open-conversation#conversation=ch-1"),
+            IngressIntent.classify(
+                IngressIntent.ACTION_VIEW,
+                "https://vibestudio.app/c/chat/open-conversation#conversation=ch-1",
+                null,
+                null,
+            ),
+        )
+    }
+
+    @Test
     fun otherViewLinksAreNotIngress() {
+        assertNull(IngressIntent.classify(IngressIntent.ACTION_VIEW, "https://vibestudio.app/oauth/callback", null, null))
+        assertNull(IngressIntent.classify(IngressIntent.ACTION_VIEW, "https://vibestudio.app/cx/chat", null, null))
         assertNull(IngressIntent.classify(IngressIntent.ACTION_VIEW, "vibestudio://connect?x=1", null, null))
         assertNull(IngressIntent.classify(IngressIntent.ACTION_VIEW, "https://example.com/c/chat/open", null, null))
         assertNull(IngressIntent.classify(IngressIntent.ACTION_VIEW, null, null, null))

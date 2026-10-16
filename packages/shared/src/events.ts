@@ -137,6 +137,7 @@ export type EventName =
   | "notification:dismiss"
   | "notification:action"
   | "user-notifications-changed"
+  | "client-updates-changed"
   | "server-connection-changed"
   | "remote-transport-diagnostics-changed"
   | "server-health"
@@ -145,7 +146,9 @@ export type EventName =
   | "eval:run-event"
   | "development:run-event"
   | "development:client-launch-request"
-  | "development:client-stop-request";
+  | "development:client-stop-request"
+  | "development:device-drive-request"
+  | "development:device-drive-cancel";
 
 /**
  * Action button definition for notifications.
@@ -280,6 +283,10 @@ export interface EventPayloads {
     runId: string;
     childPid: number;
   };
+  /** One operation addressed to a registered device driver; answered with `answerDrive`. */
+  "development:device-drive-request": { callId: string; op: string; args: unknown };
+  /** The caller of an outstanding drive gave up; the driver ends the operation. */
+  "development:device-drive-cancel": { callId: string };
   "eval:run-event": {
     runId: string;
     scopeKey: string;
@@ -482,6 +489,12 @@ export interface EventPayloads {
   "notification:action": { id: string; actionId: string; text?: string };
   /** Opaque account-targeted nudge; consumers reconcile from the durable inbox. */
   "user-notifications-changed": { changedAt: number };
+  /**
+   * The desktop host's pending client updates changed (an update was offered,
+   * taken or retired). The host's list is the one source of truth: surfaces
+   * re-read `app.listPendingUpdates` on this event.
+   */
+  "client-updates-changed": { changedAt: number };
   "server-connection-changed": {
     /** Current connection status */
     status: "connected" | "connecting" | "disconnected";
@@ -619,6 +632,8 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "development:run-event",
   "development:client-launch-request",
   "development:client-stop-request",
+  "development:device-drive-request",
+  "development:device-drive-cancel",
   "system-theme-changed",
   "panel-tree-invalidated",
   "workspace-presence-changed",
@@ -663,6 +678,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "notification:dismiss",
   "notification:action",
   "user-notifications-changed",
+  "client-updates-changed",
   "server-connection-changed",
   "remote-transport-diagnostics-changed",
   "server-health",

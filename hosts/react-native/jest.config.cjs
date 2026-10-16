@@ -100,9 +100,11 @@ const { requireDevelopmentTemplateCheckouts } = require(
 
 const selectedTemplates = requireDevelopmentTemplateCheckouts(repoRoot);
 const templateRoots = selectedTemplates.checkouts;
+const { REACT_NATIVE_JEST_SUITE_ROOTS } = require("./jestSuiteRoots.cjs");
+const suiteRoots = REACT_NATIVE_JEST_SUITE_ROOTS.map((relative) =>
+  path.join(templateRoots.system, relative)
+);
 const mobileBrowserRoot = path.join(templateRoots.system, "clients", "mobile-browser");
-const chatMobileRoot = path.join(templateRoots.system, "clients", "chat-mobile");
-const clientKitNativeRoot = path.join(templateRoots.system, "packages", "client-kit-native");
 const hostModules = path.join(repoRoot, "node_modules");
 const packageSource = (name) => path.join(repoRoot, "packages", name, "src");
 
@@ -118,7 +120,7 @@ module.exports = (async () => {
     // module name still resolve against the host install. Only test discovery
     // points at userland.
     rootDir: __dirname,
-    roots: [mobileBrowserRoot, chatMobileRoot, clientKitNativeRoot],
+    roots: suiteRoots,
     // The kit's tests render through the same native mocks as the browser's.
     setupFilesAfterEnv: [path.join(mobileBrowserRoot, "jest.setup.ts")],
     // Babel resolves config from the file being compiled, which now lives in

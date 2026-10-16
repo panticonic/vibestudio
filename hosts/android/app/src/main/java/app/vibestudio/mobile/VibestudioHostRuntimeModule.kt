@@ -1,11 +1,6 @@
 package app.vibestudio.mobile
 
-import android.content.Intent
-import android.net.Uri
 import android.util.Base64
-import androidx.core.content.pm.ShortcutInfoCompat
-import androidx.core.content.pm.ShortcutManagerCompat
-import androidx.core.graphics.drawable.IconCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -15,6 +10,7 @@ import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
 import java.io.File
 import java.util.concurrent.Executors
+import org.json.JSONObject
 
 /**
  * `VibestudioHostRuntime`: the native half of the host runtime contract
@@ -87,24 +83,34 @@ class VibestudioHostRuntimeModule(
 
     /**
      * Ask the launcher to pin a shortcut that opens `link`. Resolves false when
-     * the launcher cannot pin shortcuts; the OS confirms with the person.
+     * the launcher cannot pin shortcuts; the OS confirms with the person, and
+     * the host runtime hears `shortcut-pinned` only if they agree.
      */
     @ReactMethod
     fun requestPinShortcut(shortcutId: String, label: String, link: String, promise: Promise) =
         reply(promise, "pin_shortcut_failed") {
+            LaunchShortcuts.requestPin(reactApplicationContext, shortcutId, label, link)
+        }
+
+    /** Replace the launcher menu, the widget and the stored surfaces with what the host runtime published. */
+    @ReactMethod
+    fun publishLaunchSurfaces(surfaces: ReadableMap, promise: Promise) =
+        done(promise, "publish_launch_surfaces_failed") {
             val context = reactApplicationContext
-            if (!ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
-                false
-            } else {
-                val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
-                    .setShortLabel(label)
-                    .setIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))
-                    .setIntent(
-                        Intent(Intent.ACTION_VIEW, Uri.parse(link)).setClass(context, IngressActivity::class.java),
-                    )
-                    .build()
-                ShortcutManagerCompat.requestPinShortcut(context, shortcut, null)
-            }
+            val parsed = LaunchSurfacesStore.save(context, JSONObject(surfaces.toHashMap()).toString())
+            LaunchShortcuts.publishDynamic(context, parsed)
+            LaunchWidgetProvider.refreshAll(context)
+        }
+
+    /** Disable pinned launchers of clients that no longer exist. */
+    @ReactMethod
+    fun disablePinnedShortcuts(shortcutIds: ReadableArray, message: String, promise: Promise) =
+        done(promise, "disable_pinned_shortcuts_failed") {
+            LaunchShortcuts.disable(
+                reactApplicationContext,
+                (0 until shortcutIds.size()).map { shortcutIds.getString(it) ?: "" },
+                message,
+            )
         }
 
     @ReactMethod

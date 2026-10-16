@@ -6,6 +6,7 @@ import android.os.Bundle
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate
 import com.facebook.react.ReactNativeHost
+import org.json.JSONObject
 
 /**
  * Shows one client instance in its own task (own Recents entry, labelled with
@@ -55,7 +56,15 @@ class ClientActivity : ReactActivity() {
         }
         boundHost = ClientInstances.attach(this, tag)
         super.onCreate(savedInstanceState)
-        if (boundHost == null) ClientInstances.requestRestore(tag, clientId)
+        val link = intent.getStringExtra(ClientInstances.EXTRA_LINK)
+        when {
+            // A bubble: the link opens the conversation in the client, starting
+            // the client into this activity when it is not running, and it is
+            // not brought to a task of its own.
+            link != null && savedInstanceState == null ->
+                HostIngress.forward(JSONObject().put("type", "link").put("url", link).put("focus", false))
+            boundHost == null -> ClientInstances.requestRestore(tag, clientId)
+        }
     }
 
     override fun onDestroy() {

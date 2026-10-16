@@ -71,6 +71,23 @@ describe("self-provisioning system-test instance", () => {
       selfDevelopment: false,
       command: ["doctor"],
     });
+    expect(
+      parseSystemTestLauncherArgs([
+        "run",
+        "client-launch-terminal",
+        "--device",
+        "terminal",
+        "--device=desktop",
+        "--device",
+        "terminal",
+      ])
+    ).toMatchObject({
+      devices: ["terminal", "desktop"],
+      command: ["run", "client-launch-terminal"],
+    });
+    expect(() => parseSystemTestLauncherArgs(["run", "--device", "phone"])).toThrow(
+      /terminal or desktop/
+    );
     expect(parseSystemTestLauncherArgs(["list"])).toEqual({
       instanceId: "system-test",
       explicitInstance: false,

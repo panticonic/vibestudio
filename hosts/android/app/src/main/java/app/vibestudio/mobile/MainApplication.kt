@@ -26,6 +26,7 @@ class MainApplication : Application(), ReactApplication {
                 PackageList(this).packages.apply {
                     add(VibestudioMobileHostPackage())
                     add(VibestudioHostRuntimePackage())
+                    add(VibestudioConversationNotificationsPackage())
                     add(OAuthLoopbackPackage())
                     add(VibestudioIrohPackage())
                 }

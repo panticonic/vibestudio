@@ -4,6 +4,10 @@ import {
   ClientUpdateObserver,
   buildHostDescriptor,
   parseClientIntentLink,
+  clientIntentLink,
+  launchEntries,
+  textParamOf,
+  type LaunchEntry,
   invokeBackgroundIntent,
   isClientLink,
   principalGrantsOverCall,
@@ -22,6 +26,9 @@ import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval"
 import { createTypedRpcServiceClient } from "@vibestudio/shared/typedRpcServiceClient";
 import { channelClientRpcMethods } from "@vibestudio/service-schemas/channel";
 import { createRpcMethodCaller } from "@vibestudio/shared/rpcMethods";
+import { createGadServiceClient } from "@vibestudio/service-schemas/clients/gadServiceClient";
+import type { PushUserInboxDataPayload } from "@vibestudio/shared/userNotifications";
+import type { NotificationsHostEvent } from "@vibestudio/rn-client-api/notificationsProtocol";
 import { mainRpcMethod } from "@vibestudio/service-schemas/mainRpc";
 import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import { parsePanelLocationLink } from "@vibestudio/shared/panelLocation";
@@ -33,6 +40,7 @@ import type {
   UpdateOffer,
 } from "@vibestudio/rn-client-api/protocol";
 import {
+  clientPrincipalId,
   isClientCapability,
   type ClientCapability,
   type ClientSelection,
@@ -43,14 +51,16 @@ import type { DeviceConnection, DevicePorts } from "./deviceConnection";
 import { WorkspacePipes, createSessionOpeners } from "./hostConnections";
 import {
   isForegroundIntent,
+  launchSurfaces,
   pickBackgroundIntent,
   pickShareTarget,
-  pinnableShortcuts,
-  textParamOf,
-  type PinnableShortcut,
 } from "./integration";
 import type { HostState } from "./hostState";
-import type { HostNotifications } from "./notifications/hostNotifications";
+import type {
+  ConversationLaunch,
+  HostNotifications,
+  ReplyOutcome,
+} from "./notifications/hostNotifications";
 import type { BackgroundApprovalDecision } from "./notifications/actionQueue";
 import type {
   ClientStopReason,
@@ -59,6 +69,8 @@ import type {
   NativeClientBundle,
 } from "./nativeHostRuntime";
 import { createStore, type Store } from "./store";
+import { BrokerError } from "./ports";
+import type { InstalledLauncher } from "@vibestudio/rn-client-api/integrationProtocol";
 
 /** The capabilities this host binary implements (a subset of the catalog for android and ios). */
 export const MOBILE_HOST_CAPABILITIES: readonly ClientCapability[] = [
@@ -71,7 +83,16 @@ export const MOBILE_HOST_CAPABILITIES: readonly ClientCapability[] = [
   "clipboard",
   "open-external",
   "browser-import",
+  "integration.install",
 ];
+
+/**
+ * The foreground intent a conversation notification opens, and its parameter
+ * (the channel id). A client that wants conversation notifications, bubbles
+ * and notification presses routed to it declares exactly this.
+ */
+export const CONVERSATION_INTENT = "open-conversation";
+export const CONVERSATION_PARAM = "conversation";
 
 /** What the host's own screen shows (pairing, review, messages); a running client has its own screen. */
 export interface HostUiState {
@@ -138,6 +159,8 @@ export interface HostRuntimePorts {
     | "focusClient"
     | "showHostSurface"
     | "requestPinShortcut"
+    | "publishLaunchSurfaces"
+    | "disablePinnedShortcuts"
     | "respond"
     | "reject"
     | "emit"
@@ -232,6 +255,9 @@ export class HostRuntime {
    */
   async start(): Promise<void> {
     await this.ports.state.load();
+    this.releaseNotificationEvents = this.ports.notifications.onEvent((event) =>
+      this.deliverNotificationEvent(event)
+    );
     await this.ports.notifications.start();
     this.releaseNative = this.ports.onNativeEvent((event) => this.onNativeEvent(event));
     // Links, shares and background intents reach the host whichever screen is
@@ -267,12 +293,15 @@ export class HostRuntime {
   }
 
   private releaseLinks: (() => void) | null = null;
+  private releaseNotificationEvents: (() => void) | null = null;
 
   async stop(): Promise<void> {
     this.releaseNative?.();
     this.releaseNative = null;
     this.releaseLinks?.();
     this.releaseLinks = null;
+    this.releaseNotificationEvents?.();
+    this.releaseNotificationEvents = null;
     this.live = false;
     this.beforeLive.length = 0;
     await this.teardownDevice("closed");
@@ -356,6 +385,8 @@ export class HostRuntime {
     ]);
     // A decision taken while no connection was available is sent now.
     await this.ports.notifications.drain();
+    // What the OS shows of this device's clients is brought up to date at connect.
+    this.refreshIntegration();
   }
 
   // ---------------------------------------------------------------------------
@@ -363,7 +394,7 @@ export class HostRuntime {
   // ---------------------------------------------------------------------------
 
   /** A link reached the host (deep link, scanner, paste, share). Returns whether the host handled it. */
-  async handleLink(url: string): Promise<boolean> {
+  async handleLink(url: string, focus = true): Promise<boolean> {
     const { links } = this.ports;
     if (links.isConnectLink(url)) {
       if (await links.consumeReplay(url)) return true;
@@ -402,7 +433,7 @@ export class HostRuntime {
     if (isClientLink(url)) {
       try {
         const request = parseClientIntentLink(url);
-        await this.openClientIntent(request.id, { name: request.intent, params: request.params });
+        await this.openClientIntent(request.id, { name: request.intent, params: request.params }, focus);
       } catch (error) {
         this.patch({ message: errorMessage(error) });
       }
@@ -552,6 +583,7 @@ export class HostRuntime {
 
   /** The server changed which clients exist or what is built: continue a launch that was preparing. */
   private async onClientsChanged(): Promise<void> {
+    this.refreshIntegration();
     const active = this.activeLaunch;
     if (!active) return;
     try {
@@ -667,6 +699,11 @@ export class HostRuntime {
       state: this.ports.state,
       device: this.ports.deviceCapabilities,
       notifications: this.ports.notifications.handlers,
+      integration: {
+        install: (id) => this.installLauncher(id),
+        list: () => this.ports.state.launchers(),
+        remove: (id) => this.removeLaunchers(id, "This launcher was removed."),
+      },
       intent,
       deliver: (event: ClientHostEvent) => {
         void this.ports.native.emit(tag(), encodeRpcJson(event)).catch((error: unknown) => {
@@ -730,6 +767,7 @@ export class HostRuntime {
       throw error;
     }
     await this.retainBuilds();
+    this.smoke(`${reloadTag && previous ? "client-reloaded" : "client-running"}.${launched.client.id}`);
     this.patch({
       phase: "running",
       busy: false,
@@ -823,6 +861,7 @@ export class HostRuntime {
     const running = this.running.get(tag);
     if (!running) return;
     this.running.delete(tag);
+    this.smoke(`client-stopped.${running.instance.clientId}`);
     const failures: unknown[] = [];
     for (const step of [
       () => running.observer.stop(),
@@ -933,7 +972,7 @@ export class HostRuntime {
    * A link can only reach intents the client declares as foreground; nothing a
    * link carries can invoke a background intent.
    */
-  private async openClientIntent(id: string | null, intent: ClientIntent): Promise<void> {
+  private async openClientIntent(id: string | null, intent: ClientIntent, focus = true): Promise<void> {
     const listed = (await this.listClients()).filter((listing) => listing.runtime === "react-native");
     const declaring = listed.filter((listing) => isForegroundIntent(listing, intent.name));
     const chosen = id
@@ -946,15 +985,15 @@ export class HostRuntime {
           : `No client on this device handles "${intent.name}".`
       );
     }
-    await this.deliverIntent(chosen.id, intent);
+    await this.deliverIntent(chosen.id, intent, focus);
   }
 
   /** Hand the intent to the running client, or launch the client with it. */
-  private async deliverIntent(id: string, intent: ClientIntent): Promise<void> {
+  private async deliverIntent(id: string, intent: ClientIntent, focus = true): Promise<void> {
     const running = [...this.running.values()].find((entry) => entry.instance.clientId === id);
     if (running) {
       running.instance.deliverIntent(intent);
-      await this.ports.native.focusClient(running.tag);
+      if (focus) await this.ports.native.focusClient(running.tag);
       return;
     }
     await this.launch({ id, intent: intent.name, params: intent.params }, null);
@@ -973,8 +1012,8 @@ export class HostRuntime {
    * the failure of the intent is shown the same way, because the person asked
    * from a surface (a tile) that has nowhere else to say it.
    */
-  private async runBackgroundIntent(name: string, text: string): Promise<void> {
-    const picked = pickBackgroundIntent(await this.listClients(), name);
+  private async runBackgroundIntent(name: string, text: string, clientId?: string): Promise<void> {
+    const picked = pickBackgroundIntent(await this.listClients(), name, clientId);
     if (!picked) throw new Error(`No client on this device declares the background intent "${name}".`);
     const title = picked.intent.title ?? name;
     const textParam = textParamOf(picked.intent);
@@ -998,50 +1037,181 @@ export class HostRuntime {
   }
 
   /** What the person can pin to the home screen: launchers for the clients this device runs. */
-  async pinnableShortcuts(): Promise<PinnableShortcut[]> {
+  async pinnableShortcuts(): Promise<LaunchEntry[]> {
+    return launchEntries((await this.integrationSnapshot()).clients).flatMap((client) => client.entries);
+  }
+
+  /**
+   * Ask the launcher to pin a shortcut. The OS confirms with the person; the
+   * result says whether the launcher accepted the request at all. That the
+   * person agreed is the launcher's `shortcut-pinned` event, which records it.
+   */
+  pinShortcut(entry: LaunchEntry): Promise<boolean> {
+    return this.ports.native.requestPinShortcut(entry.link, entry.label, entry.link);
+  }
+
+  /** `integration.install`: ask for the `open` launcher of a client this device can run. */
+  private async installLauncher(id: string): Promise<{ outcome: "requested" | "unsupported" }> {
+    const open = clientIntentLink(id, "open");
+    const shortcut = (await this.pinnableShortcuts()).find(
+      (candidate) => candidate.clientId === id && candidate.link === open
+    );
+    if (!shortcut) {
+      throw new BrokerError("UNKNOWN_CLIENT", `This device has no client "${id}" to add a launcher for.`);
+    }
+    return { outcome: (await this.pinShortcut(shortcut)) ? "requested" : "unsupported" };
+  }
+
+  /** The launcher confirmed a pinned shortcut: remember it, and tell the clients that may care. */
+  private async onShortcutPinned(launcher: { shortcutId: string; label: string; link: string }) {
+    const request = parseClientIntentLink(launcher.link);
+    await this.ports.state.recordLauncher({
+      launcherId: launcher.shortcutId,
+      clientId: request.id,
+      label: launcher.label,
+      link: launcher.link,
+    });
+    this.smoke(`launcher-pinned.${request.id}`);
+    this.announceLaunchers();
+  }
+
+  /** Disable and forget the recorded launchers of one client. */
+  private async removeLaunchers(clientId: string, message: string): Promise<void> {
+    const mine = this.ports.state.launchers().filter((launcher) => launcher.clientId === clientId);
+    if (mine.length === 0) return;
+    await this.ports.native.disablePinnedShortcuts(
+      mine.map((launcher) => launcher.launcherId),
+      message
+    );
+    for (const launcher of mine) await this.ports.state.forgetLauncher(launcher.launcherId);
+    this.smoke(`launcher-disabled.${clientId}`);
+    this.announceLaunchers();
+  }
+
+  private announceLaunchers(): void {
+    const launchers: InstalledLauncher[] = this.ports.state.launchers();
+    for (const running of this.running.values()) running.instance.announceLaunchers(launchers);
+  }
+
+  /**
+   * Bring what the OS shows of this device's clients up to date: publish the
+   * launch surfaces (shortcut menus, widgets, App Intents) and disable the
+   * launchers of clients the server no longer declares. Runs at connect and on
+   * the server's `clients:changed`, one refresh after another so the newest
+   * state always lands last; never on a timer.
+   */
+  private refreshIntegration(): void {
+    this.integrationRefresh = this.integrationRefresh
+      .then(async () => {
+        if (!this.connection) return;
+        const [listings, snapshot] = await Promise.all([
+          this.listClients(),
+          this.integrationSnapshot(),
+        ]);
+        const present = new Set(listings.map((listing) => listing.id));
+        const retired = new Set(
+          this.ports.state
+            .launchers()
+            .map((launcher) => launcher.clientId)
+            .filter((id) => !present.has(id))
+        );
+        for (const id of retired) {
+          await this.removeLaunchers(id, "This app was removed from your workspace.");
+        }
+        await this.ports.native.publishLaunchSurfaces(launchSurfaces(snapshot.clients));
+        this.smoke("launch-surfaces-published");
+      })
+      .catch((error: unknown) => {
+        console.warn("[mobile-host] refreshing launch surfaces failed", error);
+      });
+  }
+
+  private integrationRefresh: Promise<void> = Promise.resolve();
+
+  private integrationSnapshot() {
     const clients = createTypedServiceClient(
       "clients",
       clientsMethods,
       this.callOf(this.requireConnection())
     );
-    const snapshot = await clients.integrationSnapshot(this.descriptor());
-    return pinnableShortcuts(snapshot.clients);
+    return clients.integrationSnapshot(this.descriptor());
   }
 
   /**
-   * Ask the launcher to pin a shortcut. The OS confirms with the person; the
-   * result says whether the launcher accepted the request at all.
+   * Post `text`, as the person, into the conversation a pushed message belongs
+   * to (the reply typed into its notification; no client needs to run), then
+   * acknowledge the durable inbox entry as the device. Uses the device's shared
+   * connection to the push's workspace and releases it afterwards. A reply that
+   * arrives while the device is still connecting waits for that bring-up to
+   * settle; if it settles without a connection, its reason is the error. Once
+   * the text is sent a failure to acknowledge is reported in the outcome, not
+   * thrown: the caller must not send the text again.
    */
-  pinShortcut(shortcut: PinnableShortcut): Promise<boolean> {
-    return this.ports.native.requestPinShortcut(shortcut.shortcutId, shortcut.label, shortcut.link);
-  }
-
-  /**
-   * Post `text`, as the person, into a conversation of a workspace: the reply
-   * typed into a pushed message's notification (no client needs to run). Uses
-   * the device's shared connection to that workspace and releases it
-   * afterwards. A reply that arrives while the device is still connecting
-   * waits for that bring-up to settle; if it settles without a connection, its
-   * reason is the error.
-   */
-  async replyToConversation(
-    scope: { workspaceId: string },
-    channelTargetId: string,
-    text: string
-  ): Promise<void> {
+  async replyToInbox(entry: PushUserInboxDataPayload, text: string): Promise<ReplyOutcome> {
+    if (!entry.channelTargetId) throw new Error("This message has no conversation to reply to.");
     if (!this.pipes) await this.bringUp(false);
     const pipes = this.pipes;
     if (!pipes) throw new Error(this.ui.get().message || "This device is not connected.");
-    const connection = await pipes.acquire(scope.workspaceId);
+    const connection = await pipes.acquire(entry.workspaceId);
     try {
       await createRpcMethodCaller(
         connection.rpc,
-        channelTargetId,
+        entry.channelTargetId,
         channelClientRpcMethods
       )("sendAsCaller", [text]);
+      try {
+        // `acknowledged: false` means the entry was no longer pending: already read.
+        await createGadServiceClient(connection.rpc).call("acknowledgeUserNotification", {
+          id: entry.notificationId,
+        });
+        return { acknowledged: true };
+      } catch (error) {
+        return { acknowledged: false, reason: errorMessage(error) };
+      }
     } finally {
-      await pipes.release(scope.workspaceId);
+      await pipes.release(entry.workspaceId);
     }
+  }
+
+  /**
+   * The client intent that shows a conversation: the foreground intent
+   * `open-conversation` that takes a `conversation` parameter (the channel id),
+   * of the first client on this device that declares one. Null when none does,
+   * or the device is not connected.
+   */
+  async conversationLaunch(channelId: string): Promise<ConversationLaunch | null> {
+    const deviceId = this.connection?.launch.deviceId;
+    if (!deviceId) return null;
+    const listing = (await this.listClients()).find(
+      (candidate) =>
+        candidate.runtime === "react-native" &&
+        candidate.unavailableReason === undefined &&
+        candidate.intents.some(
+          (intent) =>
+            intent.kind === "foreground" &&
+            intent.name === CONVERSATION_INTENT &&
+            intent.params?.[CONVERSATION_PARAM] !== undefined
+        )
+    );
+    if (!listing) return null;
+    return {
+      link: clientIntentLink(listing.id, CONVERSATION_INTENT, { [CONVERSATION_PARAM]: channelId }),
+      tag: clientPrincipalId(listing.id, "react-native", deviceId),
+      clientId: listing.id,
+      title: listing.title,
+    };
+  }
+
+  /** A notification event for the running clients that may see it; true when one took it. */
+  private deliverNotificationEvent(event: NotificationsHostEvent): boolean {
+    let delivered = false;
+    for (const running of this.running.values()) {
+      if (running.instance.capabilities.includes("notifications")) {
+        running.instance.deliver(event);
+        delivered = true;
+      }
+    }
+    return delivered;
   }
 
   // ---------------------------------------------------------------------------
@@ -1072,6 +1242,7 @@ export class HostRuntime {
         const running = this.running.get(event.tag);
         if (!running) return;
         this.running.delete(event.tag);
+        this.smoke(`client-stopped.${running.instance.clientId}`);
         void (async () => {
           await running.observer.stop().catch(() => undefined);
           await running.instance.dispose().catch(() => undefined);
@@ -1095,7 +1266,15 @@ export class HostRuntime {
         return;
       }
       case "link": {
-        this.whenLive(() => this.handleLink(event.url).then(() => undefined));
+        this.whenLive(() => this.handleLink(event.url, event.focus !== false).then(() => undefined));
+        return;
+      }
+      case "shortcut-pinned": {
+        void this.guarded(() => this.onShortcutPinned(event));
+        return;
+      }
+      case "notification-event": {
+        void this.ports.notifications.handleInboxEvent(event);
         return;
       }
       case "share-in": {
@@ -1103,7 +1282,7 @@ export class HostRuntime {
         return;
       }
       case "background-intent": {
-        this.whenLive(() => this.runBackgroundIntent(event.name, event.text));
+        this.whenLive(() => this.runBackgroundIntent(event.name, event.text, event.clientId));
         return;
       }
     }

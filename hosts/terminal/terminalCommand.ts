@@ -353,7 +353,11 @@ async function planClient(
       const clients = createTypedServiceClient("clients", clientsMethods, call);
       const listings = await clients.list(descriptor);
       syncClientIndex(shimContext(context), listings);
-      const listing = listings.find((candidate) => candidate.id === request.id);
+      // A client id can exist once per runtime (`chat`); a terminal runs the terminal one.
+      const listing =
+        listings.find(
+          (candidate) => candidate.id === request.id && candidate.runtime === "terminal"
+        ) ?? listings.find((candidate) => candidate.id === request.id);
       if (!listing) {
         throw new UsageError(
           `No client "${request.id}" is available in this terminal. See \`vibestudio clients list\`.`

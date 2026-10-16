@@ -15,6 +15,7 @@ import {
 } from "./scripts/lib/userland-dependency-projection";
 import { retireUserlandProjectionProcess } from "./scripts/lib/userland-projection-process-owner";
 import { runWithOwnedCleanup } from "./scripts/lib/owned-cleanup.mjs";
+import { REACT_NATIVE_JEST_SUITE_ROOTS } from "./hosts/react-native/jestSuiteRoots.cjs";
 import {
   exactPairTestPaths,
   exactPairTestsFor,
@@ -294,8 +295,7 @@ export default defineConfig(async (): Promise<UserConfig> => {
               ...excludedIntegrationTestsFor(template),
               ...vitestSharedConfig.test.exclude,
               // Jest suites (React Native mocks); hosts/react-native/jest.config.cjs runs them.
-              `${workspaceGlob}/clients/mobile-browser/**`,
-              `${workspaceGlob}/packages/client-kit-native/**`,
+              ...REACT_NATIVE_JEST_SUITE_ROOTS.map((root) => `${workspaceGlob}/${root}/**`),
               `${workspaceGlob}/**/*.browser.test.ts`,
               `${workspaceGlob}/**/*.browser.test.tsx`,
               // These files use @workspace/test-runtime and run in workerd,

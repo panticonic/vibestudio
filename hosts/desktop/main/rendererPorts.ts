@@ -69,6 +69,11 @@ export class RendererPortBroker {
     this.holders.clear();
   }
 
+  /** A replacement connection process is established: documents may ask for their port again. */
+  connectionRestored(): void {
+    this.lost = null;
+  }
+
   private async grant(event: IpcMainEvent): Promise<void> {
     const frame = event.senderFrame;
     const contents = event.sender;

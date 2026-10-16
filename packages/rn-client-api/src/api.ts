@@ -6,6 +6,7 @@ import type {
   ClientIntent,
   UpdateOffer,
 } from "./protocol";
+import type { InstalledLauncher, InstallLauncherOutcome } from "./integrationProtocol";
 import type {
   DisplayedNotification,
   LocalNotification,
@@ -100,6 +101,17 @@ export interface ClientBrowserImportApi {
   releaseArchive(handle: string): Promise<void>;
 }
 
+/** `integration.install`: launchers for clients on this device's home screen. */
+export interface ClientIntegrationApi {
+  /** Ask the OS to add the launcher of client `id`; the person confirms in the OS's own UI. */
+  install(id: string): Promise<{ outcome: InstallLauncherOutcome }>;
+  list(): Promise<InstalledLauncher[]>;
+  /** Disable the launchers of client `id`. */
+  remove(id: string): Promise<void>;
+  /** The set of confirmed launchers changed (the person agreed, or a client was retired). */
+  onChange(listener: (launchers: readonly InstalledLauncher[]) => void): () => void;
+}
+
 /**
  * The complete host API of ABI rn-host-6. Every method that needs a capability
  * fails with the host's `CAPABILITY_NOT_GRANTED` unless the instance holds it;
@@ -117,6 +129,7 @@ export interface RnClientApi {
   readonly clipboard: { setString(text: string): Promise<void> };
   readonly openExternal: (url: string) => Promise<void>;
   readonly browserImport: ClientBrowserImportApi;
+  readonly integration: ClientIntegrationApi;
   readonly device: {
     /** Forget this device's pairing; every client is torn down and the host returns to pairing. */
     reset(): Promise<void>;
@@ -154,6 +167,11 @@ export async function createRnClientApi(channel: BrokerChannel): Promise<RnClien
   const tokenListeners = new Set<(token: string) => void>();
   hub.ofType("notification-token", (event) => {
     for (const listener of [...tokenListeners]) listener(event.token);
+  });
+
+  const launcherListeners = new Set<(launchers: readonly InstalledLauncher[]) => void>();
+  hub.ofType("integration-launchers", (event) => {
+    for (const listener of [...launcherListeners]) listener(event.launchers);
   });
 
   const deps = { channel, hub };
@@ -266,6 +284,15 @@ export async function createRnClientApi(channel: BrokerChannel): Promise<RnClien
       readEntry: (handle, name, offset, maxBytes) =>
         channel.request("browserImport.readEntry", handle, name, offset, maxBytes),
       releaseArchive: (handle) => channel.request("browserImport.releaseArchive", handle),
+    },
+    integration: {
+      install: (id) => channel.request("integration.install", { id }),
+      list: () => channel.request("integration.list"),
+      remove: (id) => channel.request("integration.remove", { id }),
+      onChange(listener) {
+        launcherListeners.add(listener);
+        return () => launcherListeners.delete(listener);
+      },
     },
     device: {
       reset: () => channel.request("device.reset"),

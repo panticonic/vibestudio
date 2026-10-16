@@ -10,6 +10,8 @@ import type {
 import type { ConnectedStartupMode } from "../main/startupMode.js";
 import type { NativeIpcCaller } from "./uiSessions.js";
 import type { ConnectPairing } from "@vibestudio/iroh-transport";
+import type { LaunchState, LaunchedClient } from "@vibestudio/client-host-core";
+import type { ClientSelection, HostDescriptor } from "@vibestudio/workspace-contracts/clients";
 
 /**
  * The control vocabulary between the Electron main process and the connection
@@ -93,7 +95,12 @@ export interface MainToConnection {
   "client.expose": { handle: number; method: string; stream: boolean };
   "client.nudge": { handle: number };
   "client.close": { handle: number };
-  "client.principal-sessions": { handle: number; enabled: boolean };
+  "launch.start": { launchId: number; descriptor: HostDescriptor; select: ClientSelection };
+  "launch.clients-changed": { launchId: number };
+  "launch.resolve-approvals": { launchId: number; decision: "once" | "deny" };
+  "launch.end": { launchId: number };
+  "launch.retain": { retained: RetainedClientBuild[] };
+  "artifacts.read": { integrity: string };
   "ports.bind": { binding: NativeIpcCaller & PortBindingState };
   "ports.update": { callerId: string; client: ClientBindingState };
   "ports.release": { callerId: string };
@@ -102,6 +109,21 @@ export interface MainToConnection {
   "ports.revoke-ui": { callerId: string };
   "ports.deliver-shell": { workspaceId: string; event: string; payload: unknown };
   "catalog.invalidate": { workspaceId: string };
+}
+
+/**
+ * What the launcher reports to main. The one-use connection grant stays in the
+ * connection process, which is the only place a grant is redeemed.
+ */
+export type LaunchedClientWire = Omit<LaunchedClient, "grant"> & { principalId: string };
+export type LaunchStateWire =
+  | Exclude<LaunchState, { state: "ready" }>
+  | { state: "ready"; launched: LaunchedClientWire };
+
+/** The verified artifacts a running client's builds still need cached. */
+export interface RetainedClientBuild {
+  clientId: string;
+  integrities: string[];
 }
 
 export interface ClientCall {
@@ -145,7 +167,6 @@ export interface ConnectionToMain {
   "host.panel-lease": { callerId: string };
   "host.call": { handle: number; method: string; args: unknown[] };
   "host.stream": { handle: number; method: string; args: unknown[] };
-  "clients.connection-grant": { handle: number; principalId: string };
   "client.recovery": { handle: number; kind: "resubscribe" | "cold-recover" };
 }
 
@@ -179,7 +200,9 @@ export interface ConnectionEvents {
   "credential-save-failed": RpcFailure;
   "client.status": ClientState;
   "client.event": { handle: number; event: string; payload: unknown };
-  "client.session-ended": { handle: number; caller: ScopedServerCaller; reason: string };
+  "launch.state": { launchId: number; state: LaunchStateWire };
+  /** A hosted client principal's session ended for good (`trust-revoked`, `retired`, ...). */
+  "clients.session-ended": { caller: ScopedServerCaller; reason: string };
   "cdp-token": { workspaceId: string; token: string };
   "host.observe-failure": {
     workspaceId: string;

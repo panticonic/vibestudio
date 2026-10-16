@@ -29,6 +29,8 @@
  * are registered in a client instance only when `panel-hosting` is granted.
  * Starting a client runs the component `CLIENT_ROOT_COMPONENT`.
  */
+import type { LaunchSurfaces } from "./integration";
+
 
 export const HOST_RUNTIME_MODULE = "VibestudioHostRuntime";
 /** The host's own root component (pairing, review, messages): `app.json` `name`, started by MainActivity / the first scene. */
@@ -105,6 +107,23 @@ export interface HostRuntimeNativeModule {
    */
   requestPinShortcut(shortcutId: string, label: string, link: string): Promise<boolean>;
 
+  /**
+   * Replace what the OS shows of the launch surfaces with `surfaces` (the host
+   * publishes the whole set after every refresh; see `LaunchSurfaces`).
+   * Android: dynamic shortcuts and the widget's data. iOS: the App Group
+   * snapshot the App Intents, widgets and share extension read, quick actions,
+   * and `updateAppShortcutParameters()`. Resolves once the OS has the new set.
+   */
+  publishLaunchSurfaces(surfaces: LaunchSurfaces): Promise<void>;
+
+  /**
+   * Disable pinned launchers whose client is gone, so tapping one says
+   * `message` instead of opening nothing (Android
+   * `ShortcutManagerCompat.disableShortcuts`; a pinned shortcut cannot be
+   * removed programmatically). iOS has no pinned launchers and resolves.
+   */
+  disablePinnedShortcuts(shortcutIds: string[], message: string): Promise<void>;
+
   /** Answer a `client-request` with the JSON result (`"null"` for void). */
   respond(tag: string, requestId: string, resultJson: string): Promise<void>;
   /** Fail a `client-request`; the client sees an Error with `code` and `message`. */
@@ -164,10 +183,34 @@ export type HostRuntimeEvent =
   | { type: "client-restore"; tag: string; clientId: string }
   /**
    * The OS delivered a `vibestudio://c/...` link (a pinned shortcut, a launcher
-   * menu) to the host's link activity; it is handled like any client link.
+   * menu, a bubble) to the host's link activity; it is handled like any client
+   * link. `focus: false` delivers the intent without bringing the client's
+   * task forward (a bubble shows the client itself).
    */
-  | { type: "link"; url: string }
+  | { type: "link"; url: string; focus?: boolean }
   /** Text was shared into Vibestudio (Android `ACTION_SEND`); `mimeType` is what the sender declared. */
   | { type: "share-in"; mimeType: string; text: string }
-  /** A launch surface (a Quick Settings tile) asked to run background intent `name` with this text. */
-  | { type: "background-intent"; name: string; text: string };
+  /**
+   * A launch surface (a Quick Settings tile, an App Intent) asked to run
+   * background intent `name` with this text, of client `clientId` when the
+   * surface named one.
+   */
+  | { type: "background-intent"; name: string; text: string; clientId?: string }
+  /**
+   * The launcher confirmed a pinned shortcut the host requested with
+   * `requestPinShortcut`. This is the only signal that the person said yes.
+   */
+  | { type: "shortcut-pinned"; shortcutId: string; label: string; link: string }
+  /**
+   * The person used a notification native drew itself (Android conversation
+   * notifications): pressed it, or answered one of its actions (`input` is
+   * what they typed into a reply field). `data` is what the host gave native
+   * to attach when it displayed the notification.
+   */
+  | {
+      type: "notification-event";
+      kind: "press" | "action";
+      actionId?: string;
+      input?: string;
+      data: Record<string, string>;
+    };

@@ -22,7 +22,10 @@ const registry: CliCommand[] = [
     group: "open",
     name: "",
     summary: "",
-    flags: [{ name: "develop", takesValue: false }, { name: "yes", short: "y", takesValue: false }],
+    flags: [
+      { name: "develop", takesValue: false },
+      { name: "yes", short: "y", takesValue: false },
+    ],
     run,
   },
   { group: "clients", name: "list", summary: "", run },
@@ -103,7 +106,9 @@ printf '%s\\n' "\${COMPREPLY[@]}"`;
   }
   it("completes groups, built-ins and the client command table", () => {
     const all = complete("");
-    expect(all).toEqual(expect.arrayContaining(["remote", "open", "completions", "help", "chat", "notes"]));
+    expect(all).toEqual(
+      expect.arrayContaining(["remote", "open", "completions", "help", "chat", "notes"])
+    );
     expect(complete("c")).toEqual(expect.arrayContaining(["clients", "completions", "chat"]));
     expect(complete("c")).not.toContain("remote");
   });
@@ -139,7 +144,10 @@ describe("dynamic completions", () => {
 });
 
 describe("completions command", () => {
-  const command = createCompletionsCommand({ registry: () => registry, state: () => stateWith({}) });
+  const command = createCompletionsCommand({
+    registry: () => registry,
+    state: () => stateWith({}),
+  });
   const invoke = (...positionals: string[]) =>
     command.run({ positionals, flags: {}, flagsMulti: () => [] }, positionals);
   it("rejects an unknown shell and a bad dynamic kind", async () => {

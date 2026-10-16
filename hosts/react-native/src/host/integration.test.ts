@@ -1,14 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { parseClientIntentLink } from "@vibestudio/client-host-core";
+import { textParamOf } from "@vibestudio/client-host-core";
 import type { ClientIntentDecl } from "@vibestudio/workspace-contracts/clients";
 import {
-  clientIntentLink,
   isForegroundIntent,
   mimeAccepted,
   pickBackgroundIntent,
   pickShareTarget,
-  pinnableShortcuts,
-  textParamOf,
+  launchSurfaces,
   type ListedClient,
 } from "./integration";
 
@@ -42,19 +40,6 @@ const browser: ListedClient = {
   isDefault: true,
   intents: [{ name: "open-panel", kind: "foreground", params: { panel: "string" } }],
 };
-
-describe("clientIntentLink", () => {
-  it("round-trips through the host's own link parser, whatever the params hold", () => {
-    const params = { conversation: "a b&c=d/é", empty: "" };
-    const link = clientIntentLink("chat", "open-conversation", params);
-    expect(link.startsWith("vibestudio://c/chat/open-conversation?")).toBe(true);
-    expect(parseClientIntentLink(link)).toEqual({ id: "chat", intent: "open-conversation", params });
-  });
-
-  it("omits the query when there are no params", () => {
-    expect(clientIntentLink("chat", "open")).toBe("vibestudio://c/chat/open");
-  });
-});
 
 describe("mimeAccepted", () => {
   it("matches exact types, type wildcards and anything, ignoring case and parameters", () => {
@@ -114,14 +99,6 @@ describe("pickBackgroundIntent", () => {
   });
 });
 
-describe("textParamOf", () => {
-  it("names the first free-text parameter", () => {
-    expect(textParamOf(ask)).toBe("text");
-    expect(textParamOf(openConversation)).toBeNull();
-    expect(textParamOf({})).toBeNull();
-  });
-});
-
 describe("isForegroundIntent", () => {
   it("allows the implicit open and declared foreground intents, not background or unknown ones", () => {
     expect(isForegroundIntent(chat, "open")).toBe(true);
@@ -131,51 +108,43 @@ describe("isForegroundIntent", () => {
   });
 });
 
-describe("pinnableShortcuts", () => {
+describe("launchSurfaces", () => {
   const snapshot = [
-    {
-      id: "chat",
-      title: "Chat",
-      intents: [openConversation, share, ask],
-      entries: {},
-    },
+    { id: "chat", title: "Chat", intents: [openConversation, share, ask], entries: {} },
     {
       id: "notes",
       title: "Notes",
       intents: [
         { name: "new-note", kind: "foreground", title: "New note" },
         { name: "open-note", kind: "foreground", params: { note: "string" }, dynamic: "p#recent" },
+        { name: "find", kind: "background", title: "Find", params: { query: "text" }, handler: "p#find" },
       ] satisfies ClientIntentDecl[],
-      entries: {
-        "open-note": [
-          { title: "Groceries", params: { note: "n1" } },
-          { title: "Ideas", params: { note: "n 2" } },
-        ],
-      },
+      entries: { "open-note": [{ title: "Groceries", params: { note: "n1" } }] },
     },
   ];
 
-  it("offers each client's open, its parameterless intents and its dynamic entries", () => {
-    const pinnable = pinnableShortcuts(snapshot);
-    expect(pinnable.map(({ clientId, label, link }) => ({ clientId, label, link }))).toEqual([
-      { clientId: "chat", label: "Chat", link: "vibestudio://c/chat/open" },
-      { clientId: "notes", label: "Notes", link: "vibestudio://c/notes/open" },
-      { clientId: "notes", label: "Notes: New note", link: "vibestudio://c/notes/new-note" },
-      { clientId: "notes", label: "Groceries", link: "vibestudio://c/notes/open-note?note=n1" },
-      { clientId: "notes", label: "Ideas", link: "vibestudio://c/notes/open-note?note=n%202" },
+  it("separates plain shortcuts from dynamic entries, per client", () => {
+    const { clients } = launchSurfaces(snapshot);
+    expect(clients.map((client) => client.clientId)).toEqual(["chat", "notes"]);
+    const notes = clients[1]!;
+    expect(notes.shortcuts.map((item) => item.link)).toEqual([
+      "vibestudio://c/notes/open",
+      "vibestudio://c/notes/new-note",
     ]);
+    expect(notes.recent).toEqual([
+      { intent: "open-note", label: "Groceries", link: "vibestudio://c/notes/open-note?note=n1" },
+    ]);
+    expect(clients[0]!.recent).toEqual([]);
   });
 
-  it("never offers share-in, background or parameterized-without-entries intents", () => {
-    const links = pinnableShortcuts(snapshot).map((entry) => entry.link);
-    expect(links.some((link) => link.includes("/share"))).toBe(false);
-    expect(links.some((link) => link.includes("/ask"))).toBe(false);
-    expect(links.some((link) => link.includes("/open-conversation"))).toBe(false);
-  });
-
-  it("gives each shortcut a distinct stable id, so pinning twice updates rather than duplicates", () => {
-    const ids = pinnableShortcuts(snapshot).map((entry) => entry.shortcutId);
-    expect(new Set(ids).size).toBe(ids.length);
-    expect(pinnableShortcuts(snapshot).map((entry) => entry.shortcutId)).toEqual(ids);
+  it("lists the free-text background intents and the intents that accept shared items", () => {
+    const { background, shareIn } = launchSurfaces(snapshot);
+    expect(background).toEqual([
+      { clientId: "chat", clientTitle: "Chat", intent: "ask", title: "ask", textParam: "text" },
+      { clientId: "notes", clientTitle: "Notes", intent: "find", title: "Find", textParam: "query" },
+    ]);
+    expect(shareIn).toEqual([
+      { clientId: "chat", clientTitle: "Chat", intent: "share", textParam: "text", accepts: ["text/*"] },
+    ]);
   });
 });

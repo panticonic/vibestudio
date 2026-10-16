@@ -9,6 +9,7 @@ import type { DeviceConnection } from "./deviceConnection";
 import type { HostRuntimeEvent } from "./nativeHostRuntime";
 import type { KeyValueStore } from "./ports";
 import { FakeSession } from "./testSupport";
+import { durableObjectServiceFixture } from "@vibestudio/service-schemas/test-utils";
 import { MemoryStore } from "../../../core/src/testing";
 
 const DIGEST = "e".repeat(64);
@@ -87,7 +88,9 @@ async function setup(options: {
   launches: unknown[];
   served?: Record<string, string>;
   listing?: unknown[];
+  snapshot?: unknown;
   invoked?: { text: string } | Error;
+  acknowledge?: Error;
 }) {
   const launches = [...options.launches];
   const served: Record<string, string> = { ...options.served };
@@ -117,6 +120,13 @@ async function setup(options: {
         return [];
       case "clients.list":
         return options.listing ?? [];
+      case "clients.integrationSnapshot":
+        return options.snapshot ?? { clients: [] };
+      case "workers.resolveService":
+        return durableObjectServiceFixture("do:gad");
+      case "acknowledgeUserNotification":
+        if (options.acknowledge) throw options.acknowledge;
+        return { acknowledged: true };
       case "clients.invokeIntent":
         if (options.invoked instanceof Error) throw options.invoked;
         return options.invoked ?? { text: "" };
@@ -177,6 +187,8 @@ async function setup(options: {
     focusClient: vi.fn(async () => undefined),
     showHostSurface: vi.fn(async () => undefined),
     requestPinShortcut: vi.fn(async () => true),
+    publishLaunchSurfaces: vi.fn(async () => undefined),
+    disablePinnedShortcuts: vi.fn(async () => undefined),
     respond: vi.fn(async () => undefined),
     reject: vi.fn(async () => undefined),
     emit: vi.fn(async () => undefined),
@@ -184,13 +196,18 @@ async function setup(options: {
     artifactRetainBuilds: vi.fn(async () => undefined),
   };
   const store = new MemoryStore();
+  const notificationListeners = new Set<(event: never) => boolean | void>();
   const forget = vi.fn(async () => undefined);
   const notifications = {
     handlers: { "notifications.display": vi.fn(async () => undefined) } as never,
     start: vi.fn(async () => undefined),
     stop: vi.fn(),
-    onEvent: () => () => undefined,
+    onEvent: (listener: (event: never) => boolean | void) => {
+      notificationListeners.add(listener);
+      return () => void notificationListeners.delete(listener);
+    },
     drain: vi.fn(async () => undefined),
+    handleInboxEvent: vi.fn(async () => undefined),
   };
   const state = new HostState(memoryStore());
   const ports: HostRuntimePorts = {
@@ -264,6 +281,7 @@ async function setup(options: {
     emitServerEvent,
     nativeEvent,
     notifications,
+    notificationListeners,
     request,
     connection,
     queue: (...more: unknown[]) => launches.push(...more),
@@ -561,5 +579,233 @@ describe("intents from the OS", () => {
     const display = (t.notifications.handlers as never as Record<string, ReturnType<typeof vi.fn>>)["notifications.display"]!;
     await vi.waitFor(() => expect(display).toHaveBeenCalled());
     expect(display.mock.calls[0]![0].body).toMatch(/^Failed: .*quota/);
+  });
+});
+
+const chatSnapshot = {
+  clients: [
+    {
+      id: "chat",
+      title: "Chat",
+      intents: chatListing().intents,
+      entries: {},
+    },
+  ],
+};
+
+describe("launchers and launch surfaces", () => {
+  const build = { buildKey: "bk-1", bundle: "client bundle 1" };
+  const started = async (options: Partial<Parameters<typeof setup>[0]> = {}) => {
+    const t = await setup({
+      launches: [await readyOf(build, { grantedCapabilities: ["integration.install"] })],
+      served: { [route("bk-1")]: build.bundle },
+      listing: [chatListing()],
+      snapshot: chatSnapshot,
+      ...options,
+    });
+    await t.runtime.start();
+    await vi.waitFor(() => expect(t.native.publishLaunchSurfaces).toHaveBeenCalled());
+    return t;
+  };
+  const requestResult = async (t: Awaited<ReturnType<typeof started>>, method: string, args: unknown[]) => {
+    const { responded, rejected } = await t.request(method, args);
+    return rejected ? { rejected: rejected[2] } : { result: JSON.parse(responded![2] as string) };
+  };
+
+  it("publishes the launch surfaces at connect and again on every clients:changed, not on a timer", async () => {
+    const t = await started();
+    const published = t.native.publishLaunchSurfaces.mock.calls;
+    expect(published).toHaveLength(1);
+    expect(published[0]![0].clients).toEqual([
+      {
+        clientId: "chat",
+        title: "Chat",
+        shortcuts: [{ intent: "open", label: "Chat", link: "vibestudio://c/chat/open" }],
+        recent: [],
+      },
+    ]);
+    expect(published[0]![0].background).toMatchObject([{ clientId: "chat", intent: "ask" }]);
+    await t.emitServerEvent("clients:changed", {});
+    await vi.waitFor(() => expect(t.native.publishLaunchSurfaces).toHaveBeenCalledTimes(2));
+  });
+
+  it("installs the open launcher of a client the device can run, and records it once the OS confirms", async () => {
+    const t = await started();
+    expect(await requestResult(t, "integration.install", [{ id: "chat" }])).toEqual({
+      result: { outcome: "requested" },
+    });
+    expect(t.native.requestPinShortcut).toHaveBeenCalledWith(
+      "vibestudio://c/chat/open",
+      "Chat",
+      "vibestudio://c/chat/open"
+    );
+    // Asking is not installing: nothing is recorded until the launcher says the person agreed.
+    expect(await requestResult(t, "integration.list", [])).toEqual({ result: [] });
+
+    t.nativeEvent({
+      type: "shortcut-pinned",
+      shortcutId: "vibestudio://c/chat/open",
+      label: "Chat",
+      link: "vibestudio://c/chat/open",
+    });
+    const launcher = {
+      launcherId: "vibestudio://c/chat/open",
+      clientId: "chat",
+      label: "Chat",
+      link: "vibestudio://c/chat/open",
+    };
+    await vi.waitFor(async () =>
+      expect(await requestResult(t, "integration.list", [])).toEqual({ result: [launcher] })
+    );
+    const announced = t.native.emit.mock.calls.map((call) => JSON.parse(call[1] as string));
+    expect(announced).toContainEqual({ type: "integration-launchers", launchers: [launcher] });
+  });
+
+  it("says unsupported when the launcher cannot pin, and refuses a client this device cannot run", async () => {
+    const t = await started();
+    t.native.requestPinShortcut.mockResolvedValueOnce(false);
+    expect(await requestResult(t, "integration.install", [{ id: "chat" }])).toEqual({
+      result: { outcome: "unsupported" },
+    });
+    expect(await requestResult(t, "integration.install", [{ id: "nope" }])).toEqual({
+      rejected: "UNKNOWN_CLIENT",
+    });
+  });
+
+  it("refuses every integration call from a client without the capability", async () => {
+    const t = await started({
+      launches: [await readyOf(build, { grantedCapabilities: ["device-session"] })],
+    });
+    expect(await requestResult(t, "integration.install", [{ id: "chat" }])).toEqual({
+      rejected: "CAPABILITY_NOT_GRANTED",
+    });
+    expect(t.native.requestPinShortcut).not.toHaveBeenCalled();
+  });
+
+  it("disables and forgets a client's launchers when asked to remove them", async () => {
+    const t = await started();
+    t.nativeEvent({ type: "shortcut-pinned", shortcutId: "vibestudio://c/chat/open", label: "Chat", link: "vibestudio://c/chat/open" });
+    await vi.waitFor(async () =>
+      expect((await requestResult(t, "integration.list", [])).result).toHaveLength(1)
+    );
+    await requestResult(t, "integration.remove", [{ id: "chat" }]);
+    expect(t.native.disablePinnedShortcuts).toHaveBeenCalledWith(
+      ["vibestudio://c/chat/open"],
+      expect.any(String)
+    );
+    expect(await requestResult(t, "integration.list", [])).toEqual({ result: [] });
+  });
+
+  it("disables the launchers of a client the server no longer declares, on clients:changed", async () => {
+    const listing: unknown[] = [chatListing()];
+    const t = await started({ listing });
+    t.nativeEvent({ type: "shortcut-pinned", shortcutId: "vibestudio://c/chat/open", label: "Chat", link: "vibestudio://c/chat/open" });
+    await vi.waitFor(() => expect(t.state.launchers()).toHaveLength(1));
+    listing.length = 0;
+    await t.emitServerEvent("clients:changed", {});
+    await vi.waitFor(() =>
+      expect(t.native.disablePinnedShortcuts).toHaveBeenCalledWith(
+        ["vibestudio://c/chat/open"],
+        expect.any(String)
+      )
+    );
+    expect(t.state.launchers()).toEqual([]);
+  });
+
+  it("keeps the launchers of a client that is merely unavailable right now", async () => {
+    const listing: unknown[] = [chatListing()];
+    const t = await started({ listing });
+    t.nativeEvent({ type: "shortcut-pinned", shortcutId: "vibestudio://c/chat/open", label: "Chat", link: "vibestudio://c/chat/open" });
+    await vi.waitFor(() => expect(t.state.launchers()).toHaveLength(1));
+    listing[0] = chatListing({ unavailableReason: "needs a capability" });
+    await t.emitServerEvent("clients:changed", {});
+    await vi.waitFor(() => expect(t.native.publishLaunchSurfaces).toHaveBeenCalledTimes(2));
+    expect(t.native.disablePinnedShortcuts).not.toHaveBeenCalled();
+  });
+});
+
+describe("notifications reach the host's clients and conversations", () => {
+  const build = { buildKey: "bk-1", bundle: "client bundle 1" };
+
+  it("delivers a notification open to a running client that holds the notifications capability", async () => {
+    const t = await setup({
+      launches: [await readyOf(build, { grantedCapabilities: ["notifications"] })],
+      served: { [route("bk-1")]: build.bundle },
+    });
+    await t.runtime.start();
+    const open = { type: "notification-open", open: { kind: "approval", target: {} } } as never;
+    const took = [...t.notificationListeners].map((listener) => listener(open));
+    expect(took).toEqual([true]);
+    expect(t.native.emit.mock.calls.map((call) => JSON.parse(call[1] as string))).toContainEqual(
+      JSON.parse(JSON.stringify(open))
+    );
+  });
+
+  it("keeps a notification open for the client that launches when none holds the capability", async () => {
+    const t = await setup({ launches: [{ state: "unavailable", reason: "x" }] });
+    await t.runtime.start();
+    const took = [...t.notificationListeners].map((listener) =>
+      listener({ type: "notification-token", token: "t" } as never)
+    );
+    expect(took).toEqual([false]);
+  });
+
+  it("finds the client whose open-conversation intent shows a channel", async () => {
+    const chat = chatListing({
+      intents: [
+        { name: "open", kind: "foreground" },
+        { name: "open-conversation", kind: "foreground", params: { conversation: "string" } },
+      ],
+    });
+    const t = await setup({ launches: [{ state: "unavailable", reason: "x" }], listing: [chat] });
+    await t.runtime.start();
+    expect(await t.runtime.conversationLaunch("ch-1")).toEqual({
+      link: "vibestudio://c/chat/open-conversation?conversation=ch-1",
+      tag: "client:chat:react-native:dev1",
+      clientId: "chat",
+      title: "Chat",
+    });
+  });
+
+  it("finds no conversation launch when no client declares one", async () => {
+    const t = await setup({ launches: [{ state: "unavailable", reason: "x" }], listing: [chatListing()] });
+    await t.runtime.start();
+    expect(await t.runtime.conversationLaunch("ch-1")).toBeNull();
+  });
+});
+
+describe("replying to a pushed message", () => {
+  const entry = {
+    kind: "user-inbox",
+    serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+    userId: "alice",
+    workspaceId: "ws-personal",
+    notificationId: "agent.message:m1:alice",
+    inboxKind: "agent.message",
+    title: "Agent",
+    priority: "normal",
+    channelTargetId: "do:channel:ch-1",
+  } as never;
+  const replyCalls = (t: Awaited<ReturnType<typeof setup>>) =>
+    t.rpcCalls.filter((call) => call.name === "sendAsCaller" || call.name.endsWith("acknowledgeUserNotification"));
+
+  it("sends the text into the conversation, then acknowledges the durable entry as the device", async () => {
+    const t = await setup({ launches: [{ state: "unavailable", reason: "x" }] });
+    await t.runtime.start();
+    await expect(t.runtime.replyToInbox(entry, "on my way")).resolves.toEqual({ acknowledged: true });
+    expect(replyCalls(t)).toEqual([
+      { name: "sendAsCaller", args: ["on my way"] },
+      { name: "acknowledgeUserNotification", args: [{ id: "agent.message:m1:alice" }] },
+    ]);
+  });
+
+  it("reports a failed acknowledgement as an outcome, because the text was already sent", async () => {
+    const t = await setup({ launches: [{ state: "unavailable", reason: "x" }], acknowledge: new Error("gad down") });
+    await t.runtime.start();
+    await expect(t.runtime.replyToInbox(entry, "hi")).resolves.toEqual({
+      acknowledged: false,
+      reason: "gad down",
+    });
+    expect(replyCalls(t).filter((call) => call.name === "sendAsCaller")).toHaveLength(1);
   });
 });

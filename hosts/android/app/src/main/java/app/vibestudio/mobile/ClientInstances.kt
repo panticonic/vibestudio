@@ -31,6 +31,9 @@ object ClientInstances {
     const val EXTRA_CLIENT_ID = "app.vibestudio.mobile.client.clientId"
     const val EXTRA_TITLE = "app.vibestudio.mobile.client.title"
 
+    /** A link to open when the activity is created (a bubble): the activity shows the client itself. */
+    const val EXTRA_LINK = "app.vibestudio.mobile.client.link"
+
     private class Instance(val host: ClientReactNativeHost) {
         val spec get() = host.spec
         var startDone: ((NativeFailure?) -> Unit)? = null

@@ -4,8 +4,12 @@ import type { NotificationsHostEvent } from "@vibestudio/rn-client-api/notificat
 import { ACTION_QUEUE_KEY, SYNCING_NOTIFICATION_BODY } from "./hostNotifications";
 import {
   createHostNotifications,
+  notifeeInboxDisplay,
+  type ConversationLaunch,
   type DeviceNotification,
+  type InboxNotification,
   type NotificationEvent,
+  type ReplyOutcome,
   type NotificationPermission,
   type RemoteMessage,
 } from "./hostNotifications";
@@ -22,6 +26,7 @@ function harness(
     initial?: RemoteMessage | null;
     storedDeviceId?: string | null;
     platform?: "android" | "ios";
+    conversation?: ConversationLaunch | null;
   } = {}
 ) {
   const storage = new Map<string, string>();
@@ -31,7 +36,11 @@ function harness(
   let permission = options.permission ?? "granted";
   let decideFails = true;
   const replies: Array<{ workspaceId: string; target: string; text: string }> = [];
-  const replyFailure: { error: Error | null } = { error: null };
+  const replyFailure: { error: Error | null; unacknowledged: string | null } = {
+    error: null,
+    unacknowledged: null,
+  };
+  const inboxShown: InboxNotification[] = [];
   const l = {
     tokenRefresh: undefined as undefined | ((token: string) => void),
     message: undefined as undefined | ((message: RemoteMessage) => void),
@@ -94,9 +103,20 @@ function harness(
     },
     platform: options.platform ?? "android",
     isConfigured: () => options.configured ?? true,
-    replyToConversation: async (replyScope, target, text) => {
+    inbox: {
+      display: async (notification) => {
+        inboxShown.push(notification);
+        await notifeeInboxDisplay(notifee).display(notification);
+      },
+      cancel: (id) => notifeeInboxDisplay(notifee).cancel(id),
+    },
+    conversationLaunch: async () => options.conversation ?? null,
+    replyToInbox: async (entry, text): Promise<ReplyOutcome> => {
       if (replyFailure.error) throw replyFailure.error;
-      replies.push({ workspaceId: replyScope.workspaceId, target, text });
+      replies.push({ workspaceId: entry.workspaceId, target: entry.channelTargetId!, text });
+      return replyFailure.unacknowledged === null
+        ? { acknowledged: true }
+        : { acknowledged: false, reason: replyFailure.unacknowledged };
     },
     decide: async (t, decision) => {
       if (decideFails) throw new Error("not connected");
@@ -112,6 +132,7 @@ function harness(
     cancelled,
     decided,
     replies,
+    inboxShown,
     replyFailure,
     notifee,
     messaging,
@@ -218,7 +239,7 @@ describe("host notifications", () => {
       id: keyOf("agent.message:say:call-1:usr_bob"),
       title: "Briefing ready",
       body: "3 stories",
-      android: { channelId: "messages", importance: 4 },
+      ios: {},
     });
   });
 
@@ -446,23 +467,61 @@ describe("host notifications", () => {
       await vi.waitFor(() => expect(h.displayed).toHaveLength(1));
     };
 
-    it("draws a reply field on Android and registers the reply category for iOS", async () => {
+    it("hands the inbox port the entry's reply actions and registers the reply category for iOS", async () => {
       const h = harness();
       await show(h);
-      const actions = (shown(h).android as { actions: Array<Record<string, unknown>> }).actions;
-      expect(actions).toEqual([
-        {
-          title: "Reply",
-          pressAction: { id: "reply" },
-          input: { placeholder: "Reply", allowFreeFormInput: true },
-        },
-      ]);
+      expect(h.inboxShown[0]).toMatchObject({
+        id: keyOf("n-1"),
+        title: "Agent",
+        body: "Ready?",
+        priority: "normal",
+        actions: [{ id: "reply", title: "Reply", input: "text" }],
+        conversation: null,
+      });
       expect(shown(h).ios).toEqual({ categoryId: "vibestudio-user-inbox-reply" });
       const categories = h.notifee.setNotificationCategories.mock.calls[0]![0];
       expect(categories.find((c) => c.id === "vibestudio-user-inbox-reply")?.actions[0]).toMatchObject({
         id: "reply",
         input: expect.anything(),
       });
+    });
+
+    it("carries the client intent that opens the entry's conversation", async () => {
+      const conversation: ConversationLaunch = {
+        link: "vibestudio://c/chat/open-conversation?conversation=ch-1",
+        tag: "client:chat:react-native:dev",
+        clientId: "chat",
+        title: "Chat",
+      };
+      const h = harness({ conversation });
+      await show(h);
+      expect(h.inboxShown[0]!.conversation).toEqual(conversation);
+    });
+
+    it("takes a reply typed into a notification the platform drew itself, with no client running", async () => {
+      const h = harness();
+      await show(h);
+      await h.host.handleInboxEvent({
+        kind: "action",
+        actionId: "reply",
+        input: "on my way",
+        data: h.inboxShown[0]!.data,
+      });
+      expect(h.replies).toEqual([{ workspaceId: scope.workspaceId, target: channelTargetId, text: "on my way" }]);
+      expect(h.cancelled).toEqual([keyOf("n-1")]);
+    });
+
+    it("says on the notification when the reply was sent but the entry could not be acknowledged, and does not offer a second send", async () => {
+      const h = harness();
+      await show(h);
+      h.replyFailure.unacknowledged = "gad unreachable";
+      await h.l.backgroundEvent!(replyEvent(h, "hi"));
+      expect(h.replies).toHaveLength(1);
+      expect(h.cancelled).toEqual([]);
+      expect(h.displayed).toHaveLength(2);
+      expect(shown(h).body).toBe("Sent, but this message could not be marked as read: gad unreachable");
+      expect(shown(h).ios).toEqual({});
+      expect(h.inboxShown.at(-1)!.actions).toEqual([]);
     });
 
     it("posts a typed reply into the push's conversation and workspace with no client running, then retires the notification", async () => {
@@ -481,7 +540,8 @@ describe("host notifications", () => {
       expect(h.cancelled).toEqual([]);
       expect(h.displayed).toHaveLength(2);
       expect(shown(h).body).toBe("Not sent: not connected");
-      expect((shown(h).android as { actions: unknown[] }).actions).toHaveLength(1);
+      expect(shown(h).ios).toEqual({ categoryId: "vibestudio-user-inbox-reply" });
+      expect(h.inboxShown.at(-1)!.actions).toHaveLength(1);
     });
 
     it("sends nothing for an empty reply, an undeclared action or a press on the body", async () => {
@@ -496,7 +556,7 @@ describe("host notifications", () => {
     it("an entry without actions has no reply", async () => {
       const h = harness();
       await show(h, pushed({ actionsJson: undefined }));
-      expect((shown(h).android as { actions?: unknown }).actions).toBeUndefined();
+      expect(h.inboxShown[0]!.actions).toEqual([]);
       expect(shown(h).ios).toEqual({});
       await h.l.backgroundEvent!(replyEvent(h, "hi"));
       expect(h.replies).toEqual([]);

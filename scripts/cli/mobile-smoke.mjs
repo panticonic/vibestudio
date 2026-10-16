@@ -41,6 +41,7 @@ import {
 import { flagValue } from "./lib/args.mjs";
 import { visibleAgentTurnState } from "./lib/mobile-agent-turn-state.mjs";
 import { mobileApprovalSurfaceState } from "./lib/mobile-approval-surface.mjs";
+import { assertSecondClientSeparateTask } from "./lib/mobile-smoke-clients.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
@@ -2641,6 +2642,22 @@ async function runSmoke(
     console.log(
       "[mobile-smoke] Recovery: server restart reconnected with zero panel-asset pipe misses"
     );
+
+    // Launch surfaces: the host published its clients to the launcher, and a
+    // client link (what a shortcut delivers) starts a second client in its own
+    // task beside the first.
+    const chatTask = await assertSecondClientSeparateTask(
+      {
+        adb: (...args) => adb(options.device, ...args),
+        adbCapture: (...args) => adbCapture(options.device, ...args),
+        logcat,
+        waitForPhase: (phase, deadline) =>
+          waitForPhaseTappingApprovals(options.device, logcat, phase, deadline),
+        deadlineMs: Date.now() + options.timeoutMs,
+      },
+      { packageName: options.packageName, clientId: "chat" }
+    );
+    console.log(`[mobile-smoke] Launch surfaces: chat runs in its own task ${chatTask}`);
 
     console.log(
       panelResult.agentTurnCompleted

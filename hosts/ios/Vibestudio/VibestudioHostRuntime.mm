@@ -4,6 +4,7 @@
 #import "VibestudioArtifactStore.h"
 #import "VibestudioClientManager.h"
 #import "VibestudioInstances.h"
+#import "Vibestudio-Swift.h"
 
 // The native side of the mobile host runtime. Mirrors `HostRuntimeNativeModule`
 // in hosts/react-native/src/host/nativeHostRuntime.ts. Exists for the host
@@ -110,6 +111,48 @@ RCT_EXPORT_METHOD(showHostSurface:(RCTPromiseResolveBlock)resolve
 {
   VIBESTUDIO_HOST_ONLY();
   [[VibestudioClientManager shared] showHostSurfaceResolve:resolve];
+}
+
+#pragma mark Launch surfaces
+
+// iOS has no pin API: a home-screen launcher is a Shortcuts-app action or a
+// quick action, both projected from the published snapshot.
+RCT_EXPORT_METHOD(requestPinShortcut:(NSString *)shortcutId
+                  label:(NSString *)label
+                  link:(NSString *)link
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  VIBESTUDIO_HOST_ONLY();
+  resolve(@NO);
+}
+
+RCT_EXPORT_METHOD(publishLaunchSurfaces:(NSDictionary *)surfaces
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  VIBESTUDIO_HOST_ONLY();
+  NSError *error = nil;
+  NSData *data = [NSJSONSerialization dataWithJSONObject:surfaces options:0 error:&error];
+  if (data == nil) {
+    reject(@"invalid-surfaces", error.localizedDescription, error);
+    return;
+  }
+  [VibestudioLaunchSurfacesPublisher publish:[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]
+                                  completion:^(NSError *failure) {
+    if (failure) reject(@"publish-failed", failure.localizedDescription, failure);
+    else resolve(nil);
+  }];
+}
+
+// There are no pinned launchers on iOS, so there is nothing to disable.
+RCT_EXPORT_METHOD(disablePinnedShortcuts:(NSArray<NSString *> *)shortcutIds
+                  message:(NSString *)message
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  VIBESTUDIO_HOST_ONLY();
+  resolve(nil);
 }
 
 #pragma mark Broker

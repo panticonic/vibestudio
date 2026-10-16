@@ -16256,6 +16256,184 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:deviceDriver.answer",
+      "rpcPlane": "host-service",
+      "owner": "deviceDriver",
+      "method": "answer",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "deviceDriver.register",
+      "reviewRationale": "The addressed driver settles exactly one operation it was asked to run",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:deviceDriver.answer"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:deviceDriver.answer),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:deviceDriver.answer",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:deviceDriver.devices",
+      "rpcPlane": "host-service",
+      "owner": "deviceDriver",
+      "method": "devices",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "deviceDriver.drive",
+      "reviewRationale": "Read-only discovery of the caller's live test drivers",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:deviceDriver.devices"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:deviceDriver.devices),workspace-member),allOf(capability(code,service:deviceDriver.devices),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:deviceDriver.devices",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:deviceDriver.drive",
+      "rpcPlane": "host-service",
+      "owner": "deviceDriver",
+      "method": "drive",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "deviceDriver.drive",
+      "reviewRationale": "Reaches only a device the person started as a test driver, for the lifetime of that driver's transport",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:deviceDriver.drive"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(allOf(capability(user,service:deviceDriver.drive),workspace-member),allOf(capability(code,service:deviceDriver.drive),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:deviceDriver.drive",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:deviceDriver.register",
+      "rpcPlane": "host-service",
+      "owner": "deviceDriver",
+      "method": "register",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "deviceDriver.register",
+      "reviewRationale": "An authenticated device offers itself as the account's test driver for as long as its transport is live; it grants no authority",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:deviceDriver.register"
+      },
+      "authorityPrincipals": [
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "allOf(capability(user,service:deviceDriver.register),workspace-member)",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:deviceDriver.register",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:docs.describe",
       "rpcPlane": "host-service",
       "owner": "docs",

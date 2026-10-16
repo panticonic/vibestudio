@@ -364,9 +364,16 @@ describe("server notification service", () => {
       const request = UserInboxPushRequestSchema.parse({ ...base, actions: [reply] });
       const data = userInboxPushData(request);
       expect(data.actionsJson).toBe(JSON.stringify([reply]));
-      const scoped = { ...data, serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa", workspaceId: "w", userId: "u" };
+      const scoped = {
+        ...data,
+        serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+        workspaceId: "w",
+        userId: "u",
+      };
       expect(isPushUserInboxDataPayload(scoped)).toBe(true);
-      expect(userInboxPushData(UserInboxPushRequestSchema.parse(base))).not.toHaveProperty("actionsJson");
+      expect(userInboxPushData(UserInboxPushRequestSchema.parse(base))).not.toHaveProperty(
+        "actionsJson"
+      );
 
       const push = {
         listRegistrations: () => [{ userId: "usr_alice", clientId: "phone-a" }],

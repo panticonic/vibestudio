@@ -5,6 +5,7 @@
  * without needing a workspace server.
  */
 
+import { NodeArtifactStore } from "@vibestudio/client-host-core/node";
 import type { RpcCallOptions } from "@vibestudio/rpc";
 import type { ConnectedSession } from "../../main/serverSession.js";
 import type { ConnectedServerClient } from "../../main/serverClient.js";
@@ -106,6 +107,9 @@ parentPort.once("message", (event) => {
     channel,
     establish: async () => smokeSession(),
     createCentralData: () => ({}) as never,
+    // The harness launches no clients, so nothing is ever written here.
+    createArtifactStore: (userDataPath) =>
+      new NodeArtifactStore(`${userDataPath}/client-artifacts`),
   });
   channel.onClose(() => void host.close().finally(() => process.exit(0)));
 });

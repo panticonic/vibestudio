@@ -4606,6 +4606,94 @@
       }
     }
   },
+  "deviceDriver": {
+    "service": {
+      "principals": [
+        "user",
+        "code"
+      ]
+    },
+    "methods": {
+      "answer": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "untrusted-execution",
+          "family": "deviceDriver.register",
+          "rationale": "The addressed driver settles exactly one operation it was asked to run"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "devices": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "untrusted-execution",
+          "family": "deviceDriver.drive",
+          "rationale": "Read-only discovery of the caller's live test drivers"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "drive": {
+        "authority": {
+          "principals": [
+            "user",
+            "code"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "untrusted-execution",
+          "family": "deviceDriver.drive",
+          "rationale": "Reaches only a device the person started as a test driver, for the lifetime of that driver's transport"
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "register": {
+        "authority": {
+          "principals": [
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "untrusted-execution",
+          "family": "deviceDriver.register",
+          "rationale": "An authenticated device offers itself as the account's test driver for as long as its transport is live; it grants no authority"
+        },
+        "capability": null,
+        "presentation": null
+      }
+    }
+  },
   "docs": {
     "service": {
       "principals": [

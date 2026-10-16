@@ -4,6 +4,7 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import type { ClientMenus } from "./clientMenu.js";
 import type { ClientWindow, ClientWindowFactory, ClientWindowSpec } from "./clientWindow.js";
 import { CLIENT_SCHEME } from "./clientDelivery.js";
+import { windowAppDetails } from "./integration/launcherArtifacts.js";
 import type { PanelHostWindow } from "./panelHostWindow.js";
 import { workspaceNativeViewId } from "./workspaceNativeViews.js";
 import { workspaceTransportArgument } from "../preload/workspaceTransportIdentity.js";
@@ -20,6 +21,8 @@ export interface ElectronClientWindowDeps {
   /** Absolute path of the built client preload. */
   preloadPath: string;
   iconPath: string;
+  /** The command that starts this app, for a window's relaunch command on Windows. */
+  appCommand: readonly string[];
   menus: ClientMenus;
   panelHost: PanelHostWindow;
   /** The session partition a client's pages run in. */
@@ -57,8 +60,8 @@ class PlainClientWindow implements ClientWindow {
     this.currentSpec = spec;
     const chrome = chromeWindowColors(nativeTheme.shouldUseDarkColors);
     this.window = new BaseWindow({
-      width: 960,
-      height: 720,
+      width: spec.compact ? 560 : 960,
+      height: spec.compact ? 420 : 720,
       show: false,
       title: spec.title,
       icon: deps.iconPath,
@@ -74,6 +77,17 @@ class PlainClientWindow implements ClientWindow {
           }
         : {}),
     });
+    // Windows gives each client's windows its own taskbar group and pinning target,
+    // matching its Start-menu shortcut. Elsewhere windows group under Vibestudio.
+    if (process.platform === "win32") {
+      this.window.setAppDetails(
+        windowAppDetails(
+          { clientId: spec.clientId, title: spec.title },
+          deps.appCommand,
+          deps.iconPath
+        )
+      );
+    }
     this.view = new WebContentsView({
       webPreferences: {
         preload: deps.preloadPath,

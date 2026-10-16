@@ -7,6 +7,9 @@ import {
   type RpcStreamOptions,
 } from "@vibestudio/rpc";
 import { SESSION_CONNECTION_LOST_CODE } from "@vibestudio/rpc/protocol/remoteSession";
+import type { ClientArtifactStore } from "@vibestudio/client-host-core";
+import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
+import { gatewayMethods } from "@vibestudio/service-schemas/gateway";
 import type { CentralDataManager } from "@vibestudio/shared/centralData";
 import type {
   ConnectedSession,
@@ -28,6 +31,7 @@ import type {
   WorkspaceDescriptor,
 } from "./connectionProtocol.js";
 import type { HostCall, HostServiceEndpoint } from "./hostServices.js";
+import { ClientLaunchHost } from "./clientLaunchHost.js";
 import { RendererPortHost } from "./rendererPortHost.js";
 import type { WorkspaceIpcRuntime } from "./uiSessions.js";
 
@@ -37,6 +41,8 @@ export interface ConnectionHostDeps {
   channel: ControlChannel;
   establish: typeof establishServerSession;
   createCentralData(): CentralDataManager;
+  /** The content-addressed store of verified client artifacts under a user-data root. */
+  createArtifactStore(userDataPath: string): ClientArtifactStore;
 }
 
 interface ClientEntry {
@@ -78,6 +84,7 @@ export class ConnectionHost {
   /** Outlives the connection: main stops or detaches the hub after the sessions closed. */
   private hubManager: ConnectedSession["hubProcessManager"] = null;
   private ports: RendererPortHost | null = null;
+  private launches: ClientLaunchHost | null = null;
   private nextHandle = 1;
   private closing: Promise<void> | null = null;
 
@@ -106,9 +113,6 @@ export class ConnectionHost {
     handle("client.expose", ({ handle: id, method, stream }) => this.expose(id, method, stream));
     handle("client.nudge", ({ handle: id }) => this.entry(id).client.nudge?.());
     handle("client.close", ({ handle: id }) => this.entry(id).client.close());
-    handle("client.principal-sessions", ({ handle: id, enabled }) =>
-      this.principalSessions(id, enabled)
-    );
     handle("ports.bind", ({ binding }, context) => {
       const [port] = context.ports;
       if (!port) throw new Error("A port binding requires a transferred port");
@@ -224,6 +228,17 @@ export class ConnectionHost {
       onReconnectProgress: (progress) => this.emit("reconnect-progress", progress),
     });
     this.session = session;
+    const gateway = createTypedServiceClient("gateway", gatewayMethods, (service, method, args) =>
+      session.serverClient.stream(service, method, args)
+    );
+    this.launches = new ClientLaunchHost({
+      channel: this.deps.channel,
+      call: (service, method, args) => session.serverClient.call(service, method, args),
+      fetchArtifact: (route) => gateway.fetch({ path: route, method: "GET" }),
+      store: this.deps.createArtifactStore(args.userDataPath),
+    });
+    // Client sessions are granted for the exact build this process verified.
+    session.serverClient.setClientPrincipalSessions(this.launches.principalSessions());
     this.hubManager = session.hubProcessManager;
     const workspace = this.registerWorkspace(session);
     const hub = this.registerClient(session.hubControlClient);
@@ -432,19 +447,6 @@ export class ConnectionHost {
     });
   }
 
-  private principalSessions(handle: number, enabled: boolean): void {
-    this.entry(handle).client.setClientPrincipalSessions(
-      enabled
-        ? {
-            connectionGrant: async (principalId) =>
-              (await this.request("clients.connection-grant", { handle, principalId })) as string,
-            sessionEnded: (caller, reason) =>
-              this.emit("client.session-ended", { handle, caller, reason }),
-          }
-        : null
-    );
-  }
-
   // -------------------------------------------------------------------------
   // Host-owned services of workspace runtimes
   // -------------------------------------------------------------------------
@@ -516,6 +518,7 @@ export class ConnectionHost {
       for (const entry of [...this.clients.values()]) entry.release();
       this.session = null;
       this.ports = null;
+      this.launches = null;
       if (failures.length === 1) throw failures[0];
       if (failures.length > 1) throw new AggregateError(failures, "Connection cleanup failed");
     })();

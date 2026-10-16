@@ -24,6 +24,7 @@ import {
   readUserInboxActions,
   USER_INBOX_REPLY_CATEGORY,
   type PushUserInboxDataPayload,
+  type UserInboxAction,
 } from "@vibestudio/shared/userNotifications";
 import type {
   DisplayedNotification,
@@ -36,7 +37,6 @@ import type {
 import {
   APPROVAL_NOTIFICATION_CHANNEL_ID,
   INBOX_NOTIFICATION_CHANNEL_ID,
-  androidReplyActions,
   getAndroidNotificationActions,
   notificationCategories,
   type NotificationCategory,
@@ -116,6 +116,46 @@ export interface NotifeePort {
   onBackgroundEvent(listener: (event: NotificationEvent) => Promise<void>): void;
 }
 
+/** How a pushed conversation can be opened as a client's intent: what a notification press or a bubble launches. */
+export interface ConversationLaunch {
+  /** `vibestudio://c/<id>/<intent>?…` for the conversation. */
+  link: string;
+  /** The instance tag (`client:<id>:react-native:<device>`) a bubble attaches to. */
+  tag: string;
+  clientId: string;
+  /** The client's title, for the task label. */
+  title: string;
+}
+
+/** A pushed inbox entry, ready to be drawn. */
+export interface InboxNotification {
+  /** Workspace-scoped notification key; a redriven push replaces rather than stacks. */
+  id: string;
+  title: string;
+  body: string;
+  /** The push's data payload, attached to the notification so a press or action can be routed with no other state. */
+  data: PushUserInboxDataPayload;
+  priority: "normal" | "high";
+  /** Reply actions; each draws a native reply field. */
+  actions: UserInboxAction[];
+  /** The client intent that shows the entry's conversation, when a client on this device can. */
+  conversation: ConversationLaunch | null;
+}
+
+/**
+ * Where pushed inbox entries are drawn. Android draws them itself, as
+ * conversation notifications (MessagingStyle, a bubble, `RemoteInput`); iOS
+ * draws them through notifee with the reply category registered at launch.
+ * Both report what the person does with them to `handleNotificationEvent`.
+ */
+export interface InboxDisplayPort {
+  display(notification: InboxNotification): Promise<void>;
+  cancel(id: string): Promise<void>;
+}
+
+/** What posting a reply into a conversation did: it is sent whenever this resolves, and the durable entry is retired or not. */
+export type ReplyOutcome = { acknowledged: true } | { acknowledged: false; reason: string };
+
 export interface KeyValuePort {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
@@ -142,17 +182,28 @@ export interface HostNotificationsPorts {
    * queued and is retried by the next `drain()`.
    */
   decide(target: WorkspaceApprovalTarget, decision: BackgroundApprovalDecision): Promise<void>;
+  inbox: InboxDisplayPort;
+  /** The client intent that shows `channelId`'s conversation, or null when no client on this device handles it. */
+  conversationLaunch(channelId: string): Promise<ConversationLaunch | null>;
   /**
-   * Post `text`, as the person, into the conversation `channelTargetId` of the
-   * push's workspace, over the device's own connection. Waits for that
-   * connection to be ready; rejects when there is none or the channel refuses.
+   * Post `text`, as the person, into the push's conversation over the device's
+   * own connection to its workspace, then acknowledge the durable inbox entry
+   * as the device. Waits for that connection to be ready; rejects when the
+   * reply could not be sent. A reply that was sent but whose entry could not be
+   * acknowledged resolves with the reason instead: the text must not be sent twice.
    */
-  replyToConversation(
-    scope: WorkspacePushScope,
-    channelTargetId: string,
-    text: string
-  ): Promise<void>;
+  replyToInbox(entry: PushUserInboxDataPayload, text: string): Promise<ReplyOutcome>;
   now?(): number;
+}
+
+/** What the person did to a notification the inbox display port drew. */
+export interface InboxEvent {
+  kind: "press" | "action";
+  actionId?: string | undefined;
+  /** What was typed into the action's reply field. */
+  input?: string | undefined;
+  /** The `data` the notification was drawn with. */
+  data: Record<string, unknown>;
 }
 
 /**
@@ -182,6 +233,8 @@ export interface HostNotifications {
   onEvent(listener: HostNotificationsListener): Unsubscribe;
   /** Resolve every queued decision whose workspace is reachable. Call when a workspace connection becomes available. */
   drain(): Promise<void>;
+  /** The person used a notification the inbox display port drew itself (a press, a typed reply). */
+  handleInboxEvent(event: InboxEvent): Promise<void>;
 }
 
 const LOG = "[HostNotifications]";
@@ -301,51 +354,67 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
 
   /**
    * A pushed inbox entry (messaging plan 4.10.9). Its id is the durable entry's
-   * id, so a redriven push replaces rather than stacks, and a press carries the
-   * deep-link facts straight to the conversation. An entry with reply actions
-   * draws a native reply field (Android `RemoteInput`; on iOS the action of the
-   * category registered at launch), so it can be answered from a lock screen.
+   * id, so a redriven push replaces rather than stacks. An entry with reply
+   * actions draws a native reply field, so it can be answered from a lock
+   * screen; an entry that belongs to a conversation a client on this device can
+   * show carries that client's intent, so a press or a bubble opens it.
    */
   async function displayInbox(
     data: PushUserInboxDataPayload,
     message: RemoteMessage,
-    body: string = data.body ?? message.notification?.body ?? ""
+    options: { body?: string; replyable?: boolean } = {}
   ): Promise<void> {
-    const actions = readUserInboxActions(data.actionsJson) ?? [];
-    await notifee.display({
+    const actions = options.replyable === false ? [] : (readUserInboxActions(data.actionsJson) ?? []);
+    let conversation: ConversationLaunch | null = null;
+    if (data.channelId) {
+      try {
+        conversation = await ports.conversationLaunch(data.channelId);
+      } catch (error) {
+        console.warn(`${LOG} could not resolve the conversation of ${data.notificationId}:`, error);
+      }
+    }
+    await ports.inbox.display({
       id: workspaceNotificationKey(data, data.notificationId),
       title: data.title || message.notification?.title || "New message",
-      body,
-      data: { ...data },
-      android: {
-        channelId: INBOX_NOTIFICATION_CHANNEL_ID,
-        pressAction: { id: "open", launchActivity: "default" },
-        ...(data.priority === "high" ? { importance: 4 } : {}),
-        ...(actions.length > 0 ? { actions: androidReplyActions(actions) } : {}),
-      },
-      ios: actions.length > 0 ? { categoryId: USER_INBOX_REPLY_CATEGORY } : {},
+      body: options.body ?? data.body ?? message.notification?.body ?? "",
+      data,
+      priority: data.priority,
+      actions,
+      conversation,
     });
   }
 
   /**
    * The person typed a reply into a pushed entry. It is posted into that
-   * entry's conversation through the device's own connection to its workspace;
-   * success retires the notification, and a failure is said on the
-   * notification itself with its reply kept, so what was typed is never
-   * silently lost.
+   * entry's conversation through the device's own connection to its workspace
+   * and the durable entry is acknowledged; success retires the notification,
+   * and a failure is said on the notification itself. A reply that was not
+   * sent keeps its reply action, so what was typed is never silently lost; one
+   * that was sent but could not be acknowledged loses it, so it is never sent twice.
    */
   async function replyToInbox(data: PushUserInboxDataPayload, event: NotificationEvent): Promise<void> {
     const action = readUserInboxActions(data.actionsJson)?.find((entry) => entry.id === event.actionId);
     const text = event.input?.trim();
     if (!action || !text || !data.channelTargetId) return;
+    let outcome: ReplyOutcome;
     try {
-      await ports.replyToConversation(data, data.channelTargetId, text);
+      outcome = await ports.replyToInbox(data, text);
     } catch (error) {
       console.warn(`${LOG} could not send the reply for ${data.notificationId}:`, error);
-      await displayInbox(data, {}, `Not sent: ${error instanceof Error ? error.message : String(error)}`);
+      await displayInbox(data, {}, {
+        body: `Not sent: ${error instanceof Error ? error.message : String(error)}`,
+      });
       return;
     }
-    await notifee.cancel(workspaceNotificationKey(data, data.notificationId));
+    if (!outcome.acknowledged) {
+      console.warn(`${LOG} sent the reply for ${data.notificationId} but could not acknowledge it:`, outcome.reason);
+      await displayInbox(data, {}, {
+        body: `Sent, but this message could not be marked as read: ${outcome.reason}`,
+        replyable: false,
+      });
+      return;
+    }
+    await ports.inbox.cancel(workspaceNotificationKey(data, data.notificationId));
   }
 
   async function showSyncing(
@@ -404,6 +473,15 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
       return;
     }
     if (opens) await open({ kind: "approval", target });
+  }
+
+  async function handleInboxEvent(event: InboxEvent): Promise<void> {
+    await handleNotificationEvent({
+      kind: event.kind,
+      ...(event.actionId !== undefined ? { actionId: event.actionId } : {}),
+      ...(event.input !== undefined ? { input: event.input } : {}),
+      notification: { data: event.data },
+    });
   }
 
   const guarded =
@@ -530,5 +608,25 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
       return () => void listeners.delete(listener);
     },
     drain,
+    handleInboxEvent: guarded("handle an inbox notification event", handleInboxEvent),
+  };
+}
+
+/**
+ * Draw an inbox entry through notifee, as iOS does: the reply category
+ * registered at launch fixes the one reply action, so the push cannot name
+ * others. (Android draws inbox entries natively; see `nativePorts.ts`.)
+ */
+export function notifeeInboxDisplay(notifee: Pick<NotifeePort, "display" | "cancel">): InboxDisplayPort {
+  return {
+    display: (notification) =>
+      notifee.display({
+        id: notification.id,
+        title: notification.title,
+        body: notification.body,
+        data: { ...notification.data },
+        ios: notification.actions.length > 0 ? { categoryId: USER_INBOX_REPLY_CATEGORY } : {},
+      }),
+    cancel: (id) => notifee.cancel(id),
   };
 }

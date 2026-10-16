@@ -36,6 +36,7 @@ import type { developmentNativeMethods } from "./developmentNative.js";
 import type { desktopBrowserPrivacyPresentationMethods } from "./desktopBrowserPrivacyPresentation.js";
 import type { vcsMethods } from "./vcs.js";
 import type { developmentClientExecutorMethods } from "./developmentClientExecutor.js";
+import type { deviceDriverMethods } from "./deviceDriver.js";
 import type { shellBrowserPrivacyMethods } from "./shellBrowserPrivacy.js";
 import type { workerLogMethods } from "./workerLog.js";
 import type { corsApprovalMethods } from "./corsApproval.js";
@@ -114,6 +115,7 @@ export type MainRpcMethods = Methods<"governance", typeof governanceMethods> &
   Methods<"desktopBrowserPrivacyPresentation", typeof desktopBrowserPrivacyPresentationMethods> &
   Methods<"vcs", typeof vcsMethods> &
   Methods<"developmentClientExecutor", typeof developmentClientExecutorMethods> &
+  Methods<"deviceDriver", typeof deviceDriverMethods> &
   Methods<"shellBrowserPrivacy", typeof shellBrowserPrivacyMethods> &
   Methods<"workerLog", typeof workerLogMethods> &
   Methods<"corsApproval", typeof corsApprovalMethods> &
@@ -200,6 +202,7 @@ const loaders = {
   vcs: async () => (await import("./vcs.js")).vcsMethods,
   developmentClientExecutor: async () =>
     (await import("./developmentClientExecutor.js")).developmentClientExecutorMethods,
+  deviceDriver: async () => (await import("./deviceDriver.js")).deviceDriverMethods,
   shellBrowserPrivacy: async () =>
     (await import("./shellBrowserPrivacy.js")).shellBrowserPrivacyMethods,
   workerLog: async () => (await import("./workerLog.js")).workerLogMethods,

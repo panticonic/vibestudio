@@ -110,13 +110,25 @@
             android:configChanges="keyboard|keyboardHidden|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/AppTheme"
+            android:allowEmbedded="true"
+            android:resizeableActivity="true"
+            android:documentLaunchMode="always"
             android:exported="false" />
 
         <!--
             Where the OS delivers what is meant for a client: vibestudio://c/...
-            links (pinned shortcuts) and text shared with Vibestudio. Shows
-            nothing; forwards to the host runtime, which routes it to the client
-            that declares the intent or accepts the type.
+            links (shortcuts, widget, notifications), https://vibestudio.app/c/...
+            App Links and text shared with Vibestudio. Shows nothing; forwards to
+            the host runtime, which routes it to the client that declares the
+            intent or accepts the type.
+
+            The https filter is a verified Android App Link (autoVerify): the OS
+            sends vibestudio.app/c/ links to this app only while
+            https://vibestudio.app/.well-known/assetlinks.json lists this app's
+            package and signing certificate (the same file that verifies the
+            /oauth/ filter on MainActivity; see docs/audit/08-mobile-supply-chain.md
+            and hosts/react-native/README.md). Unverified, the link opens in the
+            browser. Check with: adb shell pm get-app-links app.vibestudio.mobile
         -->
         <activity
             android:name=".IngressActivity"
@@ -130,12 +142,40 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="vibestudio" android:host="c" />
             </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data
+                    android:scheme="https"
+                    android:host="vibestudio.app"
+                    android:pathPrefix="/c/" />
+            </intent-filter>
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:mimeType="text/*" />
             </intent-filter>
         </activity>
+
+        <!-- Home-screen widget: a client's recent conversations (dynamic entries) and Ask. -->
+        <receiver
+            android:name=".LaunchWidgetProvider"
+            android:label="@string/app_name"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/launch_widget_info" />
+        </receiver>
+
+        <!-- Fired by the launcher when the person agrees to a pinned shortcut the host asked for. -->
+        <receiver android:name=".PinResultReceiver" android:exported="false" />
+
+        <!-- A reply typed into a conversation notification. -->
+        <receiver android:name=".ConversationReplyReceiver" android:exported="false" />
 
         <!-- The Ask tile and its prompt: a background intent, no client opens. -->
         <service
