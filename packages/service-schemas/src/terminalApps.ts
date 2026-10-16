@@ -10,7 +10,6 @@
  * clients attaches to it with the shell extension's framed attach stream.
  */
 import { z } from "zod";
-import { JsonObjectSchema } from "@vibestudio/shared/wireValues";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { TerminalSessionEntry } from "@vibestudio/shared/terminalSessions";
@@ -193,23 +192,5 @@ export const terminalAppsMethods = defineServiceMethods({
     returns: z.void(),
     authority: { principals: ["user", "code"] },
     access: { sensitivity: "destructive" },
-  },
-  getSettings: {
-    website: WEBSITE,
-    description: "The calling person's terminal settings (prefix key, bell, mouse, …).",
-    tier: controlTier,
-    args: z.tuple([]),
-    returns: JsonObjectSchema,
-    authority: { principals: ["user", "code"] },
-    access: { sensitivity: "read" },
-  },
-  setSettings: {
-    website: WEBSITE,
-    description: "Replace the calling person's terminal settings (at most 4 KB of JSON).",
-    tier: controlTier,
-    args: z.tuple([JsonObjectSchema]),
-    returns: z.void(),
-    authority: { principals: ["user", "code"] },
-    access: { sensitivity: "write" },
   },
 });

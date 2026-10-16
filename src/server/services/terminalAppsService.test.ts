@@ -832,16 +832,11 @@ describe("terminalApps launch service", () => {
     }
   );
 
-  it("refuses runs the dispatcher did not prepare, and settings larger than 4 KB", async () => {
+  it("refuses runs the dispatcher did not prepare", async () => {
     const h = await harness();
     await expect(
       call(h, "launch", { caller: personCtx().caller }, { cols: 80, rows: 24 })
     ).rejects.toThrow(/prepared/);
-    await expect(call(h, "setSettings", personCtx(), { blob: "x".repeat(5000) })).rejects.toThrow(
-      /4096/
-    );
-    await call(h, "setSettings", personCtx(), { prefixKey: "C-a" });
-    expect(await call(h, "getSettings", personCtx())).toEqual({ prefixKey: "C-a" });
     await h.service.stop();
   });
 });

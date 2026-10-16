@@ -7429,17 +7429,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "terminalApps.getSettings": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "terminal-apps.control",
-      rationale: "Controls only the calling person's own terminal sessions",
-    },
-    capability: null,
-    presentation: null,
-  },
   "terminalApps.launch": {
     tier: {
       tier: "open",
@@ -7513,17 +7502,6 @@ export const HOST_AUTHORITY_METHODS = {
         verb: "act",
       },
     },
-  },
-  "terminalApps.setSettings": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "terminal-apps.control",
-      rationale: "Controls only the calling person's own terminal sessions",
-    },
-    capability: null,
-    presentation: null,
   },
   "vcs.blame": {
     tier: {

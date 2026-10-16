@@ -55,7 +55,6 @@ import { writeFileAtomicSync } from "../../atomicFile.js";
 export const SHELL_EXTENSION = "@workspace-extensions/shell";
 export const TERMINAL_LAUNCH_ENV = "VIBESTUDIO_TERMINAL_LAUNCH";
 const HOST_CALLER_ID = "terminal-apps";
-const MAX_SETTINGS_BYTES = 4096;
 const MAX_TITLE_LENGTH = 80;
 
 /** What the program reads from its one-shot launch file (`@workspace/terminal-app`). */
@@ -112,7 +111,6 @@ interface StoredSession {
 interface RegistryFile {
   version: 1;
   sessions: StoredSession[];
-  settings: Record<string, Record<string, unknown>>;
 }
 
 export interface TerminalAppsServiceDeps {
@@ -720,15 +718,6 @@ export function createTerminalAppsService(
             changed(subject.userId);
           });
         }),
-      getSettings: (ctx) => registryFile().settings[userSubject(ctx).userId] ?? {},
-      setSettings: (ctx, [settings]) => {
-        const userId = userSubject(ctx).userId;
-        if (Buffer.byteLength(JSON.stringify(settings), "utf8") > MAX_SETTINGS_BYTES) {
-          throw new Error(`Terminal settings must be at most ${MAX_SETTINGS_BYTES} bytes`);
-        }
-        registryFile().settings[userId] = settings;
-        saveRegistry();
-      },
     }),
     async stop() {
       stopped = true;
@@ -744,7 +733,7 @@ function loadRegistry(file: string): RegistryFile {
     raw = fs.readFileSync(file, "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return { version: 1, sessions: [], settings: {} };
+      return { version: 1, sessions: [] };
     }
     throw error;
   }
@@ -764,9 +753,5 @@ function loadRegistry(file: string): RegistryFile {
       session.entityKey = session.entityId.slice("panel:".length);
     }
   }
-  return {
-    version: 1,
-    sessions: value.sessions,
-    settings: value.settings && typeof value.settings === "object" ? value.settings : {},
-  };
+  return { version: 1, sessions: value.sessions };
 }

@@ -17244,26 +17244,6 @@
         "capability": null,
         "presentation": null
       },
-      "getSettings": {
-        "authority": {
-          "principals": [
-            "user",
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "terminal-apps.control",
-          "rationale": "Controls only the calling person's own terminal sessions"
-        },
-        "capability": null,
-        "presentation": null
-      },
       "launch": {
         "authority": {
           "requirement": {
@@ -17727,26 +17707,6 @@
             "verb": "act"
           }
         }
-      },
-      "setSettings": {
-        "authority": {
-          "principals": [
-            "user",
-            "code"
-          ]
-        },
-        "access": {
-          "sensitivity": "write"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "terminal-apps.control",
-          "rationale": "Controls only the calling person's own terminal sessions"
-        },
-        "capability": null,
-        "presentation": null
       }
     }
   },
