@@ -41,7 +41,7 @@ export type ApprovalProvenanceDecision =
   | "submit";
 
 /** The surface the resolver acted from (§5). */
-export type ResolvedVia = "shell" | "mobile-notification" | "app" | "server";
+export type ResolvedVia = "shell" | "mobile-notification" | "client" | "server";
 
 /** The grant scope the server persisted for this resolution (null for once/deny). */
 export type GrantScopeStored =

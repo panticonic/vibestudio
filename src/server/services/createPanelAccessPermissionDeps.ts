@@ -1,6 +1,6 @@
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import type { AppHost } from "../appHost.js";
+import type { ClientHost } from "../clients/clientRegistry.js";
 import type { ContextBoundaryDeps } from "./contextBoundary.js";
 import type { PanelAccessPermissionDeps } from "./panelAccessPermission.js";
 import {
@@ -12,7 +12,7 @@ export function createPanelAccessPermissionDeps(input: {
   contextBoundary: ContextBoundaryDeps;
   entityCache: EntityCache;
   lifecycleContextStore: LifecycleContextControlStore;
-  getAppHost(): AppHost | null;
+  getClientHost(): ClientHost | null;
 }): PanelAccessPermissionDeps {
   const { contextBoundary, entityCache } = input;
   return {
@@ -45,7 +45,7 @@ export function createPanelAccessPermissionDeps(input: {
       const kind = record?.kind;
       if (
         !record ||
-        (kind !== "panel" && kind !== "app" && kind !== "worker" && kind !== "do") ||
+        (kind !== "panel" && kind !== "client" && kind !== "worker" && kind !== "do") ||
         !record.activeExecutionDigest ||
         !record.activeAuthority
       ) {
@@ -60,7 +60,7 @@ export function createPanelAccessPermissionDeps(input: {
         requested: record.activeAuthority.requests,
       });
     },
-    hasAppCapability: (callerId, capability) =>
-      input.getAppHost()?.hasAppCapability(callerId, capability) ?? false,
+    hasClientCapability: (callerId, capability) =>
+      input.getClientHost()?.hasClientCapability(callerId, capability) ?? false,
   };
 }

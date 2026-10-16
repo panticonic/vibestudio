@@ -112,7 +112,7 @@ function makeRecord(
     activeAuthority?: EntityRecord["activeAuthority"];
   }
 ): EntityRecord {
-  const executable = kind === "panel" || kind === "app" || kind === "worker" || kind === "do";
+  const executable = kind === "panel" || kind === "client" || kind === "worker" || kind === "do";
   return {
     id,
     kind,
@@ -4275,7 +4275,7 @@ describe("RpcServer relay behavior", () => {
     );
   });
 
-  it.each(["panel", "app"] as const)(
+  it.each(["panel", "client"] as const)(
     "inherits the live %s context test policy without granting a session",
     async (kind) => {
       const policy = { policyId: "test:panel-context", kind: "orchestrator" as const };
@@ -5818,13 +5818,13 @@ describe("RpcServer caller identity", () => {
   it("indexes shared-app connections by their concrete authorized user", () => {
     const { server } = createServer();
     const alice = createClientWithConnection("app:shared", "alice-connection");
-    alice.caller = createVerifiedCaller("app:shared", "app", null, null, {
+    alice.caller = createVerifiedCaller("app:shared", "client", null, null, {
       userId: "usr_alice",
       handle: "alice",
     });
     alice.userId = "usr_alice";
     const bob = createClientWithConnection("app:shared", "bob-connection");
-    bob.caller = createVerifiedCaller("app:shared", "app", null, null, {
+    bob.caller = createVerifiedCaller("app:shared", "client", null, null, {
       userId: "usr_bob",
       handle: "bob",
     });
@@ -6099,7 +6099,7 @@ describe("RpcServer caller identity", () => {
 
   it("rejects WS authentication when a connection grant has no runtime entity kind", async () => {
     const { server, connectionGrants, entityCache } = createServer();
-    const principal = makeRecord("missing-principal", "app");
+    const principal = makeRecord("missing-principal", "client");
     entityCache._onActivate(principal);
     const grant = connectionGrants.grant(principal.id, "shell:test").token;
     entityCache._onRetire({ ...principal, status: "retired", retiredAt: Date.now() });
@@ -6156,10 +6156,10 @@ describe("RpcServer caller identity", () => {
   it("preserves app chain caller attribution for extension parent invocations", async () => {
     const authorizingCaller = createVerifiedCaller(
       "@workspace-apps/shell",
-      "app",
+      "client",
       {
         callerId: "@workspace-apps/shell",
-        callerKind: "app",
+        callerKind: "client",
         repoPath: "apps/shell",
         effectiveVersion: "ev-shell",
       },
@@ -6170,11 +6170,11 @@ describe("RpcServer caller identity", () => {
       resolveExtensionInvocation: vi.fn(() => ({
         caller: {
           callerId: "@workspace-apps/shell",
-          callerKind: "app" as const,
+          callerKind: "client" as const,
         },
         chainCaller: {
           callerId: "@workspace-apps/shell",
-          callerKind: "app" as const,
+          callerKind: "client" as const,
           repoPath: "apps/shell",
           effectiveVersion: "ev-shell",
         },
@@ -6206,7 +6206,7 @@ describe("RpcServer caller identity", () => {
       },
       chainCaller: {
         callerId: "@workspace-apps/shell",
-        callerKind: "app",
+        callerKind: "client",
         repoPath: "apps/shell",
         effectiveVersion: "ev-shell",
       },

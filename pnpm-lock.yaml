@@ -980,6 +980,9 @@ importers:
       '@vibestudio/shared':
         specifier: workspace:*
         version: link:../shared
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../workspace-contracts
       react-native:
         specifier: ^0.79.0
         version: 0.79.7(patch_hash=ffd50cbf5758f9251e228ad537ef249cfcce06fa456dbe4dfd418aac138e31cf)(@babel/core@7.29.7)(@react-native-community/cli@18.0.1(typescript@7.0.2))(@types/react@19.2.10)(react@19.2.4)

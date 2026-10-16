@@ -40,7 +40,7 @@ export interface CredentialBootstrapDeps {
   presentsOwnBrowserHandoff: NonNullable<
     NonNullable<CredentialServiceDeps["connectionLookup"]>["presentsOwnBrowserHandoff"]
   >;
-  hasAppCapability: NonNullable<CredentialServiceDeps["hasAppCapability"]>;
+  hasClientCapability: NonNullable<CredentialServiceDeps["hasClientCapability"]>;
   resolveNativeInvocation?: CredentialServiceDeps["resolveNativeInvocation"];
 }
 
@@ -108,7 +108,7 @@ export function wireCredentialService(
     sessionGrantStore: deps.sessionGrantStore,
     credentialUseGrantStore: deps.credentialUseGrantStore,
     credentialLifecycle: deps.credentialLifecycle,
-    hasAppCapability: deps.hasAppCapability,
+    hasClientCapability: deps.hasClientCapability,
     resolveNativeInvocation: deps.resolveNativeInvocation,
     runtimeInspector: {
       listActiveEntities: () => deps.entityCache.listActive(),

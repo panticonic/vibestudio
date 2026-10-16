@@ -161,7 +161,7 @@ export type CredentialUseGrant = CredentialUseGrantBase &
       }
   );
 
-export type CredentialAccessSubjectKind = "panel" | "worker" | "do" | "app" | "unknown";
+export type CredentialAccessSubjectKind = "panel" | "worker" | "do" | "client" | "unknown";
 
 export interface CredentialAccessSubjectSummary {
   id: string;
@@ -473,7 +473,7 @@ export interface ConnectCredentialEnvelope {
   spec: ConnectCredentialRequest;
   handoffTarget: {
     callerId: string;
-    callerKind: "app" | "panel" | "shell";
+    callerKind: "client" | "panel" | "shell";
   };
 }
 

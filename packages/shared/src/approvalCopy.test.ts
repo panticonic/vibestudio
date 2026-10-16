@@ -71,7 +71,7 @@ function installReview(overrides: Record<string, unknown>) {
     description: "Read and discuss personalized news briefings.",
     template: null,
     parts: [],
-    summary: { panels: 0, agents: 0, services: 0, clientApps: 0, extensions: 0 },
+    summary: { panels: 0, agents: 0, services: 0, clients: 0, extensions: 0 },
     unchangedPartCount: 0,
     configWrite: null,
     ...overrides,
@@ -372,7 +372,7 @@ describe("approvalCopy", () => {
           title: "News changed",
           description: "Someone edited this part in your workspace.",
           parts: [reviewPart()],
-          summary: { panels: 1, agents: 0, services: 0, clientApps: 0, extensions: 0 },
+          summary: { panels: 1, agents: 0, services: 0, clients: 0, extensions: 0 },
         }),
       },
       category: "A part changed",
@@ -398,7 +398,7 @@ describe("approvalCopy", () => {
               repoPath: "extensions/feed-reader",
             }),
           ],
-          summary: { panels: 0, agents: 0, services: 0, clientApps: 0, extensions: 1 },
+          summary: { panels: 0, agents: 0, services: 0, clients: 0, extensions: 1 },
           template: {
             title: "News",
             purpose: "Read and discuss personalized news briefings.",
@@ -853,14 +853,25 @@ describe("approvalCopy", () => {
 
   it("keeps reviewed receiver credential permission version-bound while showing its website initiator", () => {
     const operation: PendingCapabilityApproval = {
-      ...base, kind: "capability", title: "Use account", capability: "credential.use",
-      authoritySubject: { principal: "code:workers/helper@v1", reviewedVersion: "v1",
-        website: { origin: "https://example.com", workspaceId: "project", documentId: "doc-1" } },
+      ...base,
+      kind: "capability",
+      title: "Use account",
+      capability: "credential.use",
+      authoritySubject: {
+        principal: "code:workers/helper@v1",
+        reviewedVersion: "v1",
+        website: { origin: "https://example.com", workspaceId: "project", documentId: "doc-1" },
+      },
       allowedDecisions: ["once", "version", "deny"],
     };
     expect(getRecommendedStandardDecision(operation)).toBe("version");
-    expect(getStandardApprovalDecisionActions(operation).map(action => action.decision)).toContain("version");
-    expect(getApprovalIdentityDetails(operation)).toContainEqual({ label: "Website origin", value: "https://example.com" });
+    expect(
+      getStandardApprovalDecisionActions(operation).map((action) => action.decision)
+    ).toContain("version");
+    expect(getApprovalIdentityDetails(operation)).toContainEqual({
+      label: "Website origin",
+      value: "https://example.com",
+    });
   });
 
   it("identifies a browser permission by its website origin rather than its native mediator", () => {
@@ -1038,7 +1049,7 @@ describe("approvalCopy", () => {
       template: template(""),
       description: "Read and discuss personalized news briefings.",
       parts: [reviewPart()],
-      summary: { panels: 1, agents: 0, services: 0, clientApps: 0, extensions: 0 },
+      summary: { panels: 1, agents: 0, services: 0, clients: 0, extensions: 0 },
     }) as Extract<PendingApproval, { kind: "unit-install-review" }>;
     expect(getApprovalCopy({ ...base, ...empty })).toMatchObject({
       title: "Add News",
@@ -1050,7 +1061,7 @@ describe("approvalCopy", () => {
       template: template("   \n "),
       description: "  ",
       parts: [reviewPart()],
-      summary: { panels: 1, agents: 0, services: 0, clientApps: 0, extensions: 0 },
+      summary: { panels: 1, agents: 0, services: 0, clients: 0, extensions: 0 },
     }) as Extract<PendingApproval, { kind: "unit-install-review" }>;
     // Nothing printable was supplied at all, so the platform's own count of
     // what is arriving stands in — never an empty line.

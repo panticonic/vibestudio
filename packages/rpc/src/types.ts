@@ -303,7 +303,7 @@ export interface AuthenticatedCaller {
 export type CallerKind =
   | "shell"
   | "panel"
-  | "app"
+  | "client"
   | "worker"
   | "do"
   | "extension"

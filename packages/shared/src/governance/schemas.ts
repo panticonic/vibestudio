@@ -41,7 +41,7 @@ export const ApprovalRecordSchema = z
     workspaceId: z.string().min(1),
     resolvedAt: z.number().finite(),
     resolvedBy: UserActorSchema.extend({ deviceLabel: z.string().min(1).optional() }),
-    resolvedVia: z.enum(["shell", "mobile-notification", "app", "server"]),
+    resolvedVia: z.enum(["shell", "mobile-notification", "client", "server"]),
     requestedBy: z
       .object({
         callerId: z.string().min(1),

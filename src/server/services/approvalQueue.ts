@@ -127,7 +127,7 @@ export type ApprovalRequesterRef = Pick<
 interface ApprovalQueueRequestBase {
   authoritySubject?: PendingApproval["authoritySubject"];
   callerId: string;
-  callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
+  callerKind: "panel" | "client" | "worker" | "do" | "extension" | "system";
   repoPath: string;
   effectiveVersion: string;
   /** Presentation routing only; it never changes the approval's authority semantics. */
@@ -379,7 +379,7 @@ function installResultEntryPoint(
   if (approval.mode === "remove") return undefined;
   const openable = approval.parts.filter(
     (part) =>
-      (part.kind === "panel" || part.kind === "app") &&
+      (part.kind === "panel" || part.kind === "client") &&
       part.section !== "repair" &&
       part.change !== "removed" &&
       (!landing || landing.landed.includes(part.identityKey))
@@ -390,7 +390,7 @@ function installResultEntryPoint(
     identityKey: chosen.identityKey,
     repoPath: chosen.repoPath,
     title: chosen.displayName ?? chosen.title,
-    kind: chosen.kind === "panel" ? "panel" : "app",
+    kind: chosen.kind === "panel" ? "panel" : "client",
   };
 }
 
@@ -751,7 +751,7 @@ export function createApprovalQueue(deps: {
   resolveTitle?: (entityId: string) => string | undefined;
   resolveRequester?: (input: {
     callerId: string;
-    callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
+    callerKind: "panel" | "client" | "worker" | "do" | "extension" | "system";
     repoPath: string;
     effectiveVersion: string;
     requesterCategory?: ApprovalRequesterCategory;

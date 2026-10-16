@@ -35,7 +35,10 @@ function workerContext(id = "worker:one"): ServiceContext {
 }
 
 function shellContext(): ServiceContext {
-  return { caller: createVerifiedCaller("shell", "shell"), authorization: INTERNAL_AUTHORIZATION };
+  return {
+    caller: createVerifiedCaller("shell:test-device", "shell"),
+    authorization: INTERNAL_AUTHORIZATION,
+  };
 }
 
 function agentContext(channelId = "channel:own"): ServiceContext {

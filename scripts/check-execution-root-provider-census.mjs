@@ -11,7 +11,7 @@ const census = JSON.parse(
 const expected = new Set([
   "runtime-entity",
   "panel-history",
-  "app-generation",
+  "client-generation",
   "runtime-image",
   "extension-generation",
   "eval-run",

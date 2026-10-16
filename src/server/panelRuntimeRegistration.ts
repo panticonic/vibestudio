@@ -28,7 +28,7 @@ import {
   panelEvaluateTimeoutMs,
 } from "@vibestudio/shared/panel/evaluate";
 import type { SlotRow } from "@vibestudio/shell-core/workspaceStateClient";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import {
   callerControlsContextTransition,
@@ -110,7 +110,7 @@ export interface CommonDeps {
   eventService?: import("@vibestudio/shared/eventsService").EventService;
   grantStore?: import("./services/capabilityGrantStore.js").CapabilityGrantStore;
   /** Whether a workspace-app caller declares a capability (e.g. panel-hosting). */
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
   /** Active-entity cache; resolves caller/target contexts and code-identity subjects. */
   entityCache?: import("@vibestudio/shared/runtime/entityCache").EntityCache;
   /** True when the target context already holds state (active entity or materialized folder). */
@@ -266,7 +266,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       const rec = panelGateEntityCache.resolveActive(entityId);
       if (!rec) return null;
       const k = rec.kind;
-      if (k !== "panel" && k !== "app" && k !== "worker" && k !== "do") return null;
+      if (k !== "panel" && k !== "client" && k !== "worker" && k !== "do") return null;
       if (!rec.activeExecutionDigest || !rec.activeAuthority) return null;
       return createVerifiedCaller(rec.id, k, {
         callerId: rec.id,
@@ -321,7 +321,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             );
           },
         },
-        hasAppCapability: deps.hasAppCapability,
+        hasClientCapability: deps.hasClientCapability,
         ensureContextFolder: deps.ensureContextFolder,
       })
     );
@@ -432,7 +432,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
         panelCdpDefinition = createPanelCdpService({
           ...panelGateDeps,
           resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
-          hasAppCapability: deps.hasAppCapability,
+          hasClientCapability: deps.hasClientCapability,
           getTarget: (panelId) => requestPanelMetadataForServices(panelId),
           getEndpoint: async (panelId, requesterEntityId) => {
             await ensureCdpTargetReady(panelId);
@@ -619,7 +619,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
       createPanelContextService({
         ...panelGateDeps,
         resolveRequesterPanel: resolveRequesterPanelMetadataForServices,
-        hasAppCapability: deps.hasAppCapability,
+        hasClientCapability: deps.hasClientCapability,
         getTarget: (panelId) => requestPanelMetadataForServices(panelId),
         getPanelDetail: async (panelId) =>
           (await deps.dispatcher.dispatch(serverCtx, "workspace-state", "panelTree.detail", [

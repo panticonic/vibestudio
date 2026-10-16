@@ -1,6 +1,12 @@
 import { z } from "zod";
 
-export const RuntimeSupervisionKindSchema = z.enum(["panel", "worker", "do", "app", "extension"]);
+export const RuntimeSupervisionKindSchema = z.enum([
+  "panel",
+  "worker",
+  "do",
+  "client",
+  "extension",
+]);
 export type RuntimeSupervisionKind = z.infer<typeof RuntimeSupervisionKindSchema>;
 
 export const RuntimeSupervisionEntityKeySchema = z

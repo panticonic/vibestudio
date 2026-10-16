@@ -24,8 +24,8 @@ const hostOrigin = {
 function part(overrides: Partial<InstallReviewPart> = {}): InstallReviewPart {
   return {
     identityKey: `${overrides.repoPath ?? "apps/shell"}@ev`,
-    kind: "app",
-    label: "Client App",
+    kind: "client",
+    label: "Client",
     surfaces: [],
     name: "@workspace-apps/shell",
     title: "Shell",
@@ -35,7 +35,7 @@ function part(overrides: Partial<InstallReviewPart> = {}): InstallReviewPart {
     version: "1.0.0",
     requiredUnitKeys: [],
     runsInBackground: false,
-    target: "electron",
+    runtime: "web",
     origin: hostOrigin,
     notableRows: [],
     everydayRows: [],
@@ -62,7 +62,7 @@ function review(
     title: "Start this workspace?",
     description: "",
     parts,
-    summary: { panels: 0, agents: 0, services: 0, clientApps: 0, extensions: 0 },
+    summary: { panels: 0, agents: 0, services: 0, clients: 0, extensions: 0 },
     unchangedPartCount: 0,
   };
 }
@@ -89,14 +89,14 @@ describe("the common case", () => {
             kind: "extension",
             label: "Extension",
             repoPath: "extensions/shell",
-            target: null,
+            runtime: null,
           }),
         ]),
       ],
     });
 
     expect(view.summary).toBe(
-      "Vibestudio needs to run 2 programs on this computer — 1 app · 1 extension, all from Vibestudio 1.4.0."
+      "Vibestudio needs to run 2 programs on this computer — 1 client · 1 extension, all from Vibestudio 1.4.0."
     );
     expect(view.sources).toHaveLength(1);
     expect(view.sourcesExpandedByDefault).toBe(false);
@@ -105,7 +105,7 @@ describe("the common case", () => {
 
   it("discloses the execution contract of the workspace host", () => {
     const withExtension = launchGateView({
-      approvals: [review([part({ kind: "extension", label: "Extension", target: null })])],
+      approvals: [review([part({ kind: "extension", label: "Extension", runtime: null })])],
     });
     expect(withExtension.nativeCodeWarning).toBe(
       "Workspace commands and extensions run in a sandbox on the Linux host. Separately approved host actions can run outside that sandbox."
@@ -113,7 +113,7 @@ describe("the common case", () => {
     expect(
       launchGateView({
         approvals: [
-          review([part({ kind: "extension", label: "Extension", target: null })], "windows"),
+          review([part({ kind: "extension", label: "Extension", runtime: null })], "windows"),
         ],
       }).nativeCodeWarning
     ).toBe(
@@ -122,7 +122,7 @@ describe("the common case", () => {
     expect(
       launchGateView({
         approvals: [
-          review([part({ kind: "extension", label: "Extension", target: null })], "macos"),
+          review([part({ kind: "extension", label: "Extension", runtime: null })], "macos"),
         ],
       }).nativeCodeWarning
     ).toContain("run in a sandbox on the macOS host");
@@ -219,7 +219,7 @@ describe("a workspace built from someone else's code", () => {
         label: "Extension",
         repoPath: "extensions/acme-tools",
         title: "Acme Tools",
-        target: null,
+        runtime: null,
         origin: acmeRoot,
       }),
     ]),
@@ -285,7 +285,7 @@ describe("a workspace built from someone else's code", () => {
     expect(view.sources[0]!.label).toBe("https://github.com/acme/studio  at v2.1");
     // The name survives only in the slot that says whose name it is.
     const text = words(
-      formatLaunchGateForTerminal([review([part({ origin: impostor })])], "electron")
+      formatLaunchGateForTerminal([review([part({ origin: impostor })])], "desktop")
     );
     expect(text).toContain(words('"Vibestudio" — name given by this template'));
     expect(text).not.toContain("all from Vibestudio");
@@ -303,7 +303,7 @@ describe("more than one source", () => {
             label: "Extension",
             repoPath: "extensions/news",
             title: "Feed Reader",
-            target: null,
+            runtime: null,
             origin: acme,
           }),
         ]),
@@ -372,7 +372,7 @@ describe("more than one source", () => {
             label: "Extension",
             repoPath: "extensions/news",
             title: "Feed Reader",
-            target: null,
+            runtime: null,
             origin: acme,
           }),
         ]),
@@ -400,7 +400,7 @@ describe("declining says what it costs", () => {
   it("says only that extension will not run when nothing else is at stake", () => {
     const view = launchGateView({
       approvals: [
-        review([part({ kind: "extension", label: "Extension", title: "News", target: null })]),
+        review([part({ kind: "extension", label: "Extension", title: "News", runtime: null })]),
       ],
     });
     expect(view.declineConsequence).toBe(
@@ -413,12 +413,12 @@ describe("declining says what it costs", () => {
     const view = launchGateView({
       approvals: [
         review([
-          part({ kind: "extension", label: "Extension", title: "News", target: null }),
+          part({ kind: "extension", label: "Extension", title: "News", runtime: null }),
           part({
             kind: "extension",
             label: "Extension",
             title: "Calendar",
-            target: null,
+            runtime: null,
             repoPath: "extensions/calendar",
           }),
         ]),
@@ -442,12 +442,12 @@ describe("the terminal form", () => {
               label: "Extension",
               repoPath: "extensions/news",
               title: "Feed Reader",
-              target: null,
+              runtime: null,
               origin: acme,
             }),
           ]),
         ],
-        "electron"
+        "desktop"
       )
     );
 
@@ -466,7 +466,7 @@ describe("the terminal form", () => {
           kind: "extension",
           label: "Extension",
           repoPath: "extensions/acme",
-          target: null,
+          runtime: null,
           origin: acmeRoot,
         }),
       ]),
@@ -509,7 +509,7 @@ describe("the terminal form", () => {
 
   it("prints no commit id or content digest at any level", () => {
     const text = words(
-      formatLaunchGateForTerminal([review([part(), part({ origin: acme })])], "electron")
+      formatLaunchGateForTerminal([review([part(), part({ origin: acme })])], "desktop")
     );
     expect(text).not.toMatch(/[0-9a-f]{40}/u);
     expect(text).not.toContain("ev");
@@ -542,7 +542,7 @@ describe("an instance's first start", () => {
           repoPath: "panels/about",
           kind: "panel",
           label: "Panel",
-          target: null,
+          runtime: null,
           origin: systemRoot,
         }),
       ]),
@@ -552,7 +552,7 @@ describe("an instance's first start", () => {
           kind: "panel",
           label: "Panel",
           title: "chat",
-          target: null,
+          runtime: null,
           origin: personalRoot,
         }),
       ]),
@@ -566,7 +566,7 @@ describe("an instance's first start", () => {
     expect(view.firstEncounterLine).toBe("You haven't run code from github.com/acme before.");
     // Every program counts somewhere.
     expect(view.sources.map((source) => source.counts).sort()).toEqual([
-      "1 app · 1 other part",
+      "1 client · 1 other part",
       "1 part",
     ]);
 

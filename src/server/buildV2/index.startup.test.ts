@@ -459,7 +459,7 @@ describe("BuildSystemV2 startup", () => {
           [
             "runtime-entity",
             "panel-history",
-            "app-generation",
+            "client-generation",
             "runtime-image",
             "extension-generation",
             "eval-run",
@@ -470,7 +470,7 @@ describe("BuildSystemV2 startup", () => {
           id,
           mandatory: true,
           async snapshotRoots() {
-            if (id === "app-generation") throw new Error("registry offline");
+            if (id === "client-generation") throw new Error("registry offline");
             return [];
           },
         })),
@@ -505,7 +505,7 @@ describe("BuildSystemV2 startup", () => {
       ],
       providerFailures: [
         {
-          provider: "app-generation",
+          provider: "client-generation",
           error: "registry offline",
         },
       ],
@@ -579,7 +579,7 @@ describe("BuildSystemV2 startup", () => {
     const providerIds = [
       "runtime-entity",
       "panel-history",
-      "app-generation",
+      "client-generation",
       "runtime-image",
       "extension-generation",
       "eval-run",
@@ -634,7 +634,7 @@ describe("BuildSystemV2 startup", () => {
           [
             "runtime-entity",
             "panel-history",
-            "app-generation",
+            "client-generation",
             "runtime-image",
             "extension-generation",
             "eval-run",
@@ -933,7 +933,7 @@ describe("BuildSystemV2 startup", () => {
     const providerIds = [
       "runtime-entity",
       "panel-history",
-      "app-generation",
+      "client-generation",
       "runtime-image",
       "extension-generation",
       "eval-run",

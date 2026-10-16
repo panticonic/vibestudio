@@ -420,7 +420,7 @@ export const developmentRunSchema = z
     ownerRuntimeId: nonEmpty,
     ownerRuntimeKind: z.enum([
       "panel",
-      "app",
+      "client",
       "worker",
       "do",
       "extension",

@@ -23,7 +23,7 @@ import {
 } from "@vibestudio/shared/serviceDefinition";
 import { vcsFileSelections, type SemanticReads } from "./vcsFileAuthority.js";
 import { defineServiceHandler, mapServiceHandlers } from "@vibestudio/shared/serviceHandlers";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import {
   channelTrajectoryFor,
   commandIdForTrajectoryInvocation,
@@ -36,7 +36,7 @@ import {
   type VcsMethodName,
 } from "@vibestudio/service-schemas/vcs";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
-import { isAuthorizedChrome } from "./chromeTrust.js";
+import { isTrustedDeviceCaller } from "./clientTrust.js";
 import { requireReviewedSourceConsumer } from "./workspaceTemplateSourceService.js";
 
 export interface VcsServiceDeps {
@@ -48,7 +48,7 @@ export interface VcsServiceDeps {
     | "referencesReachable"
   >;
   entityCache?: Pick<EntityCache, "resolveContext" | "resolveActive">;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
   listOwnedContexts?: (input: { contextId: string }) => Promise<{
     contexts: Array<{
       contextId: string;
@@ -123,8 +123,8 @@ function callerContextAuthorities(ctx: ServiceContext, deps: VcsServiceDeps): st
 }
 
 function privileged(ctx: ServiceContext, deps: VcsServiceDeps): boolean {
-  return isAuthorizedChrome(verifiedInitiator(ctx), {
-    hasAppCapability: deps.hasAppCapability,
+  return isTrustedDeviceCaller(verifiedInitiator(ctx), {
+    hasClientCapability: deps.hasClientCapability,
   });
 }
 

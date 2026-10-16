@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
-  APP_CAPABILITIES_BY_NATIVE_HOST,
-  APP_CAPABILITIES_BY_TARGET,
+  CLIENT_CAPABILITY_CATALOG,
+  HOST_KINDS,
+  HOST_RUNTIME,
+  capabilitiesForRuntime,
+} from "@vibestudio/workspace-contracts/clients";
+import {
   UnitManifestError,
-  appUnitManifestDescriptor,
+  clientUnitManifestDescriptor,
   extensionUnitManifestDescriptor,
   validateUnitManifest,
   validateUnitIconDeclaration,
@@ -36,23 +40,22 @@ describe("stored unit icons", () => {
   });
 });
 
-describe("app capability catalog", () => {
-  it("derives native-host support as a strict subset of the target vocabulary", () => {
-    const electronVocabulary = new Set(APP_CAPABILITIES_BY_TARGET.electron);
-    const reactNativeVocabulary = new Set(APP_CAPABILITIES_BY_TARGET["react-native"]);
-
-    expect(
-      APP_CAPABILITIES_BY_NATIVE_HOST.electron.every((capability) =>
-        electronVocabulary.has(capability)
-      )
-    ).toBe(true);
-    expect(electronVocabulary.has("tray")).toBe(true);
-    expect(APP_CAPABILITIES_BY_NATIVE_HOST.electron).not.toContain("tray");
-    expect(
-      APP_CAPABILITIES_BY_NATIVE_HOST["react-native"].every((capability) =>
-        reactNativeVocabulary.has(capability)
-      )
-    ).toBe(true);
+describe("client capability catalog", () => {
+  it("derives each runtime's vocabulary from the hosts that run it", () => {
+    for (const runtime of ["web", "react-native", "terminal"] as const) {
+      const hostsOfRuntime = HOST_KINDS.filter((host) => HOST_RUNTIME[host] === runtime);
+      const vocabulary = new Set(capabilitiesForRuntime(runtime));
+      for (const [capability, descriptor] of Object.entries(CLIENT_CAPABILITY_CATALOG)) {
+        const implemented = (descriptor.hosts as readonly string[]).some((host) =>
+          (hostsOfRuntime as readonly string[]).includes(host)
+        );
+        expect(vocabulary.has(capability as keyof typeof CLIENT_CAPABILITY_CATALOG)).toBe(
+          implemented
+        );
+      }
+    }
+    expect(capabilitiesForRuntime("web")).toContain("tray");
+    expect(capabilitiesForRuntime("terminal")).not.toContain("tray");
   });
 });
 
@@ -197,99 +200,106 @@ describe("validateUnitManifest", () => {
         extensionUnitManifestDescriptor,
         {
           extension: { activationEvents: ["*"], methodAuthority: {} },
-          app: { target: "electron", renderer: "index.tsx" },
+          client: { id: "shell", runtime: "web", hostAbi: "web-host-1", entry: "index.tsx" },
         },
         { unitName: "@workspace-extensions/a" }
       )
     ).toThrow(UnitManifestError);
   });
 
-  it("validates pure-thin Electron app manifests", () => {
+  const webClient = (overrides: Record<string, unknown> = {}) => ({
+    client: {
+      id: "desktop-browser",
+      runtime: "web",
+      hostAbi: "web-host-1",
+      entry: "index.tsx",
+      capabilities: { required: ["panel-hosting"], optional: ["native-menus", "notifications"] },
+      ...overrides,
+    },
+  });
+  const validateClient = (manifest: unknown, unitName = "@workspace-clients/desktop-browser") =>
+    validateUnitManifest(clientUnitManifestDescriptor, manifest, { unitName });
+
+  it("validates a web client manifest", () => {
+    expect(() => validateClient(webClient())).not.toThrow();
+  });
+
+  it("validates a terminal client with an integration command and intents", () => {
     expect(() =>
-      validateUnitManifest(
-        appUnitManifestDescriptor,
-        {
-          app: {
-            target: "electron",
-            renderer: "index.tsx",
-            startupModules: ["./components/App"],
-            capabilities: ["native-menus", "notifications", "fs-write"],
-          },
+      validateClient({
+        client: {
+          id: "chat",
+          runtime: "terminal",
+          hostAbi: "terminal-host-1",
+          entry: "index.ts",
+          capabilities: { optional: ["clipboard"] },
+          integration: { terminal: { command: "chat" } },
+          intents: [{ name: "open", kind: "foreground" }],
         },
-        { unitName: "@workspace-apps/shell" }
-      )
+      })
     ).not.toThrow();
   });
 
-  it("rejects unsafe app startup module paths", () => {
+  it("rejects an entry that escapes the package", () => {
+    expect(() => validateClient(webClient({ entry: "../native/App" }))).toThrow(
+      /package-relative module path/
+    );
+  });
+
+  it("rejects fields a client may not declare", () => {
+    expect(() => validateClient(webClient({ preload: "preload.ts" }))).toThrow(
+      /unknown field "preload"/
+    );
+  });
+
+  it("rejects the legacy app block and unknown runtimes", () => {
+    expect(() => validateClient({ app: { target: "electron", renderer: "index.tsx" } })).toThrow(
+      /vibestudio.client must be an object/
+    );
+    expect(() => validateClient(webClient({ runtime: "electron" }))).toThrow(
+      /runtime must be one of/
+    );
+  });
+
+  it("requires a host ABI of the client's runtime", () => {
+    expect(() => validateClient(webClient({ hostAbi: "rn-host-6" }))).toThrow(
+      /hostAbi must be "web-host-<version>"/
+    );
+  });
+
+  it("rejects capabilities the runtime's hosts do not implement", () => {
     expect(() =>
-      validateUnitManifest(
-        appUnitManifestDescriptor,
-        {
-          app: {
-            target: "electron",
-            renderer: "index.tsx",
-            startupModules: ["../native/App"],
-          },
+      validateClient({
+        client: {
+          id: "mobile",
+          runtime: "react-native",
+          hostAbi: "rn-host-6",
+          entry: "index.tsx",
+          capabilities: { optional: ["native-menus"] },
         },
-        { unitName: "@workspace-apps/shell" }
-      )
-    ).toThrow(/package-root-relative/u);
-  });
-
-  it("rejects native-process fields in app manifests", () => {
-    expect(() =>
-      validateUnitManifest(
-        appUnitManifestDescriptor,
-        { app: { target: "electron", renderer: "index.tsx", preload: "preload.ts" } },
-        { unitName: "@workspace-apps/shell" }
-      )
-    ).toThrow(/pure-thin/);
-  });
-
-  it("rejects dist as an app manifest target", () => {
-    expect(() =>
-      validateUnitManifest(
-        appUnitManifestDescriptor,
-        { app: { target: "dist", renderer: "index.tsx", distDir: "dist" } },
-        { unitName: "@workspace-apps/prebuilt" }
-      )
-    ).toThrow(/target must be "electron", "react-native", or "terminal"/);
-  });
-
-  it("validates terminal app manifests with terminal capabilities", () => {
-    expect(() =>
-      validateUnitManifest(
-        appUnitManifestDescriptor,
-        {
-          app: {
-            target: "terminal",
-            entry: "index.ts",
-            capabilities: ["clipboard"],
-          },
-        },
-        { unitName: "@workspace-apps/terminal-browser" }
-      )
-    ).not.toThrow();
-  });
-
-  it("requires React Native ABI and component name", () => {
-    expect(() =>
-      validateUnitManifest(
-        appUnitManifestDescriptor,
-        { app: { target: "react-native", renderer: "index.tsx", rnComponentName: "Vibestudio" } },
-        { unitName: "@workspace-apps/mobile" }
-      )
-    ).toThrow(/requires rnComponentName and rnHostAbi/);
-  });
-
-  it("rejects target-unknown capabilities", () => {
-    expect(() =>
-      validateUnitManifest(
-        appUnitManifestDescriptor,
-        { app: { target: "react-native", renderer: "index.tsx", capabilities: ["native-menus"] } },
-        { unitName: "@workspace-apps/mobile" }
-      )
+      })
     ).toThrow(/known react-native capabilities/);
+  });
+
+  it("rejects a capability listed as both required and optional", () => {
+    expect(() =>
+      validateClient(
+        webClient({ capabilities: { required: ["notifications"], optional: ["notifications"] } })
+      )
+    ).toThrow(/both required and optional/);
+  });
+
+  it("rejects reserved terminal commands", () => {
+    expect(() =>
+      validateClient({
+        client: {
+          id: "chat",
+          runtime: "terminal",
+          hostAbi: "terminal-host-1",
+          entry: "index.ts",
+          integration: { terminal: { command: "agent" } },
+        },
+      })
+    ).toThrow(/built-in vibestudio command/);
   });
 });

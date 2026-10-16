@@ -868,36 +868,6 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     }
   }
 
-  function buildArtifactSetIntegrity(entries: BuildArtifactManifestEntry[]): string {
-    const canonical = entries
-      .map((entry) => ({
-        path: entry.path,
-        role: entry.role,
-        contentType: entry.contentType,
-        encoding: entry.encoding,
-        platform: entry.platform ?? null,
-        integrity: entry.integrity ?? null,
-      }))
-      .sort((a, b) =>
-        `${a.path}\0${a.platform ?? ""}`.localeCompare(`${b.path}\0${b.platform ?? ""}`)
-      );
-    return `sha256-${crypto.createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
-  }
-
-  function metadataForEntries(
-    metadata: BuildMetadata,
-    entries: BuildArtifactManifestEntry[]
-  ): BuildMetadata {
-    if (metadata.details.kind !== "app") return metadata;
-    return {
-      ...metadata,
-      details: {
-        ...metadata.details,
-        integrity: buildArtifactSetIntegrity(entries),
-      },
-    };
-  }
-
   function canonicalSourcePath(input: string): string {
     const value = input.replace(/\\/g, "/").normalize("NFC");
     if (!value || value.startsWith("/") || value.includes("\0")) {
@@ -1110,7 +1080,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
         dir,
         buildKey: expectedBuildKey,
         sourceStateHash: metadata.sourceStateHash,
-        metadata: metadataForEntries(metadata, storedManifest),
+        metadata,
         artifacts,
       };
     } catch (error) {
@@ -1448,7 +1418,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
       return {
         ...current,
         sourceStateHash: metadata.sourceStateHash,
-        metadata: metadataForEntries(metadata, current.artifacts),
+        metadata,
       };
     } catch {
       return null;
@@ -1627,10 +1597,9 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     }
     assertCanonicalArtifactManifestPaths(entries);
     const artifactManifest = entries.map(manifestForEntry);
-    const metadataWithEntries = metadataForEntries(sealedMetadata, artifactManifest);
-    const execution = createBuildExecutionIdentity(metadataWithEntries, artifactManifest);
+    const execution = createBuildExecutionIdentity(sealedMetadata, artifactManifest);
     const storedMetadata: BuildMetadata = {
-      ...metadataWithEntries,
+      ...sealedMetadata,
       ...(execution ? { execution } : {}),
     };
 

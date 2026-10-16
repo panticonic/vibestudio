@@ -233,15 +233,15 @@ describe("UnitSupervisor", () => {
   });
 
   it("fans describe and logs out from a release key to that release's live entities", async () => {
-    const release = { kind: "app" as const, releaseId: "terminal-browser" };
-    const first = { ...description("app", "terminal-browser#a"), release };
-    const second = { ...description("app", "terminal-browser#b"), release };
+    const release = { kind: "client" as const, releaseId: "terminal-browser" };
+    const first = { ...description("client", "terminal-browser#a"), release };
+    const second = { ...description("client", "terminal-browser#b"), release };
     const other = {
-      ...description("app", "shell"),
-      release: { kind: "app" as const, releaseId: "shell" },
+      ...description("client", "shell"),
+      release: { kind: "client" as const, releaseId: "shell" },
     };
     const record = (entityId: string, timestamp: number, message: string) => ({
-      identity: { kind: "app" as const, entityId },
+      identity: { kind: "client" as const, entityId },
       timestamp,
       level: "info" as const,
       message,
@@ -253,7 +253,7 @@ describe("UnitSupervisor", () => {
     );
     const supervisor = new UnitSupervisor();
     supervisor.register(
-      driver("app", "unused", { list: vi.fn(() => [other, first, second]), logs })
+      driver("client", "unused", { list: vi.fn(() => [other, first, second]), logs })
     );
 
     await expect(supervisor.describe(release)).resolves.toEqual([first, second]);
@@ -262,16 +262,18 @@ describe("UnitSupervisor", () => {
       record("terminal-browser#a", 3, "a3"),
     ]);
     expect(logs).not.toHaveBeenCalledWith("shell", expect.anything());
-    await expect(supervisor.describe({ kind: "app", releaseId: "missing" })).resolves.toEqual([]);
-    await expect(supervisor.logs({ kind: "app", releaseId: "missing" })).rejects.toMatchObject({
+    await expect(supervisor.describe({ kind: "client", releaseId: "missing" })).resolves.toEqual(
+      []
+    );
+    await expect(supervisor.logs({ kind: "client", releaseId: "missing" })).rejects.toMatchObject({
       code: "UNIT_ENTITY_NOT_FOUND",
     });
-    await expect(supervisor.describe({ kind: "app", entityId: "gone" })).resolves.toEqual([]);
+    await expect(supervisor.describe({ kind: "client", entityId: "gone" })).resolves.toEqual([]);
   });
 
   it("addresses rollback only through a release identity and release facet", async () => {
     const rollback = vi.fn(() => ({ releaseId: "apps/shell", activeBuildKey: "build-old" }));
-    const apps = driver("app", "app:running", {
+    const apps = driver("client", "app:running", {
       releases: {
         versions: vi.fn(() => ({ current: null, previous: [], retentionLimit: 5 })),
         rollback,
@@ -281,7 +283,7 @@ describe("UnitSupervisor", () => {
     supervisor.register(apps);
 
     await expect(
-      supervisor.rollback(ctx, { kind: "app", releaseId: "apps/shell" }, "build-old")
+      supervisor.rollback(ctx, { kind: "client", releaseId: "apps/shell" }, "build-old")
     ).resolves.toEqual({ releaseId: "apps/shell", activeBuildKey: "build-old" });
     expect(rollback).toHaveBeenCalledWith(ctx, "apps/shell", "build-old");
   });

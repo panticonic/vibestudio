@@ -24,7 +24,7 @@ export function createCorsApprovalService(): ServiceDefinition {
   ): Promise<CorsApprovalResult> {
     if (
       ctx.caller.runtime.kind !== "panel" &&
-      ctx.caller.runtime.kind !== "app" &&
+      ctx.caller.runtime.kind !== "client" &&
       ctx.caller.runtime.kind !== "worker" &&
       ctx.caller.runtime.kind !== "do"
     ) {

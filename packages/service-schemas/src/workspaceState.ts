@@ -197,7 +197,7 @@ export const EntityRecordSchema = z.object({
     .optional(),
   id: z.string(),
   authoritySessionId: z.string().min(1),
-  kind: z.enum(["panel", "app", "worker", "do", "session", "shell", "server"]),
+  kind: z.enum(["panel", "client", "worker", "do", "session", "shell", "server"]),
   source: z.object({ repoPath: z.string(), effectiveVersion: z.string() }),
   activeBuildKey: z.string().optional(),
   activeExecutionDigest: z.string().optional(),

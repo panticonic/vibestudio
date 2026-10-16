@@ -22,7 +22,7 @@ afterEach(() => vi.clearAllMocks());
 it.each(["github-copilot", "kimi-coding", "meta", "xai"])(
   "connects %s with browser handoff, device-code UI, and encrypted provider state",
   async (providerId) => {
-    const caller = createVerifiedCaller("app:test", "app");
+    const caller = createVerifiedCaller("app:test", "client");
     const ctx: ServiceContext = {
       caller,
       connectionId: "connection",

@@ -452,14 +452,14 @@ describe("discoverPackageGraph template framework closure", () => {
   });
 });
 
-describe("discoverPackageGraph app units", () => {
-  it("discovers app packages under flat workspace/apps paths", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-app-graph-"));
+describe("discoverPackageGraph client units", () => {
+  it("discovers client packages under flat workspace/clients paths", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-client-graph-"));
     try {
       const runtimeDir = path.join(root, "packages", "runtime");
-      const appDir = path.join(root, "apps", "shell");
+      const clientDir = path.join(root, "clients", "desktop-browser");
       fs.mkdirSync(runtimeDir, { recursive: true });
-      fs.mkdirSync(appDir, { recursive: true });
+      fs.mkdirSync(clientDir, { recursive: true });
       fs.writeFileSync(
         path.join(runtimeDir, "package.json"),
         JSON.stringify({
@@ -469,27 +469,29 @@ describe("discoverPackageGraph app units", () => {
         })
       );
       fs.writeFileSync(
-        path.join(appDir, "package.json"),
+        path.join(clientDir, "package.json"),
         JSON.stringify({
-          name: "@workspace-apps/shell",
+          name: "@workspace-clients/desktop-browser",
           version: "1.0.0",
           dependencies: {
             "@workspace/runtime": "workspace:*",
           },
           vibestudio: {
-            app: {
-              target: "electron",
-              renderer: "index.tsx",
-              capabilities: ["native-menus"],
+            client: {
+              id: "browser",
+              runtime: "web",
+              hostAbi: "web-host-1",
+              entry: "index.tsx",
+              capabilities: { optional: ["native-menus"] },
             },
           },
         })
       );
 
       const graph = discoverPackageGraph(root);
-      const node = graph.get("@workspace-apps/shell");
-      expect(node.kind).toBe("app");
-      expect(node.relativePath).toBe("apps/shell");
+      const node = graph.get("@workspace-clients/desktop-browser");
+      expect(node.kind).toBe("client");
+      expect(node.relativePath).toBe("clients/desktop-browser");
       expect(node.internalDeps).toContain("@workspace/runtime");
     } finally {
       fs.rmSync(root, { recursive: true, force: true });

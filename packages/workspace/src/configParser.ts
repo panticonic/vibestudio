@@ -9,15 +9,19 @@ import {
 import YAML from "yaml";
 import { z, ZodError, type ZodIssue } from "zod";
 import type {
-  WorkspaceAppDecl,
+  WorkspaceClientDecl,
   WorkspaceConfig,
   WorkspaceExtensionDecl,
-  WorkspaceHostTargetDecl,
-  WorkspaceHostTargetName,
   WorkspaceTrustDecl,
 } from "@vibestudio/workspace-contracts/types";
 import {
-  WORKSPACE_APP_PACKAGE_SCOPE,
+  CLIENT_RUNTIMES,
+  HOST_KINDS,
+  type ClientRuntime,
+  type HostKind,
+} from "@vibestudio/workspace-contracts/clients";
+import {
+  WORKSPACE_CLIENT_PACKAGE_SCOPE,
   WORKSPACE_EXTENSION_PACKAGE_SCOPE,
   WORKSPACE_SOURCE_DIRS,
 } from "@vibestudio/workspace-contracts/sourceDirs";
@@ -29,7 +33,7 @@ import {
 import { normalizeWorkspaceRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import { WORKSPACE_SYSTEM_EPOCH, WORKSPACE_APP_VERSION } from "@vibestudio/shared/vcs/systemEpoch";
 
-export { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE };
+export { WORKSPACE_CLIENT_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE };
 
 export const WORKSPACE_CONFIG_PATH = "meta/vibestudio.yml";
 
@@ -202,10 +206,10 @@ const UNIT_PACKAGE_NAME = /^@[^/\s]+\/[^/\s]+$/;
 const WORKSPACE_SOURCE_DIR_SET = new Set<string>(WORKSPACE_SOURCE_DIRS);
 
 interface DeclaredUnitDescriptor<Decl extends { source: string }> {
-  section: "extensions" | "apps";
-  sourceRoot: "extensions" | "apps";
-  packageScope: typeof WORKSPACE_EXTENSION_PACKAGE_SCOPE | typeof WORKSPACE_APP_PACKAGE_SCOPE;
-  singular: "extension" | "app";
+  section: "extensions" | "clients";
+  sourceRoot: "extensions" | "clients";
+  packageScope: typeof WORKSPACE_EXTENSION_PACKAGE_SCOPE | typeof WORKSPACE_CLIENT_PACKAGE_SCOPE;
+  singular: "extension" | "client";
   values: Decl[] | undefined;
   validate?: (decl: Decl) => void;
 }
@@ -314,15 +318,16 @@ function validateDeclaredUnits(config: WorkspaceConfig): void {
     singular: "extension",
     values: config.extensions,
   });
-  validateDeclaredUnitList<WorkspaceAppDecl>({
-    section: "apps",
-    sourceRoot: "apps",
-    packageScope: WORKSPACE_APP_PACKAGE_SCOPE,
-    singular: "app",
-    values: config.apps,
+  validateDeclaredUnitList<WorkspaceClientDecl>({
+    section: "clients",
+    sourceRoot: "clients",
+    packageScope: WORKSPACE_CLIENT_PACKAGE_SCOPE,
+    singular: "client",
+    values: config.clients,
   });
   validateTrust(config.trust);
-  validateHostTargets(config.hostTargets);
+  validateClientDefaults(config.clientDefaults);
+  validateRuntimeExtensions(config.runtimeExtensions);
   validateProviders(config);
 }
 
@@ -335,10 +340,10 @@ export function resolveDeclaredExtensions(
   }));
 }
 
-export function resolveDeclaredApps(
+export function resolveDeclaredClients(
   config: WorkspaceConfig
 ): Array<{ source: string; ref: string }> {
-  return (config.apps ?? []).map((decl) => ({
+  return (config.clients ?? []).map((decl) => ({
     source: decl.source.trim(),
     ref: (decl.ref ?? "main").trim(),
   }));
@@ -355,23 +360,17 @@ function resolveDeclaredUnits<Decl extends { source: string; ref?: string }>(
 }
 
 // =============================================================================
-// trust / hostTargets / providers — manifest-declared host contracts
+// trust / clientDefaults / runtimeExtensions / providers — manifest-declared host contracts
 // =============================================================================
 
-const WORKSPACE_HOST_TARGETS: readonly WorkspaceHostTargetName[] = [
-  "electron",
-  "react-native",
-  "terminal",
-];
-
 interface CanonicalUnitKind {
-  sourceRoot: "apps" | "extensions";
-  packageScope: typeof WORKSPACE_APP_PACKAGE_SCOPE | typeof WORKSPACE_EXTENSION_PACKAGE_SCOPE;
+  sourceRoot: "clients" | "extensions";
+  packageScope: typeof WORKSPACE_CLIENT_PACKAGE_SCOPE | typeof WORKSPACE_EXTENSION_PACKAGE_SCOPE;
 }
 
-const APP_UNIT: CanonicalUnitKind = {
-  sourceRoot: "apps",
-  packageScope: WORKSPACE_APP_PACKAGE_SCOPE,
+const CLIENT_UNIT: CanonicalUnitKind = {
+  sourceRoot: "clients",
+  packageScope: WORKSPACE_CLIENT_PACKAGE_SCOPE,
 };
 const EXTENSION_UNIT: CanonicalUnitKind = {
   sourceRoot: "extensions",
@@ -379,8 +378,8 @@ const EXTENSION_UNIT: CanonicalUnitKind = {
 };
 
 /**
- * Canonicalize a declared app/extension identity to its workspace-relative
- * repo path (`apps/name` / `extensions/name`). Accepts either the repo-path
+ * Canonicalize a declared client/extension identity to its workspace-relative
+ * repo path (`clients/name` / `extensions/name`). Accepts either the repo-path
  * form or the scoped package-name form. Throws with the offending manifest
  * field on anything else.
  */
@@ -402,10 +401,15 @@ function canonicalUnitRepoPath(value: unknown, kind: CanonicalUnitKind, field: s
   return `${kind.sourceRoot}/${identity}`;
 }
 
-/** `apps/name` | `@workspace-apps/name` → `@workspace-apps/name`. */
-export function workspaceAppPackageName(source: string): string {
-  const repoPath = canonicalUnitRepoPath(source, APP_UNIT, "app source");
-  return `${WORKSPACE_APP_PACKAGE_SCOPE}${repoPath.slice("apps/".length)}`;
+/** `clients/name` | `@workspace-clients/name` → `@workspace-clients/name`. */
+export function workspaceClientPackageName(source: string): string {
+  const repoPath = canonicalUnitRepoPath(source, CLIENT_UNIT, "client source");
+  return `${WORKSPACE_CLIENT_PACKAGE_SCOPE}${repoPath.slice("clients/".length)}`;
+}
+
+/** `clients/name` | `@workspace-clients/name` → `clients/name`. */
+export function workspaceClientRepoPath(source: string): string {
+  return canonicalUnitRepoPath(source, CLIENT_UNIT, "client source");
 }
 
 /** `extensions/name` | `@workspace-extensions/name` → `@workspace-extensions/name`. */
@@ -448,43 +452,46 @@ function validateTrust(trust: WorkspaceTrustDecl | undefined): void {
     throw new Error("meta/vibestudio.yml: `trust` must be a mapping");
   }
   for (const key of Object.keys(trust)) {
-    if (key !== "chromeApps") {
+    if (key !== "clients") {
       throw new Error(`meta/vibestudio.yml: unknown \`trust\` key "${key}"`);
     }
   }
-  validateUnitSourceList(trust.chromeApps, APP_UNIT, "trust.chromeApps");
-  validateUnitSourceList(
-    trust.connectionManagementApps,
-    APP_UNIT,
-    "trust.connectionManagementApps"
-  );
+  validateUnitSourceList(trust.clients, CLIENT_UNIT, "trust.clients");
 }
 
-function validateHostTargets(hostTargets: WorkspaceConfig["hostTargets"] | undefined): void {
-  if (hostTargets === undefined) return;
-  if (hostTargets === null || typeof hostTargets !== "object" || Array.isArray(hostTargets)) {
-    throw new Error("meta/vibestudio.yml: `hostTargets` must be a mapping");
+function validateClientDefaults(defaults: WorkspaceConfig["clientDefaults"] | undefined): void {
+  if (defaults === undefined) return;
+  if (defaults === null || typeof defaults !== "object" || Array.isArray(defaults)) {
+    throw new Error("meta/vibestudio.yml: `clientDefaults` must be a mapping");
   }
-  for (const [target, decl] of Object.entries(hostTargets)) {
-    if (!(WORKSPACE_HOST_TARGETS as readonly string[]).includes(target)) {
+  for (const [host, source] of Object.entries(defaults)) {
+    if (!(HOST_KINDS as readonly string[]).includes(host)) {
       throw new Error(
-        `meta/vibestudio.yml: unknown \`hostTargets\` key "${target}" (expected one of ${WORKSPACE_HOST_TARGETS.join(", ")})`
+        `meta/vibestudio.yml: unknown \`clientDefaults\` key "${host}" (expected one of ${HOST_KINDS.join(", ")})`
       );
     }
-    if (decl === null || decl === undefined) continue;
-    if (typeof decl !== "object" || Array.isArray(decl)) {
-      throw new Error(`meta/vibestudio.yml: \`hostTargets.${target}\` must be a mapping`);
+    canonicalUnitRepoPath(source, CLIENT_UNIT, `clientDefaults.${host}`);
+  }
+}
+
+function validateRuntimeExtensions(
+  runtimeExtensions: WorkspaceConfig["runtimeExtensions"] | undefined
+): void {
+  if (runtimeExtensions === undefined) return;
+  if (
+    runtimeExtensions === null ||
+    typeof runtimeExtensions !== "object" ||
+    Array.isArray(runtimeExtensions)
+  ) {
+    throw new Error("meta/vibestudio.yml: `runtimeExtensions` must be a mapping");
+  }
+  for (const [runtime, sources] of Object.entries(runtimeExtensions)) {
+    if (!(CLIENT_RUNTIMES as readonly string[]).includes(runtime)) {
+      throw new Error(
+        `meta/vibestudio.yml: unknown \`runtimeExtensions\` key "${runtime}" (expected one of ${CLIENT_RUNTIMES.join(", ")})`
+      );
     }
-    canonicalUnitRepoPath(
-      (decl as WorkspaceHostTargetDecl).app,
-      APP_UNIT,
-      `hostTargets.${target}.app`
-    );
-    validateUnitSourceList(
-      (decl as WorkspaceHostTargetDecl).requiresExtensions,
-      EXTENSION_UNIT,
-      `hostTargets.${target}.requiresExtensions`
-    );
+    validateUnitSourceList(sources, EXTENSION_UNIT, `runtimeExtensions.${runtime}`);
   }
 }
 
@@ -551,54 +558,30 @@ function validateProviders(config: WorkspaceConfig): void {
 }
 
 /**
- * Resolve the manifest's app trust grants to canonical repo paths
- * (`apps/name`). Missing `trust` (or a missing list) resolves to an empty
+ * Resolve the manifest's device-level trust grants to canonical repo paths
+ * (`clients/name`). Missing `trust` (or a missing list) resolves to an empty
  * grant list — trust is never assumed.
  */
-export function resolveWorkspaceTrustGrants(config: WorkspaceConfig): {
-  chromeApps: string[];
-  connectionManagementApps: string[];
-} {
-  return {
-    chromeApps: validateUnitSourceList(config.trust?.chromeApps, APP_UNIT, "trust.chromeApps"),
-    connectionManagementApps: validateUnitSourceList(
-      config.trust?.connectionManagementApps,
-      APP_UNIT,
-      "trust.connectionManagementApps"
-    ),
-  };
+export function resolveWorkspaceTrustGrants(config: WorkspaceConfig): { clients: string[] } {
+  return { clients: validateUnitSourceList(config.trust?.clients, CLIENT_UNIT, "trust.clients") };
+}
+
+/** The default client of one host (canonical `clients/name`), or null when none is declared. */
+export function resolveClientDefault(config: WorkspaceConfig, host: HostKind): string | null {
+  const source = config.clientDefaults?.[host];
+  return source === undefined
+    ? null
+    : canonicalUnitRepoPath(source, CLIENT_UNIT, `clientDefaults.${host}`);
 }
 
 /**
- * Resolve one host target's declared app (canonical `apps/name` repo path)
- * and its required extensions (canonical `extensions/name`). Returns null
- * when the manifest declares nothing for the target.
+ * Resolve the declared extensions that are build prerequisites for clients of
+ * one runtime, or of every runtime when omitted. The result is deduplicated and
+ * retains each extension's declared ref.
  */
-export function resolveHostTargetDecl(
+export function resolveRuntimeRequiredExtensions(
   config: WorkspaceConfig,
-  target: WorkspaceHostTargetName
-): { appSource: string; requiresExtensions: string[] } | null {
-  const decl = config.hostTargets?.[target];
-  if (!decl || typeof decl !== "object") return null;
-  return {
-    appSource: canonicalUnitRepoPath(decl.app, APP_UNIT, `hostTargets.${target}.app`),
-    requiresExtensions: validateUnitSourceList(
-      decl.requiresExtensions,
-      EXTENSION_UNIT,
-      `hostTargets.${target}.requiresExtensions`
-    ),
-  };
-}
-
-/**
- * Resolve the declared extensions that are launch prerequisites for one host
- * target, or for every target when omitted. The result is deduplicated and
- * retains each extension's declared ref. Callers can therefore resolve a
- * selected target lazily without maintaining a second prewarm list.
- */
-export function resolveHostTargetRequiredExtensions(
-  config: WorkspaceConfig,
-  target?: (typeof WORKSPACE_HOST_TARGETS)[number]
+  runtime?: ClientRuntime
 ): Array<{ source: string; ref: string }> {
   const declaredBySource = new Map(
     resolveDeclaredExtensions(config).map((decl) => [
@@ -608,9 +591,13 @@ export function resolveHostTargetRequiredExtensions(
   );
   const seen = new Set<string>();
   const required: Array<{ source: string; ref: string }> = [];
-  const targets = target === undefined ? WORKSPACE_HOST_TARGETS : [target];
-  for (const candidate of targets) {
-    for (const source of resolveHostTargetDecl(config, candidate)?.requiresExtensions ?? []) {
+  const runtimes = runtime === undefined ? CLIENT_RUNTIMES : [runtime];
+  for (const candidate of runtimes) {
+    for (const source of validateUnitSourceList(
+      config.runtimeExtensions?.[candidate],
+      EXTENSION_UNIT,
+      `runtimeExtensions.${candidate}`
+    )) {
       if (seen.has(source)) continue;
       seen.add(source);
       required.push(declaredBySource.get(source) ?? { source, ref: "main" });
@@ -620,18 +607,19 @@ export function resolveHostTargetRequiredExtensions(
 }
 
 /**
- * Resolve the extensions that should run for the currently demanded host
- * targets. A target prerequisite remains a declaration (and therefore part of
- * launch review) without becoming ambient startup work for unrelated hosts.
+ * Resolve the extensions that should run for the currently demanded client
+ * runtimes. A runtime prerequisite remains a declaration (and therefore part
+ * of launch review) without becoming ambient startup work for hosts that do
+ * not run that runtime.
  */
-export function resolveExtensionsForHostTargets(
+export function resolveExtensionsForRuntimes(
   config: WorkspaceConfig,
-  targets: readonly WorkspaceHostTargetName[]
+  runtimes: readonly ClientRuntime[]
 ): Array<{ source: string; ref: string }> {
-  const allRequired = resolveHostTargetRequiredExtensions(config);
+  const allRequired = resolveRuntimeRequiredExtensions(config);
   const requiredSources = new Set(allRequired.map((decl) => decl.source));
-  const activeRequired = targets.flatMap((target) =>
-    resolveHostTargetRequiredExtensions(config, target)
+  const activeRequired = runtimes.flatMap((runtime) =>
+    resolveRuntimeRequiredExtensions(config, runtime)
   );
   const seen = new Set<string>();
   return [...activeRequired, ...resolveDeclaredExtensions(config)].filter((decl) => {

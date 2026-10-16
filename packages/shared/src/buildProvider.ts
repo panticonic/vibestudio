@@ -1,11 +1,12 @@
-/**
- * Contract version between a React Native workspace app bundle and the shipped
- * native mobile shell. The build provider rejects apps that declare another
- * value; the mobile shell rejects bundles built for another value.
- */
-export const RN_HOST_ABI = "rn-host-5";
+import type { ClientManifestBlock } from "@vibestudio/workspace-contracts/clients";
 
-export type BuildProviderTarget = "react-native" | "terminal";
+/**
+ * Build providers are extensions that compile a client runtime the host build
+ * cannot. Only React Native has one (Metro). The host ABI a bundle targets is
+ * the client manifest's `hostAbi`, checked against `CURRENT_HOST_ABI`; the
+ * provider never reports it.
+ */
+export type BuildProviderTarget = "react-native";
 export type BuildProviderArtifactRole = "primary" | "asset" | "html" | "css" | "map";
 export type BuildProviderArtifactEncoding = "utf8" | "base64";
 
@@ -37,15 +38,12 @@ export interface BuildProviderInput {
   sourcePath: string;
   dependencyProjection: BuildProviderDependencyProjection;
   effectiveVersion: string;
-  manifest: Record<string, unknown>;
+  /** The unit's validated `vibestudio.client` manifest block. */
+  client: ClientManifestBlock;
 }
 
 export interface BuildProviderOutput {
   artifacts: BuildProviderArtifact[];
-  metadata?: {
-    rnHostAbi?: string | null;
-    platform?: "ios" | "android";
-  };
 }
 
 export interface BuildProvider {

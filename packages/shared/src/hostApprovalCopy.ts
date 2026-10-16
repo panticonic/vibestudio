@@ -35,7 +35,7 @@ type InstallPartCounts = {
   panels: number;
   agents: number;
   services: number;
-  clientApps: number;
+  clients: number;
   extensions: number;
 };
 
@@ -44,7 +44,7 @@ function describeInstallParts(verb: string, empty: string, summary: InstallPartC
     [summary.panels, "panel", "panels"],
     [summary.agents, "agent", "agents"],
     [summary.services, "service", "services"],
-    [summary.clientApps, "client app", "client apps"],
+    [summary.clients, "client", "clients"],
     [summary.extensions, "extension", "extensions"],
   ] as const;
   const parts = phrases
@@ -97,7 +97,7 @@ export const HOST_APPROVAL_COPY = {
 
   requesterCategories: {
     panel: "Panel",
-    "workspace-app": "App",
+    client: "Client",
     agent: "Agent",
     eval: "Agent",
     worker: "Background task",
@@ -353,15 +353,15 @@ export const HOST_APPROVAL_COPY = {
       panels: number;
       agents: number;
       services: number;
-      clientApps: number;
+      clients: number;
       extensions: number;
     }): string => describeInstallParts("Adds", "Adds nothing new", summary),
-    /** `Updates 3 client apps and 13 extensions` */
+    /** `Updates 3 clients and 13 extensions` */
     updates: (summary: {
       panels: number;
       agents: number;
       services: number;
-      clientApps: number;
+      clients: number;
       extensions: number;
     }): string => describeInstallParts("Updates", "Updates no existing parts", summary),
     /** `Removes 1 panel` */
@@ -369,7 +369,7 @@ export const HOST_APPROVAL_COPY = {
       panels: number;
       agents: number;
       services: number;
-      clientApps: number;
+      clients: number;
       extensions: number;
     }): string => describeInstallParts("Removes", "Removes no parts", summary),
     /** The row's own footprint when it has nothing headline to say. */
@@ -397,7 +397,7 @@ export const HOST_APPROVAL_COPY = {
       filterAll: "All",
       filterPanels: "Panels",
       filterAgents: "Agents and services",
-      filterClientApps: "Client apps",
+      filterClients: "Clients",
       filterExtensions: "Extensions",
       noMatches: "No parts match what you typed.",
       /** The right-hand pane's own prompt before anything is picked. */
@@ -966,28 +966,12 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "browser-data",
   },
   {
-    prefix: "window-management",
-    authorityCategory: { domain: "computer", verb: "manage" },
-    title: "Manage windows",
-    action: "open, focus, or resize Vibestudio windows",
-    description: "Open, focus, or change Vibestudio windows",
-    group: "host",
-  },
-  {
     prefix: "panel-hosting",
     authorityCategory: { domain: "automation", verb: "manage" },
     title: "Display panels",
     action: "show and coordinate workspace panels",
     description: "Display and coordinate workspace panels",
     group: "panels",
-  },
-  {
-    prefix: "incoming-pair-links",
-    authorityCategory: { domain: "people", verb: "act" },
-    title: "Pair other devices",
-    action: "accept links that pair another device with Vibestudio",
-    description: "Handle links that pair another Vibestudio device",
-    group: "host",
   },
   {
     prefix: "clipboard",
@@ -1022,22 +1006,6 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "host",
   },
   {
-    prefix: "fs-read",
-    authorityCategory: { domain: "computer", verb: "see" },
-    title: "Read files on your device",
-    action: "read files and list folders on your device",
-    description: "Read file contents and metadata and list folders on this device",
-    group: "host",
-  },
-  {
-    prefix: "fs-write",
-    authorityCategory: { domain: "computer", verb: "act" },
-    title: "Change files on your device",
-    action: "create, change, move, or delete files and folders on your device",
-    description: "Create, modify, move, or delete files and folders and change their metadata",
-    group: "host",
-  },
-  {
     prefix: "microphone",
     authorityCategory: { domain: "computer", verb: "see" },
     title: "Use your microphone",
@@ -1046,12 +1014,108 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "host",
   },
   {
-    prefix: "keychain",
-    authorityCategory: { domain: "accounts", verb: "manage" },
-    title: "Use secure storage",
-    action: "save account information in your device's secure storage",
-    description: "Store account information securely on this device",
-    group: "credentials",
+    prefix: "device-session",
+    authorityCategory: { domain: "people", verb: "act" },
+    title: "Act as this device",
+    action: "act as this device in every workspace it is routed to",
+    description: "Act as this device in every workspace it is routed to",
+    group: "host",
+  },
+  {
+    prefix: "terminal-app-hosting",
+    authorityCategory: { domain: "automation", verb: "manage" },
+    title: "Run terminal apps",
+    action: "start terminal apps and shells in workspaces",
+    description: "Start terminal apps and shells in workspaces",
+    group: "panels",
+  },
+  {
+    prefix: "approval-surface",
+    authorityCategory: { domain: "safety", verb: "manage" },
+    title: "Show approvals",
+    action: "show approvals and submit your decisions on them",
+    description: "Show approval requests and submit your decisions on them",
+    group: "host",
+  },
+  {
+    prefix: "hub-control",
+    authorityCategory: { domain: "people", verb: "manage" },
+    title: "Manage this hub",
+    action: "manage workspaces, members and devices on this hub",
+    description: "Manage workspaces, members and devices on this hub",
+    group: "host",
+  },
+  {
+    prefix: "notifications.reply",
+    authorityCategory: { domain: "computer", verb: "see" },
+    title: "Receive notification replies",
+    action: "receive replies typed into notifications",
+    description: "Receive replies you type into notifications",
+    group: "notifications",
+  },
+  {
+    prefix: "tray",
+    authorityCategory: { domain: "computer", verb: "act" },
+    title: "Show a tray icon",
+    action: "show an icon in the system tray",
+    description: "Show an icon in the system tray",
+    group: "host",
+  },
+  {
+    prefix: "badge",
+    authorityCategory: { domain: "computer", verb: "act" },
+    title: "Show a badge count",
+    action: "show a badge count on the application icon",
+    description: "Show a badge count on the application icon",
+    group: "host",
+  },
+  {
+    prefix: "global-shortcut",
+    authorityCategory: { domain: "computer", verb: "act" },
+    title: "Register a system-wide shortcut",
+    action: "register a system-wide keyboard shortcut",
+    description: "Register a keyboard shortcut that works in any application",
+    group: "host",
+  },
+  {
+    prefix: "local-files",
+    authorityCategory: { domain: "computer", verb: "act" },
+    title: "Use files on your device",
+    action: "read and write files on your device that you pick",
+    description: "Read and write files on this device that you pick",
+    group: "host",
+  },
+  {
+    prefix: "dialog",
+    authorityCategory: { domain: "computer", verb: "act" },
+    title: "Open native dialogs",
+    action: "open native file and message dialogs",
+    description: "Open native file and message dialogs",
+    group: "host",
+  },
+  {
+    prefix: "theme",
+    authorityCategory: { domain: "computer", verb: "act" },
+    title: "Change the window theme",
+    action: "change the window theme and appearance",
+    description: "Change the window theme and appearance",
+    group: "host",
+  },
+  {
+    prefix: "devtools",
+    authorityCategory: { domain: "computer", verb: "see" },
+    title: "Open developer tools",
+    action: "open developer tools for the views it hosts",
+    description: "Open developer tools for the views this client hosts",
+    group: "host",
+  },
+  {
+    prefix: "integration.install",
+    authorityCategory: { domain: "computer", verb: "act" },
+    title: "Add launchers to this device",
+    action: "ask to add launchers for clients to this device",
+    description: "Ask to add launchers for clients to this device",
+    group: "host",
   },
   {
     prefix: "internal-model-runtime.use",

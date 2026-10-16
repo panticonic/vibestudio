@@ -5,6 +5,7 @@
  */
 
 import { z } from "zod";
+import { CLIENT_RUNTIMES } from "@vibestudio/workspace-contracts/clients";
 import { STATE_HASH_RE } from "@vibestudio/shared/contentTree/treeObjects";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
@@ -239,11 +240,15 @@ export const buildMetadataDetailsSchema = z.discriminatedUnion("kind", [
     .strict(),
   z
     .object({
-      kind: z.literal("app"),
-      target: z.enum(["electron", "react-native", "terminal"]),
-      platform: z.enum(["electron", "ios", "android", "terminal"]).optional(),
-      integrity: z.string().nullable().optional(),
-      rnHostAbi: z.string().nullable().optional(),
+      /**
+       * A client: the top-level program a host runs (§4.9). Every artifact of a
+       * client build carries an `integrity`; `hostAbi` is the ABI the build
+       * was produced for, copied from the manifest and checked by the host.
+       */
+      kind: z.literal("client"),
+      clientId: z.string(),
+      runtime: z.enum(["web", "react-native", "terminal"]),
+      hostAbi: z.string(),
       provider: z
         .object({
           name: z.string(),
@@ -252,8 +257,7 @@ export const buildMetadataDetailsSchema = z.discriminatedUnion("kind", [
           contractVersion: z.string(),
         })
         .strict()
-        .nullable()
-        .optional(),
+        .nullable(),
     })
     .strict(),
   z
@@ -419,7 +423,7 @@ export type ExecutableModuleWire = z.infer<typeof executableModuleSchema>;
 
 export const buildMetadataSchema = z
   .object({
-    kind: z.enum(["panel", "package", "worker", "extension", "app", "template"]),
+    kind: z.enum(["panel", "package", "worker", "extension", "client", "template"]),
     name: z.string(),
     buildKey: z.string().min(1),
     sourcePath: z.string().nullable(),
@@ -874,8 +878,8 @@ export const recentBuildEventSchema = z
 export const buildUnitCatalogEntrySchema = z
   .object({
     name: z.string(),
-    kind: z.enum(["panel", "worker", "extension", "app"]),
-    target: z.enum(["electron", "react-native", "terminal"]).nullable(),
+    kind: z.enum(["panel", "worker", "extension", "client"]),
+    runtime: z.enum(CLIENT_RUNTIMES).nullable(),
     capabilities: z.array(z.string()),
     source: z.string(),
     displayName: z.string(),
@@ -895,24 +899,6 @@ export const buildUnitCatalogEntrySchema = z
   })
   .strict();
 export type BuildUnitCatalogEntry = z.infer<typeof buildUnitCatalogEntrySchema>;
-
-export const mobileAppUpdateStatusSchema = z
-  .object({
-    type: z.literal("update-available"),
-    appId: z.string(),
-    source: z.string(),
-    target: z.literal("react-native"),
-    buildKey: z.string(),
-    effectiveVersion: z.string().nullable(),
-    previousBuildKey: z.string().nullable(),
-    previousEffectiveVersion: z.string().nullable(),
-    canRollback: z.boolean(),
-    requiresReload: z.literal(true),
-    adoptionPolicy: z.literal("prompt"),
-    selectedForHost: z.literal(true),
-  })
-  .strict();
-export type MobileAppUpdateStatus = z.infer<typeof mobileAppUpdateStatusSchema>;
 
 /**
  * Which execution environment will run a library bundle — selects the module
@@ -1019,29 +1005,9 @@ export const buildMethods = defineServiceMethods({
         "Read-only projection of declared workspace sources, immutable build identity, and reviewed authority",
     },
     description:
-      "List declared workspace panels, workers, extensions and apps with their source identity and build readiness. Use this catalog to discover available extensions before invoking one. For exact live processes, use runtime.supervision.list.",
+      "List declared workspace panels, workers, extensions and clients with their source identity and build readiness. Use this catalog to discover available extensions before invoking one. For exact live processes, use runtime.supervision.list.",
     args: z.tuple([]),
     returns: z.array(buildUnitCatalogEntrySchema),
-    access: READ_ACCESS,
-  },
-  mobileUpdateStatus: {
-    website: {
-      kind: "closed",
-      reason:
-        "The native host compares its installed bundle identity; websites do not own a native installation.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "build.native-installation",
-      rationale:
-        "Read-only comparison of caller-supplied native bundle identity with the selected workspace app build",
-    },
-    description:
-      "Return the selected React Native app update relative to this installation's active build key, or null when it is current.",
-    args: z.tuple([z.string().nullable()]),
-    returns: mobileAppUpdateStatusSchema.nullable(),
     access: READ_ACCESS,
   },
   getBuild: {

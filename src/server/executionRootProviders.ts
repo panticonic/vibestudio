@@ -12,7 +12,7 @@ import {
 export const REQUIRED_EXECUTION_ROOT_PROVIDER_IDS = [
   "runtime-entity",
   "panel-history",
-  "app-generation",
+  "client-generation",
   "runtime-image",
   "extension-generation",
   "eval-run",

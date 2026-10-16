@@ -246,11 +246,11 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
   });
 
   it("uses the unit's declared runtime library when checking exact build source", async () => {
-    const unitDir = path.join(sourceRoot, "apps/mobile-runtime");
+    const unitDir = path.join(sourceRoot, "clients/mobile-runtime");
     await fsp.mkdir(unitDir, { recursive: true });
     await fsp.writeFile(
       path.join(unitDir, "package.json"),
-      JSON.stringify({ name: "@workspace-apps/mobile-runtime", type: "module" })
+      JSON.stringify({ name: "@workspace-clients/mobile-runtime", type: "module" })
     );
     const configPath = path.join(unitDir, "tsconfig.json");
     await fsp.writeFile(
@@ -266,9 +266,9 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
     );
     try {
       const configured = await typecheckUnit(
-        "apps/mobile-runtime",
+        "clients/mobile-runtime",
         sourceRoot,
-        [{ name: "@workspace-apps/mobile-runtime", relativePath: "apps/mobile-runtime" }],
+        [{ name: "@workspace-clients/mobile-runtime", relativePath: "clients/mobile-runtime" }],
         [],
         PANEL_CONDITIONS
       );
@@ -279,9 +279,9 @@ describe("typecheckUnit (push build-gate fold-in)", () => {
         JSON.stringify({ compilerOptions: { target: "ES2020", lib: ["ES2020"] } })
       );
       const staleEnvironment = await typecheckUnit(
-        "apps/mobile-runtime",
+        "clients/mobile-runtime",
         sourceRoot,
-        [{ name: "@workspace-apps/mobile-runtime", relativePath: "apps/mobile-runtime" }],
+        [{ name: "@workspace-clients/mobile-runtime", relativePath: "clients/mobile-runtime" }],
         [],
         PANEL_CONDITIONS
       );

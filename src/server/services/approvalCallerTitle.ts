@@ -41,7 +41,7 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 function entityKindToRequesterKind(kind: EntityKind): ApprovalRequesterBreadcrumb["kind"] {
   if (
     kind === "panel" ||
-    kind === "app" ||
+    kind === "client" ||
     kind === "worker" ||
     kind === "do" ||
     kind === "session" ||
@@ -75,7 +75,7 @@ function categoryForRecord(
   if (fallbackKind === "system") return "system";
   if (!record) {
     if (fallbackKind === "panel") return "panel";
-    if (fallbackKind === "app") return "workspace-app";
+    if (fallbackKind === "client") return "client";
     if (fallbackKind === "worker") return "worker";
     if (fallbackKind === "do") return "durable-object";
     if (fallbackKind === "extension") return "extension";
@@ -86,8 +86,8 @@ function categoryForRecord(
   switch (record.kind) {
     case "panel":
       return "panel";
-    case "app":
-      return "workspace-app";
+    case "client":
+      return "client";
     case "worker":
       return "worker";
     case "do":
@@ -131,8 +131,8 @@ function fallbackLabel(
   switch (kind) {
     case "panel":
       return "Workspace panel";
-    case "app":
-      return "Workspace app";
+    case "client":
+      return "Workspace client";
     case "worker":
       return "Background worker";
     case "do":
@@ -176,7 +176,7 @@ function breadcrumbForRecord(
   const category = categoryForRecord(
     record,
     record.kind === "panel" ||
-      record.kind === "app" ||
+      record.kind === "client" ||
       record.kind === "worker" ||
       record.kind === "do"
       ? record.kind
@@ -273,7 +273,7 @@ export function resolveApprovalCallerTitle(
     callerId,
     callerKind:
       record?.kind === "panel" ||
-      record?.kind === "app" ||
+      record?.kind === "client" ||
       record?.kind === "worker" ||
       record?.kind === "do"
         ? record.kind

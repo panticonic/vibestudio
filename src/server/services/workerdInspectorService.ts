@@ -14,16 +14,16 @@ import {
   type ServiceDefinition,
 } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import type { WorkerdInspectorTarget } from "../workerdInspectorBridge.js";
-import { isAuthorizedChrome } from "./chromeTrust.js";
+import { isTrustedDeviceCaller } from "./clientTrust.js";
 import { describeCapability } from "@vibestudio/shared/authorityPresentation";
 
 export const WORKERD_INSPECTOR_CAPABILITY = "runtime.inspect";
 const WORKERD_INSPECTOR_AUTHORITY_RESOLVER = "workerdInspector.getEndpoint.target";
 
 export interface WorkerdInspectorServiceDeps {
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
   listTargets(): Promise<WorkerdInspectorTarget[]>;
   getEndpoint(
     targetPath: string,
@@ -42,7 +42,7 @@ export function createWorkerdInspectorService(
     authorityPreparation: {
       [WORKERD_INSPECTOR_AUTHORITY_RESOLVER]: (ctx, [rawTargetPath]) => {
         if (
-          isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability }) ||
+          isTrustedDeviceCaller(ctx.caller, { hasClientCapability: deps.hasClientCapability }) ||
           (!ctx.caller.code && !ctx.caller.executionSession)
         ) {
           return { selections: [], payload: null };

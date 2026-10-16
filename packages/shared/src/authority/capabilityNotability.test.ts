@@ -92,8 +92,7 @@ describe("capability notability", () => {
       "camera",
       "screen-capture",
       "location",
-      "fs-read",
-      "fs-write",
+      "local-files",
       "microphone",
       "permissions.revoke",
     ]) {

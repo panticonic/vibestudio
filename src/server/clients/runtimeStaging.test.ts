@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { HostTargetStaging } from "./hostTargetStaging.js";
+import { RuntimeStaging } from "./runtimeStaging.js";
 
-describe("HostTargetStaging", () => {
-  it("stages a pre-demanded target once for concurrent callers", async () => {
+describe("RuntimeStaging", () => {
+  it("stages a pre-demanded runtime once for concurrent callers", async () => {
     const demanded = new Set(["react-native"]);
     let finish!: () => void;
     const stage = vi.fn(
@@ -11,7 +11,7 @@ describe("HostTargetStaging", () => {
           finish = resolve;
         })
     );
-    const staging = new HostTargetStaging(demanded, stage);
+    const staging = new RuntimeStaging(demanded, stage);
 
     const first = staging.ensure("react-native");
     const second = staging.ensure("react-native");
@@ -29,7 +29,7 @@ describe("HostTargetStaging", () => {
     const demanded = new Set<"react-native">();
     const failure = new Error("declaration reconciliation failed");
     const stage = vi.fn().mockRejectedValueOnce(failure).mockResolvedValueOnce(undefined);
-    const staging = new HostTargetStaging(demanded, stage);
+    const staging = new RuntimeStaging(demanded, stage);
 
     await expect(staging.ensure("react-native")).rejects.toBe(failure);
     expect(demanded.has("react-native")).toBe(false);
@@ -40,7 +40,7 @@ describe("HostTargetStaging", () => {
   it("preserves an initial demand when staging fails", async () => {
     const demanded = new Set(["react-native"]);
     const failure = new Error("declaration reconciliation failed");
-    const staging = new HostTargetStaging(demanded, () => Promise.reject(failure));
+    const staging = new RuntimeStaging(demanded, () => Promise.reject(failure));
 
     await expect(staging.ensure("react-native")).rejects.toBe(failure);
     expect(demanded.has("react-native")).toBe(true);

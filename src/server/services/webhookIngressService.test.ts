@@ -26,7 +26,7 @@ import { resolveWebhookDirectMaxBodyBytes } from "./webhookIngressService.js";
 const RELAY_BASE_URL = "https://hooks.test";
 const DIRECT_BASE_URL = "https://direct.test";
 
-function shellCtx(callerId = "shell"): ServiceContext {
+function shellCtx(callerId = "shell:test-device"): ServiceContext {
   return { caller: createVerifiedCaller(callerId, "shell") };
 }
 

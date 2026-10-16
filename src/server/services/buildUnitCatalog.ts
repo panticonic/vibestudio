@@ -5,7 +5,7 @@ import type { BuildSystemV2 } from "../buildV2/index.js";
 
 export type HostedSourceStatus = {
   name: string;
-  kind: "extension" | "app";
+  kind: "extension" | "client";
   source: string;
   status: "available" | "running" | "stopped" | "error" | "pending-approval" | "building";
   activeBundleKey: string | null;
@@ -50,23 +50,23 @@ export async function listBuildUnitCatalog(
       (
         node
       ): node is typeof node & {
-        kind: "panel" | "worker" | "extension" | "app";
+        kind: "panel" | "worker" | "extension" | "client";
       } =>
         node.kind === "panel" ||
         node.kind === "worker" ||
         node.kind === "extension" ||
-        node.kind === "app"
+        node.kind === "client"
     )
     .map((node): BuildUnitCatalogEntry => {
       const effectiveVersion = deps.buildSystem.getEffectiveVersion(node.name);
       const hosted =
-        node.kind === "extension" || node.kind === "app"
+        node.kind === "extension" || node.kind === "client"
           ? hostedBySource.get(node.relativePath)
           : undefined;
       const worker = node.kind === "worker" ? workersBySource.get(node.relativePath) : undefined;
       const workerError = node.kind === "worker" ? deps.workerError(node.relativePath) : null;
       const status =
-        node.kind === "extension" || node.kind === "app"
+        node.kind === "extension" || node.kind === "client"
           ? hostedBuildStatus(hosted, effectiveVersion)
           : worker?.status === "starting" || worker?.status === "building"
             ? "building"
@@ -78,8 +78,14 @@ export async function listBuildUnitCatalog(
       return {
         name: node.name,
         kind: node.kind,
-        target: node.kind === "app" ? (node.manifest.app?.target ?? null) : null,
-        capabilities: node.kind === "app" ? [...(node.manifest.app?.capabilities ?? [])] : [],
+        runtime: node.kind === "client" ? (node.manifest.client?.runtime ?? null) : null,
+        capabilities:
+          node.kind === "client"
+            ? [
+                ...(node.manifest.client?.capabilities?.required ?? []),
+                ...(node.manifest.client?.capabilities?.optional ?? []),
+              ]
+            : [],
         source: node.relativePath,
         displayName: node.manifest.displayName ?? node.manifest.title ?? node.name,
         isAgent: Boolean(node.manifest.agent),

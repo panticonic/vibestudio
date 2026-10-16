@@ -34,12 +34,12 @@ const WAITER = {
   requesterCategory: "agent" as const,
 };
 
-function unit(kind: "extension" | "app" | "panel" | "worker", name: string): ReviewedUnit {
+function unit(kind: "extension" | "client" | "panel" | "worker", name: string): ReviewedUnit {
   return {
     unitKind: kind,
     unitName: name,
     displayName: name,
-    target: kind === "app" ? "electron" : null,
+    runtime: kind === "client" ? "web" : null,
     source: {
       kind: "workspace-repo",
       repo: `${kind}s/${name}`,
@@ -219,7 +219,7 @@ describe("UnitInstallReviewCoordinator", () => {
     expect(() =>
       coordinator.enqueue({
         trigger: "startup",
-        entries: [{ ...unit("app", "shell"), ev: null }],
+        entries: [{ ...unit("client", "shell"), ev: null }],
         applyApproved: vi.fn(async () => undefined),
         applyDenied: vi.fn(),
       })
@@ -246,7 +246,7 @@ describe("UnitInstallReviewCoordinator", () => {
     });
     const second = coordinator.enqueue({
       trigger: "startup",
-      entries: [unit("app", "shell")],
+      entries: [unit("client", "shell")],
       applyApproved: applyApp,
       applyDenied: vi.fn(),
     });
@@ -261,7 +261,7 @@ describe("UnitInstallReviewCoordinator", () => {
         title: "Start this workspace?",
         units: [
           expect.objectContaining({ unitKind: "extension", unitName: "image-service" }),
-          expect.objectContaining({ unitKind: "app", unitName: "shell" }),
+          expect.objectContaining({ unitKind: "client", unitName: "shell" }),
         ],
       })
     );
@@ -312,13 +312,13 @@ describe("UnitInstallReviewCoordinator", () => {
     await Promise.all([
       coordinator.enqueue({
         trigger: "startup",
-        entries: [unit("app", "desktop")],
+        entries: [unit("client", "desktop")],
         applyApproved: vi.fn(async () => undefined),
         applyDenied: vi.fn(),
       }),
       coordinator.enqueue({
         trigger: "startup",
-        entries: [{ ...unit("app", "mobile"), target: "react-native" }],
+        entries: [{ ...unit("client", "mobile"), runtime: "react-native" }],
         applyApproved: vi.fn(async () => undefined),
         applyDenied: vi.fn(),
       }),
@@ -422,7 +422,7 @@ describe("UnitInstallReviewCoordinator", () => {
     const pending = Promise.all([
       coordinator.enqueue({
         trigger: "startup",
-        entries: [unit("app", "shell")],
+        entries: [unit("client", "shell")],
         applyApproved: applyApp,
         applyDenied: vi.fn(),
       }),
@@ -468,7 +468,7 @@ describe("UnitInstallReviewCoordinator", () => {
       }),
       coordinator.enqueue({
         trigger: "startup",
-        entries: [unit("app", "shell")],
+        entries: [unit("client", "shell")],
         applyApproved: apply,
         applyDenied: denyApp,
       }),
@@ -497,7 +497,7 @@ describe("UnitInstallReviewCoordinator", () => {
 
     const pending = coordinator.enqueue({
       trigger: "startup",
-      entries: [unit("app", "terminal-browser")],
+      entries: [unit("client", "terminal-browser")],
       applyApproved: applyApp,
       applyDenied: vi.fn(),
     });
@@ -580,7 +580,7 @@ describe("UnitInstallReviewCoordinator", () => {
       const applyLate = vi.fn(async () => undefined);
       const late = coordinator.enqueue({
         trigger: "startup",
-        entries: [unit("app", "shell")],
+        entries: [unit("client", "shell")],
         applyApproved: applyLate,
         applyDenied: vi.fn(),
       });
@@ -651,7 +651,7 @@ describe("UnitInstallReviewCoordinator", () => {
     });
     const app = coordinator.enqueue({
       trigger: "startup",
-      entries: [unit("app", "unrelated-electron-app")],
+      entries: [unit("client", "unrelated-electron-app")],
       applyApproved: appApplied,
       applyDenied: vi.fn(),
     });
@@ -670,7 +670,7 @@ describe("UnitInstallReviewCoordinator", () => {
 
   it("reports landed and failed targets separately after concurrent application", async () => {
     const extension = unit("extension", "react-native");
-    const app = unit("app", "shell");
+    const app = unit("client", "shell");
     const reportInstallLanding = vi.fn();
     const approvalQueue = {
       request: vi.fn(async () => "accepted" as const),
@@ -732,7 +732,7 @@ describe("UnitInstallReviewCoordinator", () => {
   });
 
   it("reports landing to the exact queue handle when another review overlaps", async () => {
-    const app = unit("app", "shell");
+    const app = unit("client", "shell");
     const part = {
       identityKey: `${app.source.repo}@${app.ev}`,
       repoPath: app.source.repo,

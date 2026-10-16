@@ -3,11 +3,11 @@ import {
   parseWorkspaceConfigContentWithId,
   parseWorkspaceSystemEpochEnvelope,
   readWorkspaceConfig,
-  resolveExtensionsForHostTargets,
-  resolveHostTargetDecl,
-  resolveHostTargetRequiredExtensions,
+  resolveClientDefault,
+  resolveExtensionsForRuntimes,
+  resolveRuntimeRequiredExtensions,
   resolveWorkspaceTrustGrants,
-  workspaceAppPackageName,
+  workspaceClientPackageName,
   workspaceExtensionPackageName,
   workspaceProviderExtensionPackageName,
 } from "./configParser.js";
@@ -63,8 +63,8 @@ singletonObjects:
 extensions:
   - source: extensions/browser-data
   - source: extensions/git-bridge
-apps:
-  - source: apps/shell
+clients:
+  - source: clients/desktop-browser
 providers:
   evalEngine:
     source: "@workspace/eval"
@@ -77,21 +77,19 @@ providers:
   gitInterop:
     extension: extensions/git-bridge
 trust:
-  chromeApps:
-    - apps/shell
-    - "@workspace-apps/mobile"
-hostTargets:
-  electron:
-    app: apps/shell
+  clients:
+    - clients/desktop-browser
+    - "@workspace-clients/mobile-browser"
+clientDefaults:
+  desktop: clients/desktop-browser
+  android: "@workspace-clients/mobile-browser"
+  terminal: clients/terminal-browser
+runtimeExtensions:
   react-native:
-    app: "@workspace-apps/mobile"
-    requiresExtensions:
-      - extensions/react-native
-  terminal:
-    app: apps/terminal-browser
+    - extensions/react-native
 `;
 
-describe("manifest declarations: providers / trust / hostTargets", () => {
+describe("manifest declarations: providers / trust / client defaults", () => {
   it("reads exactly one flattened runtime manifest", async () => {
     const reads: string[] = [];
     await expect(
@@ -148,42 +146,41 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
     const config = parse(FULL_MANIFEST);
     expect(config.providers?.evalEngine?.source).toBe("@workspace/eval");
     expect(config.providers?.cdpClient?.source).toBe("@workspace/cdp-client");
-    expect(config.trust?.chromeApps).toHaveLength(2);
+    expect(config.trust?.clients).toHaveLength(2);
   });
 
   it("resolves trust grants to canonical repo paths (both identity forms)", () => {
     const grants = resolveWorkspaceTrustGrants(parse(FULL_MANIFEST));
-    expect(grants.chromeApps).toEqual(["apps/shell", "apps/mobile"]);
+    expect(grants.clients).toEqual(["clients/desktop-browser", "clients/mobile-browser"]);
   });
 
   it("resolves empty grants when trust is absent — trust is never assumed", () => {
     const grants = resolveWorkspaceTrustGrants(parse("initPanels: []\n"));
-    expect(grants.chromeApps).toEqual([]);
+    expect(grants.clients).toEqual([]);
   });
 
-  it("resolves host target declarations (canonical forms + requires)", () => {
+  it("resolves each host's default client (canonical forms)", () => {
     const config = parse(FULL_MANIFEST);
-    expect(resolveHostTargetDecl(config, "electron")).toEqual({
-      appSource: "apps/shell",
-      requiresExtensions: [],
-    });
-    expect(resolveHostTargetDecl(config, "react-native")).toEqual({
-      appSource: "apps/mobile",
-      requiresExtensions: ["extensions/react-native"],
-    });
-    expect(resolveHostTargetDecl(parse("initPanels: []\n"), "electron")).toBeNull();
-    expect(resolveHostTargetRequiredExtensions(config)).toEqual([
+    expect(resolveClientDefault(config, "desktop")).toBe("clients/desktop-browser");
+    expect(resolveClientDefault(config, "android")).toBe("clients/mobile-browser");
+    expect(resolveClientDefault(config, "ios")).toBeNull();
+    expect(resolveClientDefault(parse("initPanels: []\n"), "desktop")).toBeNull();
+  });
+
+  it("resolves the extensions each runtime's clients need to build", () => {
+    const config = parse(FULL_MANIFEST);
+    expect(resolveRuntimeRequiredExtensions(config)).toEqual([
       { source: "extensions/react-native", ref: "main" },
     ]);
-    expect(resolveHostTargetRequiredExtensions(config, "electron")).toEqual([]);
-    expect(resolveHostTargetRequiredExtensions(config, "react-native")).toEqual([
+    expect(resolveRuntimeRequiredExtensions(config, "web")).toEqual([]);
+    expect(resolveRuntimeRequiredExtensions(config, "react-native")).toEqual([
       { source: "extensions/react-native", ref: "main" },
     ]);
-    expect(resolveExtensionsForHostTargets(config, ["electron"])).toEqual([
+    expect(resolveExtensionsForRuntimes(config, ["web"])).toEqual([
       { source: "extensions/browser-data", ref: "main" },
       { source: "extensions/git-bridge", ref: "main" },
     ]);
-    expect(resolveExtensionsForHostTargets(config, ["react-native"])).toEqual([
+    expect(resolveExtensionsForRuntimes(config, ["react-native"])).toEqual([
       { source: "extensions/react-native", ref: "main" },
       { source: "extensions/browser-data", ref: "main" },
       { source: "extensions/git-bridge", ref: "main" },
@@ -208,20 +205,29 @@ describe("manifest declarations: providers / trust / hostTargets", () => {
   });
 
   it("rejects malformed trust lists", () => {
-    expect(() => parse("trust:\n  chromeApps: apps/shell\n")).toThrow(/must be a list/);
-    expect(() => parse("trust:\n  chromeApps:\n    - panels/chat\n")).toThrow(/trust\.chromeApps/);
+    expect(() => parse("trust:\n  clients: clients/desktop-browser\n")).toThrow(/must be a list/);
+    expect(() => parse("trust:\n  clients:\n    - panels/chat\n")).toThrow(/trust\.clients/);
     expect(() =>
-      parse('trust:\n  chromeApps:\n    - apps/shell\n    - "@workspace-apps/shell"\n')
+      parse(
+        'trust:\n  clients:\n    - clients/desktop-browser\n    - "@workspace-clients/desktop-browser"\n'
+      )
     ).toThrow(/duplicate/);
+    expect(() => parse("trust:\n  chromeApps:\n    - clients/desktop-browser\n")).toThrow(
+      /unknown `trust` key/
+    );
   });
 
-  it("rejects unknown host targets and malformed app declarations", () => {
-    expect(() => parse("hostTargets:\n  browser:\n    app: apps/shell\n")).toThrow(
-      /unknown `hostTargets` key/
+  it("rejects unknown hosts, unknown runtimes and malformed client declarations", () => {
+    expect(() => parse("clientDefaults:\n  electron: clients/desktop-browser\n")).toThrow(
+      /unknown `clientDefaults` key/
     );
-    expect(() => parse("hostTargets:\n  electron:\n    app: extensions/shell\n")).toThrow(
-      /hostTargets\.electron\.app/
+    expect(() => parse("clientDefaults:\n  desktop: extensions/shell\n")).toThrow(
+      /clientDefaults\.desktop/
     );
+    expect(() => parse("runtimeExtensions:\n  electron:\n    - extensions/a\n")).toThrow(
+      /unknown `runtimeExtensions` key/
+    );
+    expect(() => parse("hostTargets:\n  electron:\n    app: apps/shell\n")).toThrow(/hostTargets/);
   });
 
   it("rejects provider slots without a source", () => {
@@ -372,8 +378,12 @@ it("rejects Git service settings in authored workspace configuration", () => {
 
 describe("workspace package-name helpers (centralized scopes)", () => {
   it("maps both identity forms to scoped package names", () => {
-    expect(workspaceAppPackageName("apps/shell")).toBe("@workspace-apps/shell");
-    expect(workspaceAppPackageName("@workspace-apps/shell")).toBe("@workspace-apps/shell");
+    expect(workspaceClientPackageName("clients/desktop-browser")).toBe(
+      "@workspace-clients/desktop-browser"
+    );
+    expect(workspaceClientPackageName("@workspace-clients/desktop-browser")).toBe(
+      "@workspace-clients/desktop-browser"
+    );
     expect(workspaceExtensionPackageName("extensions/browser-data")).toBe(
       "@workspace-extensions/browser-data"
     );
@@ -383,8 +393,8 @@ describe("workspace package-name helpers (centralized scopes)", () => {
   });
 
   it("rejects non-unit-shaped identities", () => {
-    expect(() => workspaceAppPackageName("panels/chat")).toThrow();
-    expect(() => workspaceExtensionPackageName("apps/shell")).toThrow();
+    expect(() => workspaceClientPackageName("panels/chat")).toThrow();
+    expect(() => workspaceExtensionPackageName("clients/desktop-browser")).toThrow();
   });
 });
 

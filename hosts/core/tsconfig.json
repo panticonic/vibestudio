@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "noUncheckedIndexedAccess": true,
+    "types": ["node", "vitest/globals"],
+    "paths": {
+      "@vibestudio/rpc": ["../../packages/rpc/src/index.ts"],
+      "@vibestudio/rpc/*": ["../../packages/rpc/src/*"],
+      "@vibestudio/service-schemas/bindings/*": ["../../packages/service-schemas/src/bindings/*"],
+      "@vibestudio/service-schemas/clients/*": ["../../packages/service-schemas/src/clients/*"],
+      "@vibestudio/service-schemas/runtime/*": ["../../packages/service-schemas/src/runtime/*"],
+      "@vibestudio/service-schemas/*": ["../../packages/service-schemas/src/*"],
+      "@vibestudio/shared/*": ["../../packages/shared/src/*"],
+      "@vibestudio/workspace-contracts/*": ["../../packages/workspace-contracts/src/*"]
+    }
+  },
+  "include": ["src/**/*.ts"]
+}

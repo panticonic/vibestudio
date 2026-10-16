@@ -8,7 +8,7 @@
 
 import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 
-export type EntityKind = "panel" | "app" | "worker" | "do" | "session" | "shell" | "server";
+export type EntityKind = "panel" | "client" | "worker" | "do" | "session" | "shell" | "server";
 
 export interface EntitySource {
   repoPath: string;
@@ -446,11 +446,6 @@ export type RuntimeEntityCreateSpec =
       stateArgs?: unknown;
     })
   | (RuntimeEntityCreateCommon & {
-      kind: "app";
-      execution: CodeExecution;
-      stateArgs?: unknown;
-    })
-  | (RuntimeEntityCreateCommon & {
       kind: "worker";
       execution: CodeExecution;
       stateArgs?: unknown;
@@ -484,7 +479,7 @@ export type RuntimeCodePanelEntityCreateSpec = Omit<RuntimePanelEntityCreateSpec
 };
 export type RuntimeCodeEntityCreateSpec =
   | RuntimeCodePanelEntityCreateSpec
-  | Extract<RuntimeEntityCreateSpec, { kind: "app" | "worker" | "do" }>;
+  | Extract<RuntimeEntityCreateSpec, { kind: "worker" | "do" }>;
 
 /** Durable source coordinate retained by the current entity-store schema. */
 export function runtimeEntitySource(spec: RuntimeEntityCreateSpec): string {
@@ -502,7 +497,7 @@ export function runtimeEntityBuildRef(
 
 export interface RuntimeEntityHandle {
   id: string;
-  kind: "panel" | "app" | "worker" | "do" | "session";
+  kind: "panel" | "client" | "worker" | "do" | "session";
   source: EntitySource;
   /** Content-addressed BuildV2 artifact selected for this incarnation. */
   buildKey?: string;
@@ -522,7 +517,7 @@ export interface RuntimeEntityHandle {
 /**
  * Build canonical entity id from identity components.
  * - panel: `panel:<key>` (key is historyEntryKey)
- * - app: `app:<source>:<key>`
+ * - client: `client:<id>:<runtime>:<deviceId>` (device principal of a running client)
  * - worker: `worker:<source>:<key>`
  * - do: `do:<source>:<className>:<key>`
  * - session: `session:<key>`
@@ -536,9 +531,8 @@ export function canonicalEntityId(args: {
   switch (args.kind) {
     case "panel":
       return `panel:${args.key}`;
-    case "app":
-      if (!args.source) throw new Error("app entity requires source");
-      return `app:${args.source}:${args.key}`;
+    case "client":
+      return `client:${args.key}`;
     case "worker":
       if (!args.source) throw new Error("worker entity requires source");
       return `worker:${args.source}:${args.key}`;

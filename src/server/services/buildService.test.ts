@@ -204,25 +204,8 @@ function makeBuildSystem(): BuildSystemV2 {
 }
 
 describe("build service extension diagnostics", () => {
-  it("starts only after both build and app update authorities exist", () => {
-    expect(BUILD_SERVICE_DEPENDENCIES).toEqual(["buildSystem", "appHost"]);
-  });
-
-  it("queries the selected mobile update relative to the caller's installed build", async () => {
-    const mobileUpdateStatus = vi.fn(() => null);
-    const service = createBuildService({
-      buildSystem: makeBuildSystem(),
-      listUnits: () => [],
-      getCallerContextId: () => null,
-      mobileUpdateStatus,
-    });
-
-    await expect(
-      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "mobileUpdateStatus", [
-        "mobile-build-2",
-      ])
-    ).resolves.toBeNull();
-    expect(mobileUpdateStatus).toHaveBeenCalledWith("mobile-build-2");
+  it("starts once the build system exists", () => {
+    expect(BUILD_SERVICE_DEPENDENCIES).toEqual(["buildSystem"]);
   });
 
   it("preserves the exact semantic ref and native dependency resources", async () => {
@@ -236,7 +219,6 @@ describe("build service extension diagnostics", () => {
     };
     vi.mocked(buildSystem.prepareTypecheck).mockResolvedValue(environment);
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => "agent-context",
@@ -286,7 +268,6 @@ describe("build service extension diagnostics", () => {
     });
     vi.mocked(buildSystem.getStoredBuild).mockResolvedValue(websiteBuild);
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,
@@ -320,7 +301,6 @@ describe("build service extension diagnostics", () => {
     const buildSystem = makeBuildSystem();
     vi.mocked(buildSystem.getBuild).mockResolvedValue({ bundle: "module.exports = {};" } as never);
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,
@@ -342,7 +322,6 @@ describe("build service extension diagnostics", () => {
   it("returns compact build metadata by default", async () => {
     const buildSystem = makeBuildSystem();
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,
@@ -365,7 +344,6 @@ describe("build service extension diagnostics", () => {
   it("returns the executable source inventory only when explicitly requested", async () => {
     const buildSystem = makeBuildSystem();
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,
@@ -387,7 +365,6 @@ describe("build service extension diagnostics", () => {
   it("accepts an explicit compact metadata read", async () => {
     const buildSystem = makeBuildSystem();
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,
@@ -409,7 +386,6 @@ describe("build service extension diagnostics", () => {
   it("schedules ahead-of-use build reports in the background", async () => {
     const buildSystem = makeBuildSystem();
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,
@@ -432,7 +408,6 @@ describe("build service extension diagnostics", () => {
   it("profiles exact builds without returning artifact or module contents", async () => {
     const buildSystem = makeBuildSystem();
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,
@@ -486,7 +461,6 @@ describe("build service extension diagnostics", () => {
       .mockReturnValueOnce(32);
     try {
       const service = createBuildService({
-        mobileUpdateStatus: () => null,
         buildSystem,
         listUnits: () => [],
         getCallerContextId: () => null,
@@ -508,7 +482,6 @@ describe("build service extension diagnostics", () => {
   it("resolves panel metadata by its public workspace source path", async () => {
     const buildSystem = makeBuildSystem();
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,
@@ -535,7 +508,6 @@ describe("build service extension diagnostics", () => {
     );
     const getCallerContextId = vi.fn(() => "context:unpublished");
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId,
@@ -555,7 +527,6 @@ describe("build service extension diagnostics", () => {
   it("uses a verified agent binding and keeps unbound root callers on main", async () => {
     const buildSystem = makeBuildSystem();
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,
@@ -591,7 +562,6 @@ describe("build service extension diagnostics", () => {
       },
     ]);
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,
@@ -633,7 +603,6 @@ describe("build service extension diagnostics", () => {
       retainedSourceRoots: [],
     });
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,
@@ -663,7 +632,6 @@ describe("build service extension diagnostics", () => {
       },
     ]);
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,
@@ -721,7 +689,6 @@ describe("build service extension diagnostics", () => {
       },
     ]);
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,
@@ -772,7 +739,6 @@ describe("build service extension diagnostics", () => {
       tryGet: () => undefined,
     } as never);
     const service = createBuildService({
-      mobileUpdateStatus: () => null,
       buildSystem,
       listUnits: () => [],
       getCallerContextId: () => null,

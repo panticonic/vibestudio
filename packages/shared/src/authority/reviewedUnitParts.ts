@@ -118,7 +118,7 @@ export function reviewedUnitPart(input: ReviewedUnitPartInput): InstallReviewPar
     version: unit.version ?? null,
     requiredUnitKeys: Object.keys(unit.dependencyEvs ?? {}),
     runsInBackground: unit.unitKind === "worker",
-    ...(unit.target === undefined ? {} : { target: unit.target }),
+    ...(unit.runtime === undefined ? {} : { runtime: unit.runtime }),
     origin: input.origin,
     notableRows,
     everydayRows,

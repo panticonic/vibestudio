@@ -7,7 +7,7 @@ describe("createLiveCallerGate", () => {
   const authority = { requests: [], provides: [] } as const;
   const codeIdentity = (
     callerId: string,
-    callerKind: "panel" | "app" | "worker" | "do",
+    callerKind: "panel" | "client" | "worker" | "do",
     repoPath: string
   ) => ({
     callerId,
@@ -92,7 +92,7 @@ describe("createLiveCallerGate", () => {
                 } as never)
               : ({
                   id: entityId,
-                  kind: "app",
+                  kind: "client",
                   source: { repoPath: "apps/shared", effectiveVersion: "ev-1" },
                   activeExecutionDigest: currentExecutionDigest,
                   activeAuthority: authority,
@@ -275,8 +275,8 @@ describe("createLiveCallerGate", () => {
     const state = fixture();
     const app = createVerifiedCaller(
       "app:shared",
-      "app",
-      codeIdentity("app:shared", "app", "apps/shared"),
+      "client",
+      codeIdentity("client:shared", "client", "apps/shared"),
       null,
       {
         userId: "usr_alice",
@@ -317,8 +317,8 @@ describe("createLiveCallerGate", () => {
     const state = fixture();
     const app = createVerifiedCaller(
       "app:shared",
-      "app",
-      codeIdentity("app:shared", "app", "apps/shared"),
+      "client",
+      codeIdentity("client:shared", "client", "apps/shared"),
       null,
       { userId: "usr_alice", handle: "alice" }
     );
@@ -363,8 +363,8 @@ describe("createLiveCallerGate", () => {
     const state = fixture();
     const app = createVerifiedCaller(
       "@workspace-apps/terminal-browser",
-      "app",
-      codeIdentity("@workspace-apps/terminal-browser", "app", "apps/shared"),
+      "client",
+      codeIdentity("@workspace-clients/terminal-browser", "client", "apps/shared"),
       null,
       { userId: "system", handle: "system" }
     );

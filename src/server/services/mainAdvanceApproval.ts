@@ -11,7 +11,8 @@ import type {
   ServiceContext,
   VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
+import type { ClientTrustChange } from "@vibestudio/shared/approvals";
 import type {
   InstallReviewOrigin,
   UnitInstallSourceOrigin,
@@ -21,7 +22,7 @@ import { compareUtf16CodeUnits, EMPTY_STATE_HASH } from "@vibestudio/content-add
 import { countLines, countLineDiff } from "@vibestudio/shared/lineDiff";
 import { blobPath, diffTrees, getBytes, statBlob } from "./blobstoreService.js";
 import { joinRepoPrefix } from "../vcsHost/paths.js";
-import { isAuthorizedChrome, isInteractiveChrome } from "./chromeTrust.js";
+import { isTrustedDeviceCaller, isInteractiveClient } from "./clientTrust.js";
 import type {
   RefGate,
   RefGateBatch,
@@ -572,7 +573,7 @@ export interface MainAdvanceApprovalCompletion {
 
 export function createMainAdvanceApprovalGate(deps: {
   authorizeEffect(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void>;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
   getProviders(): Array<UnitChangeApprovalProvider<ReviewedUnit> | null | undefined>;
   /**
    * Row keys a part already holds standing clearance for. An update re-mints
@@ -595,6 +596,12 @@ export function createMainAdvanceApprovalGate(deps: {
     landingToken: string,
     report: import("./approvalQueue.js").InstallLandingReport
   ) => void;
+  /**
+   * Clients whose effective device-level capabilities differ between the
+   * candidate state and current main (§4.4.1): `trust.clients` membership ×
+   * each client's declared device-level capabilities.
+   */
+  trustDeltaForCommit?: (stateHash: string) => Promise<ClientTrustChange[]>;
 }): MainAdvanceApprovalGate {
   return {
     async approve(candidate) {
@@ -602,13 +609,23 @@ export function createMainAdvanceApprovalGate(deps: {
       const metaChanged = candidate.changedPaths.some(isMetaPath);
 
       const runtimeKind = candidate.caller.runtime.kind;
+      // A change to which clients hold device-level power is a trust change,
+      // and a trust change is critical for every publisher: no once, task,
+      // envelope, mission or standing grant satisfies it, and the click that
+      // started a chrome publication is not consent to it (§4.4.1).
+      const trustDelta =
+        deps.trustDeltaForCommit &&
+        candidate.changedPaths.some((changed) => isMetaPath(changed) || isClientPath(changed))
+          ? await deps.trustDeltaForCommit(candidate.stateHash)
+          : [];
+      if (trustDelta.length > 0) await approveTrustChange(deps, candidate, trustDelta);
       // Trusted first-party UI writing for the user in front of it — setup,
       // settings, layout. The click IS the consent, so these publications record
       // admission and stay silent (§5.2). A `server` or `headless-host`
       // publication has no user and no click, so it falls through to the
       // ordinary gate below even though it also holds `panel-hosting`.
-      const interactiveChrome = isInteractiveChrome(candidate.caller, {
-        hasAppCapability: deps.hasAppCapability,
+      const interactiveChrome = isInteractiveClient(candidate.caller, {
+        hasClientCapability: deps.hasClientCapability,
       });
 
       if (!interactiveChrome) {
@@ -854,7 +871,9 @@ export function createMainAdvanceApprovalGate(deps: {
     },
 
     async approveSemanticAdvance(candidate) {
-      if (isAuthorizedChrome(candidate.caller, { hasAppCapability: deps.hasAppCapability })) {
+      if (
+        isTrustedDeviceCaller(candidate.caller, { hasClientCapability: deps.hasClientCapability })
+      ) {
         return;
       }
       const runtimeKind = candidate.caller.runtime.kind;
@@ -901,7 +920,9 @@ export function createMainAdvanceApprovalGate(deps: {
       // The shell acts on the user's behalf (it carries its own confirm UX), so
       // chrome callers pass — same trust model as `approve`. Every other caller
       // (agents, panels, workers) must get explicit user approval.
-      if (isAuthorizedChrome(candidate.caller, { hasAppCapability: deps.hasAppCapability })) {
+      if (
+        isTrustedDeviceCaller(candidate.caller, { hasClientCapability: deps.hasClientCapability })
+      ) {
         return;
       }
       const callerKind = userlandCallerKind(candidate.caller.runtime.kind);
@@ -1029,6 +1050,8 @@ async function authorizeProtectedPublication(
     capability: string;
     resourceKey: string;
     tier: "gated" | "critical";
+    /** Principals that may satisfy the requirement; every family by default. */
+    principals?: readonly ("host" | "user" | "code" | "website")[];
     args: readonly unknown[];
     preparedState: unknown;
     challenge: NonNullable<HostAuthorityEffect["challenge"]>;
@@ -1052,7 +1075,10 @@ async function authorizeProtectedPublication(
       resourceKey: input.resourceKey,
       // The code family already admits evaluated sessions; naming session again
       // duplicates the same branch and repeats one missing-grant reason.
-      requirement: requirementForPrincipals(["host", "user", "code", "website"], input.capability),
+      requirement: requirementForPrincipals(
+        input.principals ?? ["host", "user", "code", "website"],
+        input.capability
+      ),
       tier: input.tier,
       sessionAdmission: "family",
       args: input.args,
@@ -1071,10 +1097,58 @@ function isMetaPath(filePath: string): boolean {
   return filePath === "meta" || filePath.startsWith("meta/");
 }
 
-function userlandCallerKind(kind: string): "panel" | "app" | "worker" | "do" | "extension" | null {
+function isClientPath(filePath: string): boolean {
+  return filePath.startsWith("clients/");
+}
+
+/**
+ * The fresh, per-publication `confirm.critical` decision on a trust change.
+ * The requirement admits no host bypass: even a host's own session needs the
+ * person's exact confirmation, bound by the prepared-state digest to this
+ * candidate and this delta.
+ */
+async function approveTrustChange(
+  deps: { authorizeEffect(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void> },
+  candidate: MainAdvanceApprovalCandidate,
+  delta: readonly ClientTrustChange[]
+): Promise<void> {
+  const groupKey = `workspace-trust-change:${candidate.publicationId}`;
+  const names = delta.map((change) => change.title).join(", ");
+  const gains = delta.some((change) => change.gained.length > 0);
+  await authorizeProtectedPublication(deps, candidate.caller, {
+    ...(candidate.signal ? { signal: candidate.signal } : {}),
+    capability: WORKSPACE_PUBLISH_CAPABILITY,
+    resourceKey: `workspace-trust-change:publication:${candidate.publicationId}`,
+    tier: "critical",
+    principals: ["user", "code", "website"],
+    args: [candidate.publicationId, candidate.stateHash, delta],
+    preparedState: { candidate, delta },
+    challenge: {
+      severity: "severe",
+      dedupKey: groupKey,
+      resource: { type: "client-trust", label: "Clients", value: names },
+      operation: {
+        kind: "workspace",
+        verb: gains ? "give clients device-level power" : "take device-level power from clients",
+        object: { type: "client-trust", label: "Clients", value: names },
+        groupKey,
+      },
+      title: gains ? `Let ${names} act as this device` : `Stop ${names} acting as this device`,
+      description: gains
+        ? "Trusted clients can act as your devices and show approvals on your behalf. Approve only clients you expect."
+        : "These clients lose the powers listed below; running copies close and say why.",
+      trustChange: delta,
+      deniedReason: "Trust change denied",
+    },
+  });
+}
+
+function userlandCallerKind(
+  kind: string
+): "panel" | "client" | "worker" | "do" | "extension" | null {
   if (
     kind === "panel" ||
-    kind === "app" ||
+    kind === "client" ||
     kind === "worker" ||
     kind === "do" ||
     kind === "extension"

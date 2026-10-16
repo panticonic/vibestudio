@@ -54,7 +54,7 @@ const EXACT_PIN_EXCEPTIONS = new Map([
     "react-native-tcp-socket",
     "react-native-webview",
   ].map((name) => [
-    `apps/mobile/package.json:dependencies:${name}`,
+    `clients/mobile-browser/package.json:dependencies:${name}`,
     "must match the React Native runtime or native module compiled into the APK",
   ]),
 ]);
@@ -182,8 +182,8 @@ export async function collectStartupHostReuseFindings(appRoot, userlandRoot) {
     fs.readFileSync(path.join(workspaceRoot, "meta", "vibestudio.yml"), "utf8")
   );
   const sources = new Set();
-  const electronApp = config?.hostTargets?.electron?.app;
-  if (typeof electronApp === "string") sources.add(electronApp);
+  const desktopClient = config?.clientDefaults?.desktop;
+  if (typeof desktopClient === "string") sources.add(desktopClient);
   for (const entry of config?.initPanels ?? []) {
     const source = typeof entry === "string" ? entry : entry?.source;
     if (typeof source === "string") sources.add(source);

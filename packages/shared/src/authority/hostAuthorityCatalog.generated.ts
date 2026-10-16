@@ -593,26 +593,14 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "auth.getMobileAppBootstrap": {
+  "auth.grantClientPrincipal": {
     tier: {
       tier: "open",
       session: "family",
       residency: "identity",
       family: "auth.read",
       rationale:
-        "An authenticated mobile shell reads the approved app manifest for its own workspace.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "auth.grantAppPrincipal": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "identity",
-      family: "auth.read",
-      rationale:
-        "An authenticated device shell obtains the device-scoped identity of an approved app it runs itself; the app's authority was admitted at its launch gate.",
+        "An authenticated device host obtains the principal of the exact client build it verified and runs itself; the client was admitted at its launch gate.",
     },
     capability: null,
     presentation: null,
@@ -2253,18 +2241,6 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
-  "build.mobileUpdateStatus": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "native-effect",
-      family: "build.native-installation",
-      rationale:
-        "Read-only comparison of caller-supplied native bundle identity with the selected workspace app build",
-    },
-    capability: null,
-    presentation: null,
-  },
   "build.prepareTypecheck": {
     tier: {
       tier: "open",
@@ -2376,6 +2352,53 @@ export const HOST_AUTHORITY_METHODS = {
       family: "chromiumFetch.transport",
       rationale:
         "The agent already owns web-fetch authority; this selects the canonical native Chromium transport",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "clients.integrationSnapshot": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "clients.read",
+      rationale:
+        "Reads the launch surfaces (intents and dynamic entries) a host projects onto the OS.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "clients.invokeIntent": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "clients.launch",
+      rationale:
+        "Runs a client's declared background intent as that client's principal; the handler's own authority applies.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "clients.launch": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "clients.launch",
+      rationale:
+        "A device host launches an admitted System client; admission is the unit install review, not this call.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "clients.list": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "clients.read",
+      rationale: "Lists the System workspace's declared clients for a host.",
     },
     capability: null,
     presentation: null,

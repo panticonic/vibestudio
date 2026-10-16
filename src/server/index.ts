@@ -48,7 +48,7 @@ import {
   TYPESCRIPT_SERVER_PATH_ENV,
 } from "./appRoot.js";
 import { createServerLogStore } from "./services/serverLogStore.js";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import { gitInteropProviderMethods } from "@vibestudio/service-schemas/gitInterop";
 import { randomBytes, randomUUID } from "crypto";
 import {
@@ -82,7 +82,15 @@ import { eventWatchOwner } from "@vibestudio/service-schemas/bindings/eventsServ
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
 import { resolveHeadlessHostAutospawn } from "./headlessHostAutospawn.js";
-import { HostTargetStaging } from "./hostTargetStaging.js";
+import { RuntimeStaging } from "./clients/runtimeStaging.js";
+import {
+  CLIENT_RUNTIMES,
+  HOST_KINDS,
+  HOST_RUNTIME,
+  isHostKind,
+  type ClientRuntime,
+  type HostKind,
+} from "@vibestudio/workspace-contracts/clients";
 import { writeFileAtomicSync } from "../atomicFile.js";
 import { stateLayout } from "./stateLayout.js";
 import { consumeWorkspaceChildSecrets } from "./workspaceChildSecrets.js";
@@ -108,6 +116,7 @@ import {
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import type { UserlandCapabilityDefinition } from "@vibestudio/shared/authorityManifest";
 import { hostBuildOrigin } from "@vibestudio/shared/authority/reviewedUnitParts";
+import { isReviewPending } from "@vibestudio/shared/authority/reviewPending";
 import { WorkspaceRpcMethodUndeclaredError } from "./workspaceRpcCatalogMismatch.js";
 import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
 import { HOST_APPROVAL_COPY } from "@vibestudio/shared/hostApprovalCopy";
@@ -170,8 +179,8 @@ interface CliArgs {
   logLevel?: string;
   readyFile?: string;
   gatewayPort?: number;
-  requireMobileReady?: boolean;
-  requireElectronReady?: boolean;
+  /** Hosts whose default client must be prepared before startup reports ready. */
+  requireClientsReady?: HostKind[];
   headlessHostAutospawn?: boolean;
   help?: boolean;
 }
@@ -193,10 +202,9 @@ Options:
   --ready-file <path>      Write structured readiness JSON to this file
   --gateway-port <port>    Port for the loopback gateway HTTP/WS ingress (default: auto-assigned)
   --log-level <level>      Log verbosity (trace, verbose, info, warn, error, silent)
-  --require-mobile-ready   Fail startup unless the workspace React Native app can be
-                           built and served to native mobile clients.
-  --require-electron-ready Fail startup unless the workspace Electron shell app can be
-                           built and served to desktop clients.
+  --require-client-ready <host>
+                           Fail startup unless the default client of this host
+                           (desktop, terminal, android, ios) builds. Repeatable.
   --help                   Show this help message and exit
 
 Environment variables:
@@ -244,18 +252,12 @@ function parseArgs(argv: string[]): CliArgs {
     "ready-file",
     "log-level",
     "gateway-port",
-    "require-mobile-ready",
-    "require-electron-ready",
+    "require-client-ready",
     "headless-host-autospawn",
     "help",
   ]);
   /** Flags that don't take a value */
-  const booleanFlags = new Set([
-    "require-mobile-ready",
-    "require-electron-ready",
-    "headless-host-autospawn",
-    "help",
-  ]);
+  const booleanFlags = new Set(["headless-host-autospawn", "help"]);
 
   for (let i = 0; i < argv.length; i++) {
     const arg = assertPresent(argv[i]);
@@ -314,14 +316,15 @@ function parseArgs(argv: string[]): CliArgs {
       case "gateway-port":
         args.gatewayPort = parsePort(value, "--gateway-port");
         break;
-      case "require-mobile-ready":
-        args.requireMobileReady = true;
+      case "require-client-ready":
+        if (!isHostKind(value)) {
+          console.error(`--require-client-ready must be one of ${HOST_KINDS.join(", ")}`);
+          process.exit(1);
+        }
+        (args.requireClientsReady ??= []).push(value);
         break;
       case "headless-host-autospawn":
         args.headlessHostAutospawn = value !== "off" && value !== "0" && value !== "false";
-        break;
-      case "require-electron-ready":
-        args.requireElectronReady = true;
         break;
       case "help":
         args.help = true;
@@ -582,9 +585,9 @@ async function main() {
   const { resolveWorkspaceService } = await import("./workspaceServices.js");
   const {
     resolveWorkspaceTrustGrants,
-    resolveExtensionsForHostTargets,
-    resolveHostTargetDecl,
-    resolveHostTargetRequiredExtensions,
+    resolveExtensionsForRuntimes,
+    resolveClientDefault,
+    resolveRuntimeRequiredExtensions,
     WORKSPACE_EXTENSION_PROVIDER_NAMES,
     workspaceProviderExtensionPackageName,
   } = await import("@vibestudio/workspace/configParser");
@@ -657,13 +660,13 @@ async function main() {
   };
 
   // Manifest-declared host contracts (meta/vibestudio.yml `trust`/`providers`/
-  // `hostTargets`). Loading the disk config seeds trust once; the startup
+  // `clientDefaults`). Loading the disk config seeds trust once; the startup
   // protected-main sync below re-seeds it before RPC/container services start.
   const warnMissingWorkspaceTrust = (): void => {
     const trustGrants = resolveWorkspaceTrustGrants(workspaceConfig);
-    if (trustGrants.chromeApps.length === 0) {
+    if (isSystemWorkspace() && trustGrants.clients.length === 0) {
       console.warn(
-        "[Trust] meta/vibestudio.yml declares no `trust.chromeApps` — no workspace app may render host chrome"
+        "[Trust] meta/vibestudio.yml declares no `trust.clients` — no client may act as a device"
       );
     }
   };
@@ -869,6 +872,20 @@ async function main() {
   const identityDb = new IdentityDb({ path: identityDbPath, readOnly: true });
   const userStore = new UserStore(identityDb);
   const membershipStore = new MembershipStore(identityDb, userStore);
+  /**
+   * Clients are hosted only in a System workspace. Ordinarily that is an
+   * account-scoped designation, but a host launched to serve its default
+   * client from this workspace has been told the same thing by its operator,
+   * and the hub passes that flag down for the bootstrap workspace alone.
+   * Without this a hermetic launch — one with no account to own a designation
+   * — provisions the System template and then refuses to host the client it
+   * just installed.
+   */
+  const isSystemWorkspace = (): boolean => {
+    if (requireClientsReady.size > 0) return true;
+    const owner = identityDb.getPrivateWorkspaceOwner(workspaceId);
+    return owner?.role === "system" && membershipStore.has(owner.userId, workspaceId);
+  };
   const deviceAuthStore = new DeviceAuthStore({
     db: identityDb,
     serverIdPath: path.join(path.dirname(identityDbPath), "server-id.json"),
@@ -1311,10 +1328,19 @@ async function main() {
     delayMs: 250,
     autoPublishStartup: false,
   });
-  const requireMobileReady =
-    args.requireMobileReady || process.env["VIBESTUDIO_REQUIRE_MOBILE_READY"] === "1";
-  const requireElectronReady =
-    args.requireElectronReady || process.env["VIBESTUDIO_REQUIRE_ELECTRON_READY"] === "1";
+  const requireClientsReady = new Set<HostKind>([
+    ...(args.requireClientsReady ?? []),
+    ...(process.env["VIBESTUDIO_REQUIRE_CLIENTS_READY"] ?? "")
+      .split(",")
+      .map((host) => host.trim())
+      .filter((host) => host.length > 0)
+      .map((host) => {
+        if (!isHostKind(host)) {
+          throw new Error(`VIBESTUDIO_REQUIRE_CLIENTS_READY names unknown host ${host}`);
+        }
+        return host;
+      }),
+  ]);
   const credentialLifecycle = new CredentialLifecycle({
     credentialStore,
     clientConfigStore,
@@ -1497,12 +1523,12 @@ async function main() {
   const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBESTUDIO_GATEWAY_PORT");
   const { gatewayHttpUrl, gatewayWsUrl, GATEWAY_HOST } =
     await import("@vibestudio/shared/hostConfig");
-  let appHostForGateway: import("./appHost.js").AppHost | null = null;
+  let clientHostForGateway: import("./clients/clientRegistry.js").ClientHost | null = null;
   type TrustedUnitHostInstance =
     | import("@vibestudio/extension-host").ExtensionHost
-    | import("./appHost.js").AppHost;
+    | import("./clients/clientRegistry.js").ClientHost;
   const trustedUnitHosts = (): TrustedUnitHostInstance[] =>
-    [extensionHostForGateway, appHostForGateway].filter(
+    [extensionHostForGateway, clientHostForGateway].filter(
       (host): host is TrustedUnitHostInstance => host !== null
     );
   let startupWorkspaceUnitReconcile: Promise<void> | null = null;
@@ -1941,13 +1967,15 @@ async function main() {
     resolveContextOwnerLabel: (contextId: string): string | undefined => {
       const active = entityCache.listActive().filter((e) => e.contextId === contextId);
       const owner =
-        active.find((e) => e.kind === "panel") ?? active.find((e) => e.kind === "app") ?? active[0];
+        active.find((e) => e.kind === "panel") ??
+        active.find((e) => e.kind === "client") ??
+        active[0];
       if (!owner) return undefined;
       return entityTitleProjection.get(owner.id) ?? owner.source.repoPath;
     },
   };
 
-  const { resolveDeclaredApps, resolveDeclaredExtensions } =
+  const { resolveDeclaredClients, resolveDeclaredExtensions } =
     await import("@vibestudio/workspace/loader");
   const { readWorkspaceConfigFromState, readWorkspaceDeclarationsFromState } =
     await import("./workspaceConfigSource.js");
@@ -1957,51 +1985,74 @@ async function main() {
     return readWorkspaceConfigFromState(workspaceVcs, workspaceId, stateHash);
   };
   const appliedExtensionDeclarations = new AppliedWorkspaceUnitDeclarations();
-  const appliedAppDeclarations = new AppliedWorkspaceUnitDeclarations();
-  const demandedHostTargets = new Set<import("@vibestudio/shared/hostTargets").HostTarget>([
-    "electron",
-    ...(requireMobileReady ? (["react-native"] as const) : []),
+  const appliedClientDeclarations = new AppliedWorkspaceUnitDeclarations();
+  // Build prerequisites run only for runtimes a host has demanded: a desktop-only
+  // server never starts the React Native build provider.
+  const demandedRuntimes = new Set<ClientRuntime>([
+    "web",
+    ...[...requireClientsReady].map((host) => HOST_RUNTIME[host]),
   ]);
   const runtimeExtensionDeclarations = (config: typeof workspaceConfig) =>
-    resolveExtensionsForHostTargets(config, [...demandedHostTargets]);
-  const hostTargetStaging = new HostTargetStaging(demandedHostTargets, async () => {
+    resolveExtensionsForRuntimes(config, [...demandedRuntimes]);
+  const runtimeStaging = new RuntimeStaging(demandedRuntimes, async () => {
     const host = extensionHostForGateway;
     if (!host) throw new Error("Extension host is not available");
-    const staging = host.reconcileDeclared(runtimeExtensionDeclarations(workspaceConfig), {
+    await host.reconcileDeclared(runtimeExtensionDeclarations(workspaceConfig), {
       trigger: "startup",
       waitFor: "staged",
     });
-    await staging;
   });
-  const prepareHostTarget = async (
-    target: import("@vibestudio/shared/hostTargets").HostTarget
-  ): Promise<void> => {
+  /**
+   * Admit and stage what clients of a runtime need to build. A runtime can be
+   * demanded before the background startup reconciliation reaches its
+   * host-build admission pass, so the exact trusted builds it needs are
+   * admitted at this boundary before staging makes them activatable.
+   */
+  const stageRuntime = async (runtime: ClientRuntime): Promise<void> => {
     const extensionHost = extensionHostForGateway;
     if (!extensionHost) throw new Error("Extension host is not available");
-    // A host target can be demanded before the background startup reconciliation
-    // reaches its host-build admission pass. Admit the exact trusted builds the
-    // target needs — its required extensions and its own app — at this boundary
-    // before staging makes them activatable.
-    const requiredExtensions = resolveHostTargetRequiredExtensions(workspaceConfig, target);
-    admitSeedTrustedUnits(await extensionHost.seedTrustedDeclared(requiredExtensions));
-    const targetApp = resolveHostTargetDecl(workspaceConfig, target);
-    if (targetApp && appHostForGateway) {
-      admitSeedTrustedUnits(
-        await appHostForGateway.seedTrustedDeclared(
-          resolveDeclaredApps(workspaceConfig).filter(
-            (declaration) => declaration.source === targetApp.appSource
-          )
-        )
-      );
+    admitSeedTrustedUnits(
+      await extensionHost.seedTrustedDeclared(
+        resolveRuntimeRequiredExtensions(workspaceConfig, runtime)
+      )
+    );
+    await runtimeStaging.ensure(runtime);
+  };
+  /** Start a runtime's required extensions; what that reached, for `clients.launch`. */
+  const prepareRuntime = async (
+    runtime: ClientRuntime
+  ): Promise<import("./clients/clientRegistry.js").RuntimePreparation> => {
+    const required = resolveRuntimeRequiredExtensions(workspaceConfig, runtime);
+    if (required.length === 0) return { state: "ready" };
+    await stageRuntime(runtime);
+    const host = assertPresent(extensionHostForGateway);
+    await host.whenDeclarationsStaged();
+    const units = await host.listWorkspaceUnits();
+    const awaitingReview: string[] = [];
+    for (const declaration of required) {
+      const unit = units.find((row) => row.source === declaration.source);
+      if (!unit) {
+        return {
+          state: "unavailable",
+          reason: `Required extension is not installed: ${declaration.source}`,
+        };
+      }
+      try {
+        await host.ensureActivated(unit.name);
+      } catch (error) {
+        // An open review is the one expected way activation stops; every
+        // other failure belongs to the caller.
+        if (!isReviewPending(error)) throw error;
+        awaitingReview.push(declaration.source);
+      }
     }
-    await hostTargetStaging.ensure(target);
+    return awaitingReview.length > 0
+      ? { state: "approval-required", sources: awaitingReview }
+      : { state: "ready" };
   };
   // Optional artifact warming shares the explicit activation owner.
   let startupExtensionWarming: Promise<void> | null = null;
   let reconcileDefaultAutomations: () => Promise<void> = async () => {};
-  let startupElectronArtifactPreparation: Promise<
-    import("./appHost.js").ElectronHostReadiness
-  > | null = null;
   let startupPanelArtifactPreparation: Promise<
     import("./startupPanelPreparation.js").StartupPanelPreparationResult
   > | null = null;
@@ -2013,7 +2064,7 @@ async function main() {
       // Declaration ownership precedes optional review preparation. Desktop
       // launch can demand its exact target while the fresh-workspace review is built.
       if (trigger === "startup") {
-        appHostForGateway?.setDeclared(resolveDeclaredApps(nextConfig), { trigger });
+        clientHostForGateway?.setDeclared(resolveDeclaredClients(nextConfig), { trigger });
         extensionHostForGateway?.setDeclared(runtimeExtensionDeclarations(nextConfig));
         resolveInitialExtensionDeclarations();
       }
@@ -2023,7 +2074,7 @@ async function main() {
         const extensionHost = extensionHostForGateway;
         const declared = runtimeExtensionDeclarations(nextConfig);
         const reviewed = resolveDeclaredExtensions(nextConfig);
-        for (const required of resolveHostTargetRequiredExtensions(nextConfig)) {
+        for (const required of resolveRuntimeRequiredExtensions(nextConfig)) {
           if (!reviewed.some((declaration) => declaration.source === required.source)) {
             reviewed.push(required);
           }
@@ -2086,40 +2137,48 @@ async function main() {
           }
         }
       }
-      if (appHostForGateway) {
-        const appHost = appHostForGateway;
+      if (clientHostForGateway) {
+        const clientHost = clientHostForGateway;
+        // A published `trust.clients` takes effect live: grants widen running
+        // clients, withdrawals close their sessions (§4.4.1).
+        if (trigger === "meta-change") clientHost.applyTrust();
         try {
-          const declared = resolveDeclaredApps(nextConfig);
+          const declared = resolveDeclaredClients(nextConfig);
           const declarationFingerprint = workspaceUnitDeclarationFingerprint(declared);
-          if (trigger === "meta-change" && appliedAppDeclarations.matches(declarationFingerprint)) {
-            console.info("[Apps] Declarations unchanged after meta change; reconcile skipped");
+          if (
+            trigger === "meta-change" &&
+            appliedClientDeclarations.matches(declarationFingerprint)
+          ) {
+            console.info("[Clients] Declarations unchanged after meta change; reconcile skipped");
           } else {
             // Before reconcile, not after: reconcile is where trust is resolved,
             // and admission is one of its inputs. Recording it afterwards would
-            // leave every host-build app resolved as un-admitted for the pass
-            // that decides whether to run it — it would build and then never
-            // activate, with nothing on screen to explain why.
+            // leave every host-build client resolved as un-admitted for the
+            // pass that decides whether to run it — it would build and then
+            // never activate, with nothing on screen to explain why.
             if (trigger === "startup") {
-              admitSeedTrustedUnits(await appHost.seedTrustedDeclared(declared));
+              admitSeedTrustedUnits(await clientHost.seedTrustedDeclared(declared));
             }
-            await appliedAppDeclarations.apply(declarationFingerprint, () =>
-              appHost.setDeclared(declared, { trigger })
+            await appliedClientDeclarations.apply(declarationFingerprint, () =>
+              trigger === "startup"
+                ? clientHost.setDeclared(declared, { trigger })
+                : clientHost.reconcileDeclared(declared, { trigger })
             );
             if (trigger === "startup") {
               const review = workspaceCreationReview.isPending()
-                ? await appHost.reviewDeclared(declared)
+                ? await clientHost.reviewDeclared(declared)
                 : { units: [], identityKeys: [] };
               if (review.units.length > 0) {
                 tasks.push(
                   enqueueLaunchGateReview({
                     review,
-                    label: "app",
+                    label: "client",
                     applyApproved: (units, identityKeys, sourceOrigins) => {
                       // Activation trust says this build may run; admission says
                       // its declared authority was reviewed. Both, or the unit
                       // runs with no record of the decision that let it.
                       acceptLaunchGateUnits(
-                        () => appHost.preparePreapprovedTrust(identityKeys),
+                        () => clientHost.preparePreapprovedTrust(identityKeys),
                         units,
                         sourceOrigins
                       );
@@ -2127,24 +2186,10 @@ async function main() {
                   })
                 );
               }
-              // Compiling a selected host artifact is not activation. Start
-              // that deterministic cache fill as soon as declarations are
-              // known, while the visible review independently owns grants. Readiness can
-              // await this exact promise before exposing a pairing link.
-              startupElectronArtifactPreparation = appHost.prepareElectronArtifact();
-              void startupElectronArtifactPreparation.catch((err: unknown) =>
-                console.warn(
-                  "[StartupBackground] Electron host artifact preparation failed:",
-                  err instanceof Error ? err.message : String(err)
-                )
-              );
-              console.info(
-                "[StartupBackground] App declarations staged; selected Electron artifact preparation started"
-              );
             }
           }
         } catch (err) {
-          console.warn("[Apps] Failed to update declared workspace app units:", err);
+          console.warn("[Clients] Failed to update declared clients:", err);
         }
       }
       if (trigger === "startup" && !startupPanelArtifactPreparation) {
@@ -2419,13 +2464,13 @@ async function main() {
    * The creation review never covers one, whatever its admission state.
    */
   const isLaunchGateRepoPath = (repoPath: string): boolean => {
-    for (const decl of resolveDeclaredApps(workspaceConfig)) {
+    for (const decl of resolveDeclaredClients(workspaceConfig)) {
       if (decl.source === repoPath) return true;
     }
     for (const decl of resolveDeclaredExtensions(workspaceConfig)) {
       if (decl.source === repoPath) return true;
     }
-    for (const decl of resolveHostTargetRequiredExtensions(workspaceConfig)) {
+    for (const decl of resolveRuntimeRequiredExtensions(workspaceConfig)) {
       if (decl.source === repoPath) return true;
     }
     return false;
@@ -2632,11 +2677,11 @@ async function main() {
             services: exactWorkspaceServiceBindings(await loadWorkspaceConfigFromState(stateHash)),
           };
         },
-        ensureBuildProvider: async (target) => {
-          await prepareHostTarget(target);
+        ensureBuildProvider: async (runtime) => {
+          await stageRuntime(runtime);
           const host = assertPresent(extensionHostForGateway);
           await host.whenReconciled();
-          for (const declaration of resolveHostTargetRequiredExtensions(workspaceConfig, target)) {
+          for (const declaration of resolveRuntimeRequiredExtensions(workspaceConfig, runtime)) {
             const unit = (await host.listWorkspaceUnits()).find(
               (row) => row.source === declaration.source
             );
@@ -2647,12 +2692,12 @@ async function main() {
         },
         executionRootProviders: [
           buildKeyRootProvider({
-            id: "app-generation",
-            owner: "app-generation",
+            id: "client-generation",
+            owner: "client-generation",
             buildKeys() {
-              const appHost = appHostForGateway;
-              if (!appHost) throw new Error("App registry is not available");
-              return appHost.registry.list().flatMap((entry) => [
+              const clientHost = clientHostForGateway;
+              if (!clientHost) throw new Error("Client registry is not available");
+              return clientHost.registry.list().flatMap((entry) => [
                 ...(entry.activeBundleKey
                   ? [
                       {
@@ -2855,7 +2900,6 @@ async function main() {
   const { createWorkerService } = await import("./services/workerService.js");
 
   {
-    let appHost: import("./appHost.js").AppHost | null = null;
     container.registerManaged({
       name: "build",
       dependencies: [...BUILD_SERVICE_DEPENDENCIES],
@@ -2863,11 +2907,9 @@ async function main() {
         buildSystemInstance = assertPresent(
           resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
         );
-        appHost = assertPresent(resolve<import("./appHost.js").AppHost>("appHost"));
       },
       getServiceDefinition() {
         const buildSystem = assertPresent(buildSystemInstance);
-        const owningAppHost = assertPresent(appHost);
         return createBuildService({
           buildSystem,
           getCallerContextId: (callerId) => callerRuntimeContextId(entityCache, callerId),
@@ -2893,14 +2935,76 @@ async function main() {
               authorityRows: (requests) =>
                 summarizeAuthorityRequests(requests, [], describeCapability).rows,
             }),
-          mobileUpdateStatus: (installedBuildKey) =>
-            owningAppHost.mobileUpdateStatus(installedBuildKey),
         });
       },
     });
   }
   const presence = createPresenceTracker({ eventService });
   container.registerRpc(createPresenceService({ presence }));
+  {
+    const { createClientLaunchService } = await import("./clients/clientLaunchService.js");
+    container.registerRpc(
+      createClientLaunchService({
+        getClientHost: () => clientHostForGateway,
+        invokeIntentHandler: async ({ caller, signal, source, intent, params }) => {
+          const clientHost = assertPresent(clientHostForGateway);
+          const rpcServer = assertPresent(rpcServerForGateway);
+          if (!caller.runtime.id.startsWith("shell:")) {
+            throw new Error("Background intents run for a paired device");
+          }
+          const principal = await clientHost.intentPrincipal(
+            caller.runtime.id.slice("shell:".length),
+            source
+          );
+          const [protocol, method] = intent.handler!.split("#") as [string, string];
+          const workers = assertPresent(
+            container.get<ReturnType<typeof createWorkerService>>("workersRpc")
+          );
+          const service = await workers.resolveService(
+            {
+              caller: await rpcServer.verifiedRuntimeCaller(principal.principalId),
+              ...(signal ? { signal } : {}),
+            },
+            protocol
+          );
+          if (service.kind !== "durable-object") {
+            throw new Error(
+              `Intent handler ${intent.handler} must be a Durable Object-backed workspace service`
+            );
+          }
+          const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+          const result = await doDispatch.dispatch(
+            { source: service.source, className: service.className, objectKey: service.objectKey },
+            method,
+            { params, principalId: principal.principalId }
+          );
+          if (intent.result === "text-stream") {
+            const channelId = (result as { channelId?: unknown } | null)?.channelId;
+            if (typeof channelId !== "string") {
+              throw new Error(`Intent handler ${intent.handler} returned no stream channel`);
+            }
+            return { stream: { channelId } };
+          }
+          if (typeof result !== "string") {
+            throw new Error(`Intent handler ${intent.handler} must return text`);
+          }
+          return { text: result };
+        },
+      })
+    );
+  }
+  /**
+   * Withdraw a client principal (§4.4.1): its outstanding one-use grants are
+   * invalidated and every open session is closed with a typed reason the host
+   * relays to the person.
+   */
+  const revokeClientPrincipalSessions = (
+    principalId: string,
+    reason: "trust-revoked" | "retired"
+  ): void => {
+    connectionGrants.revokeForPrincipal(principalId);
+    void rpcServerForGateway?.retireCaller(principalId, "client", reason);
+  };
 
   {
     // Account profile reads resolve live through the child's shared query-only
@@ -2959,9 +3063,11 @@ async function main() {
     const { heldClearanceRowKeys } = await import("./services/unitClearanceGrants.js");
     const mainAdvanceGate = createMainAdvanceApprovalGate({
       authorizeEffect: (ctx, effect) => dispatcher.authorizeHostEffect(ctx, effect),
-      hasAppCapability: (callerId, capability) =>
-        appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+      hasClientCapability: (callerId, capability) =>
+        clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
       getProviders: () => [...trustedUnitHosts(), buildUnitChangeApprovalProvider],
+      trustDeltaForCommit: async (stateHash) =>
+        (await clientHostForGateway?.trustDeltaForCommit(stateHash)) ?? [],
       resolveUnitOrigins,
       reportInstallLandingByToken: (landingToken, report) =>
         approvalQueue.reportInstallLandingByToken?.(landingToken, report),
@@ -2997,8 +3103,8 @@ async function main() {
       },
       beginCandidateReview: (candidate) => {
         const runtimeKind = candidate.caller.runtime.kind;
-        const callerKind = ["panel", "app", "worker", "do", "extension"].includes(runtimeKind)
-          ? (runtimeKind as "panel" | "app" | "worker" | "do" | "extension")
+        const callerKind = ["panel", "client", "worker", "do", "extension"].includes(runtimeKind)
+          ? (runtimeKind as "panel" | "client" | "worker" | "do" | "extension")
           : "system";
         approvalQueue.beginPreparation?.({
           kind: "capability",
@@ -3306,8 +3412,8 @@ async function main() {
         return createVcsService({
           workspaceVcs,
           entityCache,
-          hasAppCapability: (callerId, capability) =>
-            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+          hasClientCapability: (callerId, capability) =>
+            clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
           // Cross-context READ authz (throw-not-prompt): back it with WS-3's
           // relationship registry so a caller may inspect only the contexts it
           // owns (lifecycle) or forked (lineage). Resolved lazily per call — the
@@ -3359,7 +3465,7 @@ async function main() {
           ];
         },
         "supervision:changed": () => [
-          ...(appHostForGateway?.supervisionSnapshot() ?? []),
+          ...(clientHostForGateway?.supervisionSnapshot() ?? []),
           ...(extensionHostForGateway?.supervisionSnapshot() ?? []),
         ],
       },
@@ -3395,8 +3501,8 @@ async function main() {
   const { createNotificationService } = await import("./services/notificationService.js");
   const notificationResult = createNotificationService({
     eventService,
-    hasAppCapability: (callerId, capability) =>
-      appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+    hasClientCapability: (callerId, capability) =>
+      clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
     push: pushResult.internal,
     // Include root's implicit membership, which intentionally has no row.
     workspaceMemberUserIds: listWorkspaceMemberUserIds,
@@ -3450,8 +3556,8 @@ async function main() {
       scopeAccess: approvalWorkspaceAccess,
       deviceLabelFor: (deviceId) => identityDb.getDevice(deviceId)?.label,
       workspaceCreationReviewState: () => workspaceCreationReviewState,
-      hasAppCapability: (callerId, capability) =>
-        appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+      hasClientCapability: (callerId, capability) =>
+        clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
     })
   );
   const { BrowserPermissionGrantProjection, createBrowserPermissionsService } =
@@ -3467,10 +3573,10 @@ async function main() {
   );
   const { WebsiteDocuments } = await import("./services/websiteDocuments.js");
   const { createWebsiteHostingService } = await import("./services/websiteHostingService.js");
-  const { isInteractiveChrome } = await import("./services/chromeTrust.js");
+  const { isInteractiveClient } = await import("./services/clientTrust.js");
   const websiteChromeTrust = {
-    hasAppCapability: (callerId: string, capability: AppCapability) =>
-      appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+    hasClientCapability: (callerId: string, capability: ClientCapability) =>
+      clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
   };
   const websiteDocuments = new WebsiteDocuments({
     workspaceId,
@@ -3486,7 +3592,7 @@ async function main() {
     changed: (runtimeId, connected, documentId, userId) => {
       eventService.emitProjected("website:connection-changed", (owner) =>
         owner.userId === userId &&
-        isInteractiveChrome(
+        isInteractiveClient(
           {
             runtime: { id: owner.callerId, kind: owner.callerKind },
           },
@@ -3593,8 +3699,8 @@ async function main() {
       rpcServerForGateway?.getAuthorizingShell(principalId) ?? null,
     presentsOwnBrowserHandoff: (principalId) =>
       panelRuntimeCoordinator.getHostHeldLease(principalId) !== null,
-    hasAppCapability: (callerId, capability) =>
-      appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+    hasClientCapability: (callerId, capability) =>
+      clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
     resolveNativeInvocation,
   });
 
@@ -4246,7 +4352,8 @@ async function main() {
           doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
           resolveDeviceConnection: (ctx) => {
             const initiator = verifiedInitiator(ctx);
-            if (initiator.runtime.kind !== "panel" && initiator.runtime.kind !== "app") return null;
+            if (initiator.runtime.kind !== "panel" && initiator.runtime.kind !== "client")
+              return null;
             const rpcServer = rpcServerForGateway;
             const shell = rpcServer?.getAuthorizingShell(initiator.runtime.id) ?? null;
             const userId = callerAccountUserId(initiator);
@@ -4379,7 +4486,7 @@ async function main() {
             contextBoundary: contextBoundaryDeps,
             entityCache,
             lifecycleContextStore,
-            getAppHost: () => appHostForGateway,
+            getClientHost: () => clientHostForGateway,
           }),
           onAlarmChanged: () => alarmDriverInstance?.notifyChanged(),
           onSlotStateChanged: notifySlotStateListeners,
@@ -4453,27 +4560,6 @@ async function main() {
             }
             return build;
           });
-        };
-        const resolveBuildExecution = async (source: string, ref: string | undefined) => {
-          const build = await buildSystem.getBuild(source, ref);
-          const authority = build.metadata.authority;
-          const executionDigest = build.metadata.execution?.executionDigest;
-          if (!authority) {
-            throw new Error(
-              `Build ${build.buildKey} for ${source} has no sealed authority envelope`
-            );
-          }
-          if (!executionDigest) {
-            throw new Error(
-              `Build ${build.buildKey} for ${source} has no sealed execution identity`
-            );
-          }
-          return {
-            effectiveVersion: build.metadata.ev,
-            buildKey: build.buildKey,
-            executionDigest,
-            authority,
-          };
         };
         runtimeResult = createRuntimeService({
           taskAuthorities,
@@ -4669,8 +4755,6 @@ async function main() {
                   env: spec.env,
                   parent,
                 });
-              } else if (spec.kind === "app") {
-                prepared = await resolveBuildExecution(source, ref);
               } else if (spec.kind === "panel") {
                 const selectedBuildKey = spec.execution.artifact?.buildKey ?? existingBuildKey;
                 if (selectedBuildKey) {
@@ -4875,8 +4959,8 @@ async function main() {
             },
           },
           contextBoundary: contextBoundaryDeps,
-          hasAppCapability: (callerId, capability) =>
-            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+          hasClientCapability: (callerId, capability) =>
+            clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
           stateArgsSchemaForBuild: async (buildKey) => {
             const build = await container
               .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
@@ -5059,8 +5143,8 @@ async function main() {
             call: (targetId, method, ...args) =>
               rpcServer.server.callTarget(targetId, method, args),
           },
-          hasAppCapability: (callerId, capability) =>
-            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+          hasClientCapability: (callerId, capability) =>
+            clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
           dispatchToTarget: async (target, event) => {
             await rpcServer.server.callTarget(doTargetId(target), target.method, [event]);
           },
@@ -5495,7 +5579,7 @@ async function main() {
                 const entity = entityCache.resolveActive(entityId);
                 if (
                   !entity ||
-                  !["panel", "app", "worker", "do"].includes(entity.kind) ||
+                  !["panel", "client", "worker", "do"].includes(entity.kind) ||
                   !entity.activeExecutionDigest ||
                   !entity.activeAuthority
                 ) {
@@ -5503,10 +5587,10 @@ async function main() {
                 }
                 return createVerifiedCaller(
                   entity.id,
-                  entity.kind as "panel" | "app" | "worker" | "do",
+                  entity.kind as "panel" | "client" | "worker" | "do",
                   {
                     callerId: entity.id,
-                    callerKind: entity.kind as "panel" | "app" | "worker" | "do",
+                    callerKind: entity.kind as "panel" | "client" | "worker" | "do",
                     repoPath: entity.source.repoPath,
                     effectiveVersion: entity.source.effectiveVersion,
                     executionDigest: entity.activeExecutionDigest,
@@ -5514,8 +5598,8 @@ async function main() {
                   }
                 );
               },
-              hasAppCapability: (callerId, capability) =>
-                appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+              hasClientCapability: (callerId, capability) =>
+                clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
             },
             { caller, authorizingCaller },
             contextBoundary.operation,
@@ -6462,33 +6546,26 @@ async function main() {
 
   // ── Workers RPC service ──
 
-  // ── App host (workspace-owned privileged frontend apps) ──
+  // ── Client host (System-workspace clients that device hosts run) ──
   container.registerManaged({
-    name: "appHost",
+    name: "clientHost",
     dependencies: ["buildSystem"],
     async start(resolve) {
-      const { AppHost } = await import("./appHost.js");
+      const { ClientHost } = await import("./clients/clientRegistry.js");
       const buildSystemInst = assertPresent(
         resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
       );
-      const host = new AppHost({
+      const host = new ClientHost({
         statePath,
         workspacePath,
         workspaceId,
         diagnostics: runtimeDiagnostics,
-        getWorkspaceTrustGrants: () => resolveWorkspaceTrustGrants(workspaceConfig),
-        isSystemWorkspace: () => {
-          // Native app units are hosted only in a System workspace. Ordinarily
-          // that is an account-scoped designation, but a host launched to serve
-          // its desktop shell from this workspace has been told the same thing
-          // by its operator, and the hub passes that flag down for the
-          // bootstrap workspace alone. Without this a hermetic launch — one
-          // with no account to own a designation — provisions the System
-          // template and then refuses to host the shell it just installed.
-          if (requireElectronReady) return true;
-          const owner = identityDb.getPrivateWorkspaceOwner(workspaceId);
-          return owner?.role === "system" && membershipStore.has(owner.userId, workspaceId);
-        },
+        isSystemWorkspace,
+        getTrustedClients: () => resolveWorkspaceTrustGrants(workspaceConfig).clients,
+        // Read live from workspaceConfig so meta-change reloads are reflected
+        // without a ClientHost restart.
+        getClientDefault: (hostKind) => resolveClientDefault(workspaceConfig, hostKind),
+        prepareRuntime,
         buildSystem: buildSystemInst,
         executionPublicationPort: executionPublicationJournal,
         eventService,
@@ -6506,19 +6583,14 @@ async function main() {
         entityCache,
         readWorkspaceFileAtState,
         describeCapability,
-        getReactNativeAppArtifactBaseUrl: () => getLocalGatewayUrl("React Native app artifact"),
-        getTerminalAppArtifactBaseUrl: () => getLocalGatewayUrl("Terminal app artifact"),
-        // Manifest-declared preferred app per host target (meta/vibestudio.yml
-        // hostTargets.*). Read live from workspaceConfig so meta-change
-        // reloads are reflected without an AppHost restart.
-        getHostTargetDecl: (target) => resolveHostTargetDecl(workspaceConfig, target),
-        prepareHostTarget,
+        revokePrincipalSessions: (principalId, reason) =>
+          revokeClientPrincipalSessions(principalId, reason),
       });
       await host.initialize();
-      appHostForGateway = host;
+      clientHostForGateway = host;
       return host;
     },
-    async stop(instance: import("./appHost.js").AppHost) {
+    async stop(instance: import("./clients/clientRegistry.js").ClientHost) {
       await instance?.shutdown();
     },
   });
@@ -7212,8 +7284,8 @@ async function main() {
     tokenManager,
     cdpGrants,
     grantStore: capabilityGrantStore,
-    hasAppCapability: (callerId: string, capability: AppCapability) =>
-      appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+    hasClientCapability: (callerId: string, capability: ClientCapability) =>
+      clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
     contextExists: contextBoundaryDeps.contextExists,
     resolveContextOwnerLabel: contextBoundaryDeps.resolveContextOwnerLabel,
     lifecycleContextStore,
@@ -7313,13 +7385,13 @@ async function main() {
             (candidate) => candidate.name === releaseId || candidate.relativePath === releaseId
           );
         if (!node) return;
-        for (const target of ["electron", "react-native", "terminal"] as const) {
+        for (const runtime of CLIENT_RUNTIMES) {
           if (
-            resolveHostTargetRequiredExtensions(workspaceConfig, target).some(
+            resolveRuntimeRequiredExtensions(workspaceConfig, runtime).some(
               (declaration) => declaration.source === node.relativePath
             )
           ) {
-            await prepareHostTarget(target);
+            await stageRuntime(runtime);
           }
         }
         await extensionHostForGateway?.whenDeclarationsStaged();
@@ -7328,9 +7400,8 @@ async function main() {
     )
   );
   unitSupervisor.register(
-    (await import("./services/appUnitDriver.js")).createAppUnitDriver({
-      getHost: () => appHostForGateway,
-      entityCache,
+    (await import("./services/clientUnitDriver.js")).createClientUnitDriver({
+      getHost: () => clientHostForGateway,
       diagnostics: runtimeDiagnostics,
     })
   );
@@ -7517,19 +7588,13 @@ async function main() {
           },
           connectionGrants,
           auditLog,
-          hasAppCapability: (callerId, capability) =>
-            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
-          ensureMobileAppReady: async (source) =>
-            appHostForGateway?.reactNative.ensureReady(source, { waitForApproval: false }) ?? {
-              ready: false,
-              source: source ?? null,
-              reason: "App host is not available",
-              details: [],
-            },
-          getMobileAppBootstrap: async (source) =>
-            appHostForGateway?.reactNative.getBootstrap(source) ?? null,
-          registerDevicePrincipal: async (target, deviceId, source) =>
-            (await appHostForGateway?.registerDevicePrincipal(target, deviceId, source)) ?? null,
+          hasClientCapability: (callerId, capability) =>
+            clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
+          grantClientPrincipal: async (deviceId, expected) => {
+            const clientHost = clientHostForGateway;
+            if (!clientHost) throw new Error("Clients run only from the System workspace");
+            return clientHost.grantPrincipal(deviceId, expected);
+          },
           resolveRuntimeEntity: (id) => getEntityStore().resolveActiveRecord(id),
         }),
         routeRegistry
@@ -7558,16 +7623,16 @@ async function main() {
     },
     getExtensionHttpHandler: () => extensionHostForGateway,
     getAppArtifactHandler: () => {
-      const apps = appHostForGateway;
-      if (!apps || !container.has("panelHttpServer")) return null;
+      const clients = clientHostForGateway;
+      if (!clients || !container.has("panelHttpServer")) return null;
       const { server } = container.get<{
         server: import("./panelHttpServer.js").PanelHttpServer;
       }>("panelHttpServer");
       return {
         handleAppArtifactRequest: async (req, res, buildKey, remainderPath) => {
-          if (!(await apps.servesBuild(buildKey))) {
+          if (!(await clients.servesBuild(buildKey))) {
             res.writeHead(404, { "Content-Type": "text/plain" });
-            res.end("App artifact not active");
+            res.end("Client artifact not active");
             return;
           }
           await server.serveAppArtifact(req, res, buildKey, remainderPath);
@@ -7650,8 +7715,8 @@ async function main() {
         const { createWorkerdInspectorService } =
           await import("./services/workerdInspectorService.js");
         workerdInspectorDefinition = createWorkerdInspectorService({
-          hasAppCapability: (callerId, capability) =>
-            appHostForGateway?.hasAppCapability(callerId, capability) ?? false,
+          hasClientCapability: (callerId, capability) =>
+            clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
           listTargets: () => bridge.listTargets(),
           getEndpoint: (targetPath, principalId) => bridge.getEndpoint(targetPath, principalId),
         });
@@ -7723,7 +7788,7 @@ async function main() {
     "workspace",
     "auth",
     "shellApproval",
-    "appHost",
+    "clientHost",
     "extensionHost",
     "panelHttpWiring",
     "panelRuntime",
@@ -8091,8 +8156,8 @@ async function main() {
   // workspace, so cross a scheduling boundary before starting opportunistic
   // reconciliation. Pairing readiness demands only its selected host artifact.
   container
-    .get<import("./appHost.js").AppHost>("appHost")
-    .setDeclared(resolveDeclaredApps(workspaceConfig), { trigger: "startup" });
+    .get<import("./clients/clientRegistry.js").ClientHost>("clientHost")
+    .setDeclared(resolveDeclaredClients(workspaceConfig), { trigger: "startup" });
   container
     .get<import("@vibestudio/extension-host").ExtensionHost>("extensionHost")
     .setDeclared(runtimeExtensionDeclarations(workspaceConfig));
@@ -8130,60 +8195,35 @@ async function main() {
   void startupWorkerArtifactPreparation.catch((error: unknown) => {
     console.warn("[StartupBackground] Worker executable preparation failed:", error);
   });
-  if (!requireMobileReady && !requireElectronReady) {
+  if (requireClientsReady.size === 0) {
     void startupWorkspaceUnitReconcile.catch((err: unknown) =>
       console.warn(
         "[Startup] Background workspace unit reconcile failed:",
         err instanceof Error ? err.message : String(err)
       )
     );
-  }
-
-  if (requireMobileReady) {
+  } else {
     await startupWorkspaceUnitReconcile;
-    const appHost = container.get<import("./appHost.js").AppHost>("appHost");
-    const readiness = await appHost.reactNative.ensureReady(null, {
-      waitForApproval: false,
-    });
-    if (!readiness?.ready) {
-      printReadinessActionBlock("React Native mobile app is not ready", [
-        "This server was started with mobile pairing enabled, but the",
-        "workspace-owned React Native app is not ready to serve to the native host.",
-        "",
-        readiness?.reason ?? "App host is not available",
-        ...(readiness?.source ? [`Source: ${readiness.source}`] : []),
-        ...(readiness?.appId ? [`App: ${readiness.appId}`] : []),
-        ...(readiness?.details?.length ? ["", ...readiness.details] : []),
-        "",
-        "Fix the blocking app/extension build above, then restart this command.",
-      ]);
-      process.exit(1);
+    const clientHost =
+      container.get<import("./clients/clientRegistry.js").ClientHost>("clientHost");
+    for (const hostKind of requireClientsReady) {
+      const readiness = await clientHost.prepareDefault(hostKind);
+      if (!readiness.ready) {
+        printReadinessActionBlock(`The default ${hostKind} client is not ready`, [
+          `This server was started to serve ${hostKind} hosts, but the default`,
+          `${hostKind} client in the System workspace cannot be built.`,
+          "",
+          readiness.reason,
+          ...(readiness.source ? [`Source: ${readiness.source}`] : []),
+          "",
+          "Fix the blocking client or extension build above, then restart this command.",
+        ]);
+        process.exit(1);
+      }
+      console.log(
+        `[Clients] Default ${hostKind} client ready: ${readiness.source} build ${readiness.buildKey}`
+      );
     }
-    console.log(
-      `[Mobile] React Native app ready${readiness.appId ? `: ${readiness.appId} (${readiness.source ?? "unknown"}) build ${readiness.buildKey ?? "unknown"}` : ""}`
-    );
-  }
-  if (requireElectronReady) {
-    const appHost = container.get<import("./appHost.js").AppHost>("appHost");
-    const readiness = await (startupElectronArtifactPreparation ??
-      appHost.prepareElectronArtifact());
-    if (!readiness.ready) {
-      printReadinessActionBlock("Electron desktop shell app is not ready", [
-        "This server was started with desktop pairing enabled, but the",
-        "workspace-owned Electron shell app is not ready to serve to desktop clients.",
-        "",
-        readiness.reason ?? "App host is not available",
-        ...(readiness.source ? [`Source: ${readiness.source}`] : []),
-        ...(readiness.appId ? [`App: ${readiness.appId}`] : []),
-        ...(readiness.details.length ? ["", ...readiness.details] : []),
-        "",
-        "Fix the blocking app build above, then restart this command.",
-      ]);
-      process.exit(1);
-    }
-    console.log(
-      `[Desktop] Electron shell app ready: ${readiness.appId} (${readiness.source}) build ${readiness.buildKey}`
-    );
   }
 
   // ===========================================================================
@@ -8246,7 +8286,6 @@ async function main() {
         startupExtensionWarming,
         startupPanelArtifactPreparation,
         startupWorkerArtifactPreparation,
-        startupElectronArtifactPreparation,
       ])
     );
     await shutdownStage("cleanup-reaper", () => cleanupReaper.stop()).catch((error) => {
@@ -8488,7 +8527,7 @@ async function main() {
   startIdleExitMonitor({
     activity: activityRegistry,
     hasConnectedClients: () =>
-      (rpcServerForGateway?.countConnectedClients(["shell", "app"]) ?? 0) > 0,
+      (rpcServerForGateway?.countConnectedClients(["shell", "client"]) ?? 0) > 0,
     shutdown: () => void shutdown(),
     idleExitMs,
     log: (message) => console.log(message),

@@ -10,21 +10,14 @@ import { createTypedRpcServiceClient } from "@vibestudio/shared/typedRpcServiceC
 import type { RpcClient } from "@vibestudio/rpc";
 import { type TypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import { workspaceMethods } from "../workspace.js";
-import { runtimeMethods } from "../runtime.js";
 
 export class WorkspaceClient {
   private typed: TypedServiceClient<typeof workspaceMethods>;
-  private runtime: TypedServiceClient<typeof runtimeMethods>;
   constructor(rpc: Pick<RpcClient, "call">) {
     this.typed = createTypedRpcServiceClient(
       rpc,
       { targetId: "main", namespace: "workspace" },
       workspaceMethods
-    );
-    this.runtime = createTypedRpcServiceClient(
-      rpc,
-      { targetId: "main", namespace: "runtime" },
-      runtimeMethods
     );
   }
   getInfo(): ReturnType<TypedServiceClient<typeof workspaceMethods>["getInfo"]> {
@@ -32,13 +25,5 @@ export class WorkspaceClient {
   }
   getActive(): Promise<string> {
     return this.typed.getActive();
-  }
-  appVersions(
-    name: string
-  ): Promise<{ current: unknown; previous: unknown[]; retentionLimit: number }> {
-    return this.runtime.supervision.versions({ kind: "app", releaseId: name });
-  }
-  rollbackApp(name: string, opts?: { buildKey?: string }): Promise<unknown> {
-    return this.runtime.supervision.rollback({ kind: "app", releaseId: name }, opts);
   }
 }

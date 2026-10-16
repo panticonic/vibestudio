@@ -146,7 +146,7 @@ describe("WorkspaceRepositories Merkle composition", () => {
     mains = [{ repoPath: "packages/core", contentRoot: await stateWithFile("index.ts", "core") }];
     const nodes = new Map([
       ["core", { name: "core", relativePath: "packages/core" }],
-      ["app", { name: "app", relativePath: "apps/app" }],
+      ["app", { name: "app", relativePath: "clients/app" }],
       ["panel", { name: "panel", relativePath: "panels/panel" }],
     ]);
     const repositories = createRepositories({
@@ -156,7 +156,7 @@ describe("WorkspaceRepositories Merkle composition", () => {
     });
 
     await expect(repositories.deletionDependents("packages/core")).resolves.toEqual([
-      "apps/app",
+      "clients/app",
       "panels/panel",
     ]);
   });

@@ -244,15 +244,14 @@ describe("collectStartupHostReuseFindings", () => {
     try {
       fs.mkdirSync(host, { recursive: true });
       fs.mkdirSync(path.join(base, "meta"), { recursive: true });
-      fs.mkdirSync(path.join(base, "apps", "shell"), { recursive: true });
+      fs.mkdirSync(path.join(base, "clients", "desktop-browser"), { recursive: true });
       fs.mkdirSync(path.join(base, "panels", "chat"), { recursive: true });
       fs.mkdirSync(path.join(base, "workers", "agent-worker"), { recursive: true });
       fs.writeFileSync(
         path.join(base, "meta", "vibestudio.yml"),
         [
-          "hostTargets:",
-          "  electron:",
-          "    app: apps/shell",
+          "clientDefaults:",
+          "  desktop: clients/desktop-browser",
           "initPanels:",
           "  - source: panels/chat",
           "defaultAutomations:",
@@ -262,10 +261,10 @@ describe("collectStartupHostReuseFindings", () => {
         ].join("\n")
       );
       fs.writeFileSync(
-        path.join(base, "apps", "shell", "package.json"),
+        path.join(base, "clients", "desktop-browser", "package.json"),
         JSON.stringify({
-          name: "@workspace-apps/shell",
-          vibestudio: { app: { target: "electron" } },
+          name: "@workspace-clients/desktop-browser",
+          vibestudio: { client: { id: "browser", runtime: "web" } },
           dependencies: { react: "^19.0.0" },
         })
       );

@@ -1753,7 +1753,7 @@ export class EgressProxy {
       caller.runtime.kind === "do"
         ? "durable-object"
         : caller.runtime.kind === "panel" ||
-            caller.runtime.kind === "app" ||
+            caller.runtime.kind === "client" ||
             caller.runtime.kind === "worker" ||
             caller.runtime.kind === "extension"
           ? caller.runtime.kind

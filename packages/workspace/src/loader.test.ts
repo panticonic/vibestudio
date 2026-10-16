@@ -11,7 +11,7 @@ import {
   loadWorkspaceConfig,
   recoverStagedWorkspaceDeletions,
   resolveOrCreateWorkspace,
-  resolveDeclaredApps,
+  resolveDeclaredClients,
   resolveDeclaredExtensions,
 } from "./loader.js";
 import { currentContextProjectionsPath } from "./contextProjections.js";
@@ -161,7 +161,7 @@ describe("loadWorkspaceConfig", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
-    writeConfig(sourceRoot, "extensions:\n  - source: apps/shell\n");
+    writeConfig(sourceRoot, "extensions:\n  - source: clients/desktop-browser\n");
 
     expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(
       /extensions\[\]\.source.*extensions\/name/
@@ -197,41 +197,44 @@ describe("loadWorkspaceConfig", () => {
     expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/non-empty `source`/);
   });
 
-  it("rejects .git-suffixed app declarations", () => {
+  it("rejects .git-suffixed client declarations", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
-    writeConfig(sourceRoot, "apps:\n  - source: apps/shell.git\n");
+    writeConfig(sourceRoot, "clients:\n  - source: clients/desktop-browser.git\n");
 
-    expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/apps\[\]\.source/);
+    expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/clients\[\]\.source/);
   });
 
-  it("rejects duplicate app declarations across source-root and package-name forms", () => {
+  it("rejects duplicate client declarations across source-root and package-name forms", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
-    writeConfig(sourceRoot, 'apps:\n  - source: apps/shell\n  - source: "@workspace-apps/shell"\n');
+    writeConfig(
+      sourceRoot,
+      'clients:\n  - source: clients/desktop-browser\n  - source: "@workspace-clients/desktop-browser"\n'
+    );
 
-    expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/duplicate app/);
+    expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/duplicate client/);
   });
 
-  it("rejects app declarations outside the app source root", () => {
+  it("rejects client declarations outside the client source root", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
-    writeConfig(sourceRoot, "apps:\n  - source: extensions/react-native\n");
+    writeConfig(sourceRoot, "clients:\n  - source: extensions/react-native\n");
 
-    expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/apps\[\]\.source.*apps\/name/);
+    expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(/clients\[\]\.source.*clients\/name/);
   });
 
-  it("rejects unscoped app package names", () => {
+  it("rejects unscoped client package names", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-loader-"));
     tempRoots.push(root);
     const sourceRoot = path.join(root, "workspace", "source");
-    writeConfig(sourceRoot, "apps:\n  - source: shell\n");
+    writeConfig(sourceRoot, "clients:\n  - source: shell\n");
 
     expect(() => loadWorkspaceConfig(sourceRoot)).toThrow(
-      /apps\[\]\.source.*@workspace-apps\/name/
+      /clients\[\]\.source.*@workspace-clients\/name/
     );
   });
 });
@@ -285,28 +288,28 @@ describe("resolveDeclaredExtensions", () => {
   });
 });
 
-describe("resolveDeclaredApps", () => {
-  it("returns an empty list when no apps section exists", () => {
-    expect(resolveDeclaredApps({ id: "ws", systemEpoch: WORKSPACE_SYSTEM_EPOCH })).toEqual([]);
+describe("resolveDeclaredClients", () => {
+  it("returns an empty list when no clients section exists", () => {
+    expect(resolveDeclaredClients({ id: "ws", systemEpoch: WORKSPACE_SYSTEM_EPOCH })).toEqual([]);
   });
 
   it("applies ref defaults", () => {
     expect(
-      resolveDeclaredApps({
+      resolveDeclaredClients({
         id: "ws",
         systemEpoch: WORKSPACE_SYSTEM_EPOCH,
-        apps: [
-          { source: "apps/shell" },
+        clients: [
+          { source: "clients/desktop-browser" },
           {
-            source: "@workspace-apps/mobile",
+            source: "@workspace-clients/mobile-browser",
             ref: "dev",
           },
         ],
       })
     ).toEqual([
-      { source: "apps/shell", ref: "main" },
+      { source: "clients/desktop-browser", ref: "main" },
       {
-        source: "@workspace-apps/mobile",
+        source: "@workspace-clients/mobile-browser",
         ref: "dev",
       },
     ]);
@@ -643,9 +646,9 @@ describe("resolveOrCreateWorkspace", () => {
       const recoveryFile = path.join(occupiedWorkspace, "recover-me.txt");
       fs.writeFileSync(recoveryFile, "important\n");
 
-      expect(() =>
-        resolveOrCreateWorkspace({ name: "occupied", appRoot: root })
-      ).toThrow(/existing files were not changed/);
+      expect(() => resolveOrCreateWorkspace({ name: "occupied", appRoot: root })).toThrow(
+        /existing files were not changed/
+      );
       expect(fs.readFileSync(recoveryFile, "utf8")).toBe("important\n");
     }
   );

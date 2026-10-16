@@ -120,31 +120,6 @@ function build(overrides: Partial<BuildResult> = {}): BuildResult {
   };
 }
 
-function expectedArtifactSetIntegrity(
-  entries: Array<{
-    path: string;
-    role: string;
-    contentType: string;
-    encoding: string;
-    platform?: string;
-    integrity?: string | null;
-  }>
-): string {
-  const canonical = entries
-    .map((entry) => ({
-      path: entry.path,
-      role: entry.role,
-      contentType: entry.contentType,
-      encoding: entry.encoding,
-      platform: entry.platform ?? null,
-      integrity: entry.integrity ?? null,
-    }))
-    .sort((a, b) =>
-      `${a.path}\0${a.platform ?? ""}`.localeCompare(`${b.path}\0${b.platform ?? ""}`)
-    );
-  return `sha256-${createHash("sha256").update(JSON.stringify(canonical)).digest("hex")}`;
-}
-
 describe("build artifact helpers", () => {
   it("publishes prepared resources only with the complete immutable build", async () => {
     const buildKey = "f".repeat(64);
@@ -803,57 +778,6 @@ describe("build artifact helpers", () => {
     ).rejects.toThrow(/missing sealed authority metadata/);
   });
 
-  it("computes app build integrity from the stored artifact manifest", async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-"));
-    try {
-      setStateRoot(root);
-      const metadata = {
-        ...build().metadata,
-        buildKey: "app-build-key",
-        kind: "app" as const,
-        details: {
-          kind: "app" as const,
-          target: "react-native" as const,
-          integrity: "sha256-provider-supplied",
-          rnHostAbi: "rn-host-2",
-          provider: null,
-        },
-      };
-      const result = await store.put(
-        "app-build-key",
-        {
-          entries: [
-            {
-              path: "index.android.bundle",
-              role: "primary",
-              contentType: "application/javascript; charset=utf-8",
-              encoding: "utf8",
-              platform: "android",
-              content: "android",
-            },
-            {
-              path: "index.ios.bundle",
-              role: "primary",
-              contentType: "application/javascript; charset=utf-8",
-              encoding: "utf8",
-              platform: "ios",
-              content: "ios",
-            },
-          ],
-        },
-        metadata
-      );
-      const expected = expectedArtifactSetIntegrity(result.artifacts);
-
-      expect(result.metadata.details).toMatchObject({ integrity: expected });
-      expect((await store.get("app-build-key"))?.metadata.details).toMatchObject({
-        integrity: expected,
-      });
-    } finally {
-      await cleanupRoot(root);
-    }
-  });
-
   it("seals a full execution digest from source, build inputs, and exact artifacts", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-build-store-identity-"));
     const buildKey = "a".repeat(64);
@@ -1285,12 +1209,12 @@ describe("build artifact helpers", () => {
       fs.mkdirSync(path.join(dir, "assets"), { recursive: true });
       const metadata = {
         ...build().metadata,
-        kind: "app" as const,
+        kind: "client" as const,
         details: {
-          kind: "app" as const,
-          target: "electron" as const,
-          integrity: null,
-          rnHostAbi: null,
+          kind: "client" as const,
+          clientId: "browser",
+          runtime: "web" as const,
+          hostAbi: "web-host-1",
           provider: null,
         },
       };

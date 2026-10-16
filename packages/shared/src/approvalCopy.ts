@@ -36,7 +36,7 @@ function userFacingCallerLabel(value: string | undefined): string | undefined {
   if (
     !normalized ||
     isOpaqueId(normalized) ||
-    /^(?:do(?:-service)?|worker|panel|app|extension|session):/i.test(normalized)
+    /^(?:do(?:-service)?|worker|panel|client|extension|session):/i.test(normalized)
   ) {
     return undefined;
   }
@@ -1150,7 +1150,7 @@ function getCredentialCopy(approval: PendingCredentialApproval): ApprovalCopyRes
 const CALLER_KIND_TO_CATEGORY: Record<string, keyof typeof HOST_APPROVAL_COPY.requesterCategories> =
   {
     panel: "panel",
-    app: "workspace-app",
+    client: "client",
     worker: "worker",
     do: "durable-object",
     extension: "extension",
@@ -1193,7 +1193,7 @@ export function shouldShowOperationSubstance(
     !target ||
     target === approval.capability ||
     isOpaqueId(target) ||
-    /^(?:do|worker|panel|app|extension):/iu.test(target)
+    /^(?:do|worker|panel|client|extension):/iu.test(target)
   ) {
     return false;
   }

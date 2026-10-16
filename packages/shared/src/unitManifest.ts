@@ -1,16 +1,23 @@
 /**
  * Shared validator for declarative trusted workspace-unit manifests.
  *
- * Extensions and apps are both build-gated, approval-gated workspace units.
+ * Extensions and clients are both build-gated, approval-gated workspace units.
  * This module keeps their fail-closed package.json validation in one place so
  * build, reconcile/install, and boot checks cannot drift by unit kind.
  */
 
 import { validateWebsiteMethodPolicy, type WebsiteMethodPolicy } from "@vibestudio/rpc";
+import {
+  CLIENT_RUNTIMES,
+  RESERVED_TERMINAL_COMMANDS,
+  capabilitiesForRuntime,
+  isValidClientId,
+  isValidIntentName,
+  type ClientRuntime,
+} from "@vibestudio/workspace-contracts/clients";
 import { isSemanticEmoji, isUnitIconAssetPath } from "./panel/icon.js";
 
-export type UnitKind = "extension" | "app";
-export type WorkspaceAppTarget = "electron" | "react-native" | "terminal";
+export type UnitKind = "extension" | "client";
 
 export type ExtensionMethodAuthorityDeclaration =
   | { website: WebsiteMethodPolicy; effect: { kind: "open" } }
@@ -102,89 +109,6 @@ export function parseExtensionMethodAuthority(
   return Object.freeze(result);
 }
 
-type NativeAppHost = "electron" | "react-native";
-
-interface AppCapabilityDescriptor {
-  targets: readonly WorkspaceAppTarget[];
-  nativeHosts?: readonly NativeAppHost[];
-}
-
-/**
- * One catalog owns both the manifest vocabulary and concrete native-host
- * support. A target may recognize a capability without every host having
- * implemented it; loaders must use the derived native-host set as well as the
- * target vocabulary.
- */
-export const APP_CAPABILITY_CATALOG = {
-  "native-menus": { targets: ["electron"], nativeHosts: ["electron"] },
-  notifications: {
-    targets: ["electron", "react-native"],
-    nativeHosts: ["electron", "react-native"],
-  },
-  tray: { targets: ["electron"] },
-  "global-shortcut": { targets: ["electron"] },
-  "fs-read": {
-    targets: ["electron", "react-native"],
-    nativeHosts: ["electron"],
-  },
-  "fs-write": {
-    targets: ["electron", "react-native"],
-    nativeHosts: ["electron"],
-  },
-  clipboard: {
-    targets: ["electron", "react-native", "terminal"],
-    nativeHosts: ["react-native"],
-  },
-  dialog: { targets: ["electron"] },
-  "open-external": {
-    targets: ["electron", "react-native", "terminal"],
-    nativeHosts: ["electron", "react-native"],
-  },
-  "browser-import": {
-    targets: ["react-native"],
-    nativeHosts: ["react-native"],
-  },
-  "window-management": { targets: ["electron"], nativeHosts: ["electron"] },
-  camera: { targets: ["electron", "react-native"] },
-  microphone: { targets: ["electron"] },
-  "screen-capture": { targets: ["electron"] },
-  location: { targets: ["electron"] },
-  "panel-hosting": {
-    targets: ["electron", "react-native"],
-    nativeHosts: ["electron"],
-  },
-  "incoming-pair-links": { targets: ["electron"], nativeHosts: ["electron"] },
-  keychain: { targets: ["react-native"], nativeHosts: ["react-native"] },
-  "connection-management": { targets: ["react-native", "terminal"] },
-} as const satisfies Record<string, AppCapabilityDescriptor>;
-
-export type AppCapability = keyof typeof APP_CAPABILITY_CATALOG;
-
-const appCapabilities = Object.keys(APP_CAPABILITY_CATALOG) as AppCapability[];
-const capabilitiesForTarget = (target: WorkspaceAppTarget): readonly AppCapability[] =>
-  Object.freeze(
-    appCapabilities.filter((capability) =>
-      (APP_CAPABILITY_CATALOG[capability].targets as readonly WorkspaceAppTarget[]).includes(target)
-    )
-  );
-const capabilitiesForNativeHost = (host: NativeAppHost): readonly AppCapability[] =>
-  Object.freeze(
-    appCapabilities.filter((capability) =>
-      (APP_CAPABILITY_CATALOG[capability] as AppCapabilityDescriptor).nativeHosts?.includes(host)
-    )
-  );
-
-export const APP_CAPABILITIES_BY_TARGET = Object.freeze({
-  electron: capabilitiesForTarget("electron"),
-  "react-native": capabilitiesForTarget("react-native"),
-  terminal: capabilitiesForTarget("terminal"),
-}) satisfies Record<WorkspaceAppTarget, readonly AppCapability[]>;
-
-export const APP_CAPABILITIES_BY_NATIVE_HOST = Object.freeze({
-  electron: capabilitiesForNativeHost("electron"),
-  "react-native": capabilitiesForNativeHost("react-native"),
-}) satisfies Record<NativeAppHost, readonly AppCapability[]>;
-
 export class UnitManifestError extends Error {
   readonly code: string;
   constructor(message: string, code: string) {
@@ -222,12 +146,12 @@ export const extensionUnitManifestDescriptor: UnitManifestDescriptor = {
   label: "Extension",
 };
 
-export const appUnitManifestDescriptor: UnitManifestDescriptor = {
-  kind: "app",
-  label: "App",
+export const clientUnitManifestDescriptor: UnitManifestDescriptor = {
+  kind: "client",
+  label: "Client",
 };
 
-const LOCATION_CONFIG_BLOCKS = ["extension", "app"] as const;
+const LOCATION_CONFIG_BLOCKS = ["extension", "client"] as const;
 
 function assertRecord(
   value: unknown,
@@ -413,135 +337,342 @@ function validateExtensionBlock(
   }
 }
 
-function validateAppBlock(
+function clientError(message: string, code: string): UnitManifestError {
+  return new UnitManifestError(message, code);
+}
+
+function validateCapabilityList(
+  value: unknown,
+  allowed: ReadonlySet<string>,
+  field: string,
+  options: UnitManifestValidationOptions,
+  runtime: ClientRuntime
+): string[] {
+  if (value === undefined) return [];
+  if (
+    !Array.isArray(value) ||
+    value.some((capability) => typeof capability !== "string" || !allowed.has(capability))
+  ) {
+    throw clientError(
+      `Client ${options.unitName} ${field} must list known ${runtime} capabilities`,
+      "MANIFEST_CLIENT_CAPABILITIES"
+    );
+  }
+  return value as string[];
+}
+
+function validateIntents(value: unknown, options: UnitManifestValidationOptions): void {
+  if (value === undefined) return;
+  if (!Array.isArray(value)) {
+    throw clientError(
+      `Client ${options.unitName} intents must be a list`,
+      "MANIFEST_CLIENT_INTENTS"
+    );
+  }
+  const names = new Set<string>();
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      throw clientError(
+        `Client ${options.unitName} every intent must be an object`,
+        "MANIFEST_CLIENT_INTENTS"
+      );
+    }
+    const intent = raw as Record<string, unknown>;
+    const name = intent["name"];
+    if (!isValidIntentName(name)) {
+      throw clientError(
+        `Client ${options.unitName} intent names must be lower-case words joined by hyphens`,
+        "MANIFEST_CLIENT_INTENT_NAME"
+      );
+    }
+    if (names.has(name)) {
+      throw clientError(
+        `Client ${options.unitName} declares intent "${name}" twice`,
+        "MANIFEST_CLIENT_INTENT_NAME"
+      );
+    }
+    names.add(name);
+    const kind = intent["kind"];
+    if (kind !== "foreground" && kind !== "background") {
+      throw clientError(
+        `Client ${options.unitName} intent "${name}" kind must be "foreground" or "background"`,
+        "MANIFEST_CLIENT_INTENT_KIND"
+      );
+    }
+    if (name === "open" && kind !== "foreground") {
+      throw clientError(
+        `Client ${options.unitName} intent "open" must be a foreground intent`,
+        "MANIFEST_CLIENT_INTENT_KIND"
+      );
+    }
+    assertOptionalString(
+      intent["title"],
+      `Client ${options.unitName} intent "${name}" title must be a non-empty string`,
+      "MANIFEST_CLIENT_INTENT_TITLE"
+    );
+    const params = intent["params"];
+    if (params !== undefined) {
+      if (!params || typeof params !== "object" || Array.isArray(params)) {
+        throw clientError(
+          `Client ${options.unitName} intent "${name}" params must be a mapping`,
+          "MANIFEST_CLIENT_INTENT_PARAMS"
+        );
+      }
+      for (const [param, type] of Object.entries(params)) {
+        if (!/^[a-z][a-zA-Z0-9]*$/u.test(param) || (type !== "string" && type !== "text")) {
+          throw clientError(
+            `Client ${options.unitName} intent "${name}" param "${param}" must be "string" or "text"`,
+            "MANIFEST_CLIENT_INTENT_PARAMS"
+          );
+        }
+      }
+    }
+    for (const field of ["dynamic", "handler"] as const) {
+      const method = intent[field];
+      if (
+        method !== undefined &&
+        (typeof method !== "string" || !/^[^#\s]+#[^#\s]+$/u.test(method))
+      ) {
+        throw clientError(
+          `Client ${options.unitName} intent "${name}" ${field} must name a service method as "<protocol>#<method>"`,
+          "MANIFEST_CLIENT_INTENT_METHOD"
+        );
+      }
+    }
+    if (kind === "background") {
+      if (typeof intent["handler"] !== "string") {
+        throw clientError(
+          `Client ${options.unitName} background intent "${name}" requires a handler`,
+          "MANIFEST_CLIENT_INTENT_HANDLER"
+        );
+      }
+      const result = intent["result"];
+      if (result !== undefined && result !== "text" && result !== "text-stream") {
+        throw clientError(
+          `Client ${options.unitName} intent "${name}" result must be "text" or "text-stream"`,
+          "MANIFEST_CLIENT_INTENT_RESULT"
+        );
+      }
+      if (intent["accepts"] !== undefined) {
+        throw clientError(
+          `Client ${options.unitName} background intent "${name}" cannot accept shared content`,
+          "MANIFEST_CLIENT_INTENT_ACCEPTS"
+        );
+      }
+    } else {
+      if (intent["handler"] !== undefined || intent["result"] !== undefined) {
+        throw clientError(
+          `Client ${options.unitName} foreground intent "${name}" cannot declare a handler or result`,
+          "MANIFEST_CLIENT_INTENT_HANDLER"
+        );
+      }
+      const accepts = intent["accepts"];
+      if (
+        accepts !== undefined &&
+        (!Array.isArray(accepts) ||
+          accepts.length === 0 ||
+          accepts.some(
+            (type) => typeof type !== "string" || !/^[a-z]+\/(\*|[a-z0-9.+-]+)$/u.test(type)
+          ))
+      ) {
+        throw clientError(
+          `Client ${options.unitName} intent "${name}" accepts must list MIME types such as "text/*"`,
+          "MANIFEST_CLIENT_INTENT_ACCEPTS"
+        );
+      }
+    }
+  }
+}
+
+function validateIntegration(
+  value: unknown,
+  runtime: ClientRuntime,
+  options: UnitManifestValidationOptions
+): void {
+  if (value === undefined) return;
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw clientError(
+      `Client ${options.unitName} integration must be a mapping`,
+      "MANIFEST_CLIENT_INTEGRATION"
+    );
+  }
+  const integration = value as Record<string, unknown>;
+  for (const key of Object.keys(integration)) {
+    if (key !== "desktop" && key !== "terminal") {
+      throw clientError(
+        `Client ${options.unitName} integration has unknown host "${key}"`,
+        "MANIFEST_CLIENT_INTEGRATION"
+      );
+    }
+  }
+  const desktop = integration["desktop"];
+  if (desktop !== undefined) {
+    if (runtime !== "web" || !desktop || typeof desktop !== "object" || Array.isArray(desktop)) {
+      throw clientError(
+        `Client ${options.unitName} integration.desktop applies only to web clients and must be a mapping`,
+        "MANIFEST_CLIENT_INTEGRATION"
+      );
+    }
+    for (const [key, size] of Object.entries(desktop)) {
+      if (
+        !["width", "height", "minWidth", "minHeight"].includes(key) ||
+        typeof size !== "number" ||
+        !Number.isInteger(size) ||
+        size < 200 ||
+        size > 8192
+      ) {
+        throw clientError(
+          `Client ${options.unitName} integration.desktop.${key} must be a window size in pixels`,
+          "MANIFEST_CLIENT_INTEGRATION"
+        );
+      }
+    }
+  }
+  const terminal = integration["terminal"];
+  if (terminal !== undefined) {
+    if (
+      runtime !== "terminal" ||
+      !terminal ||
+      typeof terminal !== "object" ||
+      Array.isArray(terminal)
+    ) {
+      throw clientError(
+        `Client ${options.unitName} integration.terminal applies only to terminal clients and must be a mapping`,
+        "MANIFEST_CLIENT_INTEGRATION"
+      );
+    }
+    const command = (terminal as Record<string, unknown>)["command"];
+    if (command !== undefined) {
+      if (typeof command !== "string" || !/^[a-z][a-z0-9-]{0,31}$/u.test(command)) {
+        throw clientError(
+          `Client ${options.unitName} integration.terminal.command must be a lower-case command name`,
+          "MANIFEST_CLIENT_TERMINAL_COMMAND"
+        );
+      }
+      if (RESERVED_TERMINAL_COMMANDS.includes(command)) {
+        throw clientError(
+          `Client ${options.unitName} integration.terminal.command "${command}" is a built-in vibestudio command`,
+          "MANIFEST_CLIENT_TERMINAL_COMMAND"
+        );
+      }
+    }
+  }
+}
+
+function validateClientBlock(
   record: Record<string, unknown>,
   options: UnitManifestValidationOptions
 ): void {
-  const app = record["app"];
-  if (!app || typeof app !== "object" || Array.isArray(app)) {
-    throw new UnitManifestError(
-      `App ${options.unitName} vibestudio.app must be an object`,
-      "MANIFEST_APP_BLOCK"
+  const client = record["client"];
+  if (!client || typeof client !== "object" || Array.isArray(client)) {
+    throw clientError(
+      `Client ${options.unitName} vibestudio.client must be an object`,
+      "MANIFEST_CLIENT_BLOCK"
     );
   }
-  const appRecord = app as Record<string, unknown>;
-
-  const target = appRecord["target"];
-  if (target !== "electron" && target !== "react-native" && target !== "terminal") {
-    throw new UnitManifestError(
-      `App ${options.unitName} target must be "electron", "react-native", or "terminal"`,
-      "MANIFEST_APP_TARGET"
+  const block = client as Record<string, unknown>;
+  const known = new Set([
+    "id",
+    "runtime",
+    "hostAbi",
+    "entry",
+    "title",
+    "capabilities",
+    "intents",
+    "integration",
+  ]);
+  for (const key of Object.keys(block)) {
+    if (!known.has(key)) {
+      throw clientError(
+        `Client ${options.unitName} vibestudio.client has unknown field "${key}"`,
+        "MANIFEST_CLIENT_FIELD"
+      );
+    }
+  }
+  if (!isValidClientId(block["id"])) {
+    throw clientError(
+      `Client ${options.unitName} id must be a lower-case word or hyphenated words`,
+      "MANIFEST_CLIENT_ID"
     );
   }
-
-  assertOptionalString(
-    appRecord["displayName"],
-    `App ${options.unitName} displayName must be a non-empty string when provided`,
-    "MANIFEST_APP_DISPLAY_NAME"
-  );
-  const entryField = target === "terminal" ? "entry" : "renderer";
-  if (typeof appRecord[entryField] !== "string" || appRecord[entryField].trim().length === 0) {
-    throw new UnitManifestError(
-      `App ${options.unitName} ${entryField} must be a non-empty string`,
-      "MANIFEST_APP_RENDERER"
+  const runtime = block["runtime"];
+  if (!(CLIENT_RUNTIMES as readonly unknown[]).includes(runtime)) {
+    throw clientError(
+      `Client ${options.unitName} runtime must be one of ${CLIENT_RUNTIMES.join(", ")}`,
+      "MANIFEST_CLIENT_RUNTIME"
     );
   }
-  if (target === "terminal" && appRecord["renderer"] !== undefined) {
-    throw new UnitManifestError(
-      `Terminal app ${options.unitName} must use vibestudio.app.entry instead of renderer`,
-      "MANIFEST_APP_TERMINAL_RENDERER"
+  const clientRuntime = runtime as ClientRuntime;
+  const abiPrefix = { web: "web-host-", "react-native": "rn-host-", terminal: "terminal-host-" }[
+    clientRuntime
+  ];
+  const hostAbi = block["hostAbi"];
+  if (typeof hostAbi !== "string" || !new RegExp(`^${abiPrefix}[1-9][0-9]*$`, "u").test(hostAbi)) {
+    throw clientError(
+      `Client ${options.unitName} hostAbi must be "${abiPrefix}<version>" for a ${clientRuntime} client`,
+      "MANIFEST_CLIENT_HOST_ABI"
     );
   }
-  if (target !== "terminal" && appRecord["entry"] !== undefined) {
-    throw new UnitManifestError(
-      `App ${options.unitName} vibestudio.app.entry is only supported for terminal apps`,
-      "MANIFEST_APP_TERMINAL_ENTRY"
-    );
-  }
-
-  const startupModules = appRecord["startupModules"];
+  const entry = block["entry"];
   if (
-    startupModules !== undefined &&
-    (!Array.isArray(startupModules) ||
-      startupModules.length === 0 ||
-      startupModules.some(
-        (specifier) =>
-          typeof specifier !== "string" ||
-          !specifier.startsWith("./") ||
-          specifier.includes("\\") ||
-          specifier.split("/").includes("..")
-      ))
+    typeof entry !== "string" ||
+    entry.trim().length === 0 ||
+    entry.startsWith("/") ||
+    entry.includes("\\") ||
+    entry.split("/").includes("..")
   ) {
-    throw new UnitManifestError(
-      `App ${options.unitName} vibestudio.app.startupModules must be a non-empty array of package-root-relative module specifiers`,
-      "MANIFEST_APP_STARTUP_MODULES"
+    throw clientError(
+      `Client ${options.unitName} entry must be a package-relative module path`,
+      "MANIFEST_CLIENT_ENTRY"
     );
   }
-  if (target === "terminal" && startupModules !== undefined) {
-    throw new UnitManifestError(
-      `Terminal app ${options.unitName} cannot declare vibestudio.app.startupModules`,
-      "MANIFEST_APP_STARTUP_MODULES_TARGET"
-    );
-  }
-
-  for (const forbidden of ["main", "preload", "window"]) {
-    if (appRecord[forbidden] !== undefined) {
-      throw new UnitManifestError(
-        `App ${options.unitName} is pure-thin and must not declare vibestudio.app.${forbidden}`,
-        "MANIFEST_APP_NATIVE_FIELD"
-      );
-    }
-  }
-
-  const capabilities = appRecord["capabilities"];
+  assertOptionalString(
+    block["title"],
+    `Client ${options.unitName} title must be a non-empty string when provided`,
+    "MANIFEST_CLIENT_TITLE"
+  );
+  const capabilities = block["capabilities"];
   if (capabilities !== undefined) {
-    const allowed = new Set<string>(APP_CAPABILITIES_BY_TARGET[target]);
-    if (
-      !Array.isArray(capabilities) ||
-      capabilities.some((capability) => typeof capability !== "string" || !allowed.has(capability))
-    ) {
-      throw new UnitManifestError(
-        `App ${options.unitName} capabilities must be known ${target} capabilities`,
-        "MANIFEST_APP_CAPABILITIES"
+    if (!capabilities || typeof capabilities !== "object" || Array.isArray(capabilities)) {
+      throw clientError(
+        `Client ${options.unitName} capabilities must be a mapping with required and optional lists`,
+        "MANIFEST_CLIENT_CAPABILITIES"
+      );
+    }
+    for (const key of Object.keys(capabilities)) {
+      if (key !== "required" && key !== "optional") {
+        throw clientError(
+          `Client ${options.unitName} capabilities has unknown list "${key}"`,
+          "MANIFEST_CLIENT_CAPABILITIES"
+        );
+      }
+    }
+    const allowed = new Set<string>(capabilitiesForRuntime(clientRuntime));
+    const capabilityRecord = capabilities as Record<string, unknown>;
+    const required = validateCapabilityList(
+      capabilityRecord["required"],
+      allowed,
+      "capabilities.required",
+      options,
+      clientRuntime
+    );
+    const optional = validateCapabilityList(
+      capabilityRecord["optional"],
+      allowed,
+      "capabilities.optional",
+      options,
+      clientRuntime
+    );
+    const overlap = required.filter((capability) => optional.includes(capability));
+    if (overlap.length > 0) {
+      throw clientError(
+        `Client ${options.unitName} lists ${overlap.join(", ")} as both required and optional`,
+        "MANIFEST_CLIENT_CAPABILITIES"
       );
     }
   }
-
-  if (target === "react-native") {
-    assertOptionalString(
-      appRecord["rnComponentName"],
-      `React Native app ${options.unitName} rnComponentName must be a non-empty string`,
-      "MANIFEST_APP_RN_COMPONENT"
-    );
-    assertOptionalString(
-      appRecord["rnHostAbi"],
-      `React Native app ${options.unitName} rnHostAbi must be a non-empty string`,
-      "MANIFEST_APP_RN_ABI"
-    );
-    assertOptionalString(
-      appRecord["nativeModulePolicy"],
-      `React Native app ${options.unitName} nativeModulePolicy must be a non-empty string`,
-      "MANIFEST_APP_RN_NATIVE_POLICY"
-    );
-    if (
-      typeof appRecord["rnComponentName"] !== "string" ||
-      typeof appRecord["rnHostAbi"] !== "string"
-    ) {
-      throw new UnitManifestError(
-        `React Native app ${options.unitName} requires rnComponentName and rnHostAbi`,
-        "MANIFEST_APP_RN_REQUIRED"
-      );
-    }
-  } else if (
-    appRecord["rnComponentName"] !== undefined ||
-    appRecord["rnHostAbi"] !== undefined ||
-    appRecord["nativeModulePolicy"] !== undefined
-  ) {
-    throw new UnitManifestError(
-      `${target === "terminal" ? "Terminal" : "Electron"} app ${options.unitName} must not declare React Native-only fields`,
-      "MANIFEST_APP_RN_FIELD"
-    );
-  }
+  validateIntents(block["intents"], options);
+  validateIntegration(block["integration"], clientRuntime, options);
 }
 
 /**
@@ -560,7 +691,7 @@ export function validateUnitManifest(
   if (descriptor.kind === "extension") {
     validateExtensionBlock(record, options);
   } else {
-    validateAppBlock(record, options);
+    validateClientBlock(record, options);
   }
 }
 

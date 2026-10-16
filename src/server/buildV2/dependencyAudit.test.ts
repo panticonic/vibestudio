@@ -46,7 +46,7 @@ describe("compositionForKind", () => {
   it("treats packages and skills as libraries and everything buildable as a root", () => {
     // Skills are discovered as packages, so one rule covers both.
     expect(compositionForKind("package")).toBe("library");
-    for (const kind of ["panel", "app", "worker", "extension"] as const) {
+    for (const kind of ["panel", "client", "worker", "extension"] as const) {
       expect(compositionForKind(kind)).toBe("runtime-root");
     }
     expect(compositionForKind("template")).toBeNull();
@@ -105,22 +105,36 @@ describe("auditWorkspaceDependencies", () => {
     writeHostPackage("@vibestudio/native-camera", {
       peerDependencies: { "react-native-camera-kit": "^16.0.0" },
     });
-    writeUnit("apps/mobile", {
-      name: "@workspace-apps/mobile",
-      vibestudio: { app: { target: "react-native" } },
+    writeUnit("clients/mobile-browser", {
+      name: "@workspace-clients/mobile-browser",
+      vibestudio: {
+        client: {
+          id: "browser",
+          runtime: "react-native",
+          hostAbi: "rn-host-6",
+          entry: "App.tsx",
+        },
+      },
       dependencies: { "@vibestudio/native-camera": "workspace:*" },
     });
 
     expect(audit()).toEqual([
-      "apps/mobile: @workspace-apps/mobile is loaded on its own, so nothing provides its " +
+      "clients/mobile-browser: @workspace-clients/mobile-browser is loaded on its own, so nothing provides its " +
         "closure's peers: react-native-camera-kit@^16.0.0 (required by @vibestudio/native-camera). " +
-        "Declare each as a dependency of @workspace-apps/mobile at the version it should own.",
+        "Declare each as a dependency of @workspace-clients/mobile-browser at the version it should own.",
     ]);
 
     // Owning it at a version the peer range admits settles it.
-    writeUnit("apps/mobile", {
-      name: "@workspace-apps/mobile",
-      vibestudio: { app: { target: "react-native" } },
+    writeUnit("clients/mobile-browser", {
+      name: "@workspace-clients/mobile-browser",
+      vibestudio: {
+        client: {
+          id: "browser",
+          runtime: "react-native",
+          hostAbi: "rn-host-6",
+          entry: "App.tsx",
+        },
+      },
       dependencies: {
         "@vibestudio/native-camera": "workspace:*",
         "react-native-camera-kit": "16.0.1",
@@ -134,14 +148,16 @@ describe("auditWorkspaceDependencies", () => {
       name: "@workspace/quickfire-core",
       peerDependencies: { react: "19.0.0" },
     });
-    writeUnit("apps/shell", {
-      name: "@workspace-apps/shell",
-      vibestudio: { app: { target: "electron" } },
+    writeUnit("clients/desktop-browser", {
+      name: "@workspace-clients/desktop-browser",
+      vibestudio: {
+        client: { id: "browser", runtime: "web", hostAbi: "web-host-1", entry: "index.tsx" },
+      },
       dependencies: { "@workspace/quickfire-core": "workspace:*", react: "19.2.4" },
     });
 
     expect(audit()).toEqual([
-      "apps/shell: @workspace-apps/shell resolves a dependency its own closure rejects: " +
+      "clients/desktop-browser: @workspace-clients/desktop-browser resolves a dependency its own closure rejects: " +
         "react resolves to 19.2.4, which @workspace/quickfire-core does not accept " +
         "(it requires 19.0.0).",
     ]);

@@ -120,7 +120,7 @@ describe("approval audience", () => {
       eventService: new EventService(),
       scopeAccess: access,
     });
-    const pending = (["panel", "app"] as const).map((kind) =>
+    const pending = (["panel", "client"] as const).map((kind) =>
       queue.requestWithHandle({
         kind: "unit-install-review",
         callerId: `system:${kind}`,
@@ -138,7 +138,7 @@ describe("approval audience", () => {
             source: { kind: "workspace-repo", repo: `${kind}s/example`, ref: "main" },
             ev: "version",
             capabilities: [],
-            ...(kind === "app" ? { target: "electron" as const } : {}),
+            ...(kind === "client" ? { runtime: "web" as const } : {}),
           },
         ],
       })

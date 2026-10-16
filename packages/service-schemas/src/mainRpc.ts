@@ -12,6 +12,7 @@ import type { blobstoreMethods } from "./blobstore.js";
 import type { shellPresenceMethods } from "./shellPresence.js";
 import type { accountMethods } from "./account.js";
 import type { authMethods } from "./auth.js";
+import type { clientsMethods } from "./clients.js";
 import type { runtimeMethods } from "./runtime.js";
 import type { workersMethods } from "./workers.js";
 import type { desktopEventsMethods } from "./desktopEvents.js";
@@ -100,6 +101,7 @@ export type MainRpcMethods = Methods<"governance", typeof governanceMethods> &
   Methods<"events", typeof eventsMethods> &
   Methods<"hostTerminal", typeof hostTerminalMethods> &
   Methods<"terminalApps", typeof terminalAppsMethods> &
+  Methods<"clients", typeof clientsMethods> &
   Methods<"serverLog", typeof serverLogMethods> &
   Methods<"webhookEngine", typeof webhookEngineMethods> &
   Methods<"docs", typeof docsMethods> &
@@ -182,6 +184,7 @@ const loaders = {
   events: async () => (await import("./events.js")).eventsMethods,
   hostTerminal: async () => (await import("./hostTerminal.js")).hostTerminalMethods,
   terminalApps: async () => (await import("./terminalApps.js")).terminalAppsMethods,
+  clients: async () => (await import("./clients.js")).clientsMethods,
   serverLog: async () => (await import("./serverLog.js")).serverLogMethods,
   webhookEngine: async () => (await import("./webhookEngine.js")).webhookEngineMethods,
   docs: async () => (await import("./docs.js")).docsMethods,

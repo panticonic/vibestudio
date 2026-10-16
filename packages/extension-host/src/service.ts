@@ -249,7 +249,7 @@ interface ApprovalQueueLike {
   request(req: {
     kind: "capability";
     callerId: string;
-    callerKind: "panel" | "app" | "worker" | "do" | "extension";
+    callerKind: "panel" | "client" | "worker" | "do" | "extension";
     requestedByUserId?: string;
     repoPath: string;
     effectiveVersion: string;
@@ -265,7 +265,7 @@ interface ApprovalQueueLike {
   request(req: {
     kind: "unit-install-review";
     callerId: string;
-    callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
+    callerKind: "panel" | "client" | "worker" | "do" | "extension" | "system";
     requestedByUserId?: string;
     repoPath: string;
     effectiveVersion: string;
@@ -1005,7 +1005,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         packageJson.vibestudio.icon.trim().startsWith("./")
           ? { iconState: candidate.stateHash }
           : {}),
-        target: null,
         capabilities,
         authority: {
           ...authority,
@@ -2463,7 +2462,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         externalDeps: candidate.externalDeps,
       }),
       ...(node.manifest.icon?.trim().startsWith("./") ? { iconState: candidate.stateHash } : {}),
-      target: null,
       capabilities: extensionRuntimeCapabilities(),
       authority: {
         ...parseUnitAuthorityManifest(
@@ -2996,7 +2994,7 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (ctx.caller.runtime.kind === "shell") return;
     if (
       ctx.caller.runtime.kind !== "panel" &&
-      ctx.caller.runtime.kind !== "app" &&
+      ctx.caller.runtime.kind !== "client" &&
       ctx.caller.runtime.kind !== "worker" &&
       ctx.caller.runtime.kind !== "do"
     ) {
@@ -3045,7 +3043,6 @@ export class ExtensionHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           displayName: node.manifest.displayName ?? node.manifest.title ?? node.name,
           ...(node.manifest.icon?.trim() ? { icon: node.manifest.icon.trim() } : {}),
           version: entry?.version ?? this.readNodeVersion(node.path),
-          target: null,
           source,
           ev: entry?.activeEv ?? null,
           capabilities: extensionRuntimeCapabilities(),
@@ -3315,10 +3312,7 @@ function assertBuildProviderOutput(
   ) {
     throw new Error(`Build provider ${providerName} for ${target} returned invalid artifacts`);
   }
-  return {
-    artifacts: output.artifacts,
-    ...(output.metadata ? { metadata: output.metadata } : {}),
-  };
+  return { artifacts: output.artifacts };
 }
 
 function extensionWorkspaceStatusFallback(

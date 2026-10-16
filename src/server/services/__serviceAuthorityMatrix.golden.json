@@ -292,27 +292,7 @@
         "capability": null,
         "presentation": null
       },
-      "getMobileAppBootstrap": {
-        "authority": {
-          "principals": [
-            "host",
-            "user"
-          ]
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "identity",
-          "family": "auth.read",
-          "rationale": "An authenticated mobile shell reads the approved app manifest for its own workspace."
-        },
-        "capability": null,
-        "presentation": null
-      },
-      "grantAppPrincipal": {
+      "grantClientPrincipal": {
         "authority": {
           "principals": [
             "host",
@@ -327,7 +307,7 @@
           "session": "family",
           "residency": "identity",
           "family": "auth.read",
-          "rationale": "An authenticated device shell obtains the device-scoped identity of an approved app it runs itself; the app's authority was admitted at its launch gate."
+          "rationale": "An authenticated device host obtains the principal of the exact client build it verified and runs itself; the client was admitted at its launch gate."
         },
         "capability": null,
         "presentation": null
@@ -2305,23 +2285,6 @@
         "capability": null,
         "presentation": null
       },
-      "mobileUpdateStatus": {
-        "authority": {
-          "inherits": true
-        },
-        "access": {
-          "sensitivity": "read"
-        },
-        "tier": {
-          "tier": "open",
-          "session": "family",
-          "residency": "native-effect",
-          "family": "build.native-installation",
-          "rationale": "Read-only comparison of caller-supplied native bundle identity with the selected workspace app build"
-        },
-        "capability": null,
-        "presentation": null
-      },
       "prepareTypecheck": {
         "authority": {
           "inherits": true
@@ -2592,6 +2555,96 @@
           "residency": "native-effect",
           "family": "chromiumFetch.transport",
           "rationale": "The agent already owns web-fetch authority; this selects the canonical native Chromium transport"
+        },
+        "capability": null,
+        "presentation": null
+      }
+    }
+  },
+  "clients": {
+    "service": {
+      "principals": [
+        "host",
+        "user"
+      ]
+    },
+    "methods": {
+      "integrationSnapshot": {
+        "authority": {
+          "principals": [
+            "host",
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "supervision",
+          "family": "clients.read",
+          "rationale": "Reads the launch surfaces (intents and dynamic entries) a host projects onto the OS."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "invokeIntent": {
+        "authority": {
+          "principals": [
+            "host",
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "supervision",
+          "family": "clients.launch",
+          "rationale": "Runs a client's declared background intent as that client's principal; the handler's own authority applies."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "launch": {
+        "authority": {
+          "principals": [
+            "host",
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "supervision",
+          "family": "clients.launch",
+          "rationale": "A device host launches an admitted System client; admission is the unit install review, not this call."
+        },
+        "capability": null,
+        "presentation": null
+      },
+      "list": {
+        "authority": {
+          "principals": [
+            "host",
+            "user"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "supervision",
+          "family": "clients.read",
+          "rationale": "Lists the System workspace's declared clients for a host."
         },
         "capability": null,
         "presentation": null

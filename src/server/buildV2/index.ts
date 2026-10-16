@@ -633,7 +633,7 @@ export interface BuildSystemV2 {
 
   /**
    * Subscribe to effective-version changes detected from workspace publications.
-   * Trusted unit hosts use this to rebuild apps/extensions through their
+   * Trusted unit hosts use this to rebuild clients/extensions through their
    * approval-aware activation paths because the state trigger intentionally
    * does not build trusted units directly.
    */
@@ -1966,7 +1966,7 @@ export async function initBuildSystemV2(
 
   /**
    * Infer which library targets a package needs based on its dependents' kinds.
-   * panel/about → library:panel; worker/extension → library:worker; app builds
+   * panel/about → library:panel; worker/extension → library:worker; client builds
    * its own graph but may pull a package as either, so it contributes both.
    * Falls back to BOTH when no buildable dependents are known.
    */
@@ -1986,7 +1986,7 @@ export async function initBuildSystemV2(
         case "extension":
           targets.add("library:worker");
           break;
-        case "app":
+        case "client":
           targets.add("library:panel");
           targets.add("library:worker");
           break;
@@ -3324,7 +3324,7 @@ export async function initBuildSystemV2(
       // Trigger builds for changed buildable units
       const buildableChanged = [...changes.changed, ...changes.added].filter((name) => {
         const n = snapshot.graph.tryGet(name);
-        return n && isNodeBuildable(n) && n.kind !== "extension" && n.kind !== "app";
+        return n && isNodeBuildable(n) && n.kind !== "extension" && n.kind !== "client";
       });
 
       for (const name of buildableChanged) {

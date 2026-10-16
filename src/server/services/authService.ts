@@ -25,8 +25,7 @@ import type { User } from "@vibestudio/identity/types";
 import type { DeviceTransportBinding } from "@vibestudio/identity/identityDb";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { AuditLog } from "@vibestudio/credential-client/audit";
-import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import { isPanelSlotId } from "@vibestudio/shared/panel/ids";
 import {
   agentCallerId,
@@ -34,8 +33,8 @@ import {
   shellCallerId,
   type AuthConnectionInfo,
 } from "../hostCore/auth/model.js";
-import { grantAppPrincipal } from "../hostCore/auth/principalGrants.js";
-import type { DeviceAppPrincipal } from "../deviceAppPrincipals.js";
+import { grantClientPrincipal } from "../hostCore/auth/principalGrants.js";
+import type { ClientPrincipal } from "../clients/clientPrincipals.js";
 import { sendAuthError } from "../hostCore/auth/httpErrors.js";
 import { authError, authErrorCode } from "../hostCore/auth/errors.js";
 import { createCapabilityAuthorizer, type CapabilityAuthorizer } from "./capabilityAuthorizer.js";
@@ -309,27 +308,18 @@ export function createAuthService(deps: {
   getConnectionInfo: () => AuthConnectionInfo;
   connectionGrants?: ConnectionGrantService;
   auditLog?: Pick<AuditLog, "append">;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
   capabilityAuthorizer?: CapabilityAuthorizer;
-  ensureMobileAppReady?: (source?: string | null) => Promise<{
-    ready: boolean;
-    reason?: string;
-    details?: string[];
-    approvalRequired?: boolean;
-    approvals?: PendingUnitInstallReviewApproval[];
-  }>;
-  getMobileAppBootstrap?: (source?: string | null) => unknown | null | Promise<unknown | null>;
-  registerDevicePrincipal?: (
-    target: import("@vibestudio/shared/unitManifest").WorkspaceAppTarget,
+  grantClientPrincipal?: (
     deviceId: string,
-    source: string | null
-  ) => Promise<DeviceAppPrincipal | null>;
+    expected: { source: string; buildKey: string; executionDigest: string }
+  ) => Promise<ClientPrincipal>;
   resolveRuntimeEntity?: (id: string) => Promise<EntityRecord | null>;
 }): ServiceWithRoutes {
   const capabilityAuthorizer =
     deps.capabilityAuthorizer ??
     createCapabilityAuthorizer({
-      hasAppCapability: deps.hasAppCapability,
+      hasClientCapability: deps.hasClientCapability,
       // WP9 §3: resolve the caller's LIVE role from the hub-owned identity DB so
       // `isRootOrAdmin` reflects promotions/demotions immediately (never a value
       // frozen onto the connection). Both hub and child hold a read handle;
@@ -438,68 +428,22 @@ export function createAuthService(deps: {
         callerKind: ctx.caller.runtime.kind,
         ...(ctx.caller.agentBinding ? { agentBinding: ctx.caller.agentBinding } : {}),
       }),
-      getMobileAppBootstrap: async (ctx, [source]) => {
-        requireDeviceShell(ctx, "getMobileAppBootstrap", "Mobile app bootstrap");
-        if (!deps.getMobileAppBootstrap) {
-          throw new ServiceError(
-            "auth",
-            "getMobileAppBootstrap",
-            "Mobile app bootstrap is not configured",
-            "MOBILE_BOOTSTRAP_UNAVAILABLE"
-          );
-        }
-        const readiness = await deps.ensureMobileAppReady?.(source);
-        if (readiness && !readiness.ready) {
-          const code = readiness.approvalRequired
-            ? "MOBILE_APP_APPROVAL_REQUIRED"
-            : "MOBILE_APP_UNAVAILABLE";
-          throw new ServiceError(
-            "auth",
-            "getMobileAppBootstrap",
-            [
-              readiness.reason ?? "No approved React Native workspace app is available",
-              ...(readiness.details ?? []),
-            ].join(": "),
-            code,
-            undefined,
-            "service",
-            readiness.approvalRequired ? { approvals: readiness.approvals ?? [] } : undefined
-          );
-        }
-        const bootstrap = await deps.getMobileAppBootstrap(source);
-        if (!bootstrap || typeof bootstrap !== "object" || Array.isArray(bootstrap)) {
-          throw new ServiceError(
-            "auth",
-            "getMobileAppBootstrap",
-            "No approved React Native workspace app is available",
-            "MOBILE_APP_UNAVAILABLE"
-          );
-        }
-        return {
-          serverId: deps.deviceAuthStore.getServerId(),
-          serverBootId: deps.getServerBootId(),
-          workspaceId: deps.getWorkspaceId(),
-          bootstrap: bootstrap as Record<string, unknown>,
-        };
-      },
-      grantAppPrincipal: async (ctx, [request]) => {
+      grantClientPrincipal: async (ctx, [request]) => {
         const { deviceId, subject } = requireDeviceShell(
           ctx,
-          "grantAppPrincipal",
-          "An app principal grant"
+          "grantClientPrincipal",
+          "A client principal grant"
         );
-        return grantAppPrincipal(
+        return grantClientPrincipal(
           {
             getServerId: () => deps.deviceAuthStore.getServerId(),
             getServerBootId: deps.getServerBootId,
             getWorkspaceId: deps.getWorkspaceId,
             connectionGrants: deps.connectionGrants,
-            ensureMobileAppReady: deps.ensureMobileAppReady,
-            registerDevicePrincipal: deps.registerDevicePrincipal,
+            grantClientPrincipal: deps.grantClientPrincipal,
           },
           {
-            principal: request.principal,
-            source: request.source ?? null,
+            ...request,
             deviceId,
             subject,
             issuedBy: ctx.caller.runtime.id,

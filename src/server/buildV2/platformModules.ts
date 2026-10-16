@@ -32,8 +32,8 @@
  *     Node built-in shims and force-expose companion modules
  *     ({@link WORKER_RUNTIME_COMPANION_MODULES}) so eval'd code gets a working
  *     `require()` surface (see `generateExposeModuleCode`).
- *   - Workspace *app* renderers get a host-generated stub in its place
- *     (see `createAppRuntimeShimPlugin`) — apps must not bootstrap panel APIs.
+ *   - Workspace *client* pages get a host-generated stub in its place
+ *     (see `createClientRuntimeShimPlugin`) — clients must not bootstrap panel APIs.
  *   - Eval library builds keep it external so it resolves at runtime to the
  *     hosting sandbox's SDK instance instead of being re-bundled.
  *

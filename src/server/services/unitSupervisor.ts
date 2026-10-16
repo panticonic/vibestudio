@@ -233,7 +233,7 @@ export class UnitSupervisor {
       kind !== "panel" &&
       kind !== "worker" &&
       kind !== "do" &&
-      kind !== "app" &&
+      kind !== "client" &&
       kind !== "extension"
     ) {
       throw Object.assign(new Error(`${kind} is not a supervised executable caller`), {

@@ -48,8 +48,7 @@ Authority principals: `host`, `user`
 |--------|-------------|
 | `auth.grantConnection` | Mint a short-lived connection token for a panel/app caller (requires the panel-hosting capability), granting it access to the gateway. |
 | `auth.getConnectionInfo` | Report how clients should reach this gateway: server/connect URLs, protocol, server identity, and current workspace. |
-| `auth.getMobileAppBootstrap` | Return the approved React Native app manifest to the authenticated mobile shell. |
-| `auth.grantAppPrincipal` | Activate the calling device's principal for an approved, running device-run app (the mobile app or the terminal browser) and mint a one-use connection grant for it, bound to the caller's transport endpoint. Returns the grant and the exact app artifacts the principal is bound to. |
+| `auth.grantClientPrincipal` | Activate the calling device's principal for the exact admitted client build it verified (`client:<id>:<runtime>:<deviceId>`) and mint a one-use connection grant for it, bound to the caller's transport endpoint. |
 
 ## `authority`
 
@@ -117,8 +116,7 @@ Authority principals: `code`, `host`, `user`, `website`
 
 | Method | Description |
 |--------|-------------|
-| `build.listUnits` | List declared workspace panels, workers, extensions and apps with their source identity and build readiness. Use this catalog to discover available extensions before invoking one. For exact live processes, use runtime.supervision.list. |
-| `build.mobileUpdateStatus` | Return the selected React Native app update relative to this installation's active build key, or null when it is current. |
+| `build.listUnits` | List declared workspace panels, workers, extensions and clients with their source identity and build readiness. Use this catalog to discover available extensions before invoking one. For exact live processes, use runtime.supervision.list. |
 | `build.getBuild` | Build a panel/worker/extension unit (or a library bundle) and return its artifacts. The optional ref selects the workspace state to build from: omitted = main HEAD, a head name (e.g. 'ctx:abc'), or an immutable 'state:…' hash. Results are cached by content-derived build key, so rebuilding an unchanged unit reuses the cache. |
 | `build.getBuildArtifacts` | Return the content-free artifact manifest for an immutable cached build, or null when the build is unavailable. |
 | `build.buildWebsite` | Build a panel package's manifest-declared portable website entry at an exact workspace ref and return a content-free immutable artifact handle. |

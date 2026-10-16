@@ -21,7 +21,7 @@ function context(
     ws?: boolean;
     userId?: string;
     authorizingUserId?: string;
-    callerKind?: "app" | "do" | "panel";
+    callerKind?: "client" | "do" | "panel";
   } = {}
 ): ServiceContext {
   const caller = createVerifiedCaller(
@@ -304,14 +304,14 @@ describe("events.watch", () => {
       service,
       context("app:hosted-chrome", "request:hosted", {
         authorizingUserId: "alice",
-        callerKind: "app",
+        callerKind: "client",
       })
     );
 
     expect(openWatch).toHaveBeenCalledWith(
       expect.objectContaining({
         callerId: "app:hosted-chrome",
-        callerKind: "app",
+        callerKind: "client",
         userId: "alice",
       })
     );

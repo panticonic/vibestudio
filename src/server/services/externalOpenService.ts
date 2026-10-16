@@ -97,7 +97,7 @@ export function createExternalOpenService(deps: ExternalOpenServiceDeps): Servic
 
 function requesterKind(kind: string): CapabilityRequesterKind | undefined {
   if (kind === "do") return "durable-object";
-  if (kind === "app" || kind === "panel" || kind === "worker" || kind === "extension") {
+  if (kind === "client" || kind === "panel" || kind === "worker" || kind === "extension") {
     return kind;
   }
   return undefined;

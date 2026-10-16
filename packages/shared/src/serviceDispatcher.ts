@@ -605,6 +605,8 @@ export interface AuthorityChallengePresentation {
   };
   details?: readonly { label: string; value: string; format?: ApprovalDetailFormat }[];
   diffReview?: readonly DiffReviewEntry[];
+  /** A change to which clients hold device-level power, rendered as its own section. */
+  trustChange?: readonly import("./approvals.js").ClientTrustChange[];
   /**
    * Present this decision as the install review (§7) rather than as a plain
    * capability card.

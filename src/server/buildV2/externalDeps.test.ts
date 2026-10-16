@@ -440,7 +440,7 @@ describe("collectExternalDependencyClosure", () => {
     // A shared package that runs against whatever React its consumer owns.
     const shared = makeNode("@workspace/quickfire-core", {}, [], { react: "19.0.0" });
     const app = makeNode(
-      "@workspace-apps/shell",
+      "@workspace-clients/desktop-browser",
       { "@workspace/quickfire-core": "workspace:*", react: "19.2.4" },
       ["@workspace/quickfire-core"]
     );
@@ -463,7 +463,7 @@ describe("collectExternalDependencyClosure", () => {
     const strict = makeNode("@workspace/strict", {}, [], { react: "19.2.4" });
     const floor = makeNode("@workspace/floor", {}, [], { react: "19.0.0" });
     const app = makeNode(
-      "@workspace-apps/shell",
+      "@workspace-clients/desktop-browser",
       { "@workspace/strict": "workspace:*", "@workspace/floor": "workspace:*", react: "19.2.4" },
       ["@workspace/strict", "@workspace/floor"]
     );

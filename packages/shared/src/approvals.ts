@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { ClientRuntime } from "@vibestudio/workspace-contracts/clients";
 import type {
   AccountIdentity,
   CredentialGrantAction,
@@ -76,18 +77,18 @@ export const approvalDetailSchema = z
 export const approvalPrincipalSchema = z
   .object({
     callerId: approvalCleanString("caller id", { min: 1, max: 200 }),
-    callerKind: z.enum(["panel", "app", "worker", "do", "extension"]),
+    callerKind: z.enum(["panel", "client", "worker", "do", "extension"]),
     repoPath: approvalCleanString("repo path", { min: 1, max: 300 }),
     effectiveVersion: approvalCleanString("effective version", { min: 1, max: 200 }),
     callerTitle: approvalCleanString("caller title", { max: 120 }).optional(),
   })
   .strict();
 
-export type ApprovalRequesterKind = "panel" | "app" | "worker" | "do" | "extension" | "system";
+export type ApprovalRequesterKind = "panel" | "client" | "worker" | "do" | "extension" | "system";
 
 export type ApprovalRequesterCategory =
   | "panel"
-  | "workspace-app"
+  | "client"
   | "agent"
   | "eval"
   | "worker"
@@ -263,7 +264,7 @@ export const secretInputRequestSchema = z
 /** The verified runtime caller that issued the prompt. Populated by the dispatcher. */
 export interface ApprovalPrincipal {
   callerId: string;
-  callerKind: "panel" | "app" | "worker" | "do" | "extension";
+  callerKind: "panel" | "client" | "worker" | "do" | "extension";
   repoPath: string;
   effectiveVersion: string;
   /**
@@ -323,7 +324,7 @@ export interface PendingApprovalBase {
   callerId: string;
   // "system" is a host-initiated principal (e.g. workspace-startup extension
   // reconciliation), not a userland caller pretending to be one.
-  callerKind: "panel" | "app" | "worker" | "do" | "extension" | "system";
+  callerKind: "panel" | "client" | "worker" | "do" | "extension" | "system";
   repoPath: string;
   effectiveVersion: string;
   requestedAt: number;
@@ -427,9 +428,27 @@ export interface PendingCredentialApproval extends PendingApprovalBase {
   replacementCredentialLabel?: string;
 }
 
+/**
+ * One client whose device-level power a publication changes
+ * (docs/client-hosts-and-clients-plan.md §4.4.1). The person approves exactly
+ * this delta; the approval's prepared-state digest binds it to the candidate.
+ */
+export interface ClientTrustChange {
+  source: string;
+  title: string;
+  icon?: string;
+  runtime: ClientRuntime;
+  gained: Array<{ capability: string; summary: string }>;
+  lost: Array<{ capability: string; summary: string }>;
+  /** The exact candidate source state the client will be pinned to. */
+  effectiveVersion: string | null;
+}
+
 export interface PendingCapabilityApproval extends PendingApprovalBase {
   kind: "capability";
   capability: string;
+  /** Present when the decision is a change to which clients hold device-level power. */
+  trustChange?: ClientTrustChange[];
   severity?: "standard" | "severe";
   grantResourceKey?: string;
   title: string;
@@ -526,7 +545,7 @@ export interface UnitApprovalCommit {
 }
 
 /** The four kinds of executable unit a review presents. */
-export type ReviewedUnitKind = "extension" | "app" | "panel" | "worker";
+export type ReviewedUnitKind = "extension" | "client" | "panel" | "worker";
 
 /**
  * One workspace-owned unit an arriving publication lands, as its producer
@@ -544,7 +563,8 @@ export interface ReviewedUnit {
   version?: string | null;
   /** One sentence, from the unit's own description: what it is for. */
   purpose?: string;
-  target?: "electron" | "react-native" | "terminal" | null;
+  /** The runtime a client is built for. Absent for every other unit kind. */
+  runtime?: ClientRuntime | null;
   source: { kind: "workspace-repo"; repo: string; ref: string };
   ev?: string | null;
   /** Native or host capabilities granted by running this unit. */

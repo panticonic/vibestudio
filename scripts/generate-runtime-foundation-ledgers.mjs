@@ -609,9 +609,14 @@ const executionRows = [
   ["eval-do", "exact-product-seed", "new-eval-incarnation", "execution.eval-do"],
   ["vcs-store", "exact-product-seed", "bootstrap-manifest", "execution.vcs-store"],
   ["panel", "selected-source-ref", "explicit-reload-or-navigation", "execution.panel"],
-  ["electron-app", "resolved-exact-artifact", "load-update", "execution.electron-app"],
-  ["react-native-app", "resolved-exact-artifact", "mobile-install", "execution.react-native-app"],
-  ["terminal-app", "resolved-exact-artifact", "client-relaunch", "execution.terminal-app"],
+  ["web-client", "resolved-exact-artifact", "load-update", "execution.client-web"],
+  [
+    "react-native-client",
+    "resolved-exact-artifact",
+    "mobile-install",
+    "execution.client-react-native",
+  ],
+  ["terminal-client", "resolved-exact-artifact", "client-relaunch", "execution.client-terminal"],
   ["extension", "resolved-exact-artifact", "supervised-restart", "execution.extension"],
 ].map(([surface, selector, adoption, testId]) => ({
   surface,

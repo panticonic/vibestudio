@@ -43,7 +43,7 @@ export function createBrowserPrivacyPresentationService(
         );
       }
       const initiator = verifiedInitiator(ctx);
-      if (initiator.runtime.kind !== "panel" && initiator.runtime.kind !== "app") {
+      if (initiator.runtime.kind !== "panel" && initiator.runtime.kind !== "client") {
         throw new Error("Browser privacy presentation must originate in a hosted panel or app");
       }
       const shell = deps.getAuthorizingShell(initiator.runtime.id);

@@ -13,12 +13,12 @@ afterEach(() => {
 function observed() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-supervision-"));
   roots.push(root);
-  const registry = new UnitRegistry({ statePath: root, unitKind: "app" });
+  const registry = new UnitRegistry({ statePath: root, unitKind: "client" });
   const changes: SupervisionChange[] = [];
   observeUnitSupervision(registry, (change) => changes.push(change));
   registry.upsert(
     createPendingUnitRegistryEntry({
-      unitKind: "app",
+      unitKind: "client",
       name: "@apps/a",
       version: "1.0.0",
       sourceRepo: "workspace/apps/a",
@@ -40,7 +40,7 @@ describe("observeUnitSupervision", () => {
       ["running", "update refused", "k".repeat(64)],
     ]);
     expect(changes[0]).toMatchObject({
-      identity: { kind: "app", entityId: "@apps/a" },
+      identity: { kind: "client", entityId: "@apps/a" },
       source: "apps/a",
       change: "status",
     });

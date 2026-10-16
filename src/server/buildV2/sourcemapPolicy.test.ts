@@ -10,7 +10,7 @@ function node(kind: GraphNode["kind"], sourcemap?: boolean): GraphNode {
 
 describe("runtime source-map policy", () => {
   it("keeps normal runtime artifacts map-free unless the unit opts in", () => {
-    for (const kind of ["panel", "app", "worker"] as const) {
+    for (const kind of ["panel", "client", "worker"] as const) {
       expect(buildSourcemapForNode(node(kind))).toBe(false);
       expect(buildSourcemapForNode(node(kind, false))).toBe(false);
       expect(buildSourcemapForNode(node(kind, true))).toBe(true);

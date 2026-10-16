@@ -90,7 +90,7 @@ const ActorRefWireSchema = z
       "system",
       "external",
       "panel",
-      "app",
+      "client",
       "worker",
       "do",
       "shell",

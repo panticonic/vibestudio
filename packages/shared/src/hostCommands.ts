@@ -223,7 +223,7 @@ export function createHostCommandRegistry(
     },
     acceptRpcEvent(event) {
       const { caller } = event;
-      if (caller.callerKind !== "panel" && caller.callerKind !== "app") return false;
+      if (caller.callerKind !== "panel" && caller.callerKind !== "client") return false;
       return accept(caller.callerPanelId ?? caller.callerId, event.payload, caller.callerId);
     },
     get(panelId) {

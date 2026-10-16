@@ -180,8 +180,8 @@ vibestudio terminal "<compact-payload>"              # pair with a remote server
 vibestudio terminal --workspace dev --keep-server
 ```
 
-The terminal browser is a client app: the command fetches the build that the
-server made for the workspace's `hostTargets.terminal.app` over its own
+The terminal browser is a client: the command fetches the build that the
+server made for the workspace's `clientDefaults.terminal` over its own
 connection and runs it in this process. A newer adopted build is loaded the
 next time the browser reconnects or the command is run again. From a source
 checkout, use `pnpm start:terminal` or `pnpm dev:terminal` (see

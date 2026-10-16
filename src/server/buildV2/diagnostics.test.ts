@@ -183,7 +183,7 @@ describe("build diagnostics path normalization", () => {
     const diagnostic = {
       source: "authority" as const,
       severity: "error" as const,
-      file: "apps/shell/package.json",
+      file: "clients/desktop-browser/package.json",
       line: 1,
       column: 0,
       message: "Missing declared gateway capability. " + "x".repeat(800),
@@ -199,11 +199,11 @@ describe("build diagnostics path normalization", () => {
     ];
     const error = new BuildGateFailedError(
       diagnostics,
-      ["@workspace-apps/shell"],
+      ["@workspace-clients/desktop-browser"],
       "state:candidate"
     );
     expect(error.message).toContain(
-      "apps/shell/package.json:1: Missing declared gateway capability."
+      "clients/desktop-browser/package.json:1: Missing declared gateway capability."
     );
     expect(error.message).not.toContain("An earlier warning");
     expect(error.message).toContain("1 more error; see the structured diagnostics.");

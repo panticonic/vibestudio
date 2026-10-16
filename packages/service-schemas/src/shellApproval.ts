@@ -7,6 +7,7 @@ import { rpcCausalParentSchema } from "./rpcCausality.js";
  */
 
 import { z } from "zod";
+import { CLIENT_RUNTIMES } from "@vibestudio/workspace-contracts/clients";
 import { STATE_HASH_RE } from "@vibestudio/shared/contentTree/treeObjects";
 import type {
   ApprovalOperationDescriptor,
@@ -47,10 +48,10 @@ export const shellApprovalValuesSchema = z
 const approvalRequesterSchema = z
   .object({
     id: z.string(),
-    kind: z.enum(["panel", "app", "worker", "do", "extension", "system"]),
+    kind: z.enum(["panel", "client", "worker", "do", "extension", "system"]),
     category: z.enum([
       "panel",
-      "workspace-app",
+      "client",
       "agent",
       "eval",
       "worker",
@@ -85,7 +86,7 @@ const approvalRequesterSchema = z
           id: z.string(),
           kind: z.enum([
             "panel",
-            "app",
+            "client",
             "worker",
             "do",
             "extension",
@@ -96,7 +97,7 @@ const approvalRequesterSchema = z
           ]),
           category: z.enum([
             "panel",
-            "workspace-app",
+            "client",
             "agent",
             "eval",
             "worker",
@@ -188,7 +189,7 @@ const pendingApprovalBaseShape = {
     .optional(),
   approvalId: z.string(),
   callerId: z.string(),
-  callerKind: z.enum(["panel", "app", "worker", "do", "extension", "system"]),
+  callerKind: z.enum(["panel", "client", "worker", "do", "extension", "system"]),
   repoPath: z.string(),
   effectiveVersion: z.string(),
   requestedAt: z.number(),
@@ -310,8 +311,8 @@ const installReviewOriginSchema = z
 const installReviewPartSchema = z
   .object({
     identityKey: z.string().min(1),
-    kind: z.enum(["panel", "worker", "app", "extension"]),
-    label: z.enum(["Panel", "Agent", "Service", "Client App", "Extension"]),
+    kind: z.enum(["panel", "worker", "client", "extension"]),
+    label: z.enum(["Panel", "Agent", "Service", "Client", "Extension"]),
     surfaces: z.array(
       z.object({ kind: z.enum(["durable-object", "service"]), name: z.string() }).strict()
     ),
@@ -326,7 +327,7 @@ const installReviewPartSchema = z
     version: z.string().nullable(),
     requiredUnitKeys: z.array(z.string()),
     runsInBackground: z.boolean(),
-    target: z.enum(["electron", "react-native", "terminal"]).nullable().optional(),
+    runtime: z.enum(CLIENT_RUNTIMES).nullable().optional(),
     origin: installReviewOriginSchema,
     notableRows: z.array(installReviewRowSchema),
     everydayRows: z.array(installReviewRowSchema),
@@ -360,7 +361,7 @@ export const pendingUnitInstallReviewApprovalSchema = z
         panels: z.number().int().nonnegative(),
         agents: z.number().int().nonnegative(),
         services: z.number().int().nonnegative(),
-        clientApps: z.number().int().nonnegative(),
+        clients: z.number().int().nonnegative(),
         extensions: z.number().int().nonnegative(),
       })
       .strict(),
@@ -476,7 +477,7 @@ export interface InstallReviewResolution {
    * `Open News →`. Offered only for a part that can be opened and, where the
    * landing was watched, only for one that actually landed.
    */
-  entryPoint?: { identityKey: string; repoPath: string; title: string; kind: "panel" | "app" };
+  entryPoint?: { identityKey: string; repoPath: string; title: string; kind: "panel" | "client" };
   /** Absent when no landing site reported — the outcome is under way, not good. */
   landing?: InstallReviewLanding;
 }
@@ -485,8 +486,8 @@ const installReviewResolvedPartSchema = z
   .object({
     identityKey: z.string().min(1),
     title: z.string(),
-    kind: z.enum(["panel", "worker", "app", "extension"]),
-    label: z.enum(["Panel", "Agent", "Service", "Client App", "Extension"]),
+    kind: z.enum(["panel", "worker", "client", "extension"]),
+    label: z.enum(["Panel", "Agent", "Service", "Client", "Extension"]),
     clearance: z.enum(["allowed-now", "asks-when-needed"]),
   })
   .strict() satisfies z.ZodType<InstallReviewResolvedPart>;
@@ -505,7 +506,7 @@ export const installReviewResolutionSchema = z
         identityKey: z.string().min(1),
         repoPath: z.string().min(1),
         title: z.string().min(1),
-        kind: z.enum(["panel", "app"]),
+        kind: z.enum(["panel", "client"]),
       })
       .strict()
       .optional(),

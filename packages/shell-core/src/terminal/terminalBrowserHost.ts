@@ -1,6 +1,6 @@
 /**
  * Contract between the `vibestudio terminal` CLI (trusted client) and the
- * workspace's terminal browser app (`hostTargets.terminal.app`).
+ * workspace's terminal browser app (`clientDefaults.terminal`).
  *
  * The CLI fetches the server-built primary artifact of the terminal app,
  * imports it in the CLI process, and calls its exported `run(host)`. The
@@ -46,7 +46,7 @@ export interface TerminalBrowserWorkspace {
 
 export interface TerminalBrowserHost {
   contractVersion: typeof TERMINAL_BROWSER_HOST_CONTRACT_VERSION;
-  /** App-principal RPC client in the System workspace (callerKind "app", selfId === appId). */
+  /** App-principal RPC client in the System workspace (callerKind "client", selfId === clientId). */
   rpc: RpcClient;
   appId: string;
   /** The account's System workspace, where the browser itself is installed. */

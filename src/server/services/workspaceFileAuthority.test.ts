@@ -50,9 +50,9 @@ describe("repository file consent", () => {
       kind: "prefix",
       prefix: "workspace-path/meta/",
     });
-    expect(selection("apps/new-app/src/index.ts", "write").resource).toEqual({
+    expect(selection("clients/new-client/src/index.ts", "write").resource).toEqual({
       kind: "prefix",
-      prefix: "workspace-path/apps/new-app/",
+      prefix: "workspace-path/clients/new-client/",
     });
   });
 

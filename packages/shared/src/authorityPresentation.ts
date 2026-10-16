@@ -9,7 +9,7 @@ import { authorityRow, type AuthorityRow } from "./authority/authorityRows.js";
 import { diffAuthorityRows, type AuthorityRowDiff } from "./authority/authorityRowDiff.js";
 import type { AuthorityDomainId, AuthorityVerb } from "./authority/authorityDomains.js";
 import type { CapabilityNotability } from "./authority/capabilityNotability.js";
-import { APP_CAPABILITY_CATALOG } from "./unitManifest.js";
+import { CLIENT_CAPABILITY_CATALOG } from "@vibestudio/workspace-contracts/clients";
 
 export interface CapabilityPresentation extends EditableCapabilityCopy {
   authorityCategory?: { domain: AuthorityDomainId; verb: AuthorityVerb; declaredBy?: string };
@@ -17,7 +17,12 @@ export interface CapabilityPresentation extends EditableCapabilityCopy {
   notability?: CapabilityNotability;
 }
 
-export type CapabilityRequesterKind = "app" | "panel" | "worker" | "extension" | "durable-object";
+export type CapabilityRequesterKind =
+  | "client"
+  | "panel"
+  | "worker"
+  | "extension"
+  | "durable-object";
 
 export type CapabilityPresentationResolver = (
   capability: string,
@@ -25,16 +30,16 @@ export type CapabilityPresentationResolver = (
 ) => CapabilityPresentation;
 
 /**
- * Validate the native-host effects a shipped app requests through the ordinary
- * install-review vocabulary. App ABI capabilities that are not requested do
+ * Validate the native-host effects a shipped client requests through the ordinary
+ * install-review vocabulary. Client capabilities that are not requested do
  * not need review copy; declaring one as authority does.
  */
-export function assertReviewedNativeAppAuthorityRequests(
+export function assertReviewedClientAuthorityRequests(
   requests: readonly UnitAuthorityRequest[]
 ): void {
   summarizeAuthorityRequests(
     requests.filter((request) =>
-      Object.prototype.hasOwnProperty.call(APP_CAPABILITY_CATALOG, request.capability)
+      Object.prototype.hasOwnProperty.call(CLIENT_CAPABILITY_CATALOG, request.capability)
     )
   );
 }

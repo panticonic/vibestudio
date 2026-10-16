@@ -1,3 +1,4 @@
+import type { ClientRuntime } from "@vibestudio/workspace-contracts/clients";
 /**
  * The one review surface every arrival of code shares
  * (docs/template-install-unit-approval-ux-plan.md §7).
@@ -33,20 +34,20 @@ import type { UnitAuthorityRequest, UserlandCapabilityDefinition } from "../auth
 import type { CapabilityPresentationResolver } from "../authorityPresentation.js";
 
 /** The four kinds of executable unit a review can present. */
-export type InstallPartKind = "panel" | "worker" | "app" | "extension";
+export type InstallPartKind = "panel" | "worker" | "client" | "extension";
 
 /**
  * The user-facing noun. A worker splits by a computable test rather than by
  * judgment: one that declares a service or Durable Object surface is a Service,
  * one that declares none is an Agent.
  */
-export type InstallPartLabel = "Panel" | "Agent" | "Service" | "Client App" | "Extension";
+export type InstallPartLabel = "Panel" | "Agent" | "Service" | "Client" | "Extension";
 
 export const INSTALL_PART_LABEL_COPY: Record<InstallPartLabel, string> = {
   Panel: "Something you open and look at",
   Agent: "Something that works on its own",
   Service: "Something other parts rely on",
-  "Client App": "The desktop, mobile, or terminal app itself",
+  Client: "A program your devices run, such as a browser or chat",
   Extension: "Native code that adds an ability to the host",
 };
 
@@ -63,8 +64,8 @@ export function installPartLabel(
   switch (kind) {
     case "panel":
       return "Panel";
-    case "app":
-      return "Client App";
+    case "client":
+      return "Client";
     case "extension":
       return "Extension";
     case "worker":
@@ -681,8 +682,8 @@ export interface InstallReviewPart {
   version: string | null;
   requiredUnitKeys: string[];
   runsInBackground: boolean;
-  /** Which host a client app targets. Absent for panels, workers, and extensions. */
-  target?: "electron" | "react-native" | "terminal" | null;
+  /** The runtime a client is built for. Absent for panels, workers, and extensions. */
+  runtime?: ClientRuntime | null;
   origin: InstallReviewOrigin;
   /** Every headline row plus every behavioral fact. Never truncated. */
   notableRows: InstallReviewRow[];
@@ -714,7 +715,7 @@ export interface InstallReviewSummary {
   panels: number;
   agents: number;
   services: number;
-  clientApps: number;
+  clients: number;
   extensions: number;
 }
 
@@ -726,7 +727,7 @@ export function summarizeParts(
     panels: 0,
     agents: 0,
     services: 0,
-    clientApps: 0,
+    clients: 0,
     extensions: 0,
   };
   for (const part of parts) {
@@ -741,8 +742,8 @@ export function summarizeParts(
       case "Service":
         summary.services += 1;
         break;
-      case "Client App":
-        summary.clientApps += 1;
+      case "Client":
+        summary.clients += 1;
         break;
       case "Extension":
         summary.extensions += 1;
@@ -929,7 +930,7 @@ export function installPartGroup(
   }
   if (directory === "about") return { key: "system-panels", title: "System panels", order: 2 };
   if (part.label === "Service") return { key: "services", title: "Services", order: 3 };
-  if (directory === "apps") return { key: "client-apps", title: "Client apps", order: 4 };
+  if (directory === "clients") return { key: "clients", title: "Clients", order: 4 };
   if (directory === "extensions") return { key: "extensions", title: "Extensions", order: 5 };
   return {
     key: `directory:${directory}`,

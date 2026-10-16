@@ -472,7 +472,7 @@ export const WorkspaceConfigSchema = z
       )
       .optional(),
     extensions: z.array(WorkspaceSourceRefSchema).optional(),
-    apps: z.array(WorkspaceSourceRefSchema).optional(),
+    clients: z.array(WorkspaceSourceRefSchema).optional(),
     providers: z
       .object({
         evalEngine: z.object({ source: z.string() }).strict().optional(),
@@ -485,25 +485,24 @@ export const WorkspaceConfigSchema = z
       .optional(),
     trust: z
       .object({
-        chromeApps: z.array(z.string()).optional(),
-        connectionManagementApps: z.array(z.string()).optional(),
+        clients: z.array(z.string()).optional(),
       })
       .strict()
       .optional(),
-    hostTargets: z
+    clientDefaults: z
       .object({
-        electron: z
-          .object({ app: z.string(), requiresExtensions: z.array(z.string()).optional() })
-          .strict()
-          .optional(),
-        "react-native": z
-          .object({ app: z.string(), requiresExtensions: z.array(z.string()).optional() })
-          .strict()
-          .optional(),
-        terminal: z
-          .object({ app: z.string(), requiresExtensions: z.array(z.string()).optional() })
-          .strict()
-          .optional(),
+        desktop: z.string().optional(),
+        terminal: z.string().optional(),
+        android: z.string().optional(),
+        ios: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+    runtimeExtensions: z
+      .object({
+        web: z.array(z.string()).optional(),
+        "react-native": z.array(z.string()).optional(),
+        terminal: z.array(z.string()).optional(),
       })
       .strict()
       .optional(),

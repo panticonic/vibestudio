@@ -132,13 +132,13 @@ describe("UnitRegistry", () => {
       unitKind: "extension",
     });
 
-    expect(() => registry.upsert(entry({ unitKind: "app" }))).toThrow(/Cannot store app/);
+    expect(() => registry.upsert(entry({ unitKind: "client" }))).toThrow(/Cannot store client/);
   });
 
   it("builds pending registry entries with shared install-state defaults", () => {
     expect(
       createPendingUnitRegistryEntry({
-        unitKind: "app",
+        unitKind: "client",
         name: "@workspace-apps/shell",
         version: "1.0.0",
         sourceRepo: "workspace/apps/shell",
@@ -147,7 +147,7 @@ describe("UnitRegistry", () => {
         installedAt: 10,
       })
     ).toMatchObject({
-      unitKind: "app",
+      unitKind: "client",
       name: "@workspace-apps/shell",
       source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
       installedAt: 10,
@@ -164,7 +164,7 @@ describe("UnitRegistry", () => {
   it("builds shared batch approval entry bases with normalized source identity", () => {
     expect(
       createReviewedUnitBase({
-        unitKind: "app",
+        unitKind: "client",
         name: "@workspace-apps/shell",
         displayName: "Workspace Shell",
         icon: "🖥️",
@@ -176,7 +176,7 @@ describe("UnitRegistry", () => {
         externalDeps: { react: "19.0.0" },
       })
     ).toEqual({
-      unitKind: "app",
+      unitKind: "client",
       unitName: "@workspace-apps/shell",
       displayName: "Workspace Shell",
       icon: "🖥️",
@@ -191,7 +191,7 @@ describe("UnitRegistry", () => {
   it("builds shared unit identities with normalized source and sorted capabilities", () => {
     expect(
       createUnitBuildIdentity({
-        unitKind: "app",
+        unitKind: "client",
         name: "@workspace-apps/shell",
         sourceRepo: "/workspace/apps/shell",
         ref: "main",
@@ -201,7 +201,7 @@ describe("UnitRegistry", () => {
         capabilities: ["z", "a"],
       })
     ).toEqual({
-      unitKind: "app",
+      unitKind: "client",
       name: "@workspace-apps/shell",
       source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
       effectiveVersion: "ev-app",
@@ -215,7 +215,7 @@ describe("UnitRegistry", () => {
     expect(
       unitBuildIdentityFromRegistryEntry(
         entry({
-          unitKind: "app",
+          unitKind: "client",
           name: "@workspace-apps/shell",
           source: { kind: "workspace-repo", repo: "/workspace/apps/shell", ref: "main" },
           activeEv: "ev-app",
@@ -225,7 +225,7 @@ describe("UnitRegistry", () => {
         ["z", "a"]
       )
     ).toEqual({
-      unitKind: "app",
+      unitKind: "client",
       name: "@workspace-apps/shell",
       source: { kind: "workspace-repo", repo: "apps/shell", ref: "main" },
       effectiveVersion: "ev-app",
@@ -259,11 +259,11 @@ describe("UnitRegistry", () => {
 
   it("finds unit graph nodes by package name or normalized repo path", () => {
     const descriptor = {
-      buildKind: "app" as const,
+      buildKind: "client" as const,
       approvalFraming: { unitLabel: "app" },
     };
     const nodes = [
-      { name: "@workspace-apps/shell", kind: "app", relativePath: "apps/shell" },
+      { name: "@workspace-apps/shell", kind: "client", relativePath: "apps/shell" },
       { name: "@workspace-extensions/rn", kind: "extension", relativePath: "extensions/rn" },
     ];
 
@@ -278,10 +278,10 @@ describe("UnitRegistry", () => {
 describe("FileUnitIdentityApprovalStore", () => {
   it("persists exact reviewed identities independently of activation", () => {
     const root = tempRoot();
-    const first = new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "app" });
+    const first = new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "client" });
     first.approveMany(["identity:b", "identity:a"]);
 
-    const reloaded = new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "app" });
+    const reloaded = new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "client" });
     expect(reloaded.has("identity:a")).toBe(true);
     expect(reloaded.has("identity:b")).toBe(true);
     expect(reloaded.has("identity:other")).toBe(false);
@@ -289,7 +289,7 @@ describe("FileUnitIdentityApprovalStore", () => {
 
   it("rolls back only prepared identities and preserves later approvals", () => {
     const root = tempRoot();
-    const store = new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "app" });
+    const store = new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "client" });
     const transaction = store.prepareApproveMany(["identity:prepared"]);
 
     store.approveMany(["identity:later"]);
@@ -297,7 +297,7 @@ describe("FileUnitIdentityApprovalStore", () => {
 
     expect(store.has("identity:prepared")).toBe(false);
     expect(store.has("identity:later")).toBe(true);
-    const reloaded = new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "app" });
+    const reloaded = new FileUnitIdentityApprovalStore({ statePath: root, unitKind: "client" });
     expect(reloaded.has("identity:prepared")).toBe(false);
     expect(reloaded.has("identity:later")).toBe(true);
   });
@@ -367,10 +367,10 @@ describe("workspace unit summaries", () => {
   it("maps registry entries to shared fallback log rows", () => {
     expect(
       unitWorkspaceLogRecord(
-        "app",
+        "client",
         "workspace-1",
         entry({
-          unitKind: "app",
+          unitKind: "client",
           name: "@workspace-apps/shell",
           status: "error",
           lastError: "boom",
@@ -379,7 +379,7 @@ describe("workspace unit summaries", () => {
     ).toEqual({
       workspaceId: "workspace-1",
       unitName: "@workspace-apps/shell",
-      kind: "app",
+      kind: "client",
       timestamp: 1,
       level: "error",
       message: "boom",

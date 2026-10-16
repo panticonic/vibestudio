@@ -22,9 +22,8 @@ import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
-import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
-import { AppPrincipalGrantRequestSchema } from "@vibestudio/service-schemas/auth";
-import type { DeviceAppPrincipal } from "../deviceAppPrincipals.js";
+import { ClientPrincipalGrantRequestSchema } from "@vibestudio/service-schemas/clients";
+import type { ClientPrincipal } from "../clients/clientPrincipals.js";
 
 function makePanelRecord(id: string): EntityRecord {
   return {
@@ -143,8 +142,9 @@ describe("workspace child auth clean cutover", () => {
       "/refresh-shell",
       "/refresh-agent",
     ]);
-    expect(service.definition.methods).toHaveProperty("getMobileAppBootstrap");
-    expect(service.definition.methods).toHaveProperty("grantAppPrincipal");
+    expect(service.definition.methods).toHaveProperty("grantClientPrincipal");
+    expect(service.definition.methods).not.toHaveProperty("getMobileAppBootstrap");
+    expect(service.definition.methods).not.toHaveProperty("grantAppPrincipal");
     expect(service.definition.methods).not.toHaveProperty("createPairingInvite");
     expect(service.definition.methods).not.toHaveProperty("listDevices");
     expect(service.definition.methods).not.toHaveProperty("revokeDevice");
@@ -159,16 +159,12 @@ describe("workspace child auth clean cutover", () => {
     expect(
       RefreshShellBodySchema.safeParse({ ...deviceCredential, room: "legacy-room" }).success
     ).toBe(false);
+    const build = { source: "clients/chat", buildKey: "build-1", executionDigest: "d".repeat(64) };
+    expect(ClientPrincipalGrantRequestSchema.safeParse(build).success).toBe(true);
     expect(
-      AppPrincipalGrantRequestSchema.safeParse({ principal: "terminal-app", source: null }).success
-    ).toBe(true);
-    expect(
-      AppPrincipalGrantRequestSchema.safeParse({
-        principal: "terminal-app",
-        callerId: "legacy-caller",
-      }).success
+      ClientPrincipalGrantRequestSchema.safeParse({ ...build, callerId: "legacy-caller" }).success
     ).toBe(false);
-    expect(AppPrincipalGrantRequestSchema.safeParse({ principal: "app:mobile" }).success).toBe(
+    expect(ClientPrincipalGrantRequestSchema.safeParse({ principal: "app:mobile" }).success).toBe(
       false
     );
     expect(
@@ -334,8 +330,8 @@ describe("auth service connection grants", () => {
       getWorkspaceId: () => "workspace_test",
       getConnectionInfo,
       connectionGrants,
-      hasAppCapability: (callerId, capability) =>
-        callerId === "app:apps/mobile:device-1" && capability === "panel-hosting",
+      hasClientCapability: (callerId, capability) =>
+        callerId === "client:browser:web:device-1" && capability === "panel-hosting",
     });
 
     expect(service.definition.methods?.["grantConnection"]?.authority).toEqual({
@@ -343,7 +339,7 @@ describe("auth service connection grants", () => {
     });
 
     const granted = (await service.definition.handler(
-      { caller: createVerifiedCaller("app:apps/mobile:device-1", "app") },
+      { caller: createVerifiedCaller("client:browser:web:device-1", "client") },
       "grantConnection",
       ["panel:mobile"]
     )) as { token: string; expiresAt: number };
@@ -351,7 +347,7 @@ describe("auth service connection grants", () => {
     expect(granted.token).toMatch(/^[0-9a-f]{64}$/);
     expect(connectionGrants.redeem(granted.token)).toEqual({
       principalId: "panel:mobile",
-      issuedBy: "app:apps/mobile:device-1",
+      issuedBy: "client:browser:web:device-1",
     });
     connectionGrants.stop();
   });
@@ -368,156 +364,35 @@ describe("auth service connection grants", () => {
       getWorkspaceId: () => "workspace_test",
       getConnectionInfo,
       connectionGrants,
-      hasAppCapability: () => false,
+      hasClientCapability: () => false,
     });
 
     await expect(
       service.definition.handler(
-        { caller: createVerifiedCaller("app:apps/other:device-1", "app") },
+        { caller: createVerifiedCaller("client:other:web:device-1", "client") },
         "grantConnection",
         ["panel:mobile"]
       )
     ).rejects.toThrow(/panel-hosting/);
     connectionGrants.stop();
   });
-
-  it("returns mobile app approval requirements without blocking bootstrap", async () => {
-    const tokenManager = new TokenManager();
-    const identity = makeIdentity({ withRoot: true });
-    const authStore = identity.deviceAuthStore;
-    const issued = identity.deviceAuthStore.issueDevice({
-      transport: { kind: "iroh", endpointId: "a".repeat(64) },
-      userId: identity.rootId!,
-      label: "Phone",
-      platform: "mobile",
-    });
-    const approvals = [
-      {
-        approvalId: "approval-mobile",
-        kind: "unit-install-review",
-        callerId: "system:apps",
-        callerKind: "system",
-        repoPath: "apps/mobile",
-        effectiveVersion: "ev-mobile",
-        mode: "adopt-root",
-        title: "Start this workspace?",
-        description: "Approve the mobile app",
-        parts: [
-          {
-            identityKey: "apps/mobile@ev-mobile",
-            kind: "app",
-            label: "Client App",
-            surfaces: [],
-            name: "@workspace-apps/mobile",
-            title: "Mobile",
-            purpose: "The mobile app itself.",
-            repoPath: "apps/mobile",
-            effectiveVersion: "ev-mobile",
-            version: null,
-            requiredUnitKeys: [],
-            runsInBackground: false,
-            target: "react-native",
-            origin: {
-              url: null,
-              originKey: "vibestudio",
-              registrableDomain: null,
-              version: null,
-              isHostBuild: true,
-              firstEncounter: false,
-            },
-            notableRows: [],
-            everydayRows: [],
-            change: "added",
-            section: "template",
-          },
-        ],
-        summary: { panels: 0, agents: 0, services: 0, clientApps: 1, extensions: 0 },
-        unchangedPartCount: 0,
-        configWrite: null,
-        requestedAt: 1,
-      },
-    ] satisfies PendingUnitInstallReviewApproval[];
-    const authService = createAuthService({
-      resolveUser: testResolveUser,
-      tokenManager,
-      deviceAuthStore: authStore,
-      agentCredentialWriter: {
-        mint: async (input) => authStore.mintAgentCredential(input),
-        revoke: async (agentId) => authStore.revokeAgentCredential(agentId),
-      },
-      roleOf: (userId) => identity.userStore.getUser(userId)?.role ?? null,
-      getServerBootId: () => "boot_mobile_approval",
-      getWorkspaceId: () => "workspace_mobile_approval",
-      getConnectionInfo,
-      ensureMobileAppReady: async () => ({
-        ready: false,
-        approvalRequired: true,
-        approvals,
-        reason: "React Native workspace app requires approval",
-      }),
-      getMobileAppBootstrap: () => null,
-    });
-    const caller = createVerifiedCaller(`shell:${issued.deviceId}`, "shell", null, null, {
-      userId: identity.rootId!,
-      handle: "root",
-    });
-    await expect(
-      authService.definition.handler({ caller }, "getMobileAppBootstrap", [null])
-    ).rejects.toMatchObject({
-      code: "MOBILE_APP_APPROVAL_REQUIRED",
-      errorData: {
-        approvals: [
-          expect.objectContaining({
-            approvalId: "approval-mobile",
-            parts: [expect.objectContaining({ target: "react-native" })],
-          }),
-        ],
-      },
-    });
-  });
-
-  it("returns mobile bootstrap through the authenticated device session without a refresh secret", async () => {
-    const identity = makeIdentity({ withRoot: true });
-    const issued = identity.deviceAuthStore.issueDevice({
-      transport: { kind: "iroh", endpointId: "b".repeat(64) },
-      userId: identity.rootId!,
-      label: "Phone",
-      platform: "mobile",
-    });
-    const authService = createAuthService({
-      resolveUser: testResolveUser,
-      tokenManager: new TokenManager(),
-      deviceAuthStore: identity.deviceAuthStore,
-      getServerBootId: () => "boot_mobile",
-      getWorkspaceId: () => "workspace_mobile",
-      getConnectionInfo,
-      ensureMobileAppReady: async () => ({ ready: true }),
-      getMobileAppBootstrap: async () => ({ buildKey: "build-mobile", artifacts: [] }),
-    });
-    const caller = createVerifiedCaller(`shell:${issued.deviceId}`, "shell", null, null, {
-      userId: identity.rootId!,
-      handle: "root",
-    });
-
-    await expect(
-      authService.definition.handler({ caller }, "getMobileAppBootstrap", ["apps/mobile"])
-    ).resolves.toMatchObject({
-      serverBootId: "boot_mobile",
-      workspaceId: "workspace_mobile",
-      bootstrap: { buildKey: "build-mobile" },
-    });
-  });
 });
-describe("auth.grantAppPrincipal", () => {
-  function makeAppPrincipalRecord(principal: DeviceAppPrincipal): EntityRecord {
+describe("auth.grantClientPrincipal", () => {
+  const BUILD = {
+    source: "clients/terminal-browser",
+    buildKey: "build-terminal",
+    executionDigest: "d".repeat(64),
+  };
+
+  function makeClientPrincipalRecord(principal: ClientPrincipal): EntityRecord {
     return {
       id: principal.principalId,
-      kind: "app",
+      kind: "client",
       source: { repoPath: principal.source, effectiveVersion: principal.effectiveVersion },
       activeBuildKey: principal.buildKey,
       activeExecutionDigest: "a".repeat(64),
       activeAuthority: { requests: [], provides: [] },
-      contextId: "ctx-app-device",
+      contextId: "ctx-client-device",
       key: principal.principalId,
       createdAt: Date.now(),
       status: "active",
@@ -527,8 +402,7 @@ describe("auth.grantAppPrincipal", () => {
 
   function makeGrantService(
     opts: {
-      registerDevicePrincipal?: Parameters<typeof createAuthService>[0]["registerDevicePrincipal"];
-      ensureMobileAppReady?: Parameters<typeof createAuthService>[0]["ensureMobileAppReady"];
+      grantClientPrincipal?: Parameters<typeof createAuthService>[0]["grantClientPrincipal"];
     } = {}
   ) {
     const identity = makeIdentity({ withRoot: true });
@@ -539,34 +413,19 @@ describe("auth.grantAppPrincipal", () => {
     });
     const entityCache = new EntityCache();
     const connectionGrants = new ConnectionGrantService({ entityCache });
-    const principalFor = (
-      target: string,
-      deviceId: string,
-      source: string | null
-    ): DeviceAppPrincipal => {
-      const appSource = source ?? (target === "terminal" ? "apps/terminal-browser" : "apps/mobile");
-      return {
-        principalId: `app:${appSource}:${deviceId}`,
-        appId: `@workspace-apps/${appSource.slice("apps/".length)}`,
-        source: appSource,
-        target: target as DeviceAppPrincipal["target"],
-        buildKey: "build-terminal",
-        effectiveVersion: "ev-terminal",
-        artifacts: [
-          {
-            path: "index.mjs",
-            role: "primary",
-            contentType: "text/javascript; charset=utf-8",
-            route: "/_a/build-terminal/index.mjs",
-          },
-        ],
-      };
-    };
-    const registerDevicePrincipal = vi.fn(
-      opts.registerDevicePrincipal ??
-        (async (target: DeviceAppPrincipal["target"], deviceId: string, source: string | null) => {
-          const principal = principalFor(target, deviceId, source);
-          entityCache._onActivate(makeAppPrincipalRecord(principal));
+    const principalFor = (deviceId: string): ClientPrincipal => ({
+      principalId: `client:browser:terminal:${deviceId}`,
+      id: "browser",
+      runtime: "terminal",
+      source: BUILD.source,
+      buildKey: BUILD.buildKey,
+      effectiveVersion: "ev-terminal",
+    });
+    const grantClientPrincipal = vi.fn(
+      opts.grantClientPrincipal ??
+        (async (deviceId: string) => {
+          const principal = principalFor(deviceId);
+          entityCache._onActivate(makeClientPrincipalRecord(principal));
           return principal;
         })
     );
@@ -578,8 +437,7 @@ describe("auth.grantAppPrincipal", () => {
       getWorkspaceId: () => "workspace_grant",
       getConnectionInfo,
       connectionGrants,
-      registerDevicePrincipal,
-      ...(opts.ensureMobileAppReady ? { ensureMobileAppReady: opts.ensureMobileAppReady } : {}),
+      grantClientPrincipal,
     });
     const subject = { userId: identity.rootId!, handle: "root" };
     const shellCaller = (remoteEndpointId?: string) => ({
@@ -593,32 +451,29 @@ describe("auth.grantAppPrincipal", () => {
       subject,
       shellCaller,
       connectionGrants,
-      registerDevicePrincipal,
+      grantClientPrincipal,
     };
   }
 
   it("rejects callers that are not an authenticated device shell", async () => {
-    const { service, registerDevicePrincipal, connectionGrants, device, subject } =
-      makeGrantService();
+    const { service, grantClientPrincipal, connectionGrants, device, subject } = makeGrantService();
     try {
       for (const caller of [
         createVerifiedCaller("panel:one", "panel", null, null, subject),
-        createVerifiedCaller(`shell:${device.deviceId}`, "app", null, null, subject),
+        createVerifiedCaller(`shell:${device.deviceId}`, "client", null, null, subject),
       ]) {
         await expect(
-          service.definition.handler({ caller }, "grantAppPrincipal", [
-            { principal: "terminal-app" },
-          ])
+          service.definition.handler({ caller }, "grantClientPrincipal", [BUILD])
         ).rejects.toMatchObject({ code: "EACCES" });
       }
-      expect(registerDevicePrincipal).not.toHaveBeenCalled();
+      expect(grantClientPrincipal).not.toHaveBeenCalled();
     } finally {
       connectionGrants.stop();
     }
   });
 
   it("rejects a shell whose subject does not own the device", async () => {
-    const { service, registerDevicePrincipal, connectionGrants, device } = makeGrantService();
+    const { service, grantClientPrincipal, connectionGrants, device } = makeGrantService();
     try {
       for (const subject of [null, { userId: "usr_other", handle: "other" }]) {
         const caller = createVerifiedCaller(
@@ -629,52 +484,46 @@ describe("auth.grantAppPrincipal", () => {
           subject
         );
         await expect(
-          service.definition.handler({ caller }, "grantAppPrincipal", [
-            { principal: "terminal-app" },
-          ])
+          service.definition.handler({ caller }, "grantClientPrincipal", [BUILD])
         ).rejects.toMatchObject({ code: "EACCES" });
       }
-      expect(registerDevicePrincipal).not.toHaveBeenCalled();
+      expect(grantClientPrincipal).not.toHaveBeenCalled();
     } finally {
       connectionGrants.stop();
     }
   });
 
-  it("mints a grant for the device's terminal app principal bound to the caller endpoint", async () => {
-    const { service, shellCaller, device, subject, connectionGrants, registerDevicePrincipal } =
+  it("requires the exact build the host verified", () => {
+    expect(ClientPrincipalGrantRequestSchema.safeParse(BUILD).success).toBe(true);
+    expect(ClientPrincipalGrantRequestSchema.safeParse({ source: BUILD.source }).success).toBe(
+      false
+    );
+    expect(
+      ClientPrincipalGrantRequestSchema.safeParse({ ...BUILD, principal: "terminal-app" }).success
+    ).toBe(false);
+  });
+
+  it("mints a grant for the device's client principal bound to the caller endpoint", async () => {
+    const { service, shellCaller, device, subject, connectionGrants, grantClientPrincipal } =
       makeGrantService();
     const endpoint = "e".repeat(64);
     try {
       const response = (await service.definition.handler(
         { caller: shellCaller(endpoint) },
-        "grantAppPrincipal",
-        [{ principal: "terminal-app" }]
-      )) as { connectionGrant: string; callerId: string };
+        "grantClientPrincipal",
+        [BUILD]
+      )) as { connectionGrant: string; principalId: string };
 
-      expect(registerDevicePrincipal).toHaveBeenCalledWith("terminal", device.deviceId, null);
-      const principalId = `app:apps/terminal-browser:${device.deviceId}`;
+      expect(grantClientPrincipal).toHaveBeenCalledWith(device.deviceId, BUILD);
+      const principalId = `client:browser:terminal:${device.deviceId}`;
       expect(response).toEqual({
         connectionGrant: expect.stringMatching(/^[0-9a-f]{64}$/),
         expiresAt: expect.any(Number),
-        callerId: principalId,
+        principalId,
         deviceId: device.deviceId,
         serverId: expect.any(String),
         serverBootId: "boot_grant",
         workspaceId: "workspace_grant",
-        app: {
-          appId: "@workspace-apps/terminal-browser",
-          source: "apps/terminal-browser",
-          buildKey: "build-terminal",
-          effectiveVersion: "ev-terminal",
-          artifacts: [
-            {
-              path: "index.mjs",
-              role: "primary",
-              contentType: "text/javascript; charset=utf-8",
-              route: "/_a/build-terminal/index.mjs",
-            },
-          ],
-        },
       });
       // The grant is bound to the requesting endpoint: another path cannot redeem it.
       expect(connectionGrants.validate(response.connectionGrant)).toBeNull();
@@ -689,24 +538,16 @@ describe("auth.grantAppPrincipal", () => {
     }
   });
 
-  it("passes an explicit app source and omits the endpoint for loopback callers", async () => {
-    const { service, shellCaller, device, subject, connectionGrants, registerDevicePrincipal } =
-      makeGrantService();
+  it("omits the endpoint for loopback callers", async () => {
+    const { service, shellCaller, device, subject, connectionGrants } = makeGrantService();
     try {
       const response = (await service.definition.handler(
         { caller: shellCaller() },
-        "grantAppPrincipal",
-        [{ principal: "terminal-app", source: "apps/other-terminal" }]
-      )) as { connectionGrant: string; callerId: string };
-
-      expect(registerDevicePrincipal).toHaveBeenCalledWith(
-        "terminal",
-        device.deviceId,
-        "apps/other-terminal"
-      );
-      expect(response.callerId).toBe(`app:apps/other-terminal:${device.deviceId}`);
+        "grantClientPrincipal",
+        [BUILD]
+      )) as { connectionGrant: string; principalId: string };
       expect(connectionGrants.redeem(response.connectionGrant)).toEqual({
-        principalId: response.callerId,
+        principalId: `client:browser:terminal:${device.deviceId}`,
         issuedBy: `shell:${device.deviceId}`,
         subject,
       });
@@ -715,58 +556,19 @@ describe("auth.grantAppPrincipal", () => {
     }
   });
 
-  it("reports an unavailable terminal principal with the terminal launch-gate remedy", async () => {
+  it("carries the registry's refusal to the host and mints no grant", async () => {
     const { service, shellCaller, connectionGrants } = makeGrantService({
-      registerDevicePrincipal: async () => null,
+      grantClientPrincipal: async () => {
+        throw new Error("build-terminal is no longer the active build of clients/terminal-browser");
+      },
     });
     try {
       await expect(
-        service.definition.handler({ caller: shellCaller() }, "grantAppPrincipal", [
-          { principal: "terminal-app" },
-        ])
+        service.definition.handler({ caller: shellCaller() }, "grantClientPrincipal", [BUILD])
       ).rejects.toMatchObject({
         code: "PRINCIPAL_UNAVAILABLE",
-        message: expect.stringContaining("vibestudio terminal"),
+        message: expect.stringContaining("no longer the active build"),
       });
-    } finally {
-      connectionGrants.stop();
-    }
-  });
-
-  it("consults mobile readiness before registering a React Native principal", async () => {
-    const ensureMobileAppReady = vi.fn(async () => ({
-      ready: false,
-      reason: "React Native workspace app requires approval",
-      details: ["apps/mobile@ev-mobile"],
-    }));
-    const { service, shellCaller, device, connectionGrants, registerDevicePrincipal } =
-      makeGrantService({ ensureMobileAppReady });
-    try {
-      await expect(
-        service.definition.handler({ caller: shellCaller() }, "grantAppPrincipal", [
-          { principal: "react-native-app", source: "apps/mobile" },
-        ])
-      ).rejects.toMatchObject({
-        code: "PRINCIPAL_UNAVAILABLE",
-        message: expect.stringContaining(
-          "React Native workspace app requires approval: apps/mobile@ev-mobile"
-        ),
-      });
-      expect(ensureMobileAppReady).toHaveBeenCalledWith("apps/mobile");
-      expect(registerDevicePrincipal).not.toHaveBeenCalled();
-
-      ensureMobileAppReady.mockResolvedValueOnce({ ready: true } as never);
-      const response = (await service.definition.handler(
-        { caller: shellCaller() },
-        "grantAppPrincipal",
-        [{ principal: "react-native-app", source: "apps/mobile" }]
-      )) as { callerId: string };
-      expect(registerDevicePrincipal).toHaveBeenCalledWith(
-        "react-native",
-        device.deviceId,
-        "apps/mobile"
-      );
-      expect(response.callerId).toBe(`app:apps/mobile:${device.deviceId}`);
     } finally {
       connectionGrants.stop();
     }

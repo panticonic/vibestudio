@@ -64,8 +64,8 @@ describe("sealed v8 dependency input capture", () => {
       for (let index = 0; index < workspaceRoots.length; index++) {
         expect(composed[index]).toEqual(fresh[index]);
         expect(fresh[index]?.value).toBe(expected.value);
-        expect(computeBuildKey(fresh[index]!, "apps/shell", "same-ev", false)).toBe(
-          computeBuildKey(expected, "apps/shell", "same-ev", false)
+        expect(computeBuildKey(fresh[index]!, "clients/desktop-browser", "same-ev", false)).toBe(
+          computeBuildKey(expected, "clients/desktop-browser", "same-ev", false)
         );
         const workspaceFiles = fresh[index]!.files.slice(3, 8);
         expect(workspaceFiles.map(({ file }) => file)).toEqual(

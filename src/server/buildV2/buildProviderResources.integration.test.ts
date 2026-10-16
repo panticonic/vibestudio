@@ -7,6 +7,14 @@ import { materializeImmutableTree } from "./immutableTreeMaterializer.js";
 import { startNativeWorkspaceRuntime } from "../nativeWorkspaceRuntime.js";
 import { waitForNativeJob } from "../nativeWorkspaceJob.js";
 import { stateLayout } from "../stateLayout.js";
+import type { ClientManifestBlock } from "@vibestudio/workspace-contracts/clients";
+
+const CLIENT: ClientManifestBlock = {
+  id: "browser",
+  runtime: "react-native",
+  hostAbi: "rn-host-6",
+  entry: "App.tsx",
+};
 
 let root: string | undefined;
 afterEach(async () => {
@@ -17,7 +25,7 @@ it("admits a complete native provider input without granting host sources or cac
   root = await mkdtemp(path.join(tmpdir(), "provider-resources-"));
   const statePath = path.join(root, "workspace", "state");
   const sourceRoot = path.join(statePath, "build-sources", "immutable-state");
-  const app = path.join(sourceRoot, "apps", "mobile");
+  const app = path.join(sourceRoot, "clients", "mobile-browser");
   const shared = path.join(sourceRoot, "packages", "shared");
   const platform = path.join(root, "host-projection", "platform-module");
   const dependencies = path.join(root, "shared-npm-cache", "node_modules");
@@ -25,7 +33,7 @@ it("admits a complete native provider input without granting host sources or cac
   const sibling = path.join(root, "sibling-workspace", "secret.txt");
   for (const dir of [app, shared, platform, dependencies, context, path.dirname(sibling)])
     await mkdir(dir, { recursive: true });
-  await writeFile(path.join(app, "native-module-policy.json"), '{"blockedImports":{}}');
+  await writeFile(path.join(app, "provider-input.json"), '{"blockedImports":{}}');
   await writeFile(path.join(shared, "index.js"), "module.exports = 7;");
   await writeFile(path.join(platform, "index.js"), "module.exports = 8;");
   await writeFile(path.join(dependencies, "package.js"), "module.exports = 9;");
@@ -38,14 +46,14 @@ it("admits a complete native provider input without granting host sources or cac
     materialize: materializeImmutableTree,
     input: {
       target: "react-native",
-      unitName: "@workspace-apps/mobile",
+      unitName: "@workspace-clients/mobile-browser",
       sourcePath: app,
       effectiveVersion: "a".repeat(64),
-      manifest: {},
+      client: CLIENT,
       dependencyProjection: {
         nodeModulesPath: dependencies,
         modules: {
-          "@workspace-apps/mobile": app,
+          "@workspace-clients/mobile-browser": app,
           "@workspace/shared": shared,
           "@platform/module": platform,
         },
@@ -76,14 +84,14 @@ it("admits a complete native provider input without granting host sources or cac
       const path = require('node:path');
       const input = ${JSON.stringify(input)};
       (async () => {
-        const policy = path.join(input.sourcePath, 'native-module-policy.json');
+        const policy = path.join(input.sourcePath, 'provider-input.json');
         assert.deepEqual(JSON.parse(await fs.readFile(policy, 'utf8')), {blockedImports:{}});
         assert.equal(require(path.join(input.sourcePath, '../../packages/shared/index.js')), 7);
         assert.equal(require(path.join(input.dependencyProjection.modules['@platform/module'], 'index.js')), 8);
         assert.equal(require(path.join(input.dependencyProjection.nodeModulesPath, 'package.js')), 9);
         if (process.platform !== 'win32') {
           await assert.rejects(fs.writeFile(policy, 'tampered'));
-          for (const file of ${JSON.stringify([path.join(app, "native-module-policy.json"), path.join(dependencies, "package.js"), sibling])}) {
+          for (const file of ${JSON.stringify([path.join(app, "provider-input.json"), path.join(dependencies, "package.js"), sibling])}) {
             await assert.rejects(fs.readFile(file));
           }
         }
@@ -118,7 +126,7 @@ it("cleans incomplete input publication on materialization failure", async () =>
         unitName: "app",
         sourcePath: path.join(root, "missing"),
         effectiveVersion: "a",
-        manifest: {},
+        client: CLIENT,
         dependencyProjection: { nodeModulesPath: null, modules: {} },
       },
       materialize: materializeImmutableTree,

@@ -142,29 +142,21 @@ describe("Iroh product E2E entry points", () => {
     expect(preflight).not.toContain("pipefail");
   });
 
-  it("admits exact host-target builds before the target staging owner activates them", () => {
+  it("admits exact runtime builds before the runtime staging owner activates them", () => {
     const server = source("src/server/index.ts");
-    const demandStart = server.indexOf("const prepareHostTarget = async (");
-    const demandEnd = server.indexOf(
-      "const reconcileDeclaredWorkspaceUnits = async (",
-      demandStart
-    );
+    const demandStart = server.indexOf("const stageRuntime = async (");
+    const demandEnd = server.indexOf("const prepareRuntime = async (", demandStart);
     const demand = server.slice(demandStart, demandEnd);
     const admission = demand.indexOf(
-      "admitSeedTrustedUnits(await extensionHost.seedTrustedDeclared(requiredExtensions))"
+      "admitSeedTrustedUnits(\n      await extensionHost.seedTrustedDeclared("
     );
-    const appAdmission = demand.indexOf("await appHostForGateway.seedTrustedDeclared(");
-    const staging = demand.indexOf("await hostTargetStaging.ensure(target)");
-    const stagingOwnerStart = server.indexOf("const hostTargetStaging = new HostTargetStaging(");
-    const stagingOwnerEnd = server.indexOf(
-      "const prepareHostTarget = async (",
-      stagingOwnerStart
-    );
+    const staging = demand.indexOf("await runtimeStaging.ensure(runtime)");
+    const stagingOwnerStart = server.indexOf("const runtimeStaging = new RuntimeStaging(");
+    const stagingOwnerEnd = server.indexOf("const stageRuntime = async (", stagingOwnerStart);
     const stagingOwner = server.slice(stagingOwnerStart, stagingOwnerEnd);
     expect(demandStart).toBeGreaterThan(0);
     expect(admission).toBeGreaterThan(0);
-    expect(appAdmission).toBeGreaterThan(admission);
-    expect(staging).toBeGreaterThan(appAdmission);
+    expect(staging).toBeGreaterThan(admission);
     expect(stagingOwnerStart).toBeGreaterThan(0);
     expect(stagingOwner).toContain(
       "host.reconcileDeclared(runtimeExtensionDeclarations(workspaceConfig)"

@@ -14,8 +14,21 @@ export type NotificationShowRequest = Omit<
 
 /** Host acceptance and explicit dismissal; this does not attest visual rendering. */
 export const NativeNotificationLifecycleObservationSchema = z.discriminatedUnion("method", [
-  z.object({ protocol: z.literal("notification-lifecycle-observation.v1"), method: z.literal("notification.show"), notificationId: z.string().min(1), actionLabels: z.array(z.string()) }).strict(),
-  z.object({ protocol: z.literal("notification-lifecycle-observation.v1"), method: z.literal("notification.dismiss"), notificationId: z.string().min(1) }).strict(),
+  z
+    .object({
+      protocol: z.literal("notification-lifecycle-observation.v1"),
+      method: z.literal("notification.show"),
+      notificationId: z.string().min(1),
+      actionLabels: z.array(z.string()),
+    })
+    .strict(),
+  z
+    .object({
+      protocol: z.literal("notification-lifecycle-observation.v1"),
+      method: z.literal("notification.dismiss"),
+      notificationId: z.string().min(1),
+    })
+    .strict(),
 ]);
 
 // Access descriptors carry sensitivity metadata beside the compositional
@@ -61,12 +74,11 @@ export const NotificationActionSchema = z.object({
     .describe("Visual emphasis of the action button."),
   command: z
     .union([
-      z.object({ type: z.literal("app.applyUpdate"), appId: z.string() }),
       z.object({
         type: z.literal("runtime.supervision.rollback"),
         release: z
           .object({
-            kind: z.literal("app"),
+            kind: z.literal("client"),
             releaseId: z.string(),
           })
           .strict(),
@@ -76,7 +88,7 @@ export const NotificationActionSchema = z.object({
         type: z.literal("runtime.supervision.restart"),
         identity: z
           .object({
-            kind: z.enum(["panel", "worker", "do", "app", "extension"]),
+            kind: z.enum(["panel", "worker", "do", "client", "extension"]),
             entityId: z.string(),
           })
           .strict(),
@@ -145,7 +157,7 @@ export const NotificationShowRequestSchema = z
         scopes: z.array(z.string()),
         callerId: z.string(),
         callerTitle: z.string(),
-        callerKind: z.enum(["panel", "app", "worker", "do"]),
+        callerKind: z.enum(["panel", "client", "worker", "do"]),
       })
       .optional()
       .describe("Consent request details shown for 'consent'-type notifications."),

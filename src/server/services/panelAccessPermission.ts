@@ -9,9 +9,9 @@ import {
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
 import type { PreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import type { ApprovalTargetIdentity } from "@vibestudio/shared/approvals";
-import { isInteractiveChrome } from "./chromeTrust.js";
+import { isInteractiveClient } from "./clientTrust.js";
 import { prepareContextBoundarySelection, type ContextBoundaryDeps } from "./contextBoundary.js";
 
 export interface PanelAccessPermissionTarget extends PanelAccessTarget {
@@ -76,7 +76,7 @@ export interface PanelAccessPermissionDeps extends ContextBoundaryDeps {
    * Returns null when the anchor has no resolvable code identity.
    */
   resolveSubjectCaller(entityId: string): VerifiedCaller | null;
-  hasAppCapability?(callerId: string, capability: AppCapability): boolean;
+  hasClientCapability?(callerId: string, capability: ClientCapability): boolean;
   /** Resolve a panel caller's own slot for generic context-boundary preparation. */
   resolveRequesterPanel?(caller: VerifiedCaller): Promise<PanelAccessPermissionTarget | null>;
 }
@@ -169,7 +169,7 @@ export async function preparePanelAccessAuthority(
   // contexts reserved for it. Match runtime reservation's ownership principal
   // rather than treating the extension's shared runtime as that owner.
   let subjectCaller = ctx.caller.runtime.kind === "extension" ? verifiedInitiator(ctx) : ctx.caller;
-  if (isInteractiveChrome(subjectCaller, deps)) return [];
+  if (isInteractiveClient(subjectCaller, deps)) return [];
   const isAgentCaller = subjectCaller.runtime.kind === "agent";
   const isHostCaller =
     subjectCaller.runtime.kind === "server" || subjectCaller.runtime.kind === "shell";

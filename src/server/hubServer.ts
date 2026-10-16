@@ -478,8 +478,8 @@ export function selectWorkspaceCreationRootTemplate(input: {
     // so it has to be the role that can host desktop chrome. Development sets
     // the override above to System for exactly that reason. A packaged host has
     // no override, and falling through to Base stood up a workspace that
-    // declares no `trust.chromeApps` and owns no Electron app, so a launch that
-    // required a desktop shell died on "No Electron workspace app is selected"
+    // declares no `trust.clients` and no desktop default client, so a launch that
+    // required a desktop client died on "no default client"
     // after provisioning had already succeeded.
     return readDefaultWorkspaceTemplates(input.appRoot, environment).system;
   }

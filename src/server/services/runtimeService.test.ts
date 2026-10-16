@@ -134,10 +134,6 @@ interface BuildDepsOptions {
     ref?: string;
     buildKey?: string;
   }) => Promise<Record<string, unknown>>;
-  resolveAppExecution?: (args: {
-    source: string;
-    ref?: string;
-  }) => Promise<Record<string, unknown>>;
   setEntityTitle?: Parameters<typeof createRuntimeService>[0]["setEntityTitle"];
   semanticContexts?: Partial<Parameters<typeof createRuntimeService>[0]["semanticContexts"]>;
   cloneDurableStorage?: NonNullable<
@@ -152,7 +148,7 @@ interface BuildDepsOptions {
   onPanelExecutionActivated?: Parameters<
     typeof createRuntimeService
   >[0]["onPanelExecutionActivated"];
-  hasAppCapability?: Parameters<typeof createRuntimeService>[0]["hasAppCapability"];
+  hasClientCapability?: Parameters<typeof createRuntimeService>[0]["hasClientCapability"];
   faultAbortAgentVessel?: Parameters<typeof createRuntimeService>[0]["faultAbortAgentVessel"];
 }
 
@@ -200,9 +196,6 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
   const prepareDurableWorkRelease = opts.prepareDurableWorkRelease ?? vi.fn(async () => {});
   const preparePanel =
     opts.preparePanel ?? vi.fn(async () => ({ effectiveVersion: "ev-panel", ...sealedExecution }));
-  const resolveAppExecution =
-    opts.resolveAppExecution ??
-    vi.fn(async () => ({ effectiveVersion: "ev-app", ...sealedExecution }));
   const initializeDurableClone = opts.initializeDurableClone ?? vi.fn(async () => {});
   const cloneDurableStorage = opts.cloneDurableStorage ?? vi.fn(async () => {});
   const destroyDurableStorage = opts.destroyDurableStorage ?? vi.fn(async () => {});
@@ -278,16 +271,11 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
             ? await prepareDurableObject({ ...args, className: spec.className })
             : spec.kind === "worker"
               ? await prepareWorker({ ...args, env: spec.env, parent })
-              : spec.kind === "app"
-                ? await resolveAppExecution({
-                    source: spec.execution.source,
-                    ref: spec.execution.ref,
-                  })
-                : await preparePanel({
-                    source: spec.execution.source,
-                    ref: spec.execution.ref,
-                    ...(existingBuildKey ? { buildKey: existingBuildKey } : {}),
-                  });
+              : await preparePanel({
+                  source: spec.execution.source,
+                  ref: spec.execution.ref,
+                  ...(existingBuildKey ? { buildKey: existingBuildKey } : {}),
+                });
         const rawTargetId = "targetId" in raw ? raw["targetId"] : undefined;
         return {
           surface: "code",
@@ -324,7 +312,7 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     onContextRemoved: opts.onContextRemoved,
     onPanelExecutionActivated: opts.onPanelExecutionActivated,
     setEntityTitle: opts.setEntityTitle,
-    hasAppCapability: opts.hasAppCapability,
+    hasClientCapability: opts.hasClientCapability,
     faultAbortAgentVessel: opts.faultAbortAgentVessel,
     semanticContexts,
   });
@@ -374,7 +362,6 @@ async function buildDeps(opts: BuildDepsOptions = {}) {
     releaseEntity,
     prepareDurableWorkRelease,
     preparePanel,
-    resolveAppExecution,
     initializeDurableClone,
     cloneDurableStorage,
     destroyDurableStorage,
@@ -399,10 +386,10 @@ const panelCaller = (id = "panel:caller", _contextId = "ctx-caller") =>
     ],
   });
 
-const appCaller = (id = "app:apps/shell:desktop", _contextId = "ctx-caller") =>
-  createVerifiedCaller(id, "app", {
+const appCaller = (id = "client:browser:web:desktop", _contextId = "ctx-caller") =>
+  createVerifiedCaller(id, "client", {
     callerId: id,
-    callerKind: "app",
+    callerKind: "client",
     repoPath: "apps/shell",
     effectiveVersion: "v1",
     requested: [
@@ -434,7 +421,7 @@ const sessionCaller = (id = "agent:session") =>
     createTestExecutionSession({ runtimeId: id, mode: "interactive" })
   );
 
-const shellCaller = createVerifiedCaller("shell", "shell");
+const shellCaller = createVerifiedCaller("shell:test-device", "shell");
 const serverCaller = createVerifiedCaller("server", "server");
 const extensionCaller = (id = "extension:agent-launcher") => createVerifiedCaller(id, "extension");
 
@@ -1025,7 +1012,7 @@ describe("runtimeService deferred panel activation", () => {
         listContextEdgesByOwner: async (input) => instance.contextEdgeListByOwner(input),
         listContextEdgesByChild: async (id) => instance.contextEdgeListByChild(id),
       },
-      getAppHost: () => null,
+      getClientHost: () => null,
     });
     for (const operation of ["openPanel", "updatePanelState", "close"] as const) {
       await expect(
@@ -1771,87 +1758,6 @@ describe("runtimeService.createEntity (do kind)", () => {
       ])
     ).rejects.toThrow(/Invalid literal value/);
   });
-
-  it("creates app entities as first-class runtime records", async () => {
-    const resolveAppExecution = vi.fn(async () => ({
-      effectiveVersion: "ev-app-shell",
-      ...sealedExecution,
-    }));
-    const { service, entityCache } = await buildDeps({ resolveAppExecution });
-    const spec: RuntimeEntityCreateSpec = {
-      kind: "app",
-      execution: { surface: "code", source: "apps/shell" },
-      key: "desktop",
-      contextId: "ctx-app",
-      stateArgs: { window: "main" },
-    };
-
-    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [spec])) as {
-      id: string;
-      kind: string;
-      targetId: string;
-    };
-
-    expect(handle.kind).toBe("app");
-    expect(handle.id).toBe(
-      canonicalEntityId({
-        kind: "app",
-        source: "apps/shell",
-        key: "desktop",
-      })
-    );
-    expect(handle.targetId).toBe(handle.id);
-    expect(entityCache.resolveActive(handle.id)).toMatchObject({
-      kind: "app",
-      source: { repoPath: "apps/shell", effectiveVersion: "ev-app-shell" },
-      contextId: "ctx-app",
-      key: "desktop",
-      stateArgs: { window: "main" },
-    });
-    expect(resolveAppExecution).toHaveBeenCalledWith({
-      source: "apps/shell",
-      ref: "main",
-    });
-  });
-
-  it("rejects non-host callers creating app entities", async () => {
-    const { service } = await buildDeps();
-    const spec: RuntimeEntityCreateSpec = {
-      kind: "app",
-      execution: { surface: "code", source: "apps/shell" },
-      key: "desktop",
-      contextId: "ctx-app",
-    };
-
-    await expect(
-      service.handler({ caller: panelCaller() }, "createEntity", [spec])
-    ).rejects.toThrow(/host-managed/);
-  });
-
-  it("reactivates a retired app row without changing its effective version", async () => {
-    const resolveAppExecution = vi
-      .fn()
-      .mockResolvedValueOnce({ effectiveVersion: "ev-app-v1", ...sealedExecution })
-      .mockResolvedValueOnce({ effectiveVersion: "ev-app-v2", ...sealedExecution });
-    const { service, instance } = await buildDeps({ resolveAppExecution });
-    const spec: RuntimeEntityCreateSpec = {
-      kind: "app",
-      execution: { surface: "code", source: "apps/shell" },
-      key: "desktop",
-      contextId: "ctx-app",
-    };
-
-    const handle = (await service.handler({ caller: serverCaller }, "createEntity", [spec])) as {
-      id: string;
-    };
-    await service.handler({ caller: serverCaller }, "retireEntity", [{ id: handle.id }]);
-
-    await service.handler({ caller: serverCaller }, "createEntity", [spec]);
-
-    const reactivated = instance.entityResolve(handle.id);
-    expect(reactivated?.status).toBe("active");
-    expect(reactivated?.source.effectiveVersion).toBe("ev-app-v1");
-  });
 });
 
 describe("runtimeService.createEntity context policy", () => {
@@ -2015,10 +1921,10 @@ describe("runtimeService.createEntity context policy", () => {
     const { dispatch, approvalQueue, entityCache } = await buildDeps({
       approvalDecision: "version",
     });
-    const caller = appCaller("app:apps/shell:desktop", "ctx-caller");
+    const caller = appCaller("client:browser:web:desktop", "ctx-caller");
     entityCache._onActivate({
       id: caller.runtime.id,
-      kind: "app",
+      kind: "client",
       source: { repoPath: "apps/shell", effectiveVersion: "v1" },
       contextId: "ctx-caller",
       key: "desktop",
@@ -2043,8 +1949,8 @@ describe("runtimeService.createEntity context policy", () => {
     expect(handle.contextId).toBe("ctx-target");
     expect(approvalQueue.request).toHaveBeenCalledWith(
       expect.objectContaining({
-        callerId: "app:apps/shell:desktop",
-        callerKind: "app",
+        callerId: "client:browser:web:desktop",
+        callerKind: "client",
         capability: "context.boundary",
       })
     );
@@ -2235,13 +2141,13 @@ describe("runtimeService.setTitle", () => {
   it("allows app callers to set their display title", async () => {
     const setEntityTitle = vi.fn();
     const { service } = await buildDeps({ setEntityTitle });
-    const caller = appCaller("app:apps/shell:desktop");
+    const caller = appCaller("client:browser:web:desktop");
 
     await expect(
       service.handler({ caller }, "setTitle", ["Workspace Shell"])
     ).resolves.toBeUndefined();
 
-    expect(setEntityTitle).toHaveBeenCalledWith("app:apps/shell:desktop", "Workspace Shell", {
+    expect(setEntityTitle).toHaveBeenCalledWith("client:browser:web:desktop", "Workspace Shell", {
       explicit: false,
     });
   });
@@ -2249,11 +2155,11 @@ describe("runtimeService.setTitle", () => {
   it("passes explicit title intent through to the title registry", async () => {
     const setEntityTitle = vi.fn();
     const { service } = await buildDeps({ setEntityTitle });
-    const caller = appCaller("app:apps/shell:desktop");
+    const caller = appCaller("client:browser:web:desktop");
 
     await service.handler({ caller }, "setTitle", ["Workspace Shell", { explicit: true }]);
 
-    expect(setEntityTitle).toHaveBeenCalledWith("app:apps/shell:desktop", "Workspace Shell", {
+    expect(setEntityTitle).toHaveBeenCalledWith("client:browser:web:desktop", "Workspace Shell", {
       explicit: true,
     });
   });
@@ -4321,8 +4227,8 @@ describe("runtimeService.cloneContext", () => {
 describe("runtimeService execution recovery", () => {
   it("admits the trusted shell app without a self-referential recovery grant", async () => {
     const { service, dispatch } = await buildDeps({
-      hasAppCapability: (callerId, capability) =>
-        callerId === "app:apps/shell:desktop" && capability === "panel-hosting",
+      hasClientCapability: (callerId, capability) =>
+        callerId === "client:browser:web:desktop" && capability === "device-session",
     });
     const handle = (await service.handler({ caller: serverCaller }, "createEntity", [
       doCreateSpec({ contextId: "ctx-recovery" }),
@@ -4340,9 +4246,9 @@ describe("runtimeService execution recovery", () => {
   });
 
   it("rejects an ordinary installed app even though recovery transport is open", async () => {
-    const { service } = await buildDeps({ hasAppCapability: () => false });
+    const { service } = await buildDeps({ hasClientCapability: () => false });
     await expect(
-      service.handler({ caller: appCaller("app:apps/untrusted:desktop") }, "recoverExecution", [
+      service.handler({ caller: appCaller("client:untrusted:web:desktop") }, "recoverExecution", [
         {
           entityId: "do:workers/agent:AgentDO:missing",
           expectedExecutionDigest: sealedExecution.executionDigest,

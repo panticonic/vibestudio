@@ -141,7 +141,7 @@ describe("workspacePresenceService (WP8 §4)", () => {
 
   it("goes offline with a frozen last-seen when the last connection drops, and emits", () => {
     const h = harness();
-    h.registry.set("u1", [conn("u1", "app")]);
+    h.registry.set("u1", [conn("u1", "client")]);
     h.registry.fire();
     expect(h.emitted).toHaveLength(1);
     expect(h.emitted[0]?.[0]?.online).toBe(true);

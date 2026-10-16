@@ -354,11 +354,10 @@ describe("BuildV2 metadata details", () => {
       smokeTest: { mode: "child-process", passed: true },
     },
     {
-      kind: "app",
-      target: "react-native",
-      platform: "ios",
-      integrity: null,
-      rnHostAbi: "rn-host.v1",
+      kind: "client",
+      clientId: "chat",
+      runtime: "react-native",
+      hostAbi: "rn-host-6",
       provider: {
         name: "provider",
         activeEv: digest,

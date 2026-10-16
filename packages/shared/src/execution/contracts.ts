@@ -87,7 +87,7 @@ export interface ArtifactBundleEntry {
 export type ExecutionOwnerKind =
   | "runtime-entity"
   | "panel-history"
-  | "app-generation"
+  | "client-generation"
   | "extension-generation"
   | "runtime-image"
   | "eval-run"

@@ -601,6 +601,7 @@ export class RpcServer {
       pendingSockets: Set<RpcSessionChannel>;
       callerKind?: CallerKind;
       phase: "draining" | "cleanup" | "failed" | "settled";
+      reason: string;
     }
   >();
   private stopped = false;
@@ -1048,10 +1049,10 @@ export class RpcServer {
   /** Host-owned initialization uses the same live runtime projection as ingress. */
   async verifiedRuntimeCaller(runtimeId: string): Promise<VerifiedCaller> {
     const record = this.deps.entityCache?.resolveActive(runtimeId);
-    if (!record || !["panel", "app", "worker", "do"].includes(record.kind)) {
+    if (!record || !["panel", "client", "worker", "do"].includes(record.kind)) {
       throw createRelayError(`Runtime ${runtimeId} is not active`, "RUNTIME_ENTITY_NOT_ACTIVE");
     }
-    return this.verifiedCallerFor(runtimeId, record.kind as "panel" | "app" | "worker" | "do");
+    return this.verifiedCallerFor(runtimeId, record.kind as "panel" | "client" | "worker" | "do");
   }
 
   private async verifiedCallerFor(
@@ -1910,7 +1911,7 @@ export class RpcServer {
         grant.principalId,
         kind,
         undefined,
-        kind === "panel" || kind === "app" ? grant.subject : undefined
+        kind === "panel" || kind === "client" ? grant.subject : undefined
       );
       if (this.deps.membershipGate && !this.deps.membershipGate(caller.subject)) return null;
       if (this.deps.liveCallerGate && !(await this.deps.liveCallerGate(caller, grant.issuedBy)))
@@ -2442,7 +2443,12 @@ export class RpcServer {
    * cleanup completes, so callers may then tear down the Iroh room carrying
    * those sessions.
    */
-  retireCaller(callerId: string, callerKind?: CallerKind): Promise<void> {
+  retireCaller(
+    callerId: string,
+    callerKind?: CallerKind,
+    /** Close reason the caller's host sees, e.g. `trust-revoked` (§4.4.1). */
+    reason = "Token revoked"
+  ): Promise<void> {
     const existing = this.callerRetirements.get(callerId);
     if (existing && existing.phase !== "failed") return existing.promise;
     callerKind ??= existing?.callerKind;
@@ -2467,13 +2473,14 @@ export class RpcServer {
         ? { callerKind: clients[0]?.caller.runtime.kind ?? sessionKind ?? callerKind }
         : {}),
       phase: "draining" as "draining" | "cleanup" | "failed" | "settled",
+      reason,
     };
     this.callerRetirements.set(callerId, retirement);
     this.clearReconnectStateForRetirement(callerId);
 
     for (const client of clients) {
       if ((this.activeInboundRequests.get(client.ws) ?? 0) === 0) {
-        client.ws.close(4001, "Token revoked");
+        client.ws.close(4001, reason);
       }
     }
     this.maybeCompleteCallerRetirement(callerId);
@@ -2564,7 +2571,7 @@ export class RpcServer {
     this.activeInboundRequests.delete(client.ws);
     const retirement = this.callerRetirements.get(client.caller.runtime.id);
     if (retirement?.pendingSockets.has(client.ws) && client.ws.readyState === client.ws.OPEN) {
-      client.ws.close(4001, "Token revoked");
+      client.ws.close(4001, retirement.reason);
     }
   }
 
@@ -2593,9 +2600,10 @@ export class RpcServer {
     // stores before ANY post-auth frame is processed. This intentionally also
     // gates routed responses/tool results: a revoked caller cannot keep acting
     // merely because the hub's best-effort socket close failed.
-    if (this.callerRetirements.has(client.caller.runtime.id)) {
+    const retirement = this.callerRetirements.get(client.caller.runtime.id);
+    if (retirement) {
       if ((this.activeInboundRequests.get(client.ws) ?? 0) === 0) {
-        client.ws.close(4001, "Token revoked");
+        client.ws.close(4001, retirement.reason);
       }
       return;
     }

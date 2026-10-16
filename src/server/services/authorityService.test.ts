@@ -553,7 +553,7 @@ describe("authorityService", () => {
       try {
         const dispatcher = new ServiceDispatcher();
         const capability = "runtime.supervision.manage";
-        const caller = createVerifiedCaller("app:compiler", "app", undefined, null, {
+        const caller = createVerifiedCaller("app:compiler", "client", undefined, null, {
           userId: "alice",
           handle: "alice",
         });

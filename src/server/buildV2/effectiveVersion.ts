@@ -254,7 +254,8 @@ export async function persistEvState(
 // Native esbuild resolution replaces the guarded virtual-file namespace.
 // Its output recipe must not borrow artifacts emitted by that old resolver.
 // "38": combines the native resolver with automatic JSX for terminal programs.
-const BUILD_CACHE_VERSION = "38";
+// "39": clients replace apps: web pages are first-class builds with sealed integrity, no startup-module bundles.
+const BUILD_CACHE_VERSION = "39";
 
 /** Development borrows the host's installation; production prepares its own.
  * This selection is also an input to the build key, not a compiler guard. */

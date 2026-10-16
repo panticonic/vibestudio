@@ -13,7 +13,7 @@ export interface ClientConfigRecord {
   currentVersion?: string;
   owner?: {
     callerId: string;
-    callerKind: "panel" | "app" | "worker" | "do" | "shell" | "server";
+    callerKind: "panel" | "client" | "worker" | "do" | "shell" | "server";
     repoPath: string;
     effectiveVersion: string;
   };

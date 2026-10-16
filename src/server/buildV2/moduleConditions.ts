@@ -20,8 +20,8 @@ export function conditionsForRuntimeUnit(node: GraphNode): readonly string[] {
       return WORKER_CONDITIONS;
     case "extension":
       return EXTENSION_CONDITIONS;
-    case "app":
-      switch (node.manifest.app?.target) {
+    case "client":
+      switch (node.manifest.client?.runtime) {
         case "terminal":
           return NODE_CONDITIONS;
         case "react-native":

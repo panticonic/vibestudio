@@ -49,7 +49,7 @@ import {
 } from "@vibestudio/shared/serviceDefinition";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import type { NativeInvocationIdentity } from "@vibestudio/rpc";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
@@ -76,7 +76,7 @@ import type { EgressProxy } from "./egressProxy.js";
 import type { ApprovalQueue, GrantedDecision } from "./approvalQueue.js";
 import type { OAuthCallbackMode } from "@vibestudio/rpc/protocol/wsProtocol";
 import { CredentialLifecycle } from "./credentialLifecycle.js";
-import { isAuthorizedChrome } from "./chromeTrust.js";
+import { isTrustedDeviceCaller } from "./clientTrust.js";
 import {
   CredentialSessionGrantStore,
   type CredentialSessionGrantResource,
@@ -199,7 +199,7 @@ export interface CredentialServiceDeps {
     captureId: string,
     completion: CredentialCaptureCompletion
   ) => void;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
   runtimeInspector?: CredentialRuntimeInspector;
   /** Revalidates native task ownership with the canonical host resolver. */
   resolveNativeInvocation?: (
@@ -262,7 +262,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   type UserlandRuntimeContext = ServiceContext & {
     caller: ServiceContext["caller"] & {
       runtime: ServiceContext["caller"]["runtime"] & {
-        kind: "panel" | "app" | "worker" | "do";
+        kind: "panel" | "client" | "worker" | "do";
       };
     };
   };
@@ -270,7 +270,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   function isUserlandRuntimeCaller(ctx: ServiceContext): ctx is UserlandRuntimeContext {
     return (
       ctx.caller.runtime.kind === "panel" ||
-      ctx.caller.runtime.kind === "app" ||
+      ctx.caller.runtime.kind === "client" ||
       ctx.caller.runtime.kind === "worker" ||
       ctx.caller.runtime.kind === "do"
     );
@@ -716,8 +716,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
 
   function isCredentialAccessSubjectKind(
     kind: EntityKind
-  ): kind is "panel" | "worker" | "do" | "app" {
-    return kind === "panel" || kind === "worker" || kind === "do" || kind === "app";
+  ): kind is "panel" | "worker" | "do" | "client" {
+    return kind === "panel" || kind === "worker" || kind === "do" || kind === "client";
   }
 
   async function summarizeCredentialSubject(
@@ -782,7 +782,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (entity.kind === "panel" && panelInfo?.title) return panelInfo.title;
     if (entity.kind === "do")
       return entity.className ? `${entity.className}:${entity.key}` : entity.id;
-    if (entity.kind === "worker" || entity.kind === "app") return entity.source.repoPath;
+    if (entity.kind === "worker" || entity.kind === "client") return entity.source.repoPath;
     return entity.id;
   }
 
@@ -1452,7 +1452,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (
       !approvalQueue ||
       (ctx.caller.runtime.kind !== "panel" &&
-        ctx.caller.runtime.kind !== "app" &&
+        ctx.caller.runtime.kind !== "client" &&
         ctx.caller.runtime.kind !== "worker" &&
         ctx.caller.runtime.kind !== "do" &&
         ctx.caller.runtime.kind !== "extension")
@@ -1523,7 +1523,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     credential: Credential,
     usage: CredentialUseContext
   ): boolean {
-    if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) {
+    if (isTrustedDeviceCaller(ctx.caller, { hasClientCapability: deps.hasClientCapability })) {
       return true;
     }
     if (

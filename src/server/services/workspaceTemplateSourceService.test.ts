@@ -166,7 +166,7 @@ describe("workspaceTemplateSource", () => {
     });
     await expect(
       service.handler(
-        { caller: createVerifiedCaller("@workspace-apps/other", "app") },
+        { caller: createVerifiedCaller("@workspace-apps/other", "client") },
         "inspectExact",
         [first]
       )
@@ -197,7 +197,9 @@ describe("workspaceTemplateSource", () => {
     });
     await expect(service.handler(ctx, "inspectExact", [pin])).rejects.toThrow();
     await expect(
-      service.handler({ caller: createVerifiedCaller("other", "app") }, "readCompatibility", [pin])
+      service.handler({ caller: createVerifiedCaller("other", "client") }, "readCompatibility", [
+        pin,
+      ])
     ).rejects.toThrow(/reviewed source consumer/);
   });
 });

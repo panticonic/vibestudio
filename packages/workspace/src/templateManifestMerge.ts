@@ -12,7 +12,7 @@ import type { ParsedTemplateManifest } from "./templateManifest.js";
  */
 
 /** Declarations that name a unit source: two layers naming one source is a mistake. */
-const UNIQUE_SOURCE_LISTS = ["extensions", "apps"] as const;
+const UNIQUE_SOURCE_LISTS = ["extensions", "clients"] as const;
 
 /** Declarations that accumulate, where repeating a source is legitimate. */
 const ACCUMULATING_LISTS = ["services", "routes", "singletonObjects"] as const;
@@ -27,12 +27,13 @@ const ACCUMULATING_LISTS = ["services", "routes", "singletonObjects"] as const;
  *
  * One level only, and a slot's value is replaced rather than merged — a list
  * inside a slot stays the statement of the layer that made it, so a dependency
- * cannot quietly add itself to something like `trust.chromeApps`.
+ * cannot quietly add itself to something like `trust.clients`.
  */
 export const MERGED_RECORD_SETTINGS = [
   "providers",
   "trust",
-  "hostTargets",
+  "clientDefaults",
+  "runtimeExtensions",
   "defaultAgentConfig",
   "defaultAutomations",
 ] as const;
@@ -121,7 +122,7 @@ export function mergeTemplateManifests(
         const source = sourceOf(entry);
         const repoPath = source
           ?.replace("@workspace-extensions/", "extensions/")
-          .replace("@workspace-apps/", "apps/");
+          .replace("@workspace-clients/", "clients/");
         if (source && declarations.has(source)) {
           if (repoPath && replacements.has(repoPath)) {
             if (!replaced.has(source))

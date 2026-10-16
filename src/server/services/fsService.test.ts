@@ -500,7 +500,7 @@ function makeWorkerCtx(callerId: string): ServiceContext {
 }
 
 function makeAppCtx(callerId: string): ServiceContext {
-  return testContext(createVerifiedCaller(callerId, "app"));
+  return testContext(createVerifiedCaller(callerId, "client"));
 }
 
 function makeDoCtx(callerId: string): ServiceContext {
@@ -923,7 +923,7 @@ describe("FsService", () => {
 
     it("uses an active app entity context for app callers", async () => {
       const ctx = makeAppCtx("@workspace-apps/shell");
-      registerContext(ctx.caller.runtime.id, "app", "ctx-app");
+      registerContext(ctx.caller.runtime.id, "client", "ctx-app");
 
       await service.handleCall(ctx, "writeFile", ["/app.txt", "from-app"]);
 

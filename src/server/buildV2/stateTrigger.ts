@@ -448,8 +448,9 @@ export class StateTransitionTrigger extends EventEmitter {
       const node = graph.tryGet(name);
       if (!node) continue;
       if (!isBuildableKind(node.kind)) continue;
-      // Trusted units (extensions/apps) rebuild only when directly targeted.
-      if ((node.kind === "extension" || node.kind === "app") && name !== sourceUnitName) continue;
+      // Trusted units (extensions/clients) rebuild only when directly targeted.
+      if ((node.kind === "extension" || node.kind === "client") && name !== sourceUnitName)
+        continue;
 
       const ev = assertPresent(evMap[name]);
       const buildKey = resolveBuildUnitKey(
@@ -475,7 +476,7 @@ export class StateTransitionTrigger extends EventEmitter {
           trigger.workspaceStateHash,
           {
             // Publication warming is optional cache work. It must yield every
-            // build lane needed by a panel, app, worker, or approval the user is
+            // build lane needed by a panel, client, worker, or approval the user is
             // actually waiting for.
             priority: "speculative",
           }

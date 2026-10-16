@@ -193,7 +193,7 @@ function makeRegistry(): { registry: RelayRegistry; state: FakeState } {
 }
 
 function shellCtx(): ServiceContext {
-  return { caller: createVerifiedCaller("shell", "shell") };
+  return { caller: createVerifiedCaller("shell:test-device", "shell") };
 }
 
 async function tick(): Promise<void> {

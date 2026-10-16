@@ -3,28 +3,28 @@ import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createNotificationService } from "./notificationService.js";
 
 describe("server notification service", () => {
-  it("requires a current server-granted chrome capability even for an app named shell", async () => {
+  it("requires a current server-granted chrome capability even for a client named shell", async () => {
     const eventService = { emit: vi.fn(), emitToUser: vi.fn(() => true) };
-    const hasAppCapability = vi.fn(() => false);
+    const hasClientCapability = vi.fn(() => false);
     const service = createNotificationService({
       eventService: eventService as never,
-      hasAppCapability,
+      hasClientCapability,
     }).definition;
-    const caller = createVerifiedCaller("app:apps/shell:device", "app", {
-      callerId: "app:apps/shell:device",
-      callerKind: "app",
-      repoPath: "apps/shell",
+    const caller = createVerifiedCaller("client:browser:web:device-1", "client", {
+      callerId: "client:browser:web:device-1",
+      callerKind: "client",
+      repoPath: "clients/desktop-browser",
       effectiveVersion: "a".repeat(64),
     });
     await expect(service.handler({ caller }, "reportAction", ["notice", "open"])).rejects.toThrow(
       "Only trusted workspace chrome"
     );
-    hasAppCapability.mockReturnValue(true);
+    hasClientCapability.mockReturnValue(true);
     await expect(
       service.handler({ caller }, "reportAction", ["notice", "open"])
     ).resolves.toBeUndefined();
-    expect(hasAppCapability).toHaveBeenCalledWith(caller.runtime.id, "panel-hosting");
-    hasAppCapability.mockReturnValue(false);
+    expect(hasClientCapability).toHaveBeenCalledWith(caller.runtime.id, "device-session");
+    hasClientCapability.mockReturnValue(false);
     await expect(service.handler({ caller }, "reportAction", ["notice", "open"])).rejects.toThrow(
       "Only trusted workspace chrome"
     );
@@ -88,8 +88,8 @@ describe("server notification service", () => {
     };
     const result = createNotificationService({
       eventService: eventService as never,
-      hasAppCapability: (callerId, capability) =>
-        callerId === "app:@workspace-apps/shell" && capability === "panel-hosting",
+      hasClientCapability: (callerId, capability) =>
+        callerId === "client:browser:web:device-1" && capability === "device-session",
     });
     const panel = createVerifiedCaller("panel:alice", "panel", null, null, {
       userId: "usr_alice",
@@ -104,24 +104,24 @@ describe("server notification service", () => {
       handle: "bob",
     });
     const aliceChrome = createVerifiedCaller(
-      "app:@workspace-apps/shell",
-      "app",
+      "client:browser:web:device-1",
+      "client",
       {
-        callerId: "app:@workspace-apps/shell",
-        callerKind: "app",
-        repoPath: "apps/shell",
+        callerId: "client:browser:web:device-1",
+        callerKind: "client",
+        repoPath: "clients/desktop-browser",
         effectiveVersion: "a".repeat(64),
       },
       null,
       { userId: "usr_alice", handle: "alice" }
     );
     const ordinaryApp = createVerifiedCaller(
-      "app:@workspace-apps/terminal-browser",
-      "app",
+      "client:chat:terminal:device-1",
+      "client",
       {
-        callerId: "app:@workspace-apps/terminal-browser",
-        callerKind: "app",
-        repoPath: "apps/terminal-browser",
+        callerId: "client:chat:terminal:device-1",
+        callerKind: "client",
+        repoPath: "clients/terminal-browser",
         effectiveVersion: "b".repeat(64),
       },
       null,

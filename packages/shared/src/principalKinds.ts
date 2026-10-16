@@ -9,8 +9,8 @@ export const PRINCIPAL_KIND_REGISTRY = {
     callerKind: "panel",
     codeIdentity: true,
   },
-  app: {
-    callerKind: "app",
+  client: {
+    callerKind: "client",
     codeIdentity: true,
   },
   worker: {

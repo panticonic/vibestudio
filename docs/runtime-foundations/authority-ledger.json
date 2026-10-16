@@ -6900,63 +6900,18 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:auth.getMobileAppBootstrap",
+      "id": "host:auth.grantClientPrincipal",
       "rpcPlane": "host-service",
       "owner": "auth",
-      "method": "getMobileAppBootstrap",
+      "method": "grantClientPrincipal",
       "tier": "open",
       "sessionAdmission": "family",
       "residency": "identity",
       "mechanismFamily": "auth.read",
-      "reviewRationale": "An authenticated mobile shell reads the approved app manifest for its own workspace.",
+      "reviewRationale": "An authenticated device host obtains the principal of the exact client build it verified and runs itself; the client was admitted at its launch gate.",
       "resourceDerivation": {
         "kind": "literal",
-        "key": "service:auth.getMobileAppBootstrap"
-      },
-      "authorityPrincipals": [
-        "host",
-        "user"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:auth.getMobileAppBootstrap),allOf(capability(user,service:auth.getMobileAppBootstrap),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:auth.getMobileAppBootstrap",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:auth.grantAppPrincipal",
-      "rpcPlane": "host-service",
-      "owner": "auth",
-      "method": "grantAppPrincipal",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "identity",
-      "mechanismFamily": "auth.read",
-      "reviewRationale": "An authenticated device shell obtains the device-scoped identity of an approved app it runs itself; the app's authority was admitted at its launch gate.",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:auth.grantAppPrincipal"
+        "key": "service:auth.grantClientPrincipal"
       },
       "authorityPrincipals": [
         "host",
@@ -6981,12 +6936,12 @@
         "live-workspace-membership",
         "exact-resource-scope"
       ],
-      "r3aRequirement": "anyOf(capability(host,service:auth.grantAppPrincipal),allOf(capability(user,service:auth.grantAppPrincipal),workspace-member))",
+      "r3aRequirement": "anyOf(capability(host,service:auth.grantClientPrincipal),allOf(capability(user,service:auth.grantClientPrincipal),workspace-member))",
       "r3b": {
-        "review": "device-shell-own-app-principal-grant",
-        "change": "Replaces the public /refresh-principal-grant HTTP route. Only an authenticated device shell may call it, and only for its own device: it activates that device's principal for an approved, running client app (react-native or terminal) and mints a one-use connection grant bound to the caller's transport endpoint and the app's exact execution identity. It grants no authority beyond the app's admitted manifest."
+        "review": "device-shell-own-client-principal-grant",
+        "change": "Only an authenticated device shell may call it, and only for its own device: it activates that device's principal (client:<id>:<runtime>:<deviceId>) for the exact admitted client build the host verified and mints a one-use connection grant bound to the caller's transport endpoint and that build's execution identity. It grants no authority beyond the client's admitted manifest and the device-level capabilities trust.clients confers."
       },
-      "capability": "service:auth.grantAppPrincipal",
+      "capability": "service:auth.grantClientPrincipal",
       "parityAssertion": "generated-census:host-authority"
     },
     {
@@ -12984,53 +12939,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:build.mobileUpdateStatus",
-      "rpcPlane": "host-service",
-      "owner": "build",
-      "method": "mobileUpdateStatus",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "build.native-installation",
-      "reviewRationale": "Read-only comparison of caller-supplied native bundle identity with the selected workspace app build",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:build.mobileUpdateStatus"
-      },
-      "authorityPrincipals": [
-        "code",
-        "user",
-        "host",
-        "website"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(capability(host,service:build.mobileUpdateStatus),allOf(capability(user,service:build.mobileUpdateStatus),workspace-member),allOf(capability(code,service:build.mobileUpdateStatus),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:build.mobileUpdateStatus",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:build.prepareTypecheck",
       "rpcPlane": "host-service",
       "owner": "build",
@@ -13444,6 +13352,186 @@
         "change": null
       },
       "capability": "service:chromiumFetch.read",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:clients.integrationSnapshot",
+      "rpcPlane": "host-service",
+      "owner": "clients",
+      "method": "integrationSnapshot",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "clients.read",
+      "reviewRationale": "Reads the launch surfaces (intents and dynamic entries) a host projects onto the OS.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:clients.integrationSnapshot"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:clients.integrationSnapshot),allOf(capability(user,service:clients.integrationSnapshot),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:clients.integrationSnapshot",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:clients.invokeIntent",
+      "rpcPlane": "host-service",
+      "owner": "clients",
+      "method": "invokeIntent",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "clients.launch",
+      "reviewRationale": "Runs a client's declared background intent as that client's principal; the handler's own authority applies.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:clients.invokeIntent"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:clients.invokeIntent),allOf(capability(user,service:clients.invokeIntent),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:clients.invokeIntent",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:clients.launch",
+      "rpcPlane": "host-service",
+      "owner": "clients",
+      "method": "launch",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "clients.launch",
+      "reviewRationale": "A device host launches an admitted System client; admission is the unit install review, not this call.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:clients.launch"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:clients.launch),allOf(capability(user,service:clients.launch),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:clients.launch",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:clients.list",
+      "rpcPlane": "host-service",
+      "owner": "clients",
+      "method": "list",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "clients.read",
+      "reviewRationale": "Lists the System workspace's declared clients for a host.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:clients.list"
+      },
+      "authorityPrincipals": [
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:clients.list),allOf(capability(user,service:clients.list),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:clients.list",
       "parityAssertion": "generated-census:host-authority"
     },
     {

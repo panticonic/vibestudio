@@ -60,11 +60,11 @@ describe("runtime resource bindings", () => {
     fs.rmSync(statePath, { recursive: true, force: true });
   });
 
-  const caller = createVerifiedCaller("app:apps/shell:main", "app", null, null, {
+  const caller = createVerifiedCaller("app:apps/shell:main", "client", null, null, {
     userId: "user-a",
     handle: "alice",
   });
-  const shellLifecycleCaller = createVerifiedCaller("app:apps/shell:main", "app");
+  const shellLifecycleCaller = createVerifiedCaller("app:apps/shell:main", "client");
   const quickfireLifecycleCaller = createVerifiedCaller(
     "do:workers/quickfire-service:QuickfireSessionsDO:sessions",
     "do",

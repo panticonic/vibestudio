@@ -22,7 +22,7 @@ import {
   fixedPreparedAuthoritySelection,
   preparedAuthorityState,
 } from "@vibestudio/shared/serviceDefinition";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import { isBootstrapUnitApproval } from "@vibestudio/shared/bootstrapApprovals";
 import { defaultAcceptance } from "@vibestudio/shared/authority/unitInstallReview";
 import {
@@ -33,7 +33,7 @@ import {
 import type { ResolvedVia } from "@vibestudio/shared/governance/types";
 import type { ApprovalQueue, ApprovalResolver } from "./approvalQueue.js";
 import { pushMetrics, type PushMetrics } from "./pushMetrics.js";
-import { isAuthorizedChrome } from "./chromeTrust.js";
+import { callerHasCapability } from "./clientTrust.js";
 import {
   approvalVisibleToUser,
   isHostApprovalObserver,
@@ -42,14 +42,14 @@ import {
 
 /**
  * The surface a resolution arrived from (WP5 §5). Derived from the transport
- * caller kind — the trusted approval bar is `shell`, adopted app-host chrome is
- * `app`, and the embedded desktop / other host relays are `server`.
+ * caller kind — the trusted approval bar is `shell`, a client's chrome is
+ * `client`, and the embedded desktop / other host relays are `server`.
  */
 function resolvedViaFor(kind: string, clientPlatform?: string): ResolvedVia {
   if (clientPlatform === "mobile") return "mobile-notification";
   if (kind === "shell") return "shell";
   if (kind === "server") return "server";
-  return "app";
+  return "client";
 }
 
 /**
@@ -84,7 +84,7 @@ export function createShellApprovalService(deps: {
   metrics?: PushMetrics;
   deviceLabelFor?: (deviceId: string) => string | undefined;
   workspaceCreationReviewState?: () => WorkspaceCreationReviewState;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
   scopeAccess?: ApprovalScopeAccess;
 }): ServiceDefinition {
   const { approvalQueue } = deps;
@@ -109,7 +109,9 @@ export function createShellApprovalService(deps: {
   };
   const preparePresenter = (capability: string) => (ctx: ServiceContext) => {
     if (
-      isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability }) ||
+      callerHasCapability(ctx.caller, "approval-surface", {
+        hasClientCapability: deps.hasClientCapability,
+      }) ||
       (!ctx.caller.code && !ctx.caller.executionSession)
     ) {
       return preparedAuthorityState([]);

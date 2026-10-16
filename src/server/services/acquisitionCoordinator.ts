@@ -2014,6 +2014,7 @@ export class AcquisitionCoordinator {
                   : `acquire:${input.snapshot.sessionId}`,
             },
             ...(presentation?.details ? { details: [...presentation.details] } : {}),
+            ...(presentation?.trustChange ? { trustChange: [...presentation.trustChange] } : {}),
             snapshot: input.snapshot,
             cardType: entry.info.cardType,
             allowedDecisions: [...allowedDecisions],
@@ -2969,10 +2970,10 @@ function combineAcquisitionSignals(
 
 function approvalCallerKind(
   kind: string
-): "panel" | "app" | "worker" | "do" | "extension" | "system" {
+): "panel" | "client" | "worker" | "do" | "extension" | "system" {
   switch (kind) {
     case "panel":
-    case "app":
+    case "client":
     case "worker":
     case "do":
     case "extension":

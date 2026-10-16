@@ -83,7 +83,7 @@ describe("part kinds", () => {
       "Service"
     );
     expect(installPartLabel("panel", [])).toBe("Panel");
-    expect(installPartLabel("app", [])).toBe("Client App");
+    expect(installPartLabel("client", [])).toBe("Client");
     expect(installPartLabel("extension", [])).toBe("Extension");
   });
 });
@@ -245,7 +245,7 @@ describe("summary", () => {
         part({ label: "Service" }),
         part({ label: "Extension", change: "removed" }),
       ])
-    ).toEqual({ panels: 1, agents: 1, services: 1, clientApps: 0, extensions: 0 });
+    ).toEqual({ panels: 1, agents: 1, services: 1, clients: 0, extensions: 0 });
   });
 });
 

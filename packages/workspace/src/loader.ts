@@ -21,9 +21,9 @@ import { parseWorkspaceConfigContentWithId } from "./configParser.js";
 import { currentContextProjectionsPath } from "./contextProjections.js";
 import { readTemplateRelease } from "./templateRelease.js";
 export {
-  resolveDeclaredApps,
+  resolveDeclaredClients,
   resolveDeclaredExtensions,
-  resolveHostTargetRequiredExtensions,
+  resolveRuntimeRequiredExtensions,
 } from "./configParser.js";
 
 const log = createDevLogger("Workspace");

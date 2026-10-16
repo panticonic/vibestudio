@@ -195,8 +195,7 @@ export async function authorityDiagnosticsForProgram(input: {
   // The mobile host contract includes a workspace context boundary. Other
   // executable kinds owe it only when their explicit calls cross one; semantic
   // dependency expansion below still charges those calls to their consumer.
-  if (input.manifest.app?.target !== "react-native") transports.delete("context.boundary");
-  for (const capability of input.manifest.app?.capabilities ?? []) transports.add(capability);
+  if (input.manifest.client?.runtime !== "react-native") transports.delete("context.boundary");
   const required = semanticCapabilities(transports);
   const diagnostics = [...required]
     .filter((capability) => !containsCapability(authority, capability))

@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { stateLayout } from "./stateLayout.js";
 
-export type RuntimeDiagnosticKind = "panel" | "worker" | "do" | "extension" | "app";
+export type RuntimeDiagnosticKind = "panel" | "worker" | "do" | "extension" | "client";
 export type RuntimeDiagnosticLevel = "debug" | "info" | "warn" | "error";
 export type RuntimeDiagnosticSource =
   | "console"

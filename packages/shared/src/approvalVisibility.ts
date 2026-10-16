@@ -61,7 +61,7 @@ function accountOrUndefined(userId: string | undefined): string | undefined {
   return isAccountUserId(userId) ? userId : undefined;
 }
 
-/** Every unresolved decision remains actionable, including reviews of client apps.
+/** Every unresolved decision remains actionable, including reviews of clients.
  * Launch gates can present reviews before a client runs; that does not make them
  * invisible to an already-running client. Only preparation has no decision yet.
  */

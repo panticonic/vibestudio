@@ -15,6 +15,7 @@ import {
   inferUnitTransportCapabilities,
   inferWorkspacePackageReferences,
 } from "@vibestudio/unit-authority-inference";
+import { CLIENT_CAPABILITIES } from "../packages/workspace-contracts/src/clients.ts";
 import developmentTemplateConfig from "../src/dev/developmentTemplateConfig.cjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -131,20 +132,23 @@ const REVIEWED_INTRINSIC_CAPABILITIES = new Map([
   ["clipboard", "gated"],
   ["network.connect", "gated"],
   ["network.response.read", "gated"],
-  ["incoming-pair-links", "gated"],
   ["internal-model-runtime.use", "gated"],
-  ["keychain", "gated"],
   // Device media permission for dictation; the host prompts per use.
   ["microphone", "gated"],
   ["native-menus", "gated"],
   ["notifications", "gated"],
   ["open-external", "gated"],
   ["panel-hosting", "gated"],
-  ["window-management", "gated"],
   // Main-advance publication gate (mainAdvanceApproval.ts authorizes it gated).
   ["workspace.publish", "gated"],
   ["workspace-repo-delete", "critical"],
 ]);
+// Every client capability is a gated host effect: the catalog is the vocabulary.
+for (const capability of CLIENT_CAPABILITIES) {
+  if (!REVIEWED_INTRINSIC_CAPABILITIES.has(capability)) {
+    REVIEWED_INTRINSIC_CAPABILITIES.set(capability, "gated");
+  }
+}
 for (const [capability, tier] of REVIEWED_INTRINSIC_CAPABILITIES) {
   recordCapabilityTier(capability, tier, "reviewed intrinsic capability");
 }

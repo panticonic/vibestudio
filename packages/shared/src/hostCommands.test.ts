@@ -4,7 +4,7 @@ import { createHostCommandRegistry, HOST_COMMAND_CONTRIBUTION_EVENT } from "./ho
 const registryForTest = () => createHostCommandRegistry({ dispatchRun: () => {}, warn: () => {} });
 
 function contribution(
-  caller: { callerId: string; callerKind: "panel" | "app" | "worker"; callerPanelId?: string },
+  caller: { callerId: string; callerKind: "panel" | "client" | "worker"; callerPanelId?: string },
   commands: unknown
 ) {
   return { caller, payload: { commands } };

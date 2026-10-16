@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import type { ReviewedUnit } from "@vibestudio/shared/approvals";
+import type { ClientTrustChange, ReviewedUnit } from "@vibestudio/shared/approvals";
 import {
   createVerifiedCaller,
   type HostAuthorityEffect,
@@ -169,7 +169,7 @@ describe("createMainAdvanceApprovalGate", () => {
     const gate = createMainAdvanceApprovalGate({ ...deps, getProviders: () => [provider] });
 
     const completion = await gate.approve(
-      candidate({ caller: createVerifiedCaller("shell", "shell") })
+      candidate({ caller: createVerifiedCaller("shell:device-1", "shell") })
     );
 
     // The click IS the consent, so no prompt — but the units it introduced are
@@ -178,6 +178,161 @@ describe("createMainAdvanceApprovalGate", () => {
     expect(provider.acceptPreapprovedTrust).not.toHaveBeenCalled();
     await completion?.committed();
     expect(provider.acceptPreapprovedTrust).toHaveBeenCalledWith(["identity:unit"], "chrome");
+  });
+
+  describe("client trust changes", () => {
+    const delta: ClientTrustChange[] = [
+      {
+        source: "clients/chat-desktop",
+        title: "Chat",
+        runtime: "web",
+        gained: [
+          {
+            capability: "approval-surface",
+            summary: "show approvals and submit your decisions on them",
+          },
+        ],
+        lost: [],
+        effectiveVersion: "ev-chat",
+      },
+    ];
+    const interactiveClient = () => createVerifiedCaller("client:browser:web:device-1", "client");
+    const providerFor = () =>
+      ({
+        unitChangeApprovalForCommit: vi.fn(async () => ({ units: [], identityKeys: [] })),
+        acceptPreapprovedTrust: vi.fn(),
+      }) satisfies UnitChangeApprovalProvider<ReviewedUnit>;
+
+    it("keeps today's behavior when the delta is empty", async () => {
+      const deps = gateDeps();
+      const trustDeltaForCommit = vi.fn(async () => [] as ClientTrustChange[]);
+      const gate = createMainAdvanceApprovalGate({
+        ...deps,
+        trustDeltaForCommit,
+        getProviders: () => [providerFor()],
+      });
+
+      await gate.approve(candidate({ caller: createVerifiedCaller("shell:device-1", "shell") }));
+
+      expect(trustDeltaForCommit).toHaveBeenCalledWith("state:next");
+      expect(deps.authorizeEffect).not.toHaveBeenCalled();
+    });
+
+    it("forces a critical card for a non-empty delta even for an interactive client", async () => {
+      const deps = gateDeps();
+      const provider = providerFor();
+      const gate = createMainAdvanceApprovalGate({
+        ...deps,
+        hasClientCapability: (callerId, capability) =>
+          callerId === "client:browser:web:device-1" && capability === "device-session",
+        trustDeltaForCommit: async () => delta,
+        getProviders: () => [provider],
+      });
+
+      const completion = await gate.approve(candidate({ caller: interactiveClient() }));
+
+      expect(deps.authorizeEffect).toHaveBeenCalledTimes(1);
+      const [ctx, effect] = deps.authorizeEffect.mock.calls[0]!;
+      expect(ctx).toMatchObject({ authorityAcquisition: "wait" });
+      expect(effect).toMatchObject({
+        capability: "workspace.publish",
+        tier: "critical",
+        resourceKey: "workspace-trust-change:publication:publication:next",
+        args: ["publication:next", "state:next", delta],
+        challenge: {
+          severity: "severe",
+          title: "Let Chat act as this device",
+          trustChange: delta,
+          deniedReason: "Trust change denied",
+        },
+      });
+      // No host session may satisfy it: only the person (or code they consented for).
+      expect(JSON.stringify(effect.requirement)).not.toContain('"principal":"host"');
+      expect(JSON.stringify(effect.requirement)).toContain('"principal":"user"');
+      await completion?.committed();
+    });
+
+    it("forces it for a host session, a panel and every other publisher", async () => {
+      for (const caller of [
+        createVerifiedCaller("shell:device-1", "shell"),
+        createVerifiedCaller("server", "server"),
+        panelCaller(),
+      ]) {
+        const deps = gateDeps();
+        const gate = createMainAdvanceApprovalGate({
+          ...deps,
+          trustDeltaForCommit: async () => delta,
+          getProviders: () => [],
+        });
+        // The ordinary gate may still refuse a caller it does not support, but
+        // the trust change is decided first.
+        await gate.approve(candidate({ caller })).catch(() => undefined);
+        expect(deps.authorizeEffect.mock.calls[0]?.[1]).toMatchObject({
+          resourceKey: "workspace-trust-change:publication:publication:next",
+          tier: "critical",
+        });
+      }
+    });
+
+    it("describes a withdrawal as taking power away", async () => {
+      const deps = gateDeps();
+      const gate = createMainAdvanceApprovalGate({
+        ...deps,
+        trustDeltaForCommit: async () => [{ ...delta[0]!, gained: [], lost: delta[0]!.gained }],
+        getProviders: () => [],
+      });
+      await gate.approve(candidate({ caller: panelCaller() })).catch(() => undefined);
+      expect(deps.authorizeEffect.mock.calls[0]?.[1]).toMatchObject({
+        challenge: { title: "Stop Chat acting as this device" },
+      });
+    });
+
+    it("does not admit anything when the trust change is denied", async () => {
+      const deps = gateDeps({ decision: "deny" });
+      const provider = providerFor();
+      const gate = createMainAdvanceApprovalGate({
+        ...deps,
+        trustDeltaForCommit: async () => delta,
+        getProviders: () => [provider],
+      });
+
+      await expect(
+        gate.approve(candidate({ caller: createVerifiedCaller("shell:device-1", "shell") }))
+      ).rejects.toThrow("Trust change denied");
+
+      expect(provider.unitChangeApprovalForCommit).not.toHaveBeenCalled();
+      expect(provider.acceptPreapprovedTrust).not.toHaveBeenCalled();
+    });
+
+    it("only evaluates the delta for publications that can change trust", async () => {
+      const deps = gateDeps();
+      const trustDeltaForCommit = vi.fn(async () => delta);
+      const gate = createMainAdvanceApprovalGate({
+        ...deps,
+        trustDeltaForCommit,
+        getProviders: () => [],
+      });
+
+      await gate.approve(
+        candidate({
+          caller: panelCaller(),
+          repoPaths: ["panels/x"],
+          changedPaths: ["panels/x/a.ts"],
+        })
+      );
+      expect(trustDeltaForCommit).not.toHaveBeenCalled();
+
+      await gate
+        .approve(
+          candidate({
+            caller: panelCaller(),
+            repoPaths: ["clients/chat-desktop"],
+            changedPaths: ["clients/chat-desktop/package.json"],
+          })
+        )
+        .catch(() => undefined);
+      expect(trustDeltaForCommit).toHaveBeenCalledWith("state:next");
+    });
   });
 
   it("does not admit a reviewed unit when the protected publication fails", async () => {

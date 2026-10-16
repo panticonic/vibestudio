@@ -15,7 +15,7 @@ vi.mock("./connect.js", () => ({
   }),
 }));
 
-import { RN_HOST_ABI } from "@vibestudio/shared/buildProvider";
+import { CURRENT_HOST_ABI } from "@vibestudio/workspace-contracts/clients";
 import {
   streamArtifactToNative,
   selectPlatformArtifacts,
@@ -23,6 +23,8 @@ import {
   type BundleDeliveryRpc,
   type NativeBundleHost,
 } from "./bundleDelivery.js";
+
+const RN_HOST_ABI = CURRENT_HOST_ABI["react-native"];
 
 function response(chunks: Uint8Array[], start: number, total: number) {
   const length = chunks.reduce((sum, chunk) => sum + chunk.length, 0);

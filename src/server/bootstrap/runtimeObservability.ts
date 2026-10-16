@@ -36,7 +36,7 @@ export function wireRuntimeObservability(
         panel: "panel",
         worker: "worker",
         extension: "extension",
-        app: "app",
+        client: "client",
       };
       return buildSystem.onBuildEvent((event) => {
         if (event.type === "build-started") return;

@@ -323,12 +323,10 @@ export function testAuthority(
 ): { context: AuthorizationContext; grants: AuthorityGrant[] } {
   const platformCapability = new Set([
     "panel-hosting",
-    "window-management",
     "open-external",
     "native-menus",
     "notifications",
-    "fs-read",
-    "fs-write",
+    "local-files",
   ]).has(capability);
   const host =
     caller.hostOriginated === true || caller.runtime.kind === "server" ? TEST_HOST : null;
@@ -344,7 +342,7 @@ export function testAuthority(
   const carriesCode =
     Boolean(caller.code) ||
     (!caller.executionSession &&
-      ["panel", "app", "worker", "do", "extension"].includes(caller.runtime.kind));
+      ["panel", "client", "worker", "do", "extension"].includes(caller.runtime.kind));
   // Code identity and manifest requests are independent facts. Under-declared
   // code remains code and must fail as `not-requested`; erasing its identity
   // here would incorrectly turn it into a user or product-host invocation.

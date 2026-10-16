@@ -5,7 +5,7 @@ import type { CapabilityScope } from "@vibestudio/rpc";
 import type { UnitAuthorityManifest } from "./authorityManifest.js";
 import type { StateArgsSchema, StateArgsValue } from "./stateArgs.js";
 import type { PanelFailureCode } from "./panel/observation.js";
-import type { AppCapability, WorkspaceAppTarget } from "./unitManifest.js";
+import type { ClientManifestBlock } from "@vibestudio/workspace-contracts/clients";
 export type { ThemeConfig } from "./theme.js";
 
 // Re-export types for consumers of this module
@@ -87,19 +87,8 @@ export interface PackageManifest {
      */
     providerContracts?: Record<string, { methods: string[] }>;
   };
-  /** App-only host contract (valid only for packages under apps/). */
-  app?: {
-    target: WorkspaceAppTarget;
-    capabilities?: AppCapability[];
-    renderer?: string;
-    preload?: string;
-    /**
-     * Package-root-relative modules dynamically selected on the normal startup
-     * path. Their emitted closures are transferred with the initial artifact
-     * bundle without changing when or whether the modules execute.
-     */
-    startupModules?: string[];
-  };
+  /** Client-only host contract (valid only for packages under clients/). */
+  client?: ClientManifestBlock;
   // ----- Panel-only fields -----
   /** Top-level package.json dependencies merged in by `loadPanelManifest`. */
   dependencies?: Record<string, string>;

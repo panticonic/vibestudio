@@ -146,7 +146,7 @@
       "parityAssertion": "test:execution.panel"
     },
     {
-      "surface": "electron-app",
+      "surface": "web-client",
       "selector": "resolved-exact-artifact",
       "executableIdentity": "full-execution-digest",
       "adoption": "load-update",
@@ -161,10 +161,10 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "test:execution.electron-app"
+      "parityAssertion": "test:execution.client-web"
     },
     {
-      "surface": "react-native-app",
+      "surface": "react-native-client",
       "selector": "resolved-exact-artifact",
       "executableIdentity": "full-execution-digest",
       "adoption": "mobile-install",
@@ -179,10 +179,10 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "test:execution.react-native-app"
+      "parityAssertion": "test:execution.client-react-native"
     },
     {
-      "surface": "terminal-app",
+      "surface": "terminal-client",
       "selector": "resolved-exact-artifact",
       "executableIdentity": "full-execution-digest",
       "adoption": "client-relaunch",
@@ -197,7 +197,7 @@
         "artifact-digest",
         "execution-digest"
       ],
-      "parityAssertion": "test:execution.terminal-app"
+      "parityAssertion": "test:execution.client-terminal"
     },
     {
       "surface": "extension",

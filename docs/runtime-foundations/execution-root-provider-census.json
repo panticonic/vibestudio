@@ -11,13 +11,13 @@
       "reviewedReaders": ["src/server/panelHttpServer.ts", "src/server/panelRuntimeRegistration.ts"]
     },
     {
-      "id": "app-generation",
-      "backingSources": ["src/server/appHost.ts", "packages/unit-host/src/index.ts"],
+      "id": "client-generation",
+      "backingSources": ["src/server/clients/clientRegistry.ts", "packages/unit-host/src/index.ts"],
       "reviewedReaders": [
         "packages/unit-host/src/supervisionChange.ts",
-        "src/server/services/appUnitDriver.ts",
+        "src/server/services/clientUnitDriver.ts",
         "src/server/services/buildUnitCatalog.ts",
-        "src/server/deviceAppPrincipals.ts"
+        "src/server/clients/clientPrincipals.ts"
       ]
     },
     {
@@ -62,10 +62,6 @@
       "reason": "Artifact store and collector, not an execution owner."
     },
     {
-      "source": "src/server/buildV2/distBake.ts",
-      "reason": "Offline distribution projection, not a live owner."
-    },
-    {
       "source": "src/server/bootstrap/workerd.ts",
       "reason": "Startup build resolver; durable runtime ownership is recorded by runtime-image and runtime-entity."
     },
@@ -84,10 +80,6 @@
     {
       "source": "src/server/index.ts",
       "reason": "Composition root that registers providers."
-    },
-    {
-      "source": "src/server/reactNativeAppAdapter.ts",
-      "reason": "Launch adapter reading app-generation state; AppHost remains the durable artifact owner."
     },
     {
       "source": "src/main/appOrchestrator.ts",

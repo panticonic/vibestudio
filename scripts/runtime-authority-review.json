@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:b975d10c190f0bf70553929cce64ed3b210e68164701d6fa2d3fb3b379c0dc28",
+  "censusDigest": "sha256:a67e8f896b81c69c42169b4dccc7e3d79b8f0d8ec356f35eab99f5e8e48a5a71",
   "decisions": {
     "host:terminalApps.launch": {
       "review": "single-prepared-terminal-program-consent",
@@ -173,9 +173,9 @@
       "review": "parent-presented-exact-child-approval",
       "change": "Adds the host-only parent presentation of one verified signed child challenge. The acquisition request is derived from the canonical invocation snapshot and prepared operation, and the signed terminal decision cannot authorize a different request."
     },
-    "host:auth.grantAppPrincipal": {
-      "review": "device-shell-own-app-principal-grant",
-      "change": "Replaces the public /refresh-principal-grant HTTP route. Only an authenticated device shell may call it, and only for its own device: it activates that device's principal for an approved, running client app (react-native or terminal) and mints a one-use connection grant bound to the caller's transport endpoint and the app's exact execution identity. It grants no authority beyond the app's admitted manifest."
+    "host:auth.grantClientPrincipal": {
+      "review": "device-shell-own-client-principal-grant",
+      "change": "Only an authenticated device shell may call it, and only for its own device: it activates that device's principal (client:<id>:<runtime>:<deviceId>) for the exact admitted client build the host verified and mints a one-use connection grant bound to the caller's transport endpoint and that build's execution identity. It grants no authority beyond the client's admitted manifest and the device-level capabilities trust.clients confers."
     },
     "host:auth.mintAgentCredential": {
       "review": "reviewed-subagent-launch-agent-login",

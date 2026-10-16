@@ -56,7 +56,7 @@ describe("current template manifest", () => {
     const dependency = canonicalTemplateYaml({
       systemEpoch: WORKSPACE_SYSTEM_EPOCH,
       services: [{ source: "workers/example", name: "example" }],
-      trust: { chromeApps: ["apps/shell"] },
+      trust: { clients: ["clients/desktop-browser"] },
     });
     const installation = {
       sources: [
@@ -68,7 +68,7 @@ describe("current template manifest", () => {
         systemEpoch: WORKSPACE_SYSTEM_EPOCH,
         template: { dependencies: [{ url }] },
         services: [{ source: "workers/example", name: "example" }],
-        trust: { chromeApps: ["apps/shell"] },
+        trust: { clients: ["clients/desktop-browser"] },
       }),
       WORKSPACE_SYSTEM_EPOCH
     );
@@ -144,13 +144,13 @@ providers:
   evalRuntime:
     source: "@workspace/runtime"
 trust:
-  chromeApps: [apps/shell]
+  clients: [clients/desktop-browser]
 `,
       WORKSPACE_SYSTEM_EPOCH
     );
 
     expect(canonicalTemplateYaml(rootRuntimeFromTemplateManifest(root))).toBe(
-      `providers:\n  evalRuntime:\n    source: "@workspace/runtime"\nroutes: []\nsystemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntrust:\n  chromeApps:\n    - apps/shell\n`
+      `providers:\n  evalRuntime:\n    source: "@workspace/runtime"\nroutes: []\nsystemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\ntrust:\n  clients:\n    - clients/desktop-browser\n`
     );
   });
 

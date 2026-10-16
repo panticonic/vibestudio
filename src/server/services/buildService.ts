@@ -1,11 +1,7 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { PanelPlacementHint } from "@vibestudio/shared/types";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import {
-  buildMethods,
-  type BuildUnitCatalogEntry,
-  type MobileAppUpdateStatus,
-} from "@vibestudio/service-schemas/build";
+import { buildMethods, type BuildUnitCatalogEntry } from "@vibestudio/service-schemas/build";
 import { BUILDABLE_UNIT_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import { buildSourcemapForNode } from "../buildV2/builder.js";
@@ -26,7 +22,7 @@ export interface ResolvedPanelMetadata {
   placement?: PanelPlacementHint;
 }
 
-export const BUILD_SERVICE_DEPENDENCIES = ["buildSystem", "appHost"] as const;
+export const BUILD_SERVICE_DEPENDENCIES = ["buildSystem"] as const;
 
 /** Resolve panel identity from the same exact workspace coordinate as its code. */
 export async function resolvePanelMetadata(
@@ -61,9 +57,6 @@ const SKILLS_PACKAGE_SCOPE = (() => {
 export function createBuildService(deps: {
   buildSystem: BuildSystemV2;
   listUnits: () => BuildUnitCatalogEntry[] | Promise<BuildUnitCatalogEntry[]>;
-  mobileUpdateStatus: (
-    installedBuildKey: string | null
-  ) => MobileAppUpdateStatus | null | Promise<MobileAppUpdateStatus | null>;
   getCallerContextId: (callerId: string) => string | null;
 }): ServiceDefinition {
   const artifactHandle = (build: StoredBuildResult) => ({
@@ -86,7 +79,6 @@ export function createBuildService(deps: {
     methods: buildMethods,
     handler: defineServiceHandler("build", buildMethods, {
       listUnits: () => deps.listUnits(),
-      mobileUpdateStatus: (_ctx, [installedBuildKey]) => deps.mobileUpdateStatus(installedBuildKey),
       getBuild: (_ctx, [unit, ref, options]) => {
         const bs = deps.buildSystem;
         return options?.library

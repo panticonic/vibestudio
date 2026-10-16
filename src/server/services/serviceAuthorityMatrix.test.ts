@@ -14,6 +14,7 @@ import { createPushService } from "./pushService.js";
 import { createMobileNativeService } from "./mobileNativeService.js";
 import { createWebhookIngressService } from "./webhookIngressService.js";
 import { DevelopmentClientExecutorRegistry } from "./developmentClientExecutorService.js";
+import { createClientLaunchService } from "../clients/clientLaunchService.js";
 
 const servicesDir = fileURLToPath(new URL(".", import.meta.url));
 const goldenPath = join(servicesDir, "__serviceAuthorityMatrix.golden.json");
@@ -102,6 +103,12 @@ async function collectAuthorityMatrix(): Promise<AuthorityMatrix> {
     inertDeps() as ConstructorParameters<typeof DevelopmentClientExecutorRegistry>[0]
   ).definition();
   definitions.set(developmentClientExecutorDefinition.name, developmentClientExecutorDefinition);
+  // The clients service lives with the ClientHost it fronts, outside the
+  // services directory this census discovers by file name.
+  const clientLaunchDefinition = createClientLaunchService(
+    inertDeps() as Parameters<typeof createClientLaunchService>[0]
+  );
+  definitions.set(clientLaunchDefinition.name, clientLaunchDefinition);
   for (const file of files) {
     const module = (await import(/* @vite-ignore */ join(servicesDir, file))) as Record<
       string,

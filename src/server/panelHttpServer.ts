@@ -154,8 +154,8 @@ function isPanelAssetRequest(resource: string): boolean {
   );
 }
 
-/** An app document may load only its own origin's scripts, styles and images. */
-const APP_DOCUMENT_CSP =
+/** A client document may load only its own origin's scripts, styles and images. */
+const CLIENT_DOCUMENT_CSP =
   "default-src 'self'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:";
 
 /** `enc=gzip` asks for each text-like record of a bundle in its compressed form. */
@@ -1118,8 +1118,8 @@ export class PanelHttpServer {
       headers["ETag"] = etag;
       headers["X-Vibestudio-Content-Digest"] = artifact.integrity;
     }
-    if (artifact.role === "html" && build.metadata.kind === "app") {
-      headers["Content-Security-Policy"] = APP_DOCUMENT_CSP;
+    if (artifact.role === "html" && build.metadata.kind === "client") {
+      headers["Content-Security-Policy"] = CLIENT_DOCUMENT_CSP;
     }
 
     const range = this.requestedRange(req, etag, body.length);

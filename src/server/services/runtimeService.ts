@@ -45,7 +45,7 @@ import {
   type ServiceContext,
   type VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import type {
   LifecyclePrepareInput,
   LifecyclePrepareResult,
@@ -73,7 +73,7 @@ import {
 } from "@vibestudio/shared/runtime/entitySpec";
 import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
-import { isAuthorizedChrome, isInteractiveChrome } from "./chromeTrust.js";
+import { isTrustedDeviceCaller, isInteractiveClient } from "./clientTrust.js";
 import {
   prepareContextBoundarySelection,
   type ContextBoundaryAction,
@@ -350,7 +350,7 @@ export interface RuntimeServiceDeps {
   ) => void | Promise<void>;
   /** The stateArgs schema a build declares (panel builds), for per-instance state writes. */
   stateArgsSchemaForBuild?: (buildKey: string) => Promise<Record<string, unknown> | undefined>;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
   /**
    * Hidden system-test fault seam. The host callback must authenticate the
    * attested system-test harness before aborting this exact active DO facet.
@@ -566,7 +566,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     // the panel-tree boundary and retain trusted-host authority here.
     if (
       caller.runtime.kind === "server" ||
-      isAuthorizedChrome(caller, { hasAppCapability: deps.hasAppCapability })
+      isTrustedDeviceCaller(caller, { hasClientCapability: deps.hasClientCapability })
     ) {
       return [];
     }
@@ -608,9 +608,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   }
 
   function assertCreateEntityAllowed(caller: VerifiedCaller, spec: RuntimeEntityCreateSpec): void {
-    if (spec.kind === "app" && !isTrustedRuntimeHost(caller)) {
-      throw new Error("App runtime entities are host-managed");
-    }
     if (spec.kind === "session") {
       const orchestratorExtension = caller.runtime.kind === "extension" && Boolean(spec.source);
       if (!isTrustedRuntimeHost(caller) && !orchestratorExtension) {
@@ -1602,7 +1599,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     caller: VerifiedCaller,
     input: RuntimeExecutionRecoveryRequest
   ): Promise<RuntimeExecutionRecoveryResult> {
-    if (!isInteractiveChrome(caller, { hasAppCapability: deps.hasAppCapability })) {
+    if (!isInteractiveClient(caller, { hasClientCapability: deps.hasClientCapability })) {
       throw new Error("runtime.recoverExecution is restricted to interactive trusted chrome");
     }
     const run = () => {

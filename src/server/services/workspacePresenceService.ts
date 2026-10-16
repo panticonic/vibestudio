@@ -47,7 +47,7 @@ const SYSTEM_USER_ID = "system";
  * agent/worker/do are code deputies acting under an inherited userId — real,
  * but not "a person in the workspace"; server/extension are infrastructure.
  */
-const HUMAN_KINDS: ReadonlySet<CallerKind> = new Set<CallerKind>(["shell", "panel", "app"]);
+const HUMAN_KINDS: ReadonlySet<CallerKind> = new Set<CallerKind>(["shell", "panel", "client"]);
 
 /**
  * How long a departed user lingers on the presence surface as `online: false`

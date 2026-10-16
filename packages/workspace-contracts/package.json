@@ -15,7 +15,8 @@
     "./workspaceRoutes": "./src/workspaceRoutes.ts",
     "./workspaceConfigSchema": "./src/workspaceConfigSchema.ts",
     "./automations": "./src/automations.ts",
-    "./appCompatibility": "./src/appCompatibility.ts"
+    "./appCompatibility": "./src/appCompatibility.ts",
+    "./clients": "./src/clients.ts"
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/workspace-contracts/src"

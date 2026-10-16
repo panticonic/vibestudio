@@ -28,7 +28,7 @@ export async function prepareWorkspaceRuntimeBuilds(
     (node) =>
       node.kind !== "package" &&
       node.kind !== "template" &&
-      !(node.kind === "app" && node.manifest.app?.target === "react-native")
+      !(node.kind === "client" && node.manifest.client?.runtime === "react-native")
   );
   reportProgress?.({ type: "planned", count: runtimes.length });
   const outcomes = await Promise.allSettled(

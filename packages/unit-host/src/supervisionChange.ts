@@ -42,7 +42,6 @@ export function unitSupervisionChange(
     change,
     previousBuildKey: superseded?.activeBundleKey ?? null,
     previousEffectiveVersion: superseded?.activeEv ?? null,
-    adoption: null,
   };
 }
 

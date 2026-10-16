@@ -145,7 +145,7 @@ export const RuntimeEntityHandleSchema = z
   .object({
     id: z.string().describe("Server-authoritative canonical entity id."),
     kind: z
-      .enum(["panel", "app", "worker", "do", "session"])
+      .enum(["panel", "client", "worker", "do", "session"])
       .describe("Entity kind that was created."),
     source: z
       .object({
@@ -206,7 +206,7 @@ const RuntimeAgentBindingSchema = z
 
 export const RuntimeSupervisionReleaseKeySchema = z
   .object({
-    kind: z.enum(["panel", "worker", "app", "extension"]),
+    kind: z.enum(["panel", "worker", "client", "extension"]),
     releaseId: z.string().min(1),
   })
   .strict();
@@ -318,7 +318,7 @@ export type RuntimeSupervisionLogReport = z.infer<typeof RuntimeSupervisionLogRe
 
 export const RuntimeSupervisionActivationKeySchema = z
   .object({
-    kind: z.enum(["app", "extension"]),
+    kind: z.enum(["client", "extension"]),
     releaseId: z.string(),
   })
   .strict();
@@ -511,22 +511,6 @@ const PanelReservationSpecSchema = PanelEntityCreateSpecSchema.extend({
 
 export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
   PanelEntityCreateSpecSchema,
-  z
-    .object({
-      kind: z.literal("app"),
-      execution: CodeExecutionSchema,
-      contextId: z
-        .string()
-        .nullable()
-        .optional()
-        .describe(
-          "Target context; omit/null to inherit the verified caller's context, or mint a fresh root when the caller has no runtime context."
-        ),
-      key: z.string().optional().describe("Stable instance key; omit to mint a random UUID."),
-      resourceBindings: z.array(RuntimeResourceBindingSchema).max(16).optional(),
-      stateArgs: z.unknown().optional().describe("Opaque initial state passed to the app runtime."),
-    })
-    .strict(),
   z
     .object({
       kind: z.literal("worker"),
@@ -970,7 +954,7 @@ export const runtimeMethods = defineServiceMethods({
       z
         .object({
           kind: z
-            .enum(["panel", "app", "worker", "do", "session"])
+            .enum(["panel", "client", "worker", "do", "session"])
             .optional()
             .describe("Filter to a single entity kind; omit to list all kinds."),
         })
@@ -979,7 +963,7 @@ export const runtimeMethods = defineServiceMethods({
     returns: z.array(
       z.object({
         id: z.string().describe("Canonical entity id."),
-        kind: z.enum(["panel", "app", "worker", "do", "session"]).describe("Entity kind."),
+        kind: z.enum(["panel", "client", "worker", "do", "session"]).describe("Entity kind."),
         source: z.string().describe("Source repo path."),
         key: z.string().describe("Caller-selected instance key encoded in the canonical id."),
         contextId: z.string().describe("Owning context id."),

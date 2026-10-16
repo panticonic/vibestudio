@@ -7,6 +7,7 @@ import { TypeCheckService } from "@vibestudio/typecheck";
 import { HOST_AUTHORITY_METHODS } from "@vibestudio/shared/authority/hostAuthorityCatalog.generated";
 import { authorityDiagnosticsForProgram } from "./authorityFold.js";
 import { createExactWorkspaceAuthorityEnvironment } from "./userlandAuthority.js";
+import { CURRENT_HOST_ABI } from "@vibestudio/workspace-contracts/clients";
 
 function programFor(source: string) {
   const root = mkdtempSync(join(tmpdir(), "vibestudio-authority-fold-"));
@@ -442,19 +443,27 @@ describe("userland authority fold", () => {
     expect(diagnostics).toEqual([]);
   });
 
-  it.each(["terminal", "electron", "react-native"] as const)(
+  it.each(["terminal", "web", "react-native"] as const)(
     "keeps the automatic context baseline only for the mobile host contract (%s)",
-    async (target) => {
+    async (runtime) => {
       const { root, project } = programFor("export const entry = true;");
       const diagnostics = await authorityDiagnosticsForProgram({
         project,
         sourceRoot: root,
         unitRelativePath: ".",
         units: [{ name: "consumer", relativePath: "." }],
-        manifest: { app: { target }, authority: { requests: [], provides: [] } },
+        manifest: {
+          client: {
+            id: "consumer",
+            runtime,
+            hostAbi: CURRENT_HOST_ABI[runtime],
+            entry: "index.ts",
+          },
+          authority: { requests: [], provides: [] },
+        },
       });
       expect(diagnostics).toEqual(
-        target === "react-native"
+        runtime === "react-native"
           ? [
               expect.objectContaining({
                 message: expect.stringContaining("capability 'context.boundary'"),
@@ -465,9 +474,9 @@ describe("userland authority fold", () => {
     }
   );
 
-  it.each([undefined, "terminal", "electron", "react-native"] as const)(
+  it.each([undefined, "terminal", "web", "react-native"] as const)(
     "charges an explicit context-bearing call independently of the host contract (%s)",
-    async (target) => {
+    async (runtime) => {
       const { root, project } = programFor(
         `export const method = "workspace-state.slot.commitPreparedNavigation";`
       );
@@ -478,7 +487,16 @@ describe("userland authority fold", () => {
         unitRelativePath: ".",
         units: [{ name: "@workspace/library", relativePath: "." }],
         manifest: {
-          ...(target ? { app: { target } } : {}),
+          ...(runtime
+            ? {
+                client: {
+                  id: "consumer",
+                  runtime,
+                  hostAbi: CURRENT_HOST_ABI[runtime],
+                  entry: "index.ts",
+                },
+              }
+            : {}),
           authority: {
             requests: [],
             serviceRequests: [{ protocol: "example.notes.v1", availability: "required" }],

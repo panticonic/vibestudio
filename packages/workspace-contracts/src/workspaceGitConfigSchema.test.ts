@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { GitConfigSchema, WorkspaceConfigSchema, WorkspaceTemplatePinSchema } from "./workspaceConfigSchema.js";
+import {
+  GitConfigSchema,
+  WorkspaceConfigSchema,
+  WorkspaceTemplatePinSchema,
+} from "./workspaceConfigSchema.js";
 
 const BASE = { id: "test", systemEpoch: 56 } as const;
 
@@ -21,22 +25,21 @@ describe("exact template source pins", () => {
 
 function configWithUpstream(upstream: Record<string, unknown>) {
   return {
-
-      remotes: {
-        panels: {
-          news: {
-            origin: {
-              url: "https://github.com/acme/news.git",
-              branch: "main",
-            },
+    remotes: {
+      panels: {
+        news: {
+          origin: {
+            url: "https://github.com/acme/news.git",
+            branch: "main",
           },
         },
       },
-      upstreams: {
-        panels: {
-          news: upstream,
-        },
+    },
+    upstreams: {
+      panels: {
+        news: upstream,
       },
+    },
   };
 }
 
@@ -79,8 +82,7 @@ describe("workspace Git upstream contract", () => {
       ).success
     ).toBe(false);
     expect(
-      GitConfigSchema.safeParse(configWithUpstream({ remote: "origin", credential: null }))
-        .success
+      GitConfigSchema.safeParse(configWithUpstream({ remote: "origin", credential: null })).success
     ).toBe(false);
   });
 });

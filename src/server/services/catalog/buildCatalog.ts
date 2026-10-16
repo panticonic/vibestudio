@@ -361,7 +361,7 @@ function presentationPrincipals(callerKind: CatalogAudience): PrincipalKind[] {
     case "agent":
       return ["session", "user"];
     case "panel":
-    case "app":
+    case "client":
     case "worker":
     case "do":
     case "extension":

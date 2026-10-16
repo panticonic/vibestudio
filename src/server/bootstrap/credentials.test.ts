@@ -30,7 +30,7 @@ describe("wireCredentialService", () => {
       credentialLifecycle: inert as CredentialBootstrapDeps["credentialLifecycle"],
       isPersonalWorkspaceOwner: () => false,
       getAuthorizingShell: () => null,
-      hasAppCapability: () => false,
+      hasClientCapability: () => false,
       presentsOwnBrowserHandoff: () => false,
     });
 

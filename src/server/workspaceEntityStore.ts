@@ -22,8 +22,8 @@ import {
  * receive the store and never touch raw entity dispatch or the cache mutators,
  * so they CAN'T publish an executable identity that its runtime cannot load.
  *
- * NOT in scope: cache-only synthetic entities (apps / device principals in
- * `appHost`, which have no WorkspaceDO row) and the boot hydrate path
+ * NOT in scope: cache-only synthetic entities (device principals of clients in
+ * `ClientHost`, which have no WorkspaceDO row) and the boot hydrate path
  * (`index.ts`). Those are genuinely cache-only — there is no durable write to
  * pair — and keep using `EntityCache` directly.
  */

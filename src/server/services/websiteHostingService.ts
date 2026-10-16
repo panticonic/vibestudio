@@ -2,13 +2,13 @@ import { websiteHostingMethods } from "@vibestudio/service-schemas/websiteHostin
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import { isInteractiveChrome, type CapabilityTrustDeps } from "./chromeTrust.js";
+import { isInteractiveClient, type CapabilityTrustDeps } from "./clientTrust.js";
 import type { WebsiteDocuments } from "./websiteDocuments.js";
 
 export function createWebsiteHostingService(
   documents: WebsiteDocuments,
   slotOfRuntime: (runtimeId: string) => string | null,
-  chromeTrust: Pick<CapabilityTrustDeps, "hasAppCapability">
+  clientTrust: Pick<CapabilityTrustDeps, "hasClientCapability">
 ): ServiceDefinition {
   const host = (ctx: ServiceContext) => {
     // The presentation transport itself must attest the document. A delegated
@@ -27,7 +27,7 @@ export function createWebsiteHostingService(
         if (
           !ctx.caller.subject ||
           ctx.caller.website ||
-          !isInteractiveChrome(ctx.caller, chromeTrust)
+          !isInteractiveClient(ctx.caller, clientTrust)
         )
           throw new Error("Website connection inventory requires authenticated workspace chrome");
         return documents

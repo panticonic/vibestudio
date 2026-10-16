@@ -1,10 +1,12 @@
 import { gatewayMethods } from "@vibestudio/service-schemas/gateway";
 import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import { NativeModules, Platform } from "react-native";
-import { RN_HOST_ABI } from "@vibestudio/shared/buildProvider";
+import { CURRENT_HOST_ABI } from "@vibestudio/workspace-contracts/clients";
 import { GZIP_MARKER_HEADER } from "@vibestudio/shared/panel/assetHeaders";
 import { loadShellCredential } from "./connect.js";
 import { retryBundleTransfer } from "./bundleTransferRetry.js";
+
+const RN_HOST_ABI = CURRENT_HOST_ABI["react-native"];
 
 export interface BrowserImportArchiveEntry {
   name: string;

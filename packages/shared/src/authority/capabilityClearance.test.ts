@@ -30,7 +30,7 @@ describe("capability clearance", () => {
   });
 
   it("keeps device access contextual", () => {
-    for (const capability of ["clipboard", "devices.pair", "incoming-pair-links"]) {
+    for (const capability of ["clipboard", "devices.pair"]) {
       expect(
         isInstallClearable({ capability, resource: workspace, tier: "gated", reviewed: true })
       ).toBe(false);

@@ -1,4 +1,4 @@
-export type UnitKind = "extension" | "app";
+export type UnitKind = "extension" | "client";
 
 export type UnitRegistryStatus =
   | "running"

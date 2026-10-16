@@ -15,7 +15,7 @@ import {
   type MethodAuthorityDescriptor,
 } from "./typedServiceClient.js";
 
-const ctx = { caller: createVerifiedCaller("app:compiler", "app") };
+const ctx = { caller: createVerifiedCaller("client:compiler", "client") };
 const operation = {
   service: "bounded",
   method: "inspect",
@@ -323,7 +323,7 @@ describe("receiver authority plan compilation", () => {
     expect(second.definitionDigest).not.toBe(first.definitionDigest);
     expect(second.leaves).toEqual(first.leaves);
     expect(f.resolver).not.toHaveBeenCalled();
-    const caller = createVerifiedCaller("app:compiler", "app", undefined, null, {
+    const caller = createVerifiedCaller("client:compiler", "client", undefined, null, {
       userId: "alice",
       handle: "alice",
     });

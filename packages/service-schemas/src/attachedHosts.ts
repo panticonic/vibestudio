@@ -30,7 +30,7 @@ const sessionFactsShape = {
   initiatingRuntimeId: nonEmpty,
   initiatingRuntimeKind: z.enum([
     "panel",
-    "app",
+    "client",
     "worker",
     "do",
     "extension",
@@ -91,7 +91,7 @@ const invocationReferenceSchema = z
     ownerRuntimeId: nonEmpty,
     ownerRuntimeKind: z.enum([
       "panel",
-      "app",
+      "client",
       "worker",
       "do",
       "extension",
@@ -224,7 +224,11 @@ const ownerAuthority: ServiceAuthorityPolicy = {
  */
 export const attachedHostsMethods = defineServiceMethods({
   attachClient: {
-    website: {"kind":"closed","reason":"The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
       "Open the caller-owned live attached-host session for ordinary typed service clients.",
     args: z.tuple([z.object({ sessionId: nonEmpty }).strict()]),
@@ -244,7 +248,11 @@ export const attachedHostsMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   invokeAttached: {
-    website: {"kind":"closed","reason":"The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Invoke one ordinary service method through a caller-owned attached-host session.",
     args: z.tuple([
       z
@@ -263,7 +271,11 @@ export const attachedHostsMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   listApprovalAudit: {
-    website: {"kind":"closed","reason":"The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
       "Read a bounded page of canonical terminal approval receipts for one caller-owned attached-host session.",
     args: z.tuple([
@@ -293,7 +305,11 @@ export const attachedHostsMethods = defineServiceMethods({
     access: { sensitivity: "read" },
   },
   bootstrapExchange: {
-    website: {"kind":"closed","reason":"The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
       "Exchange one exact-generation ordinary device bootstrap for an ephemeral attached-host route.",
     args: z.tuple([attachedHostParentHelloSchema]),
@@ -304,7 +320,11 @@ export const attachedHostsMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   bootstrapConfirm: {
-    website: {"kind":"closed","reason":"The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
       "Confirm the mutually signed transcript before the ordinary bootstrap credential is revoked.",
     args: z.tuple([attachedHostSessionProofSchema]),
@@ -315,7 +335,11 @@ export const attachedHostsMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   invoke: {
-    website: {"kind":"closed","reason":"The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Deliver one signed replay-protected ordinary child service invocation.",
     args: z.tuple([
       z
@@ -332,7 +356,11 @@ export const attachedHostsMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   presentApproval: {
-    website: {"kind":"closed","reason":"The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description:
       "Present a child-signed typed invocation through the parent canonical approval queue and return one exact signed decision.",
     args: z.tuple([attachedHostApprovalChallengeSchema]),
@@ -343,7 +371,11 @@ export const attachedHostsMethods = defineServiceMethods({
     access: { sensitivity: "write" },
   },
   close: {
-    website: {"kind":"closed","reason":"The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The attachedHosts receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     description: "Close one exact attached-host route and every pending approval challenge.",
     args: z.tuple([
       z.object({ attachedHostSessionId: nonEmpty, reason: nonEmpty.max(256) }).strict(),

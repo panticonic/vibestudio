@@ -100,7 +100,7 @@ describe("ServiceDispatcher ownership", () => {
       const dispatcher = new ServiceDispatcher();
       const request = vi.fn(() => ({
         acquisitionId: "acq:files",
-        ownerRuntimeId: "app:caller",
+        ownerRuntimeId: "client:caller",
         snapshotDigest: "d".repeat(64),
         capability,
         resourceKey: "workspace-files",
@@ -154,9 +154,9 @@ describe("ServiceDispatcher ownership", () => {
         handler: vi.fn(),
       });
       dispatcher.markInitialized();
-      const caller = createVerifiedCaller("app:caller", "app", {
-        callerId: "app:caller",
-        callerKind: "app",
+      const caller = createVerifiedCaller("client:caller", "client", {
+        callerId: "client:caller",
+        callerKind: "client",
         repoPath: "apps/caller",
         effectiveVersion: "v1",
         requested: [{ capability, resource: { kind: "prefix", prefix: "" } }],
@@ -359,16 +359,16 @@ describe("ServiceDispatcher ownership", () => {
     expect(
       (
         await dispatcher.compileAuthorityPlanOperation(
-          { caller: createVerifiedCaller("app:compiler", "app") },
+          { caller: createVerifiedCaller("client:compiler", "client") },
           {
             service: "lifecycle",
             method: "activate",
-            args: [{ kind: "app", releaseId: "task-board" }],
+            args: [{ kind: "client", releaseId: "task-board" }],
             use: "action",
           }
         )
       ).leaves[0]!.resource
-    ).toEqual({ kind: "exact", key: "activate:app:task-board" });
+    ).toEqual({ kind: "exact", key: "activate:client:task-board" });
   });
 
   it("presents the reviewed method and human target without enforcement prose", async () => {
@@ -376,10 +376,10 @@ describe("ServiceDispatcher ownership", () => {
     const capability = "runtime.supervision.manage";
     const request = vi.fn((_input: unknown) => ({
       acquisitionId: "acq:activate-task-board",
-      ownerRuntimeId: "app:caller",
+      ownerRuntimeId: "client:caller",
       snapshotDigest: "d".repeat(64),
       capability,
-      resourceKey: "activate:app:task-board",
+      resourceKey: "activate:client:task-board",
       tier: "gated" as const,
       cardType: "permission.gated" as const,
       renderedAction: "start a workspace service",
@@ -433,9 +433,9 @@ describe("ServiceDispatcher ownership", () => {
       handler: vi.fn(),
     });
     dispatcher.markInitialized();
-    const caller = createVerifiedCaller("app:caller", "app", {
-      callerId: "app:caller",
-      callerKind: "app",
+    const caller = createVerifiedCaller("client:caller", "client", {
+      callerId: "client:caller",
+      callerKind: "client",
       repoPath: "apps/caller",
       effectiveVersion: "ev-caller",
       requested: [{ capability, resource: { kind: "prefix", prefix: "" } }],
@@ -444,12 +444,12 @@ describe("ServiceDispatcher ownership", () => {
 
     await expect(
       dispatcher.dispatch({ caller }, "lifecycle", "activate", [
-        { kind: "app", releaseId: "task-board" },
+        { kind: "client", releaseId: "task-board" },
       ])
     ).rejects.toMatchObject({ code: "EACQUIRE" });
     expect(request).toHaveBeenCalledWith(
       expect.objectContaining({
-        resource: { kind: "exact", key: "activate:app:task-board" },
+        resource: { kind: "exact", key: "activate:client:task-board" },
         presentation: expect.objectContaining({
           title: "Start a workspace service",
           resource: {
@@ -514,7 +514,7 @@ describe("ServiceDispatcher ownership", () => {
     expect(
       (
         await dispatcher.compileAuthorityPlanOperation(
-          { caller: createVerifiedCaller("app:compiler", "app") },
+          { caller: createVerifiedCaller("client:compiler", "client") },
           {
             service: "mail",
             method: "send",

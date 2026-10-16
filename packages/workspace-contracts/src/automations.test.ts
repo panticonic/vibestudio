@@ -13,9 +13,7 @@ const automation = (tool: string) => ({
 
 describe("workspace automation tool action schema", () => {
   it("preserves namespaced selected tool names exactly", () => {
-    const result = WorkspaceAutomationSchema.parse(
-      automation("vibestudio.refresh-now"),
-    );
+    const result = WorkspaceAutomationSchema.parse(automation("vibestudio.refresh-now"));
     expect(result.action).toEqual({
       kind: "tool",
       tool: "vibestudio.refresh-now",
@@ -23,12 +21,7 @@ describe("workspace automation tool action schema", () => {
     });
   });
 
-  it.each(["", "   ", "x".repeat(129)])(
-    "rejects an invalid selected tool name (%j)",
-    (tool) => {
-      expect(WorkspaceAutomationSchema.safeParse(automation(tool)).success).toBe(
-        false,
-      );
-    },
-  );
+  it.each(["", "   ", "x".repeat(129)])("rejects an invalid selected tool name (%j)", (tool) => {
+    expect(WorkspaceAutomationSchema.safeParse(automation(tool)).success).toBe(false);
+  });
 });

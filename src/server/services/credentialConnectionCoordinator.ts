@@ -88,9 +88,9 @@ import {
 import { getRelayOrigin } from "./relayBackhaulClient.js";
 
 const log = createDevLogger("CredentialConnectionCoordinator");
-type BrowserHandoffCallerKind = "app" | "panel" | "shell";
+type BrowserHandoffCallerKind = "client" | "panel" | "shell";
 /** Who presents a browser handoff: a view host (shell), an app, or a terminal-hosted panel. */
-type BrowserDeliveryCallerKind = "app" | "shell" | "panel";
+type BrowserDeliveryCallerKind = "client" | "shell" | "panel";
 type BrowserHandoffOwnerLookupStatus =
   | "not-required"
   | "not-configured"
@@ -656,7 +656,7 @@ export function createCredentialConnectionCoordinator(
   type UserlandRuntimeContext = ServiceContext & {
     caller: ServiceContext["caller"] & {
       runtime: ServiceContext["caller"]["runtime"] & {
-        kind: "panel" | "app" | "worker" | "do";
+        kind: "panel" | "client" | "worker" | "do";
       };
     };
   };
@@ -664,7 +664,7 @@ export function createCredentialConnectionCoordinator(
   function isUserlandRuntimeCaller(ctx: ServiceContext): ctx is UserlandRuntimeContext {
     return (
       ctx.caller.runtime.kind === "panel" ||
-      ctx.caller.runtime.kind === "app" ||
+      ctx.caller.runtime.kind === "client" ||
       ctx.caller.runtime.kind === "worker" ||
       ctx.caller.runtime.kind === "do"
     );
@@ -712,7 +712,7 @@ export function createCredentialConnectionCoordinator(
       );
     }
     if (
-      targetCallerKind === "app" ||
+      targetCallerKind === "client" ||
       (targetCallerKind === "panel" &&
         connectionLookup?.presentsOwnBrowserHandoff?.(targetCallerId))
     ) {

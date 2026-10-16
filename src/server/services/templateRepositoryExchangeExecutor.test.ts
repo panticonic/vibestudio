@@ -17,8 +17,8 @@ function manifest(): string {
     "  name: Test",
     "  description: Test template",
 
-    "apps:",
-    "  - source: apps/one",
+    "clients:",
+    "  - source: clients/one",
     "",
   ].join("\n");
 }
@@ -30,10 +30,10 @@ async function fixture() {
   fs.mkdirSync(path.join(checkout, ".git"), { recursive: true });
   const writeTree = async (target: string, value: string) => {
     await fsp.mkdir(path.join(target, "meta"), { recursive: true });
-    await fsp.mkdir(path.join(target, "apps", "one"), { recursive: true });
+    await fsp.mkdir(path.join(target, "clients", "one"), { recursive: true });
     await fsp.writeFile(path.join(target, "meta", "vibestudio.yml"), manifest());
     await fsp.writeFile(path.join(target, "package.json"), "root\n");
-    await fsp.writeFile(path.join(target, "apps", "one", "package.json"), value);
+    await fsp.writeFile(path.join(target, "clients", "one", "package.json"), value);
   };
   await writeTree(checkout, "semantic\n");
   let semanticValue = "semantic\n";
@@ -111,7 +111,7 @@ describe("TemplateRepositoryExchangeExecutor", () => {
       expectedWorkingHead: { kind: "event", eventId: "event" },
       idempotencyKey: "export",
     });
-    expect(fs.readFileSync(path.join(fx.checkout, "apps", "one", "package.json"), "utf8")).toBe(
+    expect(fs.readFileSync(path.join(fx.checkout, "clients", "one", "package.json"), "utf8")).toBe(
       "semantic\n"
     );
     const receipt = await fx.executor.apply({
@@ -121,7 +121,7 @@ describe("TemplateRepositoryExchangeExecutor", () => {
       ingress: { causalParent: null },
     });
     expect(receipt.direction).toBe("export");
-    expect(fs.readFileSync(path.join(fx.checkout, "apps", "one", "package.json"), "utf8")).toBe(
+    expect(fs.readFileSync(path.join(fx.checkout, "clients", "one", "package.json"), "utf8")).toBe(
       "semantic update\n"
     );
     expect(fs.existsSync(path.join(fx.root, "operations", prepared.intentDigest))).toBe(true);
@@ -153,7 +153,7 @@ describe("TemplateRepositoryExchangeExecutor", () => {
       checkout: fx.checkout,
       ingress: { causalParent: null },
     });
-    fs.writeFileSync(path.join(fx.checkout, "apps", "one", "package.json"), "checkout edit\n");
+    fs.writeFileSync(path.join(fx.checkout, "clients", "one", "package.json"), "checkout edit\n");
     const prepared = await fx.executor.prepare({
       direction: "import",
       checkout: fx.checkout,

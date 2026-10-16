@@ -4,24 +4,24 @@ import type { InstallReviewPart } from "./authority/unitInstallReview.js";
 
 import {
   filterBootstrapApprovals,
-  filterBootstrapApprovalsForTarget,
+  filterBootstrapApprovalsForRuntime,
 } from "./bootstrapApprovals.js";
 
 function part(overrides: Partial<InstallReviewPart> = {}): InstallReviewPart {
   return {
-    identityKey: `${overrides.repoPath ?? "apps/shell"}@ev-test`,
-    kind: "app",
-    label: "Client App",
+    identityKey: `${overrides.repoPath ?? "clients/desktop-browser"}@ev-test`,
+    kind: "client",
+    label: "Client",
     surfaces: [],
-    name: "@workspace-apps/shell",
+    name: "@workspace-clients/desktop-browser",
     title: "Shell",
     purpose: "The desktop app itself.",
-    repoPath: "apps/shell",
+    repoPath: "clients/desktop-browser",
     effectiveVersion: "ev-test",
     version: "1.0.0",
     requiredUnitKeys: [],
     runsInBackground: false,
-    target: "electron",
+    runtime: "web",
     origin: {
       url: null,
       originKey: "vibestudio",
@@ -54,7 +54,7 @@ function review(
     title: "Start this workspace?",
     description: "Vibestudio needs to run programs on this computer.",
     parts,
-    summary: { panels: 0, agents: 0, services: 0, clientApps: 0, extensions: 0 },
+    summary: { panels: 0, agents: 0, services: 0, clients: 0, extensions: 0 },
     unchangedPartCount: 0,
   };
 }
@@ -65,7 +65,7 @@ const extensionPart = part({
   name: "@workspace-extensions/test",
   title: "Test Extension",
   repoPath: "extensions/test",
-  target: null,
+  runtime: null,
 });
 
 const credentialApproval: PendingApproval = {
@@ -94,28 +94,29 @@ describe("which surface owns which review", () => {
   });
 
   it("leaves a review of panels and workers to the running workspace", () => {
-    // apps/shell can render this one, because it is not the code under review.
+    // clients/desktop-browser can render this one, because it is not the code under review.
     const panels = review([part({ kind: "panel", label: "Panel", repoPath: "panels/chat" })]);
     expect(filterBootstrapApprovals([panels])).toEqual([]);
   });
 
-  it("asks each host target only about its own app and the extensions it needs", () => {
+  it("asks each runtime only about its own clients and the extensions it needs", () => {
     const desktop = review([part()], "desktop");
-    const mobile = review([part({ target: "react-native", repoPath: "apps/mobile" })], "mobile");
+    const mobile = review(
+      [part({ runtime: "react-native", repoPath: "clients/mobile-browser" })],
+      "mobile"
+    );
     const extension = review([extensionPart], "extension");
 
     expect(
-      filterBootstrapApprovalsForTarget([desktop, mobile, extension], "electron", [
-        "extensions/test",
-      ])
+      filterBootstrapApprovalsForRuntime([desktop, mobile, extension], "web", ["extensions/test"])
     ).toEqual([desktop, extension]);
-    expect(filterBootstrapApprovalsForTarget([desktop, mobile, extension], "react-native")).toEqual(
-      [mobile]
-    );
+    expect(
+      filterBootstrapApprovalsForRuntime([desktop, mobile, extension], "react-native")
+    ).toEqual([mobile]);
   });
 
-  it("does not ask a target about an extension it does not require", () => {
+  it("does not ask a runtime about an extension it does not require", () => {
     const extension = review([extensionPart], "extension");
-    expect(filterBootstrapApprovalsForTarget([extension], "electron", [])).toEqual([]);
+    expect(filterBootstrapApprovalsForRuntime([extension], "web", [])).toEqual([]);
   });
 });

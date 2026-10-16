@@ -1,4 +1,5 @@
 import type { WorkspaceAutomation } from "./automations.js";
+import type { ClientRuntime, HostKind } from "./clients.js";
 /**
  * Configuration types for Vibestudio.
  *
@@ -12,12 +13,12 @@ import type { WorkspaceAutomation } from "./automations.js";
  *    - meta/vibestudio.yml: Init panels and shared git remotes
  *    - meta/AGENTS.md: Agent system prompt
  *    - panels/: Panel source code
- *    - apps/: Trusted workspace-owned frontend apps
+ *    - clients/: Trusted top-level programs that hosts run on devices
  *    - projects/: Plain editable repositories that are not runtime units
  *    - .cache/: Build cache
  */
 
-export { WORKSPACE_APP_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE } from "./sourceDirs.js";
+export { WORKSPACE_CLIENT_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE } from "./sourceDirs.js";
 
 /**
  * Standard model roles with fallback behavior
@@ -370,18 +371,18 @@ export interface WorkspaceExtensionDecl {
 }
 
 /**
- * App declaration in `workspace/meta/vibestudio.yml`. Apps are the frontend
- * counterpart to extensions: privileged, workspace-coupled units that are
- * build-gated, approval-gated, and hot-loaded onto a shipped host.
+ * Client declaration in `workspace/meta/vibestudio.yml`. A client is a
+ * top-level program a host runs on a device (a browser, a chat app). Clients
+ * live only in the System workspace; they are build-gated, review-gated and
+ * delivered to hosts integrity-verified.
  */
-export interface WorkspaceAppDecl {
+export interface WorkspaceClientDecl {
   /**
-   * App identity: a workspace-relative repo path
-   * (e.g. `"apps/shell"`) OR the package name
-   * (e.g. `"@workspace-apps/shell"`). Both resolve via the build graph.
+   * Client identity: a workspace-relative repo path (`"clients/desktop-browser"`)
+   * OR the package name (`"@workspace-clients/desktop-browser"`).
    */
   source: string;
-  /** Git ref the app floats to. Defaults to `"main"`. */
+  /** Git ref the client floats to. Defaults to `"main"`. */
   ref?: string;
 }
 
@@ -432,41 +433,23 @@ export interface WorkspaceProvidersDecl {
 }
 
 /**
- * Manifest-declared app trust grants. Sources use the `extensions[]`/`apps[]`
- * identity convention (`apps/name` or `@workspace-apps/name`). Because the
- * manifest lives in the approval-gated meta repo, editing these lists rides
- * the existing main-advance approval flow — trust changes stay user-gated.
- *
- * A workspace app listed under `chromeApps` may render host chrome
- * (`panel-hosting`). An app not listed never receives that capability even if
- * its own unit manifest requests it.
+ * Manifest-declared trust. `clients` lists the clients allowed device-level
+ * capabilities (`device-session`, `panel-hosting`, `terminal-app-hosting`,
+ * `approval-surface`, `hub-control`); a client not listed never receives one
+ * even if its own manifest requests it. Because the manifest lives in the
+ * approval-gated meta repo, and a change to who holds a device-level
+ * capability is classified as a critical trust change, trust stays
+ * person-confirmed.
  */
 export interface WorkspaceTrustDecl {
-  chromeApps?: string[];
-  /** Apps allowed to manage pairing and connection recovery. */
-  connectionManagementApps?: string[];
+  clients?: string[];
 }
 
-/**
- * Per-host-target app declaration: which declared workspace app a host target
- * (electron / react-native / terminal) prefers to launch, plus any extensions
- * that must be running before that app can build (used for startup-ordering
- * diagnostics, e.g. the react-native build provider extension).
- */
-export interface WorkspaceHostTargetDecl {
-  /** App identity: `apps/name` or `@workspace-apps/name`. */
-  app: string;
-  /** Extensions (`extensions/name` or `@workspace-extensions/name`) that must
-   *  start before this app can build. */
-  requiresExtensions?: string[];
-}
+/** The client each host opens when nothing more specific was asked. */
+export type WorkspaceClientDefaultsDecl = Partial<Record<HostKind, string>>;
 
-/** Host targets a workspace app can serve. */
-export type WorkspaceHostTargetName = "electron" | "react-native" | "terminal";
-
-export type WorkspaceHostTargetsDecl = Partial<
-  Record<WorkspaceHostTargetName, WorkspaceHostTargetDecl>
->;
+/** Extensions that must run before clients of a runtime can build (e.g. the React Native build provider). */
+export type WorkspaceRuntimeExtensionsDecl = Partial<Record<ClientRuntime, string[]>>;
 
 /** HTTP route declaration in `workspace/meta/vibestudio.yml`. */
 export interface WorkspaceRouteDecl {
@@ -540,22 +523,22 @@ export interface WorkspaceConfig {
    */
   extensions?: WorkspaceExtensionDecl[];
   /**
-   * Declarative privileged frontend app set for this workspace. Absent or
-   * empty means no apps; the reconciler removes anything not declared here.
+   * Declarative client set (System workspace only). Absent or empty means no
+   * clients; the reconciler removes anything not declared here.
    */
-  apps?: WorkspaceAppDecl[];
+  clients?: WorkspaceClientDecl[];
   /**
    * Provider slots: which workspace units fulfil host-integrated roles
    * (eval engine/runtime, cdp client, git interop, browser-data broker). A
    * missing slot cleanly disables the corresponding host feature.
    */
   providers?: WorkspaceProvidersDecl;
-  /**
-   * App trust grants for chrome rendering. Approval-gated via the meta repo.
-   */
+  /** Device-level trust grants. Approval-gated via the meta repo. */
   trust?: WorkspaceTrustDecl;
-  /** Preferred app (and startup-ordering constraints) per host target. */
-  hostTargets?: WorkspaceHostTargetsDecl;
+  /** Default client per host. */
+  clientDefaults?: WorkspaceClientDefaultsDecl;
+  /** Build prerequisites per client runtime. */
+  runtimeExtensions?: WorkspaceRuntimeExtensionsDecl;
 }
 
 /**

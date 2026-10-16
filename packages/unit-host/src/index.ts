@@ -67,7 +67,7 @@ export function unitAuthorityManifestFromPackageJson(
 
 export interface UnitDescriptor<Kind extends UnitKind = UnitKind> {
   kind: Kind;
-  sourceRoot: "extensions" | "apps";
+  sourceRoot: "extensions" | "clients";
   buildKind: Kind;
   approvalFraming: {
     serviceName: string;
@@ -1421,7 +1421,8 @@ export function unitWorkspaceLogRecord<Entry extends UnitRegistryEntryBase>(
     timestamp: entry.installedAt,
     level,
     message:
-      entry.lastError ?? `${kind === "app" ? "App" : "Extension"} ${entry.name} is ${entry.status}`,
+      entry.lastError ??
+      `${kind === "client" ? "Client" : "Extension"} ${entry.name} is ${entry.status}`,
   };
 }
 
@@ -1724,7 +1725,7 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
     publishExecutionOwner(
       changed ? this.publicationPort : undefined,
       {
-        owner: this.unitKind === "app" ? "app-generation" : "extension-generation",
+        owner: this.unitKind === "client" ? "client-generation" : "extension-generation",
         ownerId: entry.name,
         artifacts: changed && this.publicationPort ? this.publishedArtifacts(entry) : [],
       },

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   createCapabilityPresentationResolver,
-  assertReviewedNativeAppAuthorityRequests,
+  assertReviewedClientAuthorityRequests,
   describeCapability,
   summarizeAuthorityManifest,
   summarizeAuthorityRequests,
@@ -13,7 +13,7 @@ import {
 } from "./authority/hostAuthorityCatalog.generated.js";
 import { capabilityDomain } from "./authority/authorityDomains.js";
 import { HOST_SEMANTIC_CAPABILITY_COPY } from "./hostApprovalCopy.js";
-import { APP_CAPABILITIES_BY_NATIVE_HOST } from "./unitManifest.js";
+import { CLIENT_CAPABILITIES } from "@vibestudio/workspace-contracts/clients";
 
 const HOST_CAPABILITY_PRESENTATIONS = Object.fromEntries(
   Object.entries(HOST_AUTHORITY_METHODS)
@@ -31,11 +31,10 @@ const HOST_CAPABILITY_PRESENTATIONS = Object.fromEntries(
 );
 
 describe("authority request presentation", () => {
-  it("reviews every capability implemented by a native app host", () => {
-    const capabilities = [...new Set(Object.values(APP_CAPABILITIES_BY_NATIVE_HOST).flat())];
-    for (const capability of capabilities) {
+  it("reviews every capability in the client capability catalog", () => {
+    for (const capability of CLIENT_CAPABILITIES) {
       expect(() =>
-        assertReviewedNativeAppAuthorityRequests([
+        assertReviewedClientAuthorityRequests([
           {
             capability,
             resource: { kind: "prefix", prefix: "" },
@@ -173,19 +172,6 @@ describe("authority request presentation", () => {
     ]);
   });
 
-  it("rejects a native app authority request without reviewed presentation", () => {
-    expect(() =>
-      assertReviewedNativeAppAuthorityRequests([
-        {
-          capability: "tray",
-          resource: { kind: "prefix", prefix: "" },
-          tier: "gated",
-          evidence: "intentional-broad",
-        },
-      ])
-    ).toThrow("Capability tray has no reviewed authority presentation");
-  });
-
   it.each([
     ["microphone", "Use your microphone", "record audio from your microphone"],
     ["camera", "Use your camera", "capture images and video from your camera"],
@@ -213,7 +199,7 @@ describe("authority request presentation", () => {
       action,
       group: "host",
     });
-    expect(() => assertReviewedNativeAppAuthorityRequests([request])).not.toThrow();
+    expect(() => assertReviewedClientAuthorityRequests([request])).not.toThrow();
   });
 
   it("presents a tier change distinctly without inventing added or removed authority", () => {

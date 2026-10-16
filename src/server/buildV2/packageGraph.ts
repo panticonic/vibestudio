@@ -2,7 +2,7 @@
  * Package Graph — DAG discovery from workspace package.json files.
  *
  * Scans the buildable-unit directories declared by BUILDABLE_UNIT_DIRS in
- * @vibestudio/workspace-contracts/sourceDirs (packages, panels, apps, about, workers,
+ * @vibestudio/workspace-contracts/sourceDirs (packages, panels, clients, about, workers,
  * extensions, skills, templates) and builds an adjacency-list DAG of internal
  * dependencies. Detects cycles, produces topological ordering.
  */
@@ -34,7 +34,7 @@ export interface GraphNode {
   /** Package version from the exact discovered manifest. */
   packageVersion?: string;
   /** Unit kind */
-  kind: "package" | "panel" | "worker" | "extension" | "app" | "template";
+  kind: "package" | "panel" | "worker" | "extension" | "client" | "template";
   /** Dependencies this unit owns: installed into its closure and bundled into it. */
   dependencies: Record<string, string>;
   /** Source-analysis and test requirements; excluded from runtime composition. */
@@ -42,7 +42,7 @@ export interface GraphNode {
   /**
    * Dependencies this unit expects the context that composes it to provide
    * (name → version). A peer is never bundled into this unit: a runtime root
-   * (panel/app/worker/extension) must satisfy every peer in its closure from
+   * (panel/client/worker/extension) must satisfy every peer in its closure from
    * its own `dependencies`, and a library (package/skill) leaves unsatisfied
    * peers external so the realm that loads it supplies its live instance. That
    * is what keeps one React in a panel realm instead of one per guest.
@@ -371,7 +371,7 @@ function manifestIssue(
   };
 }
 
-const LOCATION_SPECIFIC_BLOCKS = ["app", "extension", "panel", "worker"] as const;
+const LOCATION_SPECIFIC_BLOCKS = ["client", "extension", "panel", "worker"] as const;
 
 export function packageManifestContractError(
   relativePath: string,
@@ -393,7 +393,7 @@ export function packageManifestContractError(
   const presentBlocks = LOCATION_SPECIFIC_BLOCKS.filter(
     (block) => manifest?.[block] !== undefined && manifest[block] !== null
   );
-  const requiredBlock = kind === "app" || kind === "extension" ? kind : null;
+  const requiredBlock = kind === "client" || kind === "extension" ? kind : null;
   if (requiredBlock && !presentBlocks.includes(requiredBlock)) {
     return `${relativePath} must declare vibestudio.${requiredBlock} configuration`;
   }

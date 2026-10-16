@@ -295,7 +295,7 @@ describe("shellApproval service contract", () => {
             section: "template",
           },
         ],
-        summary: { panels: 1, agents: 0, services: 0, clientApps: 0, extensions: 0 },
+        summary: { panels: 1, agents: 0, services: 0, clients: 0, extensions: 0 },
         unchangedPartCount: 0,
       },
     ]);

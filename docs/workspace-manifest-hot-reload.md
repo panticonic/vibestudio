@@ -101,9 +101,12 @@ push whose exact published event changes the `meta` repository:
   new route sources. DO routes remain lazy: a route may be registered before the
   DO class is warmed, and the gateway prepares the DO on first request.
 - `extensions`: reconciled by `ExtensionHost`.
-- `apps` and `hostTargets`: app declarations are reconciled by `AppHost`; host
-  target preference lookups read the live config.
-- `trust`: re-seeds the process trust registry after the manifest is applied.
+- `clients`, `clientDefaults` and `runtimeExtensions`: client declarations are
+  reconciled by `ClientHost`; default-client and runtime-prerequisite lookups
+  read the live config.
+- `trust`: applies `trust.clients` live. A grant widens running clients through
+  `supervision:changed`; a withdrawal retires their principals and closes their
+  sessions as `trust-revoked`.
 - shared remotes: synced after meta reload from the live config.
 
 Hot reload should not require callers to retry with lower-level APIs. For

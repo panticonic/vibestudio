@@ -29,18 +29,18 @@ function startupApproval(id = "startup-1"): PendingUnitInstallReviewApproval {
     parts: [
       {
         identityKey: "apps/shell@ev",
-        kind: "app",
-        label: "Client App",
+        kind: "client",
+        label: "Client",
         surfaces: [],
         name: "@workspace-apps/shell",
         title: "Shell",
         purpose: "The desktop app itself.",
-        repoPath: "apps/shell",
+        repoPath: "clients/desktop-browser",
         effectiveVersion: "ev",
         version: null,
         requiredUnitKeys: [],
         runsInBackground: false,
-        target: "electron",
+        runtime: "web",
         origin: {
           url: null,
           originKey: "vibestudio",
@@ -55,7 +55,7 @@ function startupApproval(id = "startup-1"): PendingUnitInstallReviewApproval {
         section: "template",
       },
     ],
-    summary: { panels: 0, agents: 0, services: 0, clientApps: 1, extensions: 0 },
+    summary: { panels: 0, agents: 0, services: 0, clients: 1, extensions: 0 },
     unchangedPartCount: 0,
   };
 }
@@ -86,7 +86,7 @@ describe("shellApprovalService", () => {
       injection: { type: "header", name: "authorization", valueTemplate: "Bearer {token}" },
       requestedByUserId: "alice",
     });
-    const app = createVerifiedCaller("app:apps/shell:desktop", "app");
+    const app = createVerifiedCaller("client:browser:web:desktop", "client");
     const alice = createVerifiedCaller("shell:alice", "shell", null, null, {
       userId: "alice",
       handle: "alice",
@@ -113,20 +113,20 @@ describe("shellApprovalService", () => {
     });
     const service = createShellApprovalService({
       approvalQueue,
-      hasAppCapability: (callerId, capability) =>
-        callerId === "app:apps/shell:desktop" && capability === "panel-hosting",
+      hasClientCapability: (callerId, capability) =>
+        callerId === "client:browser:web:desktop" && capability === "approval-surface",
     });
-    const trusted = createVerifiedCaller("app:apps/shell:desktop", "app", {
-      callerId: "app:apps/shell:desktop",
-      callerKind: "app",
-      repoPath: "apps/shell",
+    const trusted = createVerifiedCaller("client:browser:web:desktop", "client", {
+      callerId: "client:browser:web:desktop",
+      callerKind: "client",
+      repoPath: "clients/desktop-browser",
       effectiveVersion: "v1",
       requested: [],
     });
-    const ordinary = createVerifiedCaller("app:apps/terminal-browser:terminal", "app", {
-      callerId: "app:apps/terminal-browser:terminal",
-      callerKind: "app",
-      repoPath: "apps/terminal-browser",
+    const ordinary = createVerifiedCaller("client:chat:terminal:device-1", "client", {
+      callerId: "client:chat:terminal:device-1",
+      callerKind: "client",
+      repoPath: "clients/terminal-browser",
       effectiveVersion: "v1",
       requested: [],
     });
@@ -317,7 +317,7 @@ describe("shellApprovalService", () => {
     const welcome: PendingUnitInstallReviewApproval = {
       ...startupApproval("welcome-1"),
       callerId: "system:workspace-creation",
-      parts: [{ ...startupApproval().parts[0]!, kind: "panel", label: "Panel", target: null }],
+      parts: [{ ...startupApproval().parts[0]!, kind: "panel", label: "Panel", runtime: null }],
     };
     const resolveInstallReview = vi.fn();
     const service = createShellApprovalService({

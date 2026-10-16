@@ -11,7 +11,7 @@
  * abstractions for cross-process wiring.
  */
 
-import type { AppCapability } from "./unitManifest.js";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import type { CapabilityScope } from "@vibestudio/rpc";
 import type { PanelLifecycleResult, PanelPlacementHint } from "./types.js";
 
@@ -114,13 +114,13 @@ export interface PanelViewLike {
     appId: string,
     url: string,
     contextId?: string,
-    capabilities?: readonly AppCapability[],
+    capabilities?: readonly ClientCapability[],
     identity?: HostedCodeIdentity
   ): Promise<void>;
   updateAppView?(
     appId: string,
     url: string,
-    capabilities?: readonly AppCapability[],
+    capabilities?: readonly ClientCapability[],
     identity?: HostedCodeIdentity
   ): Promise<void>;
   createViewForBrowser?(

@@ -3,6 +3,10 @@
  */
 
 import { z } from "zod";
+import {
+  ClientPrincipalGrantRequestSchema,
+  ClientPrincipalGrantResponseSchema,
+} from "./clients.js";
 import type {
   MethodAccessDescriptor,
   ServiceAuthorityPolicy,
@@ -75,66 +79,20 @@ export const ConnectionInfoResponseSchema = z
     serverBootId: z.string().min(1),
     workspaceId: z.string().min(1),
     /** Authenticated caller kind of this connection. */
-    callerKind: z.enum(["shell", "panel", "app", "worker", "do", "extension", "server", "agent"]),
+    callerKind: z.enum([
+      "shell",
+      "panel",
+      "client",
+      "worker",
+      "do",
+      "extension",
+      "server",
+      "agent",
+    ]),
     /** Host-verified entity/context binding, present only for an agent caller. */
     agentBinding: AgentBindingSchema.optional(),
   })
   .strict();
-
-export const MobileAppBootstrapResponseSchema = z
-  .object({
-    serverId: z.string().min(1),
-    serverBootId: z.string().min(1),
-    workspaceId: z.string().min(1),
-    bootstrap: z.record(z.string(), z.unknown()),
-  })
-  .strict();
-
-/** Device-run app targets whose clients exchange their device identity for an app principal. */
-export const AppPrincipalTargetSchema = z.enum(["react-native-app", "terminal-app"]);
-export type AppPrincipalTarget = z.infer<typeof AppPrincipalTargetSchema>;
-
-export const AppPrincipalGrantRequestSchema = z
-  .object({
-    principal: AppPrincipalTargetSchema,
-    /** App source; defaults to the workspace's `hostTargets.<target>.app`. */
-    source: z.string().min(1).max(256).nullable().optional(),
-  })
-  .strict();
-
-export const AppPrincipalGrantResponseSchema = z
-  .object({
-    /** One-use connection grant; redeem it as the auth token of a new RPC session. */
-    connectionGrant: z.string().min(1),
-    expiresAt: z.number().int(),
-    /** Device-scoped app principal (`app:<source>:<deviceId>`) the grant authenticates. */
-    callerId: z.string().min(1),
-    deviceId: z.string().min(1),
-    serverId: z.string().min(1),
-    serverBootId: z.string().min(1),
-    workspaceId: z.string().min(1),
-    /** The exact app incarnation the principal is bound to; clients run these artifacts. */
-    app: z
-      .object({
-        appId: z.string().min(1),
-        source: z.string().min(1),
-        buildKey: z.string().min(1),
-        effectiveVersion: z.string().min(1),
-        artifacts: z.array(
-          z
-            .object({
-              path: z.string().min(1),
-              role: z.string().min(1),
-              contentType: z.string(),
-              route: z.string().min(1),
-            })
-            .strict()
-        ),
-      })
-      .strict(),
-  })
-  .strict();
-export type AppPrincipalGrantResponse = z.infer<typeof AppPrincipalGrantResponseSchema>;
 
 export const authMethods = defineServiceMethods({
   grantConnection: {
@@ -187,7 +145,7 @@ export const authMethods = defineServiceMethods({
     authority: AUTH_CONNECTION_INFO_POLICY,
     access: AUTH_READ_ACCESS,
   },
-  getMobileAppBootstrap: {
+  grantClientPrincipal: {
     website: {
       kind: "closed",
       reason: "Transport credentials and principal admission belong to authenticated hosts.",
@@ -198,31 +156,12 @@ export const authMethods = defineServiceMethods({
       residency: "identity",
       family: "auth.read",
       rationale:
-        "An authenticated mobile shell reads the approved app manifest for its own workspace.",
-    },
-    description: "Return the approved React Native app manifest to the authenticated mobile shell.",
-    args: z.tuple([z.string().min(1).max(256).nullable()]),
-    returns: MobileAppBootstrapResponseSchema,
-    authority: { principals: ["host", "user"] },
-    access: AUTH_READ_ACCESS,
-  },
-  grantAppPrincipal: {
-    website: {
-      kind: "closed",
-      reason: "Transport credentials and principal admission belong to authenticated hosts.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "identity",
-      family: "auth.read",
-      rationale:
-        "An authenticated device shell obtains the device-scoped identity of an approved app it runs itself; the app's authority was admitted at its launch gate.",
+        "An authenticated device host obtains the principal of the exact client build it verified and runs itself; the client was admitted at its launch gate.",
     },
     description:
-      "Activate the calling device's principal for an approved, running device-run app (the mobile app or the terminal browser) and mint a one-use connection grant for it, bound to the caller's transport endpoint. Returns the grant and the exact app artifacts the principal is bound to.",
-    args: z.tuple([AppPrincipalGrantRequestSchema]),
-    returns: AppPrincipalGrantResponseSchema,
+      "Activate the calling device's principal for the exact admitted client build it verified (`client:<id>:<runtime>:<deviceId>`) and mint a one-use connection grant for it, bound to the caller's transport endpoint.",
+    args: z.tuple([ClientPrincipalGrantRequestSchema]),
+    returns: ClientPrincipalGrantResponseSchema,
     authority: { principals: ["host", "user"] },
     access: AUTH_GRANT_ACCESS,
   },

@@ -13,7 +13,7 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { fixedPreparedAuthoritySelection } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import type { Workspace, WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
 import { normalizeWorkspaceRepoPath, splitRepoPath } from "@vibestudio/shared/runtime/entitySpec";
 import {
@@ -25,7 +25,7 @@ import { readWorkspaceConfig } from "@vibestudio/workspace/configParser";
 import { buildWorkspaceDeclarations } from "@vibestudio/workspace/singletonRegistry";
 import type { WorkspaceTreeScanner } from "../vcsHost/workspaceTreeScanner.js";
 import { parseSkillFrontmatter } from "../vcsHost/workspaceSkills.js";
-import { isAuthorizedChrome } from "./chromeTrust.js";
+import { isTrustedDeviceCaller } from "./clientTrust.js";
 
 // Wire data types live in the shared schema module (single source of truth
 // for server registration and typed clients). Re-exported here because many
@@ -65,7 +65,7 @@ export interface WorkspaceServiceDeps {
     ) => Promise<Array<{ path: string; content: string }>>;
   };
   /** Durably advance a model session's content latch before read bytes are returned. */
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
   /**
    * Materialize a context's working folder (idempotent) and return its absolute
    * path. Backs `workspace.ensureContextFolder`; delegates to the
@@ -127,7 +127,7 @@ function resolveSkillMdPath(nameOrPath: string): string {
 }
 
 function isTrustedWorkspaceCaller(ctx: ServiceContext, deps: WorkspaceServiceDeps): boolean {
-  return isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability });
+  return isTrustedDeviceCaller(ctx.caller, { hasClientCapability: deps.hasClientCapability });
 }
 
 async function requireEnsureContextFolderAccess(

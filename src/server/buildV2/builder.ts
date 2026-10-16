@@ -48,11 +48,11 @@ import {
 import { profileEsbuildBuild } from "./compilerProfile.js";
 import { SharedBuildCoordinator } from "./sharedBuildCoordinator.js";
 import { derivedCacheCoordinator } from "@vibestudio/shared/derivedCache";
-import type { GraphNode, PackageGraph } from "./packageGraph.js";
+import type { GraphNode, PackageGraph, PackageManifest } from "./packageGraph.js";
 import { BuildDiagnosticsError, BuildRequestError, diagnosticsFromError } from "./diagnostics.js";
 import type { LibraryBuildTarget, WorkspaceTestRuntime } from "@vibestudio/service-schemas/build";
 import {
-  appUnitManifestDescriptor,
+  clientUnitManifestDescriptor,
   extensionUnitManifestDescriptor,
   validateUnitManifest,
   parseExtensionMethodAuthority,
@@ -97,7 +97,8 @@ import { RUNTIME_MODULE, WORKER_RUNTIME_COMPANION_MODULES } from "./platformModu
 import { resolveExportSubpath } from "@vibestudio/typecheck/workspace";
 import { assertPresent } from "../../lintHelpers";
 import { resolveBuildProvider } from "./buildProviderRegistry.js";
-import { validateAppBuildContract } from "./appBuildContract.js";
+import { validateClientBuildContract } from "../clients/clientBuildContract.js";
+import type { ClientManifestBlock, ClientRuntime } from "@vibestudio/workspace-contracts/clients";
 import { peerConflictRefusal, unownedPeerRefusal } from "./dependencyAudit.js";
 import { createBuildScratchDir } from "./buildScratch.js";
 import { prepareBuildProviderResources } from "./buildProviderResources.js";
@@ -115,7 +116,7 @@ import {
   workspaceRpcSchema,
   workspaceRpcSchemaMetadata,
 } from "./workspaceRpcSchemas.js";
-import { createPanelBundleReport, startupModuleOutputs } from "./panelBundleReport.js";
+import { createPanelBundleReport } from "./panelBundleReport.js";
 import { generatePanelEntry } from "./panelEntryProtocol.js";
 import { createSharedStyleDedupePlugin } from "./sharedStyleDedupe.js";
 import { LibraryLoweringWorkerClient } from "./libraryLoweringWorkerClient.js";
@@ -1105,19 +1106,6 @@ function normalizeManifestSpecList(specs: string[] | undefined): string[] {
   return [...deduped].sort();
 }
 
-function normalizeStartupModuleSpecifiers(specs: string[] | undefined): string[] {
-  if (!specs) return [];
-  const normalized = new Set<string>();
-  for (const raw of specs) {
-    const value = typeof raw === "string" ? raw.trim() : "";
-    if (!value.startsWith("./") || value.includes("\\") || value.split("/").includes("..")) {
-      throw new Error(`Invalid app.startupModules specifier: ${JSON.stringify(raw)}`);
-    }
-    normalized.add(value);
-  }
-  return [...normalized].sort();
-}
-
 function escapeRegex(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -1383,14 +1371,14 @@ function createDedupePlugin(runtimeNodeModules: string, packages: string[]): esb
   };
 }
 
-function createAppRuntimeShimPlugin(): esbuild.Plugin {
+function createClientRuntimeShimPlugin(): esbuild.Plugin {
   const unavailable = `() => { throw new Error(${JSON.stringify(
-    `${RUNTIME_MODULE} panel APIs are not available in workspace app renderers`
+    `${RUNTIME_MODULE} panel APIs are not available in workspace client pages`
   )}); }`;
   const ns = `new Proxy({}, { get: () => unavailable })`;
   const contents = `const unavailable = ${unavailable};
 // --- Portable runtime surface (identical names on panel/worker/eval) ---
-export const id = "app";
+export const id = "client";
 export const contextId = "";
 export const rpc = {};
 export const fs = new Proxy({}, { get: () => unavailable });
@@ -1470,7 +1458,7 @@ function createFsShimPlugin(options: {
         const isPromises = args.path === "fs/promises" || args.path === "node:fs/promises";
         if (!options.runtimeBacked) {
           const unavailable =
-            '() => { throw new Error("Node fs is not available in workspace app renderers"); }';
+            '() => { throw new Error("Node fs is not available in workspace client pages"); }';
           const contents = isPromises
             ? `export const readFile = ${unavailable};
 export const writeFile = ${unavailable};
@@ -2353,7 +2341,7 @@ function preparedRuntimeBuild(
     !options?.website &&
     node.kind !== "package" &&
     node.kind !== "template" &&
-    !(node.kind === "app" && node.manifest.app?.target === "react-native")
+    !(node.kind === "client" && node.manifest.client?.runtime === "react-native")
       ? source.preparedBuildForContent?.(stateRef, node.relativePath)
       : null;
   if (prepared && prepared.effectiveVersion !== ev) {
@@ -2404,12 +2392,13 @@ export async function buildUnitStored(
     stateRef,
     options
   );
-  // An app target's artifact contract is part of its build, whether the bytes
-  // were just produced, found in the store or installed with a release: a
-  // candidate that could never be activated fails the protected-main build gate
-  // instead of landing and failing at activation.
-  if (node.kind === "app" && !options?.library && !options?.test && !options?.website) {
-    validateAppBuildContract(node.name, appTargetOf(node), stored);
+  // A client's artifact contract is part of its build, whether the bytes were
+  // just produced, found in the store or installed with a release: a candidate
+  // that could never be activated fails the protected-main build gate instead
+  // of landing and failing at activation. This is the one place it is enforced.
+  if (node.kind === "client" && !options?.library && !options?.test && !options?.website) {
+    const client = clientBlockOf(node);
+    validateClientBuildContract(node.name, client, stored);
   }
   return stored;
 }
@@ -2435,8 +2424,8 @@ async function buildUnitStoredUnchecked(
     !capturedOptions?.library &&
     !capturedOptions?.test &&
     !capturedOptions?.website &&
-    node.kind === "app" &&
-    node.manifest.app?.target === "react-native"
+    node.kind === "client" &&
+    node.manifest.client?.runtime === "react-native"
   ) {
     // The provider is an input to the artifact, so resolve it before cache
     // lookup, coalescing, or taking a compilation slot.
@@ -2445,7 +2434,7 @@ async function buildUnitStoredUnchecked(
       provider = resolveBuildProvider("react-native");
     } catch (error) {
       throw new Error(
-        `React Native app ${node.name} cannot be built because its build provider is unavailable: ${error instanceof Error ? error.message : String(error)}. ` +
+        `React Native client ${node.name} cannot be built because its build provider is unavailable: ${error instanceof Error ? error.message : String(error)}. ` +
           "Install and enable the extension that contributes the react-native build target, then push again.",
         { cause: error }
       );
@@ -2693,8 +2682,8 @@ async function doBuild(
           authority,
           signal
         );
-      } else if (node.kind === "app") {
-        return await buildApp(
+      } else if (node.kind === "client") {
+        return await buildClient(
           session,
           node,
           ev,
@@ -2930,7 +2919,7 @@ interface BuildEnv {
  * How the artifact under construction is composed, which decides who satisfies
  * the closure's peers.
  *
- * A `runtime-root` (panel, app, worker, extension) is loaded on its own, so
+ * A `runtime-root` (panel, client, worker, extension) is loaded on its own, so
  * nothing exists above it to provide anything: every peer in its closure must
  * be owned by one of its own dependencies. A `library` (package, skill) is
  * always loaded *into* a realm, so its unsatisfied peers stay external and
@@ -3494,62 +3483,61 @@ async function buildWebsiteBundle(
   }
 }
 
-async function buildPanel(
-  session: BuilderSession,
-  node: GraphNode,
-  ev: string,
-  buildKey: string,
-  graph: PackageGraph,
-  workspaceRoot: string,
-  sourcemap: boolean,
-  sourceRoot: string,
-  sourceStateHash: string,
-  authority: UnitAuthorityManifest,
-  runtimeTest?: RuntimeTestBuild,
-  signal: AbortSignal = session.signal
-): Promise<StoredBuildResult> {
-  const profileStartedAt = Date.now();
-  const profileStartedRss = process.memoryUsage().rss;
-  const env = await prepareBuildEnv(
-    session,
-    node,
-    buildKey,
-    graph,
-    workspaceRoot,
-    sourceRoot,
-    "runtime-root",
-    signal
-  );
-  const environmentReadyAt = Date.now();
-  const { outdir, nodePaths } = env;
-  const entryFile = runtimeTest
-    ? path.join(outdir, "_test-entry.ts")
-    : await resolveEntryPoint(node, env.sourcePath, { conditions: PANEL_CONDITIONS });
-  if (runtimeTest) {
-    fs.writeFileSync(entryFile, panelTestEntry(outdir, env.sourcePath, runtimeTest));
-  }
+/**
+ * The browser-bundle core shared by panels and client pages: the exposed-module
+ * and entry wrappers, one esbuild invocation with the browser/panel conditions
+ * and shims, and the located outputs. What surrounds the bundle (the page, the
+ * loader, shared styles' artifacts, metadata) belongs to the caller.
+ */
+/** A unit's `vibestudio` block: the typed fields plus the free-form ones builds read by key. */
+type UnitManifest = PackageManifest & Record<string, unknown>;
 
-  // esbuild identifies inputs by their physical paths. Keep the package root
-  // used for manifest-relative startup modules in that same namespace (e.g.
-  // macOS /var and /private/var name the same materialized source directory).
-  const panelSourcePath = fs.realpathSync(env.sourcePath);
-  const extractedPkgPath = path.join(panelSourcePath, "package.json");
-  const pkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8"));
-  const extractedManifest = pkg.vibestudio ?? {};
-  const extractedDeps = { ...pkg.peerDependencies, ...pkg.dependencies };
+interface BrowserBundleInput {
+  session: BuilderSession;
+  node: GraphNode;
+  graph: PackageGraph;
+  sourceRoot: string;
+  env: BuildEnv;
+  sourcemap: boolean;
+  /** Absolute path of the program's entry module. */
+  entryFile: string;
+  manifest: UnitManifest;
+  adapter: FrameworkAdapter;
+  /** Specifiers bundled into one shared stylesheet; empty when the page links none. */
+  sharedStyles: readonly string[];
+  /** Plugins that must resolve before the common browser shims. */
+  leadingPlugins: readonly esbuild.Plugin[];
+  /** Whether `fs` is backed by the runtime's filesystem service or unavailable. */
+  runtimeBackedFs: boolean;
+}
 
-  // Resolve framework and HTML template from materialized source
-  const resolved = resolveTemplate(extractedManifest, extractedDeps, panelSourcePath, sourceRoot);
-  const adapter = getAdapter(resolved.framework);
+interface BrowserBundle {
+  metafile: esbuild.Metafile | undefined;
+  externals: Record<string, string>;
+  bundleOutputPath: string;
+  cssOutputPath: string | undefined;
+  sharedStyleOutputPath: string | undefined;
+  /** Artifact paths relative to the build directory. */
+  bundleArtifactPath: string;
+  cssArtifactPath: string | null;
+  bundle: string;
+  css: string | undefined;
+  /** Every other emitted file: chunks, images, source maps. */
+  assetEntries: BuildArtifactInput[];
+  compileStartedAt: number;
+  compileReadyAt: number;
+}
 
-  const manifestExternals = extractedManifest.externals ?? {};
+async function compileBrowserBundle(input: BrowserBundleInput): Promise<BrowserBundle> {
+  const { node, graph, sourceRoot, env, entryFile, manifest, adapter, sharedStyles } = input;
+  const { outdir, nodePaths, resolveDir } = env;
+  const manifestExternals = manifest.externals ?? {};
   const externalSpecifiers = expandExternalSpecifiers(manifestExternals);
-  const exposeModules = normalizeManifestSpecList(extractedManifest.exposeModules);
+  const exposeModules = normalizeManifestSpecList(manifest.exposeModules);
   const dedupePackages = normalizeManifestSpecList([
     ...adapter.dedupePackages,
-    ...(extractedManifest.dedupeModules ?? []),
+    ...(manifest.dedupeModules ?? []),
   ]);
-  const { resolveDir } = env;
 
   // Generate expose/wrapper entries.
   const exposePath = path.join(outdir, "_expose.js");
@@ -3568,13 +3556,11 @@ async function buildPanel(
     exposePath,
     entryFile,
     adapter,
-    manifestFrameworkModule(extractedManifest)
+    manifestFrameworkModule(manifest)
   );
   const wrapperPath = path.join(outdir, "_entry.js");
   fs.writeFileSync(wrapperPath, wrapperCode);
 
-  const sharedStyles =
-    node.kind === "app" ? [] : normalizeManifestSpecList([...(adapter.sharedStyles ?? [])]);
   const sharedStyleEntryPath =
     sharedStyles.length > 0 ? path.join(outdir, "_shared-styles.css") : null;
   if (sharedStyleEntryPath) {
@@ -3586,7 +3572,7 @@ async function buildPanel(
 
   // Exposed namespaces are literal dynamic imports in this same graph, so
   // esbuild keeps barrel-only code lazy while sharing React, runtime
-  // initialization, and every other singleton with the panel entry.
+  // initialization, and every other singleton with the entry.
   const entryPoints: Record<string, string> = {
     bundle: wrapperPath,
     ...(sharedStyleEntryPath ? { "shared-styles": sharedStyleEntryPath } : {}),
@@ -3595,11 +3581,11 @@ async function buildPanel(
   // Build plugins: resolve plugin uses materialized source paths.
   const plugins: esbuild.Plugin[] = [
     ...(sharedStyleEntryPath ? [createSharedStyleDedupePlugin(sharedStyles)] : []),
-    ...(node.kind === "app" ? [createAppRuntimeShimPlugin()] : []),
+    ...input.leadingPlugins,
     createWorkspaceResolvePlugin(graph, sourceRoot, PANEL_CONDITIONS),
     createTsExtensionPlugin(sourceRoot),
-    createFsShimPlugin({ runtimeBacked: node.kind !== "app", resolveDir }),
-    createPathShimPlugin(resolveDir, session.processOwner.appNodeModules),
+    createFsShimPlugin({ runtimeBacked: input.runtimeBackedFs, resolveDir }),
+    createPathShimPlugin(resolveDir, input.session.processOwner.appNodeModules),
     createCryptoShimPlugin({ resolveDir }),
   ];
   const dedupePlugin = createDedupePlugin(resolveDir, dedupePackages);
@@ -3630,7 +3616,7 @@ async function buildPanel(
     target: "es2022",
     format: "esm",
     splitting: true,
-    // Panels are runtime artifacts, not source modules consumed by a dev
+    // These are runtime artifacts, not source modules consumed by a dev
     // server. Shipping React's development branches and readable-but-much-
     // larger output makes every webview parse megabytes of diagnostics before
     // it can mount. Linked sourcemaps preserve debuggability without putting
@@ -3645,7 +3631,7 @@ async function buildPanel(
     // requested at runtime, substantially extending first build and cache
     // persistence. Units that need mapped production stacks opt in through
     // `vibestudio.sourcemap: true`.
-    sourcemap: sourcemap ? "linked" : false,
+    sourcemap: input.sourcemap ? "linked" : false,
     metafile: true,
     logLevel: "warning",
     conditions: [...PANEL_CONDITIONS],
@@ -3664,75 +3650,180 @@ async function buildPanel(
     esbuildOptions.tsconfigRaw = { compilerOptions: { jsx: adapter.tsconfigJsx } };
   }
 
-  try {
-    const compileStartedAt = Date.now();
-    const result = await buildWithEsbuild(esbuildOptions);
-    const compileReadyAt = Date.now();
-    const metafile = result.metafile;
+  const compileStartedAt = Date.now();
+  const result = await buildWithEsbuild(esbuildOptions);
+  const compileReadyAt = Date.now();
+  const metafile = result.metafile;
 
-    if (isVerboseBuildLogEnabled() && metafile) {
-      const outputs = Object.entries(metafile.outputs);
-      const jsChunks = outputs
-        .filter(
-          ([outputPath, meta]) =>
-            outputPath.endsWith(".js") && !meta.entryPoint && Object.keys(meta.inputs).length > 0
-        )
-        .map(([, meta]) => meta);
-      const largestChunkBytes = jsChunks.reduce((max, meta) => Math.max(max, meta.bytes), 0);
-      const mainBundleEntry = outputs.find(([outputPath]) => isPanelEntryJsOutput(outputPath));
-      const mainBundleBytes = mainBundleEntry?.[1].bytes;
-      const bundleSizeText = formatBytes(mainBundleBytes ?? 0);
-      const largestChunkText = jsChunks.length > 0 ? formatBytes(largestChunkBytes) : "0B";
+  if (isVerboseBuildLogEnabled() && metafile) {
+    const outputs = Object.entries(metafile.outputs);
+    const jsChunks = outputs
+      .filter(
+        ([outputPath, meta]) =>
+          outputPath.endsWith(".js") && !meta.entryPoint && Object.keys(meta.inputs).length > 0
+      )
+      .map(([, meta]) => meta);
+    const largestChunkBytes = jsChunks.reduce((max, meta) => Math.max(max, meta.bytes), 0);
+    const mainBundleEntry = outputs.find(([outputPath]) => isPanelEntryJsOutput(outputPath));
+    const mainBundleBytes = mainBundleEntry?.[1].bytes;
+    const bundleSizeText = formatBytes(mainBundleBytes ?? 0);
+    const largestChunkText = jsChunks.length > 0 ? formatBytes(largestChunkBytes) : "0B";
 
-      logVerbose(
-        "BuildV2",
-        `${node.name}: main=${bundleSizeText}, chunks=${jsChunks.length}, largestChunk=${largestChunkText}`
-      );
-    }
-
-    // Read outputs
-    const outputPaths = Object.keys(metafile?.outputs ?? {});
-    const bundleOutputPath =
-      outputPaths.find((outputPath) => isPanelEntryJsOutput(outputPath)) ??
-      path.join(outdir, "bundle.js");
-    const cssOutputPath = outputPaths.find((outputPath) => isPanelEntryCssOutput(outputPath));
-    const sharedStyleOutputPath = sharedStyleEntryPath
-      ? outputPaths.find(
-          (outputPath) =>
-            outputPath.endsWith(".css") &&
-            path.resolve(outdir, metafile?.outputs[outputPath]?.entryPoint ?? "") ===
-              path.resolve(sharedStyleEntryPath)
-        )
-      : undefined;
-    const bundleArtifactPath = relativeBuildOutputPath(outdir, bundleOutputPath);
-    const cssArtifactPath = cssOutputPath ? relativeBuildOutputPath(outdir, cssOutputPath) : null;
-    const bundlePath = path.join(outdir, ...bundleArtifactPath.split("/"));
-    const cssPath = cssArtifactPath ? path.join(outdir, ...cssArtifactPath.split("/")) : null;
-
-    const bundle = fs.existsSync(bundlePath) ? fs.readFileSync(bundlePath, "utf-8") : "";
-    const css = cssPath && fs.existsSync(cssPath) ? fs.readFileSync(cssPath, "utf-8") : undefined;
-    const declaredStartupModules = normalizeStartupModuleSpecifiers(
-      extractedManifest.app?.startupModules
+    logVerbose(
+      "BuildV2",
+      `${node.name}: main=${bundleSizeText}, chunks=${jsChunks.length}, largestChunk=${largestChunkText}`
     );
-    const startupOutputs = metafile
-      ? startupModuleOutputs(
+  }
+
+  // Read outputs
+  const outputPaths = Object.keys(metafile?.outputs ?? {});
+  const bundleOutputPath =
+    outputPaths.find((outputPath) => isPanelEntryJsOutput(outputPath)) ??
+    path.join(outdir, "bundle.js");
+  const cssOutputPath = outputPaths.find((outputPath) => isPanelEntryCssOutput(outputPath));
+  const sharedStyleOutputPath = sharedStyleEntryPath
+    ? outputPaths.find(
+        (outputPath) =>
+          outputPath.endsWith(".css") &&
+          path.resolve(outdir, metafile?.outputs[outputPath]?.entryPoint ?? "") ===
+            path.resolve(sharedStyleEntryPath)
+      )
+    : undefined;
+  const bundleArtifactPath = relativeBuildOutputPath(outdir, bundleOutputPath);
+  const cssArtifactPath = cssOutputPath ? relativeBuildOutputPath(outdir, cssOutputPath) : null;
+  const bundlePath = path.join(outdir, ...bundleArtifactPath.split("/"));
+  const cssPath = cssArtifactPath ? path.join(outdir, ...cssArtifactPath.split("/")) : null;
+
+  const bundle = fs.existsSync(bundlePath) ? fs.readFileSync(bundlePath, "utf-8") : "";
+  const css = cssPath && fs.existsSync(cssPath) ? fs.readFileSync(cssPath, "utf-8") : undefined;
+
+  // Collect assets (chunks, images, etc.)
+  const assetEntries: BuildArtifactInput[] = [];
+  if (metafile) {
+    for (const outputPath of Object.keys(metafile.outputs)) {
+      const absPath = path.resolve(outdir, outputPath);
+
+      // Skip main bundle and CSS
+      const relativeName = path.relative(outdir, absPath).replace(/\\/g, "/");
+      if (
+        relativeName === bundleArtifactPath ||
+        relativeName === cssArtifactPath ||
+        outputPath === sharedStyleOutputPath
+      )
+        continue;
+      if (!fs.existsSync(absPath)) continue;
+
+      const ext = path.extname(absPath).toLowerCase();
+      const isText = TEXT_EXTENSIONS.has(ext);
+
+      assetEntries.push({
+        path: relativeName,
+        role: ext === ".map" ? "map" : "asset",
+        contentType: contentTypeForPath(relativeName),
+        encoding: isText ? "utf8" : "base64",
+        content: isText
+          ? fs.readFileSync(absPath, "utf-8")
+          : fs.readFileSync(absPath).toString("base64"),
+      });
+    }
+  }
+
+  return {
+    metafile,
+    externals: manifestExternals,
+    bundleOutputPath,
+    cssOutputPath,
+    sharedStyleOutputPath,
+    bundleArtifactPath,
+    cssArtifactPath,
+    bundle,
+    css,
+    assetEntries,
+    compileStartedAt,
+    compileReadyAt,
+  };
+}
+
+async function buildPanel(
+  session: BuilderSession,
+  node: GraphNode,
+  ev: string,
+  buildKey: string,
+  graph: PackageGraph,
+  workspaceRoot: string,
+  sourcemap: boolean,
+  sourceRoot: string,
+  sourceStateHash: string,
+  authority: UnitAuthorityManifest,
+  runtimeTest?: RuntimeTestBuild,
+  signal: AbortSignal = session.signal
+): Promise<StoredBuildResult> {
+  const profileStartedAt = Date.now();
+  const profileStartedRss = process.memoryUsage().rss;
+  const env = await prepareBuildEnv(
+    session,
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    "runtime-root",
+    signal
+  );
+  const environmentReadyAt = Date.now();
+  const { outdir } = env;
+  const entryFile = runtimeTest
+    ? path.join(outdir, "_test-entry.ts")
+    : await resolveEntryPoint(node, env.sourcePath, { conditions: PANEL_CONDITIONS });
+  if (runtimeTest) {
+    fs.writeFileSync(entryFile, panelTestEntry(outdir, env.sourcePath, runtimeTest));
+  }
+
+  // esbuild identifies inputs by their physical paths (e.g. macOS /var and
+  // /private/var name the same materialized source directory).
+  const panelSourcePath = fs.realpathSync(env.sourcePath);
+  const extractedPkgPath = path.join(panelSourcePath, "package.json");
+  const pkg = JSON.parse(fs.readFileSync(extractedPkgPath, "utf-8"));
+  const extractedManifest = pkg.vibestudio ?? {};
+  const extractedDeps = { ...pkg.peerDependencies, ...pkg.dependencies };
+
+  // Resolve framework and HTML template from materialized source
+  const resolved = resolveTemplate(extractedManifest, extractedDeps, panelSourcePath, sourceRoot);
+  const adapter = getAdapter(resolved.framework);
+  const sharedStyles = normalizeManifestSpecList([...(adapter.sharedStyles ?? [])]);
+
+  try {
+    const compiled = await compileBrowserBundle({
+      session,
+      node,
+      graph,
+      sourceRoot,
+      env,
+      sourcemap,
+      entryFile,
+      manifest: extractedManifest,
+      adapter,
+      sharedStyles,
+      leadingPlugins: [],
+      runtimeBackedFs: true,
+    });
+    const {
+      metafile,
+      bundleOutputPath,
+      cssOutputPath,
+      sharedStyleOutputPath,
+      bundleArtifactPath,
+      cssArtifactPath,
+      bundle,
+      css,
+    } = compiled;
+    const rawBundleReport = metafile
+      ? createPanelBundleReport(
           metafile,
           bundleOutputPath,
-          outdir,
-          panelSourcePath,
-          declaredStartupModules
+          cssOutputPath,
+          sharedStyleOutputPath ? [sharedStyleOutputPath] : []
         )
-      : [];
-    if (declaredStartupModules.length > 0 && startupOutputs.length === 0) {
-      throw new Error(
-        `${node.name} app.startupModules did not resolve to an emitted module: ${declaredStartupModules.join(", ")}`
-      );
-    }
-    const rawBundleReport = metafile
-      ? createPanelBundleReport(metafile, bundleOutputPath, cssOutputPath, [
-          ...(sharedStyleOutputPath ? [sharedStyleOutputPath] : []),
-          ...startupOutputs,
-        ])
       : undefined;
     const bundleReport = rawBundleReport
       ? {
@@ -3794,36 +3885,7 @@ async function buildPanel(
         content: css,
       });
     }
-
-    // Collect assets (chunks, images, etc.)
-    if (metafile) {
-      for (const outputPath of Object.keys(metafile.outputs)) {
-        const absPath = path.resolve(outdir, outputPath);
-
-        // Skip main bundle and CSS
-        const relativeName = path.relative(outdir, absPath).replace(/\\/g, "/");
-        if (
-          relativeName === bundleArtifactPath ||
-          relativeName === cssArtifactPath ||
-          outputPath === sharedStyleOutputPath
-        )
-          continue;
-        if (!fs.existsSync(absPath)) continue;
-
-        const ext = path.extname(absPath).toLowerCase();
-        const isText = TEXT_EXTENSIONS.has(ext);
-
-        artifactEntries.push({
-          path: relativeName,
-          role: ext === ".map" ? "map" : "asset",
-          contentType: contentTypeForPath(relativeName),
-          encoding: isText ? "utf8" : "base64",
-          content: isText
-            ? fs.readFileSync(absPath, "utf-8")
-            : fs.readFileSync(absPath).toString("base64"),
-        });
-      }
-    }
+    artifactEntries.push(...compiled.assetEntries);
 
     const iconArtifact = manifestIconArtifact(extractedManifest, panelSourcePath);
     if (iconArtifact && !artifactEntries.some((entry) => entry.path === iconArtifact.path)) {
@@ -3834,8 +3896,7 @@ async function buildPanel(
     const title = extractedManifest.title ?? node.name;
     const html = generatePanelHtml(title, resolved.htmlPath, adapter, {
       hasCss: !!css,
-      externals: manifestExternals,
-      usePanelLoader: node.kind !== "app",
+      externals: compiled.externals,
       bundleSrc: relativeAssetHref(bundleArtifactPath),
       cssHref: cssArtifactPath ? relativeAssetHref(cssArtifactPath) : undefined,
       sharedStyleHrefs: sharedStyleMetadata?.map((style) => style.url),
@@ -3882,16 +3943,7 @@ async function buildPanel(
             runtime: runtimeTest.runtime,
             selectedFiles: runtimeTest.selectedFiles,
           }
-        : node.kind === "app"
-          ? {
-              kind: "app",
-              target: "electron",
-              platform: "electron",
-              integrity: null,
-              rnHostAbi: null,
-              provider: null,
-            }
-          : { kind: "generic" },
+        : { kind: "generic" },
       builtAt: new Date().toISOString(),
     };
 
@@ -3901,9 +3953,9 @@ async function buildPanel(
     if (isVerboseBuildLogEnabled()) {
       logVerbose("BuildV2", `panel build profile ${node.relativePath}`, {
         environmentMs: environmentReadyAt - profileStartedAt,
-        configureMs: compileStartedAt - environmentReadyAt,
-        esbuildMs: compileReadyAt - compileStartedAt,
-        artifactCollectionMs: artifactCollectionReadyAt - compileReadyAt,
+        configureMs: compiled.compileStartedAt - environmentReadyAt,
+        esbuildMs: compiled.compileReadyAt - compiled.compileStartedAt,
+        artifactCollectionMs: artifactCollectionReadyAt - compiled.compileReadyAt,
         executableModuleScanMs: executableModulesReadyAt - artifactCollectionReadyAt,
         storeMs: storedAt - executableModulesReadyAt,
         totalMs,
@@ -4380,17 +4432,20 @@ async function buildWorker(
 }
 
 // ---------------------------------------------------------------------------
-// App Build
+// Client Build
 // ---------------------------------------------------------------------------
 
-function appTargetOf(node: GraphNode): "electron" | "react-native" | "terminal" {
-  const target = node.manifest.app?.target;
-  if (!target) throw new Error(`App ${node.name} manifest must declare vibestudio.app.target`);
-  return target;
+/** The `vibestudio.client` block of a unit under `clients/`, as the graph discovered it. */
+function clientBlockOf(node: GraphNode): ClientManifestBlock {
+  const client = node.manifest.client;
+  if (!client) {
+    throw new Error(`Client ${node.name} manifest must declare vibestudio.client`);
+  }
+  return client;
 }
 
-/** Everything a target adapter needs to turn one app unit into stored artifacts. */
-interface AppBuildInput {
+/** Everything a runtime adapter needs to turn one client unit into stored artifacts. */
+interface ClientBuildInput {
   session: BuilderSession;
   node: GraphNode;
   ev: string;
@@ -4403,38 +4458,49 @@ interface AppBuildInput {
   authority: UnitAuthorityManifest;
   provider: BuildProvider | null;
   signal: AbortSignal;
-  /** The unit's validated `vibestudio` manifest and its `app` section. */
-  manifest: Record<string, unknown>;
-  appManifest: Record<string, unknown>;
+  /** The unit's validated `vibestudio` manifest. */
+  manifest: UnitManifest;
+  /** Its validated `client` block, read from the materialized source. */
+  client: ClientManifestBlock;
 }
 
 /**
- * One adapter per app target. Each owns how its artifacts are produced; the
- * artifact contract every adapter must satisfy is `validateAppBuildContract`,
- * enforced where builds leave the builder.
+ * One adapter per client runtime. Each owns how its artifacts are produced.
+ * Artifact integrity is sealed for every artifact by the store, and the
+ * artifact contract every adapter must satisfy is `validateClientBuildContract`,
+ * enforced in `buildUnitStored` where builds leave the builder.
  */
-const APP_TARGET_ADAPTERS: Record<
-  "electron" | "react-native" | "terminal",
-  (input: AppBuildInput) => Promise<StoredBuildResult>
+const CLIENT_RUNTIME_ADAPTERS: Record<
+  ClientRuntime,
+  (input: ClientBuildInput) => Promise<StoredBuildResult>
 > = {
-  electron: (input) =>
-    buildPanel(
-      input.session,
-      input.node,
-      input.ev,
-      input.buildKey,
-      input.graph,
-      input.workspaceRoot,
-      input.sourcemap,
-      input.sourceRoot,
-      input.sourceStateHash,
-      input.authority
-    ),
-  terminal: buildTerminalApp,
-  "react-native": buildReactNativeApp,
+  web: buildClientPage,
+  terminal: buildTerminalClient,
+  "react-native": buildReactNativeClient,
 };
 
-async function buildApp(
+/** The build metadata every client runtime reports: identity, ABI and (React Native) provider. */
+function clientBuildDetails(
+  client: ClientManifestBlock,
+  provider: BuildProvider | null
+): Extract<BuildMetadata["details"], { kind: "client" }> {
+  return {
+    kind: "client",
+    clientId: client.id,
+    runtime: client.runtime,
+    hostAbi: client.hostAbi,
+    provider: provider
+      ? {
+          name: provider.name,
+          activeEv: provider.activeEv,
+          activeBuildKey: provider.activeBuildKey,
+          contractVersion: provider.contractVersion,
+        }
+      : null,
+  };
+}
+
+async function buildClient(
   session: BuilderSession,
   node: GraphNode,
   ev: string,
@@ -4448,13 +4514,14 @@ async function buildApp(
   provider: BuildProvider | null,
   signal: AbortSignal
 ): Promise<StoredBuildResult> {
-  const appSourcePath = path.join(sourceRoot, node.relativePath);
+  const clientSourcePath = path.join(sourceRoot, node.relativePath);
   const extractedPkg = JSON.parse(
-    fs.readFileSync(path.join(appSourcePath, "package.json"), "utf-8")
-  ) as { vibestudio?: Record<string, unknown> };
+    fs.readFileSync(path.join(clientSourcePath, "package.json"), "utf-8")
+  ) as { vibestudio?: UnitManifest };
   const manifest = extractedPkg.vibestudio ?? {};
-  validateUnitManifest(appUnitManifestDescriptor, manifest, { unitName: node.name });
-  return APP_TARGET_ADAPTERS[appTargetOf(node)]({
+  validateUnitManifest(clientUnitManifestDescriptor, manifest, { unitName: node.name });
+  const client = manifest.client!;
+  return CLIENT_RUNTIME_ADAPTERS[client.runtime]({
     session,
     node,
     ev,
@@ -4468,11 +4535,153 @@ async function buildApp(
     provider,
     signal,
     manifest,
-    appManifest: manifest["app"] as Record<string, unknown>,
+    client,
   });
 }
 
-async function buildReactNativeApp(input: AppBuildInput): Promise<StoredBuildResult> {
+/** A client's entry module inside its materialized source; it must exist. */
+function clientEntryFile(node: GraphNode, client: ClientManifestBlock, sourcePath: string): string {
+  const entryFile = path.join(sourcePath, client.entry);
+  if (!fs.existsSync(entryFile)) {
+    throw new Error(`Client ${node.name} entry does not exist: ${client.entry}`);
+  }
+  return entryFile;
+}
+
+/**
+ * A web client: one HTML page (the primary artifact) with its JS, CSS and
+ * assets, loaded by a desktop host from its verified cache. It shares the
+ * browser-bundle core with panels but is not a panel: no panel loader, no
+ * panel runtime (a host-generated stub stands in for it), no shared styles.
+ */
+async function buildClientPage(input: ClientBuildInput): Promise<StoredBuildResult> {
+  const {
+    session,
+    node,
+    ev,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourcemap,
+    sourceRoot,
+    sourceStateHash,
+    authority,
+    signal,
+    manifest,
+    client,
+  } = input;
+  const env = await prepareBuildEnv(
+    session,
+    node,
+    buildKey,
+    graph,
+    workspaceRoot,
+    sourceRoot,
+    "runtime-root",
+    signal
+  );
+  try {
+    const entryFile = clientEntryFile(node, client, env.sourcePath);
+    // esbuild identifies inputs by their physical paths.
+    const pageSourcePath = fs.realpathSync(env.sourcePath);
+    const pkg = JSON.parse(fs.readFileSync(path.join(pageSourcePath, "package.json"), "utf-8"));
+    const resolved = resolveTemplate(
+      manifest,
+      { ...pkg.peerDependencies, ...pkg.dependencies },
+      pageSourcePath,
+      sourceRoot
+    );
+    const adapter = getAdapter(resolved.framework);
+    const compiled = await compileBrowserBundle({
+      session,
+      node,
+      graph,
+      sourceRoot,
+      env,
+      sourcemap,
+      entryFile,
+      manifest,
+      adapter,
+      sharedStyles: [],
+      leadingPlugins: [createClientRuntimeShimPlugin()],
+      runtimeBackedFs: false,
+    });
+    const { bundleArtifactPath, cssArtifactPath, css } = compiled;
+    const iconArtifact = manifestIconArtifact(manifest, pageSourcePath);
+    const html = generatePanelHtml(
+      client.title ?? manifest.title ?? node.name,
+      resolved.htmlPath,
+      adapter,
+      {
+        hasCss: !!css,
+        externals: compiled.externals,
+        usePanelLoader: false,
+        bundleSrc: relativeAssetHref(bundleArtifactPath),
+        cssHref: cssArtifactPath ? relativeAssetHref(cssArtifactPath) : undefined,
+        iconHref: manifestIconHref(manifest, iconArtifact),
+      }
+    );
+    const entries: BuildArtifactInput[] = [
+      {
+        path: "index.html",
+        role: "primary",
+        contentType: "text/html; charset=utf-8",
+        encoding: "utf8",
+        content: html,
+      },
+      {
+        path: bundleArtifactPath,
+        role: "asset",
+        contentType: "text/javascript; charset=utf-8",
+        encoding: "utf8",
+        content: compiled.bundle,
+      },
+      ...(css
+        ? [
+            {
+              path: cssArtifactPath ?? "bundle.css",
+              role: "css" as const,
+              contentType: "text/css; charset=utf-8",
+              encoding: "utf8" as const,
+              content: css,
+            },
+          ]
+        : []),
+      ...compiled.assetEntries,
+    ];
+    if (iconArtifact && !entries.some((entry) => entry.path === iconArtifact.path)) {
+      entries.push(iconArtifact);
+    }
+    return await session.store.putStored(
+      buildKey,
+      { entries },
+      {
+        kind: "client",
+        name: node.name,
+        buildKey,
+        sourcePath: node.relativePath,
+        ev,
+        sourceStateHash,
+        sourcemap,
+        authority,
+        executableModules: executableModulesFromMetafile(
+          compiled.metafile,
+          env.outdir,
+          sourceRoot,
+          node,
+          graph
+        ),
+        framework: resolved.framework,
+        details: clientBuildDetails(client, null),
+        builtAt: new Date().toISOString(),
+      }
+    );
+  } finally {
+    await env.cleanup();
+  }
+}
+
+async function buildReactNativeClient(input: ClientBuildInput): Promise<StoredBuildResult> {
   const {
     session,
     node,
@@ -4486,9 +4695,9 @@ async function buildReactNativeApp(input: AppBuildInput): Promise<StoredBuildRes
     authority,
     provider,
     signal,
-    manifest: extractedManifest,
+    client,
   } = input;
-  const appSourcePath = path.join(sourceRoot, node.relativePath);
+  const clientSourcePath = path.join(sourceRoot, node.relativePath);
   if (!provider) throw new Error("React Native build identity has no resolved provider");
   const env = await prepareBuildEnv(
     session,
@@ -4513,13 +4722,13 @@ async function buildReactNativeApp(input: AppBuildInput): Promise<StoredBuildRes
     const request: BuildProviderInput = {
       target: "react-native",
       unitName: node.name,
-      sourcePath: appSourcePath,
+      sourcePath: clientSourcePath,
       dependencyProjection: {
         nodeModulesPath: dependencies.nodeModulesDir || null,
         modules: collectBuildProviderModules(session, node, graph, sourceRoot, env.outdir),
       },
       effectiveVersion: ev,
-      manifest: extractedManifest,
+      client,
     };
     const worker = session.processOwner.immutableTreeWorker;
     resources = await prepareBuildProviderResources({
@@ -4536,7 +4745,7 @@ async function buildReactNativeApp(input: AppBuildInput): Promise<StoredBuildRes
       output.artifacts
     );
     const metadata: BuildMetadata = {
-      kind: "app",
+      kind: "client",
       name: node.name,
       buildKey,
       sourcePath: node.relativePath,
@@ -4544,19 +4753,7 @@ async function buildReactNativeApp(input: AppBuildInput): Promise<StoredBuildRes
       sourceStateHash,
       sourcemap,
       authority,
-      details: {
-        kind: "app",
-        target: "react-native",
-        platform: output.metadata?.platform,
-        integrity: null,
-        rnHostAbi: output.metadata?.rnHostAbi ?? null,
-        provider: {
-          name: provider.name,
-          activeEv: provider.activeEv,
-          activeBuildKey: provider.activeBuildKey,
-          contractVersion: provider.contractVersion,
-        },
-      },
+      details: clientBuildDetails(client, provider),
       builtAt: new Date().toISOString(),
     };
     return session.store.putStored(buildKey, { entries }, metadata);
@@ -4641,7 +4838,7 @@ function collectBuildProviderModules(
   );
 }
 
-async function buildTerminalApp(input: AppBuildInput): Promise<StoredBuildResult> {
+async function buildTerminalClient(input: ClientBuildInput): Promise<StoredBuildResult> {
   const {
     session,
     node,
@@ -4651,7 +4848,7 @@ async function buildTerminalApp(input: AppBuildInput): Promise<StoredBuildResult
     workspaceRoot,
     sourcemap,
     sourceRoot,
-    appManifest,
+    client,
     sourceStateHash,
     authority,
     signal,
@@ -4667,15 +4864,8 @@ async function buildTerminalApp(input: AppBuildInput): Promise<StoredBuildResult
     signal
   );
   const { outdir, nodePaths, resolveDir, sourcePath } = env;
-  const entry = appManifest["entry"];
-  if (typeof entry !== "string" || entry.trim().length === 0) {
-    throw new Error(`Terminal app ${node.name} requires vibestudio.app.entry`);
-  }
-  const entryFile = path.join(sourcePath, entry);
-  if (!fs.existsSync(entryFile)) {
-    throw new Error(`Terminal app ${node.name} entry does not exist: ${entry}`);
-  }
   try {
+    const entryFile = clientEntryFile(node, client, sourcePath);
     await buildWithEsbuild({
       entryPoints: [entryFile],
       bundle: true,
@@ -4723,7 +4913,7 @@ async function buildTerminalApp(input: AppBuildInput): Promise<StoredBuildResult
         ],
       },
       {
-        kind: "app",
+        kind: "client",
         name: node.name,
         buildKey,
         sourcePath: node.relativePath,
@@ -4731,14 +4921,7 @@ async function buildTerminalApp(input: AppBuildInput): Promise<StoredBuildResult
         sourceStateHash,
         sourcemap,
         authority,
-        details: {
-          kind: "app",
-          target: "terminal",
-          platform: "terminal",
-          integrity: null,
-          rnHostAbi: null,
-          provider: null,
-        },
+        details: clientBuildDetails(client, null),
         builtAt: new Date().toISOString(),
       }
     );

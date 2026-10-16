@@ -71,7 +71,7 @@ describe("preparePanelAccessAuthority", () => {
     ).resolves.toEqual([]);
   });
 
-  it.each(["shell", "electron-main", "shell:paired-device"])(
+  it.each(["electron-main", "shell:paired-device"])(
     "keeps admitted interactive chrome %s as the initiator of panel creation",
     async (id) => {
       const resolveSubjectCaller = vi.fn(() => caller);
@@ -329,21 +329,21 @@ describe("preparePanelAccessAuthority", () => {
         contextId: "ctx-target",
       })
     ).resolves.toEqual([expect.objectContaining({ tier: "critical" })]);
-    const hasAppCapability = vi.fn(() => true);
+    const hasClientCapability = vi.fn(() => true);
     const appContext: ServiceContext = {
-      caller: createVerifiedCaller("@workspace-apps/shell", "app", {
+      caller: createVerifiedCaller("@workspace-apps/shell", "client", {
         callerId: "@workspace-apps/shell",
-        callerKind: "app",
+        callerKind: "client",
         repoPath: "apps/shell",
         effectiveVersion: "v1",
       }),
     };
     await expect(
-      preparePanelAccessAuthority(deps({ hasAppCapability }), appContext, "close", {
+      preparePanelAccessAuthority(deps({ hasClientCapability }), appContext, "close", {
         id: "target",
         contextId: "ctx-target",
       })
     ).resolves.toEqual([]);
-    expect(hasAppCapability).toHaveBeenCalled();
+    expect(hasClientCapability).toHaveBeenCalled();
   });
 });

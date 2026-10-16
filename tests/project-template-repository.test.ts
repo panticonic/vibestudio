@@ -19,7 +19,7 @@ function fixture(): { workspace: string; checkout: string } {
   const checkout = path.join(root, "checkout");
   for (const directory of [workspace, checkout]) {
     fs.mkdirSync(path.join(directory, "meta"), { recursive: true });
-    fs.mkdirSync(path.join(directory, "apps", "one"), { recursive: true });
+    fs.mkdirSync(path.join(directory, "clients", "one"), { recursive: true });
     fs.writeFileSync(
       path.join(directory, "meta", "vibestudio.yml"),
       [
@@ -28,12 +28,12 @@ function fixture(): { workspace: string; checkout: string } {
         "  name: Test",
         "  description: Test template",
 
-        "apps:",
-        "  - source: apps/one",
+        "clients:",
+        "  - source: clients/one",
         "",
       ].join("\n")
     );
-    fs.writeFileSync(path.join(directory, "apps", "one", "package.json"), "one\n");
+    fs.writeFileSync(path.join(directory, "clients", "one", "package.json"), "one\n");
     fs.writeFileSync(path.join(directory, "package.json"), "root\n");
   }
   fs.mkdirSync(path.join(checkout, ".git"));
@@ -60,21 +60,21 @@ describe("template repository exchange", () => {
   it("preserves one-sided checkout edits until an explicit import", () => {
     const fx = fixture();
     applyTemplateRepositoryExchange(planTemplateRepositoryExchange({ ...fx, direction: "export" }));
-    fs.writeFileSync(path.join(fx.checkout, "apps", "one", "package.json"), "checkout edit\n");
+    fs.writeFileSync(path.join(fx.checkout, "clients", "one", "package.json"), "checkout edit\n");
     const exportPlan = planTemplateRepositoryExchange({ ...fx, direction: "export" });
-    expect(exportPlan.paths.find((entry) => entry.path === "apps/one/package.json")?.status).toBe(
-      "target-changed"
-    );
+    expect(
+      exportPlan.paths.find((entry) => entry.path === "clients/one/package.json")?.status
+    ).toBe("target-changed");
     applyTemplateRepositoryExchange(exportPlan);
-    expect(fs.readFileSync(path.join(fx.workspace, "apps", "one", "package.json"), "utf8")).toBe(
+    expect(fs.readFileSync(path.join(fx.workspace, "clients", "one", "package.json"), "utf8")).toBe(
       "one\n"
     );
     const importPlan = planTemplateRepositoryExchange({ ...fx, direction: "import" });
-    expect(importPlan.paths.find((entry) => entry.path === "apps/one/package.json")?.status).toBe(
-      "update"
-    );
+    expect(
+      importPlan.paths.find((entry) => entry.path === "clients/one/package.json")?.status
+    ).toBe("update");
     applyTemplateRepositoryExchange(importPlan);
-    expect(fs.readFileSync(path.join(fx.workspace, "apps", "one", "package.json"), "utf8")).toBe(
+    expect(fs.readFileSync(path.join(fx.workspace, "clients", "one", "package.json"), "utf8")).toBe(
       "checkout edit\n"
     );
   });
@@ -82,11 +82,11 @@ describe("template repository exchange", () => {
   it("refuses divergent edits without overwriting either side", () => {
     const fx = fixture();
     applyTemplateRepositoryExchange(planTemplateRepositoryExchange({ ...fx, direction: "export" }));
-    const relative = path.join("apps", "one", "package.json");
+    const relative = path.join("clients", "one", "package.json");
     fs.writeFileSync(path.join(fx.workspace, relative), "semantic edit\n");
     fs.writeFileSync(path.join(fx.checkout, relative), "checkout edit\n");
     const plan = planTemplateRepositoryExchange({ ...fx, direction: "export" });
-    expect(plan.conflicts).toEqual(["apps/one/package.json"]);
+    expect(plan.conflicts).toEqual(["clients/one/package.json"]);
     expect(() => applyTemplateRepositoryExchange(plan)).toThrow("has conflicts");
     expect(fs.readFileSync(path.join(fx.workspace, relative), "utf8")).toBe("semantic edit\n");
     expect(fs.readFileSync(path.join(fx.checkout, relative), "utf8")).toBe("checkout edit\n");
@@ -96,7 +96,7 @@ describe("template repository exchange", () => {
     const fx = fixture();
     const plan = planTemplateRepositoryExchange({ ...fx, direction: "export" });
     fs.writeFileSync(
-      path.join(fx.workspace, "apps", "one", "package.json"),
+      path.join(fx.workspace, "clients", "one", "package.json"),
       "changed after review\n"
     );
     expect(() => applyTemplateRepositoryExchange(plan)).toThrow("changed after review");

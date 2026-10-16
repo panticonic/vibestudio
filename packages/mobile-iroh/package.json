@@ -31,6 +31,7 @@
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shared": "workspace:*",
+    "@vibestudio/workspace-contracts": "workspace:*",
     "react-native-keychain": "^9.2.2",
     "web-streams-polyfill": "^3.3.3",
     "whatwg-fetch": "3.6.20"

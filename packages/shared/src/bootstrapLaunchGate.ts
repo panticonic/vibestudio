@@ -7,21 +7,21 @@ import {
   type InstallReviewPart,
 } from "./authority/unitInstallReview.js";
 import { HOST_APPROVAL_COPY } from "./hostApprovalCopy.js";
-import type { HostTarget } from "./hostTargets.js";
+import type { HostKind } from "@vibestudio/workspace-contracts/clients";
 
 /**
  * The launch gate (docs/template-install-unit-approval-ux-plan.md §7.6).
  *
- * Client apps and extensions are decided before the workspace UI exists, in a
+ * Clients and extensions are decided before the workspace UI exists, in a
  * host-owned window and in the terminal. This surface cannot be replaced by the
- * in-workspace collection route, because `apps/shell` is itself under review and
+ * in-workspace collection route, because the client is itself under review and
  * cannot render its own approval. After the creation review exists, it is also
  * the ONLY review these units ever get — including for a third-party root — so
  * it is specified properly rather than treated as chrome.
  *
  * **This decision is not about permissions.** Extensions execute workspace code under the host platform
- * contract, including normal account permissions on Windows, and apps are the
- * client itself. Listing individual permissions here invites the user to weigh
+ * contract, including normal account permissions on Windows, and a client is the
+ * program the person is looking at. Listing individual permissions here invites the user to weigh
  * details downstream of the only question that matters:
  *
  *   > Whose code is this, and do I want it running on my computer?
@@ -44,9 +44,10 @@ import type { HostTarget } from "./hostTargets.js";
 
 export type BootstrapDecision = "once" | "deny";
 
-export function targetLabel(target: HostTarget): string {
-  if (target === "react-native") return "Mobile";
-  if (target === "terminal") return "Terminal";
+export function hostLabel(host: HostKind): string {
+  if (host === "android") return "Android";
+  if (host === "ios") return "iOS";
+  if (host === "terminal") return "Terminal";
   return "Desktop";
 }
 
@@ -59,7 +60,7 @@ export interface LaunchGateUnitRow {
   /** Canonical reviewed-unit identity; titles can repeat across different parts. */
   identityKey: string;
   name: string;
-  /** The user-facing noun: Client App, Extension, Panel, Agent, Service. */
+  /** The user-facing noun: Client, Extension, Panel, Agent, Service. */
   label: string;
   /** Notable rows in the same words the collection route uses for this unit. */
   notable: string;
@@ -72,11 +73,11 @@ export interface LaunchGateSource {
   origin: InstallReviewOrigin;
   /** `github.com/acme/studio  at v2.1`, or the host naming its own build. */
   label: string;
-  /** `2 apps · 4 extensions · 9 other parts` */
+  /** `2 clients · 4 extensions · 9 other parts` */
   counts: string;
-  apps: number;
+  clients: number;
   extensions: number;
-  /** Panels, agents and services: everything that is neither an app nor an extension. */
+  /** Panels, agents and services: everything that is neither a client nor an extension. */
   others: number;
   units: LaunchGateUnitRow[];
   /** `You haven't run code from github.com/acme before.` */
@@ -205,12 +206,12 @@ export function launchGateUnitRow(part: InstallReviewPart): LaunchGateUnitRow {
   };
 }
 
-function countsPhrase(apps: number, extensions: number, others: number): string {
+function countsPhrase(clients: number, extensions: number, others: number): string {
   // Every program counts somewhere: the source's counts add up to what it runs.
   const parts = [
-    apps > 0 ? plural(apps, "app") : null,
+    clients > 0 ? plural(clients, "client") : null,
     extensions > 0 ? plural(extensions, "extension") : null,
-    others > 0 ? plural(others, apps + extensions > 0 ? "other part" : "part") : null,
+    others > 0 ? plural(others, clients + extensions > 0 ? "other part" : "part") : null,
   ].filter((value): value is string => value !== null);
   return parts.join(" · ") || "nothing";
 }
@@ -235,7 +236,7 @@ export function launchGateSources(parts: readonly InstallReviewPart[]): LaunchGa
         origin: part.origin,
         label: sourceLabel(part.origin),
         counts: "",
-        apps: 0,
+        clients: 0,
         extensions: 0,
         others: 0,
         units: [],
@@ -249,14 +250,14 @@ export function launchGateSources(parts: readonly InstallReviewPart[]): LaunchGa
       };
       byOrigin.set(key, source);
     }
-    if (part.kind === "app") source.apps += 1;
+    if (part.kind === "client") source.clients += 1;
     else if (part.kind === "extension") source.extensions += 1;
     else source.others += 1;
     source.units.push(launchGateUnitRow(part));
   }
   const sources = [...byOrigin.values()];
   for (const source of sources) {
-    source.counts = countsPhrase(source.apps, source.extensions, source.others);
+    source.counts = countsPhrase(source.clients, source.extensions, source.others);
     source.units.sort((left, right) => left.name.localeCompare(right.name));
   }
   return sources.sort((left, right) => {
@@ -279,7 +280,7 @@ function rootSources(sources: readonly LaunchGateSource[]): LaunchGateSource[] {
 }
 
 /**
- * The whole gate, for one host target.
+ * The whole gate, for one host.
  *
  * A fresh workspace from our own base — the overwhelmingly common case — reads
  * as one fact and one button. Anything from elsewhere is named, never buried.
@@ -317,7 +318,7 @@ export function launchGateView(input: {
         )
     : singleSource && only
       ? // One fact, one button: `Vibestudio needs to run 16 programs on this
-        // computer — 3 apps and 13 extensions, all from Vibestudio 1.4.0.`
+        // computer — 3 clients and 13 extensions, all from Vibestudio 1.4.0.`
         LAUNCH_GATE_COPY.allFromOneSource(programs, only.counts, only.label)
       : LAUNCH_GATE_COPY.programCount(programs);
 
@@ -336,7 +337,7 @@ export function launchGateView(input: {
     root.domainLine = null;
   }
 
-  const blocksStartup = input.blocksStartup ?? parts.some((part) => part.kind === "app");
+  const blocksStartup = input.blocksStartup ?? parts.some((part) => part.kind === "client");
   // One source that is not ours is still a source worth opening on: collapsing
   // it would put the only identity in this decision behind a click.
   const sourcesExpandedByDefault =
@@ -375,7 +376,7 @@ export function approvalSignature(approval: PendingUnitInstallReviewApproval): s
     approval.approvalId,
     approval.mode,
     ...approval.parts.map((part) =>
-      [part.kind, part.name, part.target ?? "", part.repoPath, part.effectiveVersion].join(":")
+      [part.kind, part.name, part.runtime ?? "", part.repoPath, part.effectiveVersion].join(":")
     ),
   ].join("|");
 }
@@ -409,11 +410,11 @@ export function approvalIds(approvals: PendingUnitInstallReviewApproval[]): Set<
  */
 export function formatLaunchGateForTerminal(
   approvals: PendingUnitInstallReviewApproval[],
-  target: HostTarget,
+  host: HostKind,
   width = 80
 ): string {
   const view = launchGateView({ approvals });
-  const lines = [`${targetLabel(target)} — ${view.title}`, ""];
+  const lines = [`${hostLabel(host)} — ${view.title}`, ""];
   const add = (text: string, indent = 0, hanging = indent) =>
     lines.push(...wrapIndented(text, width, indent, hanging));
   add(view.summary);

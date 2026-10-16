@@ -1,7 +1,7 @@
 export const WORKSPACE_SOURCE_DIRS = [
   "meta",
   "panels",
-  "apps",
+  "clients",
   "packages",
   "agents",
   "workers",
@@ -19,7 +19,7 @@ export const WORKSPACE_STATE_DIRS = [".cache", ".databases", ".context-projectio
 
 export const WORKSPACE_IMPORT_PARENT_DIRS = [
   "panels",
-  "apps",
+  "clients",
   "packages",
   "agents",
   "workers",
@@ -45,7 +45,13 @@ export type WorkspaceImportParentDir = (typeof WORKSPACE_IMPORT_PARENT_DIRS)[num
 // ---------------------------------------------------------------------------
 
 /** The build-graph node kind a buildable directory's units produce. */
-export type BuildableUnitKind = "package" | "panel" | "worker" | "extension" | "app" | "template";
+export type BuildableUnitKind =
+  | "package"
+  | "panel"
+  | "worker"
+  | "extension"
+  | "client"
+  | "template";
 
 export interface BuildableUnitDir {
   /** Workspace-relative directory name (a member of WORKSPACE_SOURCE_DIRS). */
@@ -62,12 +68,12 @@ export interface BuildableUnitDir {
 
 /**
  * Package-name scopes for workspace unit kinds. The scope conventions are a
- * host-owned contract: `workspace/apps/foo` publishes as `@workspace-apps/foo`
+ * host-owned contract: `workspace/clients/foo` publishes as `@workspace-clients/foo`
  * and `workspace/extensions/bar` as `@workspace-extensions/bar`. Centralized
  * here (and referenced by BUILDABLE_UNIT_DIRS below) so host code never
  * re-spells the scope strings.
  */
-export const WORKSPACE_APP_PACKAGE_SCOPE = "@workspace-apps/" as const;
+export const WORKSPACE_CLIENT_PACKAGE_SCOPE = "@workspace-clients/" as const;
 export const WORKSPACE_EXTENSION_PACKAGE_SCOPE = "@workspace-extensions/" as const;
 export const WORKSPACE_TERMINAL_APP_PACKAGE_SCOPE = "@workspace-terminal-apps/" as const;
 
@@ -96,7 +102,7 @@ export function isTerminalAppLocation(relativePath: string): boolean {
 export const BUILDABLE_UNIT_DIRS: readonly BuildableUnitDir[] = [
   { dir: "packages", kind: "package", scope: "@workspace/" },
   { dir: "panels", kind: "panel", scope: "@workspace-panels/" },
-  { dir: "apps", kind: "app", scope: WORKSPACE_APP_PACKAGE_SCOPE },
+  { dir: "clients", kind: "client", scope: WORKSPACE_CLIENT_PACKAGE_SCOPE },
   { dir: "about", kind: "panel", scope: "@workspace-about/" },
   { dir: TERMINAL_APP_DIR, kind: "panel", scope: WORKSPACE_TERMINAL_APP_PACKAGE_SCOPE },
   { dir: "workers", kind: "worker", scope: "@workspace-workers/" },

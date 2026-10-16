@@ -1,10 +1,6 @@
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
-import {
-  callerHasAppCapability,
-  callerHasPlatformCapability,
-  type CapabilityTrustDeps,
-} from "./chromeTrust.js";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
+import { callerHasCapability, type CapabilityTrustDeps } from "./clientTrust.js";
 
 export interface CapabilityDecision {
   allowed: boolean;
@@ -12,8 +8,8 @@ export interface CapabilityDecision {
 }
 
 export interface CapabilityAuthorizer {
-  check(caller: VerifiedCaller, capability: AppCapability): CapabilityDecision;
-  require(caller: VerifiedCaller, capability: AppCapability): void;
+  check(caller: VerifiedCaller, capability: ClientCapability): CapabilityDecision;
+  require(caller: VerifiedCaller, capability: ClientCapability): void;
   /**
    * WP9 §3 — true iff the caller's LIVE role (resolved from the identity DB via
    * `roleOf`, never a field frozen onto the connection) is `root` or `admin`.
@@ -70,12 +66,11 @@ export function createCapabilityAuthorizer(deps: CapabilityTrustDeps = {}): Capa
   return {
     check(caller, capability) {
       const kind = caller.runtime.kind;
-      if (callerHasAppCapability(caller, capability, deps)) return { allowed: true };
-      if (callerHasPlatformCapability(caller, capability, deps)) return { allowed: true };
-      if (kind === "app") {
+      if (callerHasCapability(caller, capability, deps)) return { allowed: true };
+      if (kind === "client") {
         return {
           allowed: false,
-          reason: `App ${caller.runtime.id} does not have capability '${capability}'`,
+          reason: `Client ${caller.runtime.id} does not have capability '${capability}'`,
         };
       }
       return {

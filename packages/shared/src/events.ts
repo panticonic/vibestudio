@@ -12,6 +12,7 @@ import type { PanelRuntimeLeaseChangedEvent } from "./panel/panelLease.js";
 import type { PanelPresentationSnapshot } from "./panel/presentation.js";
 import type { PanelTreeInvalidation } from "./panel/treeIndex.js";
 import type { UnitAuthorityManifest } from "./authorityManifest.js";
+import type { ClientRuntime } from "@vibestudio/workspace-contracts/clients";
 import type { CallerKind } from "./principalKinds.js";
 import type { ProtectedPublicationEvent } from "./protectedPublicationEvents.js";
 import type { WorkspacePresenceEntry } from "./workspacePresence.js";
@@ -38,19 +39,11 @@ export interface CommandAgentSurfaceRequest {
 }
 
 /**
- * How a client adopts a newly available build of an app target. The policy is
- * a property of the target, not of the event that announces it: Electron asks
- * before replacing a loaded view, React Native asks before installing a
- * bundle, and terminal apps are fetched by the client when it launches.
- */
-export type AppAdoptionPolicy = "immediate" | "prompt" | "artifact-only";
-
-/**
  * A supervised unit's state changed. One event describes every unit kind the
  * host supervises, so clients subscribe once and filter by `identity.kind`.
  */
 export interface SupervisionChange {
-  identity: { kind: "app" | "extension"; entityId: string };
+  identity: { kind: "client" | "extension"; entityId: string };
   source: string;
   /** Lifecycle of the adopted build. A unit that keeps running its adopted build reports "running" even when a newer build was refused; that refusal is `lastError`. */
   status: "starting" | "running" | "stopped" | "error";
@@ -69,13 +62,16 @@ export interface SupervisionChange {
   change: "status" | "adopted" | "rolled-back" | "update-rejected";
   previousBuildKey: string | null;
   previousEffectiveVersion: string | null;
-  /** Present on "adopted" and "rolled-back" for app targets. */
-  adoption: AppAdoptionPolicy | null;
-  /** Present for apps. `artifactRoute` and `authority` accompany adoption. */
-  app?: {
-    target: "electron" | "react-native" | "terminal";
-    capabilities: string[];
-    artifactRoute?: string;
+  /**
+   * Present for clients. The server announces a newly adopted build; each
+   * host's client-host-core decides whether and when a running instance takes
+   * it. `grantedCapabilities` is the server-vetted set: device-level
+   * capabilities appear only while the client is listed in `trust.clients`.
+   */
+  client?: {
+    id: string;
+    runtime: ClientRuntime;
+    grantedCapabilities: string[];
     authority?: UnitAuthorityManifest;
   };
 }
@@ -87,6 +83,7 @@ export type EventName =
   | "build:complete"
   | `extensions:${string}`
   | "supervision:changed"
+  | "clients:changed"
   | "vcs:publication"
   | "workspace:unit-log"
   | "workspace:revision-bumped"
@@ -158,16 +155,15 @@ export interface NotificationAction {
   label: string;
   variant?: "solid" | "soft" | "ghost";
   command?:
-    | { type: "app.applyUpdate"; appId: string }
     | {
         type: "runtime.supervision.rollback";
-        release: { kind: "app"; releaseId: string };
+        release: { kind: "client"; releaseId: string };
         buildKey?: string;
       }
     | {
         type: "runtime.supervision.restart";
         identity: {
-          kind: "panel" | "worker" | "do" | "app" | "extension";
+          kind: "panel" | "worker" | "do" | "client" | "extension";
           entityId: string;
         };
       }
@@ -220,7 +216,7 @@ export interface NotificationConsentData {
   /** Human-readable name of the caller */
   callerTitle: string;
   /** Runtime kind requesting consent. */
-  callerKind: "panel" | "app" | "worker" | "do";
+  callerKind: "panel" | "client" | "worker" | "do";
 }
 
 /**
@@ -594,11 +590,17 @@ export interface EventPayloads {
   [key: `extensions:${string}`]: unknown;
   /** See {@link SupervisionChange}. */
   "supervision:changed": SupervisionChange;
+  /**
+   * The set of clients a host can launch changed (declared, retired, trust
+   * granted or withdrawn). Hosts refresh their client index, launchers and
+   * OS integration from `clients.list` / `clients.integrationSnapshot`.
+   */
+  "clients:changed": { reason: "declared" | "retired" | "trust" | "build" };
   "vcs:publication": ProtectedPublicationEvent;
   "workspace:unit-log": {
     workspaceId: string;
     unitName: string;
-    kind: "extension" | "app" | "worker" | "panel";
+    kind: "extension" | "client" | "worker" | "panel";
     timestamp: number;
     level: "debug" | "info" | "warn" | "error";
     message: string;
@@ -673,6 +675,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "server-log:append",
   "presence:panel-active",
   "supervision:changed",
+  "clients:changed",
 ];
 
 /**

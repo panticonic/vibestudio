@@ -58,13 +58,14 @@ Remote clients use two layers of identity:
   pairing deep links.
 
 Desktop and mobile remote shells refresh a `shell` token from their device
-credential. A paired device shell that runs a workspace app itself (the mobile
-native host, the `vibestudio terminal` CLI) obtains that app's principal grant
-over its existing authenticated connection with the RPC
-`auth.grantAppPrincipal([{ principal: "react-native-app" | "terminal-app",
-source }])`. The grant names the device-scoped principal
-`app:<source>:<deviceId>` and the exact build it may run, and is bound to the
-caller's transport endpoint, so it works over loopback and Iroh alike.
+credential. A paired device host that runs a workspace client itself (the
+desktop, mobile and terminal hosts) first resolves and verifies the client's
+build with `clients.launch`, then obtains that client's principal grant over its
+existing authenticated connection with the RPC
+`auth.grantClientPrincipal([{ source, buildKey, executionDigest }])`. The grant
+names the device-scoped principal `client:<id>:<runtime>:<deviceId>`, is bound
+to the exact build the host verified, and is bound to the caller's transport
+endpoint, so it works over loopback and Iroh alike.
 
 ## Capability Checks
 

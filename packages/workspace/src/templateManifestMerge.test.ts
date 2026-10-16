@@ -223,13 +223,13 @@ describe("mergeTemplateManifests", () => {
   });
 
   it("replaces a list inside a slot rather than letting a dependency join it", () => {
-    // trust.chromeApps decides which apps may render host chrome, so the layer
+    // trust.clients decides which clients may hold device-level power, so the layer
     // that states it states all of it; a dependency cannot add itself.
     const merged = mergeTemplateManifests([
-      layer("base", {}, { trust: { chromeApps: ["apps/base-shell"] } }, ["meta"]),
-      layer("system", {}, { trust: { chromeApps: ["apps/shell"] } }, ["meta"]),
+      layer("base", {}, { trust: { clients: ["clients/base-browser"] } }, ["meta"]),
+      layer("system", {}, { trust: { clients: ["clients/desktop-browser"] } }, ["meta"]),
     ]);
-    expect(merged.document["trust"]).toEqual({ chromeApps: ["apps/shell"] });
+    expect(merged.document["trust"]).toEqual({ clients: ["clients/desktop-browser"] });
   });
 });
 

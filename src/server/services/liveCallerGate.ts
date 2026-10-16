@@ -115,7 +115,7 @@ export function createLiveCallerGate(deps: {
       return entity?.ownerUserId === user.id && exactActiveCodeIncarnation();
     }
 
-    if (caller.runtime.kind === "app" || caller.runtime.kind === "panel") {
+    if (caller.runtime.kind === "client" || caller.runtime.kind === "panel") {
       return (
         typeof authorizedBy === "string" &&
         issuerOwnsUser(authorizedBy, user.id) &&

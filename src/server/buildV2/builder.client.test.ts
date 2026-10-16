@@ -22,14 +22,28 @@ function git(cwd: string, args: string[]): void {
   });
 }
 
-describe("buildUnit app builds", () => {
+function commitUnit(dir: string, message: string): void {
+  git(dir, ["init", "-b", "main"]);
+  git(dir, ["add", "."]);
+  git(dir, [
+    "-c",
+    "user.name=Vibestudio Test",
+    "-c",
+    "user.email=test@example.invalid",
+    "commit",
+    "-m",
+    message,
+  ]);
+}
+
+describe("buildUnit client and panel bundle builds", () => {
   let root: string;
   let workspaceRoot: string;
   let session: BuilderSession;
   let closeSession: () => Promise<void>;
 
   beforeEach(async () => {
-    root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-app-build-"));
+    root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-client-build-"));
     workspaceRoot = path.join(root, "workspace");
     const context = await createBuilderTestSession({
       appRoot: path.resolve(__dirname, "../../.."),
@@ -48,13 +62,13 @@ describe("buildUnit app builds", () => {
     fs.rmSync(root, { recursive: true, force: true });
   });
 
-  it("rewrites Electron app HTML to the app artifact loader", async () => {
-    const appDir = path.join(workspaceRoot, "apps", "shell");
-    fs.mkdirSync(appDir, { recursive: true });
+  it("builds a web client as one primary page that loads its own bundle", async () => {
+    const clientDir = path.join(workspaceRoot, "clients", "desktop-browser");
+    fs.mkdirSync(clientDir, { recursive: true });
     fs.writeFileSync(
-      path.join(appDir, "package.json"),
+      path.join(clientDir, "package.json"),
       JSON.stringify({
-        name: "@workspace-apps/shell",
+        name: "@workspace-clients/desktop-browser",
         version: "0.1.0",
         private: true,
         vibestudio: {
@@ -69,39 +83,31 @@ describe("buildUnit app builds", () => {
               },
             ],
           },
-          app: {
-            target: "electron",
-            renderer: "index.ts",
-            capabilities: ["incoming-pair-links"],
+          client: {
+            id: "browser",
+            runtime: "web",
+            hostAbi: "web-host-1",
+            entry: "index.ts",
+            capabilities: { required: ["device-session"], optional: ["notifications"] },
           },
         },
       })
     );
     fs.writeFileSync(
-      path.join(appDir, "index.ts"),
+      path.join(clientDir, "index.ts"),
       "import './style.css'; document.body.dataset.ready = 'true';\n"
     );
-    fs.writeFileSync(path.join(appDir, "style.css"), "body { color: red; }\n");
+    fs.writeFileSync(path.join(clientDir, "style.css"), "body { color: red; }\n");
     fs.writeFileSync(
-      path.join(appDir, "index.html"),
+      path.join(clientDir, "index.html"),
       '<!doctype html><html><head><link rel="stylesheet" href="./bundle.css"></head><body><script type="module" src="./bundle.js"></script></body></html>'
     );
-    git(appDir, ["init", "-b", "main"]);
-    git(appDir, ["add", "."]);
-    git(appDir, [
-      "-c",
-      "user.name=Vibestudio Test",
-      "-c",
-      "user.email=test@example.invalid",
-      "commit",
-      "-m",
-      "initial app",
-    ]);
+    commitUnit(clientDir, "initial client");
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       session,
-      graph.get("@workspace-apps/shell"),
+      graph.get("@workspace-clients/desktop-browser"),
       "a".repeat(64),
       graph,
       workspaceRoot,
@@ -112,12 +118,14 @@ describe("buildUnit app builds", () => {
     expect(html).toMatch(/type="module" src="\.\/bundle-[A-Za-z0-9]+\.js"/u);
     expect(html).not.toContain('src="/__loader.js"');
     expect(html).not.toContain("<base ");
-    expect(html).not.toContain("renderer/index.js");
+    expect(result.artifacts.filter((artifact) => artifact.role === "primary")).toEqual([
+      expect.objectContaining({ path: "index.html", contentType: "text/html; charset=utf-8" }),
+    ]);
     expect(result.artifacts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           path: expect.stringMatching(/^bundle-[A-Za-z0-9]+\.js$/u),
-          role: "primary",
+          role: "asset",
         }),
         expect.objectContaining({
           path: expect.stringMatching(/^bundle-[A-Za-z0-9]+\.css$/u),
@@ -125,13 +133,23 @@ describe("buildUnit app builds", () => {
         }),
       ])
     );
+    for (const artifact of result.artifacts) {
+      expect(artifact.integrity).toMatch(/^sha256-[0-9a-f]{64}$/u);
+    }
     expect(result.artifacts).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ role: "map" })])
     );
-    const primary = result.artifacts.find((artifact) => artifact.role === "primary");
-    expect(primary?.content).not.toContain("sourceMappingURL=");
-    expect(primary?.content).not.toContain("sourceMappingURL=data:");
+    const bundle = result.artifacts.find((artifact) => artifact.path.endsWith(".js"));
+    expect(bundle?.content).not.toContain("sourceMappingURL=");
     expect(result.buildKey).toBe(result.metadata.buildKey);
+    expect(result.metadata.details).toEqual({
+      kind: "client",
+      clientId: "browser",
+      runtime: "web",
+      hostAbi: "web-host-1",
+      provider: null,
+    });
+    expect(result.metadata.bundleReport).toBeUndefined();
     expect(result.metadata.authority).toEqual({
       provides: [],
       serviceRequests: [],
@@ -146,96 +164,47 @@ describe("buildUnit app builds", () => {
     });
   });
 
-  it.each(["direct", "symlinked"])(
-    "includes declared dynamic startup modules from %s source in the initial transfer graph",
-    async (sourceLayout) => {
-      if (sourceLayout === "symlinked") {
-        const physicalSource = path.join(root, "physical", "nested", "workspace");
-        fs.mkdirSync(physicalSource, { recursive: true });
-        fs.symlinkSync(
-          physicalSource,
-          workspaceRoot,
-          process.platform === "win32" ? "junction" : "dir"
-        );
-      }
-      const appDir = path.join(workspaceRoot, "apps", "startup-shell");
-      fs.mkdirSync(appDir, { recursive: true });
-      fs.writeFileSync(
-        path.join(appDir, "package.json"),
-        JSON.stringify({
-          name: "@workspace-apps/startup-shell",
-          version: "0.1.0",
-          private: true,
-          vibestudio: {
-            authority: { provides: [], requests: [] },
-            app: {
-              target: "electron",
-              renderer: "index.ts",
-              capabilities: [],
-              startupModules: ["./components/App"],
-            },
-          },
-        })
-      );
-      fs.writeFileSync(
-        path.join(appDir, "index.ts"),
-        'void import("./components/App"); void import("./Overlay");\n'
-      );
-      fs.mkdirSync(path.join(appDir, "components"), { recursive: true });
-      fs.writeFileSync(
-        path.join(appDir, "components", "App.tsx"),
-        'import { marker } from "./startup-heavy"; globalThis.name = marker;\n'
-      );
-      fs.writeFileSync(
-        path.join(appDir, "components", "startup-heavy.ts"),
-        'export const marker = "declared-startup-marker";\n'
-      );
-      fs.writeFileSync(
-        path.join(appDir, "Overlay.ts"),
-        'globalThis.name = "optional-overlay-marker";\n'
-      );
-      git(appDir, ["init", "-b", "main"]);
-      git(appDir, ["add", "."]);
-      git(appDir, [
-        "-c",
-        "user.name=Vibestudio Test",
-        "-c",
-        "user.email=test@example.invalid",
-        "commit",
-        "-m",
-        "initial app",
-      ]);
+  it("fails a web client build whose declared entry does not exist", async () => {
+    const clientDir = path.join(workspaceRoot, "clients", "no-entry");
+    fs.mkdirSync(clientDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(clientDir, "package.json"),
+      JSON.stringify({
+        name: "@workspace-clients/no-entry",
+        version: "0.1.0",
+        private: true,
+        vibestudio: {
+          client: { id: "no-entry", runtime: "web", hostAbi: "web-host-1", entry: "missing.tsx" },
+        },
+      })
+    );
+    commitUnit(clientDir, "initial client without entry");
 
-      const graph = discoverPackageGraph(workspaceRoot);
-      const result = await buildUnit(
+    const graph = discoverPackageGraph(workspaceRoot);
+    await expect(
+      buildUnit(
         session,
-        graph.get("@workspace-apps/startup-shell"),
+        graph.get("@workspace-clients/no-entry"),
         "d".repeat(64),
         graph,
         workspaceRoot,
         SOURCE_STATE_HASH
-      );
-      const initial = new Set(result.metadata.bundleReport?.initialArtifacts ?? []);
-      const initialCode = result.artifacts
-        .filter((artifact) => initial.has(artifact.path))
-        .map((artifact) => artifact.content)
-        .join("\n");
-
-      expect(initialCode).toContain("declared-startup-marker");
-      expect(initialCode).not.toContain("optional-overlay-marker");
-    }
-  );
+      )
+    ).rejects.toThrow(/Client @workspace-clients\/no-entry entry does not exist: missing\.tsx/u);
+  });
 
   it("builds browser-viewable document and media assets with inline content types", async () => {
-    const appDir = path.join(workspaceRoot, "apps", "asset-viewer");
+    const appDir = path.join(workspaceRoot, "clients", "asset-viewer");
     fs.mkdirSync(appDir, { recursive: true });
     fs.writeFileSync(
       path.join(appDir, "package.json"),
       JSON.stringify({
-        name: "@workspace-apps/asset-viewer",
+        name: "@workspace-clients/asset-viewer",
         version: "0.1.0",
         private: true,
-        vibestudio: { app: { target: "electron", renderer: "index.ts" } },
+        vibestudio: {
+          client: { id: "asset-viewer", runtime: "web", hostAbi: "web-host-1", entry: "index.ts" },
+        },
       })
     );
     const assets = [
@@ -264,13 +233,13 @@ describe("buildUnit app builds", () => {
       "user.email=test@example.invalid",
       "commit",
       "-m",
-      "initial asset viewer app",
+      "initial asset viewer client",
     ]);
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       session,
-      graph.get("@workspace-apps/asset-viewer"),
+      graph.get("@workspace-clients/asset-viewer"),
       "b".repeat(64),
       graph,
       workspaceRoot,
@@ -296,7 +265,7 @@ describe("buildUnit app builds", () => {
     });
   });
 
-  it("bundles terminal app targets as node entry artifacts", async () => {
+  it("bundles a terminal client as one self-contained ESM program", async () => {
     const rpcDir = path.join(workspaceRoot, "packages", "rpc");
     fs.mkdirSync(path.join(rpcDir, "src"), { recursive: true });
     fs.writeFileSync(
@@ -323,19 +292,21 @@ describe("buildUnit app builds", () => {
       "-m",
       "initial rpc package",
     ]);
-    const appDir = path.join(workspaceRoot, "apps", "terminal-browser");
+    const appDir = path.join(workspaceRoot, "clients", "terminal-browser");
     fs.mkdirSync(appDir, { recursive: true });
     fs.writeFileSync(
       path.join(appDir, "package.json"),
       JSON.stringify({
-        name: "@workspace-apps/terminal-browser",
+        name: "@workspace-clients/terminal-browser",
         version: "0.1.0",
         private: true,
         vibestudio: {
-          app: {
-            target: "terminal",
+          client: {
+            id: "browser",
+            runtime: "terminal",
+            hostAbi: "terminal-host-1",
             entry: "index.ts",
-            capabilities: ["clipboard"],
+            capabilities: { optional: ["clipboard"] },
           },
         },
         dependencies: {
@@ -365,30 +336,40 @@ describe("buildUnit app builds", () => {
       "user.email=test@example.invalid",
       "commit",
       "-m",
-      "initial terminal app",
+      "initial terminal client",
     ]);
 
     const graph = discoverPackageGraph(workspaceRoot);
     const result = await buildUnit(
       session,
-      graph.get("@workspace-apps/terminal-browser"),
+      graph.get("@workspace-clients/terminal-browser"),
       "b".repeat(64),
       graph,
       workspaceRoot,
       SOURCE_STATE_HASH
     );
 
-    expect(result.metadata.details).toMatchObject({ kind: "app", target: "terminal" });
-    expect(result.artifacts).toEqual(
-      expect.arrayContaining([expect.objectContaining({ path: "index.mjs", role: "primary" })])
-    );
+    expect(result.metadata.details).toEqual({
+      kind: "client",
+      clientId: "browser",
+      runtime: "terminal",
+      hostAbi: "terminal-host-1",
+      provider: null,
+    });
+    expect(result.artifacts).toEqual([
+      expect.objectContaining({
+        path: "index.mjs",
+        role: "primary",
+        integrity: expect.stringMatching(/^sha256-[0-9a-f]{64}$/u),
+      }),
+    ]);
     const mod = (await import(pathToFileURL(path.join(result.dir, "index.mjs")).href)) as {
       main: () => { hasWs: boolean };
     };
     expect(mod.main()).toMatchObject({ hasWs: true });
   });
 
-  it("activates a dormant provider before building a React Native app", async () => {
+  it("activates a dormant provider before building a React Native client", async () => {
     let providerInput: BuildProviderInput | null = null;
     let providerBuilds = 0;
     let providerEv = "ev-provider";
@@ -402,27 +383,27 @@ describe("buildUnit app builds", () => {
       JSON.stringify({ name: "@platform/fake", version: "0.1.0", type: "module" })
     );
     fs.writeFileSync(path.join(platformPackage, "src", "index.ts"), "export const fake = true;\n");
-    const appDir = path.join(workspaceRoot, "apps", "mobile");
+    const appDir = path.join(workspaceRoot, "clients", "mobile-browser");
     fs.mkdirSync(appDir, { recursive: true });
     fs.writeFileSync(
       path.join(appDir, "package.json"),
       JSON.stringify({
-        name: "@workspace-apps/mobile",
+        name: "@workspace-clients/mobile-browser",
         version: "0.1.0",
         private: true,
         dependencies: { "@platform/fake": "workspace:*" },
         vibestudio: {
-          app: {
-            target: "react-native",
-            renderer: "index.tsx",
-            rnComponentName: "VibestudioMobile",
-            rnHostAbi: "rn-host-2",
+          client: {
+            id: "browser",
+            runtime: "react-native",
+            hostAbi: "rn-host-6",
+            entry: "App.tsx",
           },
         },
       })
     );
     fs.writeFileSync(
-      path.join(appDir, "index.tsx"),
+      path.join(appDir, "App.tsx"),
       "export default function App() { return null; }\n"
     );
     git(appDir, ["init", "-b", "main"]);
@@ -456,7 +437,7 @@ describe("buildUnit app builds", () => {
           build: async (input) => {
             providerBuilds++;
             providerInput = input;
-            expect(fs.readFileSync(path.join(input.sourcePath, "index.tsx"), "utf8")).toContain(
+            expect(fs.readFileSync(path.join(input.sourcePath, "App.tsx"), "utf8")).toContain(
               "function App"
             );
             projectedPlatformSource = fs.readFileSync(
@@ -478,15 +459,11 @@ describe("buildUnit app builds", () => {
                   },
                 },
               ],
-              metadata: {
-                rnHostAbi: "rn-host-2",
-                platform: "ios",
-              },
             };
           },
           streamArtifact: async (_artifact, input) => {
             // Provider inputs remain admitted until every lazy artifact is consumed.
-            expect(fs.existsSync(path.join(input.sourcePath, "index.tsx"))).toBe(true);
+            expect(fs.existsSync(path.join(input.sourcePath, "App.tsx"))).toBe(true);
             return new Response(
               corruptStream
                 ? "corrupt bundle"
@@ -503,7 +480,7 @@ describe("buildUnit app builds", () => {
     let result: Awaited<ReturnType<typeof buildUnit>>;
     result = await buildUnit(
       session,
-      graph.get("@workspace-apps/mobile"),
+      graph.get("@workspace-clients/mobile-browser"),
       "c".repeat(64),
       graph,
       workspaceRoot,
@@ -513,7 +490,7 @@ describe("buildUnit app builds", () => {
       Array.from({ length: 3 }, () =>
         buildUnit(
           session,
-          graph.get("@workspace-apps/mobile"),
+          graph.get("@workspace-clients/mobile-browser"),
           "c".repeat(64),
           graph,
           workspaceRoot,
@@ -527,7 +504,7 @@ describe("buildUnit app builds", () => {
     providerEv = "ev-provider-2";
     const changedProvider = await buildUnit(
       session,
-      graph.get("@workspace-apps/mobile"),
+      graph.get("@workspace-clients/mobile-browser"),
       "c".repeat(64),
       graph,
       workspaceRoot,
@@ -539,15 +516,14 @@ describe("buildUnit app builds", () => {
     expect(demandedTarget).toBe("react-native");
 
     expect(result.metadata).toMatchObject({
-      kind: "app",
-      name: "@workspace-apps/mobile",
+      kind: "client",
+      name: "@workspace-clients/mobile-browser",
       sourceStateHash: SOURCE_STATE_HASH,
       details: {
-        kind: "app",
-        target: "react-native",
-        platform: "ios",
-        integrity: expect.stringMatching(/^sha256-[0-9a-f]{64}$/),
-        rnHostAbi: "rn-host-2",
+        kind: "client",
+        clientId: "browser",
+        runtime: "react-native",
+        hostAbi: "rn-host-6",
         provider: {
           name: "@workspace-extensions/react-native-provider",
           activeEv: "ev-provider",
@@ -558,6 +534,7 @@ describe("buildUnit app builds", () => {
     });
     expect(result.sourceStateHash).toBe(SOURCE_STATE_HASH);
     expect(providerInput).toMatchObject({
+      client: { id: "browser", runtime: "react-native", hostAbi: "rn-host-6", entry: "App.tsx" },
       sourcePath: expect.stringContaining(path.join(root, "state", "build-provider-inputs")),
       dependencyProjection: {
         nodeModulesPath: null,
@@ -565,7 +542,7 @@ describe("buildUnit app builds", () => {
           "@platform/fake": expect.stringContaining(
             path.join(root, "state", "build-provider-inputs")
           ),
-          "@workspace-apps/mobile": providerInput!.sourcePath,
+          "@workspace-clients/mobile-browser": providerInput!.sourcePath,
         },
       },
     });
@@ -581,7 +558,9 @@ describe("buildUnit app builds", () => {
         encoding: "base64",
         platform: "ios",
         integrity: expect.stringMatching(/^sha256-[0-9a-f]{64}$/),
-        content: Buffer.from(`bundle:@workspace-apps/mobile:${"c".repeat(64)}`).toString("base64"),
+        content: Buffer.from(`bundle:@workspace-clients/mobile-browser:${"c".repeat(64)}`).toString(
+          "base64"
+        ),
       }),
     ]);
     corruptStream = true;
@@ -589,7 +568,7 @@ describe("buildUnit app builds", () => {
     await expect(
       buildUnit(
         session,
-        graph.get("@workspace-apps/mobile"),
+        graph.get("@workspace-clients/mobile-browser"),
         "c".repeat(64),
         graph,
         workspaceRoot,
@@ -598,28 +577,28 @@ describe("buildUnit app builds", () => {
     ).rejects.toThrow(/streamed artifact ios\/main\.hbc with integrity .* expected/);
   });
 
-  describe("app artifact contract at build time", () => {
-    function commitReactNativeApp(): void {
-      const appDir = path.join(workspaceRoot, "apps", "mobile");
+  describe("client artifact contract at build time", () => {
+    function commitReactNativeClient(): void {
+      const appDir = path.join(workspaceRoot, "clients", "mobile-browser");
       fs.mkdirSync(appDir, { recursive: true });
       fs.writeFileSync(
         path.join(appDir, "package.json"),
         JSON.stringify({
-          name: "@workspace-apps/mobile",
+          name: "@workspace-clients/mobile-browser",
           version: "0.1.0",
           private: true,
           vibestudio: {
-            app: {
-              target: "react-native",
-              renderer: "index.tsx",
-              rnComponentName: "VibestudioMobile",
-              rnHostAbi: "rn-host-2",
+            client: {
+              id: "browser",
+              runtime: "react-native",
+              hostAbi: "rn-host-6",
+              entry: "App.tsx",
             },
           },
         })
       );
       fs.writeFileSync(
-        path.join(appDir, "index.tsx"),
+        path.join(appDir, "App.tsx"),
         "export default function App() { return null; }\n"
       );
       git(appDir, ["init", "-b", "main"]);
@@ -638,7 +617,7 @@ describe("buildUnit app builds", () => {
     async function buildMobileWith(
       ensureBuildProvider: (target: "react-native") => Promise<void>
     ): Promise<unknown> {
-      commitReactNativeApp();
+      commitReactNativeClient();
       await closeSession();
       const context = await createBuilderTestSession({
         appRoot: path.resolve(__dirname, "../../.."),
@@ -652,7 +631,7 @@ describe("buildUnit app builds", () => {
       const graph = discoverPackageGraph(workspaceRoot);
       return buildUnit(
         session,
-        graph.get("@workspace-apps/mobile"),
+        graph.get("@workspace-clients/mobile-browser"),
         "d".repeat(64),
         graph,
         workspaceRoot,
@@ -662,7 +641,6 @@ describe("buildUnit app builds", () => {
 
     function registerProviderReturning(output: {
       artifacts: Array<{ platform?: "ios" | "android"; path: string }>;
-      metadata: { rnHostAbi?: string; platform?: "ios" | "android" };
     }) {
       return async () => {
         registerBuildProvider({
@@ -678,24 +656,10 @@ describe("buildUnit app builds", () => {
               contentType: "application/octet-stream",
               content: "bundle",
             })),
-            metadata: output.metadata,
           }),
         });
       };
     }
-
-    it("rejects a React Native build whose provider reports no host ABI", async () => {
-      await expect(
-        buildMobileWith(
-          registerProviderReturning({
-            artifacts: [{ path: "ios/main.hbc", platform: "ios" }],
-            metadata: { platform: "ios" },
-          })
-        )
-      ).rejects.toThrow(
-        /React Native app @workspace-apps\/mobile build is missing signed RN metadata/u
-      );
-    });
 
     it("rejects a React Native build with two primary artifacts for one platform", async () => {
       await expect(
@@ -705,22 +669,21 @@ describe("buildUnit app builds", () => {
               { path: "ios/a.hbc", platform: "ios" },
               { path: "ios/b.hbc", platform: "ios" },
             ],
-            metadata: { rnHostAbi: "rn-host-2", platform: "ios" },
           })
         )
-      ).rejects.toThrow(/multiple primary artifacts for ios/u);
+      ).rejects.toThrow(/more than one primary bundle for ios/u);
       // The rejected artifact stays in the store; a repeat must not slip through the cache.
       const graph = discoverPackageGraph(workspaceRoot);
       await expect(
         buildUnit(
           session,
-          graph.get("@workspace-apps/mobile"),
+          graph.get("@workspace-clients/mobile-browser"),
           "d".repeat(64),
           graph,
           workspaceRoot,
           SOURCE_STATE_HASH
         )
-      ).rejects.toThrow(/multiple primary artifacts for ios/u);
+      ).rejects.toThrow(/more than one primary bundle for ios/u);
     });
 
     it("rejects a React Native build whose primary artifact has no platform", async () => {
@@ -728,10 +691,9 @@ describe("buildUnit app builds", () => {
         buildMobileWith(
           registerProviderReturning({
             artifacts: [{ path: "main.hbc" }],
-            metadata: { rnHostAbi: "rn-host-2" },
           })
         )
-      ).rejects.toThrow(/primary artifact main\.hbc is missing a mobile platform/u);
+      ).rejects.toThrow(/primary artifact main\.hbc has no mobile platform/u);
     });
 
     it("fails clearly when the React Native build provider is unavailable", async () => {
@@ -740,7 +702,7 @@ describe("buildUnit app builds", () => {
           throw new Error("Required build extension is unavailable: extensions/rn-provider");
         })
       ).rejects.toThrow(
-        /React Native app @workspace-apps\/mobile cannot be built because its build provider is unavailable: Required build extension is unavailable/u
+        /React Native client @workspace-clients\/mobile-browser cannot be built because its build provider is unavailable: Required build extension is unavailable/u
       );
     });
   });
@@ -905,45 +867,32 @@ describe("buildUnit app builds", () => {
     expect(result.metadata.bundleReport?.lazy.bytes).toBeGreaterThan(0);
   });
 
-  it("rejects dist as an app build target", async () => {
-    const appDir = path.join(workspaceRoot, "apps", "prebuilt");
-    fs.mkdirSync(appDir, { recursive: true });
+  it("rejects a client whose runtime is not one of the supported runtimes", async () => {
+    const clientDir = path.join(workspaceRoot, "clients", "prebuilt");
+    fs.mkdirSync(clientDir, { recursive: true });
     fs.writeFileSync(
-      path.join(appDir, "package.json"),
+      path.join(clientDir, "package.json"),
       JSON.stringify({
-        name: "@workspace-apps/prebuilt",
+        name: "@workspace-clients/prebuilt",
         version: "0.1.0",
         private: true,
         vibestudio: {
-          app: {
-            target: "dist",
-            distDir: "dist",
-          },
+          client: { id: "prebuilt", runtime: "dist", hostAbi: "dist-host-1", entry: "index.html" },
         },
       })
     );
-    git(appDir, ["init", "-b", "main"]);
-    git(appDir, ["add", "."]);
-    git(appDir, [
-      "-c",
-      "user.name=Vibestudio Test",
-      "-c",
-      "user.email=test@example.invalid",
-      "commit",
-      "-m",
-      "initial dist app",
-    ]);
+    commitUnit(clientDir, "initial dist client");
 
     const graph = discoverPackageGraph(workspaceRoot);
     await expect(
       buildUnit(
         session,
-        graph.get("@workspace-apps/prebuilt"),
+        graph.get("@workspace-clients/prebuilt"),
         "e".repeat(64),
         graph,
         workspaceRoot,
         SOURCE_STATE_HASH
       )
-    ).rejects.toThrow(/target must be "electron", "react-native", or "terminal"/);
+    ).rejects.toThrow(/runtime must be one of web, react-native, terminal/);
   });
 });

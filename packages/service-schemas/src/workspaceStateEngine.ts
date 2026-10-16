@@ -38,7 +38,7 @@ const internal = (
   access: { sensitivity },
 });
 
-const entityKindSchema = z.enum(["panel", "app", "worker", "do", "session", "shell", "server"]);
+const entityKindSchema = z.enum(["panel", "client", "worker", "do", "session", "shell", "server"]);
 const entitySourceSchema = z
   // Inert sessions and preparing reservations have a source coordinate but no
   // executable image. Their empty effectiveVersion is an honest absence, not a

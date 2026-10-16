@@ -16,7 +16,7 @@ function fixture(
   onPrompt: (queue: ReturnType<typeof createApprovalQueue>) => void,
   signal?: AbortSignal
 ) {
-  const caller = createVerifiedCaller("app:test", "app");
+  const caller = createVerifiedCaller("app:test", "client");
   const ctx: ServiceContext = {
     caller,
     connectionId: "connection",

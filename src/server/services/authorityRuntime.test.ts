@@ -649,10 +649,10 @@ describe("authority runtime", () => {
     const capability = "service:workers.resolveService";
     const caller = createVerifiedCaller(
       "@workspace-apps/shell",
-      "app",
+      "client",
       {
         callerId: "@workspace-apps/shell",
-        callerKind: "app",
+        callerKind: "client",
         repoPath: "apps/shell",
         effectiveVersion: "ev-legacy",
       },
@@ -820,10 +820,10 @@ describe("authority runtime", () => {
     const capability = "service:workers.resolveService";
     const caller = createVerifiedCaller(
       "@workspace-apps/shell",
-      "app",
+      "client",
       {
         callerId: "@workspace-apps/shell",
-        callerKind: "app",
+        callerKind: "client",
         repoPath: "apps/shell",
         effectiveVersion: "ev-legacy",
       },
@@ -964,10 +964,10 @@ describe("authority runtime", () => {
     const resolved = authorizeVerifiedCaller(
       createVerifiedCaller(
         "app:unreviewed",
-        "app",
+        "client",
         {
           callerId: "app:unreviewed",
-          callerKind: "app",
+          callerKind: "client",
           repoPath: "apps/unreviewed",
           effectiveVersion: "ev-1",
           executionDigest: digest,

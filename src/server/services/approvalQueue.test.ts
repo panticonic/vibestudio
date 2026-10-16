@@ -34,7 +34,7 @@ function unitInstallReviewRequest(
         unitName: "@workspace-extensions/typecheck-service",
         displayName: "Typecheck Service",
         version: "1.0.0",
-        target: null,
+        runtime: null,
         source: {
           kind: "workspace-repo" as const,
           repo: "extensions/typecheck-service",
@@ -619,7 +619,7 @@ describe("approvalQueue", () => {
         effectiveVersion: input.effectiveVersion,
         stableIdentityKey: input.callerId,
         ephemeralInstanceKey: input.callerId,
-        breadcrumbs: [{ id: "app:terminal-chat", kind: "app", category: "workspace-app" }],
+        breadcrumbs: [{ id: "app:terminal-chat", kind: "client", category: "client" }],
       }),
     });
     const waiter = {
@@ -1724,7 +1724,7 @@ describe("approvalQueue", () => {
 
       await queue.resolve(approvalId, "deny", {
         subject: { userId: "usr_2", handle: "alice" },
-        via: "app",
+        via: "client",
       });
       await expect(promise).resolves.toBe("deny");
       expect(recordProvenance.mock.calls[0]![0]).toMatchObject({

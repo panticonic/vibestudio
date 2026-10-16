@@ -578,7 +578,7 @@ export const BrowserHandoffTargetSchema = z
       .max(512)
       .describe("Caller id that should receive the browser handoff."),
     callerKind: z
-      .enum(["app", "panel", "shell"])
+      .enum(["client", "panel", "shell"])
       .describe("Runtime kind of the handoff target that opens the sign-in browser."),
   })
   .strict();
@@ -1089,7 +1089,7 @@ const EntitySourceSchema = z
 const CredentialAccessSubjectSummarySchema = z
   .object({
     id: z.string(),
-    kind: z.enum(["panel", "worker", "do", "app", "unknown"]),
+    kind: z.enum(["panel", "worker", "do", "client", "unknown"]),
     active: z.boolean(),
     title: z.string().optional(),
     source: EntitySourceSchema.optional(),
@@ -1713,12 +1713,7 @@ export const credentialsMethods = defineServiceMethods({
         leaves: [
           {
             capability: "model.use",
-            requirement: selectedPreparedAuthorityRequirement([
-              "website",
-              "user",
-              "host",
-              "code",
-            ]),
+            requirement: selectedPreparedAuthorityRequirement(["website", "user", "host", "code"]),
             tier: "gated",
           },
         ],

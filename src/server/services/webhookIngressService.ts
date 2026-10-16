@@ -4,7 +4,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { CallerKind, ServiceContext } from "@vibestudio/shared/serviceDispatcher";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import {
   createWebhookIngressSubscriptionSchema as createSubscriptionSchema,
   rotateWebhookIngressSecretSchema as rotateSecretSchema,
@@ -35,7 +35,7 @@ import {
   type WebhookReplayKey,
   type WebhookTarget,
 } from "@vibestudio/shared/webhooks/ingress";
-import { isAuthorizedChrome } from "./chromeTrust.js";
+import { isTrustedDeviceCaller } from "./clientTrust.js";
 import type { RelayWebhookFrame, WebhookAck } from "./relayBackhaulClient.js";
 import type { DoDispatcher } from "@vibestudio/shared/doDispatcher";
 import { sendJson } from "../hostCore/httpResponses.js";
@@ -180,7 +180,7 @@ export interface WebhookIngressServiceDeps {
     callerKind: CallerKind;
     repoPath: string;
   } | null>;
-  hasAppCapability?: (callerId: string, capability: AppCapability) => boolean;
+  hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
   dispatchToTarget?: (target: WebhookTarget, event: WebhookDeliveryEvent) => Promise<unknown>;
   /** Backhaul registrar; relay-mode subscriptions register through it. */
   relayRegistrar?: WebhookRelayRegistrar;
@@ -258,7 +258,8 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     ctx: ServiceContext,
     subscription: WebhookIngressSubscription
   ): Promise<void> {
-    if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
+    if (isTrustedDeviceCaller(ctx.caller, { hasClientCapability: deps.hasClientCapability }))
+      return;
     const scope = await callerScope(ctx);
     if (subscription.ownerCallerId !== scope.ownerCallerId) {
       throw new Error("webhook subscription is not owned by caller");
@@ -270,7 +271,8 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     target: WebhookTarget,
     resolvedScope?: ResolvedCallerScope
   ): Promise<void> {
-    if (isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })) return;
+    if (isTrustedDeviceCaller(ctx.caller, { hasClientCapability: deps.hasClientCapability }))
+      return;
     const scope = resolvedScope ?? (await callerScope(ctx));
     if (!scope.targetSource) {
       throw new Error("webhook target source cannot be verified for caller");
@@ -354,7 +356,9 @@ export function createWebhookIngressService(deps: WebhookIngressServiceDeps = {}
     ctx: ServiceContext,
     options: { includeRevoked?: boolean } = {}
   ): Promise<WebhookIngressSubscriptionSummary[]> {
-    const owner = isAuthorizedChrome(ctx.caller, { hasAppCapability: deps.hasAppCapability })
+    const owner = isTrustedDeviceCaller(ctx.caller, {
+      hasClientCapability: deps.hasClientCapability,
+    })
       ? undefined
       : (await callerScope(ctx)).ownerCallerId;
     const rows = await store.list(owner);
