@@ -311,6 +311,48 @@ describe("shellApprovalService", () => {
     });
   });
 
+  it("answers a workspace's creation review asked in another workspace's launch gate", async () => {
+    // The Personal workspace's Welcome holds panels and agents only; it is
+    // asked in System's gate because both workspaces start together.
+    const welcome: PendingUnitInstallReviewApproval = {
+      ...startupApproval("welcome-1"),
+      callerId: "system:workspace-creation",
+      parts: [{ ...startupApproval().parts[0]!, kind: "panel", label: "Panel", target: null }],
+    };
+    const resolveInstallReview = vi.fn();
+    const service = createShellApprovalService({
+      approvalQueue: {
+        request: vi.fn(),
+        requestClientConfig: vi.fn(),
+        requestSecretInput: vi.fn(async () => ({ decision: "deny" as const })),
+        requestCredentialInput: vi.fn(),
+        presentDeviceCode: vi.fn(),
+        onPendingChanged: vi.fn(),
+        resolve: vi.fn(),
+        resolveInstallReview,
+        submitClientConfig: vi.fn(),
+        submitSecretInput: vi.fn(),
+        submitCredentialInput: vi.fn(),
+        listPending: vi.fn(() => [welcome]),
+        cancelForCaller: vi.fn(),
+        holdForUnitReview: vi.fn(() => () => {}),
+      },
+      metrics: createPushMetrics(),
+    });
+
+    await expect(
+      service.handler({ caller: createVerifiedCaller("shell", "shell") }, "resolveBootstrap", [
+        ["welcome-1"],
+        "once",
+      ])
+    ).resolves.toEqual([{ approvalId: "welcome-1", status: "resolved" }]);
+    expect(resolveInstallReview).toHaveBeenCalledWith(
+      "welcome-1",
+      expect.objectContaining({ decision: "adopt-root" }),
+      undefined
+    );
+  });
+
   it("cancels the launch gate on deny, leaving nothing admitted", async () => {
     const resolveInstallReview = vi.fn();
     const metrics = createPushMetrics();

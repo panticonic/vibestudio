@@ -224,7 +224,14 @@ export function createShellApprovalService(deps: {
         return Promise.all(
           approvalIds.map(async (approvalId) => {
             const pending = pendingFor(ctx).find((approval) => approval.approvalId === approvalId);
-            if (!pending || !isBootstrapUnitApproval(pending)) {
+            // The gate decides what must be settled before anything starts: the
+            // launch target's own units, and the creation review of a
+            // workspace started alongside it (asked in the same gate).
+            if (
+              !pending ||
+              pending.kind !== "unit-install-review" ||
+              (pending.mode !== "adopt-root" && !isBootstrapUnitApproval(pending))
+            ) {
               return { approvalId, status: "not-pending" as const };
             }
             await approvalQueue.resolveInstallReview(

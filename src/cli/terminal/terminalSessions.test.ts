@@ -200,9 +200,22 @@ describe("runTerminalSessions", () => {
   it("shows System through the System connection itself", async () => {
     const { deps, devices, progress } = harness([{ kind: "exit", exit: { kind: "quit" } }]);
     await runTerminalSessions({ ...options(deps, progress), workspace: { privateRole: "system" } });
-    expect(devices[0]!.workspaces).toEqual([]);
     const call = vi.mocked(deps.runBrowser).mock.calls[0]![0];
     expect(call.workspaceDevice).toBe(call.device);
+    // Personal is reached only so the gate asks about it too, then closed.
+    expect(devices[0]!.workspaces.map((entry) => entry.credentials.workspaceId)).toEqual([
+      "ws_personal",
+    ]);
+    expect(devices[0]!.workspaces[0]!.close).toHaveBeenCalled();
+  });
+
+  it("asks about Personal in the same gate as System, over the connection that then shows it", async () => {
+    const { deps, devices, progress } = harness([{ kind: "exit", exit: { kind: "quit" } }]);
+    await runTerminalSessions(options(deps, progress));
+    expect(devices[0]!.workspaces).toHaveLength(1);
+    const companions = vi.mocked(deps.runGate).mock.calls[0]![1]?.companions;
+    expect(companions).toHaveLength(1);
+    expect(vi.mocked(deps.runBrowser).mock.calls[0]![0].workspaceDevice).toBe(companions![0]);
   });
 
   it("shows the chosen workspace on switch-workspace, still running the browser from System", async () => {
@@ -217,6 +230,7 @@ describe("runTerminalSessions", () => {
       { privateRole: "personal" },
       { privateRole: "system" },
       { workspaceId: "ws_other" },
+      { privateRole: "personal" },
     ]);
     expect(deps.runGate).toHaveBeenCalledTimes(2);
     expect(vi.mocked(deps.runBrowser).mock.calls[1]![0]).toMatchObject({
@@ -241,7 +255,7 @@ describe("runTerminalSessions", () => {
   it("uses an explicitly requested workspace", async () => {
     const { deps, routes, progress } = harness([{ kind: "exit", exit: { kind: "quit" } }]);
     await runTerminalSessions({ ...options(deps, progress), workspace: "lab" });
-    expect(routes).toEqual([{ privateRole: "system" }, "lab"]);
+    expect(routes).toEqual([{ privateRole: "system" }, "lab", { privateRole: "personal" }]);
     expect(vi.mocked(deps.runBrowser).mock.calls[0]![0].workspace).toEqual({
       id: "ws_lab",
       name: "Research lab",

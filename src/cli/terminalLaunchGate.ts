@@ -1,9 +1,12 @@
 import readline from "node:readline/promises";
 import {
   formatLaunchGateForTerminal,
+  formatLaunchGateUnitsForTerminal,
+  launchGateView,
   targetLabel,
   type BootstrapDecision,
 } from "@vibestudio/shared/bootstrapLaunchGate";
+import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import type { HostTarget } from "@vibestudio/shared/hostTargets";
 import {
   HostLaunchClient,
@@ -33,6 +36,12 @@ export interface TerminalLaunchGateOptions {
    * holding the terminal after the server it asks about is gone.
    */
   signal?: AbortSignal;
+  /**
+   * Workspaces started together with the launch target's (the account's
+   * Personal workspace beside System): their creation reviews are asked in
+   * this same gate, once.
+   */
+  companions?: readonly LaunchGateRpc[];
 }
 
 /** What the server is doing to bring the app up, in the person's words. */
@@ -89,7 +98,11 @@ export async function runTerminalLaunchGate(
       const line = describeLaunchProgress(progress);
       if (line && line !== lastLaunchProgress) options.onProgress?.(line);
       lastLaunchProgress = line ?? "";
-    }
+    },
+    (options.companions ?? []).map(
+      (companion) => (service: string, method: string, args: unknown[]) =>
+        companion.call(qualifyServiceMethod(service, method), args)
+    )
   );
   let approvalsResolved = 0;
   let lastProgress = "";
@@ -101,8 +114,8 @@ export async function runTerminalLaunchGate(
       return { target, status: launch.status, approvalsResolved, launch };
     }
     if (launch.status === "approval-required") {
-      output.write(`\n${formatLaunchGateForTerminal(launch.approvals, target)}\n\n`);
-      const decision = await getDecision(target, options);
+      output.write(`\n${formatLaunchGateForTerminal(launch.approvals, target, width(output))}\n\n`);
+      const decision = await getDecision(target, launch.approvals, options);
       await launchClient.resolveApprovals(launch.approvals, decision);
       if (decision === "deny") {
         return { target, status: "denied", approvalsResolved };
@@ -119,8 +132,13 @@ export async function runTerminalLaunchGate(
   }
 }
 
+function width(output: NodeJS.WriteStream): number {
+  return Math.max(40, Math.min(output.columns ?? 80, 100));
+}
+
 async function getDecision(
   target: HostTarget,
+  approvals: PendingUnitInstallReviewApproval[],
   options: TerminalLaunchGateOptions
 ): Promise<BootstrapDecision> {
   if (options.yes) return "once";
@@ -141,14 +159,24 @@ async function getDecision(
   const stopOnOwner = () => interrupted.abort();
   if (ownerSignal?.aborted) interrupted.abort();
   else ownerSignal?.addEventListener("abort", stopOnOwner, { once: true });
+  const view = launchGateView({ approvals });
+  // The same two actions as the window, plus its disclosure: the programs
+  // themselves, listed on request rather than ahead of the question.
+  const question =
+    `${view.acceptLabel}: y  ·  ${view.declineLabel}: n  ·  ${view.disclosureLabel}: r\n` +
+    "Your choice [y/n/r]: ";
   try {
     for (;;) {
-      const answer = (await rl.question("Trust and start? [y/N] ", { signal: interrupted.signal }))
+      const answer = (await rl.question(question, { signal: interrupted.signal }))
         .trim()
         .toLowerCase();
       if (answer === "y" || answer === "yes") return "once";
-      if (answer === "" || answer === "n" || answer === "no") return "deny";
-      output.write("Please answer y or n.\n");
+      if (answer === "n" || answer === "no") return "deny";
+      if (answer === "r") {
+        output.write(`\n${formatLaunchGateUnitsForTerminal(approvals, width(output))}\n\n`);
+        continue;
+      }
+      output.write("Please answer y, n or r.\n");
     }
   } catch (error) {
     if (interrupted.signal.aborted) {

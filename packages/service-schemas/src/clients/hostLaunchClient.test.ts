@@ -267,6 +267,8 @@ describe("HostLaunchClient", () => {
         return { status: "approval-required" };
       }
       if (service === "shellApproval" && method === "listPending") return [];
+      if (service === "shellApproval" && method === "getWorkspaceCreationReviewState")
+        return { status: "not-required" };
       throw new Error(`Unexpected call ${service}.${method}`);
     });
 
@@ -277,6 +279,58 @@ describe("HostLaunchClient", () => {
       approvals: [],
     });
     expect(call).not.toHaveBeenCalledWith("runtime", "supervision.prepare", expect.anything());
+  });
+
+  it("asks a companion workspace's creation review in the same gate, and answers it there", async () => {
+    const own = unitInstallApproval("startup-1", "apps/shell", "adopt-root");
+    const welcome = unitInstallApproval("welcome-1", "panels/chat", "adopt-root");
+    let companionState: unknown = { status: "preparing" };
+    const call = vi.fn(async (service: string, method: string) => {
+      if (service === "workspace" && method === "getConfig")
+        return config({ electron: { app: "apps/shell" } });
+      if (service === "build" && method === "listUnits")
+        return [
+          unit({
+            name: "@workspace-apps/shell",
+            source: "apps/shell",
+            kind: "app",
+            target: "electron",
+          }),
+        ];
+      if (service === "runtime" && method === "supervision.activate")
+        return { status: "approval-required" };
+      if (service === "shellApproval" && method === "listPending") return [own];
+      if (service === "shellApproval" && method === "getWorkspaceCreationReviewState")
+        return { status: "pending", approvalId: "startup-1", partCount: 1 };
+      if (service === "shellApproval" && method === "resolveBootstrap") return [];
+      throw new Error(`Unexpected call ${service}.${method}`);
+    });
+    const companion = vi.fn(async (service: string, method: string) => {
+      if (service === "shellApproval" && method === "getWorkspaceCreationReviewState")
+        return companionState;
+      if (service === "shellApproval" && method === "listPending") return [welcome];
+      if (service === "shellApproval" && method === "resolveBootstrap") return [];
+      throw new Error(`Unexpected companion call ${service}.${method}`);
+    });
+    const client = new HostLaunchClient(call, undefined, [companion]);
+
+    // Its review is still being prepared: asking now would mean asking twice.
+    await expect(client.launch("electron")).resolves.toMatchObject({ status: "preparing" });
+
+    companionState = { status: "pending", approvalId: "welcome-1", partCount: 1 };
+    const launch = await client.launch("electron");
+    expect(launch).toMatchObject({ status: "approval-required" });
+    if (launch.status !== "approval-required") throw new Error("expected approvals");
+    expect(launch.approvals.map((approval) => approval.approvalId)).toEqual([
+      "startup-1",
+      "welcome-1",
+    ]);
+    await client.resolveApprovals(launch.approvals, "once");
+    expect(call).toHaveBeenCalledWith("shellApproval", "resolveBootstrap", [["startup-1"], "once"]);
+    expect(companion).toHaveBeenCalledWith("shellApproval", "resolveBootstrap", [
+      ["welcome-1"],
+      "once",
+    ]);
   });
 
   it("resolves only the reviews the launch gate owns, and leaves the rest alone", async () => {

@@ -38,6 +38,8 @@ export interface HostLaunchSelection {
 
 type Call = (service: string, method: string, args: unknown[]) => Promise<unknown>;
 
+type ShellApprovalClient = ReturnType<typeof createTypedServiceClient<typeof shellApprovalMethods>>;
+
 export interface HostLaunchProgress {
   phase: "resolve-target" | "start-units" | "prepare-app";
   state: "active" | "complete" | "blocked" | "failed";
@@ -59,18 +61,33 @@ export class HostLaunchClient {
   private readonly build: ReturnType<typeof createTypedServiceClient<typeof buildMethods>>;
   private readonly workspace: ReturnType<typeof createTypedServiceClient<typeof workspaceMethods>>;
   private readonly runtime: ReturnType<typeof createTypedServiceClient<typeof runtimeMethods>>;
-  private readonly shellApproval: ReturnType<
-    typeof createTypedServiceClient<typeof shellApprovalMethods>
-  >;
+  private readonly shellApproval: ShellApprovalClient;
+  private readonly companions: ShellApprovalClient[];
+  /** The workspace each companion review shown by the last launch belongs to. */
+  private readonly companionOwners = new Map<
+    PendingUnitInstallReviewApproval,
+    ShellApprovalClient
+  >();
 
+  /**
+   * `companions` reach the workspaces started together with this one (an
+   * instance's first start creates the account's System and Personal
+   * workspaces at once). Their creation reviews join this gate, so a person
+   * is asked once whether this code may run, and each answer is recorded in
+   * the workspace it belongs to.
+   */
   constructor(
     call: Call,
-    private readonly onProgress?: (progress: HostLaunchProgress) => void
+    private readonly onProgress?: (progress: HostLaunchProgress) => void,
+    companions: readonly Call[] = []
   ) {
     this.build = createTypedServiceClient("build", buildMethods, call);
     this.workspace = createTypedServiceClient("workspace", workspaceMethods, call);
     this.runtime = createTypedServiceClient("runtime", runtimeMethods, call);
     this.shellApproval = createTypedServiceClient("shellApproval", shellApprovalMethods, call);
+    this.companions = companions.map((companion) =>
+      createTypedServiceClient("shellApproval", shellApprovalMethods, companion)
+    );
   }
 
   async listCandidates(target: HostTarget): Promise<BuildUnitCatalogEntry[]> {
@@ -220,10 +237,13 @@ export class HostLaunchClient {
     approvals: readonly PendingUnitInstallReviewApproval[],
     decision: "once" | "deny"
   ): Promise<void> {
-    if (approvals.length === 0) return;
-    await this.shellApproval.resolveBootstrap(
-      approvals.map((approval) => approval.approvalId),
-      decision
+    const byOwner = new Map<ShellApprovalClient, string[]>();
+    for (const approval of approvals) {
+      const owner = this.companionOwners.get(approval) ?? this.shellApproval;
+      byOwner.set(owner, [...(byOwner.get(owner) ?? []), approval.approvalId]);
+    }
+    await Promise.all(
+      [...byOwner].map(([owner, approvalIds]) => owner.resolveBootstrap(approvalIds, decision))
     );
   }
 
@@ -244,14 +264,30 @@ export class HostLaunchClient {
     relevantSources: ReadonlySet<string>
   ): Promise<HostLaunchResult> {
     const pending = await this.shellApproval.listPending();
-    return {
-      status: "approval-required",
-      target,
-      approvals: pending.filter(
+    const approvals = pending.filter(
+      (approval): approval is PendingUnitInstallReviewApproval =>
+        approval.kind === "unit-install-review" &&
+        approval.parts.some((part) => relevantSources.has(part.repoPath))
+    );
+    this.companionOwners.clear();
+    // The creation review of this workspace and of each started with it belongs
+    // in this one question: asking now and again once one is ready would be
+    // asking twice, so the gate waits while any is still being prepared.
+    for (const owner of [this.shellApproval, ...this.companions]) {
+      const state = await owner.getWorkspaceCreationReviewState();
+      if (state.status === "preparing")
+        return { status: "preparing", target, reason: "Getting your workspaces ready" };
+      if (state.status !== "pending") continue;
+      const listed = owner === this.shellApproval ? pending : await owner.listPending();
+      const review = listed.find(
         (approval): approval is PendingUnitInstallReviewApproval =>
-          approval.kind === "unit-install-review" &&
-          approval.parts.some((part) => relevantSources.has(part.repoPath))
-      ),
-    };
+          approval.approvalId === state.approvalId && approval.kind === "unit-install-review"
+      );
+      if (!review || approvals.some((approval) => approval.approvalId === review.approvalId))
+        continue;
+      approvals.push(review);
+      if (owner !== this.shellApproval) this.companionOwners.set(review, owner);
+    }
+    return { status: "approval-required", target, approvals };
   }
 }

@@ -3,6 +3,7 @@ import type { PendingUnitInstallReviewApproval } from "./approvals.js";
 import type { InstallReviewPart } from "./authority/unitInstallReview.js";
 import {
   formatLaunchGateForTerminal,
+  formatLaunchGateUnitsForTerminal,
   launchGateSources,
   launchGateView,
   samePendingApprovals,
@@ -283,8 +284,10 @@ describe("a workspace built from someone else's code", () => {
     );
     expect(view.sources[0]!.label).toBe("https://github.com/acme/studio  at v2.1");
     // The name survives only in the slot that says whose name it is.
-    const text = formatLaunchGateForTerminal([review([part({ origin: impostor })])], "electron");
-    expect(text).toContain('"Vibestudio" — name given by this template');
+    const text = words(
+      formatLaunchGateForTerminal([review([part({ origin: impostor })])], "electron")
+    );
+    expect(text).toContain(words('"Vibestudio" — name given by this template'));
     expect(text).not.toContain("all from Vibestudio");
   });
 });
@@ -429,29 +432,30 @@ describe("declining says what it costs", () => {
 
 describe("the terminal form", () => {
   it("carries the same sources, notable lines, and consequence copy as the window", () => {
-    const text = formatLaunchGateForTerminal(
-      [
-        review([
-          part(),
-          part({
-            kind: "extension",
-            label: "Extension",
-            repoPath: "extensions/news",
-            title: "Feed Reader",
-            target: null,
-            origin: acme,
-          }),
-        ]),
-      ],
-      "electron"
+    const text = words(
+      formatLaunchGateForTerminal(
+        [
+          review([
+            part(),
+            part({
+              kind: "extension",
+              label: "Extension",
+              repoPath: "extensions/news",
+              title: "Feed Reader",
+              target: null,
+              origin: acme,
+            }),
+          ]),
+        ],
+        "electron"
+      )
     );
 
-    expect(text).toContain("https://github.com/acme/studio  at v2.1");
-    expect(text).toContain('"Acme Studio" — name given by this template');
-    expect(text).toContain("You haven't run code from github.com/acme before.");
-    expect(text).toContain("run in a sandbox on the Linux host");
-    expect(text).toContain("Vibestudio won't start. Nothing is installed or changed.");
-    expect(text).toContain("[Start] / [Quit]");
+    expect(text).toContain(words("https://github.com/acme/studio  at v2.1"));
+    expect(text).toContain(words('"Acme Studio" — name given by this template'));
+    expect(text).toContain(words("You haven't run code from github.com/acme before."));
+    expect(text).toContain(words("run in a sandbox on the Linux host"));
+    expect(text).toContain(words("Vibestudio won't start. Nothing is installed or changed."));
   });
 
   it("leads with the same origin, first encounter, and count as the window", () => {
@@ -468,13 +472,13 @@ describe("the terminal form", () => {
       ]),
     ];
     const view = launchGateView({ approvals });
-    const text = formatLaunchGateForTerminal(approvals, "terminal");
+    const text = words(formatLaunchGateForTerminal(approvals, "terminal"));
 
-    expect(text).toContain(view.summary);
-    expect(text).toContain(view.domainLine!);
-    expect(text).toContain(view.firstEncounterLine!);
-    expect(text).toContain(view.programsLine!);
-    expect(text).toContain(view.nativeCodeWarning!);
+    expect(text).toContain(words(view.summary));
+    expect(text).toContain(words(view.domainLine!));
+    expect(text).toContain(words(view.firstEncounterLine!));
+    expect(text).toContain(words(view.programsLine!));
+    expect(text).toContain(words(view.nativeCodeWarning!));
     // Promoted once, in both forms — never printed twice.
     expect(text.split(view.firstEncounterLine!).length - 1).toBe(1);
   });
@@ -488,13 +492,15 @@ describe("the terminal form", () => {
       version: "v1",
       admittedOriginKeys: new Set(),
     });
-    const text = formatLaunchGateForTerminal(
-      [review([part(), part({ repoPath: "extensions/x", origin: lookalike })])],
-      "terminal"
+    const text = words(
+      formatLaunchGateForTerminal(
+        [review([part(), part({ repoPath: "extensions/x", origin: lookalike })])],
+        "terminal"
+      )
     );
 
-    expect(text).toContain("https://github.com.attacker.net/acme/studio  at v1");
-    expect(text).toContain("Domain: attacker.net");
+    expect(text).toContain(words("https://github.com.attacker.net/acme/studio  at v1"));
+    expect(text).toContain(words("Domain: attacker.net"));
     // Our own build claims no domain, and no line pretends the lookalike is
     // github.com.
     expect(text).not.toContain("Domain: github.com");
@@ -502,12 +508,73 @@ describe("the terminal form", () => {
   });
 
   it("prints no commit id or content digest at any level", () => {
-    const text = formatLaunchGateForTerminal(
-      [review([part(), part({ origin: acme })])],
-      "electron"
+    const text = words(
+      formatLaunchGateForTerminal([review([part(), part({ origin: acme })])], "electron")
     );
     expect(text).not.toMatch(/[0-9a-f]{40}/u);
     expect(text).not.toContain("ev");
+  });
+});
+
+/** Wrapping is layout: compare the terminal form as words. */
+function words(text: string): string {
+  return text.replace(/\s+/gu, " ");
+}
+
+describe("an instance's first start", () => {
+  it("asks once about every workspace it starts, each named by where its code is", () => {
+    const systemRoot = templateOrigin({
+      url: "https://github.com/acme/system",
+      version: null,
+      admittedOriginKeys: new Set(),
+      isWorkspaceRoot: true,
+    });
+    const personalRoot = templateOrigin({
+      url: "https://github.com/acme/personal",
+      version: null,
+      admittedOriginKeys: new Set(),
+      isWorkspaceRoot: true,
+    });
+    const approvals = [
+      review([
+        part({ repoPath: "apps/shell", origin: systemRoot }),
+        part({
+          repoPath: "panels/about",
+          kind: "panel",
+          label: "Panel",
+          target: null,
+          origin: systemRoot,
+        }),
+      ]),
+      review([
+        part({
+          repoPath: "panels/chat",
+          kind: "panel",
+          label: "Panel",
+          title: "chat",
+          target: null,
+          origin: personalRoot,
+        }),
+      ]),
+    ];
+    const view = launchGateView({ approvals });
+    expect(view.title).toBe("Start your workspaces?");
+    expect(view.summary).toBe(
+      "Your workspaces are built from code at https://github.com/acme/personal and https://github.com/acme/system."
+    );
+    // One owner, said once.
+    expect(view.firstEncounterLine).toBe("You haven't run code from github.com/acme before.");
+    // Every program counts somewhere.
+    expect(view.sources.map((source) => source.counts).sort()).toEqual([
+      "1 app · 1 other part",
+      "1 part",
+    ]);
+
+    const summary = formatLaunchGateForTerminal(approvals, "terminal", 60);
+    expect(summary.split("\n").every((line) => line.length <= 60)).toBe(true);
+    // The programs themselves are one step away, not ahead of the question.
+    expect(summary).not.toContain("chat (Panel)");
+    expect(formatLaunchGateUnitsForTerminal(approvals, 60)).toContain("chat (Panel)");
   });
 });
 

@@ -8,9 +8,18 @@ import type {
 } from "@vibestudio/shared/authority/unitInstallReview";
 import {
   formatLaunchGateForTerminal,
+  formatLaunchGateUnitsForTerminal,
   launchGateView,
 } from "@vibestudio/shared/bootstrapLaunchGate";
 import { appendLaunchGateFacts, appendSources } from "./launchGateDom.js";
+
+/** The terminal at its full disclosure, as words: wrapping is layout, not content. */
+function terminalWords(approvals: Parameters<typeof formatLaunchGateForTerminal>[0]): string {
+  return `${formatLaunchGateForTerminal(approvals, "electron")}\n${formatLaunchGateUnitsForTerminal(approvals)}`.replace(
+    /\s+/gu,
+    " "
+  );
+}
 
 /**
  * The launch gate window's identity presentation (§7.6.3, §13.6).
@@ -184,7 +193,7 @@ describe("the launch gate window's identity presentation", () => {
     const approvals = foreignRoot(acme);
     const { element } = card(approvals);
     const text = element.textContent ?? "";
-    const terminal = formatLaunchGateForTerminal(approvals, "electron");
+    const terminal = terminalWords(approvals);
     const view = launchGateView({ approvals });
 
     for (const line of [
@@ -198,7 +207,7 @@ describe("the launch gate window's identity presentation", () => {
       '"Acme Studio" — name given by this template',
     ]) {
       expect(text).toContain(line);
-      expect(terminal).toContain(line);
+      expect(terminal).toContain(line.replace(/\s+/gu, " "));
     }
   });
 

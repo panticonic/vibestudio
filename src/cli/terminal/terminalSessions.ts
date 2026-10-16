@@ -96,7 +96,16 @@ export async function runTerminalSessions(
     const shown = routing
       ? await deps.route(options.credentials, selector, routing)
       : await deps.route(options.credentials, selector);
-    const result = await runOnce(system, shown, options, deps);
+    const showsPersonal =
+      typeof selector === "object" &&
+      "privateRole" in selector &&
+      selector.privateRole === "personal";
+    const personal = showsPersonal
+      ? shown
+      : routing
+        ? await deps.route(options.credentials, { privateRole: "personal" }, routing)
+        : await deps.route(options.credentials, { privateRole: "personal" });
+    const result = await runOnce(system, shown, personal, options, deps);
     if (result.kind === "app-updated") {
       options.progress.note("The terminal app was updated; loading the new version…");
       continue;
@@ -112,6 +121,7 @@ export async function runTerminalSessions(
 async function runOnce(
   systemRoute: DeviceCredential,
   shownRoute: DeviceCredential,
+  personalRoute: DeviceCredential,
   options: TerminalSessionsOptions,
   deps: TerminalSessionDependencies
 ): Promise<Awaited<ReturnType<typeof runTerminalBrowser>>> {
@@ -123,6 +133,7 @@ async function runOnce(
   const releaseDevice = device.retainConnection();
   let control: RpcClient | null = null;
   let workspaceDevice: RpcClient | null = null;
+  let personalDevice: RpcClient | null = null;
   // Workspaces as the person sees them: by label, never by internal name.
   const listWorkspaces = async (): Promise<TerminalBrowserWorkspace[]> => {
     control ??= await device.openControlConnection();
@@ -144,7 +155,12 @@ async function runOnce(
       const prepare = options.progress.step(`Preparing the terminal browser in ${system.name}`);
       let gate: Awaited<ReturnType<typeof deps.runGate>>;
       try {
+        // The account's Personal workspace starts with System: whether its code
+        // may run is asked in the same gate, not again once the browser is up.
+        if (personalRoute.workspaceId !== systemRoute.workspaceId)
+          personalDevice = await device.openWorkspaceConnection(personalRoute);
         gate = await deps.runGate(device, {
+          ...(personalDevice ? { companions: [personalDevice] } : {}),
           target: "terminal",
           yes: options.yes,
           input: options.stdin,
@@ -184,7 +200,11 @@ async function runOnce(
         // The workspace the browser shows is reached as this device, exactly as
         // the desktop shell reaches the workspace it shows.
         workspaceDevice =
-          workspace.id === system.id ? device : await device.openWorkspaceConnection(shownRoute);
+          workspace.id === system.id
+            ? device
+            : workspace.id === personalRoute.workspaceId && personalDevice
+              ? personalDevice
+              : await device.openWorkspaceConnection(shownRoute);
       } catch (error) {
         load.fail();
         throw error;
@@ -209,12 +229,14 @@ async function runOnce(
     async () => {
       const openControl = control as RpcClient | null;
       const openWorkspace = workspaceDevice as RpcClient | null;
+      const openPersonal = personalDevice as RpcClient | null;
       await runOwnedCleanupSteps(
         [
           async () => {
             const results = await Promise.allSettled([
               openControl?.close(),
               openWorkspace && openWorkspace !== device ? openWorkspace.close() : undefined,
+              openPersonal && openPersonal !== openWorkspace ? openPersonal.close() : undefined,
               releaseDevice(),
             ]);
             const failures = [

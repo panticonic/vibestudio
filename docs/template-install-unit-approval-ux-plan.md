@@ -1075,6 +1075,21 @@ with access to this computer.
                                       [Start]   [Don't start]
 ```
 
+An instance's first start creates the account's System and Personal
+workspaces together. Whether their code may run is one question, not one per
+workspace: the gate that starts the client also carries the creation review of
+each workspace started alongside it, lists every root under its own source,
+and records each answer in the workspace it belongs to. The Welcome review then
+never reappears inside the client for those workspaces.
+
+```text
+Start your workspaces?
+
+Your workspaces are built from code at github.com/acme/personal and
+github.com/acme/system.
+You haven't run code from github.com/acme before.
+```
+
 #### 7.6.5 Progressive disclosure, three levels
 
 1. **Sources** — origin URL, version, and counts. Collapsed by default when there
@@ -1114,7 +1129,10 @@ from failure.
   have not, and no self-asserted name is rendered where it reads as identity.
 - The terminal form carries the same content and the same decision as the window
   — same sources, same notable lines, same consequence copy — as plain text with
-  an explicit prompt, never a truncated summary.
+  an explicit prompt, never a truncated summary. It discloses in the same levels:
+  the question with its sources first, then each program on request (`r`), so
+  the decision is never scrolled away under the list. Text wraps to the
+  terminal, keeping its indent.
 - Keyboard-complete: the disclosure levels, both actions, and focus order work
   without a pointer. Screen readers announce the source count and the
   outside-protections sentence before the actions.

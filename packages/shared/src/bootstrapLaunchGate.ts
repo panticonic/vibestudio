@@ -59,7 +59,8 @@ export interface LaunchGateUnitRow {
   /** Canonical reviewed-unit identity; titles can repeat across different parts. */
   identityKey: string;
   name: string;
-  kind: "Client App" | "Extension";
+  /** The user-facing noun: Client App, Extension, Panel, Agent, Service. */
+  label: string;
   /** Notable rows in the same words the collection route uses for this unit. */
   notable: string;
   /** Purpose only, when there is nothing notable to say. */
@@ -71,10 +72,12 @@ export interface LaunchGateSource {
   origin: InstallReviewOrigin;
   /** `github.com/acme/studio  at v2.1`, or the host naming its own build. */
   label: string;
-  /** `2 apps · 4 extensions` */
+  /** `2 apps · 4 extensions · 9 other parts` */
   counts: string;
   apps: number;
   extensions: number;
+  /** Panels, agents and services: everything that is neither an app nor an extension. */
+  others: number;
   units: LaunchGateUnitRow[];
   /** `You haven't run code from github.com/acme before.` */
   firstEncounterLine: string | null;
@@ -132,6 +135,7 @@ export interface LaunchGateView {
 
 const LAUNCH_GATE_COPY = {
   title: "Start this workspace?",
+  titleMany: "Start your workspaces?",
   accept: "Start",
   /** At creation the whole app is what declines; later it is one extension. */
   quit: "Quit",
@@ -141,6 +145,8 @@ const LAUNCH_GATE_COPY = {
   selfNamed: (name: string) => `"${name}" — name given by this template`,
   firstEncounter: (originKey: string) => `You haven't run code from ${originKey} before.`,
   builtFrom: (url: string) => `This workspace is built from code at ${url}.`,
+  builtFromEach: (urls: readonly string[]) =>
+    `Your workspaces are built from code at ${joinNames(urls)}.`,
   allFromOneSource: (programs: string, counts: string, label: string) =>
     `Vibestudio needs to run ${programs} on this computer — ${counts}, all from ${label}.`,
   programCount: (programs: string) => `Vibestudio needs to run ${programs} on this computer.`,
@@ -155,6 +161,10 @@ const LAUNCH_GATE_COPY = {
   declineExtensions: (names: readonly string[]) =>
     `The ${joinNames(names)} extensions won't run. The rest of your workspace works normally.`,
 } as const;
+
+function isString(value: string | null): value is string {
+  return value !== null;
+}
 
 function joinNames(names: readonly string[]): string {
   if (names.length <= 1) return names[0] ?? "new";
@@ -187,7 +197,7 @@ export function launchGateUnitRow(part: InstallReviewPart): LaunchGateUnitRow {
   return {
     identityKey: part.identityKey,
     name: part.title || part.name,
-    kind: part.kind === "app" ? "Client App" : "Extension",
+    label: part.label,
     // The same words the collection route uses for the same unit, so what a
     // person reads here matches what they will later see in Templates.
     notable: notable.length > 0 ? notable.join(" · ") : partNotableLine(part),
@@ -195,10 +205,12 @@ export function launchGateUnitRow(part: InstallReviewPart): LaunchGateUnitRow {
   };
 }
 
-function countsPhrase(apps: number, extensions: number): string {
+function countsPhrase(apps: number, extensions: number, others: number): string {
+  // Every program counts somewhere: the source's counts add up to what it runs.
   const parts = [
     apps > 0 ? plural(apps, "app") : null,
     extensions > 0 ? plural(extensions, "extension") : null,
+    others > 0 ? plural(others, apps + extensions > 0 ? "other part" : "part") : null,
   ].filter((value): value is string => value !== null);
   return parts.join(" · ") || "nothing";
 }
@@ -213,7 +225,10 @@ function countsPhrase(apps: number, extensions: number): string {
 export function launchGateSources(parts: readonly InstallReviewPart[]): LaunchGateSource[] {
   const byOrigin = new Map<string, LaunchGateSource>();
   for (const part of parts) {
-    const key = part.origin.originKey;
+    // A source is one repository at one version: the identity its label shows.
+    // (`originKey` is the owner, which first encounter keys on; two repositories
+    // under one owner are still two sources.)
+    const key = `${part.origin.url ?? part.origin.originKey}\u0000${part.origin.version ?? ""}`;
     let source = byOrigin.get(key);
     if (!source) {
       source = {
@@ -222,6 +237,7 @@ export function launchGateSources(parts: readonly InstallReviewPart[]): LaunchGa
         counts: "",
         apps: 0,
         extensions: 0,
+        others: 0,
         units: [],
         firstEncounterLine:
           part.origin.originStatus === "unresolved"
@@ -234,12 +250,13 @@ export function launchGateSources(parts: readonly InstallReviewPart[]): LaunchGa
       byOrigin.set(key, source);
     }
     if (part.kind === "app") source.apps += 1;
-    if (part.kind === "extension") source.extensions += 1;
+    else if (part.kind === "extension") source.extensions += 1;
+    else source.others += 1;
     source.units.push(launchGateUnitRow(part));
   }
   const sources = [...byOrigin.values()];
   for (const source of sources) {
-    source.counts = countsPhrase(source.apps, source.extensions);
+    source.counts = countsPhrase(source.apps, source.extensions, source.others);
     source.units.sort((left, right) => left.name.localeCompare(right.name));
   }
   return sources.sort((left, right) => {
@@ -256,8 +273,9 @@ export function launchGateSources(parts: readonly InstallReviewPart[]): LaunchGa
   });
 }
 
-function rootSource(sources: readonly LaunchGateSource[]): LaunchGateSource | undefined {
-  return sources.find((source) => source.origin.isWorkspaceRoot === true);
+/** The sources workspaces are built from: one per workspace the gate starts. */
+function rootSources(sources: readonly LaunchGateSource[]): LaunchGateSource[] {
+  return sources.filter((source) => source.origin.isWorkspaceRoot === true);
 }
 
 /**
@@ -276,12 +294,15 @@ export function launchGateView(input: {
   const totalPrograms = parts.length;
   const programs = plural(totalPrograms, "program");
   const extensions = parts.filter((part) => part.kind === "extension");
-  const root = rootSource(sources);
   // Root provenance is supplied by the server from the workspace creation
   // descriptor. Counts and source ordering are presentation facts, never
-  // evidence of which source the workspace was built from.
-  const leadsWithOrigin =
-    root !== undefined && !root.origin.isHostBuild && root.origin.originStatus !== "unresolved";
+  // evidence of which source the workspace was built from. A gate that starts
+  // several workspaces at once (an instance's first start) has one root each.
+  const roots = rootSources(sources);
+  const foreignRoots = roots.filter(
+    (root) => !root.origin.isHostBuild && root.origin.originStatus !== "unresolved"
+  );
+  const leadsWithOrigin = foreignRoots.length > 0;
   const singleSource = sources.length === 1;
   const only = sources[0];
 
@@ -289,7 +310,11 @@ export function launchGateView(input: {
     ? // A workspace built from a root published by someone else leads with that
       // fact — not because it is disallowed, but because it is the thing worth
       // knowing.
-      LAUNCH_GATE_COPY.builtFrom(root.origin.url ?? root.origin.originKey)
+      foreignRoots.length === 1
+      ? LAUNCH_GATE_COPY.builtFrom(foreignRoots[0]!.origin.url ?? foreignRoots[0]!.origin.originKey)
+      : LAUNCH_GATE_COPY.builtFromEach(
+          foreignRoots.map((root) => root.origin.url ?? root.origin.originKey)
+        )
     : singleSource && only
       ? // One fact, one button: `Vibestudio needs to run 16 programs on this
         // computer — 3 apps and 13 extensions, all from Vibestudio 1.4.0.`
@@ -298,16 +323,16 @@ export function launchGateView(input: {
 
   // Promoted out of the disclosure, not duplicated into it: the row for this
   // source would otherwise repeat the sentence the reader just read.
-  let firstEncounterLine: string | null = null;
-  if (leadsWithOrigin && root.firstEncounterLine) {
-    firstEncounterLine = root.firstEncounterLine;
-    root.firstEncounterLine = null;
-  }
+  // Roots under one owner say it once.
+  const firstEncounterLine =
+    [...new Set(foreignRoots.map((root) => root.firstEncounterLine).filter(isString))].join(" ") ||
+    null;
   // The domain travels with the URL it belongs to. When the lead sentence is
   // the URL, the fact belongs beside it and not further down the page.
-  let domainLine: string | null = null;
-  if (leadsWithOrigin && root.domainLine) {
-    domainLine = root.domainLine;
+  const domainLine =
+    [...new Set(foreignRoots.map((root) => root.domainLine).filter(isString))].join(" ") || null;
+  for (const root of foreignRoots) {
+    root.firstEncounterLine = null;
     root.domainLine = null;
   }
 
@@ -318,7 +343,7 @@ export function launchGateView(input: {
     sources.length > 1 || sources.some((source) => !source.origin.isHostBuild);
   return {
     approvalIds: input.approvals.map((approval) => approval.approvalId),
-    title: LAUNCH_GATE_COPY.title,
+    title: roots.length > 1 ? LAUNCH_GATE_COPY.titleMany : LAUNCH_GATE_COPY.title,
     summary,
     firstEncounterLine,
     domainLine,
@@ -327,9 +352,7 @@ export function launchGateView(input: {
       : null,
     nativeCodeWarning:
       extensions.length > 0
-        ? HOST_APPROVAL_COPY.installReview.nativeCodeWarning(
-            input.approvals[0]?.executionPlatform,
-          )
+        ? HOST_APPROVAL_COPY.installReview.nativeCodeWarning(input.approvals[0]?.executionPlatform)
         : null,
     sources,
     sourcesExpandedByDefault,
@@ -376,41 +399,92 @@ export function approvalIds(approvals: PendingUnitInstallReviewApproval[]): Set<
  * The terminal form carries the same content and the same decision as the
  * window — same sources, same notable lines, same consequence copy — as plain
  * text with an explicit prompt, never a truncated summary.
+ *
+ * Like the window it discloses in levels (§7.6.5): this is what the window
+ * shows before "Review each" is opened — what the code is, whose it is, how
+ * much runs, what native code may do, each source with its counts, and what
+ * declining costs. The programs themselves are one keypress away
+ * (`formatLaunchGateUnitsForTerminal`), so the decision is never scrolled away
+ * under a list of every program. Everything wraps to `width`, keeping its indent.
  */
 export function formatLaunchGateForTerminal(
   approvals: PendingUnitInstallReviewApproval[],
-  target: HostTarget
+  target: HostTarget,
+  width = 80
 ): string {
   const view = launchGateView({ approvals });
-  const lines = [`${targetLabel(target)} — ${view.title}`, "", view.summary];
+  const lines = [`${targetLabel(target)} — ${view.title}`, ""];
+  const add = (text: string, indent = 0, hanging = indent) =>
+    lines.push(...wrapIndented(text, width, indent, hanging));
+  add(view.summary);
   // Same order as the window: what this workspace is, which domain that URL
   // actually belongs to, whether it is new to the user, how much of it there is,
-  // and what native code can do — all before the per-source list, none of it
-  // behind a disclosure the terminal cannot have.
+  // and what native code can do — all before the per-source list.
   //
   // The domain is stated rather than emphasized. Plain text has no honest way to
   // emphasize a run of characters — every candidate (asterisks, carets, a
   // second underlined line) is typography a hostile URL could imitate in its own
   // path — so the terminal says the fact instead of drawing it.
-  if (view.domainLine) lines.push(view.domainLine);
-  if (view.firstEncounterLine) lines.push(view.firstEncounterLine);
-  if (view.programsLine) lines.push("", view.programsLine);
-  if (view.nativeCodeWarning) lines.push("", view.nativeCodeWarning);
-  for (const source of view.sources) {
+  if (view.domainLine) add(view.domainLine);
+  if (view.firstEncounterLine) add(view.firstEncounterLine);
+  if (view.programsLine) {
     lines.push("");
-    lines.push(`  ${source.label}${source.counts ? `   ${source.counts}` : ""}`);
+    add(view.programsLine);
+  }
+  if (view.nativeCodeWarning) {
+    lines.push("");
+    add(view.nativeCodeWarning);
+  }
+  lines.push("");
+  for (const source of view.sources) {
+    add(source.label, 2, 6);
+    if (source.counts) add(source.counts, 6);
     // Directly under the URL it qualifies, before anything the template says
     // about itself: the domain is the non-asserted part of this row.
-    if (source.domainLine) lines.push(`      ${source.domainLine}`);
+    if (source.domainLine) add(source.domainLine, 6);
     if (source.origin.selfName && !source.origin.isHostBuild) {
-      lines.push(`      ${LAUNCH_GATE_COPY.selfNamed(source.origin.selfName)}`);
+      add(LAUNCH_GATE_COPY.selfNamed(source.origin.selfName), 6);
     }
-    if (source.firstEncounterLine) lines.push(`      ${source.firstEncounterLine}`);
+    if (source.firstEncounterLine) add(source.firstEncounterLine, 6);
+  }
+  lines.push("");
+  add(view.declineConsequence);
+  return lines.join("\n");
+}
+
+/** Level 2 for the terminal: every program under its source, with its notable rows. */
+export function formatLaunchGateUnitsForTerminal(
+  approvals: PendingUnitInstallReviewApproval[],
+  width = 80
+): string {
+  const view = launchGateView({ approvals });
+  const lines: string[] = [];
+  for (const source of view.sources) {
+    if (lines.length > 0) lines.push("");
+    lines.push(...wrapIndented(`${source.label}   ${source.counts}`, width, 2, 6));
     for (const unit of source.units) {
-      lines.push(`    ${unit.name} — ${unit.notable || unit.purpose}`);
+      lines.push(...wrapIndented(`${unit.name} (${unit.label})`, width, 4, 8));
+      lines.push(...wrapIndented(unit.notable || unit.purpose, width, 8));
     }
   }
-  lines.push("", view.declineConsequence);
-  lines.push("", `[${view.acceptLabel}] / [${view.declineLabel}]`);
   return lines.join("\n");
+}
+
+/** Word-wrap `text` to `width`: the first line at `indent`, the rest at `hanging`. */
+function wrapIndented(text: string, width: number, indent: number, hanging = indent): string[] {
+  const lines: string[] = [];
+  let line = " ".repeat(indent);
+  let empty = true;
+  // Runs of spaces are kept: `url  at v2.1` reads as two fields.
+  for (const word of text.split(" ")) {
+    if (!empty && line.length + 1 + word.length > width) {
+      lines.push(line);
+      line = " ".repeat(hanging);
+      empty = true;
+    }
+    line += (empty ? "" : " ") + word;
+    empty = false;
+  }
+  lines.push(line);
+  return lines;
 }

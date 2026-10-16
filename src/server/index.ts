@@ -2409,9 +2409,10 @@ async function main() {
    * Host-owned semantic startup state. `preparing` means startup can still
    * publish the creation review; every other state proves that preparation has
    * completed without inferring that fact from an empty queue or elapsed time.
+   * Whether this boot creates the workspace (and so owes a review) is known
+   * only once semantic activation has run: until then it is `preparing`.
    */
-  let workspaceCreationReviewState: WorkspaceCreationReviewState =
-    workspaceCreationReview.isPending() ? { status: "preparing" } : { status: "not-required" };
+  let workspaceCreationReviewState: WorkspaceCreationReviewState = { status: "preparing" };
   /**
    * Client apps and the extensions a host target requires are decided at the
    * launch gate, in a host-owned window, before the workspace UI exists (§7.6).
@@ -6953,6 +6954,14 @@ async function main() {
       if (recovered > 0) console.log(`[Vcs] Recovered ${recovered} pending semantic host effects`);
       const recoverPendingSemanticEffectsMs = performance.now() - spanStartedAt;
       const activated = await vcs.activateWorkspaceFromSource();
+      // Activation either created the workspace (and its creation publication
+      // recorded the review it owes) or restored one: only now is "nothing to
+      // review" a fact rather than a guess.
+      if (
+        !workspaceCreationReview.isPending() &&
+        workspaceCreationReviewState.status === "preparing"
+      )
+        workspaceCreationReviewState = { status: "not-required" };
       const launchRecord = readWorkspaceHostLaunchRecord(statePath);
       if (!launchRecord) {
         throw new Error("Workspace semantic main has no durable host launch record");
