@@ -584,7 +584,7 @@ export function viewMayRequestPeripheral(
   const manifestCapabilities = capabilities.map((capability) =>
     capability === "geolocation" ? "location" : capability
   );
-  if (view.type === "app") {
+  if (view.type === "client") {
     return manifestCapabilities.every((capability) => view.capabilities.includes(capability));
   }
   if (

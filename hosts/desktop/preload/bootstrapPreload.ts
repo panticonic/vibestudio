@@ -1,73 +1,45 @@
 /**
- * Bootstrap launch-gate preload.
+ * Launch-gate preload.
  *
- * This is deliberately smaller than the workspace app preload. The shipped
- * launch gate can only call the closed set of host RPC methods needed to
- * launch the selected host target and resolve the startup app approvals that
- * launch returns.
+ * The gate is host UI that exists before any client does. It holds no session
+ * and makes no RPC call: the host pushes launch and connection state to it, and
+ * it asks the host (a closed set of IPC channels) to relay the person's choices.
  */
 
 import { contextBridge, ipcRenderer } from "electron";
-import type { RpcEnvelope } from "@vibestudio/rpc";
-import type { TransportBridge } from "./wsTransport.js";
-import { assertBootstrapRpcMessageAllowed } from "./bootstrapTransportPolicy.js";
-
-type EnvelopeHandler = (envelope: RpcEnvelope) => void;
 
 type BootstrapBridge = {
   getState: () => Promise<unknown>;
+  getLaunchState: () => Promise<unknown>;
+  resolveApprovals: (decision: "once" | "deny") => Promise<unknown>;
   launchLocalWorkspace: (workspaceName: string) => Promise<unknown>;
   pairRemote: (payload: { link: string; label?: string }) => Promise<unknown>;
   retryStartup: () => Promise<unknown>;
   chooseConnection: () => Promise<unknown>;
   openLog: (path: string) => Promise<unknown>;
   onStateChanged: (handler: (state: unknown) => void) => () => void;
+  onLaunchState: (handler: (state: unknown) => void) => () => void;
 };
 
-const bootstrapTransport: TransportBridge = (() => {
-  const listeners = new Set<EnvelopeHandler>();
-
-  ipcRenderer.on("vibestudio:rpc:message", (_event, envelope: RpcEnvelope) => {
-    for (const listener of listeners) {
-      try {
-        listener(envelope);
-      } catch (error) {
-        console.error("Error in bootstrap transport message handler:", error);
-      }
-    }
-  });
-
-  return {
-    async send(envelope: RpcEnvelope): Promise<void> {
-      assertBootstrapRpcMessageAllowed(envelope.target, envelope.message);
-      ipcRenderer.send("vibestudio:rpc:send", envelope);
-    },
-
-    onMessage(handler: EnvelopeHandler): () => void {
-      listeners.add(handler);
-      return () => listeners.delete(handler);
-    },
-
-    onRecovery(): () => void {
-      return () => {};
-    },
-  };
-})();
+function subscribe(channel: string, handler: (state: unknown) => void): () => void {
+  const listener = (_event: Electron.IpcRendererEvent, state: unknown): void => handler(state);
+  ipcRenderer.on(channel, listener);
+  return () => ipcRenderer.removeListener(channel, listener);
+}
 
 const bootstrapBridge: BootstrapBridge = {
   getState: () => ipcRenderer.invoke("vibestudio:bootstrap:get-state"),
+  getLaunchState: () => ipcRenderer.invoke("vibestudio:bootstrap:get-launch-state"),
+  resolveApprovals: (decision) =>
+    ipcRenderer.invoke("vibestudio:bootstrap:resolve-approvals", decision),
   launchLocalWorkspace: (workspaceName) =>
     ipcRenderer.invoke("vibestudio:bootstrap:launch-local-workspace", workspaceName),
   pairRemote: (payload) => ipcRenderer.invoke("vibestudio:bootstrap:pair-remote", payload),
   retryStartup: () => ipcRenderer.invoke("vibestudio:bootstrap:retry-startup"),
   chooseConnection: () => ipcRenderer.invoke("vibestudio:bootstrap:choose-connection"),
   openLog: (path) => ipcRenderer.invoke("vibestudio:bootstrap:open-log", path),
-  onStateChanged: (handler) => {
-    const listener = (_event: Electron.IpcRendererEvent, state: unknown): void => handler(state);
-    ipcRenderer.on("vibestudio:bootstrap:state-changed", listener);
-    return () => ipcRenderer.removeListener("vibestudio:bootstrap:state-changed", listener);
-  },
+  onStateChanged: (handler) => subscribe("vibestudio:bootstrap:state-changed", handler),
+  onLaunchState: (handler) => subscribe("vibestudio:bootstrap:launch-state", handler),
 };
 
-contextBridge.exposeInMainWorld("__vibestudioTransport", bootstrapTransport);
 contextBridge.exposeInMainWorld("__vibestudioBootstrap", bootstrapBridge);

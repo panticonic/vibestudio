@@ -16,7 +16,6 @@ let exited;
 let timer;
 try {
   await writeFile(join(temp, "preload.cjs"), "");
-  await writeFile(join(temp, "shell.html"), '<body style="margin:0;background:blue">shell');
   await build({
     stdin: {
       resolveDir: root,
@@ -30,16 +29,14 @@ async function run() {
   await app.whenReady();
   const window = new BaseWindow({ width: 600, height: 400, show: false });
   const views = new ViewManager({ window,
-    shellPreload: ${JSON.stringify(join(temp, "preload.cjs"))},
-    shellHtmlPath: ${JSON.stringify(join(temp, "shell.html"))},
-    showWindowOnShellLoad: false });
+    shellOverlayPreload: ${JSON.stringify(join(temp, "preload.cjs"))},
+    contentOverlayPreload: ${JSON.stringify(join(temp, "preload.cjs"))},
+    chromeShortcuts: { intercept() {}, isChromeOwned: () => false } });
   const provider = new CdpHostProvider({ serverUrl: 'ws://127.0.0.1:1',
     hostConnectionId: 'frame-smoke',
     transport: { kind: 'authenticated-websocket', authToken: 'unused' },
     getViewManager: () => views });
-  const shell = views.getWebContents('shell');
   try {
-    if (shell.isLoading()) await new Promise(resolve => shell.once('did-finish-load', resolve));
     const panel = views.createView({ id: 'frame-smoke', type: 'panel' });
     await panel.webContents.loadURL('data:text/html,<body style="margin:0;background:red">panel');
     // A hidden unslotted panel begins at zero bounds, just like a runtime
@@ -58,7 +55,6 @@ async function run() {
     console.log('hidden parent + unslotted zero-bounds panel: captured red panel');
 
     window.showInactive();
-    await shell.executeJavaScript('new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))');
     const input = views.createView({ id: 'input-smoke', type: 'panel' });
     await input.webContents.loadURL('data:text/html,<body style="margin:0;background:red">panel');
     await provider.handleProviderMessageForTest({ type: 'cdp:control', targetId: 'input-smoke', active: true });
@@ -71,7 +67,6 @@ async function run() {
     assert.equal(await input.webContents.executeJavaScript('window.trustedClick'), true);
     assertColor(await provider.captureScreenshot('input-smoke'), 1);
     assert.equal(views.isViewVisible('input-smoke'), false);
-    assert.ok(window.contentView.children.indexOf(input) < window.contentView.children.findIndex(view => view.webContents === shell));
     await provider.handleProviderMessageForTest({ type: 'cdp:detach', targetId: 'input-smoke' });
     assert.equal(input.getVisible(), false);
     console.log('covered automation panel: trusted click, captured updated green panel, released surface');
@@ -80,8 +75,6 @@ async function run() {
     const released = Promise.all(webContents.getAllWebContents().map(contents =>
       new Promise(resolve => contents.once('destroyed', resolve))));
     views.destroy();
-    // BaseWindow does not own the lifetime of its child WebContents.
-    shell.close();
     await released;
     window.close();
   }

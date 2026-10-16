@@ -1,4 +1,4 @@
-import "./polyfills.js";
+import "@vibestudio/rn-client-api/polyfills";
 
 export { createGatewayArtifactFetch, createMobileArtifactStore } from "./bundleDelivery.js";
 export type { NativeArtifactStore } from "./bundleDelivery.js";

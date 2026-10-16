@@ -4,7 +4,7 @@ import { app } from "electron";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { WorkspaceSessionConnection } from "./serverSession.js";
-import type { ApplicationWindowController } from "./applicationWindowController.js";
+import type { PanelHostWindow } from "./panelHostWindow.js";
 import type { BrowserPermissionController } from "./services/browserPermissionController.js";
 import { createBrowserDataClient } from "@vibestudio/browser-data";
 import { createBrowserVaultNativeClient } from "./services/browserVaultNativeClient.js";
@@ -18,7 +18,7 @@ export async function registerPersonalBrowserServices(deps: {
   connection: WorkspaceSessionConnection;
   container: ServiceContainer;
   eventService: EventService;
-  window: ApplicationWindowController;
+  window: PanelHostWindow;
   browserPermissions: BrowserPermissionController;
   browserPartition: string;
   downloads: import("./services/browserDownloadManager.js").BrowserDownloadManager;

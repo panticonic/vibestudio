@@ -31367,51 +31367,6 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
-      "id": "host:terminalApps.getSettings",
-      "rpcPlane": "host-service",
-      "owner": "terminalApps",
-      "method": "getSettings",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "terminal-apps.control",
-      "reviewRationale": "Controls only the calling person's own terminal sessions",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:terminalApps.getSettings"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code"
-      ],
-      "sensitivity": "read",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:terminalApps.getSettings),workspace-member),allOf(capability(code,service:terminalApps.getSettings),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:terminalApps.getSettings",
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
       "id": "host:terminalApps.launch",
       "rpcPlane": "host-service",
       "owner": "terminalApps",
@@ -31724,51 +31679,6 @@
         "review": "schema-owned-prepared-leaf",
         "change": null
       },
-      "parityAssertion": "generated-census:host-authority"
-    },
-    {
-      "id": "host:terminalApps.setSettings",
-      "rpcPlane": "host-service",
-      "owner": "terminalApps",
-      "method": "setSettings",
-      "tier": "open",
-      "sessionAdmission": "family",
-      "residency": "native-effect",
-      "mechanismFamily": "terminal-apps.control",
-      "reviewRationale": "Controls only the calling person's own terminal sessions",
-      "resourceDerivation": {
-        "kind": "literal",
-        "key": "service:terminalApps.setSettings"
-      },
-      "authorityPrincipals": [
-        "user",
-        "code"
-      ],
-      "sensitivity": "write",
-      "authenticatedFacts": [
-        "session",
-        "acting-user",
-        "device",
-        "runtime-entity",
-        "exact-code-artifact-when-code-originated",
-        "workspace-membership",
-        "agent-binding-when-agent-originated"
-      ],
-      "currentOutcomes": {
-        "allowed": "declared caller scenarios retain their existing allow/approval flow",
-        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
-      },
-      "predicates": [
-        "live-session",
-        "live-workspace-membership",
-        "exact-resource-scope"
-      ],
-      "r3aRequirement": "anyOf(allOf(capability(user,service:terminalApps.setSettings),workspace-member),allOf(capability(code,service:terminalApps.setSettings),workspace-member))",
-      "r3b": {
-        "review": "unchanged-parity",
-        "change": null
-      },
-      "capability": "service:terminalApps.setSettings",
       "parityAssertion": "generated-census:host-authority"
     },
     {

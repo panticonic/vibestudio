@@ -30,6 +30,8 @@ function harness(
   const decided: Array<[string, string]> = [];
   let permission = options.permission ?? "granted";
   let decideFails = true;
+  const reported: Array<{ id: string; actionId: string; text?: string | undefined }> = [];
+  const reportFailure: { error: Error | null } = { error: null };
   const l = {
     tokenRefresh: undefined as undefined | ((token: string) => void),
     message: undefined as undefined | ((message: RemoteMessage) => void),
@@ -92,6 +94,10 @@ function harness(
     },
     platform: options.platform ?? "android",
     isConfigured: () => options.configured ?? true,
+    reportAction: async (_scope, id, actionId, text) => {
+      if (reportFailure.error) throw reportFailure.error;
+      reported.push({ id, actionId, text });
+    },
     decide: async (t, decision) => {
       if (decideFails) throw new Error("not connected");
       decided.push([t.approvalId, decision]);
@@ -105,6 +111,8 @@ function harness(
     displayed,
     cancelled,
     decided,
+    reported,
+    reportFailure,
     notifee,
     messaging,
     deviceIdSet,
@@ -406,5 +414,95 @@ describe("host notifications", () => {
     await expect(h.host.start()).rejects.toThrow("already started");
     h.host.stop();
     await h.host.start();
+  });
+
+  describe("server-defined notifications with reply", () => {
+    const pushed = (over: Record<string, string> = {}): RemoteMessage => ({
+      data: {
+        kind: "server-notification",
+        ...scope,
+        notificationId: "n-1",
+        title: "Agent",
+        body: "Ready?",
+        actionsJson: JSON.stringify([
+          { id: "reply", title: "Reply", input: "text" },
+          { id: "dismiss", title: "Dismiss" },
+        ]),
+        ...over,
+      },
+    });
+    const displayedNotification = (h: ReturnType<typeof harness>) => h.displayed.at(-1)!;
+    const actionEvent = (h: ReturnType<typeof harness>, actionId: string, input?: string): NotificationEvent => ({
+      kind: "action",
+      actionId,
+      ...(input !== undefined ? { input } : {}),
+      notification: displayedNotification(h),
+    });
+
+    it("draws the producer's actions on Android, with a reply field where asked", async () => {
+      const h = harness();
+      await h.host.start();
+      await h.l.message!(pushed());
+      await vi.waitFor(() => expect(h.displayed).toHaveLength(1));
+      const shown = displayedNotification(h);
+      expect(shown.id).toBe(keyOf("n-1"));
+      expect(shown.body).toBe("Ready?");
+      const actions = (shown.android as { actions: Array<Record<string, unknown>> }).actions;
+      expect(actions[0]).toMatchObject({ title: "Reply", pressAction: { id: "reply" }, input: expect.anything() });
+      expect(actions[1]).toMatchObject({ title: "Dismiss", pressAction: { id: "dismiss" } });
+      expect(actions[1]).not.toHaveProperty("input");
+    });
+
+    it("relays a typed reply to the producer with no client running, then retires the notification", async () => {
+      const h = harness();
+      await h.host.start();
+      await h.l.message!(pushed());
+      await vi.waitFor(() => expect(h.displayed).toHaveLength(1));
+      await h.l.backgroundEvent!(actionEvent(h, "reply", "on my way"));
+      expect(h.reported).toEqual([{ id: "n-1", actionId: "reply", text: "on my way" }]);
+      expect(h.cancelled).toEqual([keyOf("n-1")]);
+    });
+
+    it("relays an action without input with no text", async () => {
+      const h = harness();
+      await h.host.start();
+      await h.l.message!(pushed());
+      await vi.waitFor(() => expect(h.displayed).toHaveLength(1));
+      await h.l.foreground!(actionEvent(h, "dismiss"));
+      expect(h.reported).toEqual([{ id: "n-1", actionId: "dismiss", text: undefined }]);
+    });
+
+    it("says a failed relay on the notification and keeps its actions, so the reply is not lost silently", async () => {
+      const h = harness();
+      await h.host.start();
+      await h.l.message!(pushed());
+      await vi.waitFor(() => expect(h.displayed).toHaveLength(1));
+      h.reportFailure.error = new Error("not connected");
+      await h.l.backgroundEvent!(actionEvent(h, "reply", "hi"));
+      expect(h.cancelled).toEqual([]);
+      const shown = displayedNotification(h);
+      expect(h.displayed).toHaveLength(2);
+      expect(shown.body).toBe("Not sent: not connected");
+      expect((shown.android as { actions: unknown[] }).actions).toHaveLength(2);
+    });
+
+    it("ignores an action the producer never declared and a press on the body", async () => {
+      const h = harness();
+      await h.host.start();
+      await h.l.message!(pushed());
+      await vi.waitFor(() => expect(h.displayed).toHaveLength(1));
+      await h.l.backgroundEvent!(actionEvent(h, "approve"));
+      await h.l.backgroundEvent!({ kind: "press", notification: displayedNotification(h) });
+      expect(h.reported).toEqual([]);
+    });
+
+    it("shows nothing for a malformed notification", async () => {
+      const h = harness();
+      await h.host.start();
+      await h.l.message!(pushed({ actionsJson: "not json" }));
+      await h.l.message!(pushed({ actionsJson: JSON.stringify([{ id: "open", title: "Open" }]) }));
+      await h.l.message!(pushed({ serverId: "bad" }));
+      expect(h.displayed).toEqual([]);
+    });
   });
 });

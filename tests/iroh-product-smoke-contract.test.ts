@@ -101,12 +101,16 @@ describe("Iroh product E2E entry points", () => {
     expect(mobile).not.toContain(
       'if (!advanced) await tapVisibleNodeByResourceId(device, xml, "approval-queue-prev")'
     );
-    expect(source("hosts/react-native/index.js")).toContain("embedded-host-target-approval-resolved");
+    expect(source("hosts/react-native/src/host/hostRuntime.ts")).toContain(
+      "embedded-host-target-approval-resolved"
+    );
     expect(mobile).toContain('readXmlAttribute(node, "enabled") === "false"');
     expect(mobile).toContain("managedConnectionDeadlineMs");
     expect(mobile).toContain("managedPanelDeadlineMs");
     expect(mobile).toContain("must not recreate the still-live WebView");
-    expect(source("hosts/react-native/index.js")).toContain("embedded-pairing-failed");
+    expect(source("hosts/react-native/src/host/deviceConnection.ts")).toContain(
+      "embedded-pairing-failed"
+    );
 
     const installIndex = mobile.indexOf("await runMobileInstall(options, lifetime)");
     const templatesIndex = mobile.indexOf("await resolveDevelopmentTemplates({");

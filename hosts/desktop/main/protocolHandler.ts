@@ -5,6 +5,7 @@ import {
   type ConnectPairing,
   parseConnectLink,
 } from "@vibestudio/iroh-transport";
+import { isClientLink } from "@vibestudio/client-host-core";
 import { parsePanelLocationLink, type PanelLocation } from "@vibestudio/shared/panelLocation";
 import {
   parseShellSurfaceLink,
@@ -28,6 +29,14 @@ const surfaceListeners = new Set<(target: ShellSurfaceDescriptor) => void>();
  * launch-time failure survives until a surface exists to show it.
  */
 let pendingError: string | null = null;
+
+/**
+ * Links of the client grammar (`vibestudio://c/<id>/<intent>?k=v`) are routed
+ * to the client host, which launches the client or hands an intent to the
+ * running one. Links that arrive before the host exists are held in order.
+ */
+let pendingClientLinks: string[] = [];
+const clientLinkListeners = new Set<(link: string) => void>();
 const errorListeners = new Set<(reason: string) => void>();
 
 export function registerProtocol(): void {
@@ -58,6 +67,11 @@ export function enqueueFirstArgvLink(argv: readonly string[]): void {
 }
 
 export function enqueueProtocolLink(raw: string): void {
+  if (isClientLink(raw)) {
+    if (clientLinkListeners.size === 0) pendingClientLinks.push(raw);
+    for (const listener of clientLinkListeners) listener(raw);
+    return;
+  }
   const panel = parsePanelLocationLink(raw);
   if (panel.kind === "ok") {
     pendingPanel = panel.location;
@@ -158,4 +172,16 @@ export function getPendingShellSurface(): ShellSurfaceDescriptor | null {
 export function onShellSurface(listener: (target: ShellSurfaceDescriptor) => void): () => void {
   surfaceListeners.add(listener);
   return () => surfaceListeners.delete(listener);
+}
+
+/** Links held until the client host existed, in arrival order. */
+export function drainPendingClientLinks(): string[] {
+  const links = pendingClientLinks;
+  pendingClientLinks = [];
+  return links;
+}
+
+export function onClientLink(listener: (link: string) => void): () => void {
+  clientLinkListeners.add(listener);
+  return () => clientLinkListeners.delete(listener);
 }

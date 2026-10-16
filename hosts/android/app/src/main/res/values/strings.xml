@@ -1,3 +1,6 @@
 <resources>
     <string name="app_name">Vibestudio</string>
+    <string name="ask_tile_label">Ask</string>
+    <string name="ask_tile_hint">Ask your workspace</string>
+    <string name="ask_tile_send">Send</string>
 </resources>

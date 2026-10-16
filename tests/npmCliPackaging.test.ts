@@ -58,7 +58,6 @@ describe("npm CLI packaging", () => {
       expect(fs.existsSync(path.join(root, "node_modules/@react-native-community/netinfo"))).toBe(
         true
       );
-      expect(fs.existsSync(path.join(root, "node_modules/web-streams-polyfill"))).toBe(true);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

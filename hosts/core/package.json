@@ -16,7 +16,6 @@
     "./artifactCache": "./src/artifactCache.ts",
     "./updates": "./src/updates.ts",
     "./intents": "./src/intents.ts",
-    "./notifications": "./src/notifications.ts",
     "./node": "./src/nodeArtifactStore.ts"
   },
   "scripts": {

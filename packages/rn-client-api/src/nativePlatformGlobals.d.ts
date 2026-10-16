@@ -5,7 +5,7 @@ import type {
   ReadableStreamDefaultReadResult as PolyfillReadResult,
 } from "web-streams-polyfill/ponyfill";
 
-/** Exact Hermes + installed mobile-iroh platform surface. No DOM, Node, or
+/** Exact Hermes + installed rn-client-api platform surface. No DOM, Node, or
  * uninstalled stream constructors are made available to native consumers. */
 declare global {
   // Hermes pinned by RN 0.79: GlobalObject.cpp creates TextEncoder and atob/btoa.

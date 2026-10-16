@@ -160,11 +160,9 @@ export interface TestApi {
 
   /** Return host shell view debug state from ViewManager */
   getHostViewDebugInfo(): {
-    visibleHostChromeAppId: string | null;
+    visibleHostChromeClientId: string | null;
     shellOverlayActive: boolean | null;
-    shell: unknown;
     hostedShell: unknown;
-    shellUrl: string | null;
     hostedShellUrl: string | null;
     nativeSlots: Array<{
       nativeSlotId: string;
@@ -196,6 +194,15 @@ export interface TestApi {
 
   /** Call the terminal panel's test bridge without depending on terminal DOM internals */
   callTerminalPanel(panelId: string, method: string, args?: unknown): Promise<unknown>;
+
+  /** What the host's launch gate currently shows. Test mode only. */
+  getLaunchGateView(): import("../bootstrap/launchGateModel.js").LaunchGateView;
+
+  /** Call an Electron-local service (`view`, `menu`, `app`, ...) as the running panel-hosting client. Test mode only. */
+  callHostedClient(service: string, method: string, args?: unknown[]): Promise<unknown>;
+
+  /** Answer the review the launch gate is showing, as the person would. Test mode only. */
+  resolveLaunchApprovals(decision: "once" | "deny"): Promise<void>;
 
   /** Call a server RPC through the panel orchestrator's verified path */
   rpcCall(service: string, method: string, args?: unknown[]): Promise<unknown>;
@@ -233,11 +240,18 @@ export function setupTestApi(
     listWorkspaces(): ReturnType<TestApi["listWorkspaces"]>;
     getServerConnectionStatus(): ReturnType<TestApi["getServerConnectionStatus"]>;
     getActiveWorkspaceAssetDiagnostics?: TestApi["getActiveWorkspaceAssetDiagnostics"];
+    /** The host's launch gate: what it shows, and the person's decision on its review. */
+    launchGate: {
+      view(): import("../bootstrap/launchGateModel.js").LaunchGateView;
+      resolveApprovals(decision: "once" | "deny"): Promise<void>;
+    };
+    /** Call an Electron-local service as the panel-hosting client does. */
+    callHostedClient(service: string, method: string, args: unknown[]): Promise<unknown>;
   }
 ): void {
   if (process.env["VIBESTUDIO_TEST_MODE"] !== "1") return;
   const assertHostedChrome = () => {
-    const appId = owner.getPanelView()?.getViewManager().getVisibleHostChromeAppId();
+    const appId = owner.getPanelView()?.getViewManager().getVisibleHostChromeClientId();
     if (!appId) throw new Error("No hosted shell app is visible");
   };
   const owners = new WeakMap<PanelOrchestrator, TestApi>();
@@ -252,6 +266,10 @@ export function setupTestApi(
           getServerConnectionStatus: selectors.getServerConnectionStatus,
           getActiveWorkspaceAssetDiagnostics:
             selectors.getActiveWorkspaceAssetDiagnostics ?? (() => []),
+          getLaunchGateView: () => selectors.launchGate.view(),
+          resolveLaunchApprovals: (decision) => selectors.launchGate.resolveApprovals(decision),
+          callHostedClient: (service, method, args = []) =>
+            selectors.callHostedClient(service, method, args),
         },
         assertHostedChrome
       );
@@ -276,6 +294,9 @@ function createWorkspaceTestApi(
     | "listWorkspaces"
     | "getServerConnectionStatus"
     | "getActiveWorkspaceAssetDiagnostics"
+    | "getLaunchGateView"
+    | "resolveLaunchApprovals"
+    | "callHostedClient"
   >,
   assertHostedChrome: () => void
 ): TestApi {
@@ -556,24 +577,20 @@ function createWorkspaceTestApi(
       const viewManager = panelView?.getViewManager();
       if (!viewManager) {
         return {
-          visibleHostChromeAppId: null,
+          visibleHostChromeClientId: null,
           shellOverlayActive: null,
-          shell: null,
           hostedShell: null,
-          shellUrl: null,
           hostedShellUrl: null,
           nativeSlots: [],
         };
       }
-      const hostedShellAppId = viewManager.getVisibleHostChromeAppId();
+      const hostedClientId = viewManager.getVisibleHostChromeClientId();
       return {
-        visibleHostChromeAppId: hostedShellAppId,
+        visibleHostChromeClientId: hostedClientId,
         shellOverlayActive: viewManager.getShellOverlayActive(),
-        shell: viewManager.getViewInfo("shell"),
-        hostedShell: hostedShellAppId ? viewManager.getViewInfo(hostedShellAppId) : null,
-        shellUrl: viewManager.getWebContents("shell")?.getURL() ?? null,
-        hostedShellUrl: hostedShellAppId
-          ? (viewManager.getWebContents(hostedShellAppId)?.getURL() ?? null)
+        hostedShell: hostedClientId ? viewManager.getViewInfo(hostedClientId) : null,
+        hostedShellUrl: hostedClientId
+          ? (viewManager.getWebContents(hostedClientId)?.getURL() ?? null)
           : null,
         nativeSlots: viewManager.getNativePanelSlotDebugInfo(),
       };
@@ -795,6 +812,10 @@ function createWorkspaceTestApi(
       if (!result.__vibestudioOk) throw new Error(result.error);
       return result.value;
     },
+
+    getLaunchGateView: selectors.getLaunchGateView,
+    resolveLaunchApprovals: selectors.resolveLaunchApprovals,
+    callHostedClient: selectors.callHostedClient,
 
     async rpcCall(service, method, args = []): Promise<unknown> {
       return panelOrchestrator.callServer(service, method, args);

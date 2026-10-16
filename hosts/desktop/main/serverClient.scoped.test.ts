@@ -6,7 +6,12 @@ import { WebSocketServer } from "ws";
 import { envelopeFromMessage, type RpcEnvelope, type RpcResponse } from "@vibestudio/rpc";
 import { FRAME_DATA, FRAME_END, FRAME_HEAD } from "@vibestudio/rpc/protocol/streamCodec";
 import { RPC_CONTRACT_VERSION } from "@vibestudio/rpc/protocol/contractVersion";
-import { createServerClient } from "./serverClient.js";
+import {
+  createServerClient,
+  type ClientPrincipalSessions,
+  type ScopedServerCaller,
+} from "./serverClient.js";
+import { CLOSE_TOKEN_REVOKED } from "@vibestudio/rpc/protocol/closeCodes";
 
 const cleanup: Array<() => Promise<void> | void> = [];
 
@@ -48,7 +53,8 @@ async function startRpcHarness() {
     envelope: RpcEnvelope;
   }> = [];
   let shellSocket: import("ws").WebSocket | undefined;
-  let appSocket: import("ws").WebSocket | undefined;
+  const appSockets: Array<import("ws").WebSocket> = [];
+  const sessionsEnded: Array<{ caller: ScopedServerCaller; reason: string }> = [];
   let panelSocket: import("ws").WebSocket | undefined;
   let appGrantSequence = 0;
   let appConnectionCount = 0;
@@ -100,10 +106,10 @@ async function startRpcHarness() {
                 : pairing
                   ? "shell:device-1"
                   : "";
-          callerKind = shell || pairing ? "shell" : app ? "app" : panel ? "panel" : "";
+          callerKind = shell || pairing ? "shell" : app ? "client" : panel ? "panel" : "";
           if (shell) shellSocket = ws;
           if (app) {
-            appSocket = ws;
+            appSockets.push(ws);
             appConnectionCount += 1;
           }
           if (panel) panelSocket = ws;
@@ -152,7 +158,7 @@ async function startRpcHarness() {
         const envelope = msg.envelope as RpcEnvelope | undefined;
         const message = envelope?.message;
         if ((msg.type !== "ws:rpc" && msg.type !== "ws:route") || !message || !envelope) return;
-        if (callerKind === "app") scopedEnvelopes.push({ callerId, callerKind, envelope });
+        if (callerKind === "client") scopedEnvelopes.push({ callerId, callerKind, envelope });
         if (message.type === "response") {
           const pending = reverseCalls.get(message.requestId);
           if (!pending) return;
@@ -178,7 +184,7 @@ async function startRpcHarness() {
           );
         };
         if (
-          (callerKind === "app" || callerKind === "shell") &&
+          (callerKind === "client" || callerKind === "shell") &&
           envelope.target.startsWith("do:") &&
           method === "direct.echo"
         ) {
@@ -200,21 +206,14 @@ async function startRpcHarness() {
           );
           return;
         }
+        // A panel session is still admitted through a host-issued grant; client
+        // principals never ask the server for one.
         if (callerKind === "shell" && method === "auth.grantConnection") {
           grantRequests.push(args);
-          const principalId = String(args[0] ?? "");
-          sendResponse({
-            type: "response",
-            requestId,
-            result: {
-              token: principalId.startsWith("panel:")
-                ? "panel-grant"
-                : `app-grant-${++appGrantSequence}`,
-            },
-          });
+          sendResponse({ type: "response", requestId, result: { token: "panel-grant" } });
           return;
         }
-        if ((callerKind === "app" || callerKind === "panel") && method === "workspace.getInfo") {
+        if ((callerKind === "client" || callerKind === "panel") && method === "workspace.getInfo") {
           scopedRequests.push({ callerId, callerKind, method });
           sendResponse({
             type: "response",
@@ -264,13 +263,27 @@ async function startRpcHarness() {
     if (!panelSocket) throw new Error("Panel is not connected");
     panelSocket.send(JSON.stringify({ type: "ws:rpc", envelope }));
   };
+  const lastAppSocket = (): import("ws").WebSocket => {
+    const socket = appSockets.at(-1);
+    if (!socket) throw new Error("Client is not connected");
+    return socket;
+  };
   const sendAppEnvelope = (envelope: RpcEnvelope): void => {
-    if (!appSocket) throw new Error("App is not connected");
-    appSocket.send(JSON.stringify({ type: "ws:routed", envelope }));
+    lastAppSocket().send(JSON.stringify({ type: "ws:routed", envelope }));
   };
   const dropAppConnection = (): void => {
-    if (!appSocket) throw new Error("App is not connected");
-    appSocket.terminate();
+    lastAppSocket().terminate();
+  };
+  // The host that verified the client build issues a fresh one-use grant for
+  // every connection attempt; the harness records each request.
+  const sessions: ClientPrincipalSessions = {
+    connectionGrant: async (principalId) => {
+      grantRequests.push([principalId]);
+      return `app-grant-${++appGrantSequence}`;
+    },
+    sessionEnded: (caller, reason) => {
+      sessionsEnded.push({ caller, reason });
+    },
   };
   return {
     port,
@@ -282,6 +295,9 @@ async function startRpcHarness() {
     sendPanelEnvelope,
     sendAppEnvelope,
     dropAppConnection,
+    endAppSession: (code: number, reason: string) => lastAppSocket().close(code, reason),
+    sessions,
+    sessionsEnded,
     appConnectionCount: () => appConnectionCount,
   };
 }
@@ -301,7 +317,7 @@ describe("ServerClient scoped runtime callers", () => {
       envelopeFromMessage({
         selfId: "desktop-ui",
         from: "desktop-ui",
-        callerKind: "shell",
+        callerKind: "client",
         target: "do:workspace-presentation",
         message: {
           type: "request",
@@ -334,7 +350,7 @@ describe("ServerClient scoped runtime callers", () => {
       "closing"
     );
     await expect(
-      client.callAs({ callerId: "@workspace-apps/shell", callerKind: "app" }, "test", "echo", [])
+      client.callAs({ callerId: "@workspace-apps/shell", callerKind: "client" }, "test", "echo", [])
     ).rejects.toThrow("closing");
   });
 
@@ -361,13 +377,14 @@ describe("ServerClient scoped runtime callers", () => {
     });
   });
 
-  it("creates an app-scoped WS client through a shell-issued connection grant", async () => {
+  it("creates a client-scoped WS client through a host-issued connection grant", async () => {
     const harness = await startRpcHarness();
     const client = await createServerClient(harness.port, "shell-token");
+    client.setClientPrincipalSessions(harness.sessions);
     cleanup.push(() => client.close());
     const events: unknown[] = [];
     client.addMessageListener(
-      { callerId: "@workspace-apps/shell", callerKind: "app" },
+      { callerId: "@workspace-apps/shell", callerKind: "client" },
       (envelope) => {
         const message = envelope.message;
         if (message.type === "event") events.push(message.payload);
@@ -376,29 +393,30 @@ describe("ServerClient scoped runtime callers", () => {
 
     await expect(
       client.callAs(
-        { callerId: "@workspace-apps/shell", callerKind: "app" },
+        { callerId: "@workspace-apps/shell", callerKind: "client" },
         "workspace",
         "getInfo",
         []
       )
-    ).resolves.toEqual({ callerId: "@workspace-apps/shell", callerKind: "app" });
+    ).resolves.toEqual({ callerId: "@workspace-apps/shell", callerKind: "client" });
 
     expect(harness.grantRequests).toEqual([["@workspace-apps/shell"]]);
     expect(harness.scopedRequests).toEqual([
       {
         callerId: "@workspace-apps/shell",
-        callerKind: "app",
+        callerKind: "client",
         method: "workspace.getInfo",
       },
     ]);
     await expect.poll(() => events).toEqual([{ callerId: "@workspace-apps/shell" }]);
   });
 
-  it("relays the complete direct-target envelope protocol over one app-scoped session", async () => {
+  it("relays the complete direct-target envelope protocol over one client-scoped session", async () => {
     const harness = await startRpcHarness();
     const client = await createServerClient(harness.port, "shell-token");
+    client.setClientPrincipalSessions(harness.sessions);
     cleanup.push(() => client.close());
-    const caller = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
+    const caller = { callerId: "@workspace-apps/shell", callerKind: "client" as const };
     const received: RpcEnvelope[] = [];
     client.addMessageListener(caller, (envelope) => received.push(envelope));
     const target =
@@ -547,11 +565,12 @@ describe("ServerClient scoped runtime callers", () => {
     expect(harness.grantRequests).toEqual([[caller.callerId]]);
   });
 
-  it("reconnects the app-scoped session with a fresh one-shot grant", async () => {
+  it("reconnects the client-scoped session with a fresh one-shot grant", async () => {
     const harness = await startRpcHarness();
     const client = await createServerClient(harness.port, "shell-token");
+    client.setClientPrincipalSessions(harness.sessions);
     cleanup.push(() => client.close());
-    const caller = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
+    const caller = { callerId: "@workspace-apps/shell", callerKind: "client" as const };
     const received: RpcEnvelope[] = [];
     client.addMessageListener(caller, (envelope) => received.push(envelope));
     const target = "do:workers/example:ExampleDO:singleton";
@@ -605,6 +624,74 @@ describe("ServerClient scoped runtime callers", () => {
       .toBe(true);
   });
 
+  it("keeps a separate session per window instance of one client principal", async () => {
+    const harness = await startRpcHarness();
+    const client = await createServerClient(harness.port, "shell-token");
+    cleanup.push(() => client.close());
+    client.setClientPrincipalSessions(harness.sessions);
+    const principal = { callerId: "@workspace-apps/shell", callerKind: "client" as const };
+    const first = { ...principal, instanceId: "window-1" };
+    const second = { ...principal, instanceId: "window-2" };
+    const firstEvents: unknown[] = [];
+    const secondEvents: unknown[] = [];
+    client.addMessageListener(first, ({ message }) => {
+      if (message.type === "event") firstEvents.push(message.payload);
+    });
+    client.addMessageListener(second, ({ message }) => {
+      if (message.type === "event") secondEvents.push(message.payload);
+    });
+
+    await client.callAs(first, "workspace", "getInfo", []);
+    await client.callAs(first, "workspace", "getInfo", []);
+    await client.callAs(second, "workspace", "getInfo", []);
+
+    // One connection, and one fresh grant, per window; a repeat call reuses it.
+    expect(harness.appConnectionCount()).toBe(2);
+    expect(harness.grantRequests).toEqual([[principal.callerId], [principal.callerId]]);
+    await expect.poll(() => firstEvents.length).toBe(1);
+    await expect.poll(() => secondEvents.length).toBe(1);
+
+    // Releasing one window ends only its own session.
+    await client.releaseClientSession(first);
+    await client.callAs(first, "workspace", "getInfo", []);
+    expect(harness.appConnectionCount()).toBe(3);
+    expect(harness.grantRequests).toHaveLength(3);
+  });
+
+  it("rejects a client caller until the host provides principal sessions", async () => {
+    const harness = await startRpcHarness();
+    const client = await createServerClient(harness.port, "shell-token");
+    cleanup.push(() => client.close());
+
+    await expect(
+      client.callAs(
+        { callerId: "@workspace-apps/shell", callerKind: "client" },
+        "workspace",
+        "getInfo",
+        []
+      )
+    ).rejects.toThrow(/not available for client/);
+    expect(harness.grantRequests).toEqual([]);
+  });
+
+  it("reports a terminal close and its reason through sessionEnded", async () => {
+    const harness = await startRpcHarness();
+    const client = await createServerClient(harness.port, "shell-token");
+    cleanup.push(() => client.close());
+    client.setClientPrincipalSessions(harness.sessions);
+    const caller = {
+      callerId: "@workspace-apps/shell",
+      callerKind: "client" as const,
+      instanceId: "window-1",
+    };
+    await client.callAs(caller, "workspace", "getInfo", []);
+    expect(harness.sessionsEnded).toEqual([]);
+
+    harness.endAppSession(CLOSE_TOKEN_REVOKED, "trust-revoked");
+
+    await expect.poll(() => harness.sessionsEnded).toEqual([{ caller, reason: "trust-revoked" }]);
+  });
+
   it("surfaces the auth-result deviceCredential via onPaired (pairing-code bootstrap)", async () => {
     const harness = await startRpcHarness();
     const paired: Array<{ deviceId: string; refreshToken: string }> = [];
@@ -637,6 +724,7 @@ describe("ServerClient scoped runtime callers", () => {
     // request) — panel operations are translated by the trusted host instead.
     const harness = await startRpcHarness();
     const client = await createServerClient(harness.port, "shell-token");
+    client.setClientPrincipalSessions(harness.sessions);
     cleanup.push(() => client.close());
 
     await expect(

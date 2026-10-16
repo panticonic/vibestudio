@@ -1,48 +1,31 @@
 import type { ViewConfig } from "./viewManager.js";
-import {
-  callerKindForPrincipalKind,
-  isPrincipalKind,
-  type CallerKind,
-  type PrincipalKind,
-} from "@vibestudio/shared/principalKinds";
+import type { CallerKind } from "@vibestudio/shared/principalKinds";
 
-export type ElectronViewCallerKind = Extract<CallerKind, "shell" | "panel" | "app">;
+export type ElectronViewCallerKind = Extract<CallerKind, "panel" | "client">;
 
 export interface ElectronViewInfoForCallerResolution {
   type: ViewConfig["type"];
   hostChrome?: boolean;
 }
 
-/** Bootstrap shell and its live hosted shell app are the same trusted chrome owner. */
-export function isElectronShellChromeCaller(
-  callerId: string,
+/** The panel-hosting client: the trusted chrome of the one panel-hosting window. */
+export function isPanelHostingClientView(
   viewInfo: ElectronViewInfoForCallerResolution | null | undefined
 ): boolean {
-  return callerId === "shell" || (viewInfo?.type === "app" && viewInfo.hostChrome === true);
+  return viewInfo?.type === "client" && viewInfo.hostChrome === true;
 }
 
-export function callerKindForElectronViewType(
-  type: string | null | undefined
-): ElectronViewCallerKind {
-  if (type !== "shell" && type !== "panel" && type !== "app") {
-    throw new Error(`Unknown Electron view principal kind: ${String(type)}`);
-  }
-  if (!isPrincipalKind(type)) {
-    throw new Error(`Electron view type is not a registered principal kind: ${type}`);
-  }
-  return callerKindForPrincipalKind(type as PrincipalKind) as ElectronViewCallerKind;
-}
-
+/**
+ * Every renderer the host runs is a panel or a client. There is no bare
+ * "shell" principal: the launch gate is host UI that makes no RPC calls, and a
+ * client is its own principal.
+ */
 export function resolveElectronViewCaller(
   callerId: string,
   viewInfo: ElectronViewInfoForCallerResolution | null | undefined
 ): { callerId: string; callerKind: ElectronViewCallerKind } {
-  if (callerId === "shell") return { callerId, callerKind: callerKindForElectronViewType("shell") };
   if (!viewInfo) {
     throw new Error(`Unknown Electron view caller: ${callerId}`);
   }
-  return {
-    callerId,
-    callerKind: callerKindForElectronViewType(viewInfo.type),
-  };
+  return { callerId, callerKind: viewInfo.type };
 }

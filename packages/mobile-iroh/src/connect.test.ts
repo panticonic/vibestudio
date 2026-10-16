@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-vi.mock("./polyfills.js", () => ({}));
+vi.mock("@vibestudio/rn-client-api/polyfills", () => ({}));
 const fixture = vi.hoisted(() => ({
   password: null as string | null,
   terminal: null as null | ((error: Error) => void),

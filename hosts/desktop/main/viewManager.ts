@@ -38,9 +38,9 @@ import {
   type ContentOverlayUpdateOptions,
 } from "./shellContentOverlayView.js";
 import { ContentOverlayManager } from "./contentOverlayManager.js";
-import { interceptChromeShortcuts, isChromeOwnedInput } from "./menu.js";
+import type { ChromeShortcuts } from "./clientMenu.js";
 import { TypingActivity } from "./typingActivity.js";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import { CompositorRecovery } from "./compositorRecovery.js";
 import { FullscreenPresentation } from "./fullscreenPresentation.js";
 import type { CapabilityScope } from "@vibestudio/rpc";
@@ -88,7 +88,7 @@ export interface ViewConfig {
   /** Unique view ID (typically panel ID) */
   id: string;
   /** View type for tracking */
-  type: "shell" | "panel" | "app";
+  type: "panel" | "client";
   /** Session partition for browser views (shared session for cookies/auth). Omit for default session. */
   partition?: string;
   /** Preload script path. Set to null to disable preload (for browsers). */
@@ -97,8 +97,8 @@ export interface ViewConfig {
   parentId?: string;
   /** Whether to inject host theme CSS */
   injectHostThemeVariables?: boolean;
-  /** App capabilities declared by the active app manifest. */
-  appCapabilities?: readonly AppCapability[];
+  /** Capabilities the server granted the client running in this view. */
+  clientCapabilities?: readonly ClientCapability[];
   /** Full-window host chrome app. These views are not panel content. */
   hostChrome?: boolean;
   /** Workspace source path and effective version for app principals. */
@@ -132,7 +132,7 @@ interface PanelDisplayDiagnostics {
   }>;
   views: Array<{
     id: string;
-    type: "shell" | "panel" | "app";
+    type: "panel" | "client";
     parentId?: string;
     managedVisible: boolean;
     trackedBounds: ViewBounds;
@@ -179,14 +179,14 @@ interface ManagedView {
   workspaceIdentity?: WorkspaceViewIdentity;
   id: string;
   view: WebContentsView;
-  type: "shell" | "panel" | "app";
+  type: "panel" | "client";
   parentId?: string;
   visible: boolean;
   bounds: ViewBounds;
   /** Session partition the view was created with (undefined = default session). */
   partition?: string;
   injectHostThemeVariables: boolean;
-  appCapabilities: readonly AppCapability[];
+  clientCapabilities: readonly ClientCapability[];
   hostChrome: boolean;
   codeIdentity?: HostedCodeIdentity;
   browser?: boolean;
@@ -309,15 +309,11 @@ export class ViewManager {
   private views = new Map<string, ManagedView>();
   /** Per-view context-menu items contributed by whoever created the view. */
   private contextMenuContributors = new Map<string, ViewContextMenuContributor>();
-  private shellView: WebContentsView;
-  /** Whether the bootstrap launch-gate view is currently a child of the window.
-   *  It is fully detached on handoff to the hosted shell so its titlebar drag
-   *  region is cleared from the shared BaseWindow (see show/hideBootstrapShell). */
-  private bootstrapShellAttached = true;
   private nativeShellOverlay: ShellOverlayView;
   private shellContentOverlay: ContentOverlayManager;
   /** Recent typing anywhere in the window; overlays that open unbidden yield to it. */
   private readonly typing = new TypingActivity();
+  private readonly chromeShortcuts: ChromeShortcuts;
   /** Deliver a surface intent to the chrome owner; also used by key interception. */
   private forwardContentOverlayIntent: (payload: unknown) => void;
   private currentThemeCss: string | null = null;
@@ -398,13 +394,10 @@ export class ViewManager {
 
   constructor(options: {
     window: BaseWindow;
-    shellPreload: string;
-    shellOverlayPreload?: string;
-    contentOverlayPreload?: string;
-    shellHtmlPath: string;
-    shellAdditionalArguments?: string[];
-    devTools?: boolean;
-    showWindowOnShellLoad?: boolean;
+    shellOverlayPreload: string;
+    contentOverlayPreload: string;
+    /** Chords the window's client owns regardless of which view has focus. */
+    chromeShortcuts: ChromeShortcuts;
     headless?: boolean;
     hidePanelViewsUntilHostedShellReady?: boolean;
   }) {
@@ -419,11 +412,7 @@ export class ViewManager {
         for (const managed of this.views.values()) {
           if (managed.view.webContents.isDestroyed()) continue;
           managed.view.setBounds(managed.bounds);
-          managed.view.setVisible(
-            managed.visible &&
-              !this.shouldHideUnslottedPanelView(managed) &&
-              (managed.id !== "shell" || this.bootstrapShellAttached)
-          );
+          managed.view.setVisible(managed.visible && !this.shouldHideUnslottedPanelView(managed));
         }
         this.reconcileNativeLayerOrder();
         const id = this.fullscreen.viewId ?? this.getFocusedPanelId();
@@ -440,37 +429,19 @@ export class ViewManager {
     });
     this.headless = options.headless ?? false;
     this.hidePanelViewsUntilHostedShellReady = options.hidePanelViewsUntilHostedShellReady ?? false;
-    // Create the minimal shipped bootstrap launch gate. The full shell is a
-    // workspace app; this surface only owns host-target startup approval.
-    this.shellView = new WebContentsView({
-      webPreferences: {
-        preload: options.shellPreload,
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: true,
-        autoplayPolicy: "document-user-activation-required",
-        // The compositor owns the window and panel geometry for every fullscreen mode.
-        disableHtmlFullscreenWindowResize: true,
-        additionalArguments: options.shellAdditionalArguments,
-      },
+    this.chromeShortcuts = options.chromeShortcuts;
+    this.nativeShellOverlay = new ShellOverlayView(options.shellOverlayPreload, (event) => {
+      // Route overlay events (e.g. suggestion clicks) to the renderer that owns
+      // the address bar: the panel-hosting client view.
+      this.getShellChromeWebContents()?.send("vibestudio:shell-overlay:event", event);
     });
-    this.nativeShellOverlay = new ShellOverlayView(
-      options.shellOverlayPreload ?? options.shellPreload,
-      (event) => {
-        // Route overlay events (e.g. suggestion clicks) to the renderer that owns
-        // the address bar — the hosted shell app view when ready, otherwise the
-        // bootstrap shell. Sending only to the bootstrap shell meant clicks were
-        // silently dropped while the hosted shell was active.
-        this.getShellChromeWebContents()?.send("vibestudio:shell-overlay:event", event);
-      }
-    );
     this.nativeShellOverlay.setWindow(this.window);
     this.forwardContentOverlayIntent = (payload) => {
       const target = this.getShellChromeWebContents();
       target?.send("vibestudio:content-overlay:forward", payload);
     };
     this.shellContentOverlay = new ContentOverlayManager(
-      options.contentOverlayPreload ?? options.shellPreload,
+      options.contentOverlayPreload,
       () => {
         const wc = this.getShellChromeWebContents();
         return wc && !wc.isDestroyed() ? wc.getURL() : null;
@@ -509,60 +480,11 @@ export class ViewManager {
       }
     );
 
-    // Add shell to window and set it to fill
-    this.window.contentView.addChildView(this.shellView);
-    this.updateShellBounds();
-
-    // Track shell view
-    this.views.set("shell", {
-      id: "shell",
-      view: this.shellView,
-      type: "shell",
-      visible: true,
-      bounds: { x: 0, y: 0, width: 0, height: 0 },
-      injectHostThemeVariables: false,
-      appCapabilities: [],
-      hostChrome: false,
-      browser: false,
-      navigationRevision: 0,
-    });
-    this.webContentsIdToViewId.set(this.shellView.webContents.id, "shell");
-
-    // Load shell HTML
-    void this.shellView.webContents.loadFile(options.shellHtmlPath);
-
-    // Show window and finalize bounds after shell content loads
-    this.shellView.webContents.on("did-finish-load", () => {
-      console.log(`[Perf] shell view loaded at ${Math.round(process.uptime() * 1000)}ms uptime`);
-      this.updateShellBounds();
-      // Show window now that content is ready (avoids layout flash)
-      if (options.showWindowOnShellLoad !== false && !this.window.isVisible()) {
-        this.window.show();
-      }
-    });
-
-    if (options.devTools) {
-      this.shellView.webContents.openDevTools();
-    }
-
-    // Set up standard browser context menu for shell
-    this.shellView.webContents.on("context-menu", (_event, params) => {
-      const menuItems = this.buildContextMenuItems(params, this.shellView.webContents);
-      if (menuItems.length > 0) {
-        const menu = Menu.buildFromTemplate(menuItems);
-        this.popupWebContentsContextMenu(menu, params, this.views.get("shell")?.bounds);
-      }
-    });
-
-    this.installShellKeyForwarding(this.shellView.webContents);
-    this.installContentOverlayKeys(this.shellView.webContents);
-
-    // Update shell and panel bounds whenever the native content surface changes.
+    // Update client and panel bounds whenever the native content surface changes.
     // Maximize/full-screen transitions are separate native events on some
-    // platforms and can otherwise leave the bootstrap view at its initial
-    // 1200x600 bounds while the window itself has grown to fill the display.
+    // platforms and can otherwise leave a view at its initial bounds while the
+    // window itself has grown to fill the display.
     const syncWindowBounds = () => {
-      this.updateShellBounds();
       this.updateHostChromeBounds();
       this.refreshActivePanelSlots();
     };
@@ -607,7 +529,7 @@ export class ViewManager {
    * "should Escape dismiss this" is presentation policy the host must not own.
    */
   private installContentOverlayKeys(contents: WebContents): void {
-    interceptChromeShortcuts(contents);
+    this.chromeShortcuts.intercept(contents);
     this.typing.watch(contents);
     contents.on("before-input-event", (event, input) => {
       if (input.type !== "keyDown" || input.key !== "Escape") return;
@@ -633,7 +555,7 @@ export class ViewManager {
     });
   }
 
-  private installShellKeyForwarding(contents: WebContents): void {
+  private installClientKeyForwarding(contents: WebContents): void {
     contents.on("before-input-event", (event, input) => {
       if (this.hidePanelViewsUntilHostedShellReady && !this.nativePanelSlots.hostedShellReady) {
         return;
@@ -643,7 +565,7 @@ export class ViewManager {
         return;
       // Chrome chords belong to the chrome, not to the panel: forwarding them
       // let the panel swallow the key and the menu accelerator never ran.
-      if (isChromeOwnedInput(input)) return;
+      if (this.chromeShortcuts.isChromeOwned(input)) return;
       // These keys operate focused shell controls and navigation widgets. Never
       // teleport them into a panel even if focus state is momentarily racing.
       if (
@@ -678,50 +600,8 @@ export class ViewManager {
       this.applyProtectionToViews();
       return;
     }
-    this.updateShellBounds();
     this.updateHostChromeBounds();
     this.refreshVisiblePanel();
-  }
-
-  private updateShellBounds(): void {
-    // The bootstrap view is detached while the hosted shell owns the window
-    // (see hideBootstrapShell); there is nothing to size then.
-    if (!this.bootstrapShellAttached) return;
-    const size = this.window.getContentSize();
-    const width = size[0] ?? 0;
-    const height = size[1] ?? 0;
-    this.shellView.setBounds({ x: 0, y: 0, width, height });
-  }
-
-  /**
-   * Show the bootstrap launch gate, re-attaching the view if it was detached on
-   * handoff to the hosted shell. A WebContentsView must be attached (not merely
-   * setVisible(true)) for its content to render and its titlebar drag region to
-   * apply.
-   */
-  private showBootstrapShell(): void {
-    if (!this.bootstrapShellAttached) {
-      this.window.contentView.addChildView(this.shellView);
-      this.bootstrapShellAttached = true;
-    }
-    this.updateShellBounds();
-    this.shellView.setVisible(true);
-  }
-
-  /**
-   * Hide the bootstrap launch gate once the hosted shell is up. Fully detaches
-   * the view (removeChildView) rather than only setVisible(false): a
-   * hidden-but-attached WebContentsView keeps its `-webkit-app-region: drag`
-   * titlebar region registered on the shared BaseWindow, which leaks onto the
-   * hosted shell's titlebar and makes its chrome controls drag the window
-   * instead of click. Detaching clears that region.
-   */
-  private hideBootstrapShell(): void {
-    this.shellView.setVisible(false);
-    if (this.bootstrapShellAttached) {
-      this.window.contentView.removeChildView(this.shellView);
-      this.bootstrapShellAttached = false;
-    }
   }
 
   private fullWindowBounds(): ViewBounds {
@@ -778,19 +658,12 @@ export class ViewManager {
     }
   }
 
-  /**
-   * Get the shell WebContents (for IPC communication with renderer).
-   */
-  getShellWebContents(): WebContents {
-    return this.shellView.webContents;
-  }
-
   /** The workspace shell app that owns panel layout and presentation UI. */
   getHostedShellWebContents(): WebContents | null {
     const ownerId = this.nativePanelSlots.activeHostedShellViewId;
     if (!ownerId) return null;
     const owner = this.views.get(ownerId);
-    if (!owner || owner.type !== "app" || !owner.hostChrome) return null;
+    if (!owner || owner.type !== "client" || !owner.hostChrome) return null;
     return owner.view.webContents.isDestroyed() ? null : owner.view.webContents;
   }
 
@@ -809,12 +682,12 @@ export class ViewManager {
     // Browser panels share BROWSER_SESSION_PARTITION for cookies/auth.
     // Workspace panels use the default session (no external sites).
     const ses = config.partition ? session.fromPartition(config.partition) : session.defaultSession;
-    // App capabilities are granted by the owning workspace server. Loading
+    // Capabilities are granted by the server that admitted the client. Loading
     // another workspace manifest in this process must not reinterpret them.
     const hostChrome =
-      config.type === "app" &&
+      config.type === "client" &&
       (config.hostChrome ?? false) &&
-      config.appCapabilities?.includes("panel-hosting") === true;
+      config.clientCapabilities?.includes("panel-hosting") === true;
 
     // All panels run in safe sandboxed mode
     const runtimeMustRemainSchedulable = hostChrome || config.type === "panel";
@@ -872,16 +745,16 @@ export class ViewManager {
       bounds: initialBounds,
       partition: config.partition,
       injectHostThemeVariables: config.injectHostThemeVariables ?? true,
-      appCapabilities: config.type === "app" ? [...(config.appCapabilities ?? [])] : [],
+      clientCapabilities: config.type === "client" ? [...(config.clientCapabilities ?? [])] : [],
       hostChrome,
       codeIdentity:
-        config.type === "app" || config.type === "panel" ? config.codeIdentity : undefined,
+        config.type === "client" || config.type === "panel" ? config.codeIdentity : undefined,
       browser: config.browser === true,
       navigationRevision: 0,
     };
     this.views.set(config.id, managed);
     this.webContentsIdToViewId.set(view.webContents.id, config.id);
-    if (hostChrome) this.installShellKeyForwarding(view.webContents);
+    if (hostChrome) this.installClientKeyForwarding(view.webContents);
     this.installContentOverlayKeys(view.webContents);
     this.installWheelZoom(view.webContents, config.id);
     log.trace(` Created view for ${config.id}, type: ${config.type}`);
@@ -906,12 +779,14 @@ export class ViewManager {
       },
       renderProcessGone: (_event: Electron.Event, details: Electron.RenderProcessGoneDetails) => {
         void this.fullscreen.retire(config.id);
-        if (managed.type === "app" && this.nativePanelSlots.activeHostedShellViewId === config.id) {
+        if (
+          managed.type === "client" &&
+          this.nativePanelSlots.activeHostedShellViewId === config.id
+        ) {
           this.nativePanelSlots.hostedShellReady = false;
           this.clearAllPanelSlots();
           managed.visible = false;
           managed.view.setVisible(false);
-          this.showBootstrapShell();
           this.reconcileNativeLayerOrder();
         }
         if (details.reason !== "clean-exit") {
@@ -921,7 +796,7 @@ export class ViewManager {
         }
       },
       consoleMessage: (event: Electron.Event<Electron.WebContentsConsoleMessageEventParams>) => {
-        if (managed.type !== "app" || (event.level !== "error" && event.level !== "warning")) {
+        if (managed.type !== "client" || (event.level !== "error" && event.level !== "warning")) {
           return;
         }
         const location = event.sourceId ? ` (${event.sourceId}:${event.lineNumber ?? 0})` : "";
@@ -936,7 +811,7 @@ export class ViewManager {
         validatedURL: string,
         isMainFrame: boolean
       ) => {
-        if (managed.type !== "app" || !isMainFrame || errorCode === -3) return;
+        if (managed.type !== "client" || !isMainFrame || errorCode === -3) return;
         log.error(
           `[renderer:${config.id}] main-frame load failed: ${errorDescription} (${errorCode}) ${validatedURL}`
         );
@@ -1231,7 +1106,7 @@ export class ViewManager {
     this.automationSurfaceIds.delete(id);
 
     const contents = managed.view.webContents;
-    if (managed.type === "app" && this.nativePanelSlots.activeHostedShellViewId === id) {
+    if (managed.type === "client" && this.nativePanelSlots.activeHostedShellViewId === id) {
       this.setHostedShellReady(id, false);
     }
 
@@ -1310,7 +1185,7 @@ export class ViewManager {
     hello: NativePanelAdapterHello
   ): NativePanelAdapterHandshakeResult {
     const owner = this.views.get(ownerViewId);
-    if (!owner || owner.type !== "app" || !owner.hostChrome) {
+    if (!owner || owner.type !== "client" || !owner.hostChrome) {
       throw new Error(`Panel host owner is not an active panel-hosting app: ${ownerViewId}`);
     }
     if (hello.sealedLaunchIdentity !== owner.workspaceIdentity?.runtimeId) {
@@ -1466,7 +1341,7 @@ export class ViewManager {
 
   setHostedShellReady(ownerViewId: string, ready: boolean, rendererInstanceId?: string): void {
     const owner = this.views.get(ownerViewId);
-    if (!owner || owner.type !== "app" || !owner.hostChrome) {
+    if (!owner || owner.type !== "client" || !owner.hostChrome) {
       throw new Error(`Hosted shell owner is not an active panel-hosting app: ${ownerViewId}`);
     }
 
@@ -1488,7 +1363,6 @@ export class ViewManager {
         log.trace(
           ` Hosted shell ready reasserted by ${ownerViewId} (gen ${this.nativePanelSlots.hostedShellGeneration}); keeping ${this.nativePanelSlots.activeSlots.size} slot(s)`
         );
-        this.hideBootstrapShell();
         this.setViewVisible(ownerViewId, true);
         this.shellContentOverlay.prewarm("quickfire");
         this.refreshActivePanelSlots();
@@ -1512,7 +1386,6 @@ export class ViewManager {
           managed.view.setVisible(false);
         }
       }
-      this.hideBootstrapShell();
       this.setViewVisible(ownerViewId, true);
       this.shellContentOverlay.prewarm("quickfire");
       this.reconcileNativeLayerOrder();
@@ -1549,7 +1422,6 @@ export class ViewManager {
     this.nativePanelSlots.activeHostedShellInstanceId = null;
     owner.visible = false;
     owner.view.setVisible(false);
-    this.showBootstrapShell();
     this.reconcileNativeLayerOrder();
   }
 
@@ -1884,7 +1756,7 @@ export class ViewManager {
       managed.view.setBounds(bounds);
       managed.view.setVisible(true);
       this.reconcileNativeLayerOrder();
-    } else if (visible && managed.type !== "shell") {
+    } else if (visible) {
       // An active native slot is the authoritative geometry for its panel.
       // Visibility transitions can race immediately after a bind; falling
       // back to reconstructed host-chrome bounds here would briefly expand
@@ -2055,9 +1927,9 @@ export class ViewManager {
   }
 
   /**
-   * The webContents that hosts the shell chrome (address bar, breadcrumbs): the
-   * hosted shell app view when ready, otherwise the bootstrap shell view. Overlay
-   * events and focus restoration must target this, not always the bootstrap shell.
+   * The webContents that hosts the client chrome (address bar, breadcrumbs):
+   * the panel-hosting client view once it is ready. Overlay events and focus
+   * restoration target it.
    */
   private getShellChromeWebContents() {
     const hostId = this.nativePanelSlots.hostedShellReady
@@ -2065,7 +1937,6 @@ export class ViewManager {
       : null;
     const hosted = hostId ? this.views.get(hostId) : undefined;
     if (hosted && !hosted.view.webContents.isDestroyed()) return hosted.view.webContents;
-    if (!this.shellView.webContents.isDestroyed()) return this.shellView.webContents;
     return null;
   }
 
@@ -2476,9 +2347,6 @@ export class ViewManager {
     const focusedSlotId = this.nativePanelSlots.focusedNativeSlotId;
     if (focusedSlotId) {
       plan(this.nativePanelSlots.activeSlots.get(focusedSlotId)?.panelId);
-    }
-    if (!this.nativePanelSlots.hostedShellReady) {
-      plan("shell");
     }
 
     if (this.fullscreen.viewId) {
@@ -3014,7 +2882,7 @@ export class ViewManager {
     const owner = this.views.get(ownerId);
     if (
       !owner ||
-      owner.type !== "app" ||
+      owner.type !== "client" ||
       !owner.hostChrome ||
       owner.view.webContents.isDestroyed()
     ) {
@@ -3053,7 +2921,7 @@ export class ViewManager {
     visible: boolean;
     hostChrome: boolean;
     bounds: ViewBounds;
-    capabilities: readonly AppCapability[];
+    capabilities: readonly ClientCapability[];
     codeIdentity?: HostedCodeIdentity;
     browser?: boolean;
   } | null {
@@ -3068,15 +2936,15 @@ export class ViewManager {
       visible: managed.visible,
       hostChrome: managed.hostChrome,
       bounds: managed.bounds,
-      capabilities: managed.appCapabilities,
+      capabilities: managed.clientCapabilities,
       codeIdentity: managed.codeIdentity,
       browser: managed.browser,
     };
   }
 
-  getVisibleHostChromeAppId(): string | null {
+  getVisibleHostChromeClientId(): string | null {
     for (const [id, managed] of this.views) {
-      if (managed.type === "app" && managed.hostChrome && managed.visible) {
+      if (managed.type === "client" && managed.hostChrome && managed.visible) {
         return id;
       }
     }
@@ -3087,11 +2955,26 @@ export class ViewManager {
     return this.shellOverlayActive;
   }
 
-  openHostChromeAppDevTools(mode: "detach" | "right" | "bottom" = "detach"): boolean {
-    const appId = this.getVisibleHostChromeAppId();
-    if (!appId) return false;
-    this.openDevTools(appId, mode);
+  openHostChromeClientDevTools(mode: "detach" | "right" | "bottom" = "detach"): boolean {
+    const clientId = this.getVisibleHostChromeClientId();
+    if (!clientId) return false;
+    this.openDevTools(clientId, mode);
     return true;
+  }
+
+  /**
+   * The server granted a running client a different capability set. The
+   * window keeps its document: only the set the host enforces changes. Gaining
+   * or losing `panel-hosting` changes what the view is, so that is a swap, not
+   * an update.
+   */
+  setClientCapabilities(id: string, capabilities: readonly ClientCapability[]): void {
+    const managed = this.views.get(id);
+    if (!managed || managed.type !== "client") throw new Error(`View is not a client view: ${id}`);
+    if (managed.hostChrome !== capabilities.includes("panel-hosting")) {
+      throw new Error(`Panel hosting cannot change under a running client view: ${id}`);
+    }
+    managed.clientCapabilities = [...capabilities];
   }
 
   /**
@@ -3103,7 +2986,7 @@ export class ViewManager {
 
     // Apply to all views that want theme injection
     for (const [id, managed] of this.views) {
-      if (managed.injectHostThemeVariables && id !== "shell") {
+      if (managed.injectHostThemeVariables) {
         this.applyThemeCss(id);
       }
     }
@@ -3281,16 +3164,16 @@ export class ViewManager {
     );
   }
 
-  async updateAppView(
+  async updateClientView(
     id: string,
     url: string,
-    capabilities?: readonly AppCapability[],
+    capabilities?: readonly ClientCapability[],
     identity?: HostedCodeIdentity
   ): Promise<void> {
     const managed = this.views.get(id);
     if (!managed) throw new Error(`View not found: ${id}`);
-    if (managed.type !== "app") throw new Error(`View is not an app view: ${id}`);
-    managed.appCapabilities = [...(capabilities ?? [])];
+    if (managed.type !== "client") throw new Error(`View is not a client view: ${id}`);
+    managed.clientCapabilities = [...(capabilities ?? [])];
     const nextIdentity = identity;
     managed.hostChrome = capabilities?.includes("panel-hosting") === true;
     if (!managed.hostChrome && this.nativePanelSlots.activeHostedShellViewId === id) {
@@ -3298,7 +3181,6 @@ export class ViewManager {
       this.clearAllPanelSlots();
       managed.visible = false;
       managed.view.setVisible(false);
-      this.showBootstrapShell();
       this.reconcileNativeLayerOrder();
     }
     managed.codeIdentity = nextIdentity;
@@ -3313,7 +3195,7 @@ export class ViewManager {
   updateCodeIdentity(id: string, identity: HostedCodeIdentity | undefined): void {
     const managed = this.views.get(id);
     if (!managed) throw new Error(`View not found: ${id}`);
-    if (managed.type !== "panel" && managed.type !== "app") {
+    if (managed.type !== "panel" && managed.type !== "client") {
       throw new Error(`View is not a code view: ${id}`);
     }
     managed.codeIdentity = identity;
@@ -3433,13 +3315,7 @@ export class ViewManager {
     this.nativeShellOverlay.destroy();
     this.shellContentOverlay.destroy();
 
-    for (const id of this.views.keys()) {
-      if (id !== "shell") {
-        this.destroyView(id);
-      }
-    }
-
-    // Shell is destroyed with window
+    for (const id of [...this.views.keys()]) this.destroyView(id);
     this.views.clear();
     this.webContentsIdToViewId.clear();
 

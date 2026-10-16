@@ -377,7 +377,7 @@ Authority principals: `code`, `host`, `user`
 | Method | Description |
 |--------|-------------|
 | `notification.show` | Show a notification in the shell chrome; returns a host-issued id attributed to the verified caller. |
-| `notification.dismiss` | Dismiss a notification previously issued to this caller, rejecting any pending waitForAction for it. |
+| `notification.dismiss` | Dismiss a notification previously issued to this caller. |
 
 ## `panelCdp`
 
@@ -602,8 +602,6 @@ Authority principals: `code`, `user`
 | `terminalApps.resume` | Return a session; when its program is no longer running, start it again in the same session (an app keeps its state and context). |
 | `terminalApps.restart` | Stop a session's running program (if any) and start it again in a new PTY of the same session: same program, context and folder (an app keeps its state). |
 | `terminalApps.close` | End a terminal session for good: its program is terminated and the session is forgotten. |
-| `terminalApps.getSettings` | The calling person's terminal settings (prefix key, bell, mouse, …). |
-| `terminalApps.setSettings` | Replace the calling person's terminal settings (at most 4 KB of JSON). |
 
 ## `vcs`
 

@@ -130,7 +130,7 @@ export const appMethods = defineServiceMethods({
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
     },
     description:
-      "Set the app theme source to light, dark, or system (follow OS). Requires the window-management capability.",
+      "Set the host theme source to light, dark, or system (follow OS). Requires the theme capability.",
     args: z.tuple([z.enum(["light", "dark", "system"])]),
     returns: z.void(),
     access: WRITE_ACCESS,
@@ -150,7 +150,7 @@ export const appMethods = defineServiceMethods({
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
     },
     description:
-      "Open Chromium DevTools for the calling app view (or the shell). Requires the window-management capability.",
+      "Open Chromium DevTools for the calling client window. Requires the devtools capability.",
     args: z.tuple([]),
     returns: z.void(),
     access: WRITE_ACCESS,

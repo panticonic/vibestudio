@@ -198,7 +198,7 @@ async function clickRecoveryApproval(owner: TestApp): Promise<boolean> {
     const candidates = webContents.getAllWebContents().filter((contents) => {
       if (contents.isDestroyed()) return false;
       const title = contents.getTitle();
-      return title === "@workspace-apps/shell" || title === "Vibestudio Launch";
+      return contents.getURL().startsWith("vs-client://") || title === "Vibestudio Launch";
     });
     for (const contents of candidates) {
       try {

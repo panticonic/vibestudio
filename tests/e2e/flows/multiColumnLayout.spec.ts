@@ -505,9 +505,7 @@ test.describe("Multi-column panel layout", () => {
           wcId,
           `Math.round(document.querySelector('[data-shell-layout-columns]')?.getBoundingClientRect().width ?? 0)`
         );
-      await expect
-        .poll(() => availableLayoutWidth(), POLL)
-        .toBeGreaterThan(2 * 575 + 7);
+      await expect.poll(() => availableLayoutWidth(), POLL).toBeGreaterThan(2 * 575 + 7);
 
       // ---- Scenario 1: open a second panel beside the first --------------
       const created = await app.evaluate(

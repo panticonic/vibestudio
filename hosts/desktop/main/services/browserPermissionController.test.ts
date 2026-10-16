@@ -47,7 +47,7 @@ function mediaHarness(
           options.browser
             ? scopedNativePartition("media-test", "persist:browser-environment:browser_media")
             : undefined,
-        getViewInfo: () => ({ type: "app", capabilities: options.capabilities ?? [] }),
+        getViewInfo: () => ({ type: "client", capabilities: options.capabilities ?? [] }),
       }) as never,
     isTargetUnderAutomation: () => false,
     requestDeviceMediaAccess: consent,
@@ -373,14 +373,14 @@ describe("browser permission capability mapping", () => {
   it("admits workspace apps only when every peripheral is declared", () => {
     expect(
       viewMayRequestPeripheral(
-        { type: "app", capabilities: ["camera", "microphone", "location"] },
+        { type: "client", capabilities: ["camera", "microphone", "location"] },
         ["camera", "microphone", "geolocation"],
         "https://example.com"
       )
     ).toBe(true);
     expect(
       viewMayRequestPeripheral(
-        { type: "app", capabilities: ["camera"] },
+        { type: "client", capabilities: ["camera"] },
         ["camera", "microphone"],
         "https://example.com"
       )

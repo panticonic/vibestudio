@@ -4,7 +4,7 @@ import { coreViewMethods, viewMethods } from "@vibestudio/service-schemas/view";
 import { panelMethods } from "@vibestudio/service-schemas/panel";
 import type { ViewManager } from "../viewManager.js";
 import { assertHttpUrl } from "../utils.js";
-import { callerHasPlatformCapability, viewHasAppCapability } from "./appCapabilities.js";
+import { viewHasClientCapability } from "./clientCapabilities.js";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { buildPanelViewHandler, type PanelViewMethodDeps } from "./panelShellService.js";
 export function createViewService(
@@ -13,11 +13,8 @@ export function createViewService(
     getViewManager: () => ViewManager;
   } & Partial<Omit<PanelViewMethodDeps, "getViewManager">>
 ): ServiceDefinition {
-  const hasViewHostAuthority = (vm: ViewManager, callerId: string, callerKind: string): boolean => {
-    if (callerHasPlatformCapability(callerId, callerKind, "panel-hosting")) return true;
-    const viewInfo = vm.getViewInfo(callerId);
-    return viewHasAppCapability(callerId, viewInfo, "panel-hosting");
-  };
+  const hasViewHostAuthority = (vm: ViewManager, callerId: string, callerKind: string): boolean =>
+    callerKind === "client" && viewHasClientCapability(vm.getViewInfo(callerId), "panel-hosting");
   const assertViewHost = (
     vm: ViewManager,
     callerId: string,
@@ -55,12 +52,12 @@ export function createViewService(
       const vm = deps.getViewManager();
       const targetInfo = vm.getViewInfo(viewId);
       if (
-        ctx.caller.runtime.kind === "app" &&
+        ctx.caller.runtime.kind === "client" &&
         ctx.caller.runtime.id !== viewId &&
         targetInfo?.type === "panel"
       ) {
         throw new Error(
-          `view.setVisible: hosted apps must place panel views with native panel slots`
+          `view.setVisible: hosted clients must place panel views with native panel slots`
         );
       }
       assertOwnsOrViewHost(

@@ -81,9 +81,7 @@ test.describe("Browser panel startup", () => {
       await testApp.app.evaluate(async ({ webContents }, webContentsId) => {
         const contents = webContents.fromId(webContentsId);
         if (!contents) throw new Error("Browser panel WebContents is unavailable");
-        await contents.executeJavaScript(
-          `document.querySelector('#add-workspace').click()`
-        );
+        await contents.executeJavaScript(`document.querySelector('#add-workspace').click()`);
       }, browserReadiness.presentation.webContentsId);
       let shell: import("@playwright/test").Page | undefined;
       await expect

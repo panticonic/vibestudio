@@ -7,7 +7,7 @@ export interface CompositorBounds {
 
 export interface CompositorRecoveryView {
   id: string;
-  type: "shell" | "panel" | "app";
+  type: "panel" | "client";
   visible: boolean;
   bounds: CompositorBounds;
   view: {

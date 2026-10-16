@@ -33,7 +33,6 @@ import {
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import type { PanelLifecycleResult } from "@vibestudio/shared/types";
-import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import type { PanelReadinessSnapshot, TestApi } from "../../hosts/desktop/main/testApi.js";
 import type { MainProcessErrorRecord } from "../../hosts/desktop/main/mainProcessErrorLedger.js";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
@@ -632,10 +631,12 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
 }
 
 /**
- * Test-side human driver for the Electron launch review. This drives the same
- * launch session as the shell UI, so a fresh workspace waits for its review to
- * be published while an already-trusted workspace converges directly to ready.
- * It deliberately does not grant a process-wide bypass. Callers remain
+ * Test-side human driver for the desktop launch review. The host owns the
+ * launch (`clients.launch`) and pushes each state to the launch gate; this reads
+ * that state from the host and answers its review as the person would, so a
+ * fresh workspace waits for its review to be published while an
+ * already-trusted workspace converges directly to a running client. It
+ * deliberately does not grant a process-wide bypass. Callers remain
  * responsible for non-launch approval kinds.
  */
 export async function approvePendingStartupUnits(
@@ -645,17 +646,17 @@ export async function approvePendingStartupUnits(
   const owner = { app: fixture.app, workspaceId: fixture.systemWorkspaceId };
   const deadline = Date.now() + timeoutMs;
   let lastState: unknown = null;
-  const hostLaunch = new HostLaunchClient((service, method, args) =>
-    withElectronEvaluationTimeout(
-      callTestApi(owner, "rpcCall", [service, method, args]),
-      Math.min(ELECTRON_EVALUATE_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
-      `${service}.${method}`
-    )
-  );
   while (Date.now() < deadline) {
     try {
-      const launch = await hostLaunch.launch("electron");
-      if ((await hostLaunch.resolvePendingStartupApprovals("once")) > 0) continue;
+      const gate = await callTestApi<Awaited<ReturnType<TestApi["getLaunchGateView"]>>>(
+        owner,
+        "getLaunchGateView",
+        []
+      );
+      if (gate.launch.status === "approval-required") {
+        await callTestApi(owner, "resolveLaunchApprovals", ["once"]);
+        continue;
+      }
       const hostView = await retryIdempotentAutomationRead(
         () =>
           callTestApi<Awaited<ReturnType<TestApi["getHostViewDebugInfo"]>>>(
@@ -668,13 +669,13 @@ export async function approvePendingStartupUnits(
           timeoutMs: Math.min(ELECTRON_EVALUATE_TIMEOUT_MS, Math.max(1, deadline - Date.now())),
         }
       );
-      lastState = { launch, hostView };
-      if (launch.status === "approval-required") continue;
-      const hostedShellReady =
-        typeof hostView.visibleHostChromeAppId === "string" &&
+      lastState = { launch: gate.launch, hostView };
+      // The client page is served from the verified cache, never from the network.
+      const clientRunning =
+        typeof hostView.visibleHostChromeClientId === "string" &&
         typeof hostView.hostedShellUrl === "string" &&
-        hostView.hostedShellUrl.includes("/_a/");
-      if (launch.status === "ready" && hostedShellReady) return;
+        hostView.hostedShellUrl.startsWith("vs-client://");
+      if (clientRunning) return;
     } catch (error) {
       if (!isAutomationContextReplacement(error) && !isElectronEvaluationTimeout(error)) {
         throw error;

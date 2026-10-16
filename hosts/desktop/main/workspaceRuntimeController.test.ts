@@ -7,7 +7,7 @@ import {
   prepareDesktopWorkspaceRuntime,
 } from "./workspaceRuntimeController.js";
 import type { WorkspaceSessionConnection } from "./serverSession.js";
-import type { ApplicationWindowController } from "./applicationWindowController.js";
+import type { PanelHostWindow } from "./panelHostWindow.js";
 import type { CdpHostProvider } from "./cdpHostProvider.js";
 import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { readEventWatchRecords } from "@vibestudio/shared/events";
@@ -287,6 +287,7 @@ function fixture(
   });
   const send = vi.fn();
   const chromeSend = vi.fn();
+  const chromeContents = { id: 1, isDestroyed: () => false, send: chromeSend };
   const ownPanel = { getWebContents: vi.fn(() => ({ isDestroyed: () => false, send })) };
   const window = {
     getWorkspacePanelView: vi.fn((id: string) => (id === workspaceId ? ownPanel : null)),
@@ -295,7 +296,8 @@ function fixture(
     handleWebsiteNotificationAction: vi.fn(),
     viewManager: {
       getViewInfo: vi.fn((): unknown => null),
-      getHostedShellWebContents: () => ({ isDestroyed: () => false, send: chromeSend }),
+      getHostedShellWebContents: () => chromeContents,
+      getWebContents: (id: string) => (id === "native-system-shell" ? chromeContents : null),
     },
   };
   const events = {
@@ -322,7 +324,9 @@ function fixture(
     personal,
     app: { shellSurfaces: () => ["settings", "about"], onOpenShellSurface: openShellSurface },
     events,
-    window: window as unknown as ApplicationWindowController,
+    window: window as unknown as PanelHostWindow,
+    clientWindows: { byCaller: () => null },
+    menus: { popup: vi.fn() } as never,
     authorize: async () => {
       throw new Error("No service call expected in lifecycle test");
     },
@@ -361,7 +365,7 @@ function fixture(
 
 async function connectionSnapshot(owner: ReturnType<typeof fixture>) {
   owner.window.viewManager.getViewInfo.mockReturnValue({
-    type: "app",
+    type: "client",
     hostChrome: true,
     capabilities: ["panel-hosting"],
     workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
@@ -371,7 +375,7 @@ async function connectionSnapshot(owner: ReturnType<typeof fixture>) {
     .getServiceDefinitions()
     .find((service) => service.name === "desktopEvents")!;
   const response = (await definition.handler!(
-    { caller: createHostCaller("native-system-shell", "shell") },
+    { caller: createVerifiedCaller("native-system-shell", "client") },
     "watch",
     [["server-connection-changed"], "connection-state"]
   )) as Response;
@@ -398,7 +402,7 @@ describe("workspace runtime ownership", () => {
       expect.arrayContaining(["panel:executionActivated", "panel:executionFailed"])
     );
     owner.window.viewManager.getViewInfo.mockReturnValue({
-      type: "app",
+      type: "client",
       hostChrome: true,
       capabilities: ["panel-hosting"],
       workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
@@ -414,7 +418,7 @@ describe("workspace runtime ownership", () => {
       .find((service) => service.name === "desktopEvents")!;
     for (const watchId of ["initial", "recovered"]) {
       const response = (await definition.handler!(
-        { caller: createHostCaller("native-system-shell", "shell") },
+        { caller: createVerifiedCaller("native-system-shell", "client") },
         "watch",
         [["panel-local-presentation-changed"], watchId]
       )) as Response;
@@ -468,7 +472,7 @@ describe("workspace runtime ownership", () => {
         .getServiceDefinitions()
         .find((service) => service.name === "problemReports")!;
       const human = {
-        caller: createVerifiedCaller("native-system-shell", "shell", null, null, {
+        caller: createVerifiedCaller("native-system-shell", "client", null, null, {
           userId: "alice",
           handle: "alice",
         }),
@@ -543,7 +547,7 @@ describe("workspace runtime ownership", () => {
     }
   });
 
-  it.each(["app", "panel", "shell"] as const)(
+  it.each(["client", "panel", "shell"] as const)(
     "rejects an unadmitted %s watch before it can observe already-retained private host events",
     async (kind) => {
       const owner = fixture("shared");
@@ -573,7 +577,7 @@ describe("workspace runtime ownership", () => {
     const owner = fixture("shared");
     await owner.runtime.start();
     owner.window.viewManager.getViewInfo.mockReturnValue({
-      type: "app",
+      type: "client",
       hostChrome: true,
       capabilities: ["panel-hosting"],
       workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
@@ -585,10 +589,11 @@ describe("workspace runtime ownership", () => {
       .getServiceDefinitions()
       .find((service) => service.name === "desktopEvents")!;
     await expect(
-      definition.handler!({ caller: createHostCaller("native-system-shell", "shell") }, "watch", [
-        ["panel-local-presentation-changed"],
-        "failed-watch",
-      ])
+      definition.handler!(
+        { caller: createVerifiedCaller("native-system-shell", "client") },
+        "watch",
+        [["panel-local-presentation-changed"], "failed-watch"]
+      )
     ).rejects.toBe(failure);
   });
 
@@ -596,7 +601,7 @@ describe("workspace runtime ownership", () => {
     const owner = fixture("shared");
     await owner.runtime.start();
     owner.window.viewManager.getViewInfo.mockReturnValue({
-      type: "app",
+      type: "client",
       hostChrome: true,
       capabilities: ["panel-hosting"],
       workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
@@ -608,7 +613,7 @@ describe("workspace runtime ownership", () => {
     const releaseTopics = vi.fn();
     owner.watch.retainAll.mockResolvedValueOnce(releaseTopics);
     const response = (await definition.handler!(
-      { caller: createHostCaller("native-system-shell", "shell") },
+      { caller: createVerifiedCaller("native-system-shell", "client") },
       "watch",
       [["shell-approval:pending-changed"], "chrome-watch"]
     )) as Response;

@@ -35,7 +35,7 @@ describe("React Native standard cancellation platform", () => {
       fs.writeFileSync(
         path.join(root, "input.ts"),
         `
-        import "@vibestudio/mobile-iroh/polyfills";
+        import "@vibestudio/rn-client-api/polyfills";
         const controller = new AbortController();
         controller.abort(new Error("closed"));
         controller.signal.throwIfAborted();

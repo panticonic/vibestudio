@@ -9,7 +9,7 @@ const caller = {
   callerId: "native-system-app",
   runtimeId: "shell-app",
   workspaceId: "system",
-  callerKind: "app" as const,
+  callerKind: "client" as const,
 };
 const request: RpcEnvelope = {
   from: "shell-app",
@@ -55,7 +55,7 @@ function rendererClient(fixture: ReturnType<typeof setup>) {
   return createRpcClient({
     selfId: caller.runtimeId,
     workspaceId: caller.workspaceId,
-    callerKind: "shell",
+    callerKind: "client",
     transport: {
       send: async (envelope) => {
         const runtime = await fixture.directory.require(caller, envelope.destination!);

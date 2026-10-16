@@ -45,6 +45,7 @@ import type {
   ConnectionStatus,
   HostServiceHandler,
   PanelSession,
+  ClientPrincipalSessions,
   ScopedServerCaller,
   ServerClient,
   ServerMessageListener,
@@ -241,16 +242,18 @@ export async function createIrohServerClient(
   };
   const scopedClients = new Map<string, Promise<ScopedClient>>();
   const scopedListeners = new Map<string, Set<ServerMessageListener>>();
+  let principalSessions: ClientPrincipalSessions | null = null;
   const scopedKey = (caller: ScopedServerCaller): string =>
-    `${caller.callerKind}\x00${caller.callerId}`;
+    `${caller.callerKind}\x00${caller.callerId}\x00${caller.instanceId ?? ""}`;
   let closing = false;
   let closePromise: Promise<void> | null = null;
 
   const createScopedClient = async (caller: ScopedServerCaller): Promise<ScopedClient> => {
     if (closing) throw new Error("Iroh server client is closing");
-    // Only app principals get a scoped runtime connection (mirrors the WS path:
-    // a panel holds its own lease; native `shell` callers use call()).
-    if (caller.callerKind !== "app") {
+    // Only client principals get a scoped runtime connection (mirrors the WS
+    // path: a panel holds its own lease; native `shell` callers use call()).
+    const sessions = principalSessions;
+    if (caller.callerKind !== "client" || !sessions) {
       throw new Error(`Scoped server RPC is not available for ${caller.callerKind} callers`);
     }
     const session = transport.openSession({
@@ -258,10 +261,12 @@ export async function createIrohServerClient(
       clientPlatform: "desktop",
       oauthCallbackMode: "client-loopback",
       // Re-grant on EVERY (re)open: connection grants are one-shot, so pinning the
-      // first grant's token would fail the redeem on reconnect — the auto-reopened
-      // session would reject unhandled, once per app principal. Mirrors the main
-      // shell session, whose getShellToken is likewise re-invoked per open.
-      getToken: async () => (await authClient.grantConnection(caller.callerId)).token,
+      // first grant's token would fail the redeem on reconnect. The host that
+      // verified the client build mints each one for that exact build.
+      getToken: () => sessions.connectionGrant(caller.callerId),
+      // The server's close reason (`trust-revoked`, `retired`) is the one
+      // authoritative signal the host acts on.
+      onTerminalClose: (error) => sessions.sessionEnded(caller, error.message),
     });
     await session.ready?.();
     if (closing) {
@@ -351,6 +356,16 @@ export async function createIrohServerClient(
   };
 
   return {
+    setClientPrincipalSessions(sessions) {
+      principalSessions = sessions;
+    },
+    async releaseClientSession(caller): Promise<void> {
+      const key = scopedKey(caller);
+      const existing = scopedClients.get(key);
+      scopedClients.delete(key);
+      scopedListeners.delete(key);
+      if (existing) await (await existing.catch(() => null))?.close();
+    },
     onRecovery(listener) {
       recoveryHandlers.add(listener);
       return () => {

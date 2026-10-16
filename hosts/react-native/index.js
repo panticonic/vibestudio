@@ -10,7 +10,7 @@
 
 // Must precede any @vibestudio/rpc import: installs a TextDecoder polyfill that
 // Hermes lacks (the Iroh control-frame codec needs it).
-import "@vibestudio/mobile-iroh/polyfills";
+import "@vibestudio/rn-client-api/polyfills";
 import "react-native-get-random-values";
 import "react-native-url-polyfill/auto";
 import { AppRegistry } from "react-native";

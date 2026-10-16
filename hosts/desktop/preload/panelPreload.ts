@@ -51,9 +51,6 @@ const vibestudioShell = {
 
   // Electron-native
   openDevtools: () => ipcRenderer.invoke("vibestudio:openDevtools"),
-  openFolderDialog: (opts?: unknown) => ipcRenderer.invoke("vibestudio:openFolderDialog", opts),
-  openExternal: (url: string, options?: unknown) =>
-    ipcRenderer.invoke("vibestudio:openExternal", url, options),
 
   // Event subscription (Electron→panel push: theme, focus, child-created)
   // Returns a numeric subscription ID; call removeEventListener(id) to unsubscribe.

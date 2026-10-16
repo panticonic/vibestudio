@@ -97,6 +97,14 @@ export interface HostRuntimeNativeModule {
   /** Bring the host's own surface (pairing, review, messages) to the front. */
   showHostSurface(): Promise<void>;
 
+  /**
+   * Ask the launcher to pin a shortcut that opens `link` (a
+   * `vibestudio://c/<id>/<intent>` link): Android `ShortcutManagerCompat.requestPinShortcut`.
+   * The OS confirms with the person. Resolves false when the launcher cannot
+   * pin shortcuts; rejects when the request is malformed.
+   */
+  requestPinShortcut(shortcutId: string, label: string, link: string): Promise<boolean>;
+
   /** Answer a `client-request` with the JSON result (`"null"` for void). */
   respond(tag: string, requestId: string, resultJson: string): Promise<void>;
   /** Fail a `client-request`; the client sees an Error with `code` and `message`. */
@@ -153,4 +161,13 @@ export type HostRuntimeEvent =
    * pinned task) and there is no live instance for `tag`. The host launches
    * the client again; native has its activity wait for that.
    */
-  | { type: "client-restore"; tag: string; clientId: string };
+  | { type: "client-restore"; tag: string; clientId: string }
+  /**
+   * The OS delivered a `vibestudio://c/...` link (a pinned shortcut, a launcher
+   * menu) to the host's link activity; it is handled like any client link.
+   */
+  | { type: "link"; url: string }
+  /** Text was shared into Vibestudio (Android `ACTION_SEND`); `mimeType` is what the sender declared. */
+  | { type: "share-in"; mimeType: string; text: string }
+  /** A launch surface (a Quick Settings tile) asked to run background intent `name` with this text. */
+  | { type: "background-intent"; name: string; text: string };

@@ -2,6 +2,7 @@ import { app, BaseWindow, dialog, nativeTheme, screen, shell } from "electron";
 import * as path from "node:path";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ShellSurfaceDescriptor } from "@vibestudio/shared/shellSurface";
+import type { ClientMenus } from "./clientMenu.js";
 import type { PanelLocation } from "@vibestudio/shared/panelLocation";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { createDevLogger } from "@vibestudio/dev-log";
@@ -13,22 +14,18 @@ import type { FormFillManager } from "./autofill/formFillManager.js";
 import type { BrowserFaviconObserver } from "./services/browserFaviconObserver.js";
 import type { BrowserPermissionController } from "./services/browserPermissionController.js";
 import type { ApprovalAttention } from "./approvalAttention.js";
-import type { SessionConnection, WorkspaceSessionConnection } from "./serverSession.js";
+import type { WorkspaceSessionConnection } from "./serverSession.js";
 import { WebsiteNotificationBridge } from "./services/websiteNotificationBridge.js";
 import { BrowserHistoryRecorder } from "./browserHistoryRecorder.js";
-import { AppOrchestrator } from "./appOrchestrator.js";
 import {
   setMemoryMonitorViewManager,
   setMemoryPressureHandler,
   startMemoryMonitor,
 } from "./memoryMonitor.js";
-import { setMenuEventService, setMenuViewManager, setupMenu } from "./menu.js";
-import { getResourcesPath } from "./paths.js";
-import { assertPresent } from "../../../src/lintHelpers";
 import { recordPanelInitializationFailure } from "./panelInitializationFailure.js";
 import { DesktopWindowState } from "./desktopWindowState.js";
 
-const log = createDevLogger("ApplicationWindowController");
+const log = createDevLogger("PanelHostWindow");
 
 interface CdpRegistrationAdapter {
   registerTarget(panelId: string, contentsId: number): void;
@@ -51,27 +48,28 @@ export interface WorkspaceWindowServices {
   getBrowserPermissionController(): BrowserPermissionController | null;
 }
 
-export interface ApplicationWindowControllerDeps {
+export interface PanelHostWindowDeps {
   openPanelLocation: (location: PanelLocation) => void;
   eventService: EventService;
   getSystemWorkspaceId(): string | null;
   isHeadlessHost: boolean;
   getWindowTitle: () => string;
   getApprovalAttention: () => ApprovalAttention | null;
-  stopElectronHostTargetLaunchLoop: () => void;
-  startElectronHostTargetLaunchLoop: (serverClient: SessionConnection["serverClient"]) => void;
-  drainPendingReadyElectronLaunch: () => Promise<void>;
+  /** A headless host has no client; it prepares its panels as soon as the window exists. */
   initializePanelTreeOnce: (reason: string) => void;
   onHostedShellReady?: () => void;
   onCodeIdentityChanged?: (nativeId: string) => void;
   onWindowClosed: () => void;
+  /** Menus clients contributed; the window's chrome-owned chords come from here. */
+  menus: ClientMenus;
 }
 
-interface ApplicationWindowLifetime {
+interface PanelHostWindowLifetime {
+  /** Identifies this window's contributed menu and relayed menu actions. */
+  windowId: string;
   window: BaseWindow;
   viewManager: ViewManager;
   panelViews: Map<string, PanelView>;
-  appOrchestrator: AppOrchestrator | null;
   websiteNotifications: WebsiteNotificationBridge;
   closed: boolean;
 }
@@ -82,14 +80,20 @@ function chromeWindowColors(dark: boolean): { background: string; symbol: string
     : { background: "#edf1f6", symbol: "#445166" };
 }
 
-/** Owns the Electron window and every renderer-host object whose lifetime is the window. */
-export class ApplicationWindowController {
-  private currentLifetime: ApplicationWindowLifetime | null = null;
+/**
+ * The window of the one panel-hosting client on this device, and every
+ * renderer-host object whose lifetime is that window: the compositor, the
+ * per-workspace panel views and the website bridges. Panels can be presented
+ * in one place only, so panel hosting is a per-device singleton surface;
+ * clients that do not host panels run in plain client windows.
+ */
+export class PanelHostWindow {
+  private currentLifetime: PanelHostWindowLifetime | null = null;
   private readonly workspaceServices = new Map<string, WorkspaceWindowServices>();
   private readonly workspaceViewReleases = new Map<string, Array<() => void>>();
   private focusedWorkspaceId: string | null = null;
 
-  constructor(private readonly deps: ApplicationWindowControllerDeps) {}
+  constructor(private readonly deps: PanelHostWindowDeps) {}
 
   get focusedWorkspace(): string | null {
     return this.focusedWorkspaceId;
@@ -121,10 +125,6 @@ export class ApplicationWindowController {
   detachWorkspace(workspaceId: string): void {
     const lifetime = this.currentLifetime;
     lifetime?.websiteNotifications.detachWorkspace(workspaceId);
-    if (workspaceId === this.deps.getSystemWorkspaceId()) {
-      this.deps.stopElectronHostTargetLaunchLoop();
-      if (lifetime) lifetime.appOrchestrator = null;
-    }
     for (const release of this.workspaceViewReleases.get(workspaceId) ?? []) release();
     this.workspaceViewReleases.delete(workspaceId);
     lifetime?.panelViews.get(workspaceId)?.dispose();
@@ -145,8 +145,9 @@ export class ApplicationWindowController {
     this.currentLifetime?.websiteNotifications.handleAction(workspaceId, id, actionId);
   }
 
-  get appOrchestrator(): AppOrchestrator | null {
-    return this.currentLifetime?.appOrchestrator ?? null;
+  /** Identifies this window's contributed menu; null when closed. */
+  get windowId(): string | null {
+    return this.currentLifetime?.windowId ?? null;
   }
 
   get isOpen(): boolean {
@@ -173,7 +174,8 @@ export class ApplicationWindowController {
     if (window && !window.isDestroyed()) window.setTitle(title);
   }
 
-  create(): void {
+  /** Open the window (idempotent while it is open) and attach the workspaces already known. */
+  open(windowId: string): void {
     const existing = this.currentLifetime;
     if (existing) {
       if (!existing.closed && !existing.window.isDestroyed()) {
@@ -212,13 +214,9 @@ export class ApplicationWindowController {
     });
     const viewManager = new ViewManager({
       window,
-      shellPreload: path.join(__dirname, "bootstrapPreload.cjs"),
       shellOverlayPreload: path.join(__dirname, "shellOverlayPreload.cjs"),
       contentOverlayPreload: path.join(__dirname, "contentOverlayPreload.cjs"),
-      shellHtmlPath: path.join(__dirname, "index.html"),
-      shellAdditionalArguments: [],
-      devTools: false,
-      showWindowOnShellLoad: !this.deps.isHeadlessHost,
+      chromeShortcuts: this.deps.menus.shortcutsFor(windowId),
       headless: this.deps.isHeadlessHost,
       hidePanelViewsUntilHostedShellReady: true,
     });
@@ -247,11 +245,11 @@ export class ApplicationWindowController {
         };
       },
     });
-    const lifetime: ApplicationWindowLifetime = {
+    const lifetime: PanelHostWindowLifetime = {
+      windowId,
       window,
       viewManager,
       panelViews: new Map(),
-      appOrchestrator: null,
       websiteNotifications,
       closed: false,
     };
@@ -289,6 +287,7 @@ export class ApplicationWindowController {
     });
     window.setTitle(this.deps.getWindowTitle());
     window.on("focus", () => {
+      this.deps.menus.applyFor(windowId);
       app.setBadgeCount(0);
       this.deps.getApprovalAttention()?.handleWindowFocus();
       void this.deps.getApprovalAttention()?.refresh({ quiet: true });
@@ -313,9 +312,6 @@ export class ApplicationWindowController {
       });
     });
     startMemoryMonitor();
-    setMenuViewManager(viewManager);
-    setMenuEventService(this.deps.eventService);
-    if (!this.deps.isHeadlessHost) this.setupApplicationMenu(window, viewManager);
     if (this.deps.isHeadlessHost) this.deps.initializePanelTreeOnce("headless-host-startup");
   }
 
@@ -343,7 +339,7 @@ export class ApplicationWindowController {
   }
 
   private attachWorkspaceWindowServices(
-    lifetime: ApplicationWindowLifetime | null = this.currentLifetime
+    lifetime: PanelHostWindowLifetime | null = this.currentLifetime
   ): void {
     if (!lifetime || lifetime.closed || this.currentLifetime !== lifetime) return;
     const { window, viewManager } = lifetime;
@@ -446,7 +442,7 @@ export class ApplicationWindowController {
           ? { browserFaviconObserver: services.browserFaviconObserver }
           : {}),
         panelPreloadPath: path.join(__dirname, "panelPreload.cjs"),
-        appPreloadPath: path.join(__dirname, "appPreload.cjs"),
+        clientPreloadPath: path.join(__dirname, "clientPreload.cjs"),
         browserPreloadPath: path.join(__dirname, "browserPreload.cjs"),
         browserHistoryRecorder,
       });
@@ -464,86 +460,9 @@ export class ApplicationWindowController {
         ]);
       }
     }
-    const systemId = this.deps.getSystemWorkspaceId();
-    const services = systemId ? this.workspaceServices.get(systemId) : undefined;
-    if (!services || lifetime.appOrchestrator) return;
-    const appPanelView = lifetime.panelViews.get(services.serverSession.workspaceId);
-    const appOrchestrator = new AppOrchestrator({
-      getPanelView: () =>
-        !lifetime.closed &&
-        this.currentLifetime === lifetime &&
-        lifetime.panelViews.get(services.serverSession.workspaceId) === appPanelView
-          ? (appPanelView ?? null)
-          : null,
-      statePath: services.serverSession.statePath,
-    });
-    lifetime.appOrchestrator = appOrchestrator;
-
-    void this.deps.drainPendingReadyElectronLaunch().catch((error: unknown) => {
-      log.warn(
-        `[apps] Failed to apply held Electron host target: ${
-          error instanceof Error ? error.message : String(error)
-        }`
-      );
-    });
-    this.deps.startElectronHostTargetLaunchLoop(services.serverSession.serverClient);
-    void assertPresent(lifetime.appOrchestrator)
-      .loadBakedApp(path.join(getResourcesPath(), "baked-app"))
-      .then((loaded) => {
-        if (
-          loaded &&
-          this.currentLifetime === lifetime &&
-          !lifetime.closed &&
-          lifetime.appOrchestrator === appOrchestrator
-        ) {
-          this.deps.initializePanelTreeOnce("baked-electron-host");
-        }
-      })
-      .catch((error: unknown) => {
-        log.error(
-          `[dist] Failed to load baked app payload: ${
-            error instanceof Error ? error.message : String(error)
-          }`
-        );
-      });
   }
 
-  private setupApplicationMenu(window: BaseWindow, viewManager: ViewManager): void {
-    setupMenu(window, viewManager.getShellWebContents(), {
-      onHistoryBack: () => {
-        const currentViewManager = this.currentLifetime?.viewManager;
-        if (!currentViewManager) return;
-        const ownerId = this.focusedWorkspaceId ?? this.deps.getSystemWorkspaceId();
-        const panelId = ownerId
-          ? this.workspaceServices.get(ownerId)?.panelRegistry.getFocusedPanelId()
-          : null;
-        if (!panelId) return;
-        const contents = ownerId
-          ? new WorkspaceNativeViews(ownerId, currentViewManager).getWebContents(panelId)
-          : null;
-        if (contents && !contents.isDestroyed() && contents.navigationHistory.canGoBack()) {
-          contents.navigationHistory.goBack();
-        }
-      },
-      onHistoryForward: () => {
-        const currentViewManager = this.currentLifetime?.viewManager;
-        if (!currentViewManager) return;
-        const ownerId = this.focusedWorkspaceId ?? this.deps.getSystemWorkspaceId();
-        const panelId = ownerId
-          ? this.workspaceServices.get(ownerId)?.panelRegistry.getFocusedPanelId()
-          : null;
-        if (!panelId) return;
-        const contents = ownerId
-          ? new WorkspaceNativeViews(ownerId, currentViewManager).getWebContents(panelId)
-          : null;
-        if (contents && !contents.isDestroyed() && contents.navigationHistory.canGoForward()) {
-          contents.navigationHistory.goForward();
-        }
-      },
-    });
-  }
-
-  private teardownLifetime(lifetime: ApplicationWindowLifetime): void {
+  private teardownLifetime(lifetime: PanelHostWindowLifetime): void {
     if (lifetime.closed) return;
     lifetime.closed = true;
     lifetime.websiteNotifications.stop();
@@ -582,11 +501,9 @@ export class ApplicationWindowController {
     // clear the globals or references installed by a newer window.
     if (this.currentLifetime !== lifetime) return;
 
-    this.deps.stopElectronHostTargetLaunchLoop();
-    setMenuViewManager(null);
+    this.deps.menus.clear(lifetime.windowId);
     setMemoryMonitorViewManager(null);
     lifetime.panelViews.clear();
-    lifetime.appOrchestrator = null;
     this.currentLifetime = null;
     this.deps.onWindowClosed();
   }

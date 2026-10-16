@@ -2,7 +2,7 @@
  * The React Native clients' tests live in the System template; their test runner lives here.
  *
  * The host keeps the native shell and the only React Native jest preset in the
- * repository, while `clients/mobile-browser` and `packages/client-kit-native`
+ * repository, while `clients/mobile-browser`, `clients/chat-mobile` and `packages/client-kit-native`
  * (and their test files) are userland. So this config resolves the selected
  * Base and System checkouts exactly as `test:userland` and
  * `type-check:userland` do, and points the RN runner at them. Without it the
@@ -101,6 +101,7 @@ const { requireDevelopmentTemplateCheckouts } = require(
 const selectedTemplates = requireDevelopmentTemplateCheckouts(repoRoot);
 const templateRoots = selectedTemplates.checkouts;
 const mobileBrowserRoot = path.join(templateRoots.system, "clients", "mobile-browser");
+const chatMobileRoot = path.join(templateRoots.system, "clients", "chat-mobile");
 const clientKitNativeRoot = path.join(templateRoots.system, "packages", "client-kit-native");
 const hostModules = path.join(repoRoot, "node_modules");
 const packageSource = (name) => path.join(repoRoot, "packages", name, "src");
@@ -117,7 +118,7 @@ module.exports = (async () => {
     // module name still resolve against the host install. Only test discovery
     // points at userland.
     rootDir: __dirname,
-    roots: [mobileBrowserRoot, clientKitNativeRoot],
+    roots: [mobileBrowserRoot, chatMobileRoot, clientKitNativeRoot],
     // The kit's tests render through the same native mocks as the browser's.
     setupFilesAfterEnv: [path.join(mobileBrowserRoot, "jest.setup.ts")],
     // Babel resolves config from the file being compiled, which now lives in

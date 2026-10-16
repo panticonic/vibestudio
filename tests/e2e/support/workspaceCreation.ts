@@ -13,7 +13,7 @@ export async function findWorkspaceShellPage(app: TestApp): Promise<Page> {
       async () => {
         for (const candidate of app.app.context().pages()) {
           if (
-            (await candidate.title()) === "@workspace-apps/shell" &&
+            candidate.url().startsWith("vs-client://") &&
             !candidate.url().includes("overlaySurface=")
           ) {
             shell = candidate;

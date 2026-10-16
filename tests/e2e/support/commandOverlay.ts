@@ -63,7 +63,7 @@ export async function waitHostedShellReady(testApp: TestApp): Promise<void> {
           const candidates = webContents.getAllWebContents().filter((contents) => {
             if (contents.isDestroyed()) return false;
             const title = contents.getTitle();
-            return title === "@workspace-apps/shell" || title === "Vibestudio Launch";
+            return contents.getURL().startsWith("vs-client://") || title === "Vibestudio Launch";
           });
           for (const contents of candidates) {
             try {
@@ -456,7 +456,7 @@ export async function captureShellConsole(testApp: TestApp): Promise<boolean> {
     if (globals.__shellConsoleBound) return true;
     for (const contents of webContents.getAllWebContents()) {
       if (contents.isDestroyed()) continue;
-      if (contents.getTitle() !== "@workspace-apps/shell") continue;
+      if (!contents.getURL().startsWith("vs-client://")) continue;
       contents.on("console-message", (_event, level, message) => {
         globals.__shellConsole?.push(`[${level}] ${message}`);
       });

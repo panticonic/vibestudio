@@ -604,9 +604,9 @@ test.describe("Desktop Shell Chrome", () => {
               queued.filter(
                 (approval) =>
                   approval.kind === "unit-install-review" &&
-                  approval.parts.some((part) => part.kind === "app")
+                  approval.parts.some((part) => part.kind === "client")
               ),
-              "Only the designated System workspace can ask to start native apps"
+              "Only the designated System workspace can ask to start clients"
             ).toEqual([]);
           }
           const pending = queued.filter((approval) => approval.kind === "unit-install-review");

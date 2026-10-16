@@ -10,7 +10,7 @@ function makeViewManager(capabilities: string[] = [], opts: { id?: string; sourc
     getViewInfo: vi.fn((id: string) =>
       id === appId
         ? {
-            type: "app",
+            type: "client",
             workspaceIdentity: { workspaceId: "workspace-test", runtimeId: appId },
             visible: true,
             bounds: { x: 0, y: 0, width: 800, height: 600 },
@@ -28,8 +28,11 @@ function makeViewManager(capabilities: string[] = [], opts: { id?: string; sourc
 
 describe("view service", () => {
   it("admits verified native chrome for panel presentation through the canonical receiver", async () => {
-    const nativeId = 'shell:workspace:["system-workspace","@workspace-apps/shell"]';
-    const vm = makeViewManager(["panel-hosting"], { id: nativeId, source: "apps/shell" });
+    const nativeId = 'workspace:["system-workspace","client:browser:web:dev"]';
+    const vm = makeViewManager(["panel-hosting"], {
+      id: nativeId,
+      source: "clients/desktop-browser",
+    });
     const getViewInfo = vm.getViewInfo;
     const sealedVm = {
       ...vm,
@@ -41,7 +44,7 @@ describe("view service", () => {
               hostChrome: true,
               workspaceIdentity: {
                 workspaceId: "system-workspace",
-                runtimeId: "@workspace-apps/shell",
+                runtimeId: "client:browser:web:dev",
               },
             }
           : null;
@@ -74,7 +77,7 @@ describe("view service", () => {
         panelOrchestrator: lifecycle as never,
       })
     );
-    const ctx = { caller: createHostCaller(nativeId, "shell") };
+    const ctx = { caller: createVerifiedCaller(nativeId, "client") };
 
     await expect(
       dispatcher.dispatch(ctx, "view", "createPanel", [null, "panels/about"])
@@ -91,7 +94,7 @@ describe("view service", () => {
       "panels/about",
       { isRoot: true },
       undefined,
-      undefined
+      { callerId: "client:browser:web:dev", callerKind: "client" }
     );
 
     // A host origin alone does not confer the sealed native chrome capability.
@@ -102,15 +105,15 @@ describe("view service", () => {
         "createPanel",
         [null, "panels/about"]
       )
-    ).rejects.toThrow("restricted to app callers");
+    ).rejects.toThrow("restricted to client callers");
     await expect(
       dispatcher.dispatch(
-        { caller: createVerifiedCaller("ordinary-app", "app") },
+        { caller: createVerifiedCaller("ordinary-app", "client") },
         "view",
         "createPanel",
         [null, "panels/about"]
       )
-    ).rejects.toThrow("requires app capability");
+    ).rejects.toThrow("requires client capability");
     expect(lifecycle.createPanel).toHaveBeenCalledTimes(1);
   });
 
@@ -123,7 +126,7 @@ describe("view service", () => {
 
     await expect(
       service.handler(
-        { caller: createVerifiedCaller("@workspace-apps/shell", "app") },
+        { caller: createVerifiedCaller("@workspace-apps/shell", "client") },
         "setThemeCss",
         [":root{}"]
       )

@@ -16,7 +16,7 @@ export function createNativePanelHost(deps: {
     const vm = deps.getViewManager();
     const id = vm.findViewIdByWebContentsId(senderId);
     const info = id ? vm.getViewInfo(id) : null;
-    if (!id || info?.type !== "app" || !info.hostChrome)
+    if (!id || info?.type !== "client" || !info.hostChrome)
       throw new Error("Native presentation is available only to the hosted shell");
     return { vm, id };
   }

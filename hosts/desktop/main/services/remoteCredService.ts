@@ -2,7 +2,7 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ViewManager } from "../viewManager.js";
-import { requireChromeAppCallerOrHost } from "./appCapabilities.js";
+import { requireChromeClientCallerOr } from "./clientCapabilities.js";
 import { remoteCredMethods } from "@vibestudio/service-schemas/remoteCred";
 import type { ServerClient } from "../serverClient.js";
 import { relaunchApp } from "../relaunchApp.js";
@@ -95,11 +95,11 @@ export function createRemoteCredService(deps: {
   getViewManager?: () => ViewManager;
 }): ServiceDefinition {
   const requireRemoteCredCaller = (ctx: ServiceContext, method: string): void => {
-    if (ctx.caller.runtime.kind !== "app") return;
+    if (ctx.caller.runtime.kind !== "client") return;
     if (!deps.getViewManager) {
-      throw new Error(`remoteCred.${method} app capability unavailable`);
+      throw new Error(`remoteCred.${method} client capability unavailable`);
     }
-    requireChromeAppCallerOrHost(ctx, deps.getViewManager(), `remoteCred.${method}`);
+    requireChromeClientCallerOr(ctx, deps.getViewManager(), `remoteCred.${method}`);
   };
 
   return {

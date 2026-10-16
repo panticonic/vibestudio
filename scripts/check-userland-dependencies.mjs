@@ -53,10 +53,12 @@ const EXACT_PIN_EXCEPTIONS = new Map([
     "react-native-svg",
     "react-native-tcp-socket",
     "react-native-webview",
-  ].map((name) => [
-    `clients/mobile-browser/package.json:dependencies:${name}`,
-    "must match the React Native runtime or native module compiled into the APK",
-  ]),
+  ].flatMap((name) =>
+    ["clients/mobile-browser", "clients/chat-mobile"].map((client) => [
+      `${client}/package.json:dependencies:${name}`,
+      "must match the React Native runtime or native module compiled into the APK",
+    ])
+  ),
 ]);
 
 // Native runtime packages are one reviewed immutable Host/workspace closure.

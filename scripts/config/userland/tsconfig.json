@@ -30,6 +30,7 @@
     "**/dist",
     "**/node_modules",
     "clients/mobile-browser/**/*",
+    "clients/chat-mobile/**/*",
     "packages/client-kit-native/**/*",
     "packages/mobile-navigation/**/*"
   ]

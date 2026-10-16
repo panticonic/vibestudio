@@ -16,55 +16,23 @@ import { retryIdempotentAutomationRead } from "../../setup/automationContext";
 test.skip(!hasElectronDisplay(), ELECTRON_DISPLAY_UNAVAILABLE_MESSAGE);
 
 /**
- * Invoke a main-process `view.*` method from the hosted shell webContents (the
- * shell app is a view host). This goes through the app preload's `serviceCall`
- * bridge — the same dispatch path the real approval coordinator uses — unlike
- * `__testApi.rpcCall`, which targets the *server* services.
+ * Invoke a main-process `view.*` method as the running panel-hosting client
+ * (the client is a view host). This dispatches through the same Electron-local
+ * service container, under the client's own principal and sealed code
+ * identity, unlike `__testApi.rpcCall`, which targets the *server* services.
  */
 async function callShellView(testApp: TestApp, method: string, arg?: unknown): Promise<unknown> {
   return testApp.app.evaluate(
-    async ({ webContents }, request) => {
-      const candidates = webContents
-        .getAllWebContents()
-        .filter(
-          (candidate) =>
-            !candidate.isDestroyed() && candidate.getTitle() === "@workspace-apps/shell"
-        );
-      let contents: Electron.WebContents | undefined;
-      for (const candidate of candidates) {
-        const hasAppBridge = await Promise.race([
-          candidate
-            .executeJavaScript(`Boolean(globalThis.__vibestudioApp?.serviceCall)`, true)
-            .catch(() => false),
-          new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
-        ]);
-        if (hasAppBridge) {
-          contents = candidate;
-          break;
-        }
-      }
-      if (!contents) throw new Error("hosted shell webContents not found");
-      const call =
-        request.arg === undefined
-          ? `globalThis.__vibestudioApp.serviceCall(${JSON.stringify("view." + request.method)})`
-          : `globalThis.__vibestudioApp.serviceCall(${JSON.stringify("view." + request.method)}, ${JSON.stringify(request.arg)})`;
-      const result = (await Promise.race([
-        contents.executeJavaScript(
-          `(async () => {
-            try {
-              return { ok: true, value: await ${call} };
-            } catch (error) {
-              return { ok: false, error: String(error?.stack ?? error) };
-            }
-          })()`,
-          true
-        ),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Timed out calling view.${request.method}`)), 5_000)
-        ),
-      ])) as { ok: true; value: unknown } | { ok: false; error: string };
-      if (!result.ok) throw new Error(result.error);
-      return result.value;
+    (_electron, request) => {
+      const api = (
+        globalThis as { __testApi?: { callHostedClient(...a: unknown[]): Promise<unknown> } }
+      ).__testApi;
+      if (!api) throw new Error("The test API is not available");
+      return api.callHostedClient(
+        "view",
+        request.method,
+        request.arg === undefined ? [] : [request.arg]
+      );
     },
     { method, arg }
   );
@@ -79,7 +47,7 @@ async function waitHostedShellReady(testApp: TestApp): Promise<void> {
           const candidates = webContents.getAllWebContents().filter((contents) => {
             if (contents.isDestroyed()) return false;
             const title = contents.getTitle();
-            return title === "@workspace-apps/shell" || title === "Vibestudio Launch";
+            return contents.getURL().startsWith("vs-client://") || title === "Vibestudio Launch";
           });
           for (const contents of candidates) {
             try {
@@ -394,7 +362,7 @@ test.describe("Content overlay", () => {
         .find(
           (candidate) =>
             !candidate.isDestroyed() &&
-            candidate.getTitle() === "@workspace-apps/shell" &&
+            candidate.getURL().startsWith("vs-client://") &&
             !candidate.getURL().includes("overlaySurface=")
         );
       const overlay = webContents
@@ -421,7 +389,7 @@ test.describe("Content overlay", () => {
               .find(
                 (candidate) =>
                   !candidate.isDestroyed() &&
-                  candidate.getTitle() === "@workspace-apps/shell" &&
+                  candidate.getURL().startsWith("vs-client://") &&
                   !candidate.getURL().includes("overlaySurface=")
               );
             if (!host) return null;

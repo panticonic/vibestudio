@@ -15,6 +15,7 @@ import {
   type RpcStreamOptions,
 } from "@vibestudio/rpc";
 import { wsClientTransport } from "@vibestudio/rpc/transports/wsClient";
+import { isTerminalCloseCode } from "@vibestudio/rpc/protocol/closeCodes";
 import type {
   ClientPlatform,
   DeviceCredential,
@@ -34,6 +35,24 @@ export type ConnectionStatus = RpcConnectionStatus;
 export interface ScopedServerCaller {
   callerId: string;
   callerKind: CallerKind;
+  /**
+   * Which window of a client this session serves. A client may run several
+   * windows; each opens its own session of the one client principal, so a
+   * response always returns on the connection that asked.
+   */
+  instanceId?: string;
+}
+
+/**
+ * How a client principal's sessions are admitted and observed. The host that
+ * verified the client build owns it: a grant is one-use and bound to that exact
+ * build, so every (re)connection asks for a fresh one.
+ */
+export interface ClientPrincipalSessions {
+  /** A fresh one-use connection grant for the client principal's exact verified build. */
+  connectionGrant(principalId: string): Promise<string>;
+  /** A client session ended for good; `reason` is the server's close reason (e.g. `trust-revoked`). */
+  sessionEnded(caller: ScopedServerCaller, reason: string): void;
 }
 
 export type ServerMessageListener = (envelope: RpcEnvelope) => void;
@@ -182,7 +201,7 @@ export interface ServerClient {
     args: unknown[],
     options?: RpcCallOptions
   ): Promise<unknown>;
-  /** Call a backend service via the server as an Electron-hosted runtime principal. */
+  /** Call a backend service via the server as a client principal hosted in this process. */
   callAs(
     caller: ScopedServerCaller,
     service: string,
@@ -190,9 +209,13 @@ export interface ServerClient {
     args: unknown[],
     options?: RpcCallOptions
   ): Promise<unknown>;
-  /** Relay one already-formed envelope over an app principal's scoped session. */
+  /** Admit client principal sessions on this connection (null withdraws them). */
+  setClientPrincipalSessions(sessions: ClientPrincipalSessions | null): void;
+  /** End one client window's own session of its principal. Idempotent. */
+  releaseClientSession(caller: ScopedServerCaller): Promise<void>;
+  /** Relay one already-formed envelope over a client principal's scoped session. */
   sendAs(caller: ScopedServerCaller, envelope: RpcEnvelope): Promise<void>;
-  /** Forward server-originated messages for an Electron-hosted runtime principal. */
+  /** Forward server-originated messages for a client principal session hosted in this process. */
   addMessageListener(caller: ScopedServerCaller, listener: ServerMessageListener): () => void;
   /**
    * Open a dedicated session for a desktop panel principal, redeeming its
@@ -364,49 +387,60 @@ export async function createServerClient(
   let closing = false;
   let closePromise: Promise<void> | null = null;
   const scopedListeners = new Map<string, Set<ServerMessageListener>>();
+  let principalSessions: ClientPrincipalSessions | null = null;
   const scopedKey = (caller: ScopedServerCaller): string =>
-    `${caller.callerKind}\x00${caller.callerId}`;
+    `${caller.callerKind}\x00${caller.callerId}\x00${caller.instanceId ?? ""}`;
 
   const createScopedClient = async (
     caller: ScopedServerCaller,
     onUnrecoverable: () => void
   ): Promise<ScopedClient> => {
-    // Only app principals get a scoped runtime connection. A panel authenticates
-    // its own direct connection, which holds the panel lease; a second
-    // host-opened connection for the same panel is rejected by the lease gate.
-    // Panel operations are therefore translated by the trusted host instead (see
-    // panelView / panelOrchestrator). Native `shell` callers use call().
-    if (caller.callerKind !== "app") {
+    // Only client principals get a scoped runtime connection. A panel
+    // authenticates its own direct connection, which holds the panel lease; a
+    // second host-opened connection for the same panel is rejected by the lease
+    // gate. Panel operations are therefore translated by the trusted host
+    // instead (see panelView / panelOrchestrator). Native `shell` callers use
+    // call().
+    const sessions = principalSessions;
+    if (caller.callerKind !== "client" || !sessions) {
       throw new Error(`Scoped server RPC is not available for ${caller.callerKind} callers`);
     }
-    let activeGrantToken = (await authClient.grantConnection(caller.callerId)).token;
+    // Connection grants are one-use and bound to the verified build, so every
+    // connection attempt, including each reconnect, asks the host for a fresh one.
+    const grant = (): Promise<string> => sessions.connectionGrant(caller.callerId);
     const scopedTransport = wsClientTransport({
       selfId: caller.callerId,
       getWsUrl,
       // The renderer owns pending direct-target RPC state. Keep its exact
-      // authenticated app session alive across a transient socket loss so the
-      // server's routed response replay can settle those calls. Connection
-      // grants are one-shot, therefore every reopen obtains a fresh grant.
+      // client session alive across a transient socket loss so the server's
+      // routed response replay can settle those calls.
       reconnect: true,
       logPrefix: `ServerClient:${caller.callerId}`,
       adapter: {
         now: () => Date.now(),
-        getAuthToken: async () => activeGrantToken,
+        getAuthToken: grant,
         refreshAuthToken: async () => {
           try {
-            activeGrantToken = (await authClient.grantConnection(caller.callerId)).token;
-            return activeGrantToken;
+            return await grant();
           } catch (error) {
             // The transport stops reconnecting once a refresh fails, so this
             // session is finished for good. Drop it from the cache now: a
-            // principal that cannot mint a grant this instant may well be
-            // mintable after the next app registration, and without this the
-            // wedged socket would be reused for the rest of the process.
+            // principal that cannot be granted this instant may well be
+            // grantable after the host next verifies its build, and without
+            // this the wedged socket would be reused for the rest of the process.
             onUnrecoverable();
             throw error;
           }
         },
-        createSocket: (url, protocols) => new NodeWsLike(new WebSocket(url, protocols)),
+        createSocket: (url, protocols) => {
+          const socket = new WebSocket(url, protocols);
+          // A terminal close carries the server's reason (`trust-revoked`,
+          // `retired`): the one authoritative signal the host acts on.
+          socket.on("close", (code: number, reason: Buffer) => {
+            if (isTerminalCloseCode(code)) sessions.sessionEnded(caller, reason.toString());
+          });
+          return new NodeWsLike(socket);
+        },
       },
     });
     const scopedRpc = createInternalRpcClient({
@@ -448,6 +482,16 @@ export async function createServerClient(
   };
 
   return {
+    setClientPrincipalSessions(sessions) {
+      principalSessions = sessions;
+    },
+    async releaseClientSession(caller): Promise<void> {
+      const key = scopedKey(caller);
+      const existing = scopedClients.get(key);
+      scopedClients.delete(key);
+      scopedListeners.delete(key);
+      if (existing) await (await existing.catch(() => null))?.close();
+    },
     onRecovery(listener) {
       recoveryListeners.add(listener);
       return () => {

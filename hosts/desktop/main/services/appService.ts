@@ -12,7 +12,7 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 import type { PanelOrchestrator } from "../panelOrchestrator.js";
 import type { ServerClient } from "../serverClient.js";
 import type { ViewManager } from "../viewManager.js";
-import type { AppOrchestrator } from "../appOrchestrator.js";
+import type { PendingClientUpdates } from "../clientUpdates.js";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import {
   requirePanelHostingAuthority,
@@ -23,7 +23,8 @@ export function createAppService(deps: {
   panelOrchestrator: PanelOrchestrator;
   serverClient: ServerClient | null;
   getViewManager: () => ViewManager;
-  getAppOrchestrator?: () => AppOrchestrator | null;
+  /** The running clients' pending updates; absent where no client is hosted. */
+  getClientUpdates?: () => PendingClientUpdates | null;
   connectionMode: "local" | "remote";
   initialFocusedWorkspaceId?: string;
   remoteHost?: string;
@@ -57,14 +58,17 @@ export function createAppService(deps: {
       }),
       getSystemTheme: () => (nativeTheme.shouldUseDarkColors ? "dark" : "light"),
       setThemeMode: async (ctx, [mode]) => {
-        await requireRuntimeCapability(ctx, "window-management", "app.setThemeMode");
+        await requireRuntimeCapability(ctx, "theme", "app.setThemeMode");
         nativeTheme.themeSource = mode;
         return;
       },
       openDevTools: async (ctx) => {
         const vm = deps.getViewManager();
-        await requireRuntimeCapability(ctx, "window-management", "app.openDevTools");
-        vm.openDevTools(ctx.caller.runtime.kind === "app" ? ctx.caller.runtime.id : "shell");
+        await requireRuntimeCapability(ctx, "devtools", "app.openDevTools");
+        if (ctx.caller.runtime.kind !== "client") {
+          throw new Error("app.openDevTools opens the calling client's own view");
+        }
+        vm.openDevTools(ctx.caller.runtime.id);
         return;
       },
       openExternal: async (ctx, [url]) => {
@@ -138,15 +142,13 @@ export function createAppService(deps: {
         }
         return [];
       },
-      applyUpdate: async (ctx, [appId]) => {
+      applyUpdate: async (ctx, [clientId]) => {
         await requirePanelHostingAuthority(ctx, "app.applyUpdate");
-        return {
-          applied: (await deps.getAppOrchestrator?.()?.applyPendingAppUpdate(appId)) ?? false,
-        };
+        return { applied: (await deps.getClientUpdates?.()?.apply(clientId)) ?? false };
       },
       listPendingUpdates: async (ctx) => {
         await requirePanelHostingAuthority(ctx, "app.listPendingUpdates");
-        return deps.getAppOrchestrator?.()?.listPendingAppUpdates() ?? [];
+        return deps.getClientUpdates?.()?.list() ?? [];
       },
     }),
   };

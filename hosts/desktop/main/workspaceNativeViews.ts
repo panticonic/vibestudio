@@ -60,8 +60,8 @@ export class WorkspaceNativeViews {
     );
   }
 
-  getVisibleHostChromeAppId(): string | null {
-    const id = this.window.getVisibleHostChromeAppId();
+  getVisibleHostChromeClientId(): string | null {
+    const id = this.window.getVisibleHostChromeClientId();
     const identity = id ? this.window.getViewInfo(id)?.workspaceIdentity : undefined;
     return identity?.workspaceId === this.workspaceId ? identity.runtimeId : null;
   }
@@ -111,7 +111,7 @@ export class WorkspaceNativeViews {
   }
   isContentOverlayWebContentsId(id: number): boolean {
     return (
-      this.getVisibleHostChromeAppId() !== null && this.window.isContentOverlayWebContentsId(id)
+      this.getVisibleHostChromeClientId() !== null && this.window.isContentOverlayWebContentsId(id)
     );
   }
   getViewPartition(id: string) {
@@ -150,11 +150,13 @@ export class WorkspaceNativeViews {
   setViewVisible(id: string, visible: boolean) {
     return this.window.setViewVisible(this.nativeId(id), visible);
   }
-  updateAppView(
+  updateClientView(
     id: string,
-    ...args: Parameters<ViewManager["updateAppView"]> extends [string, ...infer Rest] ? Rest : never
+    ...args: Parameters<ViewManager["updateClientView"]> extends [string, ...infer Rest]
+      ? Rest
+      : never
   ) {
-    return this.window.updateAppView(this.nativeId(id), ...args);
+    return this.window.updateClientView(this.nativeId(id), ...args);
   }
   updateCodeIdentity(id: string, identity: Parameters<ViewManager["updateCodeIdentity"]>[1]) {
     return this.window.updateCodeIdentity(this.nativeId(id), identity);

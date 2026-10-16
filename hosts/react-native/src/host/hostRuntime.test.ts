@@ -83,7 +83,12 @@ function change(buildKey: string, over: Partial<SupervisionChange> = {}): Superv
   } as SupervisionChange;
 }
 
-async function setup(options: { launches: unknown[]; served?: Record<string, string> }) {
+async function setup(options: {
+  launches: unknown[];
+  served?: Record<string, string>;
+  listing?: unknown[];
+  invoked?: { text: string } | Error;
+}) {
   const launches = [...options.launches];
   const served: Record<string, string> = { ...options.served };
   const fetched: string[] = [];
@@ -110,6 +115,11 @@ async function setup(options: { launches: unknown[]; served?: Record<string, str
         };
       case "shellApproval.resolveBootstrap":
         return [];
+      case "clients.list":
+        return options.listing ?? [];
+      case "clients.invokeIntent":
+        if (options.invoked instanceof Error) throw options.invoked;
+        return options.invoked ?? { text: "" };
       default:
         return undefined;
     }
@@ -166,6 +176,7 @@ async function setup(options: { launches: unknown[]; served?: Record<string, str
     stopClient: vi.fn(async () => undefined),
     focusClient: vi.fn(async () => undefined),
     showHostSurface: vi.fn(async () => undefined),
+    requestPinShortcut: vi.fn(async () => true),
     respond: vi.fn(async () => undefined),
     reject: vi.fn(async () => undefined),
     emit: vi.fn(async () => undefined),
@@ -175,7 +186,7 @@ async function setup(options: { launches: unknown[]; served?: Record<string, str
   const store = new MemoryStore();
   const forget = vi.fn(async () => undefined);
   const notifications = {
-    handlers: {} as never,
+    handlers: { "notifications.display": vi.fn(async () => undefined) } as never,
     start: vi.fn(async () => undefined),
     stop: vi.fn(),
     onEvent: () => () => undefined,
@@ -219,6 +230,7 @@ async function setup(options: { launches: unknown[]; served?: Record<string, str
     hostVersion: "1.0.0",
   };
   const runtime = new HostRuntime(ports);
+  const nativeEvent = (event: HostRuntimeEvent) => nativeHandler!(event);
   const request = async (method: string, args: unknown[] = [], requestId = `r-${Math.random()}`) => {
     nativeHandler!({
       type: "client-request",
@@ -250,6 +262,8 @@ async function setup(options: { launches: unknown[]; served?: Record<string, str
     principalSession,
     principalHandlers,
     emitServerEvent,
+    nativeEvent,
+    notifications,
     request,
     connection,
     queue: (...more: unknown[]) => launches.push(...more),
@@ -465,5 +479,87 @@ describe("forgetting the device", () => {
     expect(t.forget).toHaveBeenCalledTimes(1);
     expect(t.connection.close).toHaveBeenCalled();
     expect(t.runtime.ui.get().phase).toBe("needs-pairing");
+  });
+});
+
+const chatListing = (over: Record<string, unknown> = {}) => ({
+  source: "clients/chat-mobile",
+  id: "chat",
+  runtime: "react-native",
+  title: "Chat",
+  hostAbi: "rn-host-6",
+  status: "available",
+  isDefault: false,
+  trusted: true,
+  activeBuildKey: null,
+  canRollback: false,
+  intents: [
+    { name: "open", kind: "foreground" },
+    { name: "share", kind: "foreground", params: { text: "text" }, accepts: ["text/*"] },
+    { name: "ask", kind: "background", title: "Ask", params: { text: "text" }, handler: "p#ask" },
+  ],
+  ...over,
+});
+
+describe("intents from the OS", () => {
+  const started = async (options: Parameters<typeof setup>[0] = { launches: [] }) => {
+    const t = await setup({ ...options, launches: [{ state: "unavailable", reason: "x" }, ...options.launches] });
+    await t.runtime.start();
+    return t;
+  };
+  const launchCalls = (t: Awaited<ReturnType<typeof setup>>) =>
+    t.rpcCalls.filter((call) => call.name === "clients.launch");
+
+  it("routes shared text to the client whose foreground intent accepts the type", async () => {
+    const t = await started({ launches: [{ state: "unavailable", reason: "x" }], listing: [chatListing()] });
+    t.nativeEvent({ type: "share-in", mimeType: "text/plain", text: "hello" });
+    await vi.waitFor(() => expect(launchCalls(t)).toHaveLength(2));
+    expect(launchCalls(t)[1]!.args[0]).toMatchObject({ select: { id: "chat", intent: "share", params: { text: "hello" } } });
+  });
+
+  it("says so when no client accepts what was shared", async () => {
+    const t = await started({ launches: [], listing: [chatListing()] });
+    t.nativeEvent({ type: "share-in", mimeType: "image/png", text: "x" });
+    await vi.waitFor(() => expect(t.runtime.ui.get().message).toMatch(/accepts shared image\/png/));
+  });
+
+  it("holds an intent that arrives before the device is up and handles it once it is", async () => {
+    const t = await setup({ launches: [{ state: "unavailable", reason: "x" }, { state: "unavailable", reason: "x" }], listing: [chatListing()] });
+    // Native releases what it held the moment the host is ready, before the device is up.
+    t.native.markReady.mockImplementationOnce(async () => {
+      t.nativeEvent({ type: "share-in", mimeType: "text/plain", text: "early" });
+    });
+    await t.runtime.start();
+    await vi.waitFor(() => expect(launchCalls(t)).toHaveLength(2));
+    expect(launchCalls(t)[1]!.args[0]).toMatchObject({ select: { intent: "share", params: { text: "early" } } });
+  });
+
+  it("opens a link's intent only when the client declares it as foreground", async () => {
+    const t = await started({ launches: [{ state: "unavailable", reason: "x" }], listing: [chatListing()] });
+    t.nativeEvent({ type: "link", url: "vibestudio://c/chat/ask" });
+    await vi.waitFor(() => expect(t.runtime.ui.get().message).toMatch(/no intent "ask"/));
+    expect(launchCalls(t)).toHaveLength(1);
+    t.nativeEvent({ type: "link", url: "vibestudio://c/chat/open" });
+    await vi.waitFor(() => expect(launchCalls(t)).toHaveLength(2));
+    expect(launchCalls(t)[1]!.args[0]).toMatchObject({ select: { id: "chat", intent: "open" } });
+  });
+
+  it("runs a background intent server-side and shows its text as a notification", async () => {
+    const t = await started({ launches: [], listing: [chatListing()], invoked: { text: "42" } });
+    t.nativeEvent({ type: "background-intent", name: "ask", text: "answer?" });
+    const display = (t.notifications.handlers as never as Record<string, ReturnType<typeof vi.fn>>)["notifications.display"]!;
+    await vi.waitFor(() => expect(display).toHaveBeenCalled());
+    expect(display).toHaveBeenCalledWith({ id: "intent:chat:ask", title: "Ask", body: "42" });
+    const invoked = t.rpcCalls.find((call) => call.name === "clients.invokeIntent")!;
+    expect(invoked.args[1]).toMatchObject({ id: "chat", intent: "ask", params: { text: "answer?" } });
+    expect(launchCalls(t)).toHaveLength(1);
+  });
+
+  it("shows a failed background intent as a notification, not nothing", async () => {
+    const t = await started({ launches: [], listing: [chatListing()], invoked: new Error("quota") });
+    t.nativeEvent({ type: "background-intent", name: "ask", text: "q" });
+    const display = (t.notifications.handlers as never as Record<string, ReturnType<typeof vi.fn>>)["notifications.display"]!;
+    await vi.waitFor(() => expect(display).toHaveBeenCalled());
+    expect(display.mock.calls[0]![0].body).toMatch(/^Failed: .*quota/);
   });
 });

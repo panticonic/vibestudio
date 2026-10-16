@@ -36,7 +36,7 @@ async function executeInHostedShell<T>(app: TestApp, source: string): Promise<T>
       .find(
         (candidate) =>
           !candidate.isDestroyed() &&
-          candidate.getTitle() === "@workspace-apps/shell" &&
+          candidate.getURL().startsWith("vs-client://") &&
           !candidate.getURL().includes("overlaySurface=")
       );
     if (!shell) throw new Error("Hosted shell WebContents was not found");

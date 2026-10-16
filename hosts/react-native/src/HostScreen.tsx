@@ -13,6 +13,7 @@ import { Camera, useCameraDevice, useCodeScanner } from "react-native-vision-cam
 import { launchGateView } from "@vibestudio/shared/bootstrapLaunchGate";
 import { VibestudioLogo } from "../VibestudioLogo";
 import type { HostRuntime, HostUiState } from "./host/hostRuntime";
+import type { PinnableShortcut } from "./host/integration";
 
 function ActionButton({
   title,
@@ -125,6 +126,61 @@ function LaunchTimeline({ ui }: { ui: HostUiState }) {
           </View>
         </View>
       ))}
+    </View>
+  );
+}
+
+type ShortcutList =
+  | { status: "loading" }
+  | { status: "ready"; shortcuts: PinnableShortcut[] }
+  | { status: "failed"; message: string };
+
+/**
+ * Launchers the person can add to the home screen. The host mediates it (the
+ * launcher asks the person to confirm) and offers every client's plain
+ * foreground intents the same way; it knows no client.
+ */
+function HomeScreenShortcuts({ runtime }: { runtime: HostRuntime }) {
+  const [list, setList] = useState<ShortcutList>({ status: "loading" });
+  const [result, setResult] = useState<string | null>(null);
+  React.useEffect(() => {
+    let active = true;
+    runtime.pinnableShortcuts().then(
+      (shortcuts) => active && setList({ status: "ready", shortcuts }),
+      (error: unknown) =>
+        active &&
+        setList({ status: "failed", message: error instanceof Error ? error.message : String(error) })
+    );
+    return () => {
+      active = false;
+    };
+  }, [runtime]);
+  const pin = (shortcut: PinnableShortcut) =>
+    runtime.pinShortcut(shortcut).then(
+      (requested) =>
+        setResult(
+          requested
+            ? `Confirm "${shortcut.label}" in your launcher.`
+            : "This launcher cannot pin shortcuts."
+        ),
+      (error: unknown) => setResult(error instanceof Error ? error.message : String(error))
+    );
+  return (
+    <View style={styles.actions}>
+      <Text style={styles.sectionTitle}>Add to home screen</Text>
+      {list.status === "loading" ? <ActivityIndicator /> : null}
+      {list.status === "failed" ? <Text style={styles.hint}>{list.message}</Text> : null}
+      {list.status === "ready"
+        ? list.shortcuts.map((shortcut) => (
+            <ActionButton
+              key={shortcut.shortcutId}
+              title={shortcut.label}
+              variant="secondary"
+              onPress={() => void pin(shortcut)}
+            />
+          ))
+        : null}
+      {result ? <Text style={styles.hint}>{result}</Text> : null}
     </View>
   );
 }
@@ -299,7 +355,9 @@ export function createHostScreen(runtime: HostRuntime) {
                   variant="secondary"
                 />
               </View>
-            ) : ui.phase === "running" ? null : (
+            ) : ui.phase === "running" ? (
+              <HomeScreenShortcuts runtime={runtime} />
+            ) : (
               <View style={styles.actions}>
                 {scannerOpen ? (
                   <View style={styles.scannerCard}>

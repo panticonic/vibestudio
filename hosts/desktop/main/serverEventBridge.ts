@@ -34,6 +34,8 @@ export interface ServerEventBridgeDeps {
    * single launch coordinator and retries host-target launch from this.
    */
   onSupervisionChanged?(change: SupervisionChange): Promise<void> | void;
+  /** The set of clients a host can launch changed; a launch waiting on one continues. */
+  onClientsChanged?(): void;
   /** Retain the latest level-triggered tree reset for newly opened shell watches. */
   onPanelTreeInvalidated?(event: PanelTreeInvalidation): void;
   /**
@@ -345,6 +347,12 @@ export function createServerEventBridge(
           deps.notifyError?.("App update could not be applied", message);
         }
       );
+      emitNormalized(bareEvent, payload);
+      return;
+    }
+
+    if (bareEvent === "clients:changed") {
+      deps.onClientsChanged?.();
       emitNormalized(bareEvent, payload);
       return;
     }

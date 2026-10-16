@@ -5,6 +5,11 @@ import type { PanelView } from "./panelView.js";
 vi.mock("electron", () => ({ webContents: {} }));
 import { setupTestApi, cleanupTestApi, type TestWorkspaceOwner } from "./testApi.js";
 
+const noLaunchGate = {
+  view: () => ({ title: null, launch: { status: "starting" as const, reason: "" }, progress: [] }),
+  resolveApprovals: async () => undefined,
+};
+
 afterEach(() => {
   cleanupTestApi();
   vi.unstubAllEnvs();
@@ -24,6 +29,8 @@ it("keeps identical panel IDs and RPC reads with their captured workspace owner"
   const personal = owner("Personal");
   setupTestApi(system, {
     getServerConnectionStatus: () => "connected",
+    launchGate: noLaunchGate,
+    callHostedClient: async () => undefined,
     resolveWorkspace: async (id) => {
       if (id !== "personal") throw new Error("Workspace is unavailable");
       return personal;
@@ -54,6 +61,8 @@ it("observes its owner's view becoming ready without reinstalling the global API
     resolveWorkspace: async () => owner,
     listWorkspaces: async () => [],
     getServerConnectionStatus: () => "connected",
+    launchGate: noLaunchGate,
+    callHostedClient: async () => undefined,
   });
   const api = globalThis.__testApi!;
   await expect(api.getPanelText("panel")).rejects.toThrow("PanelView not available");
@@ -80,7 +89,7 @@ it("creates in the captured workspace through native chrome without requiring an
     getPanelView: () =>
       ({
         getViewManager: () => ({
-          getVisibleHostChromeAppId: () => (hosted ? "system-shell" : null),
+          getVisibleHostChromeClientId: () => (hosted ? "system-shell" : null),
         }),
       }) as unknown as PanelView,
   };
@@ -100,6 +109,8 @@ it("creates in the captured workspace through native chrome without requiring an
     resolveWorkspace: async () => personal,
     listWorkspaces: async () => [],
     getServerConnectionStatus: () => "connected",
+    launchGate: noLaunchGate,
+    callHostedClient: async () => undefined,
   });
   const api = await globalThis.__testApi!.forWorkspace("personal");
   await api.createPanel("parent", "about/help", { focus: false });

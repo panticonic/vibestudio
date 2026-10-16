@@ -1,8 +1,8 @@
 /**
  * React Native (Hermes) web-API polyfills the Iroh pipe's codec depends on.
- * Imported FIRST by `connect.ts` (before any `@vibestudio/rpc` module loads) so
- * both bundles that use this package — the native host bootstrap and the
- * post-reload workspace shell app — get them. All guarded: a future Hermes that
+ * Imported first (before any `@vibestudio/rpc` module loads) by every
+ * Hermes context: the host runtime bundle and each client instance, which has
+ * its own JS realm. All guarded: a future Hermes that
  * ships a native implementation wins.
  *
  *  - `ReadableStream` — streamed responses (`gateway.fetch`, the bundle-activation

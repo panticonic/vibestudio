@@ -193,4 +193,39 @@ describe("protocolHandler", () => {
     expect(mod.getPendingConnectLinkError()).toMatch(/About page/);
     expect(mod.getPendingConnectLink()).toBeNull();
   });
+
+  it("routes client intent links to the client host, holding them until it exists", async () => {
+    const mod = await import("./protocolHandler.js");
+    mod.installEarlyOpenUrlBuffer();
+    const open = "vibestudio://c/chat/open-conversation?channel=general";
+    // A launch-time link and a second-instance argv link both arrive before any host listens.
+    mod.enqueueFirstArgvLink(["electron", open]);
+    mod.enqueueProtocolLink("https://vibestudio.app/c/browser/open-panel#panel=panels%2Fchat");
+    expect(mod.drainPendingClientLinks()).toEqual([
+      open,
+      "https://vibestudio.app/c/browser/open-panel#panel=panels%2Fchat",
+    ]);
+    expect(mod.drainPendingClientLinks()).toEqual([]);
+    // Client links never reach the pairing, panel or surface paths.
+    expect(mod.getPendingConnectLink()).toBeNull();
+    expect(mod.getPendingConnectLinkError()).toBeNull();
+    expect(mod.getPendingShellSurface()).toBeNull();
+
+    const seen: string[] = [];
+    const off = mod.onClientLink((link) => seen.push(link));
+    mod.enqueueProtocolLink(open);
+    off();
+    mod.enqueueProtocolLink(open);
+    expect(seen).toEqual([open]);
+    expect(mod.drainPendingClientLinks()).toEqual([open]);
+  });
+
+  it("carries a client link that arrives as a second instance's argv", async () => {
+    const mod = await import("./protocolHandler.js");
+    mod.installEarlyOpenUrlBuffer();
+    const seen: string[] = [];
+    mod.onClientLink((link) => seen.push(link));
+    mocks.handlers.get("second-instance")!({}, ["electron", "--flag", "vibestudio://c/chat/open"]);
+    expect(seen).toEqual(["vibestudio://c/chat/open"]);
+  });
 });

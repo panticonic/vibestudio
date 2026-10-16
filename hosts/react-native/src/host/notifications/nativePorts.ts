@@ -66,7 +66,12 @@ const firebaseMessaging: FirebaseMessagingPort = {
 function eventOf(event: NotifeeEvent): NotificationEvent {
   const notification = event.detail.notification as Partial<DeviceNotification> | undefined;
   if (event.type === EventType.ACTION_PRESS)
-    return { kind: "action", actionId: event.detail.pressAction?.id, notification };
+    return {
+      kind: "action",
+      actionId: event.detail.pressAction?.id,
+      ...(event.detail.input !== undefined ? { input: event.detail.input } : {}),
+      notification,
+    };
   return { kind: event.type === EventType.PRESS ? "press" : "other", notification };
 }
 
@@ -114,8 +119,8 @@ function firebaseConfigured(): boolean {
   return (host?.firebaseConfigured ?? host?.getConstants?.()?.firebaseConfigured) !== false;
 }
 
-/** Everything but `decide`, which the host runtime implements over its workspace connections. */
-export function createNativeNotificationPorts(): Omit<HostNotificationsPorts, "decide"> {
+/** Everything but `decide` and `reportAction`, which the host runtime implements over its workspace connections. */
+export function createNativeNotificationPorts(): Omit<HostNotificationsPorts, "decide" | "reportAction"> {
   return {
     messaging: firebaseMessaging,
     notifee: notifeePort,

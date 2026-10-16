@@ -7,7 +7,7 @@ import { buildPanelViewHandler } from "./panelShellService.js";
 import { panelMethods } from "@vibestudio/service-schemas/panel";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 
-const appCtx: ServiceContext = { caller: createVerifiedCaller("@workspace-apps/shell", "app") };
+const appCtx: ServiceContext = { caller: createVerifiedCaller("@workspace-apps/shell", "client") };
 const panelCtx: ServiceContext = { caller: createVerifiedCaller("panel:chat", "panel") };
 
 const FIND = { forward: true, findNext: false };
@@ -81,7 +81,7 @@ function createServiceHarness(
     })
   );
   const getViewInfo = vi.fn((runtimeId: string) => ({
-    type: "app",
+    type: "client",
     workspaceIdentity: { workspaceId: "workspace-test", runtimeId },
     hostChrome: runtimeId === "@workspace-apps/shell",
     visible: true,
@@ -361,7 +361,7 @@ describe("PanelShellService", () => {
         "markBrowserNavigationIntent",
         ["panel-1", { transition: "reload" }]
       )
-    ).rejects.toThrow(/restricted to app callers/);
+    ).rejects.toThrow(/restricted to client callers/);
     expect(harness.markBrowserNavigationIntent).not.toHaveBeenCalled();
   });
 

@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { PanelView } from "./panelView.js";
 
-function makePanelView(appPreloadPath?: string): PanelView {
+function makePanelView(clientPreloadPath?: string): PanelView {
   return new PanelView({
     nativeStorageScope: "test-host-device",
     viewManager: {
@@ -10,7 +10,7 @@ function makePanelView(appPreloadPath?: string): PanelView {
       hasView: vi.fn(() => false),
       getViewUrl: vi.fn(() => null),
       navigateView: vi.fn(async () => undefined),
-      updateAppView: vi.fn(async () => undefined),
+      updateClientView: vi.fn(async () => undefined),
       createView: vi.fn(() => {
         throw new Error("createView should not be called");
       }),
@@ -23,7 +23,7 @@ function makePanelView(appPreloadPath?: string): PanelView {
       cleanupPanelAccess: vi.fn(),
     },
     panelOrchestrator: {},
-    appPreloadPath,
+    clientPreloadPath,
   } as never);
 }
 
@@ -32,8 +32,11 @@ describe("PanelView app views", () => {
     const panelView = makePanelView();
 
     await expect(
-      panelView.createViewForApp("@workspace-apps/shell", "http://127.0.0.1:1234/_a/app/index.html")
-    ).rejects.toThrow("App preload is required for privileged app views");
+      panelView.createViewForClient(
+        "@workspace-apps/shell",
+        "http://127.0.0.1:1234/_a/app/index.html"
+      )
+    ).rejects.toThrow("Client preload is required for privileged client views");
   });
 
   it("creates panel-hosting app views as full-window host chrome", async () => {
@@ -42,7 +45,7 @@ describe("PanelView app views", () => {
       hasView: vi.fn(() => false),
       getViewUrl: vi.fn(() => null),
       navigateView: vi.fn(async () => undefined),
-      updateAppView: vi.fn(async () => undefined),
+      updateClientView: vi.fn(async () => undefined),
       createView: vi.fn(() => ({
         webContents: {
           id: 10,
@@ -64,10 +67,10 @@ describe("PanelView app views", () => {
         cleanupPanelAccess: vi.fn(),
       },
       panelOrchestrator: {},
-      appPreloadPath: "/app-preload.js",
+      clientPreloadPath: "/app-preload.js",
     } as never);
 
-    await panelView.createViewForApp(
+    await panelView.createViewForClient(
       "@workspace-apps/shell",
       "http://127.0.0.1:1234/_a/app/index.html",
       undefined,
@@ -77,7 +80,7 @@ describe("PanelView app views", () => {
     expect(viewManager.createView).toHaveBeenCalledWith(
       expect.objectContaining({
         id: "@workspace-apps/shell",
-        type: "app",
+        type: "client",
         hostChrome: true,
       })
     );
@@ -89,7 +92,7 @@ describe("PanelView app views", () => {
       hasView: vi.fn(() => true),
       getViewUrl: vi.fn(() => "http://127.0.0.1:1234/_a/old/index.html"),
       navigateView: vi.fn(async () => undefined),
-      updateAppView: vi.fn(async () => undefined),
+      updateClientView: vi.fn(async () => undefined),
       createView: vi.fn(),
     };
     const panelView = new PanelView({
@@ -103,10 +106,10 @@ describe("PanelView app views", () => {
         cleanupPanelAccess: vi.fn(),
       },
       panelOrchestrator: {},
-      appPreloadPath: "/app-preload.js",
+      clientPreloadPath: "/app-preload.js",
     } as never);
 
-    await panelView.createViewForApp(
+    await panelView.createViewForClient(
       "@workspace-apps/shell",
       "http://127.0.0.1:1234/_a/new/index.html",
       undefined,
@@ -114,7 +117,7 @@ describe("PanelView app views", () => {
       { source: "apps/shell", effectiveVersion: "ev-new" }
     );
 
-    expect(viewManager.updateAppView).toHaveBeenCalledWith(
+    expect(viewManager.updateClientView).toHaveBeenCalledWith(
       "@workspace-apps/shell",
       "http://127.0.0.1:1234/_a/new/index.html",
       ["notifications"],
@@ -141,7 +144,7 @@ describe("PanelView app views", () => {
       getViewUrl: vi.fn(() => null),
       navigateView: vi.fn(async () => undefined),
       retryViewNavigation: vi.fn(async () => true),
-      updateAppView: vi.fn(async () => undefined),
+      updateClientView: vi.fn(async () => undefined),
       createView: vi.fn(() => ({ webContents })),
       getWebContents: vi.fn(() => webContents),
     };
@@ -160,10 +163,10 @@ describe("PanelView app views", () => {
         cleanupPanelAccess: vi.fn(),
       },
       panelOrchestrator: {},
-      appPreloadPath: "/app-preload.js",
+      clientPreloadPath: "/app-preload.js",
     } as never);
 
-    await panelView.createViewForApp("@workspace-apps/shell", url, undefined, ["panel-hosting"]);
+    await panelView.createViewForClient("@workspace-apps/shell", url, undefined, ["panel-hosting"]);
     webContents.emit("did-fail-load", {}, -3, "ERR_ABORTED", url, true);
     expect(warn).not.toHaveBeenCalled();
     expect(viewManager.retryViewNavigation).not.toHaveBeenCalled();
@@ -196,7 +199,7 @@ describe("PanelView app views", () => {
         hasView: vi.fn(() => false),
         getViewUrl: vi.fn(() => null),
         navigateView: vi.fn(async () => undefined),
-        updateAppView: vi.fn(async () => undefined),
+        updateClientView: vi.fn(async () => undefined),
         createView: vi.fn(() => ({ webContents })),
       },
       panelRegistry: { workspaceId: "workspace-test", findParentId: vi.fn(() => null) },
@@ -208,10 +211,10 @@ describe("PanelView app views", () => {
       },
       panelOrchestrator: {},
       onPreloadFailure,
-      appPreloadPath: "/app-preload.js",
+      clientPreloadPath: "/app-preload.js",
     } as never);
 
-    await panelView.createViewForApp("@workspace-apps/shell", url);
+    await panelView.createViewForClient("@workspace-apps/shell", url);
     webContents.emit("preload-error", {}, "/app-preload.js", new Error("missing app preload"));
 
     expect(onPreloadFailure).toHaveBeenCalledWith(

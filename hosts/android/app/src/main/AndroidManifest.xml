@@ -113,6 +113,48 @@
             android:exported="false" />
 
         <!--
+            Where the OS delivers what is meant for a client: vibestudio://c/...
+            links (pinned shortcuts) and text shared with Vibestudio. Shows
+            nothing; forwards to the host runtime, which routes it to the client
+            that declares the intent or accepts the type.
+        -->
+        <activity
+            android:name=".IngressActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="vibestudio" android:host="c" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/*" />
+            </intent-filter>
+        </activity>
+
+        <!-- The Ask tile and its prompt: a background intent, no client opens. -->
+        <service
+            android:name=".AskTileService"
+            android:label="@string/ask_tile_label"
+            android:icon="@drawable/ic_ask_tile"
+            android:exported="true"
+            android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter>
+                <action android:name="android.service.quicksettings.action.QS_TILE" />
+            </intent-filter>
+        </service>
+        <activity
+            android:name=".AskActivity"
+            android:theme="@android:style/Theme.DeviceDefault.Dialog"
+            android:excludeFromRecents="true"
+            android:exported="false" />
+
+        <!--
             Exact-device USB provisioning. `adb shell` holds DUMP; ordinary
             Android apps do not, so only the already-authorized desktop path
             can request immediate pairing without the in-app confirmation.

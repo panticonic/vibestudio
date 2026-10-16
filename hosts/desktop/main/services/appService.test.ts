@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { createTestServiceDispatcher } from "@vibestudio/shared/serviceDispatcherTestUtils";
-import { SHELL_SURFACE_KINDS } from "@vibestudio/shared/shellSurface";
 import { createAppService } from "./appService.js";
 
 vi.mock("electron", () => ({
@@ -17,18 +16,35 @@ vi.mock("electron", () => ({
   },
 }));
 
+const ALL_SURFACES = [
+  "settings",
+  "workspace-chooser",
+  "command-agent",
+  "about",
+  "panel-command",
+  "problem-report",
+] as const;
+
 function makeService() {
   const onOpenShellSurface = vi.fn();
-  const appOrchestrator = {
-    applyPendingAppUpdate: vi.fn(async () => true),
-    listPendingAppUpdates: vi.fn(() => [
-      { appId: "@workspace-apps/shell", url: "https://updates.example/app" },
+  const clientUpdates = {
+    apply: vi.fn(async () => true),
+    list: vi.fn(() => [
+      {
+        appId: "browser",
+        source: "clients/desktop-browser",
+        url: "vs-client://browser/bk2/",
+        buildKey: "bk2",
+        effectiveVersion: "2",
+        previousBuildKey: "bk1",
+        previousEffectiveVersion: "1",
+      },
     ]),
   };
   const viewManager = {
     getViewInfo: vi.fn((id: string) =>
-      id === "@workspace-apps/shell"
-        ? { type: "app", capabilities: ["open-external", "panel-hosting", "window-management"] }
+      id === "client:browser:web:dev"
+        ? { type: "client", capabilities: ["open-external", "panel-hosting", "theme", "devtools"] }
         : null
     ),
     openDevTools: vi.fn(),
@@ -47,22 +63,22 @@ function makeService() {
       getConnectionStatus: vi.fn(() => "connected"),
     } as never,
     getViewManager: () => viewManager as never,
-    getAppOrchestrator: () => appOrchestrator as never,
+    getClientUpdates: () => clientUpdates,
     connectionMode: "local",
-    shellSurfaces: () => SHELL_SURFACE_KINDS,
+    shellSurfaces: () => ALL_SURFACES,
     onOpenShellSurface,
   });
   const dispatcher = createTestServiceDispatcher();
   dispatcher.registerService(service);
   dispatcher.markInitialized();
-  return { service, dispatcher, viewManager, appOrchestrator, onOpenShellSurface };
+  return { service, dispatcher, viewManager, clientUpdates, onOpenShellSurface };
 }
 
 function appCaller() {
-  return createVerifiedCaller("@workspace-apps/shell", "app", {
-    callerId: "@workspace-apps/shell",
-    callerKind: "app",
-    repoPath: "apps/shell",
+  return createVerifiedCaller("client:browser:web:dev", "client", {
+    callerId: "client:browser:web:dev",
+    callerKind: "client",
+    repoPath: "clients/desktop-browser",
     effectiveVersion: "ev-shell",
     executionDigest: "a".repeat(64),
     requested: ["external.open", "open-external", "panel-hosting"].map((capability) => ({
@@ -75,13 +91,13 @@ function appCaller() {
 describe("createAppService", () => {
   it("allows a live user-origin shell to exercise app host capabilities", async () => {
     const { dispatcher } = makeService();
-    const shellCtx = { caller: createVerifiedCaller("shell", "shell") };
+    const hostCtx = { caller: createHostCaller("electron-main", "shell") };
 
     await expect(
-      dispatcher.dispatch(shellCtx, "app", "openExternal", ["https://example.com"])
+      dispatcher.dispatch(hostCtx, "app", "openExternal", ["https://example.com"])
     ).resolves.toBeUndefined();
     await expect(
-      dispatcher.dispatch(shellCtx, "app", "clearBuildCache", [])
+      dispatcher.dispatch(hostCtx, "app", "clearBuildCache", [])
     ).resolves.toBeUndefined();
   });
 
@@ -94,20 +110,20 @@ describe("createAppService", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("lets shell and panel-hosting apps apply queued app updates", async () => {
-    const { dispatcher, appOrchestrator } = makeService();
-    const shellCtx = { caller: createHostCaller("shell", "shell") };
+  it("lets the host and a panel-hosting client apply pending client updates", async () => {
+    const { dispatcher, clientUpdates } = makeService();
+    const shellCtx = { caller: createHostCaller("electron-main", "shell") };
     const appCtx = {
       caller: appCaller(),
     };
 
-    await expect(
-      dispatcher.dispatch(shellCtx, "app", "applyUpdate", ["@workspace-apps/shell"])
-    ).resolves.toEqual({ applied: true });
-    await expect(dispatcher.dispatch(appCtx, "app", "listPendingUpdates", [])).resolves.toEqual([
-      { appId: "@workspace-apps/shell", url: "https://updates.example/app" },
-    ]);
-    expect(appOrchestrator.applyPendingAppUpdate).toHaveBeenCalledWith("@workspace-apps/shell");
+    await expect(dispatcher.dispatch(shellCtx, "app", "applyUpdate", ["browser"])).resolves.toEqual(
+      { applied: true }
+    );
+    await expect(dispatcher.dispatch(appCtx, "app", "listPendingUpdates", [])).resolves.toEqual(
+      clientUpdates.list()
+    );
+    expect(clientUpdates.apply).toHaveBeenCalledWith("browser");
   });
 
   it("opens only typed shell-owned management surfaces for code callers", async () => {
@@ -166,7 +182,7 @@ describe("createAppService", () => {
     ).rejects.toThrow(/About page/);
     await expect(dispatcher.dispatch(codeCtx, "app", "describeShellSurfaces", [])).resolves.toEqual(
       {
-        surfaces: [...SHELL_SURFACE_KINDS],
+        surfaces: [...ALL_SURFACES],
       }
     );
   });

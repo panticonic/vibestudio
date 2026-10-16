@@ -1,12 +1,9 @@
 import { Menu, type MenuItemConstructorOptions } from "electron";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
-import { buildMethods } from "@vibestudio/service-schemas/build";
 import { menuMethods } from "@vibestudio/service-schemas/menu";
 import type { PanelOrchestrator } from "../panelOrchestrator.js";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { ViewManager } from "../viewManager.js";
-import type { ServerClient } from "../serverClient.js";
 import type { PanelContextMenuAction } from "@vibestudio/shared/types";
 import { buildPanelChromeState } from "@vibestudio/shared/panelChrome";
 import {
@@ -14,92 +11,38 @@ import {
   PANEL_CONTEXT_MENU_SECTIONS,
   type PanelCommandId,
 } from "@vibestudio/shared/panelCommands";
-import { getPanelSource } from "@vibestudio/shared/panel/accessors";
-import { buildHamburgerMenuTemplate } from "../menu.js";
-import { requireAppCapability } from "./appCapabilities.js";
+import { requireWindowCapability } from "./clientCapabilities.js";
+import type { ClientMenus } from "../clientMenu.js";
+import type { ClientWindows } from "../clientWindow.js";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 
 export function createMenuService(deps: {
   panelOrchestrator: PanelOrchestrator;
   panelRegistry: PanelRegistry;
   getViewManager: () => ViewManager;
-  serverClient: ServerClient | null;
+  clientWindows: Pick<ClientWindows, "byCaller">;
+  /** The menus clients contributed; the caller's own popup opens from here. */
+  menus: ClientMenus;
   getPanelWebContents: (panelId: string) => Electron.WebContents | null;
 }): ServiceDefinition {
-  const serverClient = deps.serverClient;
-  const buildClient = serverClient
-    ? createTypedServiceClient("build", buildMethods, (svc, m, a) => serverClient.call(svc, m, a))
-    : null;
   return {
     name: "menu",
     description: "Native menus",
-    // Hosted workspace chrome reaches Electron through its host-attributed
-    // shell session. The capability gate below still binds that host origin to
-    // the live, admitted chrome view.
     authority: { principals: ["user", "host", "code"] },
     methods: menuMethods,
     handler: defineServiceHandler("menu", menuMethods, {
       showHamburger: (ctx, [position]) => {
-        const vm = deps.getViewManager();
-        requireAppCapability(ctx, vm, "native-menus", "menu.showHamburger");
-        const lifecycle = deps.panelOrchestrator;
-        const registry = deps.panelRegistry;
-        const shellContents = vm.getShellWebContents();
-
-        const clearBuildCache = async () => {
-          if (buildClient) {
-            try {
-              await buildClient.recompute();
-            } catch (e) {
-              console.warn("[App] Build recompute failed:", e);
-            }
-          }
-          try {
-            lifecycle.invalidateReadyPanels();
-          } catch (error) {
-            console.warn("[App] Failed to invalidate panel states:", error);
-          }
-          console.log("[App] Build cache cleared via hamburger menu");
-        };
-
-        const template = buildHamburgerMenuTemplate(shellContents, clearBuildCache, {
-          onHistoryBack: () => {
-            const panelId = registry.getFocusedPanelId();
-            const panel = panelId ? registry.getPanel(panelId) : null;
-            if (!panelId || !panel) return;
-            const contents = deps.getPanelWebContents(panelId);
-            if (
-              getPanelSource(panel).startsWith("browser:") &&
-              contents?.navigationHistory.canGoBack()
-            ) {
-              contents.navigationHistory.goBack();
-              return;
-            }
-            // Through the orchestrator: server write + imperative view rebuild.
-            void lifecycle.navigatePanelHistory(panelId, -1);
-          },
-          onHistoryForward: () => {
-            const panelId = registry.getFocusedPanelId();
-            const panel = panelId ? registry.getPanel(panelId) : null;
-            if (!panelId || !panel) return;
-            const contents = deps.getPanelWebContents(panelId);
-            if (
-              getPanelSource(panel).startsWith("browser:") &&
-              contents?.navigationHistory.canGoForward()
-            ) {
-              contents.navigationHistory.goForward();
-              return;
-            }
-            void lifecycle.navigatePanelHistory(panelId, 1);
-          },
-        });
-        const menu = Menu.buildFromTemplate(template);
-        menu.popup({ window: vm.getWindow(), x: position.x, y: position.y });
+        requireWindowCapability(ctx, deps.clientWindows, "native-menus", "menu.showHamburger");
+        const window = deps.clientWindows.byCaller(ctx.caller.runtime.id);
+        const native = window?.browserWindow();
+        if (!window || !native) throw new Error("The calling client has no open window");
+        deps.menus.popup(window.windowId, native, position);
         return;
       },
       showContext: (ctx, [items, position]) => {
-        const vm = deps.getViewManager();
-        requireAppCapability(ctx, vm, "native-menus", "menu.showContext");
+        requireWindowCapability(ctx, deps.clientWindows, "native-menus", "menu.showContext");
+        const native = deps.clientWindows.byCaller(ctx.caller.runtime.id)?.browserWindow();
+        if (!native) throw new Error("The calling client has no open window");
         return new Promise<string | null>((resolve) => {
           const template: MenuItemConstructorOptions[] = items.map((item) => ({
             label: item.label,
@@ -107,7 +50,7 @@ export function createMenuService(deps: {
           }));
           const menu = Menu.buildFromTemplate(template);
           menu.popup({
-            window: vm.getWindow(),
+            window: native,
             x: position.x,
             y: position.y,
             callback: () => resolve(null),
@@ -116,7 +59,7 @@ export function createMenuService(deps: {
       },
       showPanelContext: (ctx, [panelId, position, presentation]) => {
         const vm = deps.getViewManager();
-        requireAppCapability(ctx, vm, "native-menus", "menu.showPanelContext");
+        requireWindowCapability(ctx, deps.clientWindows, "native-menus", "menu.showPanelContext");
         const lifecycle = deps.panelOrchestrator;
         const registry = deps.panelRegistry;
         const panel = registry.getPanel(panelId);

@@ -38,7 +38,6 @@ import {
   FRAME_HEAD,
 } from "@vibestudio/rpc/protocol/streamCodec";
 import {
-  createHostCaller,
   createVerifiedCaller,
   type ServiceDispatcher,
   type VerifiedCodeIdentity,
@@ -50,7 +49,7 @@ import {
   type ResolveUiRuntime,
 } from "./uiSessions.js";
 export type { NativeIpcCaller, WorkspaceIpcRuntime, ResolveUiRuntime } from "./uiSessions.js";
-import type { PanelSession, ServerClient } from "./serverClient.js";
+import type { PanelSession, ScopedServerCaller, ServerClient } from "./serverClient.js";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
 import { createIpcResponsivenessReporter } from "./ipcResponsiveness.js";
 import { SESSION_CONNECTION_LOST_CODE } from "@vibestudio/rpc/protocol/remoteSession";
@@ -75,14 +74,13 @@ function panelRuntimeConnectionKey(conn: PanelRuntimeConnection): string {
   return `${conn.runtimeEntityId}\u0000${conn.connectionId}`;
 }
 
+/** A renderer is never a host: it runs under its own principal and sealed code identity. */
 function localVerifiedCaller(
   callerId: string,
   callerKind: CallerKind,
   code: VerifiedCodeIdentity | null
 ) {
-  return callerKind === "shell"
-    ? createHostCaller(callerId, "shell")
-    : createVerifiedCaller(callerId, callerKind, code);
+  return createVerifiedCaller(callerId, callerKind, code);
 }
 
 function envelopeFor(
@@ -113,21 +111,9 @@ function callOptionsFromEnvelope(envelope: RpcEnvelope): RpcCallOptions | undefi
   return options.destination || options.idempotencyKey || options.readOnly ? options : undefined;
 }
 
-function callServer(
-  serverClient: ServerClient,
-  service: string,
-  method: string,
-  args: unknown[],
-  options: RpcCallOptions | undefined
-): Promise<unknown> {
-  return options
-    ? serverClient.call(service, method, args, options)
-    : serverClient.call(service, method, args);
-}
-
 function callServerAs(
   serverClient: ServerClient,
-  caller: { callerId: string; callerKind: CallerKind },
+  caller: ScopedServerCaller,
   service: string,
   method: string,
   args: unknown[],
@@ -147,7 +133,8 @@ export interface IpcDispatcherDeps {
   dispatcher: ServiceDispatcher;
   /** Server client for forwarding server-service calls */
   serverClient: ServerClient;
-  getShellWebContents: () => WebContents | null;
+  /** The web contents of the panel-hosting client, where panel events and shell-addressed events go. */
+  getChromeWebContents: () => WebContents | null;
   resolveCallerForWebContents: (webContentsId: number) => NativeIpcCaller | null;
   resolveWorkspaceRuntime?: (
     workspaceId: string
@@ -160,7 +147,7 @@ export interface IpcDispatcherDeps {
    * per-panel relay session. Undefined until the panel's runtime lease exists.
    */
   getPanelRuntimeConnection?: (panelId: string) => PanelRuntimeConnection | undefined;
-  authorizeAppServerCall?: (
+  authorizeClientServerCall?: (
     callerId: string,
     service: string,
     method: string,
@@ -182,7 +169,11 @@ export class IpcDispatcher {
   private readonly uiSessions: UiSessions;
   private readonly uiStreamRelays = new Map<string, BridgeStreamRelay>();
   private readonly uiDestroyHooked = new Set<number>();
-  private readonly appMessageBridges = new Map<string, () => void>();
+  /** Per client window: its server-message bridge and the release of its principal session. */
+  private readonly clientMessageBridges = new Map<
+    string,
+    { unsubscribe: () => void; release: () => Promise<void> }
+  >();
   /** One relay session per panel principal (callerId = panel view id). */
   private readonly panelSessions = new Map<string, Promise<PanelSessionEntry>>();
   /** webContents ids with a destroy teardown attached (so we attach it once). */
@@ -263,7 +254,7 @@ export class IpcDispatcher {
       if (event.senderFrame !== event.sender.mainFrame)
         throw new Error("RPC requires the top-level document");
       const owner = this.deps.resolveCallerForWebContents(event.sender.id);
-      if (owner?.callerKind === "app") {
+      if (owner?.callerKind === "client") {
         return this.uiSessions
           .require(
             owner,
@@ -309,7 +300,7 @@ export class IpcDispatcher {
     });
     ipcMain.handle("vibestudio:rpc:stream-body-chunk", (event, msg: BridgeBodyChunk) => {
       const owner = this.deps.resolveCallerForWebContents(event.sender.id);
-      if (owner?.callerKind === "app") {
+      if (owner?.callerKind === "client") {
         const relay = this.uiStreamRelays.get(owner.callerId);
         if (!relay) throw new Error("No admitted workspace UI upload stream");
         return relay.pushBodyChunk(msg);
@@ -390,7 +381,7 @@ export class IpcDispatcher {
           await this.handleEnvelope(
             sender,
             caller.callerId,
-            "shell",
+            "client",
             envelope,
             workspaceRuntime!,
             caller.runtimeId ?? caller.callerId
@@ -451,7 +442,7 @@ export class IpcDispatcher {
       this.relayPanelEnvelope(sender, caller.callerId, envelope, runtime);
       return;
     }
-    if (caller.callerKind !== "shell" && caller.callerKind !== "app") {
+    if (caller.callerKind !== "client") {
       console.warn(
         `[IpcDispatcher] Rejecting vibestudio:rpc:send from unauthorized sender ` +
           `(webContentsId=${sender.id}, kind=${caller.callerKind})`
@@ -459,21 +450,15 @@ export class IpcDispatcher {
       this.rejectRequestEnvelope(sender, envelope, "This sender is not authorized for RPC.");
       return;
     }
-    if (caller.callerKind === "app") {
-      this.ensureAppMessageBridge(caller.callerId, runtime, caller.runtimeId ?? caller.callerId);
-    }
+    this.ensureClientMessageBridge(caller.callerId, runtime, caller.runtimeId ?? caller.callerId);
     if (envelope.target !== "main") {
-      if (caller.callerKind !== "app") {
-        this.rejectRequestEnvelope(
-          sender,
-          envelope,
-          "Only a hosted workspace app can address workspace runtime targets."
-        );
-        return;
-      }
       void runtime.serverClient
         .sendAs(
-          { callerId: caller.runtimeId ?? caller.callerId, callerKind: caller.callerKind },
+          {
+            callerId: caller.runtimeId ?? caller.callerId,
+            callerKind: caller.callerKind,
+            instanceId: caller.callerId,
+          },
           stampEnvelopeCaller(envelope, {
             callerId: caller.runtimeId ?? caller.callerId,
             callerKind: caller.callerKind,
@@ -552,7 +537,7 @@ export class IpcDispatcher {
       {
         caller: localVerifiedCaller(
           caller.callerId,
-          caller.callerKind === "app" ? "shell" : caller.callerKind,
+          caller.callerKind,
           this.deps.getCodeIdentityForCaller?.(caller.callerId) ?? null
         ),
         requestId: request.requestId,
@@ -625,8 +610,8 @@ export class IpcDispatcher {
     this.uiStreamRelays.clear();
     await this.uiSessions.close();
 
-    for (const unsubscribe of this.appMessageBridges.values()) unsubscribe();
-    this.appMessageBridges.clear();
+    for (const bridge of this.clientMessageBridges.values()) bridge.unsubscribe();
+    this.clientMessageBridges.clear();
 
     for (const active of this.activeIpcStreams.values()) {
       active.abort.abort();
@@ -727,7 +712,7 @@ export class IpcDispatcher {
   /** Relay an authenticated workspace session's event to its shell UI client. */
   sendEventToShell(workspaceId: string, event: string, payload: unknown): void {
     if (this.shuttingDown) return;
-    const wc = this.deps.getShellWebContents();
+    const wc = this.deps.getChromeWebContents();
     if (wc && !wc.isDestroyed()) {
       wc.send(
         "vibestudio:rpc:message",
@@ -839,17 +824,9 @@ export class IpcDispatcher {
         } else {
           // Server is the default owner so newly registered userland/workerd
           // services are reachable without a shared routing-list update.
-          if (callerKind === "shell") {
-            // electron-main / bootstrap launch gate are native-host `shell`
-            // principals — they reach the server on the admin connection.
-            // Hosted workspace chrome is an `app` and takes the app branch
-            // below; there is no longer a shell→app panelTree proxy.
-            result = await forwardServerCall(() =>
-              callServer(runtime.serverClient, service, method, req.args, callOptions)
-            );
-          } else if (callerKind === "app") {
+          if (callerKind === "client") {
             try {
-              this.deps.authorizeAppServerCall?.(callerId, service, method, req.args);
+              this.deps.authorizeClientServerCall?.(callerId, service, method, req.args);
             } catch (cause) {
               const message = formatRpcFailure(cause);
               const code = (cause as { code?: unknown } | null)?.code;
@@ -863,7 +840,7 @@ export class IpcDispatcher {
             result = await forwardServerCall(() =>
               callServerAs(
                 runtime.serverClient,
-                { callerId: runtimeId, callerKind },
+                { callerId: runtimeId, callerKind, instanceId: callerId },
                 service,
                 method,
                 req.args,
@@ -1060,19 +1037,10 @@ export class IpcDispatcher {
           throw new Error(`Streaming method ${request.method} did not return a Response`);
         }
         response = result;
-      } else if (callerKind === "shell") {
-        response = await runtime.serverClient.stream(service, method, request.args, {
-          signal: abort.signal,
-          ...(envelope.destination ? { destination: envelope.destination } : {}),
-          ...(envelope.delivery.idempotencyKey
-            ? { idempotencyKey: envelope.delivery.idempotencyKey }
-            : {}),
-          ...(envelope.delivery.readOnly ? { readOnly: true } : {}),
-        });
-      } else if (callerKind === "app") {
-        this.deps.authorizeAppServerCall?.(callerId, service, method, request.args);
+      } else if (callerKind === "client") {
+        this.deps.authorizeClientServerCall?.(callerId, service, method, request.args);
         response = await runtime.serverClient.streamAs(
-          { callerId: runtimeId, callerKind },
+          { callerId: runtimeId, callerKind, instanceId: callerId },
           service,
           method,
           request.args,
@@ -1253,7 +1221,7 @@ export class IpcDispatcher {
         log.warn(`Rejected non-event envelope addressed to local shell from ${callerId}`);
         return;
       }
-      const shell = this.deps.getShellWebContents();
+      const shell = this.deps.getChromeWebContents();
       if (shell && !shell.isDestroyed()) {
         shell.send(
           "vibestudio:rpc:message",
@@ -1374,20 +1342,33 @@ export class IpcDispatcher {
     return opening.then((entry) => entry.session);
   }
 
-  private ensureAppMessageBridge(
+  /** One window's own session of its client principal delivers server messages to that window. */
+  private ensureClientMessageBridge(
     callerId: string,
     runtime: WorkspaceIpcRuntime,
     runtimeId: string
   ): void {
-    if (this.appMessageBridges.has(callerId)) return;
-    const unsubscribe = runtime.serverClient.addMessageListener(
-      { callerId: runtimeId, callerKind: "app" },
-      (envelope) => {
-        const wc = this.deps.getWebContentsForCaller(callerId);
-        if (!wc || wc.isDestroyed()) return;
-        wc.send("vibestudio:rpc:message", envelope);
-      }
-    );
-    this.appMessageBridges.set(callerId, unsubscribe);
+    if (this.clientMessageBridges.has(callerId)) return;
+    const scoped = { callerId: runtimeId, callerKind: "client" as const, instanceId: callerId };
+    const unsubscribe = runtime.serverClient.addMessageListener(scoped, (envelope) => {
+      const wc = this.deps.getWebContentsForCaller(callerId);
+      if (!wc || wc.isDestroyed()) return;
+      wc.send("vibestudio:rpc:message", envelope);
+    });
+    this.clientMessageBridges.set(callerId, {
+      unsubscribe,
+      release: () => runtime.serverClient.releaseClientSession(scoped),
+    });
+  }
+
+  /**
+   * A client window is gone: end every session it held, its UI sessions and
+   * its own session of the client principal, and stop delivering to it.
+   */
+  async releaseClientWindow(callerId: string): Promise<void> {
+    const bridge = this.clientMessageBridges.get(callerId);
+    this.clientMessageBridges.delete(callerId);
+    bridge?.unsubscribe();
+    await Promise.all([this.revokeUiCaller(callerId), bridge?.release()]);
   }
 }

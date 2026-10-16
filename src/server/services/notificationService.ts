@@ -103,10 +103,7 @@ export function createNotificationService(deps: NotificationServiceDeps): {
     }
   };
 
-  type NotificationOwner = (
-    | { kind: "caller"; runtimeKey: string }
-    | { kind: "host" }
-  ) & {
+  type NotificationOwner = ({ kind: "caller"; runtimeKey: string } | { kind: "host" }) & {
     targetUserId?: string;
     /** Actions that take reply text (`input: "text"`). */
     textActions: ReadonlySet<string>;

@@ -11,7 +11,6 @@
  * abstractions for cross-process wiring.
  */
 
-import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import type { CapabilityScope } from "@vibestudio/rpc";
 import type { PanelLifecycleResult, PanelPlacementHint } from "./types.js";
 
@@ -110,19 +109,6 @@ export interface PanelViewLike {
   createViewForPanel(panelId: string, url: string, contextId?: string): Promise<void>;
   /** Refresh the authority identity retained by an existing code view without navigating it. */
   updatePanelCodeIdentity(panelId: string): void;
-  createViewForApp?(
-    appId: string,
-    url: string,
-    contextId?: string,
-    capabilities?: readonly ClientCapability[],
-    identity?: HostedCodeIdentity
-  ): Promise<void>;
-  updateAppView?(
-    appId: string,
-    url: string,
-    capabilities?: readonly ClientCapability[],
-    identity?: HostedCodeIdentity
-  ): Promise<void>;
   createViewForBrowser?(
     panelId: string,
     url: string,

@@ -155,6 +155,60 @@ function declareAndAttachPanelSlot(
 }
 import { BaseWindow, WebContentsView, ipcMain, webContents } from "electron";
 
+function testChromeOptions() {
+  return {
+    shellOverlayPreload: "/path/to/shellOverlayPreload.js",
+    contentOverlayPreload: "/path/to/contentOverlayPreload.js",
+    chromeShortcuts: { intercept: vi.fn(), isChromeOwned: vi.fn(() => false) },
+  };
+}
+
+/**
+ * Overlay surfaces are prewarmed per surface once chrome is ready, so the most
+ * recently constructed view is not necessarily the one a surface shows in.
+ * Find a surface's view by the document it was asked to load.
+ */
+function viewForSurface(surface: string) {
+  const overlays = (WebContentsView as unknown as Mock).mock.results
+    .map((result) => result.value)
+    .filter((view) =>
+      (view.setBackgroundColor as Mock).mock.calls.some(([c]) => c === "#00000000")
+    );
+  const loaded = overlays.find((view) =>
+    (view.webContents.loadURL as Mock).mock.calls.some(([url]) =>
+      String(url).endsWith(`#overlaySurface=${surface}`)
+    )
+  );
+  // A surface whose document has not been navigated yet is identified by being
+  // the only shown overlay.
+  return loaded ?? overlays.find((view) => (view.setVisible as Mock).mock.lastCall?.[0] === true);
+}
+
+/** Deliver an overlay IPC message through every surface's registered handler. */
+function overlayIpcHandler(channel: string) {
+  return (event: { sender: { id: number } }, payload?: unknown) => {
+    for (const [name, handler] of (ipcMain.on as Mock).mock.calls) {
+      if (name === channel) (handler as (e: unknown, p?: unknown) => void)(event, payload);
+    }
+  };
+}
+
+/** Create the ready panel-hosting client view whose renderer owns window chrome. */
+function openChrome(manager: ViewManager) {
+  const id = "chrome-client";
+  manager.createView({
+    id,
+    workspaceIdentity: { workspaceId: "workspace-test", runtimeId: id },
+    type: "client",
+    hostChrome: true,
+    clientCapabilities: ["panel-hosting"],
+  });
+  manager.setHostedShellReady(id, true, "renderer-chrome");
+  const contents = manager.getWebContents(id);
+  if (!contents) throw new Error("chrome client has no web contents");
+  return contents;
+}
+
 type MockBaseWindow = InstanceType<typeof BaseWindow>;
 
 describe("ViewManager", () => {
@@ -170,8 +224,7 @@ describe("ViewManager", () => {
     it("keeps a workspace's granted chrome admission independent of other loaded manifests", async () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
       const id = 'workspace:["system","@workspace-apps/shell"]';
       // A different workspace's manifest is not the native view's authority.
@@ -179,84 +232,63 @@ describe("ViewManager", () => {
         vm.createView({
           id,
           workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
-          type: "app",
+          type: "client",
           hostChrome: true,
-          appCapabilities: ["panel-hosting"],
+          clientCapabilities: ["panel-hosting"],
           codeIdentity: { source: "apps/shell", effectiveVersion: "first" },
         });
         expect(vm.getViewInfo(id)?.hostChrome).toBe(true);
-        await vm.updateAppView(id, "http://localhost/second", ["panel-hosting"], {
+        await vm.updateClientView(id, "http://localhost/second", ["panel-hosting"], {
           source: "apps/shell",
           effectiveVersion: "second",
         });
         expect(vm.getViewInfo(id)?.hostChrome).toBe(true);
-        await vm.updateAppView(id, "http://localhost/third", [], {
+        await vm.updateClientView(id, "http://localhost/third", [], {
           source: "apps/shell",
           effectiveVersion: "third",
         });
         expect(vm.getViewInfo(id)?.hostChrome).toBe(false);
-        vm.createView({ id: "ordinary-app", type: "app", hostChrome: true, appCapabilities: [] });
+        vm.createView({
+          id: "ordinary-app",
+          type: "client",
+          hostChrome: true,
+          clientCapabilities: [],
+        });
         expect(vm.getViewInfo("ordinary-app")?.hostChrome).toBe(false);
       } finally {
         vm.destroy();
       }
     });
-    it("creates shell view on construction", () => {
-      const vm = new ViewManager({
-        window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
-      });
-
-      expect(WebContentsView).toHaveBeenCalled();
-      expect(mockWindow.contentView.addChildView).toHaveBeenCalled();
-      expect(vm.hasView("shell")).toBe(true);
-    });
-
-    it("opens devtools when devTools option is true", () => {
-      const vm = new ViewManager({
-        window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
-        devTools: true,
-      });
-
-      const shellContents = vm.getShellWebContents();
-      expect(shellContents.openDevTools).toHaveBeenCalled();
-    });
-
     it("keeps host chrome and hidden panel boot runtimes schedulable", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
 
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.createView({ id: "panel-1", type: "panel" });
 
       const calls = (WebContentsView as unknown as Mock).mock.calls;
+      expect(calls[0]?.[0]?.webPreferences?.backgroundThrottling).toBe(false);
       expect(calls[1]?.[0]?.webPreferences?.backgroundThrottling).toBe(false);
-      expect(calls[2]?.[0]?.webPreferences?.backgroundThrottling).toBe(false);
       const results = (WebContentsView as unknown as Mock).mock.results;
+      expect(results[0]?.value.webContents.setBackgroundThrottling).toHaveBeenCalledWith(false);
       expect(results[1]?.value.webContents.setBackgroundThrottling).toHaveBeenCalledWith(false);
-      expect(results[2]?.value.webContents.setBackgroundThrottling).toHaveBeenCalledWith(false);
     });
 
     it("destroys content overlay IPC listeners with the manager", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
-      const shellContents = vm.getShellWebContents();
+      const shellContents = openChrome(vm);
       (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
       // Overlay instances are created per surface on first show, so there are
       // no listeners to remove until a surface has actually been used.
@@ -286,11 +318,10 @@ describe("ViewManager", () => {
     it("keeps one instance per surface so the approval card survives quickfire", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
-      const shellContents = vm.getShellWebContents();
+      const shellContents = openChrome(vm);
       (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
       const bounds = { x: 0, y: 0, width: 800, height: 600 };
 
@@ -300,8 +331,7 @@ describe("ViewManager", () => {
         props: { approvalId: "approval-1" },
         theme: { appearance: "light" },
       });
-      const results = (WebContentsView as unknown as Mock).mock.results;
-      const cardView = results[results.length - 1]?.value;
+      const cardView = viewForSurface("approval-card");
 
       vm.showContentOverlay({
         surface: "quickfire",
@@ -309,7 +339,7 @@ describe("ViewManager", () => {
         props: { mode: "all" },
         theme: { appearance: "light" },
       });
-      const quickfireView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
+      const quickfireView = viewForSurface("quickfire");
 
       // Two distinct native views, each loading its own surface — showing the
       // second must not replace the surface loaded in the first.
@@ -336,11 +366,10 @@ describe("ViewManager", () => {
     it("keeps blocking consent focused above quickfire and restores quickfire afterward", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
-      const shellContents = vm.getShellWebContents();
+      const shellContents = openChrome(vm);
       (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
       const bounds = { x: 0, y: 0, width: 800, height: 600 };
 
@@ -351,7 +380,7 @@ describe("ViewManager", () => {
         theme: { appearance: "light" },
         focus: "take",
       });
-      const quickfireView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
+      const quickfireView = viewForSurface("quickfire");
       vm.showContentOverlay({
         surface: "approval-card",
         bounds,
@@ -359,7 +388,7 @@ describe("ViewManager", () => {
         theme: { appearance: "light" },
         focus: "take",
       });
-      const approvalView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
+      const approvalView = viewForSurface("approval-card");
       const readyHandlers = (ipcMain.on as Mock).mock.calls
         .filter(([channel]) => channel === "vibestudio:content-overlay:ready")
         .map(([, handler]) => handler as (event: { sender: { id: number } }) => void);
@@ -401,11 +430,10 @@ describe("ViewManager", () => {
     it("routes an update to the named surface only", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
-      const shellContents = vm.getShellWebContents();
+      const shellContents = openChrome(vm);
       (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
       const bounds = { x: 0, y: 0, width: 800, height: 600 };
       vm.showContentOverlay({
@@ -414,14 +442,14 @@ describe("ViewManager", () => {
         props: { approvalId: "approval-1" },
         theme: { appearance: "light" },
       });
-      const cardView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
+      const cardView = viewForSurface("approval-card");
       vm.showContentOverlay({
         surface: "quickfire",
         bounds,
         props: { mode: "all" },
         theme: { appearance: "light" },
       });
-      const quickfireView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
+      const quickfireView = viewForSurface("quickfire");
       const readyHandlers = (ipcMain.on as Mock).mock.calls
         .filter(([channel]) => channel === "vibestudio:content-overlay:ready")
         .map(([, handler]) => handler as (event: { sender: { id: number } }) => void);
@@ -444,9 +472,8 @@ describe("ViewManager", () => {
     it("ignores an update or hide for a surface that was never shown", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
       expect(() => vm.updateContentOverlay("quickfire", { props: {} })).not.toThrow();
       expect(() => vm.hideContentOverlay("quickfire")).not.toThrow();
@@ -459,8 +486,7 @@ describe("ViewManager", () => {
     beforeEach(() => {
       vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
     });
 
@@ -520,9 +546,8 @@ describe("ViewManager", () => {
     it("creates a bounded overlay view above panel views", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         shellOverlayPreload: "/path/to/shellOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
 
@@ -555,11 +580,10 @@ describe("ViewManager", () => {
     it("lets an unbidden overlay yield focus to recent typing but not an explicit request", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
-      const shellContents = vm.getShellWebContents();
+      const shellContents = openChrome(vm);
       (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
       for (const [event, listener] of (shellContents.on as Mock).mock.calls) {
         if (event === "before-input-event") listener({}, { type: "keyDown", key: "h" });
@@ -574,10 +598,8 @@ describe("ViewManager", () => {
           focus,
         });
       show("unless-typing");
-      const overlayView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
-      const readyHandler = (ipcMain.on as Mock).mock.calls.find(
-        ([channel]) => channel === "vibestudio:content-overlay:ready"
-      )?.[1] as (event: { sender: { id: number } }, payload: unknown) => void;
+      const overlayView = viewForSurface("approval-card");
+      const readyHandler = overlayIpcHandler("vibestudio:content-overlay:ready");
       readyHandler(
         { sender: { id: overlayView.webContents.id } },
         { url: "file:///shell/index.html#overlaySurface=approval-card" }
@@ -591,11 +613,10 @@ describe("ViewManager", () => {
     it("applies content overlay focus after the first surface load completes", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
-      const shellContents = vm.getShellWebContents();
+      const shellContents = openChrome(vm);
       (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
 
       vm.showContentOverlay({
@@ -606,8 +627,7 @@ describe("ViewManager", () => {
         focus: "take",
       });
 
-      const results = (WebContentsView as unknown as Mock).mock.results;
-      const overlayView = results[results.length - 1]?.value;
+      const overlayView = viewForSurface("approval-card");
       expect(overlayView).toBeTruthy();
       expect(overlayView.webContents.loadURL).toHaveBeenCalledWith(
         "file:///shell/index.html#overlaySurface=approval-card"
@@ -619,9 +639,7 @@ describe("ViewManager", () => {
       )?.[1] as (() => void) | undefined;
       expect(didFinishLoad).toEqual(expect.any(Function));
 
-      const readyHandler = (ipcMain.on as Mock).mock.calls.find(
-        ([channel]) => channel === "vibestudio:content-overlay:ready"
-      )?.[1] as ((event: { sender: { id: number } }, payload: unknown) => void) | undefined;
+      const readyHandler = overlayIpcHandler("vibestudio:content-overlay:ready");
       expect(readyHandler).toEqual(expect.any(Function));
 
       readyHandler?.(
@@ -646,11 +664,10 @@ describe("ViewManager", () => {
     it("applies a reopened overlay focus request after its final stacking pass", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
-      const shellContents = vm.getShellWebContents();
+      const shellContents = openChrome(vm);
       (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
 
       const options = {
@@ -662,10 +679,8 @@ describe("ViewManager", () => {
       };
       vm.showContentOverlay(options);
 
-      const overlayView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
-      const readyHandler = (ipcMain.on as Mock).mock.calls.find(
-        ([channel]) => channel === "vibestudio:content-overlay:ready"
-      )?.[1] as ((event: { sender: { id: number } }, payload: unknown) => void) | undefined;
+      const overlayView = viewForSurface("quickfire");
+      const readyHandler = overlayIpcHandler("vibestudio:content-overlay:ready");
       readyHandler?.(
         { sender: { id: overlayView.webContents.id } },
         { url: "file:///shell/index.html#overlaySurface=quickfire" }
@@ -688,16 +703,15 @@ describe("ViewManager", () => {
     it("prewarms quickfire when the hosted shell becomes ready", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
       const hostedShellView = vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       (hostedShellView.webContents.getURL as unknown as Mock).mockReturnValue(
         "file:///hosted-shell/index.html"
@@ -717,16 +731,15 @@ describe("ViewManager", () => {
     it("attributes content overlays only to their live hosted-shell owner", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
       const hostedShellView = vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       (hostedShellView.webContents.getURL as unknown as Mock).mockReturnValue(
         "file:///hosted-shell/index.html"
@@ -755,18 +768,17 @@ describe("ViewManager", () => {
     it("reports the user-visible handoff when the hosted shell becomes ready", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
       const ready = vi.fn();
       vm.onHostedShellReady(ready);
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
@@ -777,11 +789,10 @@ describe("ViewManager", () => {
     it("retries surface navigation after the hosted-shell URL becomes available", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
-      const shellContents = vm.getShellWebContents();
+      const shellContents = openChrome(vm);
       (shellContents.getURL as unknown as Mock).mockReturnValue("");
 
       vm.showContentOverlay({
@@ -790,7 +801,7 @@ describe("ViewManager", () => {
         props: { mode: "all" },
         theme: { appearance: "light" },
       });
-      const overlayView = (WebContentsView as unknown as Mock).mock.results.at(-1)?.value;
+      const overlayView = viewForSurface("quickfire");
       expect(overlayView.webContents.loadURL).not.toHaveBeenCalled();
 
       (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
@@ -804,17 +815,16 @@ describe("ViewManager", () => {
     it("forwards an outside pointer press without consuming the clicked view's event", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       const hostedShellView = vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       (hostedShellView.webContents.getURL as unknown as Mock).mockReturnValue(
         "file:///hosted-shell/index.html"
@@ -844,11 +854,10 @@ describe("ViewManager", () => {
     it("keeps content overlays top-left anchored while expanding to reported content size", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
-      const shellContents = vm.getShellWebContents();
+      const shellContents = openChrome(vm);
       (shellContents.getURL as unknown as Mock).mockReturnValue("file:///shell/index.html");
 
       vm.showContentOverlay({
@@ -858,8 +867,7 @@ describe("ViewManager", () => {
         theme: { appearance: "light" },
       });
 
-      const results = (WebContentsView as unknown as Mock).mock.results;
-      const overlayView = results[results.length - 1]?.value;
+      const overlayView = viewForSurface("approval-card");
       expect(overlayView).toBeTruthy();
       expect(overlayView.setBounds).toHaveBeenCalledWith({
         x: 32,
@@ -868,9 +876,7 @@ describe("ViewManager", () => {
         height: 64,
       });
 
-      const sizeHandler = (ipcMain.on as Mock).mock.calls.find(
-        ([channel]) => channel === "vibestudio:content-overlay:size"
-      )?.[1] as ((event: { sender: { id: number } }, payload: unknown) => void) | undefined;
+      const sizeHandler = overlayIpcHandler("vibestudio:content-overlay:size");
       expect(sizeHandler).toEqual(expect.any(Function));
 
       sizeHandler?.({ sender: { id: overlayView.webContents.id } }, { width: 620, height: 240 });
@@ -895,17 +901,16 @@ describe("ViewManager", () => {
     it("keeps a visible content overlay above a panel appended later", () => {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
+        ...testChromeOptions(),
         contentOverlayPreload: "/path/to/contentOverlayPreload.js",
-        shellHtmlPath: "/path/to/index.html",
       });
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
       const hostedShellView = vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
       declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
@@ -924,8 +929,7 @@ describe("ViewManager", () => {
         theme: { appearance: "dark" },
       });
 
-      const results = (WebContentsView as unknown as Mock).mock.results;
-      const overlayView = results[results.length - 1]?.value;
+      const overlayView = viewForSurface("approval-card");
       const children = mockWindow.contentView.children as unknown[];
       expect(children.indexOf(overlayView)).toBeGreaterThan(children.indexOf(panelView));
 
@@ -949,15 +953,14 @@ describe("ViewManager", () => {
     function harness(browser = false) {
       const vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
       const view = vm.createView({ id: "panel", type: "panel", browser });
       vm.setViewVisible("panel", true);
       return { vm, view };
     }
     function emit(
-      contents: ReturnType<ViewManager["getShellWebContents"]>,
+      contents: NonNullable<ReturnType<ViewManager["getWebContents"]>>,
       name: string,
       ...args: unknown[]
     ) {
@@ -969,9 +972,23 @@ describe("ViewManager", () => {
     it("admits browser and workspace media only while their panels are presented", () => {
       for (const browser of [false, true]) {
         const { vm, view } = harness(browser);
-        expect(nativeViewMayUsePermission(vm, view.webContents.id, "fullscreen")).toBe(true);
+        expect(
+          nativeViewMayUsePermission(
+            vm,
+            { byWebContents: () => null },
+            view.webContents.id,
+            "fullscreen"
+          )
+        ).toBe(true);
         vm.setViewVisible("panel", false);
-        expect(nativeViewMayUsePermission(vm, view.webContents.id, "fullscreen")).toBe(false);
+        expect(
+          nativeViewMayUsePermission(
+            vm,
+            { byWebContents: () => null },
+            view.webContents.id,
+            "fullscreen"
+          )
+        ).toBe(false);
       }
     });
 
@@ -979,10 +996,10 @@ describe("ViewManager", () => {
       const { vm, view } = harness();
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
-        type: "app",
+        type: "client",
         hostChrome: true,
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
         nativeSlotId: "primary",
@@ -1062,8 +1079,7 @@ describe("ViewManager", () => {
     beforeEach(() => {
       vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
     });
 
@@ -1072,9 +1088,9 @@ describe("ViewManager", () => {
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
@@ -1086,9 +1102,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.createView({ id: "panel-1", type: "panel" });
       vm.setHostedShellReady("@workspace-apps/shell", true, "renderer-1");
@@ -1132,9 +1148,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       const panelView = vm.createView({
         id: 'workspace:["workspace-test","panel-1"]',
@@ -1210,9 +1226,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       const connected = vm.connectNativePanelAdapter("@workspace-apps/shell", {
         sealedLaunchIdentity: "@workspace-apps/shell",
@@ -1261,9 +1277,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
@@ -1306,9 +1322,9 @@ describe("ViewManager", () => {
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       const panelView = vm.createView({ id: "panel-1", type: "panel" });
 
@@ -1338,9 +1354,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
       const bounds = { x: 267, y: 32, width: 933, height: 768 };
@@ -1363,9 +1379,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
       const request = {
@@ -1400,9 +1416,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
@@ -1461,9 +1477,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
       declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
@@ -1504,9 +1520,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true, "renderer-test");
       const first = {
@@ -1538,9 +1554,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true, "renderer-test");
       expect(
@@ -1559,9 +1575,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
 
@@ -1595,9 +1611,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
       declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
@@ -1643,9 +1659,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
       declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
@@ -1687,9 +1703,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true, "renderer-old");
       declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
@@ -1725,9 +1741,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
       declareAndAttachPanelSlot(vm, "@workspace-apps/shell", {
@@ -1767,9 +1783,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
@@ -1803,9 +1819,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
@@ -1835,9 +1851,9 @@ describe("ViewManager", () => {
       const shellView = vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
       vm.setViewVisible("panel-1", true);
@@ -1854,9 +1870,9 @@ describe("ViewManager", () => {
       const shell = vm.createView({
         id: "shell-app",
         workspaceIdentity: { workspaceId: "system", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       const changed = vi.fn();
       const focused = vi.fn();
@@ -1946,9 +1962,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       vm.setHostedShellReady("@workspace-apps/shell", true);
       vm.setShellOverlayActive(true);
@@ -1975,9 +1991,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
@@ -2004,9 +2020,9 @@ describe("ViewManager", () => {
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
@@ -2021,7 +2037,7 @@ describe("ViewManager", () => {
       expect(panelView.setVisible).toHaveBeenLastCalledWith(false);
       expect(hostView.setVisible).toHaveBeenLastCalledWith(false);
       expect(vm.isPanelSlotted("panel-1")).toBe(false);
-      expect(vm.getVisibleHostChromeAppId()).toBeNull();
+      expect(vm.getVisibleHostChromeClientId()).toBeNull();
     });
 
     it("keeps active slots when the hosted shell reasserts readiness", () => {
@@ -2029,9 +2045,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
@@ -2054,9 +2070,9 @@ describe("ViewManager", () => {
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
@@ -2079,16 +2095,15 @@ describe("ViewManager", () => {
       try {
         const localVm = new ViewManager({
           window: mockWindow,
-          shellPreload: "/path/to/preload.js",
-          shellHtmlPath: "/path/to/index.html",
+          ...testChromeOptions(),
         });
         const panelView = localVm.createView({ id: "panel-1", type: "panel" });
         const hostView = localVm.createView({
           id: "@workspace-apps/shell",
           workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-          type: "app",
+          type: "client",
           hostChrome: true,
-          appCapabilities: ["panel-hosting"],
+          clientCapabilities: ["panel-hosting"],
         });
 
         localVm.setHostedShellReady("@workspace-apps/shell", true);
@@ -2118,9 +2133,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
@@ -2164,9 +2179,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
@@ -2195,9 +2210,9 @@ describe("ViewManager", () => {
       vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
 
       vm.setHostedShellReady("@workspace-apps/shell", true);
@@ -2223,9 +2238,9 @@ describe("ViewManager", () => {
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       (hostView.webContents.executeJavaScript as Mock).mockResolvedValue([
         {
@@ -2287,8 +2302,7 @@ describe("ViewManager", () => {
     beforeEach(() => {
       vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
     });
 
@@ -2334,8 +2348,7 @@ describe("ViewManager", () => {
     beforeEach(() => {
       vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
     });
 
@@ -2475,7 +2488,7 @@ describe("ViewManager", () => {
     it("preserves existing keyboard focus on window activation", () => {
       const view = vm.createView({ id: "selected-panel", type: "panel" });
       vm.setViewVisible("selected-panel", true);
-      (webContents.getFocusedWebContents as Mock).mockReturnValueOnce(vm.getShellWebContents());
+      (webContents.getFocusedWebContents as Mock).mockReturnValueOnce(openChrome(vm));
       const onFocus = (mockWindow.on as Mock).mock.calls.find(([event]) => event === "focus")![1];
       onFocus();
       expect(view.webContents.focus).not.toHaveBeenCalled();
@@ -2490,7 +2503,7 @@ describe("ViewManager", () => {
         props: { approvalId: "approval-1" },
         theme: { appearance: "light" },
       });
-      const overlay = (WebContentsView as unknown as Mock).mock.results.at(-1)!.value;
+      const overlay = viewForSurface("approval-card");
       const onFocus = (mockWindow.on as Mock).mock.calls.find(([event]) => event === "focus")![1];
       onFocus();
       expect(overlay.webContents.focus).toHaveBeenCalledOnce();
@@ -2501,9 +2514,9 @@ describe("ViewManager", () => {
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       const panelView = vm.createView({
         id: "panel-1",
@@ -2527,29 +2540,10 @@ describe("ViewManager", () => {
       });
     });
 
-    it("keeps bootstrap launch gate above fallback panels until hosted shell is ready", () => {
-      const panelView = vm.createView({
-        id: "panel-1",
-        type: "panel",
-      });
-      const children = (mockWindow.contentView as unknown as { children: unknown[] }).children;
-      const matchingShellViews = (children as Array<{ webContents?: unknown }>).filter(
-        (view) => view.webContents === vm.getShellWebContents()
-      );
-      const shellView = matchingShellViews[matchingShellViews.length - 1];
-
-      vm.setViewVisible("panel-1", true);
-
-      expect(shellView).toBeDefined();
-      expect(children[children.length - 1]).toBe(shellView);
-      expect(children[children.length - 1]).not.toBe(panelView);
-    });
-
     it("keeps panel views laid out but natively hidden behind the bootstrap launch gate", () => {
       const gatedVm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
         hidePanelViewsUntilHostedShellReady: true,
       });
       const panelView = gatedVm.createView({
@@ -2576,9 +2570,9 @@ describe("ViewManager", () => {
       gatedVm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
       gatedVm.setHostedShellReady("@workspace-apps/shell", true);
       (panelView.setVisible as Mock).mockClear();
@@ -2614,24 +2608,22 @@ describe("ViewManager", () => {
       expect(panelView.setVisible).toHaveBeenLastCalledWith(true);
     });
 
-    it("opens devtools on the visible host chrome app instead of the bootstrap shell", () => {
+    it("opens devtools on the visible host chrome client", () => {
       const hostView = vm.createView({
         id: "@workspace-apps/shell",
         workspaceIdentity: { workspaceId: "workspace-test", runtimeId: "@workspace-apps/shell" },
-        type: "app",
+        type: "client",
         hostChrome: true,
-        appCapabilities: ["panel-hosting"],
+        clientCapabilities: ["panel-hosting"],
       });
-      const shellContents = vm.getShellWebContents();
 
-      expect(vm.openHostChromeAppDevTools()).toBe(false);
+      expect(vm.openHostChromeClientDevTools()).toBe(false);
 
       vm.setViewVisible("@workspace-apps/shell", true);
 
-      expect(vm.getVisibleHostChromeAppId()).toBe("@workspace-apps/shell");
-      expect(vm.openHostChromeAppDevTools()).toBe(true);
+      expect(vm.getVisibleHostChromeClientId()).toBe("@workspace-apps/shell");
+      expect(vm.openHostChromeClientDevTools()).toBe(true);
       expect(hostView.webContents.openDevTools).toHaveBeenCalledWith({ mode: "detach" });
-      expect(shellContents.openDevTools).not.toHaveBeenCalled();
     });
 
     it("ignores hiding a missing view", () => {
@@ -2659,8 +2651,7 @@ describe("ViewManager", () => {
     beforeEach(() => {
       vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
     });
 
@@ -2698,8 +2689,7 @@ describe("ViewManager", () => {
     beforeEach(() => {
       vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
     });
 
@@ -3044,8 +3034,7 @@ describe("ViewManager", () => {
     beforeEach(() => {
       vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
     });
 
@@ -3070,8 +3059,7 @@ describe("ViewManager", () => {
     beforeEach(() => {
       vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
     });
 
@@ -3137,8 +3125,7 @@ describe("ViewManager", () => {
       vi.useFakeTimers();
       vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
     });
 
@@ -3284,8 +3271,7 @@ describe("ViewManager", () => {
       capture.mockClear();
       vm = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
         headless: true,
       });
     });
@@ -3336,8 +3322,7 @@ describe("ViewManager", () => {
     it("captures a hidden desktop panel beneath the shell without promoting it", async () => {
       const desktop = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
       const shellView = mockWindow.contentView.children.at(-1)!;
       const view = desktop.createView({ id: "hidden-desktop-panel", type: "panel" });
@@ -3356,8 +3341,7 @@ describe("ViewManager", () => {
       vi.useFakeTimers();
       const desktop = new ViewManager({
         window: mockWindow,
-        shellPreload: "/path/to/preload.js",
-        shellHtmlPath: "/path/to/index.html",
+        ...testChromeOptions(),
       });
       const shellView = mockWindow.contentView.children.at(-1)!;
       const view = desktop.createView({ id: "automated-panel", type: "panel" });

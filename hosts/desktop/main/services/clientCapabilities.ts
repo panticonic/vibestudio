@@ -1,55 +1,37 @@
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import type { ViewManager } from "../viewManager.js";
+import type { ClientWindows } from "../clientWindow.js";
 
-type AppViewInfo = NonNullable<ReturnType<ViewManager["getViewInfo"]>>;
+type ClientViewInfo = NonNullable<ReturnType<ViewManager["getViewInfo"]>>;
 
-const mainPlatformCapabilities: Readonly<Record<string, readonly AppCapability[]>> = {
-  shell: ["native-menus"],
-};
-
-export function callerHasPlatformCapability(
-  callerId: string,
-  callerKind: string,
-  capability: AppCapability
+/**
+ * Whether the live, admitted client view holds `capability`. Capabilities are
+ * the server-vetted `grantedCapabilities` the launch delivered; `panel-hosting`
+ * additionally requires the view to be the window's hosting surface.
+ */
+export function viewHasClientCapability(
+  viewInfo: ClientViewInfo | null,
+  capability: ClientCapability
 ): boolean {
-  if (callerKind !== "shell") return false;
-  return mainPlatformCapabilities[callerId]?.includes(capability) === true;
-}
-
-export function viewHasAppCapability(
-  _callerId: string,
-  viewInfo: AppViewInfo | null,
-  capability: AppCapability
-): boolean {
-  if (viewInfo?.type !== "app" || !viewInfo.capabilities.includes(capability)) return false;
+  if (viewInfo?.type !== "client" || !viewInfo.capabilities.includes(capability)) return false;
   if (capability !== "panel-hosting") return true;
   return viewInfo.hostChrome;
 }
 
-export function requireAppCapability(
+export function requireClientCapability(
   ctx: ServiceContext,
   viewManager: ViewManager,
-  capability: AppCapability,
+  capability: ClientCapability,
   surface: string
 ): void {
-  if (callerHasPlatformCapability(ctx.caller.runtime.id, ctx.caller.runtime.kind, capability))
-    return;
-  // Workspace UI admission keeps the real native resource id when executing
-  // through the destination's host session. Reuse that sealed chrome identity.
-  const viewInfo = viewManager.getViewInfo(ctx.caller.runtime.id);
-  if (
-    ctx.caller.runtime.kind === "shell" &&
-    viewInfo?.hostChrome &&
-    viewHasAppCapability(ctx.caller.runtime.id, viewInfo, capability)
-  )
-    return;
-  if (ctx.caller.runtime.kind !== "app") {
-    throw accessError(`${surface} is restricted to app callers`);
+  if (ctx.caller.runtime.kind !== "client") {
+    throw accessError(`${surface} is restricted to client callers`);
   }
-  if (viewHasAppCapability(ctx.caller.runtime.id, viewInfo, capability)) return;
+  const viewInfo = viewManager.getViewInfo(ctx.caller.runtime.id);
+  if (viewHasClientCapability(viewInfo, capability)) return;
   throw accessError(
-    `${surface} requires app capability '${capability}' for ${ctx.caller.runtime.id}`
+    `${surface} requires client capability '${capability}' for ${ctx.caller.runtime.id}`
   );
 }
 
@@ -58,41 +40,32 @@ function accessError(message: string): Error {
 }
 
 /**
- * Gate a service whose `policy.allowed` lists both `shell` and `app` so that
- * the `app` grant is restricted to authorized chrome (panel-hosting) — i.e. the
- * authorized workspace chrome app, never an arbitrary workspace app.
- * Native-host `shell`/`server`/`panel` callers pass through untouched; `app`
- * callers must carry the `panel-hosting` chrome capability.
+ * Gate a service that lists both `panel` and `client` callers so that the
+ * client grant is restricted to a client holding `panel-hosting`. Callers of
+ * other kinds pass through untouched; the service's own authority decides them.
  */
-export function requireChromeAppCallerOrHost(
+export function requireChromeClientCallerOr(
   ctx: ServiceContext,
   viewManager: ViewManager,
   surface: string
 ): void {
-  if (ctx.caller.runtime.kind !== "app") return;
-  requireAppCapability(ctx, viewManager, "panel-hosting", surface);
+  if (ctx.caller.runtime.kind !== "client") return;
+  requireClientCapability(ctx, viewManager, "panel-hosting", surface);
 }
 
-/**
- * Gate a surface to CHROME only — the native host (`shell`: electron-main /
- * bootstrap launch gate) or the authorized chrome app carrying
- * `panel-hosting`. Unlike {@link requireChromeAppCallerOrHost},
- * this REJECTS `panel`/`server`/arbitrary-`app` callers, so it is the correct
- * gate for cross-panel surfaces (e.g. `palette.list`/`palette.run`,
- * `app.openWorkspacePath`) whose `policy.allowed` also admits `panel` for OTHER
- * methods. Hosted workspace chrome now resolves as `kind:"app"`, so a bare
- * `kind === "shell"` check silently rejected it.
- */
-export function requireChromeCaller(
+/** Gate a capability that any client window may hold, whether or not it hosts panels. */
+export function requireWindowCapability(
   ctx: ServiceContext,
-  viewManager: ViewManager,
+  windows: Pick<ClientWindows, "byCaller">,
+  capability: ClientCapability,
   surface: string
 ): void {
-  const { kind } = ctx.caller.runtime;
-  if (kind === "shell") return;
-  if (kind === "app") {
-    requireAppCapability(ctx, viewManager, "panel-hosting", surface);
-    return;
+  if (ctx.caller.runtime.kind !== "client") {
+    throw accessError(`${surface} is restricted to client callers`);
   }
-  throw new Error(`${surface} is restricted to chrome (the shell)`);
+  const window = windows.byCaller(ctx.caller.runtime.id);
+  if (window?.spec.capabilities.includes(capability)) return;
+  throw accessError(
+    `${surface} requires client capability '${capability}' for ${ctx.caller.runtime.id}`
+  );
 }

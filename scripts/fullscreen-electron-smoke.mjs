@@ -12,9 +12,7 @@ const scratch = await mkdtemp(path.join(scratchRoot, "fullscreen-smoke-"));
 let childProcess;
 let evidence = "";
 try {
-  const bootstrap = path.join(scratch, "bootstrap.html");
   const preload = path.join(scratch, "preload.cjs");
-  await writeFile(bootstrap, "<!doctype html><title>Fullscreen smoke bootstrap</title>");
   await writeFile(preload, "");
   const entry = path.join(scratch, "main.cjs");
   await build({
@@ -37,7 +35,12 @@ const ready = app.whenReady().then(() => {
   console.log("[fullscreen-smoke] creating window");
   window = new BaseWindow({ width: 1000, height: 700, show: true });
   console.log("[fullscreen-smoke] creating view manager");
-  vm = new ViewManager({ window, shellPreload: ${JSON.stringify(preload)}, shellHtmlPath: ${JSON.stringify(bootstrap)} });
+  vm = new ViewManager({
+    window,
+    shellOverlayPreload: ${JSON.stringify(preload)},
+    contentOverlayPreload: ${JSON.stringify(preload)},
+    chromeShortcuts: { intercept() {}, isChromeOwned: () => false },
+  });
   console.log("[fullscreen-smoke] ready");
 });
 globalThis.runFullscreenSmoke = async () => {
@@ -65,12 +68,12 @@ globalThis.runFullscreenSmoke = async () => {
     const url = "http://127.0.0.1:" + parent.address().port;
     await vm.navigateView("chat", url);
     vm.createView({
-      id: "@workspace-apps/shell", type: "app", hostChrome: true,
-      workspaceIdentity: { workspaceId: "fullscreen-smoke", runtimeId: "@workspace-apps/shell" },
-      appCapabilities: ["panel-hosting"],
+      id: "@workspace-clients/desktop-browser", type: "client", hostChrome: true,
+      workspaceIdentity: { workspaceId: "fullscreen-smoke", runtimeId: "@workspace-clients/desktop-browser" },
+      clientCapabilities: ["panel-hosting"],
     });
-    vm.setHostedShellReady("@workspace-apps/shell", true, "smoke");
-    vm.bindPanelSlot("@workspace-apps/shell", {
+    vm.setHostedShellReady("@workspace-clients/desktop-browser", true, "smoke");
+    vm.bindPanelSlot("@workspace-clients/desktop-browser", {
       nativeSlotId: "primary", bindingId: "chat", panelId: "chat",
       rendererInstanceId: "smoke", bindingSequence: 1, operationSequence: 1,
       bounds: { x: 80, y: 90, width: 500, height: 400 }, focused: true,
@@ -105,7 +108,7 @@ globalThis.runFullscreenSmoke = async () => {
     await vm.togglePanelFullscreen("chat");
     checkFullscreen();
     const latestBounds = { x: 80, y: 90, width: 420, height: 300 };
-    vm.updatePanelSlot("@workspace-apps/shell", {
+    vm.updatePanelSlot("@workspace-clients/desktop-browser", {
       nativeSlotId: "primary", bindingId: "chat", rendererInstanceId: "smoke",
       bindingSequence: 1, operationSequence: 2, bounds: latestBounds,
     });

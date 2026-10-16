@@ -4,6 +4,7 @@ import {
   ClientUpdateObserver,
   buildHostDescriptor,
   parseClientIntentLink,
+  invokeBackgroundIntent,
   isClientLink,
   principalGrantsOverCall,
   type Call,
@@ -19,6 +20,7 @@ import { clientsMethods } from "@vibestudio/service-schemas/clients";
 import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import { createTypedRpcServiceClient } from "@vibestudio/shared/typedRpcServiceClient";
+import { notificationMethods } from "@vibestudio/service-schemas/notification";
 import { mainRpcMethod } from "@vibestudio/service-schemas/mainRpc";
 import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import { parsePanelLocationLink } from "@vibestudio/shared/panelLocation";
@@ -38,6 +40,14 @@ import type { EventPayloads, SupervisionChange } from "@vibestudio/shared/events
 import { ClientInstance, type DeviceCapabilityPorts } from "./clientInstance";
 import type { DeviceConnection, DevicePorts } from "./deviceConnection";
 import { WorkspacePipes, createSessionOpeners } from "./hostConnections";
+import {
+  isForegroundIntent,
+  pickBackgroundIntent,
+  pickShareTarget,
+  pinnableShortcuts,
+  textParamOf,
+  type PinnableShortcut,
+} from "./integration";
 import type { HostState } from "./hostState";
 import type { HostNotifications } from "./notifications/hostNotifications";
 import type { BackgroundApprovalDecision } from "./notifications/actionQueue";
@@ -56,6 +66,7 @@ export const MOBILE_HOST_CAPABILITIES: readonly ClientCapability[] = [
   "approval-surface",
   "hub-control",
   "notifications",
+  "notifications.reply",
   "clipboard",
   "open-external",
   "browser-import",
@@ -125,6 +136,7 @@ export interface HostRuntimePorts {
     | "stopClient"
     | "focusClient"
     | "showHostSurface"
+    | "requestPinShortcut"
     | "respond"
     | "reject"
     | "emit"
@@ -221,38 +233,47 @@ export class HostRuntime {
     await this.ports.state.load();
     await this.ports.notifications.start();
     this.releaseNative = this.ports.onNativeEvent((event) => this.onNativeEvent(event));
-    // Links reach the host whichever screen is showing, so they are observed
-    // here, before native is released. Those that arrive while the device is
-    // still coming up are handled once it is.
-    const early: string[] = [];
-    let live = false;
-    const link = (url: string): void => {
-      if (!live) early.push(url);
-      else void this.handleLinkSafely(url);
-    };
-    this.releaseLinks = this.ports.linkSource.onUrl(link);
+    // Links, shares and background intents reach the host whichever screen is
+    // showing, so they are observed here, before native is released. Those that
+    // arrive while the device is still coming up are handled once it is.
+    this.releaseLinks = this.ports.linkSource.onUrl((url) =>
+      this.whenLive(() => this.handleLink(url).then(() => undefined))
+    );
     await this.ports.native.markReady();
     await this.bringUp();
-    live = true;
+    this.live = true;
     const initial = await this.ports.linkSource.initialUrl();
-    for (const url of [...(initial ? [initial] : []), ...early]) await this.handleLinkSafely(url);
+    if (initial) await this.guarded(() => this.handleLink(initial).then(() => undefined));
+    for (const action of this.beforeLive.splice(0)) await this.guarded(action);
   }
 
-  private releaseLinks: (() => void) | null = null;
+  /** Whether the device has been brought up (connected or waiting for a pairing) since start. */
+  private live = false;
+  private readonly beforeLive: Array<() => Promise<void>> = [];
 
-  private async handleLinkSafely(url: string): Promise<void> {
+  /** Run `action` now when the device is up, otherwise in arrival order once it is. */
+  private whenLive(action: () => Promise<void>): void {
+    if (this.live) void this.guarded(action);
+    else this.beforeLive.push(action);
+  }
+
+  private async guarded(action: () => Promise<void>): Promise<void> {
     try {
-      await this.handleLink(url);
+      await action();
     } catch (error) {
       this.patch({ message: errorMessage(error), busy: false });
     }
   }
+
+  private releaseLinks: (() => void) | null = null;
 
   async stop(): Promise<void> {
     this.releaseNative?.();
     this.releaseNative = null;
     this.releaseLinks?.();
     this.releaseLinks = null;
+    this.live = false;
+    this.beforeLive.length = 0;
     await this.teardownDevice("closed");
     this.ports.notifications.stop();
   }
@@ -380,7 +401,7 @@ export class HostRuntime {
     if (isClientLink(url)) {
       try {
         const request = parseClientIntentLink(url);
-        await this.routeIntent({ id: request.id }, { name: request.intent, params: request.params });
+        await this.openClientIntent(request.id, { name: request.intent, params: request.params });
       } catch (error) {
         this.patch({ message: errorMessage(error) });
       }
@@ -389,7 +410,7 @@ export class HostRuntime {
     const panel = parsePanelLocationLink(url);
     if (panel.kind === "ok") {
       try {
-        await this.routeIntent(null, { name: "open-panel", params: { panel: url } });
+        await this.openClientIntent(null, { name: "open-panel", params: { panel: url } });
       } catch (error) {
         this.patch({ message: errorMessage(error) });
       }
@@ -560,8 +581,10 @@ export class HostRuntime {
     const approvals = this.ui.get().approvals;
     if (!active || approvals.length === 0) return;
     this.patch({ busy: true, message: decision === "once" ? "Approving..." : "Denying..." });
+    this.smoke("embedded-host-target-approval-submitted");
     try {
       const state = await active.launcher.resolveApprovals(approvals, decision);
+      this.smoke("embedded-host-target-approval-resolved");
       if (decision === "deny") {
         this.activeLaunch = null;
         this.patch({
@@ -897,32 +920,36 @@ export class HostRuntime {
   // Intents
   // ---------------------------------------------------------------------------
 
-  /**
-   * Deliver an intent: to the running client it names, or to the client that
-   * declares it (`target` null), launching one when none runs.
-   */
-  private async routeIntent(
-    target: { id: string } | null,
-    intent: ClientIntent
-  ): Promise<void> {
+  private async listClients() {
     const connection = this.requireConnection();
-    let id = target?.id ?? null;
-    if (!id) {
-      const clients = createTypedServiceClient(
-        "clients",
-        clientsMethods,
-        this.callOf(connection)
+    const clients = createTypedServiceClient("clients", clientsMethods, this.callOf(connection));
+    return clients.list(this.descriptor());
+  }
+
+  /**
+   * Open a foreground intent of a client: the one `id` names, or, with no id,
+   * the client on this device that declares the intent (the default one first).
+   * A link can only reach intents the client declares as foreground; nothing a
+   * link carries can invoke a background intent.
+   */
+  private async openClientIntent(id: string | null, intent: ClientIntent): Promise<void> {
+    const listed = (await this.listClients()).filter((listing) => listing.runtime === "react-native");
+    const declaring = listed.filter((listing) => isForegroundIntent(listing, intent.name));
+    const chosen = id
+      ? declaring.find((listing) => listing.id === id)
+      : (declaring.find((listing) => listing.isDefault) ?? declaring[0]);
+    if (!chosen) {
+      throw new Error(
+        id
+          ? `Client "${id}" on this device has no intent "${intent.name}" a link can open.`
+          : `No client on this device handles "${intent.name}".`
       );
-      const listed = await clients.list(this.descriptor());
-      const candidates = listed.filter(
-        (listing) =>
-          listing.runtime === "react-native" &&
-          listing.intents.some((declared) => declared.name === intent.name)
-      );
-      const chosen = candidates.find((listing) => listing.isDefault) ?? candidates[0];
-      if (!chosen) throw new Error(`No client on this device handles "${intent.name}".`);
-      id = chosen.id;
     }
+    await this.deliverIntent(chosen.id, intent);
+  }
+
+  /** Hand the intent to the running client, or launch the client with it. */
+  private async deliverIntent(id: string, intent: ClientIntent): Promise<void> {
     const running = [...this.running.values()].find((entry) => entry.instance.clientId === id);
     if (running) {
       running.instance.deliverIntent(intent);
@@ -930,6 +957,89 @@ export class HostRuntime {
       return;
     }
     await this.launch({ id, intent: intent.name, params: intent.params }, null);
+  }
+
+  /** Something was shared into the device: route it to the client that accepts its type. */
+  private async shareIn(mimeType: string, text: string): Promise<void> {
+    const target = pickShareTarget(await this.listClients(), mimeType);
+    if (!target) throw new Error(`No client on this device accepts shared ${mimeType}.`);
+    await this.deliverIntent(target.id, { name: target.intent, params: { [target.textParam]: text } });
+  }
+
+  /**
+   * Run a client's background intent server-side and show its text where the
+   * person is not looking at a client: as a notification. No client code runs;
+   * the failure of the intent is shown the same way, because the person asked
+   * from a surface (a tile) that has nowhere else to say it.
+   */
+  private async runBackgroundIntent(name: string, text: string): Promise<void> {
+    const picked = pickBackgroundIntent(await this.listClients(), name);
+    if (!picked) throw new Error(`No client on this device declares the background intent "${name}".`);
+    const title = picked.intent.title ?? name;
+    const textParam = textParamOf(picked.intent);
+    const notificationId = `intent:${picked.id}:${name}`;
+    let body: string;
+    try {
+      const result = await invokeBackgroundIntent(
+        this.callOf(this.requireConnection()),
+        this.descriptor(),
+        { id: picked.id, intent: name, params: textParam ? { [textParam]: text } : {} }
+      );
+      body = result.text;
+    } catch (error) {
+      body = `Failed: ${errorMessage(error)}`;
+    }
+    await this.ports.notifications.handlers["notifications.display"]({
+      id: notificationId,
+      title,
+      body,
+    });
+  }
+
+  /** What the person can pin to the home screen: launchers for the clients this device runs. */
+  async pinnableShortcuts(): Promise<PinnableShortcut[]> {
+    const clients = createTypedServiceClient(
+      "clients",
+      clientsMethods,
+      this.callOf(this.requireConnection())
+    );
+    const snapshot = await clients.integrationSnapshot(this.descriptor());
+    return pinnableShortcuts(snapshot.clients);
+  }
+
+  /**
+   * Ask the launcher to pin a shortcut. The OS confirms with the person; the
+   * result says whether the launcher accepted the request at all.
+   */
+  pinShortcut(shortcut: PinnableShortcut): Promise<boolean> {
+    return this.ports.native.requestPinShortcut(shortcut.shortcutId, shortcut.label, shortcut.link);
+  }
+
+  /**
+   * Return the person's choice on a server-defined notification to its
+   * producer in that workspace, from a notification action (no client needs to
+   * run). Uses the device's shared connection to that workspace and releases it
+   * afterwards.
+   */
+  async reportNotificationAction(
+    scope: { workspaceId: string },
+    notificationId: string,
+    actionId: string,
+    text?: string
+  ): Promise<void> {
+    const pipes = this.pipes;
+    if (!pipes) throw new Error("This device is not connected.");
+    const connection = await pipes.acquire(scope.workspaceId);
+    try {
+      const notification = createTypedRpcServiceClient(
+        connection.rpc,
+        { targetId: "main", namespace: "notification" },
+        notificationMethods
+      );
+      await notification.reportAction(notificationId, actionId, text);
+    } finally {
+      await pipes.release(scope.workspaceId);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -980,6 +1090,18 @@ export class HostRuntime {
       }
       case "client-restore": {
         void this.restoreClient(event.clientId);
+        return;
+      }
+      case "link": {
+        this.whenLive(() => this.handleLink(event.url).then(() => undefined));
+        return;
+      }
+      case "share-in": {
+        this.whenLive(() => this.shareIn(event.mimeType, event.text));
+        return;
+      }
+      case "background-intent": {
+        this.whenLive(() => this.runBackgroundIntent(event.name, event.text));
         return;
       }
     }

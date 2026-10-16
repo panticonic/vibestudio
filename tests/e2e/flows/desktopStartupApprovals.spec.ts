@@ -12,7 +12,6 @@ import {
   writeNativeApprovalModelProvider,
   writeNativeApprovalReviewExtension,
 } from "../../fixtures/nativeApprovalModelProvider";
-import { HostLaunchClient } from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { RuntimeSupervisionDescriptionSchema } from "@vibestudio/service-schemas/runtime";
 import {
   createManagedTestWorkspace,
@@ -153,7 +152,7 @@ async function shellHasApprovalUi(testApp: TestApp): Promise<boolean> {
     const candidates = webContents.getAllWebContents().filter((contents) => {
       if (contents.isDestroyed()) return false;
       const title = contents.getTitle();
-      return title === "@workspace-apps/shell" || title === "Vibestudio Launch";
+      return contents.getURL().startsWith("vs-client://") || title === "Vibestudio Launch";
     });
     for (const contents of candidates) {
       try {
@@ -258,7 +257,7 @@ async function hostedShellHasChrome(testApp: TestApp): Promise<boolean> {
       .find(
         (candidate) =>
           !candidate.isDestroyed() &&
-          candidate.getTitle() === "@workspace-apps/shell" &&
+          candidate.getURL().startsWith("vs-client://") &&
           !candidate.getURL().includes("overlaySurface=")
       );
     if (!contents) return false;
@@ -283,23 +282,16 @@ async function callHostedShellService(
   method: string,
   args: unknown[] = []
 ): Promise<unknown> {
+  const dot = method.indexOf(".");
   return testApp.app.evaluate(
-    async ({ webContents }, request) => {
-      const contents = webContents
-        .getAllWebContents()
-        .find(
-          (candidate) =>
-            !candidate.isDestroyed() &&
-            candidate.getTitle() === "@workspace-apps/shell" &&
-            !candidate.getURL().includes("overlaySurface=")
-        );
-      if (!contents) throw new Error("Hosted shell app WebContents was not found");
-      return contents.executeJavaScript(
-        `globalThis.__vibestudioApp.serviceCall(${JSON.stringify(request.method)}, ...${JSON.stringify(request.args)})`,
-        true
-      );
+    (_electron, request) => {
+      const api = (
+        globalThis as { __testApi?: { callHostedClient(...a: unknown[]): Promise<unknown> } }
+      ).__testApi;
+      if (!api) throw new Error("The test API is not available");
+      return api.callHostedClient(request.service, request.method, request.args);
     },
-    { method, args }
+    { service: method.slice(0, dot), method: method.slice(dot + 1), args }
   );
 }
 
@@ -319,7 +311,7 @@ async function clickShellButton(
             if (approvalId && contents.getURL().includes("overlaySurface=")) return -1;
             const title = contents.getTitle();
             if (title === "Vibestudio Launch") return 0;
-            if (title === "@workspace-apps/shell") return 1;
+            if (contents.getURL().startsWith("vs-client://")) return 1;
             return 2;
           };
           return priority(left) - priority(right);
@@ -398,10 +390,9 @@ async function listShellDomSnapshots(testApp: TestApp): Promise<
       const url = contents.getURL();
       const title = contents.getTitle();
       if (
-        !url.includes("/_a/") &&
+        !url.startsWith("vs-client://") &&
         !url.includes("overlaySurface=") &&
         !url.endsWith("/index.html") &&
-        title !== "@workspace-apps/shell" &&
         title !== "Vibestudio Launch"
       )
         continue;
@@ -488,10 +479,12 @@ async function attachStartupDiagnostics(testApp: TestApp): Promise<void> {
   const pending = await listPendingApprovals(testApp).catch((error: unknown) => ({
     error: error instanceof Error ? error.message : String(error),
   }));
-  const launchResult = await new HostLaunchClient((service, method, args) =>
-    rpcCall(testApp, service, method, args, testApp.systemWorkspaceId)
-  )
-    .launch("electron")
+  const launchResult = await testApp.app
+    .evaluate(() => {
+      const testApi = (globalThis as { __testApi?: { getLaunchGateView?: () => unknown } })
+        .__testApi;
+      return testApi?.getLaunchGateView?.() ?? null;
+    })
     .catch((error: unknown) => ({
       error: error instanceof Error ? error.message : String(error),
     }));

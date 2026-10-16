@@ -125,7 +125,7 @@ async function clickLaunchApprovalButton(owner: TestApp): Promise<boolean> {
         .filter((contents) => {
           if (contents.isDestroyed()) return false;
           const title = contents.getTitle();
-          return title === "@workspace-apps/shell" || title === "Vibestudio Launch";
+          return contents.getURL().startsWith("vs-client://") || title === "Vibestudio Launch";
         })
         .sort((left, right) =>
           left.getTitle() === "Vibestudio Launch"

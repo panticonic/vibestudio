@@ -5,10 +5,6 @@ const provisioning = readFileSync(
   "hosts/android/app/src/main/java/app/vibestudio/mobile/ProvisioningActivity.kt",
   "utf8"
 );
-const main = readFileSync(
-  "hosts/android/app/src/main/java/app/vibestudio/mobile/MainActivity.kt",
-  "utf8"
-);
 const nativeHost = readFileSync(
   "hosts/android/app/src/main/java/app/vibestudio/mobile/VibestudioMobileHostModule.kt",
   "utf8"
@@ -21,9 +17,6 @@ describe("Android USB provisioning activity lifecycle", () => {
     );
     expect(provisioning).not.toContain(
       "Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK"
-    );
-    expect(main).toMatch(
-      /if \(clearActiveBundleForConnectIntent\(intent\)\) \{[\s\S]*restartWithIntent\(intent\)[\s\S]*\} else \{[\s\S]*super\.onNewIntent\(intent\)/u
     );
   });
 

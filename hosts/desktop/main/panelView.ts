@@ -10,11 +10,11 @@ import { scopedNativePartition } from "./nativeStorageScope.js";
 
 import { createDevLogger } from "@vibestudio/dev-log";
 import type { WorkspaceNativeViews } from "./workspaceNativeViews.js";
-import type { ViewContextMenuContributor } from "./viewManager.js";
+import type { HostedCodeIdentity, ViewContextMenuContributor } from "./viewManager.js";
 import { MAX_SHELL_SURFACE_PROMPT_LENGTH } from "@vibestudio/shared/shellSurface";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { PanelViewLike, ServerInfoLike } from "@vibestudio/shared/panelInterfaces";
-import type { AppCapability } from "@vibestudio/shared/unitManifest";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import {
   getCurrentSnapshot,
   getPanelSource,
@@ -115,7 +115,7 @@ interface PanelOrchestratorLike {
   closePanel(panelId: string): Promise<unknown>;
 }
 
-type PanelLinkCaller = { callerId: string; callerKind: "app" };
+type PanelLinkCaller = { callerId: string; callerKind: "client" };
 
 interface FormFillManagerLike {
   attachToWebContents(webContentsId: number, webContents: Electron.WebContents): void;
@@ -155,7 +155,7 @@ export class PanelView implements PanelViewLike {
   private browserFaviconObserver?: BrowserFaviconObserverLike;
   private browserFaviconCleanup = new Map<string, () => void>();
   private panelPreloadPath?: string;
-  private appPreloadPath?: string;
+  private clientPreloadPath?: string;
   private browserPreloadPath?: string;
   private browserHistoryRecorder?: BrowserHistoryRecorder;
   private browserStateCleanup = new Map<
@@ -202,7 +202,7 @@ export class PanelView implements PanelViewLike {
     formFillManager?: FormFillManagerLike;
     browserFaviconObserver?: BrowserFaviconObserverLike;
     panelPreloadPath?: string;
-    appPreloadPath?: string;
+    clientPreloadPath?: string;
     browserPreloadPath?: string;
     browserHistoryRecorder?: BrowserHistoryRecorder;
   }) {
@@ -226,7 +226,7 @@ export class PanelView implements PanelViewLike {
     this.formFillManager = deps.formFillManager;
     this.browserFaviconObserver = deps.browserFaviconObserver;
     this.panelPreloadPath = deps.panelPreloadPath;
-    this.appPreloadPath = deps.appPreloadPath;
+    this.clientPreloadPath = deps.clientPreloadPath;
     this.browserPreloadPath = deps.browserPreloadPath;
     this.browserHistoryRecorder = deps.browserHistoryRecorder;
   }
@@ -443,41 +443,46 @@ export class PanelView implements PanelViewLike {
     }
   }
 
-  async createViewForApp(
-    appId: string,
+  /**
+   * Create (or move to a new build of) the top-level view of the client this
+   * window hosts. `clientId` names the view locally; its principal is the
+   * workspace runtime identity the native view manager attaches.
+   */
+  async createViewForClient(
+    clientViewId: string,
     url: string,
     contextId?: string,
-    capabilities?: readonly AppCapability[],
-    identity?: { source?: string; effectiveVersion?: string | null }
+    capabilities?: readonly ClientCapability[],
+    identity?: HostedCodeIdentity
   ): Promise<void> {
-    if (this.viewManager.hasView(appId)) {
-      const currentUrl = this.viewManager.getViewUrl(appId);
+    if (this.viewManager.hasView(clientViewId)) {
+      const currentUrl = this.viewManager.getViewUrl(clientViewId);
       if (currentUrl !== url) {
-        await this.viewManager.updateAppView(appId, url, capabilities, identity);
+        await this.viewManager.updateClientView(clientViewId, url, capabilities, identity);
       }
       return;
     }
-    if (!this.appPreloadPath) {
-      throw new Error("App preload is required for privileged app views");
+    if (!this.clientPreloadPath) {
+      throw new Error("Client preload is required for privileged client views");
     }
 
     const view = this.viewManager.createView({
-      id: appId,
-      type: "app",
-      preload: this.appPreloadPath,
+      id: clientViewId,
+      type: "client",
+      preload: this.clientPreloadPath,
       partition: scopedNativePartition(
         this.nativeStorageScope,
         contextIdToPartition(this.panelRegistry.workspaceId, contextId ?? "main")
       ),
       injectHostThemeVariables: true,
-      appCapabilities: capabilities,
+      clientCapabilities: capabilities,
       hostChrome: capabilities?.includes("panel-hosting") ?? false,
       codeIdentity: identity,
     });
 
-    this.setupBrowserStateTracking(appId, view.webContents, this.appPreloadPath);
-    this.setupLinkInterception(appId, view.webContents);
-    await this.viewManager.navigateView(appId, url);
+    this.setupBrowserStateTracking(clientViewId, view.webContents, this.clientPreloadPath);
+    this.setupLinkInterception(clientViewId, view.webContents);
+    await this.viewManager.navigateView(clientViewId, url);
   }
 
   setViewVisible(panelId: string, visible: boolean): void {
@@ -1030,7 +1035,7 @@ export class PanelView implements PanelViewLike {
         const parsed = this.parseManagedPanelUrl(url);
         if (parsed) {
           const fallback =
-            this.viewManager.getViewInfo(panelId)?.type === "app" ? "root" : "current";
+            this.viewManager.getViewInfo(panelId)?.type === "client" ? "root" : "current";
           void this.handleManagedLink(panelId, parsed, url, fallback).catch((err: unknown) =>
             this.handlePanelLinkError(panelId, err, url)
           );
@@ -1063,7 +1068,7 @@ export class PanelView implements PanelViewLike {
       if (!parsed) return;
 
       const viewInfo = this.viewManager.getViewInfo(panelId);
-      if (viewInfo?.type === "app") {
+      if (viewInfo?.type === "client") {
         event.preventDefault();
         void this.handleManagedLink(panelId, parsed, url, "root").catch((err: unknown) =>
           this.handlePanelLinkError(panelId, err, url)
@@ -1121,7 +1126,7 @@ export class PanelView implements PanelViewLike {
   }
 
   /**
-   * App-hosted views act under their own (capability-gated) authority when they
+   * Client-hosted views act under their own (capability-gated) authority when they
    * open managed links. Panel-hosted views do NOT: acting as the panel would
    * need a second runtime connection, which the panel lease gate rejects (the
    * panel's own connection holds the lease). Host-intercepted links are already
@@ -1130,7 +1135,7 @@ export class PanelView implements PanelViewLike {
    */
   private scopedCallerForHostedView(viewId: string): PanelLinkCaller | undefined {
     const viewInfo = this.viewManager.getViewInfo(viewId);
-    if (viewInfo?.type === "app") return { callerId: viewId, callerKind: "app" };
+    if (viewInfo?.type === "client") return { callerId: viewId, callerKind: "client" };
     return undefined;
   }
 
@@ -1248,7 +1253,7 @@ export class PanelView implements PanelViewLike {
     }
     const pending = flights.get(url);
     if (pending) return pending;
-    // Same-frame navigation only happens for panel-hosted slots (app views open
+    // Same-frame navigation only happens for panel-hosted slots (client views open
     // links as new root panels), so this is always a trusted-chrome translation
     // of the source slot — no scoped caller.
     const navigation = this.panelOrchestrator

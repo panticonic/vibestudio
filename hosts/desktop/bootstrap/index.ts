@@ -1,7 +1,4 @@
-import { createInternalRpcClient, type RpcWireClient } from "@vibestudio/rpc/internal";
-import { type EnvelopeRpcTransport, type RpcEnvelope } from "@vibestudio/rpc";
 import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
-import { AsyncStateConvergenceLoop } from "@vibestudio/shared/asyncStateConvergenceLoop";
 import {
   approvalIds,
   launchGateView,
@@ -9,11 +6,6 @@ import {
   type BootstrapDecision,
   type LaunchGateView,
 } from "@vibestudio/shared/bootstrapLaunchGate";
-import {
-  HostLaunchClient,
-  type HostLaunchResult,
-  type HostLaunchProgress,
-} from "@vibestudio/service-schemas/clients/hostLaunchClient";
 import { parseConnectLink } from "@vibestudio/shared/connect";
 import { appendLaunchGateFacts, appendSources } from "./launchGateDom.js";
 import {
@@ -21,20 +13,19 @@ import {
   type StartupConnectionProgress,
 } from "../../../src/startupConnectionProgress.js";
 import { startupTimeline, type BootstrapTimelinePhase } from "./startupTimeline.js";
-
-type ShellTransportBridge = {
-  send: (envelope: RpcEnvelope) => Promise<void>;
-  onMessage: (handler: (envelope: RpcEnvelope) => void) => () => void;
-};
+import type { LaunchGateView as HostLaunchView, LaunchGateStatus } from "./launchGateModel.js";
 
 type BootstrapBridge = {
   getState: () => Promise<unknown>;
+  getLaunchState: () => Promise<unknown>;
+  resolveApprovals: (decision: "once" | "deny") => Promise<unknown>;
   launchLocalWorkspace: (workspaceName: string) => Promise<unknown>;
   pairRemote: (payload: { link: string; label?: string }) => Promise<unknown>;
   retryStartup: () => Promise<unknown>;
   chooseConnection: () => Promise<unknown>;
   openLog: (path: string) => Promise<unknown>;
   onStateChanged?: (handler: (state: unknown) => void) => () => void;
+  onLaunchState?: (handler: (state: unknown) => void) => () => void;
 };
 
 type BootstrapConnectionState = {
@@ -58,12 +49,10 @@ type BootstrapConnectionState = {
 };
 
 const globals = globalThis as unknown as {
-  __vibestudioTransport?: ShellTransportBridge;
   __vibestudioBootstrap?: BootstrapBridge;
 };
 const container = document.getElementById("approvals");
 if (!container) throw new Error("Bootstrap approval container missing");
-const bootstrapTransport = globals.__vibestudioTransport;
 const bootstrapApi = globals.__vibestudioBootstrap;
 const approvalsContainer = container;
 const launchCopy = document.getElementById("launch-copy");
@@ -72,45 +61,10 @@ const bootstrapHeader = document.querySelector(".launch-header");
 const bootstrapEyebrow = document.getElementById("bootstrap-eyebrow");
 const bootstrapTitle = document.getElementById("bootstrap-title");
 
-let rpc: RpcWireClient | null = null;
-
-function createBootstrapRpc(): RpcWireClient {
-  if (!bootstrapTransport) throw new Error("Bootstrap transport unavailable");
-  const transport: EnvelopeRpcTransport = {
-    send: (envelope) => bootstrapTransport.send(envelope),
-    onMessage: (handler) => bootstrapTransport.onMessage(handler),
-    status: () => "connected",
-    ready: () => Promise.resolve(),
-    onStatusChange: () => () => {},
-  };
-
-  const nextRpc = createInternalRpcClient({ selfId: "bootstrap", callerKind: "app", transport });
-  rpc = nextRpc;
-  return nextRpc;
-}
-
-function getRpc(): RpcWireClient {
-  rpc ??= createBootstrapRpc();
-  if (!rpc) throw new Error("Bootstrap RPC unavailable");
-  return rpc;
-}
-
-let hostLaunchClient: HostLaunchClient | null = null;
-const launchProgress = new Map<HostLaunchProgress["phase"], HostLaunchProgress>();
-function getHostLaunchClient(): HostLaunchClient {
-  hostLaunchClient ??= new HostLaunchClient(
-    (service, method, args) => getRpc().call("main", `${service}.${method}`, args),
-    (progress) => {
-      launchProgress.set(progress.phase, progress);
-      render();
-    }
-  );
-  return hostLaunchClient;
-}
-const hostTarget = "electron";
 let pending: PendingUnitInstallReviewApproval[] = [];
 let rendering = false;
-let launchResult: HostLaunchResult | null = null;
+/** What the host last said about the launch; null before the first push. */
+let hostLaunch: HostLaunchView | null = null;
 /** Header copy for the current launch state; the initial value covers the frame
  * rendered before the host answers with a session. */
 let emptyLaunchText = "Connecting to your workspace...";
@@ -120,10 +74,6 @@ let decisionError: string | null = null;
 /** The person declined the review: a decision to report calmly, not a failure. */
 let startupDeclined = false;
 let startupWaitBeganAt = 0;
-
-function scheduleRefresh(): void {
-  launchRefreshLoop.request();
-}
 
 function setPending(next: PendingUnitInstallReviewApproval[]): boolean {
   if (samePendingApprovals(pending, next)) return false;
@@ -135,15 +85,12 @@ function setPending(next: PendingUnitInstallReviewApproval[]): boolean {
   return true;
 }
 
-function setLaunchResult(next: HostLaunchResult): boolean {
-  const previous = launchResult;
-  startupDeclined = false;
-  launchResult = next;
-  const pendingChanged = setPending(next.status === "approval-required" ? next.approvals : []);
-  const text = launchResultText(next);
-  const textChanged = text !== emptyLaunchText;
-  emptyLaunchText = text;
-  return pendingChanged || textChanged || previous?.status !== next.status;
+/** Apply what the host pushed about the launch. */
+function setHostLaunch(next: HostLaunchView): void {
+  hostLaunch = next;
+  startupDeclined = next.launch.status === "unavailable" && next.launch.declined === true;
+  setPending(next.launch.status === "approval-required" ? next.launch.approvals : []);
+  emptyLaunchText = launchStatusText(next.launch);
 }
 
 async function decide(
@@ -162,19 +109,9 @@ async function decide(
       : "Approval recorded. Starting the workspace..."
   );
   try {
-    await getHostLaunchClient().resolveApprovals(pending, decision);
-    if (decision === "deny") {
-      startupDeclined = true;
-      launchResult = {
-        status: "unavailable",
-        target: hostTarget,
-        reason: "You chose not to start this workspace. Nothing from it was run.",
-      };
-      setPending([]);
-      render();
-      return;
-    }
-    scheduleRefresh();
+    // The host relays the decision and continues the launch; its next state arrives as a push.
+    if (!bootstrapApi) throw new Error("Launch gate controls are unavailable");
+    await bootstrapApi.resolveApprovals(decision);
   } catch (err) {
     decisionError = `Approval failed: ${err instanceof Error ? err.message : String(err)}`;
   } finally {
@@ -284,13 +221,13 @@ function setHeaderCopy(copy: string | null): void {
   launchCopy.hidden = !copy;
 }
 
-function launchResultHeader(result: HostLaunchResult): {
+function launchStatusHeader(launch: LaunchGateStatus): {
   eyebrow: string;
   title: string;
   copy: string;
   tone?: "error";
 } {
-  if (result.status === "approval-required") {
+  if (launch.status === "approval-required") {
     return {
       eyebrow: "Workspace approval",
       title: "Do you trust the code in this workspace?",
@@ -298,22 +235,30 @@ function launchResultHeader(result: HostLaunchResult): {
         decisionError ?? "Review the workspace code that wants to run before Vibestudio starts.",
     };
   }
-  if (result.status === "unavailable" && startupDeclined) {
+  if (launch.status === "unavailable" && startupDeclined) {
     return {
       eyebrow: "Not started",
       title: "You chose not to start this workspace",
       copy: "Nothing from this workspace was run. Restart Vibestudio to review it again.",
     };
   }
-  if (result.status === "unavailable") {
+  if (launch.status === "unavailable") {
     return {
       eyebrow: "Cannot start",
       title: "Vibestudio could not start this workspace",
-      copy: result.reason,
+      copy: launch.reason,
       tone: "error",
     };
   }
-  if (result.status === "ready") {
+  if (launch.status === "failed") {
+    return {
+      eyebrow: "Cannot start",
+      title: "The launch could not complete",
+      copy: launch.reason,
+      tone: "error",
+    };
+  }
+  if (launch.status === "ready") {
     return {
       eyebrow: "Launching",
       title: "Opening your workspace",
@@ -322,16 +267,16 @@ function launchResultHeader(result: HostLaunchResult): {
   }
   // starting / preparing: the phase rows carry the technical detail, so the
   // header stays a single readable sentence.
-  return { eyebrow: "Starting", title: "Starting workspace", copy: result.reason };
+  return { eyebrow: "Starting", title: "Starting workspace", copy: launch.reason };
 }
 
-function launchResultText(result: HostLaunchResult): string {
-  if (result.status === "ready") return "The workspace is approved and launching.";
-  if (result.status === "unavailable" || result.status === "preparing") return result.reason;
-  if (result.status === "approval-required") {
+function launchStatusText(launch: LaunchGateStatus): string {
+  if (launch.status === "ready") return "The workspace is approved and launching.";
+  if (launch.status === "approval-required") {
     return decisionError ?? "Review the workspace code that wants to run before Vibestudio starts.";
   }
-  return "Starting workspace.";
+  if (launch.status === "starting") return launch.reason || "Starting workspace.";
+  return launch.reason;
 }
 
 function render(): void {
@@ -340,19 +285,19 @@ function render(): void {
   try {
     approvalsContainer.replaceChildren();
     approvalsContainer.className = "launch-body";
-    if (!launchResult) {
+    if (!hostLaunch) {
       setHeader("Starting", "Starting workspace", emptyLaunchText);
       appendLaunchTimeline(
         approvalsContainer,
-        startupTimeline(connectionState?.startupProgress, "complete", [...launchProgress.values()])
+        startupTimeline(connectionState?.startupProgress, "complete", [])
       );
       return;
     }
-    const header = launchResultHeader(launchResult);
+    const header = launchStatusHeader(hostLaunch.launch);
     setHeader(header.eyebrow, header.title, header.copy, header.tone ?? "normal");
     appendLaunchTimeline(
       approvalsContainer,
-      startupTimeline(connectionState?.startupProgress, "complete", [...launchProgress.values()])
+      startupTimeline(connectionState?.startupProgress, "complete", hostLaunch.progress)
     );
     if (pending.length === 0) {
       return;
@@ -403,35 +348,25 @@ function renderLaunchError(title: string, detail: string): void {
   approvalsContainer.replaceChildren();
   appendLaunchTimeline(
     approvalsContainer,
-    startupTimeline(
-      connectionState?.startupProgress,
-      "failed",
-      launchProgress.size > 0 ? [...launchProgress.values()] : undefined
-    )
+    startupTimeline(connectionState?.startupProgress, "failed", hostLaunch?.progress)
   );
 }
 
-type LaunchRefreshResult = HostLaunchResult["status"] | "error";
-
-async function refresh(): Promise<LaunchRefreshResult> {
-  try {
-    const result = await getHostLaunchClient().launch(hostTarget);
-    if (setLaunchResult(result)) render();
-    return result.status;
-  } catch (err) {
-    renderLaunchError(
-      "Launch gate could not reach the host",
-      err instanceof Error ? err.message : String(err)
-    );
-    return "error";
-  }
+function isHostLaunchView(value: unknown): value is HostLaunchView {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    typeof (value as { launch?: { status?: unknown } }).launch?.status === "string" &&
+    Array.isArray((value as { progress?: unknown }).progress)
+  );
 }
 
-const launchRefreshLoop = new AsyncStateConvergenceLoop(
-  refresh,
-  (status) => status === "preparing",
-  1_000
-);
+/** The host pushed a launch state: show it. */
+function applyHostLaunch(value: unknown): void {
+  if (!isHostLaunchView(value)) return;
+  setHostLaunch(value);
+  if (connectionState?.mode === "connected" || !connectionState) render();
+}
 
 let connectionState: BootstrapConnectionState | null = null;
 let connectionBusyAction: string | null = null;
@@ -598,24 +533,17 @@ async function runConnectionAction(actionId: string, action: () => Promise<void>
   startupWaitBeganAt = Date.now();
   connectionHandoff = connectionHandoffFor(actionId);
   connectionError = null;
-  startupWaitDone = false;
-  launchGateStarted = false;
   if (connectionHandoff) {
     renderConnectionHandoff();
   } else if (connectionState) {
     renderConnectionChooser(connectionState);
   }
-  // Connection actions may remain pending until the workspace app is approved
-  // and ready. Observe host state concurrently so that approval can be shown
-  // while that action is still in flight; awaiting it first creates a circular
-  // wait between startup and its own consent UI.
-  waitForConnectedBootstrapState();
+  // Connection actions may remain pending until the workspace is approved and
+  // ready. The host pushes every state change meanwhile, so the approval is
+  // shown while the action is still in flight.
   try {
     await action();
   } catch (err) {
-    startupWaitDone = true;
-    stopBootstrapConnectionStateWatch();
-    launchGateStarted = false;
     connectionError = err instanceof Error ? err.message : String(err);
     connectionBusyAction = null;
     connectionHandoff = null;
@@ -948,123 +876,49 @@ function renderStartupFailure(state: BootstrapConnectionState): void {
   }
 }
 
-let launchGateStarted = false;
-let startupWaitDone = false;
-type BootstrapConnectionPollResult = "waiting" | "terminal";
-let bootstrapConnectionStateLoop: AsyncStateConvergenceLoop<BootstrapConnectionPollResult> | null =
-  null;
-
-function stopBootstrapConnectionStateWatch(): void {
-  bootstrapConnectionStateLoop?.stop();
-  bootstrapConnectionStateLoop = null;
-}
-
-/**
- * Apply a bootstrap connection state from either transport (host push or the
- * fallback poll). Returns "terminal" when the wait is over — connected, failed,
- * or back at the chooser — so the poll loop knows to stop.
- */
-async function applyBootstrapState(
-  state: BootstrapConnectionState
-): Promise<"terminal" | "waiting"> {
+/** Show what the host's connection state says. The host pushes every change; nothing polls. */
+function applyBootstrapState(state: BootstrapConnectionState): void {
   connectionState = state;
-  if (state.mode === "failed") {
-    startupWaitDone = true;
-    stopBootstrapConnectionStateWatch();
-    renderStartupFailure(state);
-    return "terminal";
+  switch (state.mode) {
+    case "failed":
+      renderStartupFailure(state);
+      return;
+    case "connected":
+      bootstrapMain?.setAttribute("data-bootstrap-mode", "approval");
+      render();
+      return;
+    case "choose-connection":
+      // A pairing or workspace choice is in flight: the host has not yet
+      // moved to "starting", and the chooser must not flash back over it.
+      if (connectionBusyAction) renderConnectionHandoff();
+      else renderConnectionChooser(state);
+      return;
+    case "starting":
+      renderStartingWorkspace();
+      return;
   }
-  if (state.mode === "connected") {
-    startupWaitDone = true;
-    stopBootstrapConnectionStateWatch();
-    // Both the push handler and an in-flight poll can observe "connected";
-    // the gate must open exactly once.
-    if (!launchGateStarted) {
-      launchGateStarted = true;
-      await startLaunchGate();
-    }
-    return "terminal";
-  }
-  if (state.mode === "choose-connection") {
-    startupWaitDone = true;
-    stopBootstrapConnectionStateWatch();
-    renderConnectionChooser(state);
-    return "terminal";
-  }
-  renderStartingWorkspace();
-  return "waiting";
 }
 
-function waitForConnectedBootstrapState(): void {
-  stopBootstrapConnectionStateWatch();
-  const loop: AsyncStateConvergenceLoop<BootstrapConnectionPollResult> =
-    new AsyncStateConvergenceLoop<BootstrapConnectionPollResult>(
-      () => pollConnectedBootstrapState(() => bootstrapConnectionStateLoop === loop),
-      (result) => result === "waiting",
-      2_000
-    );
-  bootstrapConnectionStateLoop = loop;
-  // Give the initiating IPC action one turn to publish "starting". Later polls
-  // remain level checks; host-pushed transitions still update immediately.
-  loop.request(2_000);
-}
-
-async function pollConnectedBootstrapState(
-  isCurrent: () => boolean
-): Promise<BootstrapConnectionPollResult> {
-  if (!isCurrent() || startupWaitDone) return "terminal";
-  const state = await getBootstrapState();
-  // A replaced attempt may complete its old IPC read after the new attempt has
-  // begun. It must not render or schedule from that stale result.
-  if (!isCurrent() || startupWaitDone) return "terminal";
-  if (!isBootstrapConnectionState(state)) {
-    return "waiting";
-  }
-  if ((await applyBootstrapState(state)) === "terminal") return "terminal";
-  return "waiting";
-}
-
-/** Host-pushed state transitions land immediately (no poll latency). */
-function subscribeToBootstrapStatePush(): void {
+function subscribeToHostPushes(): void {
   bootstrapApi?.onStateChanged?.((state) => {
-    if (startupWaitDone) return;
-    if (!isBootstrapConnectionState(state)) return;
-    void applyBootstrapState(state);
+    if (isBootstrapConnectionState(state)) applyBootstrapState(state);
   });
-}
-
-async function getBootstrapState(): Promise<unknown> {
-  if (!bootstrapApi) return null;
-  return bootstrapApi.getState();
-}
-
-async function startLaunchGate(): Promise<void> {
-  bootstrapMain?.setAttribute("data-bootstrap-mode", "approval");
-  // Paint the step list before the first activation round trip.
-  render();
-  launchRefreshLoop.start();
+  bootstrapApi?.onLaunchState?.(applyHostLaunch);
 }
 
 async function init(): Promise<void> {
-  subscribeToBootstrapStatePush();
-  const state = await getBootstrapState();
-  if (isBootstrapConnectionState(state)) connectionState = state;
-  if (isBootstrapConnectionState(state) && state.mode === "choose-connection") {
-    renderConnectionChooser(state);
-    return;
+  subscribeToHostPushes();
+  if (!bootstrapApi) throw new Error("Launch gate controls are unavailable");
+  const [state, launch] = await Promise.all([
+    bootstrapApi.getState(),
+    bootstrapApi.getLaunchState(),
+  ]);
+  if (isHostLaunchView(launch)) setHostLaunch(launch);
+  if (!isBootstrapConnectionState(state)) {
+    throw new Error("The host did not report a connection state");
   }
-  if (isBootstrapConnectionState(state) && state.mode === "starting") {
-    connectionState = state;
-    startupWaitBeganAt = Date.now();
-    renderStartingWorkspace();
-    waitForConnectedBootstrapState();
-    return;
-  }
-  if (isBootstrapConnectionState(state) && state.mode === "failed") {
-    renderStartupFailure(state);
-    return;
-  }
-  await startLaunchGate();
+  if (state.mode === "starting") startupWaitBeganAt = Date.now();
+  applyBootstrapState(state);
 }
 
 void init().catch((err) => {

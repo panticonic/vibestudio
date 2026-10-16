@@ -82,10 +82,6 @@
       "reason": "Composition root that registers providers."
     },
     {
-      "source": "hosts/desktop/main/appOrchestrator.ts",
-      "reason": "Desktop observer of host-owned state."
-    },
-    {
       "source": "hosts/desktop/main/index.ts",
       "reason": "Desktop bootstrap and observer, not an artifact owner."
     }

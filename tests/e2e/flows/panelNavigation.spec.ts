@@ -41,7 +41,7 @@ async function shellStatus(owner: TestApp): Promise<{
     const contents = webContents
       .getAllWebContents()
       .find(
-        (candidate) => !candidate.isDestroyed() && candidate.getTitle() === "@workspace-apps/shell"
+        (candidate) => !candidate.isDestroyed() && candidate.getURL().startsWith("vs-client://")
       );
     if (!contents) return { buildingCount: 0, hasOperationFailure: false };
     try {

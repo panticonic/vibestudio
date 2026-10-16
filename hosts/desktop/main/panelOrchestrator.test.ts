@@ -1784,7 +1784,7 @@ describe("PanelOrchestrator.createPanel", () => {
     panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
       loadedPanels.add(panelId);
     });
-    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
+    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "client" as const };
 
     const { id } = await orchestrator.createPanel(
       caller.id,
@@ -1834,7 +1834,7 @@ describe("PanelOrchestrator.createPanel", () => {
 
     const { orchestrator, panelView, serverClient, emit } = createOrchestrator(registry);
     panelView.createViewForPanel.mockRejectedValue(new Error("native view failed"));
-    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
+    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "client" as const };
 
     await expect(
       orchestrator.createPanel(
@@ -1898,7 +1898,7 @@ describe("PanelOrchestrator.createPanel", () => {
     panelView.createViewForBrowser.mockImplementation(async (panelId: string) => {
       loadedPanels.add(panelId);
     });
-    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
+    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "client" as const };
 
     const { id } = await orchestrator.createBrowserUrlPanel(
       caller.id,
@@ -2061,7 +2061,7 @@ describe("PanelOrchestrator.createPanel", () => {
 
     const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
     panelView.createViewForBrowser.mockRejectedValueOnce(new Error("native view failed"));
-    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "app" as const };
+    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "client" as const };
 
     await expect(
       orchestrator.createBrowserUrlPanel(

@@ -29,12 +29,14 @@ import type { ServerEventBridgeDeps } from "./serverEventBridge.js";
 import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
 import type { WorkspaceSessionConnection } from "./serverSession.js";
 import { createDesktopWorkspaceController } from "./desktopWorkspaceController.js";
-import type { ApplicationWindowController } from "./applicationWindowController.js";
+import type { PanelHostWindow } from "./panelHostWindow.js";
 import { WorkspaceNativeViews } from "./workspaceNativeViews.js";
 import { createViewService } from "./services/viewService.js";
 import { createMenuService } from "./services/menuService.js";
 import { createAppService } from "./services/appService.js";
-import { requireAppCapability } from "./services/appCapabilities.js";
+import { requireClientCapability } from "./services/clientCapabilities.js";
+import type { ClientMenus } from "./clientMenu.js";
+import type { ClientWindows } from "./clientWindow.js";
 import { createDesktopEventsService } from "./services/desktopEventsService.js";
 import { createBrowserVaultNativeClient } from "./services/browserVaultNativeClient.js";
 import { BrowserPermissionController } from "./services/browserPermissionController.js";
@@ -122,6 +124,7 @@ export function createDesktopWorkspaceRuntime(deps: {
   events?: Pick<
     ServerEventBridgeDeps,
     | "onSupervisionChanged"
+    | "onClientsChanged"
     | "onApprovalPendingChanged"
     | "onApprovalResolved"
     | "onAttentionRequired"
@@ -129,11 +132,15 @@ export function createDesktopWorkspaceRuntime(deps: {
   >;
   app?: Pick<
     Parameters<typeof createAppService>[0],
-    "shellSurfaces" | "onOpenShellSurface" | "getAppOrchestrator" | "initialFocusedWorkspaceId"
+    "shellSurfaces" | "onOpenShellSurface" | "getClientUpdates" | "initialFocusedWorkspaceId"
   >;
   onRecovered?(kind: "resubscribe" | "cold-recover"): Promise<void> | void;
   adBlockManager: import("./adblock/adBlockManager.js").AdBlockManager;
-  window: ApplicationWindowController;
+  window: PanelHostWindow;
+  /** The windows of every running client, for capabilities any client may hold. */
+  clientWindows: Pick<ClientWindows, "byCaller">;
+  /** The menus clients contributed. */
+  menus: ClientMenus;
   authorize: Parameters<ServiceDispatcher["setAuthorityResolver"]>[0];
   openExternal(url: string): Promise<void>;
   onCredentialCaptureRequest?(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
@@ -299,7 +306,7 @@ export function createDesktopWorkspaceRuntime(deps: {
         if (selection.source === "startup") {
           const contents = window.viewManager?.getWebContents(_ctx.caller.runtime.id);
           const shell = window.viewManager?.getHostedShellWebContents();
-          if (_ctx.caller.runtime.kind !== "shell" && (!contents || contents.id !== shell?.id))
+          if (!contents || contents.id !== shell?.id)
             throw Object.assign(new Error("Select device diagnostics in trusted reporting UI"), {
               errorKind: "access",
             });
@@ -348,10 +355,9 @@ export function createDesktopWorkspaceRuntime(deps: {
         return bundle;
       },
       isHuman: (ctx) =>
-        ctx.caller.runtime.kind === "shell" ||
-        (ctx.caller.runtime.kind === "app" &&
-          window.viewManager?.getWebContents(ctx.caller.runtime.id)?.id ===
-            window.viewManager?.getHostedShellWebContents()?.id),
+        ctx.caller.runtime.kind === "client" &&
+        window.viewManager?.getWebContents(ctx.caller.runtime.id)?.id ===
+          window.viewManager?.getHostedShellWebContents()?.id,
     })
   );
   reportingDelivery.wake();
@@ -834,8 +840,9 @@ export function createDesktopWorkspaceRuntime(deps: {
           createMenuService({
             panelOrchestrator: controller.orchestrator,
             panelRegistry: controller.registry,
-            serverClient: connection.serverClient,
             getViewManager,
+            clientWindows: deps.clientWindows,
+            menus: deps.menus,
             getPanelWebContents: (id) => nativeViews().getWebContents(id),
           })
         );
@@ -851,7 +858,7 @@ export function createDesktopWorkspaceRuntime(deps: {
             onWatchOpened: (events, context) => {
               const manager = window.viewManager;
               if (!manager) throw new Error("Desktop window is closed");
-              requireAppCapability(context, manager, "panel-hosting", "Desktop server events");
+              requireClientCapability(context, manager, "panel-hosting", "Desktop server events");
               return watch.retainAll(events, context.signal);
             },
           })
@@ -963,6 +970,7 @@ export function createDesktopWorkspaceRuntime(deps: {
           "external-open:open",
           "browser-panel:open",
           ...(deps.events?.onSupervisionChanged ? (["supervision:changed"] as const) : []),
+          ...(deps.events?.onClientsChanged ? (["clients:changed"] as const) : []),
         ]);
         assertOpen();
         await initializePanelTree();

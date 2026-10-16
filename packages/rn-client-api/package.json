@@ -14,16 +14,23 @@
     "./protocol": "./src/protocol.ts",
     "./notificationsProtocol": "./src/notificationsProtocol.ts",
     "./native": "./src/native.ts",
-    "./testing": "./src/testing.ts"
+    "./testing": "./src/testing.ts",
+    "./polyfills": {
+      "react-native": "./src/polyfills.native.ts",
+      "default": "./src/polyfills.ts"
+    }
   },
   "scripts": {
     "test": "cd ../.. && vitest run packages/rn-client-api/src",
     "typecheck": "tsc --project tsconfig.json"
   },
   "dependencies": {
+    "@kayahr/text-encoding": "2.2.0",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/shared": "workspace:*",
-    "@vibestudio/workspace-contracts": "workspace:*"
+    "@vibestudio/workspace-contracts": "workspace:*",
+    "web-streams-polyfill": "^3.3.3",
+    "whatwg-fetch": "3.6.20"
   },
   "peerDependencies": {
     "react-native": "^0.79.0"

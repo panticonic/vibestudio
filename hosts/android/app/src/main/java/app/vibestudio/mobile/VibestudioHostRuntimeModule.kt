@@ -1,6 +1,11 @@
 package app.vibestudio.mobile
 
+import android.content.Intent
+import android.net.Uri
 import android.util.Base64
+import androidx.core.content.pm.ShortcutInfoCompat
+import androidx.core.content.pm.ShortcutManagerCompat
+import androidx.core.graphics.drawable.IconCompat
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -79,6 +84,28 @@ class VibestudioHostRuntimeModule(
     fun showHostSurface(promise: Promise) = done(promise, "show_host_surface_failed") {
         ClientInstances.onMain { ClientInstances.showHostSurface() }
     }
+
+    /**
+     * Ask the launcher to pin a shortcut that opens `link`. Resolves false when
+     * the launcher cannot pin shortcuts; the OS confirms with the person.
+     */
+    @ReactMethod
+    fun requestPinShortcut(shortcutId: String, label: String, link: String, promise: Promise) =
+        reply(promise, "pin_shortcut_failed") {
+            val context = reactApplicationContext
+            if (!ShortcutManagerCompat.isRequestPinShortcutSupported(context)) {
+                false
+            } else {
+                val shortcut = ShortcutInfoCompat.Builder(context, shortcutId)
+                    .setShortLabel(label)
+                    .setIcon(IconCompat.createWithResource(context, R.mipmap.ic_launcher))
+                    .setIntent(
+                        Intent(Intent.ACTION_VIEW, Uri.parse(link)).setClass(context, IngressActivity::class.java),
+                    )
+                    .build()
+                ShortcutManagerCompat.requestPinShortcut(context, shortcut, null)
+            }
+        }
 
     @ReactMethod
     fun respond(tag: String, requestId: String, resultJson: String, promise: Promise) =

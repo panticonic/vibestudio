@@ -260,7 +260,7 @@ export async function nativeUiRead<Args extends unknown[], Result>(
   const lifetime = new AbortController();
   const client = createRpcClient({
     selfId: bridge.identity.runtimeId,
-    callerKind: "app",
+    callerKind: "client",
     workspaceId: bridge.identity.workspaceId,
     transport: bridge.transport,
     lifetime: lifetime.signal,

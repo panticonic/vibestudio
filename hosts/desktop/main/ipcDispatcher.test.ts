@@ -47,7 +47,7 @@ function makeWebContents(id: number) {
 
 function rpcEnvelope(
   from: string,
-  callerKind: "server" | "shell" | "app" | "panel" | "unknown",
+  callerKind: "server" | "client" | "panel" | "unknown",
   message: RpcMessage,
   delivery?: Pick<RpcEnvelope["delivery"], "idempotencyKey" | "readOnly">,
   target = "main"
@@ -86,7 +86,7 @@ function makeDispatcher(opts: {
   resolveWorkspaceRuntime?: (workspaceId: string) => WorkspaceIpcRuntime;
   getCodeIdentityForCaller?: (callerId: string) => VerifiedCodeIdentity | null;
   getWebContentsForCaller?: (callerId: string) => ReturnType<typeof makeWebContents> | null;
-  getShellWebContents?: () => ReturnType<typeof makeWebContents> | null;
+  getChromeWebContents?: () => ReturnType<typeof makeWebContents> | null;
   call?: ReturnType<typeof vi.fn>;
   callAs?: ReturnType<typeof vi.fn>;
   sendAs?: ReturnType<typeof vi.fn>;
@@ -94,7 +94,7 @@ function makeDispatcher(opts: {
   streamAs?: ReturnType<typeof vi.fn>;
   addMessageListener?: ReturnType<typeof vi.fn>;
   configureDispatcher?: (dispatcher: ServiceDispatcher) => void;
-  authorizeAppServerCall?: (
+  authorizeClientServerCall?: (
     callerId: string,
     service: string,
     method: string,
@@ -145,20 +145,22 @@ function makeDispatcher(opts: {
     getConnectionStatus: vi.fn(() => "connected" as const),
     transportDiagnostics: vi.fn(() => null),
     onDirectEvent: vi.fn(() => () => {}),
+    setClientPrincipalSessions: vi.fn(),
+    releaseClientSession: vi.fn(async () => {}),
     close: vi.fn(async () => {}),
   };
   const ipcDispatcher = new IpcDispatcher({
     workspaceId: "workspace-owning-ipc",
     dispatcher,
     serverClient,
-    getShellWebContents: (opts.getShellWebContents ?? (() => null)) as never,
+    getChromeWebContents: (opts.getChromeWebContents ?? (() => null)) as never,
     resolveCallerForWebContents: opts.resolve,
     resolveUiRuntime: opts.resolveUiRuntime,
     resolveWorkspaceRuntime: opts.resolveWorkspaceRuntime,
     getCodeIdentityForCaller: opts.getCodeIdentityForCaller,
     getWebContentsForCaller: (opts.getWebContentsForCaller ?? (() => null)) as never,
     getPanelRuntimeConnection: opts.getPanelRuntimeConnection,
-    authorizeAppServerCall: opts.authorizeAppServerCall,
+    authorizeClientServerCall: opts.authorizeClientServerCall,
     onServerRpcResult: opts.onServerRpcResult,
   });
   return { serverClient, ipcDispatcher };
@@ -169,15 +171,15 @@ describe("IpcDispatcher", () => {
     const shell = makeWebContents(21);
     const observed = vi.fn();
     makeDispatcher({
-      resolve: () => ({ callerId: "shell", callerKind: "shell" }),
-      call: vi.fn(async () => {
+      resolve: () => ({ callerId: "shell", callerKind: "client" }),
+      callAs: vi.fn(async () => {
         throw new Error("Unexpected host failure");
       }),
       configureDispatcher: (dispatcher) => dispatcher.setFailureObserver(observed),
     });
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: shell } as never,
-      rpcEnvelope("shell", "shell", {
+      rpcEnvelope("shell", "client", {
         type: "request",
         requestId: "req-reporting-forwarded",
         fromId: "shell",
@@ -207,10 +209,10 @@ describe("IpcDispatcher", () => {
   it("preserves application workspace addressing on the source principal's server RPC", async () => {
     const contents = makeWebContents(41);
     const { serverClient } = makeDispatcher({
-      resolve: () => ({ callerId: "app", callerKind: "app" }),
+      resolve: () => ({ callerId: "app", callerKind: "client" }),
       getWebContentsForCaller: () => contents,
     });
-    const envelope = rpcEnvelope("app", "app", {
+    const envelope = rpcEnvelope("app", "client", {
       type: "request",
       requestId: "cross-workspace-request",
       fromId: "app",
@@ -230,7 +232,7 @@ describe("IpcDispatcher", () => {
     );
     await vi.waitFor(() =>
       expect(serverClient.callAs).toHaveBeenCalledWith(
-        { callerId: "app", callerKind: "app" },
+        { callerId: "app", callerKind: "client", instanceId: "app" },
         "workspace",
         "getInfo",
         [],
@@ -250,6 +252,34 @@ describe("IpcDispatcher", () => {
     expect(serverClient.call).not.toHaveBeenCalled();
   });
 
+  it("ends a client window's own principal session and message bridge when the window is released", async () => {
+    const contents = makeWebContents(42);
+    const unsubscribe = vi.fn();
+    const { serverClient, ipcDispatcher } = makeDispatcher({
+      resolve: () => ({ callerId: "window-1", runtimeId: "app", callerKind: "client" }),
+      getWebContentsForCaller: () => contents,
+      addMessageListener: vi.fn(() => unsubscribe),
+    });
+    ipcHandlers.get("vibestudio:rpc:send")?.(
+      { sender: contents } as never,
+      rpcEnvelope("app", "client", {
+        type: "request",
+        requestId: "release-1",
+        fromId: "app",
+        method: "workspace.getInfo",
+        args: [],
+      }) as never
+    );
+    await vi.waitFor(() => expect(serverClient.callAs).toHaveBeenCalled());
+    const scoped = { callerId: "app", callerKind: "client", instanceId: "window-1" };
+    expect(serverClient.addMessageListener).toHaveBeenCalledWith(scoped, expect.any(Function));
+
+    await ipcDispatcher.releaseClientWindow("window-1");
+
+    expect(unsubscribe).toHaveBeenCalledOnce();
+    expect(serverClient.releaseClientSession).toHaveBeenCalledWith(scoped);
+  });
+
   it.each(["project", undefined])(
     "uses admitted UI sessions for the explicit or source target %s",
     async (targetWorkspaceId) => {
@@ -258,7 +288,7 @@ describe("IpcDispatcher", () => {
         callerId: "native:System:shell",
         runtimeId: "shell-app",
         workspaceId: "system",
-        callerKind: "app" as const,
+        callerKind: "client" as const,
       };
       const session = {
         send: vi.fn(),
@@ -326,7 +356,7 @@ describe("IpcDispatcher", () => {
       callerId: "native:system:app",
       runtimeId: "shell-app",
       workspaceId: "system",
-      callerKind: "app" as const,
+      callerKind: "client" as const,
     };
     const { ipcDispatcher, serverClient } = makeDispatcher({
       resolve: () => caller,
@@ -395,13 +425,13 @@ describe("IpcDispatcher", () => {
       callerId: "native:system:app",
       runtimeId: "shell-app",
       workspaceId: "system",
-      callerKind: "app" as const,
+      callerKind: "client" as const,
     };
     const { ipcDispatcher, serverClient } = makeDispatcher({ resolve: () => caller });
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: contents } as never,
       {
-        ...rpcEnvelope("shell-app", "app", message),
+        ...rpcEnvelope("shell-app", "client", message),
         destination: { kind: "hub" },
       } as never
     );
@@ -446,12 +476,12 @@ describe("IpcDispatcher", () => {
       callerId: "native:system:app",
       runtimeId: "shell-app",
       workspaceId: "system",
-      callerKind: "app" as const,
+      callerKind: "client" as const,
     };
     const { ipcDispatcher } = makeDispatcher({ resolve: () => caller });
     const rpc = createRpcClient({
       selfId: caller.runtimeId,
-      callerKind: "app",
+      callerKind: "client",
       workspaceId: caller.workspaceId,
       transport: {
         send: async (envelope) => {
@@ -487,7 +517,7 @@ describe("IpcDispatcher", () => {
       callerId: "native:system:app",
       runtimeId: "shell-app",
       workspaceId: "system",
-      callerKind: "app" as const,
+      callerKind: "client" as const,
     };
     let incoming!: (envelope: RpcEnvelope) => void;
     const session = {
@@ -567,7 +597,7 @@ describe("IpcDispatcher", () => {
       callerId: "native:System:shell",
       runtimeId: "shell-app",
       workspaceId: "system",
-      callerKind: "app" as const,
+      callerKind: "client" as const,
     };
     const destination = {
       workspaceId: "system",
@@ -586,7 +616,7 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: contents } as never,
-      rpcEnvelope("shell-app", "app", {
+      rpcEnvelope("shell-app", "client", {
         type: "request",
         requestId: "unavailable",
         fromId: "shell-app",
@@ -619,7 +649,7 @@ describe("IpcDispatcher", () => {
       callerId: "native:System:shell",
       runtimeId: "shell-app",
       workspaceId: "system",
-      callerKind: "app" as const,
+      callerKind: "client" as const,
     };
     const { ipcDispatcher } = makeDispatcher({
       resolve: () => caller,
@@ -637,7 +667,7 @@ describe("IpcDispatcher", () => {
         { sender: contents, senderFrame: undefined } as never,
         {
           opId: "op-unavailable",
-          envelope: rpcEnvelope("shell-app", "app", {
+          envelope: rpcEnvelope("shell-app", "client", {
             type: "stream-request",
             requestId: "op-unavailable",
             fromId: "shell-app",
@@ -679,7 +709,7 @@ describe("IpcDispatcher", () => {
       callerId: "native:System:shell",
       runtimeId: "shell-app",
       workspaceId: "system",
-      callerKind: "app" as const,
+      callerKind: "client" as const,
     };
     const { ipcDispatcher } = makeDispatcher({
       resolve: () => caller,
@@ -703,10 +733,11 @@ describe("IpcDispatcher", () => {
       } as never
     );
     await vi.waitFor(() => expect(dispatch).toHaveBeenCalled());
-    expect(dispatch.mock.calls[0]?.[0].caller).toMatchObject({
-      hostOriginated: true,
-      runtime: { id: "native:System:shell", kind: "shell" },
+    const dispatched = dispatch.mock.calls[0]?.[0].caller;
+    expect(dispatched).toMatchObject({
+      runtime: { id: "native:System:shell", kind: "client" },
     });
+    expect(dispatched).not.toHaveProperty("hostOriginated", true);
     await vi.waitFor(() =>
       expect(contents.send).toHaveBeenCalledWith(
         "vibestudio:rpc:message",
@@ -736,13 +767,13 @@ describe("IpcDispatcher", () => {
         callerId: "native:project:app",
         runtimeId: "app",
         workspaceId: "project",
-        callerKind: "app",
+        callerKind: "client",
       }),
       resolveWorkspaceRuntime: () => destination,
     });
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: contents } as never,
-      rpcEnvelope("app", "app", {
+      rpcEnvelope("app", "client", {
         type: "request",
         requestId: "own",
         fromId: "app",
@@ -752,7 +783,7 @@ describe("IpcDispatcher", () => {
     );
     await vi.waitFor(() =>
       expect(callAs).toHaveBeenCalledWith(
-        { callerId: "app", callerKind: "app" },
+        { callerId: "app", callerKind: "client", instanceId: "native:project:app" },
         "workspace",
         "getInfo",
         []
@@ -790,7 +821,7 @@ describe("IpcDispatcher", () => {
         callerId: "native:System:shell",
         runtimeId: "shell-app",
         workspaceId: "system",
-        callerKind: "app",
+        callerKind: "client",
       }),
       getWebContentsForCaller: () => contents,
       resolveUiRuntime: admit,
@@ -798,7 +829,7 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: contents } as never,
-      rpcEnvelope("shell-app", "app", {
+      rpcEnvelope("shell-app", "client", {
         type: "request",
         requestId: "desktop-events-before-ready",
         fromId: "shell-app",
@@ -835,7 +866,7 @@ describe("IpcDispatcher", () => {
     await ipcDispatcher.shutdown();
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: wc } as never,
-      rpcEnvelope("shell", "shell", {
+      rpcEnvelope("shell", "client", {
         type: "request",
         requestId: "late-shutdown-request",
         fromId: "shell",
@@ -854,8 +885,8 @@ describe("IpcDispatcher", () => {
     (workspaceId) => {
       const shellWc = makeWebContents(9);
       const { ipcDispatcher } = makeDispatcher({
-        resolve: () => ({ callerId: "shell", callerKind: "shell" }),
-        getShellWebContents: () => shellWc,
+        resolve: () => ({ callerId: "shell", callerKind: "client" }),
+        getChromeWebContents: () => shellWc,
       });
 
       ipcDispatcher.sendEventToShell(workspaceId, "workspace-focused", { workspaceId });
@@ -875,8 +906,8 @@ describe("IpcDispatcher", () => {
   it("retires direct workspace event delivery with its IPC owner", async () => {
     const shellWc = makeWebContents(9);
     const { ipcDispatcher } = makeDispatcher({
-      resolve: () => ({ callerId: "shell", callerKind: "shell" }),
-      getShellWebContents: () => shellWc,
+      resolve: () => ({ callerId: "shell", callerKind: "client" }),
+      getChromeWebContents: () => shellWc,
     });
     await ipcDispatcher.shutdown();
     ipcDispatcher.sendEventToShell("personal", "notification:show", { id: "late" });
@@ -887,7 +918,7 @@ describe("IpcDispatcher", () => {
     const shellWc = makeWebContents(9);
     const eventService = new EventService();
     makeDispatcher({
-      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "client" }),
       configureDispatcher: (dispatcher) => {
         dispatcher.registerService(
           createEventsServiceDefinition(eventService, { serviceName: "desktopEvents" })
@@ -897,7 +928,7 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: shellWc } as never,
-      rpcEnvelope("@workspace-apps/shell", "app", {
+      rpcEnvelope("@workspace-apps/shell", "client", {
         type: "stream-request",
         requestId: "events-watch-1",
         fromId: "@workspace-apps/shell",
@@ -939,7 +970,7 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: shellWc } as never,
-      rpcEnvelope("@workspace-apps/shell", "app", {
+      rpcEnvelope("@workspace-apps/shell", "client", {
         type: "stream-cancel",
         requestId: "events-watch-1",
         fromId: "@workspace-apps/shell",
@@ -952,14 +983,14 @@ describe("IpcDispatcher", () => {
     const appWc = makeWebContents(10);
     const callAs = vi.fn(async () => ({ workspace: "ok" }));
     const { serverClient } = makeDispatcher({
-      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "client" }),
       getWebContentsForCaller: () => appWc,
       callAs,
     });
 
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: appWc } as never,
-      rpcEnvelope("@workspace-apps/shell", "app", {
+      rpcEnvelope("@workspace-apps/shell", "client", {
         type: "request",
         requestId: "req-1",
         fromId: "@workspace-apps/shell",
@@ -970,7 +1001,11 @@ describe("IpcDispatcher", () => {
 
     await vi.waitFor(() => {
       expect(callAs).toHaveBeenCalledWith(
-        { callerId: "@workspace-apps/shell", callerKind: "app" },
+        {
+          callerId: "@workspace-apps/shell",
+          callerKind: "client",
+          instanceId: "@workspace-apps/shell",
+        },
         "workspace",
         "getInfo",
         []
@@ -990,13 +1025,13 @@ describe("IpcDispatcher", () => {
     const appWc = makeWebContents(11);
     const sendAs = vi.fn(async () => undefined);
     makeDispatcher({
-      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "client" }),
       getWebContentsForCaller: () => appWc,
       sendAs,
     });
     const request = rpcEnvelope(
       "shell",
-      "app",
+      "client",
       {
         type: "request",
         requestId: "runtime-target-1",
@@ -1012,13 +1047,17 @@ describe("IpcDispatcher", () => {
 
     await vi.waitFor(() =>
       expect(sendAs).toHaveBeenCalledWith(
-        { callerId: "@workspace-apps/shell", callerKind: "app" },
+        {
+          callerId: "@workspace-apps/shell",
+          callerKind: "client",
+          instanceId: "@workspace-apps/shell",
+        },
         expect.objectContaining({
           from: "@workspace-apps/shell",
           target:
             "do:workers/workspace-presentation:WorkspacePresentationDO:workspace-presentation",
           delivery: expect.objectContaining({
-            caller: { callerId: "@workspace-apps/shell", callerKind: "app" },
+            caller: { callerId: "@workspace-apps/shell", callerKind: "client" },
           }),
         })
       )
@@ -1045,14 +1084,14 @@ describe("IpcDispatcher", () => {
       });
     });
     makeDispatcher({
-      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "client" }),
       getWebContentsForCaller: () => appWc,
       callAs,
     });
 
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: appWc } as never,
-      rpcEnvelope("@workspace-apps/shell", "app", {
+      rpcEnvelope("@workspace-apps/shell", "client", {
         type: "request",
         requestId: "req-review-pending",
         fromId: "@workspace-apps/shell",
@@ -1086,7 +1125,7 @@ describe("IpcDispatcher", () => {
     const onServerRpcResult = vi.fn();
     const panelHandler = vi.fn(async () => "panel-1");
     makeDispatcher({
-      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "client" }),
       call,
       callAs,
       onServerRpcResult,
@@ -1103,7 +1142,7 @@ describe("IpcDispatcher", () => {
 
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: shellWc } as never,
-      rpcEnvelope("@workspace-apps/shell", "app", {
+      rpcEnvelope("@workspace-apps/shell", "client", {
         type: "request",
         requestId: "req-paneltree",
         fromId: "@workspace-apps/shell",
@@ -1118,7 +1157,7 @@ describe("IpcDispatcher", () => {
           caller: expect.objectContaining({
             runtime: expect.objectContaining({
               id: "@workspace-apps/shell",
-              kind: "app",
+              kind: "client",
             }),
           }),
         }),
@@ -1132,7 +1171,7 @@ describe("IpcDispatcher", () => {
       expect(onServerRpcResult).toHaveBeenCalledWith(
         expect.objectContaining({
           callerId: "@workspace-apps/shell",
-          callerKind: "app",
+          callerKind: "client",
           service: "panel",
           method: "getFocusedPanelId",
         })
@@ -1145,38 +1184,6 @@ describe("IpcDispatcher", () => {
         result: "panel-1",
       });
     });
-  });
-
-  it("forwards a native-host shell server RPC on the admin connection (no shell→app proxy)", async () => {
-    // electron-main / bootstrap launch gate are native-host `shell` principals;
-    // they reach the server via the admin connection (plain call), never via the
-    // deleted shell→app panelTree proxy.
-    const shellWc = makeWebContents(21);
-    const call = vi.fn(async () => ({ ok: true }));
-    const callAs = vi.fn();
-    makeDispatcher({
-      resolve: () => ({ callerId: "shell", callerKind: "shell" }),
-      call,
-      callAs,
-    });
-
-    ipcHandlers.get("vibestudio:rpc:send")?.(
-      { sender: shellWc } as never,
-      rpcEnvelope("shell", "shell", {
-        type: "request",
-        requestId: "req-shell-server",
-        fromId: "shell",
-        method: "runtime.supervision.activate",
-        args: [{ kind: "app", releaseId: "desktop-shell" }],
-      } satisfies RpcMessage) as never
-    );
-
-    await vi.waitFor(() => {
-      expect(call).toHaveBeenCalledWith("runtime", "supervision.activate", [
-        { kind: "app", releaseId: "desktop-shell" },
-      ]);
-    });
-    expect(callAs).not.toHaveBeenCalled();
   });
 
   it("relays a panel renderer over its own panel-principal session, not the shell/app channel", async () => {
@@ -1260,19 +1267,19 @@ describe("IpcDispatcher", () => {
   it("denies app server fs RPC before forwarding when authorization fails", async () => {
     const appWc = makeWebContents(14);
     const callAs = vi.fn();
-    const authorizeAppServerCall = vi.fn(() => {
+    const authorizeClientServerCall = vi.fn(() => {
       throw new Error("fs.readFile requires app capability 'fs-read'");
     });
     makeDispatcher({
-      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "client" }),
       getWebContentsForCaller: () => appWc,
       callAs,
-      authorizeAppServerCall,
+      authorizeClientServerCall,
     });
 
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: appWc } as never,
-      rpcEnvelope("@workspace-apps/shell", "app", {
+      rpcEnvelope("@workspace-apps/shell", "client", {
         type: "request",
         requestId: "req-fs-denied",
         fromId: "@workspace-apps/shell",
@@ -1288,27 +1295,29 @@ describe("IpcDispatcher", () => {
         error: { message: "fs.readFile requires app capability 'fs-read'", errorKind: "access" },
       });
     });
-    expect(authorizeAppServerCall).toHaveBeenCalledWith("@workspace-apps/shell", "fs", "readFile", [
-      "/hello.txt",
-      "utf8",
-    ]);
+    expect(authorizeClientServerCall).toHaveBeenCalledWith(
+      "@workspace-apps/shell",
+      "fs",
+      "readFile",
+      ["/hello.txt", "utf8"]
+    );
     expect(callAs).not.toHaveBeenCalled();
   });
 
   it("forwards app server fs RPC after authorization succeeds", async () => {
     const appWc = makeWebContents(15);
     const callAs = vi.fn(async () => "hello");
-    const authorizeAppServerCall = vi.fn();
+    const authorizeClientServerCall = vi.fn();
     makeDispatcher({
-      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "client" }),
       getWebContentsForCaller: () => appWc,
       callAs,
-      authorizeAppServerCall,
+      authorizeClientServerCall,
     });
 
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: appWc } as never,
-      rpcEnvelope("@workspace-apps/shell", "app", {
+      rpcEnvelope("@workspace-apps/shell", "client", {
         type: "request",
         requestId: "req-fs-ok",
         fromId: "@workspace-apps/shell",
@@ -1319,16 +1328,22 @@ describe("IpcDispatcher", () => {
 
     await vi.waitFor(() => {
       expect(callAs).toHaveBeenCalledWith(
-        { callerId: "@workspace-apps/shell", callerKind: "app" },
+        {
+          callerId: "@workspace-apps/shell",
+          callerKind: "client",
+          instanceId: "@workspace-apps/shell",
+        },
         "fs",
         "readFile",
         ["/hello.txt", "utf8"]
       );
     });
-    expect(authorizeAppServerCall).toHaveBeenCalledWith("@workspace-apps/shell", "fs", "readFile", [
-      "/hello.txt",
-      "utf8",
-    ]);
+    expect(authorizeClientServerCall).toHaveBeenCalledWith(
+      "@workspace-apps/shell",
+      "fs",
+      "readFile",
+      ["/hello.txt", "utf8"]
+    );
     await vi.waitFor(() => {
       expectSentRpcMessage(appWc, "@workspace-apps/shell", {
         type: "response",
@@ -1349,15 +1364,15 @@ describe("IpcDispatcher", () => {
       args: ["/hello.txt", "utf8"],
     } satisfies RpcMessage;
     makeDispatcher({
-      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "client" }),
       getWebContentsForCaller: () => appWc,
       callAs,
-      authorizeAppServerCall: vi.fn(),
+      authorizeClientServerCall: vi.fn(),
     });
 
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: appWc } as never,
-      rpcEnvelope("@workspace-apps/shell", "app", request, {
+      rpcEnvelope("@workspace-apps/shell", "client", request, {
         idempotencyKey: "idem-1",
         readOnly: true,
       }) as never
@@ -1365,7 +1380,11 @@ describe("IpcDispatcher", () => {
 
     await vi.waitFor(() => {
       expect(callAs).toHaveBeenCalledWith(
-        { callerId: "@workspace-apps/shell", callerKind: "app" },
+        {
+          callerId: "@workspace-apps/shell",
+          callerKind: "client",
+          instanceId: "@workspace-apps/shell",
+        },
         "fs",
         "readFile",
         ["/hello.txt", "utf8"],
@@ -1376,7 +1395,7 @@ describe("IpcDispatcher", () => {
     expect(request).not.toHaveProperty("readOnly");
   });
 
-  it.each(["app", "panel"] as const)(
+  it.each(["client", "panel"] as const)(
     "attaches %s source identity to Electron-local service dispatch",
     async (callerKind) => {
       const appWc = makeWebContents(13);
@@ -1451,14 +1470,14 @@ describe("IpcDispatcher", () => {
       return vi.fn();
     });
     makeDispatcher({
-      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+      resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "client" }),
       getWebContentsForCaller: () => appWc,
       addMessageListener,
     });
 
     ipcHandlers.get("vibestudio:rpc:send")?.(
       { sender: appWc } as never,
-      rpcEnvelope("@workspace-apps/shell", "app", {
+      rpcEnvelope("@workspace-apps/shell", "client", {
         type: "request",
         requestId: "req-1",
         fromId: "@workspace-apps/shell",
@@ -1493,7 +1512,7 @@ describe("IpcDispatcher", () => {
     const openPanelSession = vi.fn();
     makeDispatcher({
       resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
-      getShellWebContents: () => shellWc,
+      getChromeWebContents: () => shellWc,
       getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId: "conn-1" }),
       openPanelSession,
     });
@@ -1528,7 +1547,7 @@ describe("IpcDispatcher", () => {
     const openPanelSession = vi.fn();
     makeDispatcher({
       resolve: () => ({ callerId: "panel-1", callerKind: "panel" }),
-      getShellWebContents: () => null,
+      getChromeWebContents: () => null,
       getPanelRuntimeConnection: () => ({ runtimeEntityId: "entity-1", connectionId: "conn-1" }),
       openPanelSession,
     });
@@ -1848,7 +1867,7 @@ describe("IpcDispatcher", () => {
         callerId: "native:system:app",
         runtimeId: "shell-app",
         workspaceId: "system",
-        callerKind: "app" as const,
+        callerKind: "client" as const,
       };
       const dispatch = vi.fn(
         async (_context: unknown) =>
@@ -1877,7 +1896,7 @@ describe("IpcDispatcher", () => {
         {
           opId: "desktop-events-local",
           envelope: {
-            ...rpcEnvelope("shell-app", "app", {
+            ...rpcEnvelope("shell-app", "client", {
               type: "stream-request",
               requestId: "desktop-events-local-request",
               fromId: "shell-app",
@@ -1897,7 +1916,7 @@ describe("IpcDispatcher", () => {
       );
       expect(dispatch).toHaveBeenCalledOnce();
       expect(dispatch.mock.calls[0]?.[0]).toMatchObject({
-        caller: { runtime: { id: caller.callerId, kind: "shell" } },
+        caller: { runtime: { id: caller.callerId, kind: "client" } },
         requestId: "desktop-events-local-request",
       });
       expect(destination.serverClient.openHostUiSession).not.toHaveBeenCalled();
@@ -1955,7 +1974,7 @@ describe("IpcDispatcher", () => {
         callerId: "native:system:app",
         runtimeId: "shell-app",
         workspaceId: "system",
-        callerKind: "app" as const,
+        callerKind: "client" as const,
       };
       let received: Uint8Array | undefined;
       const streamReadable = vi.fn(
@@ -2138,7 +2157,7 @@ describe("IpcDispatcher", () => {
     it("rejects stream-open from non-panel senders", async () => {
       const appWc = makeWebContents(42);
       makeDispatcher({
-        resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "app" }),
+        resolve: () => ({ callerId: "@workspace-apps/shell", callerKind: "client" }),
         getWebContentsForCaller: () => appWc,
       });
 

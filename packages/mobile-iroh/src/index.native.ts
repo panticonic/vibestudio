@@ -1,3 +1,2 @@
-import type {} from "./nativeAbortGlobals.js";
-import type {} from "./nativePlatformGlobals.js";
+import type {} from "@vibestudio/rn-client-api/polyfills";
 export * from "./index.js";

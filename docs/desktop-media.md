@@ -19,10 +19,10 @@ consent. A denied OS permission names the Privacy & Security settings needed to
 recover. Navigation, destruction, or automation invalidates pending consent.
 
 Screen capture always needs consent for each native request, including admitted
-apps. There is no session or permanent allow, and simultaneous requests cannot
+clients. There is no session or permanent allow, and simultaneous requests cannot
 share an approval. A remembered block can be removed through browser permissions.
-Camera approval never authorizes screen capture, and `window-management` never
-implies display access.
+Camera approval never authorizes screen capture, and `theme` and `devtools` never
+imply display access.
 
 ## Playback and fullscreen
 

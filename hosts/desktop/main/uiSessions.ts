@@ -15,7 +15,7 @@ export interface NativeIpcCaller {
   callerId: string;
   browser?: boolean;
   documentId?: string;
-  callerKind: "shell" | "panel" | "app";
+  callerKind: "panel" | "client";
   runtimeId?: string;
   workspaceId?: string;
 }
@@ -46,7 +46,7 @@ type SessionEntry = {
 
 const CONNECTION_LOST_MESSAGE = "Connection lost before the response arrived";
 
-/** Owns device/user sessions exclusively for native-admitted System chrome. */
+/** Owns device/user sessions exclusively for native-admitted clients holding `device-session`. */
 export class UiSessions {
   private readonly sessions = new Map<
     string,

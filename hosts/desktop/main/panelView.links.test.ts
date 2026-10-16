@@ -46,14 +46,14 @@ function makeWebContents() {
 
 function createHarness(
   options: {
-    viewType?: "panel" | "app";
+    viewType?: "panel" | "client";
     externalHost?: string;
     gatewayServerUrl?: string;
     managedNavigationInFlight?: boolean;
     onPreloadFailure?: (panelId: string, contentsId: number, message: string) => void;
   } = {}
 ) {
-  const panelId = options.viewType === "app" ? "@workspace-apps/shell" : "panel:tree/current";
+  const panelId = options.viewType === "client" ? "@workspace-apps/shell" : "panel:tree/current";
   const panel = makePanel(panelId);
   const wc = makeWebContents();
   const viewManager = {
@@ -63,7 +63,7 @@ function createHarness(
     isManagedNavigationInFlight: vi.fn(() => options.managedNavigationInFlight ?? false),
     navigateView: vi.fn(async (): Promise<void> => undefined),
     updateCodeIdentity: vi.fn(),
-    updateAppView: vi.fn(async () => undefined),
+    updateClientView: vi.fn(async () => undefined),
     createView: vi.fn(() => ({ webContents: wc.webContents })),
     destroyView: vi.fn(),
     getWebContents: vi.fn(() => wc.webContents),
@@ -72,9 +72,9 @@ function createHarness(
         ? {
             type: options.viewType ?? "panel",
             visible: true,
-            hostChrome: options.viewType === "app",
+            hostChrome: options.viewType === "client",
             bounds: { x: 0, y: 0, width: 100, height: 100 },
-            capabilities: options.viewType === "app" ? ["panel-hosting"] : [],
+            capabilities: options.viewType === "client" ? ["panel-hosting"] : [],
           }
         : null
     ),
@@ -82,7 +82,9 @@ function createHarness(
   const panelRegistry = {
     workspaceId: "workspace-test",
     findParentId: vi.fn(() => null),
-    getPanel: vi.fn((id: string) => (id === panelId && options.viewType !== "app" ? panel : null)),
+    getPanel: vi.fn((id: string) =>
+      id === panelId && options.viewType !== "client" ? panel : null
+    ),
     notifyPanelTreeUpdate: vi.fn(),
   };
   const panelOrchestrator = {
@@ -121,7 +123,7 @@ function createHarness(
     requestSiteCapability: vi.fn(async () => true),
     onPreloadFailure: options.onPreloadFailure,
     panelPreloadPath: "/panel-preload.js",
-    appPreloadPath: "/app-preload.js",
+    clientPreloadPath: "/app-preload.js",
   } as never);
 
   return {
@@ -706,11 +708,11 @@ describe("PanelView plain panel links", () => {
     );
   });
 
-  it("opens managed links from app views as app-scoped root panels", async () => {
+  it("opens managed links from client views as client-scoped root panels", async () => {
     const { panelId, panelView, webContents, panelOrchestrator } = createHarness({
-      viewType: "app",
+      viewType: "client",
     });
-    await panelView.createViewForApp(
+    await panelView.createViewForClient(
       panelId,
       "http://127.0.0.1:1234/_a/shell/index.html",
       undefined,
@@ -727,7 +729,7 @@ describe("PanelView plain panel links", () => {
         "about/help",
         { isRoot: true },
         undefined,
-        { callerId: "@workspace-apps/shell", callerKind: "app" }
+        { callerId: "@workspace-apps/shell", callerKind: "client" }
       );
     });
     expect(event.preventDefault).toHaveBeenCalled();

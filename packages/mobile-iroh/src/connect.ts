@@ -1,4 +1,4 @@
-import "./polyfills.js";
+import "@vibestudio/rn-client-api/polyfills";
 import { AppState, type AppStateStatus } from "react-native";
 import * as Keychain from "react-native-keychain";
 import { EndpointGenerationOwner } from "@vibestudio/iroh-transport";

@@ -1,9 +1,11 @@
 import { readWorkspaceTransportIdentity } from "./workspaceTransportIdentity.js";
 /**
- * App preload — privileged workspace-app bridge.
+ * Client preload: the `web-host-1` bridge every web client runs against.
  *
- * The app principal is enforced in the main process from WebContents metadata;
- * this preload is only the renderer-facing transport surface.
+ * The client principal is enforced in the main process from WebContents
+ * metadata; this preload is only the renderer-facing surface. Everything a
+ * client may ask of the host sits behind a capability the host checks on every
+ * call, so a client that was not granted one gets a rejection, not a stub.
  */
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
@@ -16,36 +18,18 @@ const activeListeners = new Map<
   number,
   (event: IpcRendererEvent, eventName: string, payload: unknown) => void
 >();
-const appTransport = {
+const clientTransport = {
   ...createIpcTransport(),
   ...createIpcStreamBridge(),
   identity: readWorkspaceTransportIdentity(process.argv),
 };
 
-const serviceCall = (method: string, ...args: unknown[]) =>
-  ipcRenderer.invoke("vibestudio:serviceCall", method, args);
-
-const vibestudioApp = {
+const vibestudioClient = {
+  /** Which client this is, its principal, build and granted capabilities. */
+  describe: () => ipcRenderer.invoke("vibestudio:client:describe"),
   getBootstrapConfig: () => ipcRenderer.invoke("vibestudio:getPanelInit"),
   getInfo: () => ipcRenderer.invoke("vibestudio:bridge.getInfo"),
   getProcessPerformanceSnapshot: () => ipcRenderer.invoke("vibestudio:performance.snapshot"),
-  serviceCall,
-  native: {
-    menu: {
-      call: (method: string, ...args: unknown[]) => serviceCall(`menu.${method}`, ...args),
-    },
-    notifications: {
-      call: (method: string, ...args: unknown[]) => serviceCall(`notification.${method}`, ...args),
-    },
-    // No `tray` / `globalShortcut` bridges: the `tray` and `global-shortcut`
-    // capabilities are declarable in the unit manifest but are NOT in this host's
-    // supported set (APP_CAPABILITIES_BY_NATIVE_HOST.electron),
-    // so an app requesting them is rejected before it ever loads. Exposing a
-    // throwing stub here would only be a capability that lies about existing.
-    fs: {
-      call: (method: string, ...args: unknown[]) => serviceCall(`fs.${method}`, ...args),
-    },
-  },
   addEventListener: (handler: (event: string, payload: unknown) => void): number => {
     const id = nextListenerId++;
     const listener = (_e: IpcRendererEvent, event: string, payload: unknown) =>
@@ -63,22 +47,57 @@ const vibestudioApp = {
   },
   // Fire-and-forget signal that the renderer regained network connectivity, so
   // main can nudge the (possibly stale-"connected") server pipe awake. No
-  // response — a nudge, never a teardown.
+  // response: a nudge, never a teardown.
   notifyNetworkOnline: () => ipcRenderer.send("vibestudio:shell.network-online"),
   // Tell main whether DOM focus is currently on a chrome control. The native
-  // key forwarder must leave keyboard input in the shell while a user is
+  // key forwarder must leave keyboard input in the client while a user is
   // operating breadcrumbs, the sidebar, dialogs, or form controls.
   setChromeInteractiveFocus: (active: boolean) =>
     ipcRenderer.send("vibestudio:shell.chrome-interactive-focus", active),
-  // Native panel views sit above the hosted shell in Electron's compositor.
-  // Dialog visibility is therefore a window-host concern, not a workspace RPC:
-  // it must remain writable while the workspace server is unavailable.
+  // Native panel views sit above the client in Electron's compositor. Dialog
+  // visibility is therefore a window-host concern, not a workspace RPC: it
+  // must remain writable while the workspace server is unavailable.
   setShellOverlayActive: (active: boolean) =>
     ipcRenderer.send("vibestudio:shell.overlay-active", active),
   inspectWorkspaceFolder: () => ipcRenderer.invoke("vibestudio:inspectWorkspaceFolder"),
+  /** `native-menus`: contribute the application menu and the client's own popup. */
+  menu: {
+    set: (model: unknown) => ipcRenderer.invoke("vibestudio:menu:set", model) as Promise<void>,
+    onAction(handler: (actionId: string) => void) {
+      const listener = (_event: IpcRendererEvent, actionId: string) => handler(actionId);
+      ipcRenderer.on("vibestudio:menu-action", listener);
+      return () => ipcRenderer.off("vibestudio:menu-action", listener);
+    },
+  },
+  /** Foreground intents (`vibestudio://c/<id>/<intent>`): held until subscribed, then live. */
+  intents: {
+    subscribe(handler: (intent: { name: string; params: Record<string, string> }) => void) {
+      const listener = (
+        _event: IpcRendererEvent,
+        intent: { name: string; params: Record<string, string> }
+      ) => handler(intent);
+      ipcRenderer.on("vibestudio:client-intent", listener);
+      void ipcRenderer.invoke("vibestudio:client-intent:subscribe");
+      return () => ipcRenderer.off("vibestudio:client-intent", listener);
+    },
+  },
+  /** `panel-hosting`: what only the compositor can do to the panel surface. */
+  panelHost: {
+    run: (action: string) =>
+      ipcRenderer.invoke("vibestudio:panel-host:run", action) as Promise<void>,
+  },
+  /** `device-session`: development mode for a client on this device. */
+  development: {
+    setMode: (clientId: string, enabled: boolean) =>
+      ipcRenderer.invoke(
+        "vibestudio:client:set-development-mode",
+        clientId,
+        enabled
+      ) as Promise<void>,
+  },
 };
 
-contextBridge.exposeInMainWorld("__vibestudioApp", vibestudioApp);
+contextBridge.exposeInMainWorld("__vibestudioClient", vibestudioClient);
 contextBridge.exposeInMainWorld("__vibestudioNativePanels", {
   openWorkspace: (workspaceId: string) =>
     ipcRenderer.invoke("vibestudio:shell.workspace-open", workspaceId),
@@ -87,7 +106,7 @@ contextBridge.exposeInMainWorld("__vibestudioNativePanels", {
   applyNativePanelSurfaces: (snapshot: unknown) =>
     ipcRenderer.invoke("vibestudio:shell.panels-apply", snapshot),
 });
-contextBridge.exposeInMainWorld("__vibestudioTransport", appTransport);
+contextBridge.exposeInMainWorld("__vibestudioTransport", clientTransport);
 contextBridge.exposeInMainWorld("__vibestudioWorkspaceConnection", {
   getCurrent: () =>
     ipcRenderer.invoke(

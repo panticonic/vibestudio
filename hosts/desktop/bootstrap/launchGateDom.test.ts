@@ -15,7 +15,7 @@ import { appendLaunchGateFacts, appendSources } from "./launchGateDom.js";
 
 /** The terminal at its full disclosure, as words: wrapping is layout, not content. */
 function terminalWords(approvals: Parameters<typeof formatLaunchGateForTerminal>[0]): string {
-  return `${formatLaunchGateForTerminal(approvals, "electron")}\n${formatLaunchGateUnitsForTerminal(approvals)}`.replace(
+  return `${formatLaunchGateForTerminal(approvals, "desktop")}\n${formatLaunchGateUnitsForTerminal(approvals)}`.replace(
     /\s+/gu,
     " "
   );
@@ -63,19 +63,18 @@ const lookalike: InstallReviewOrigin = {
 
 function part(overrides: Partial<InstallReviewPart> = {}): InstallReviewPart {
   return {
-    identityKey: `${overrides.repoPath ?? "apps/shell"}@ev`,
-    kind: "app",
-    label: "Client App",
+    identityKey: `${overrides.repoPath ?? "clients/desktop-browser"}@ev`,
+    kind: "client",
+    label: "Client",
     surfaces: [],
-    name: "@workspace-apps/shell",
+    name: "@workspace-clients/desktop-browser",
     title: "Shell",
     purpose: "The desktop app itself.",
-    repoPath: "apps/shell",
+    repoPath: "clients/desktop-browser",
     effectiveVersion: "ev",
     version: "1.0.0",
     requiredUnitKeys: [],
     runsInBackground: false,
-    target: "electron",
     origin: hostOrigin,
     notableRows: [],
     everydayRows: [],
@@ -98,7 +97,7 @@ function review(parts: InstallReviewPart[]): PendingUnitInstallReviewApproval {
     title: "Start this workspace?",
     description: "",
     parts,
-    summary: { panels: 0, agents: 0, services: 0, clientApps: 0, extensions: 0 },
+    summary: { panels: 0, agents: 0, services: 0, clients: 0, extensions: 0 },
     unchangedPartCount: 0,
   };
 }
@@ -106,13 +105,12 @@ function review(parts: InstallReviewPart[]): PendingUnitInstallReviewApproval {
 function foreignRoot(origin: InstallReviewOrigin): PendingUnitInstallReviewApproval[] {
   return [
     review([
-      part({ repoPath: "apps/studio", title: "Studio", origin }),
+      part({ repoPath: "clients/studio", title: "Studio", origin }),
       part({
         kind: "extension",
         label: "Extension",
         repoPath: "extensions/acme-tools",
         title: "Acme Tools",
-        target: null,
         origin,
       }),
     ]),

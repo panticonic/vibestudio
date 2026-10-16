@@ -6,7 +6,7 @@ import type { ViewManager } from "../viewManager.js";
 import { sanitizeFilenamePart } from "../safeFilename.js";
 import { panelMethods } from "@vibestudio/service-schemas/panel";
 import { buildPanelChromeState, type PanelChromeState } from "@vibestudio/shared/panelChrome";
-import { callerHasPlatformCapability, requireAppCapability } from "./appCapabilities.js";
+import { requireClientCapability } from "./clientCapabilities.js";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { dialog } from "electron";
 import { promises as fs } from "node:fs";
@@ -18,27 +18,12 @@ const NO_FIND_MATCHES: FindInPageResult = { activeMatchOrdinal: 0, matches: 0 };
 /** Cancellers for in-flight finds, so `stopFindInPage` settles them. */
 const pendingFinds = new WeakMap<Electron.WebContents, Set<() => void>>();
 
-function requirePanelHostingAppCapability(
+function requirePanelHostingClientCapability(
   ctx: ServiceContext,
   viewManager: ViewManager,
   method: string
 ): void {
-  if (callerHasPlatformCapability(ctx.caller.runtime.id, ctx.caller.runtime.kind, "panel-hosting"))
-    return;
-  requireAppCapability(ctx, viewManager, "panel-hosting", `panel.${method}`);
-}
-
-function requirePanelHostingChrome(
-  ctx: ServiceContext,
-  viewManager: ViewManager,
-  method: string
-): void {
-  if (
-    callerHasPlatformCapability(ctx.caller.runtime.id, ctx.caller.runtime.kind, "panel-hosting")
-  ) {
-    return;
-  }
-  requirePanelHostingAppCapability(ctx, viewManager, method);
+  requireClientCapability(ctx, viewManager, "panel-hosting", `panel.${method}`);
 }
 
 export interface PanelViewMethodDeps {
@@ -70,16 +55,16 @@ async function readPanelPresentation(deps: PanelViewMethodDeps, panelId: string)
 export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler {
   return defineServiceHandler("view", panelMethods, {
     createPanel: async (ctx, [parentId, source, options]) => {
-      requirePanelHostingChrome(ctx, deps.getViewManager(), "createPanel");
+      requirePanelHostingClientCapability(ctx, deps.getViewManager(), "createPanel");
       const { stateArgs, ...createOptions } = options ?? {};
       const caller =
-        ctx.caller.runtime.kind === "app"
+        ctx.caller.runtime.kind === "client"
           ? {
               callerId:
                 deps.getViewManager().getViewInfo(ctx.caller.runtime.id)?.workspaceIdentity
                   ?.runtimeId ??
                 (() => {
-                  throw new Error("App has no workspace ownership");
+                  throw new Error("Client has no workspace ownership");
                 })(),
               callerKind: ctx.caller.runtime.kind,
             }
@@ -98,54 +83,58 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
         ...options,
       }),
     ensurePanelLoaded: (ctx, [panelId]) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "ensurePanelLoaded");
+      requirePanelHostingClientCapability(ctx, deps.getViewManager(), "ensurePanelLoaded");
       return deps.panelOrchestrator.ensureLoaded(panelId);
     },
     updateTheme: (ctx, [theme]) => {
       const lifecycle = deps.panelOrchestrator;
       const vm = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, vm, "updateTheme");
+      requirePanelHostingClientCapability(ctx, vm, "updateTheme");
       lifecycle.setCurrentTheme(theme);
       lifecycle.broadcastTheme(theme);
       return;
     },
     updateThemeConfig: (ctx, [config]) => {
       const lifecycle = deps.panelOrchestrator;
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "updateThemeConfig");
+      requirePanelHostingClientCapability(ctx, deps.getViewManager(), "updateThemeConfig");
       lifecycle.setCurrentThemeConfig(config);
       lifecycle.broadcastThemeConfig();
       return;
     },
     getThemeConfig: () => deps.panelOrchestrator.getThemeConfig(),
     getPresentation: async (ctx, [panelId]) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getPresentation");
+      requirePanelHostingClientCapability(ctx, deps.getViewManager(), "getPresentation");
       return readPanelPresentation(deps, panelId);
     },
     getPresentations: async (ctx, [panelIds]) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getPresentations");
+      requirePanelHostingClientCapability(ctx, deps.getViewManager(), "getPresentations");
       const presentations = await Promise.all(
         [...new Set(panelIds)].map((panelId) => readPanelPresentation(deps, panelId))
       );
       return presentations.filter((presentation) => presentation !== null);
     },
     getLocalPresentation: (ctx, [panelId]) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getLocalPresentation");
+      requirePanelHostingClientCapability(ctx, deps.getViewManager(), "getLocalPresentation");
       return deps.panelOrchestrator.getLocalPresentation(panelId);
     },
     getChromeState: (ctx, [panelId]) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "getChromeState");
+      requirePanelHostingClientCapability(ctx, deps.getViewManager(), "getChromeState");
       const panel = deps.panelRegistry.getPanel(panelId);
       if (!panel) throw new Error(`Panel not found: ${panelId}`);
       return buildPanelChromeState({ panel }) satisfies PanelChromeState;
     },
     markBrowserNavigationIntent: (ctx, [panelId, intent]) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "markBrowserNavigationIntent");
+      requirePanelHostingClientCapability(
+        ctx,
+        deps.getViewManager(),
+        "markBrowserNavigationIntent"
+      );
       deps.panelView.markBrowserNavigationIntent?.(panelId, intent);
       return;
     },
     findInPage: async (ctx, [panelId, text, options]) => {
       const vm = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, vm, "findInPage");
+      requirePanelHostingClientCapability(ctx, vm, "findInPage");
       const contents = deps.panelView.getWebContents(panelId);
       if (!contents || contents.isDestroyed() || !text) return NO_FIND_MATCHES;
       return new Promise<FindInPageResult>((resolve, reject) => {
@@ -186,7 +175,7 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
     },
     stopFindInPage: (ctx, [panelId]) => {
       const vm = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, vm, "stopFindInPage");
+      requirePanelHostingClientCapability(ctx, vm, "stopFindInPage");
       const contents = deps.panelView.getWebContents(panelId);
       if (contents && !contents.isDestroyed()) {
         contents.stopFindInPage("clearSelection");
@@ -196,7 +185,7 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
     },
     getBrowserPageIdentity: async (ctx, [panelId]) => {
       const vm = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, vm, "getBrowserPageIdentity");
+      requirePanelHostingClientCapability(ctx, vm, "getBrowserPageIdentity");
       const page = currentBrowserPage(panelId, deps.panelRegistry, deps.panelView.getViewManager());
       const contents = deps.panelView.getWebContents(panelId);
       try {
@@ -214,7 +203,7 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
     },
     setNativeBrowserZoom: async (ctx, [panelId, origin, zoomFactor]) => {
       const vm = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, vm, "setNativeBrowserZoom");
+      requirePanelHostingClientCapability(ctx, vm, "setNativeBrowserZoom");
       const page = currentBrowserPage(panelId, deps.panelRegistry, deps.panelView.getViewManager());
       if (page.origin !== origin) {
         throw Object.assign(new Error("Browser page changed before zoom could be applied"), {
@@ -227,7 +216,7 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
     },
     clearNativeBrowserSiteData: async (ctx, [panelId, origin]) => {
       const vm = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, vm, "clearNativeBrowserSiteData");
+      requirePanelHostingClientCapability(ctx, vm, "clearNativeBrowserSiteData");
       const page = currentBrowserPage(panelId, deps.panelRegistry, deps.panelView.getViewManager());
       if (page.origin !== origin) {
         throw Object.assign(new Error("Browser page changed before site data could be cleared"), {
@@ -248,7 +237,7 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
     },
     printBrowserPage: async (ctx, [panelId]) => {
       const vm = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, vm, "printBrowserPage");
+      requirePanelHostingClientCapability(ctx, vm, "printBrowserPage");
       currentBrowserPage(panelId, deps.panelRegistry, deps.panelView.getViewManager());
       const contents = deps.panelView.getWebContents(panelId);
       if (!contents) throw new Error("Browser page is not loaded");
@@ -261,7 +250,7 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
     },
     saveBrowserPagePdf: async (ctx, [panelId]) => {
       const vm = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, vm, "saveBrowserPagePdf");
+      requirePanelHostingClientCapability(ctx, vm, "saveBrowserPagePdf");
       currentBrowserPage(panelId, deps.panelRegistry, deps.panelView.getViewManager());
       const contents = deps.panelView.getWebContents(panelId);
       if (!contents) throw new Error("Browser page is not loaded");
@@ -277,7 +266,7 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
     },
     stopBrowserMedia: async (ctx, [panelId]) => {
       const vm = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, vm, "stopBrowserMedia");
+      requirePanelHostingClientCapability(ctx, vm, "stopBrowserMedia");
       currentBrowserPage(panelId, deps.panelRegistry, deps.panelView.getViewManager());
       const contents = deps.panelView.getWebContents(panelId);
       if (!contents) return;
@@ -286,24 +275,24 @@ export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler
       );
     },
     togglePin: (ctx, [panelId]) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "togglePin");
+      requirePanelHostingClientCapability(ctx, deps.getViewManager(), "togglePin");
       return deps.panelOrchestrator.togglePanelPin(panelId);
     },
     listPinnedPanelIds: (ctx) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "listPinnedPanelIds");
+      requirePanelHostingClientCapability(ctx, deps.getViewManager(), "listPinnedPanelIds");
       return deps.panelOrchestrator.listPinnedPanelIds();
     },
     getFocusedPanelId: (ctx) => {
-      requirePanelHostingChrome(ctx, deps.getViewManager(), "getFocusedPanelId");
+      requirePanelHostingClientCapability(ctx, deps.getViewManager(), "getFocusedPanelId");
       return deps.panelOrchestrator.getFocusedPanelId();
     },
     setFocusedPanelId: (ctx, [panelId]) => {
-      requirePanelHostingAppCapability(ctx, deps.getViewManager(), "setFocusedPanelId");
+      requirePanelHostingClientCapability(ctx, deps.getViewManager(), "setFocusedPanelId");
       return deps.panelOrchestrator.setFocusedPanelId(panelId);
     },
     openPanelDevTools: (ctx, [panelId, mode]) => {
       const viewManager = deps.getViewManager();
-      requirePanelHostingAppCapability(ctx, viewManager, "openPanelDevTools");
+      requirePanelHostingClientCapability(ctx, viewManager, "openPanelDevTools");
       deps.panelView.getViewManager().openDevTools(panelId, mode);
     },
   });

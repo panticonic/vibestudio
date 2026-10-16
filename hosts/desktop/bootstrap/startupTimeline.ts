@@ -2,11 +2,11 @@ import type {
   StartupConnectionProgress,
   StartupConnectionPhaseId,
 } from "../../../src/startupConnectionProgress.js";
-import type { HostLaunchProgress } from "@vibestudio/service-schemas/clients/hostLaunchClient";
+import type { LaunchGateProgress } from "./launchGateModel.js";
 type BootstrapPhaseState = "pending" | "active" | "complete" | "blocked" | "failed" | "skipped";
 
 export interface BootstrapTimelinePhase {
-  id: StartupConnectionPhaseId | HostLaunchProgress["phase"];
+  id: StartupConnectionPhaseId | LaunchGateProgress["phase"];
   label: string;
   state: BootstrapPhaseState;
   detail?: string;
@@ -42,12 +42,12 @@ export function connectionTimeline(
 export function startupTimeline(
   progress: StartupConnectionProgress | null | undefined,
   currentState: "active" | "failed" | "complete" = "active",
-  launchProgress?: readonly HostLaunchProgress[]
+  launchProgress?: readonly LaunchGateProgress[]
 ): BootstrapTimelinePhase[] {
-  const labels: Record<HostLaunchProgress["phase"], string> = {
-    "resolve-target": "Find desktop app",
-    "start-units": "Start required services",
-    "prepare-app": "Prepare desktop app",
+  const labels: Record<LaunchGateProgress["phase"], string> = {
+    resolve: "Find the client",
+    extensions: "Start required services",
+    build: "Prepare the client",
   };
   return [
     ...connectionTimeline(progress, launchProgress ? "complete" : currentState),
