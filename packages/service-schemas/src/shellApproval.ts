@@ -370,6 +370,7 @@ export const pendingUnitInstallReviewApprovalSchema = z
       .strict()
       .nullable()
       .optional(),
+    waiting: z.array(approvalRequesterSchema).optional(),
   })
   .strict() satisfies z.ZodType<PendingUnitInstallReviewApproval>;
 

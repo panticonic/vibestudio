@@ -118,6 +118,12 @@ export interface ApprovalResolver {
   deviceLabel?: string;
 }
 
+/** Who is asking, in the terms the queue resolves into an `ApprovalRequesterIdentity`. */
+export type ApprovalRequesterRef = Pick<
+  ApprovalQueueRequestBase,
+  "callerId" | "callerKind" | "repoPath" | "effectiveVersion" | "requesterCategory"
+>;
+
 interface ApprovalQueueRequestBase {
   authoritySubject?: PendingApproval["authoritySubject"];
   callerId: string;
@@ -681,6 +687,17 @@ export interface ApprovalQueue {
     resolver?: ApprovalResolver
   ): Promise<void>;
   listPending(): PendingApproval[];
+  /**
+   * Record that `waiter`'s work is parked until the exact unit `code` is
+   * reviewed. Every pending unit review covering that unit lists the waiter in
+   * `waiting` until `signal` aborts or the returned release is called; the
+   * hold never resolves, delays or changes the review itself.
+   */
+  holdForUnitReview(
+    code: { repoPath: string; effectiveVersion: string },
+    waiter: ApprovalRequesterRef,
+    signal: AbortSignal
+  ): () => void;
   /** Withdraw pending decisions for a caller, rejecting waiters with the owning cause. */
   cancelForCaller(callerId: string, reason: unknown): void;
 }
@@ -773,6 +790,23 @@ export function createApprovalQueue(deps: {
   const entriesByDedupKey = new Map<string, QueueEntry>();
   const preparationsByProducerKey = new Map<string, QueueEntry>();
   const pendingListeners = new Set<(pending: PendingApproval[]) => void>();
+  /** Work parked on a unit's review, projected onto whichever review covers that unit. */
+  const unitReviewHolds = new Set<{ unit: string; requester: ApprovalRequesterIdentity }>();
+  const unitKey = (repoPath: string, effectiveVersion: string) =>
+    `${repoPath}\0${effectiveVersion}`;
+  function presented(approval: PendingApproval): PendingApproval {
+    if (approval.kind !== "unit-install-review" || unitReviewHolds.size === 0) return approval;
+    const units = new Set(
+      approval.parts.map((part) => unitKey(part.repoPath, part.effectiveVersion))
+    );
+    const waiting = new Map<string, ApprovalRequesterIdentity>();
+    for (const hold of unitReviewHolds)
+      if (units.has(hold.unit) && !waiting.has(hold.requester.id))
+        waiting.set(hold.requester.id, hold.requester);
+    return waiting.size > 0 ? { ...approval, waiting: [...waiting.values()] } : approval;
+  }
+  const pendingApprovals = (): PendingApproval[] =>
+    Array.from(entriesById.values()).map((e) => presented(e.approval));
   const scopeAccess = deps.scopeAccess ?? { isMember: () => false, isAdmin: () => false };
   const assertAnswerableAudience = (approval: PendingApproval): void => {
     const audience = approvalAudience(approval);
@@ -815,7 +849,7 @@ export function createApprovalQueue(deps: {
   };
 
   function emitPendingChanged(): void {
-    const pending = Array.from(entriesById.values()).map((e) => e.approval);
+    const pending = pendingApprovals();
     for (const listener of pendingListeners) {
       try {
         listener(pending);
@@ -2261,7 +2295,21 @@ export function createApprovalQueue(deps: {
     },
 
     listPending() {
-      return Array.from(entriesById.values()).map((e) => e.approval);
+      return pendingApprovals();
+    },
+
+    holdForUnitReview(code, waiter, signal) {
+      const requester = resolveRequesterFor(waiter);
+      if (!requester || signal.aborted) return () => {};
+      const hold = { unit: unitKey(code.repoPath, code.effectiveVersion), requester };
+      unitReviewHolds.add(hold);
+      emitPendingChanged();
+      const release = () => {
+        signal.removeEventListener("abort", release);
+        if (unitReviewHolds.delete(hold)) emitPendingChanged();
+      };
+      signal.addEventListener("abort", release, { once: true });
+      return release;
     },
 
     cancelForCaller(callerId, reason) {

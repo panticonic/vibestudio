@@ -312,6 +312,7 @@ async function makeHarness(
   const approvalQueue = {
     request: vi.fn(async (_req: unknown) => opts.approvalDecision ?? ("accepted" as const)),
     listPending: vi.fn<() => PendingApproval[]>(() => []),
+    holdForUnitReview: vi.fn(() => () => {}),
     requestWithHandle: vi.fn((req) => ({
       approvalId: "install-review",
       decision: approvalQueue.request(req),

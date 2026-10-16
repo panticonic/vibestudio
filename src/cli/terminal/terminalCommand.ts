@@ -57,7 +57,7 @@ const DETAILS = `How it connects:
     file, never to your terminal.
 
 The terminal browser shows your Personal workspace (another one with
---workspace, or switch inside it with Ctrl-Space w). Like the desktop app, the
+--workspace, or switch inside it with Ctrl-B w). Like the desktop app, the
 browser itself is installed in your System workspace; before it takes over
 the screen, its startup approvals are asked here as questions; answer them or
 pass --yes.

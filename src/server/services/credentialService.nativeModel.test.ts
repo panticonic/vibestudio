@@ -212,7 +212,11 @@ describe("native model credential admission", () => {
     const requestApproval = vi.fn();
     let acceptReview!: () => void;
     const waitForUnitReview = vi.fn(
-      (_review: NonNullable<AcquisitionRequestInput["pendingReview"]>, signal: AbortSignal) =>
+      (
+        _review: NonNullable<AcquisitionRequestInput["pendingReview"]>,
+        _waiter: unknown,
+        signal: AbortSignal
+      ) =>
         new Promise<"accepted">((resolve, reject) => {
           acceptReview = () => resolve("accepted");
           signal.addEventListener("abort", () => reject(signal.reason), { once: true });
@@ -245,6 +249,7 @@ describe("native model credential admission", () => {
           ...review,
           code: { repoPath: workerImage.source, effectiveVersion: workerImage.effectiveVersion },
         },
+        expect.objectContaining({ callerId: expect.any(String), callerKind: expect.any(String) }),
         expect.any(AbortSignal)
       );
       expect(f.handler).not.toHaveBeenCalled();

@@ -191,6 +191,7 @@ describe("shellApprovalService", () => {
         submitCredentialInput: vi.fn(),
         listPending: vi.fn(() => []),
         cancelForCaller: vi.fn(),
+        holdForUnitReview: vi.fn(() => () => {}),
       },
     });
 
@@ -215,6 +216,7 @@ describe("shellApprovalService", () => {
         submitCredentialInput: vi.fn(),
         listPending: vi.fn(() => []),
         cancelForCaller: vi.fn(),
+        holdForUnitReview: vi.fn(() => () => {}),
       },
     });
 
@@ -252,6 +254,7 @@ describe("shellApprovalService", () => {
           } as PendingApproval,
         ]),
         cancelForCaller: vi.fn(),
+        holdForUnitReview: vi.fn(() => () => {}),
       },
     });
 
@@ -286,6 +289,7 @@ describe("shellApprovalService", () => {
         submitCredentialInput: vi.fn(),
         listPending: vi.fn(() => [startupApproval("startup-1")]),
         cancelForCaller: vi.fn(),
+        holdForUnitReview: vi.fn(() => () => {}),
       },
       metrics,
     });
@@ -325,6 +329,7 @@ describe("shellApprovalService", () => {
         submitCredentialInput: vi.fn(),
         listPending: vi.fn(() => [startupApproval("startup-1")]),
         cancelForCaller: vi.fn(),
+        holdForUnitReview: vi.fn(() => () => {}),
       },
       metrics,
     });
@@ -372,6 +377,7 @@ describe("shellApprovalService", () => {
         submitCredentialInput: vi.fn(),
         listPending: vi.fn(() => pending),
         cancelForCaller: vi.fn(),
+        holdForUnitReview: vi.fn(() => () => {}),
       },
     });
     const ctx = { caller: createVerifiedCaller("shell", "shell") };
@@ -424,6 +430,7 @@ describe("shellApprovalService", () => {
         submitCredentialInput: vi.fn(),
         listPending: vi.fn(() => pending),
         cancelForCaller: vi.fn(),
+        holdForUnitReview: vi.fn(() => () => {}),
       },
     });
 

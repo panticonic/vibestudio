@@ -12,17 +12,27 @@ function exactApprovalQueue<
       req: Parameters<UnitApprovalQueueLike["requestWithHandle"]>[0]
     ): Promise<Awaited<ReturnType<UnitApprovalQueueLike["requestWithHandle"]>["decision"]>>;
     listPending?: UnitApprovalQueueLike["listPending"];
+    holdForUnitReview?: UnitApprovalQueueLike["holdForUnitReview"];
     reportInstallLanding?: UnitApprovalQueueLike["reportInstallLanding"];
   },
 >(queue: T, approvalId = "install-review"): T & UnitApprovalQueueLike {
   return Object.assign(queue, {
     listPending: queue.listPending ?? (() => []),
+    holdForUnitReview: queue.holdForUnitReview ?? (() => () => {}),
     requestWithHandle: (req: Parameters<UnitApprovalQueueLike["requestWithHandle"]>[0]) => ({
       approvalId,
       decision: queue.request(req),
     }),
   });
 }
+
+const WAITER = {
+  callerId: "do:agent",
+  callerKind: "do" as const,
+  repoPath: "workers/agent",
+  effectiveVersion: "agent-ev",
+  requesterCategory: "agent" as const,
+};
 
 function unit(kind: "extension" | "app" | "panel" | "worker", name: string): ReviewedUnit {
   return {
@@ -54,7 +64,8 @@ describe("UnitInstallReviewCoordinator", () => {
     });
     const joined = coordinator.whenUnitReviewSettled(
       { repoPath: entry.source.repo, effectiveVersion: entry.ev! },
-      new AbortController().signal
+      new AbortController().signal,
+      WAITER
     );
     const settled = vi.fn();
     void joined.then(settled, settled);
@@ -94,14 +105,16 @@ describe("UnitInstallReviewCoordinator", () => {
     await expect(
       coordinator.whenUnitReviewSettled(
         { repoPath: entry.source.repo, effectiveVersion: entry.ev! },
-        new AbortController().signal
+        new AbortController().signal,
+        WAITER
       )
     ).resolves.toBe("deny");
     answer = "accepted";
     const second = enqueue();
     const joined = coordinator.whenUnitReviewSettled(
       { repoPath: entry.source.repo, effectiveVersion: entry.ev! },
-      new AbortController().signal
+      new AbortController().signal,
+      WAITER
     );
     await coordinator.publishPending("startup");
     await second;
@@ -117,7 +130,8 @@ describe("UnitInstallReviewCoordinator", () => {
     const controller = new AbortController();
     const cancelled = coordinator.whenUnitReviewSettled(
       { repoPath: "workers/old", effectiveVersion: "ev-old" },
-      controller.signal
+      controller.signal,
+      WAITER
     );
     const reason = new Error("invocation cancelled");
     controller.abort(reason);
@@ -125,11 +139,47 @@ describe("UnitInstallReviewCoordinator", () => {
     expect(queue.request).not.toHaveBeenCalled();
     const unstaged = coordinator.whenUnitReviewSettled(
       { repoPath: "workers/missing", effectiveVersion: "ev-missing" },
-      new AbortController().signal
+      new AbortController().signal,
+      WAITER
     );
     const failure = new Error("review source preparation failed");
     coordinator.finishStartupReviewStaging(failure);
     await expect(unstaged).rejects.toBe(failure);
+  });
+
+  it("lists the joined work on the review while it waits, and only while it waits", async () => {
+    const entry = unit("worker", "agent");
+    const released = vi.fn();
+    const holdForUnitReview = vi.fn(() => released);
+    const coordinator = new UnitInstallReviewCoordinator({
+      approvalQueue: exactApprovalQueue({
+        request: vi.fn(async () => "accepted" as const),
+        holdForUnitReview,
+      }),
+      autoPublishStartup: false,
+    });
+    const enqueued = coordinator.enqueue({
+      entries: [entry],
+      trigger: "startup",
+      applyApproved: async () => {},
+      applyDenied: vi.fn(),
+    });
+    const controller = new AbortController();
+    const joined = coordinator.whenUnitReviewSettled(
+      { repoPath: entry.source.repo, effectiveVersion: entry.ev! },
+      controller.signal,
+      WAITER
+    );
+    expect(holdForUnitReview).toHaveBeenCalledWith(
+      { repoPath: entry.source.repo, effectiveVersion: entry.ev! },
+      WAITER,
+      controller.signal
+    );
+    expect(released).not.toHaveBeenCalled();
+    await coordinator.publishPending("startup");
+    await enqueued;
+    await expect(joined).resolves.toBe("accepted");
+    expect(released).toHaveBeenCalled();
   });
 
   it("propagates application failure to the exact review join", async () => {
@@ -149,7 +199,8 @@ describe("UnitInstallReviewCoordinator", () => {
     });
     const joined = coordinator.whenUnitReviewSettled(
       { repoPath: entry.source.repo, effectiveVersion: entry.ev! },
-      new AbortController().signal
+      new AbortController().signal,
+      WAITER
     );
     const publishing = coordinator.publishPending("startup");
     await Promise.all([
@@ -690,6 +741,7 @@ describe("UnitInstallReviewCoordinator", () => {
     const reportInstallLanding = vi.fn();
     const coordinator = new UnitInstallReviewCoordinator({
       approvalQueue: {
+        holdForUnitReview: vi.fn(() => () => {}),
         requestWithHandle: vi.fn(() => ({
           approvalId: "current-review",
           decision: Promise.resolve("accepted" as const),
@@ -730,6 +782,7 @@ describe("UnitInstallReviewCoordinator", () => {
     const reportInstallLanding = vi.fn();
     const coordinator = new UnitInstallReviewCoordinator({
       approvalQueue: {
+        holdForUnitReview: vi.fn(() => () => {}),
         requestWithHandle: vi.fn(() => ({
           approvalId: "shared-review",
           decision: Promise.resolve("accepted" as const),

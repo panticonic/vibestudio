@@ -5,7 +5,12 @@ import type {
   ReviewedUnit,
 } from "@vibestudio/shared/approvals";
 import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
-import type { ApprovalQueueDecision, InstallLandingReport } from "./services/approvalQueue.js";
+import type {
+  ApprovalQueue,
+  ApprovalQueueDecision,
+  ApprovalRequesterRef,
+  InstallLandingReport,
+} from "./services/approvalQueue.js";
 
 export interface UnitApprovalQueueLike {
   requestWithHandle(req: {
@@ -25,6 +30,7 @@ export interface UnitApprovalQueueLike {
     configWrite?: PendingUnitInstallReviewApproval["configWrite"];
   }): { approvalId: string; decision: Promise<ApprovalQueueDecision> };
   listPending(): PendingApproval[];
+  holdForUnitReview: ApprovalQueue["holdForUnitReview"];
   reportInstallLanding?(approvalId: string, report: InstallLandingReport): void;
 }
 
@@ -98,16 +104,21 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
 
   /** Join this exact unit's review and committed application. An observer may
    * arrive before startup has staged the review; cancellation removes only the
-   * observer and leaves the shared human question actionable. */
+   * observer and leaves the shared human question actionable. While it waits,
+   * `waiter` is listed on the review so surfaces can attribute it to the work
+   * it blocks. */
   whenUnitReviewSettled(
     code: { repoPath: string; effectiveVersion: string },
-    signal: AbortSignal
+    signal: AbortSignal,
+    waiter: ApprovalRequesterRef
   ): Promise<"accepted" | "deny" | "dismiss"> {
     signal.throwIfAborted();
     const key = `${code.repoPath}@${code.effectiveVersion}`;
     return new Promise((resolve, reject) => {
       let observing = false;
+      const release = this.deps.approvalQueue.holdForUnitReview(code, waiter, signal);
       const cleanup = () => {
+        release();
         signal.removeEventListener("abort", aborted);
         const observers = this.unitApplicationObservers.get(key);
         observers?.delete(observe);

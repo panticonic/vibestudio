@@ -608,6 +608,62 @@ describe("approvalQueue", () => {
     queue.resolve(queue.listPending()[0]!.approvalId, "deny");
   });
 
+  it("lists work parked on a unit on whichever review covers it, until the hold ends", async () => {
+    const { queue, emit } = createQueue({
+      resolveRequester: (input) => ({
+        id: input.callerId,
+        kind: input.callerKind,
+        category: "agent",
+        panel: { id: "app:terminal-chat" },
+        repoPath: input.repoPath,
+        effectiveVersion: input.effectiveVersion,
+        stableIdentityKey: input.callerId,
+        ephemeralInstanceKey: input.callerId,
+        breadcrumbs: [{ id: "app:terminal-chat", kind: "app", category: "workspace-app" }],
+      }),
+    });
+    const waiter = {
+      callerId: "do:workers/agent:AgentDO:chat",
+      callerKind: "do" as const,
+      repoPath: "workers/agent",
+      effectiveVersion: "agent-ev",
+      requesterCategory: "agent" as const,
+    };
+    const controller = new AbortController();
+    // The join may precede the review's publication; the hold is about the unit.
+    const release = queue.holdForUnitReview(
+      { repoPath: "extensions/typecheck-service", effectiveVersion: "ev-typecheck" },
+      waiter,
+      controller.signal
+    );
+    queue.holdForUnitReview(
+      { repoPath: "extensions/typecheck-service", effectiveVersion: "ev-other" },
+      { ...waiter, callerId: "do:elsewhere" },
+      new AbortController().signal
+    );
+    void queue.request(unitInstallReviewRequest());
+    const [review] = queue.listPending();
+    expect(review).toMatchObject({
+      kind: "unit-install-review",
+      waiting: [{ id: waiter.callerId, panel: { id: "app:terminal-chat" } }],
+    });
+    expect(emit).toHaveBeenLastCalledWith(
+      "shell-approval:pending-changed",
+      expect.objectContaining({
+        pending: [expect.objectContaining({ waiting: expect.any(Array) })],
+      })
+    );
+    controller.abort();
+    expect(queue.listPending()[0]).not.toHaveProperty("waiting");
+    expect(emit).toHaveBeenLastCalledWith(
+      "shell-approval:pending-changed",
+      expect.objectContaining({
+        pending: [expect.not.objectContaining({ waiting: expect.anything() })],
+      })
+    );
+    release();
+  });
+
   it("preserves a host-resolved capability target separately from the requester", async () => {
     const { queue } = createQueue();
     void queue.request({

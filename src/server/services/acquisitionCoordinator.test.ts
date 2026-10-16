@@ -91,7 +91,7 @@ describe("AcquisitionCoordinator", () => {
     const coordinator = new AcquisitionCoordinator({
       grantStore,
       approvalQueue: { requestWithHandle, cancelForCaller: vi.fn() } as never,
-      waitForUnitReview: (_review, signal) =>
+      waitForUnitReview: (_review, _waiter, signal) =>
         new Promise((resolve, reject) => {
           settleReview = resolve;
           signal.addEventListener("abort", () => reject(signal.reason), { once: true });
@@ -243,7 +243,7 @@ describe("AcquisitionCoordinator", () => {
       const waitForUnitReview = vi.fn<
         NonNullable<ConstructorParameters<typeof AcquisitionCoordinator>[0]["waitForUnitReview"]>
       >(
-        (_review, signal) =>
+        (_review, _waiter, signal) =>
           new Promise<"accepted" | "deny">((resolve, reject) => {
             settle = resolve;
             signal.addEventListener("abort", () => reject(signal.reason), { once: true });
@@ -316,7 +316,7 @@ describe("AcquisitionCoordinator", () => {
     const first = new AcquisitionCoordinator({
       grantStore,
       approvalQueue: { request } as never,
-      waitForUnitReview: async (_review, signal) =>
+      waitForUnitReview: async (_review, _waiter, signal) =>
         new Promise((_resolve, reject) => {
           signal.addEventListener("abort", () => reject(signal.reason), { once: true });
         }),

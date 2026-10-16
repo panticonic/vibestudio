@@ -1076,14 +1076,14 @@ async function main() {
     approvalQueue,
     grantStore: capabilityGrantStore,
     resolveTaskTitle,
-    waitForUnitReview: async (review, signal) => {
+    waitForUnitReview: async (review, waiter, signal) => {
       signal.throwIfAborted();
       // Admission is durable across a host restart. An unanswered review is
       // rebound to its exact unit's current application, whose lifetime also
       // covers the startup placeholder before the shared review is published.
       if (unitAdmissionStore.hasVersion(review.code.repoPath, review.code.effectiveVersion))
         return "accepted";
-      return unitInstallReviewCoordinator.whenUnitReviewSettled(review.code, signal);
+      return unitInstallReviewCoordinator.whenUnitReviewSettled(review.code, signal, waiter);
     },
     notifyOwner: createAcquisitionOwnerNotifier(() => {
       const doDispatch = resolvedDoDispatchForTitles;

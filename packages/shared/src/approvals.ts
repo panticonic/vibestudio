@@ -600,6 +600,12 @@ export interface PendingUnitInstallReviewApproval extends PendingApprovalBase {
   unchangedPartCount: number;
   /** Present when the same publication writes workspace config. */
   configWrite?: { repoPath: string; summary: string } | null;
+  /**
+   * Work parked until this review is answered: the requester of each exact
+   * invocation that joined one of its units. A surface attributes the review
+   * to the tab or panel whose work it blocks. Absent while nothing waits.
+   */
+  waiting?: ApprovalRequesterIdentity[];
 }
 
 /**

@@ -25,6 +25,7 @@ import type {
   ApprovalQueue,
   ApprovalQueueDecision,
   ApprovalQueueResolution,
+  ApprovalRequesterRef,
   AuthorityApprovalQueueDecision,
   CapabilityApprovalQueueRequest,
 } from "./approvalQueue.js";
@@ -207,8 +208,10 @@ export class AcquisitionCoordinator {
       ) => Promise<void> | void;
       resolveTaskTitle?: (taskSubject: string, signal: AbortSignal) => Promise<string | null>;
       expandLineageKeys?: (keys: readonly string[]) => readonly string[];
+      /** Park until the unit's review settles; `waiter` is whose work is parked on it. */
       waitForUnitReview?: (
         review: NonNullable<AcquisitionRequestInput["pendingReview"]>,
+        waiter: ApprovalRequesterRef,
         signal: AbortSignal
       ) => Promise<"accepted" | "deny" | "dismiss">;
     }
@@ -405,7 +408,11 @@ export class AcquisitionCoordinator {
   ): Promise<void> {
     if (!this.deps.waitForUnitReview) throw new Error("Unit review settlement is unavailable");
     const signal = AbortSignal.any([invocationSignal, this.presentationLifetime.signal]);
-    const decision = await this.deps.waitForUnitReview(review, signal);
+    const decision = await this.deps.waitForUnitReview(
+      review,
+      approvalRequesterRef(validateAcquisitionGroup(entry.inputs)),
+      signal
+    );
     signal.throwIfAborted();
     // Unit admission supplies its own grants. This receipt only releases the
     // exact invocation to reauthorize against that canonical admission.
@@ -1910,10 +1917,7 @@ export class AcquisitionCoordinator {
             }
           : {}),
       },
-      callerId: input.caller.runtime.id,
-      callerKind: approvalCallerKind(input.caller.runtime.kind),
-      repoPath: input.caller.code?.repoPath ?? "vibestudio/session",
-      effectiveVersion: input.caller.code?.effectiveVersion ?? input.snapshot.snippetDigest,
+      ...approvalRequesterRef(input),
       attention,
       operationId: entry.info.acquisitionId,
       taskSubject,
@@ -1929,11 +1933,6 @@ export class AcquisitionCoordinator {
         .sort(),
       repeatReason: "none" as const,
       ...requestedByAccount(input.caller),
-      requesterCategory: input.caller.agentBinding
-        ? ("agent" as const)
-        : input.snapshot.snippetDigest === "-"
-          ? ("unknown" as const)
-          : ("eval" as const),
       ...(presentation?.operation ? { operation: presentation.operation } : {}),
       ...((input.target ?? presentation?.target)
         ? { target: input.target ?? presentation?.target }
@@ -2487,6 +2486,21 @@ function testPolicyIntegrityError(
       input.caller.executionSession?.testPolicy?.policyId ??
       null,
   });
+}
+
+/** The invoking runtime, as the approval queue resolves it into a requester identity. */
+function approvalRequesterRef(input: AcquisitionRequestInput): ApprovalRequesterRef {
+  return {
+    callerId: input.caller.runtime.id,
+    callerKind: approvalCallerKind(input.caller.runtime.kind),
+    repoPath: input.caller.code?.repoPath ?? "vibestudio/session",
+    effectiveVersion: input.caller.code?.effectiveVersion ?? input.snapshot.snippetDigest,
+    requesterCategory: input.caller.agentBinding
+      ? "agent"
+      : input.snapshot.snippetDigest === "-"
+        ? "unknown"
+        : "eval",
+  };
 }
 
 function acquisitionDelivery(continuation: AcquisitionContinuation): AcquisitionDelivery {
