@@ -358,7 +358,7 @@ export async function runPackagedIsolationSmoke(options) {
     const ready = await measureAcceptancePhase(
       result,
       "packagedWorkspaceRequireElectronReady",
-      "Packaged server launch to hub ready-file after --require-electron-ready for fresh workspace 'dev'; server artifact readiness, not GUI pairing or visible selected shell",
+      "Packaged server launch to hub ready-file after --require-client-ready=desktop for fresh workspace 'dev'; server artifact readiness, not GUI pairing or visible selected shell",
       async () => {
         server = launch(
           executable,
@@ -369,7 +369,7 @@ export async function runPackagedIsolationSmoke(options) {
             appRoot,
             "--bootstrap-workspace",
             "dev",
-            "--require-electron-ready",
+            "--require-client-ready=desktop",
             "--ready-file",
             readyFile,
           ],

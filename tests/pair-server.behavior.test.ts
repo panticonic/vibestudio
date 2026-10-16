@@ -165,8 +165,7 @@ describe("pair-server runner", () => {
           expect(env["VIBESTUDIO_HOST"]).toBeUndefined();
           expect(env["VIBESTUDIO_IROH_RELAYS"]).toBe("https://one.example/,https://two.example/");
           expect(serverArgs).toContain("--ready-file");
-          expect(serverArgs).not.toContain("--require-electron-ready");
-          expect(serverArgs).not.toContain("--require-mobile-ready");
+          expect(serverArgs.some((arg) => arg.startsWith("--require-client-ready"))).toBe(false);
           queueMicrotask(() => child.emit("exit", 0, null));
           return child;
         },

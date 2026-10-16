@@ -852,8 +852,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
     baseEnv: {
       PATH: "/usr/bin",
       VIBESTUDIO_GATEWAY_PORT: "3030",
-      VIBESTUDIO_REQUIRE_MOBILE_READY: "1",
-      VIBESTUDIO_REQUIRE_ELECTRON_READY: "1",
+      VIBESTUDIO_REQUIRE_CLIENTS_READY: "desktop,android",
       VIBESTUDIO_WORKSPACE_DIR: "/somewhere",
       VIBESTUDIO_ADMIN_TOKEN: "hub-operator-token",
       VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH: "/hub/runtime/internal-do-programs.json",
@@ -901,8 +900,7 @@ describe("buildWorkspaceChildEnv (§5 per-child isolation)", () => {
 
   it("keeps the strict hub-child control contract and clears inherited ports", () => {
     const env = buildWorkspaceChildEnv({ ...base, workspaceName: "alpha" });
-    expect(env["VIBESTUDIO_REQUIRE_MOBILE_READY"]).toBeUndefined();
-    expect(env["VIBESTUDIO_REQUIRE_ELECTRON_READY"]).toBeUndefined();
+    expect(env["VIBESTUDIO_REQUIRE_CLIENTS_READY"]).toBeUndefined();
     expect(env["VIBESTUDIO_PROCESS_ROLE"]).toBe("workspace-child");
     expect(env["VIBESTUDIO_HUB_URL"]).toBe("http://127.0.0.1:3030");
     expect(env["VIBESTUDIO_WORKSPACE_CHILD_TOKEN"]).toBe("workspace-child-identity");

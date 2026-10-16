@@ -667,7 +667,6 @@ function copyAssets() {
   fs.copyFileSync("hosts/desktop/main/displayCapture.html", "dist/displayCapture.html");
   copySqlJsRuntimeAsset("dist");
   copyBrandAssets();
-  fs.mkdirSync("dist/baked-app", { recursive: true });
   // Bundled agent skill consumed by `vibestudio agent skill install|print`
   // (resolved as a sibling of dist/cli/client.mjs).
   copyDirectoryRecursive("skills/vibestudio-agent", "dist/cli/skills/vibestudio-agent");

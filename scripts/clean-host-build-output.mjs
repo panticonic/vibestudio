@@ -11,8 +11,6 @@ const PRESERVED_DIST_ENTRIES = new Set([
   // The libproc observer is compiled during native preparation and may be
   // called by already-running hosts while a later host generation is built.
   "native-process-observer",
-  // An app bake is an explicit, separately produced packaging input.
-  "baked-app",
   // Full and source-prerequisite builds share this lock.
   "source-server-prerequisites.lock",
   // ensure-host-build serializes callers while this directory is replaced.

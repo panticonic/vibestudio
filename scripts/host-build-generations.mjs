@@ -10,7 +10,6 @@ import {
 const NON_COMPILER_ENTRIES = new Set([
   "node",
   "mxc",
-  "baked-app",
   "source-server-prerequisites.lock",
   "host-build.lock",
   "host-generations",

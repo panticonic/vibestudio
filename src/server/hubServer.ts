@@ -1,4 +1,5 @@
 import { appCompatibilityError } from "@vibestudio/workspace-contracts/appCompatibility";
+import type { HostKind } from "@vibestudio/workspace-contracts/clients";
 import { parseWorkspaceAppCompatibilityEnvelope } from "@vibestudio/workspace/configParser";
 import { stateLayout } from "./stateLayout.js";
 import {
@@ -164,8 +165,8 @@ export interface HubServerArgs {
   logLevel?: string;
   readyFile?: string;
   gatewayPort?: number;
-  requireMobileReady?: boolean;
-  requireElectronReady?: boolean;
+  /** Hosts whose default client the bootstrap workspace must prepare before ready. */
+  requireClientsReady?: HostKind[];
   headlessHostAutospawn?: boolean;
 }
 
@@ -2832,11 +2833,10 @@ export function buildWorkspaceChildEnv(input: {
   delete env["VIBESTUDIO_GATEWAY_PORT"];
   // Readiness belongs to the explicit bootstrap launch arguments. Inheriting
   // it would require ordinary Personal/app workspaces to contain native apps.
-  delete env["VIBESTUDIO_REQUIRE_MOBILE_READY"];
+  delete env["VIBESTUDIO_REQUIRE_CLIENTS_READY"];
   if (input.workspaceSources) {
     env[WORKSPACE_SOURCES_ENV] = serializeWorkspaceSources(input.workspaceSources);
   }
-  delete env["VIBESTUDIO_REQUIRE_ELECTRON_READY"];
   delete env["VIBESTUDIO_WORKSPACE_DIR"];
   if (input.creationIntent) {
     env["VIBESTUDIO_WORKSPACE_CREATION_INTENT"] = JSON.stringify(input.creationIntent);
@@ -2881,8 +2881,7 @@ export function buildWorkspaceChildArgs(input: {
   appRoot: string;
   readyFile: string;
   logLevel?: string;
-  requireMobileReady?: boolean;
-  requireElectronReady?: boolean;
+  requireClientsReady?: readonly HostKind[];
 }): string[] {
   const args = [
     input.entry,
@@ -2894,8 +2893,9 @@ export function buildWorkspaceChildArgs(input: {
     input.readyFile,
   ];
   if (input.logLevel) args.push("--log-level", input.logLevel);
-  if (input.requireMobileReady) args.push("--require-mobile-ready");
-  if (input.requireElectronReady) args.push("--require-electron-ready");
+  for (const host of input.requireClientsReady ?? []) {
+    args.push(`--require-client-ready=${host}`);
+  }
   return args;
 }
 
@@ -2968,9 +2968,8 @@ async function startWorkspaceRuntime(
     appRoot: launchSet.appRoot,
     readyFile,
     logLevel: state.args.logLevel,
-    requireMobileReady: workspaceId === state.bootstrapWorkspaceId && state.args.requireMobileReady,
-    requireElectronReady:
-      workspaceId === state.bootstrapWorkspaceId && state.args.requireElectronReady,
+    requireClientsReady:
+      workspaceId === state.bootstrapWorkspaceId ? (state.args.requireClientsReady ?? []) : [],
   });
 
   const childEnv = buildWorkspaceChildEnv({
@@ -3622,14 +3621,9 @@ export async function runHubServer(input: {
   // publishing the ready file (and therefore before the wrapper reveals a
   // pairing link). Without an explicit project, native clients prepare their
   // designated System workspace after account pairing and private-pair creation.
-  if (bootstrapWorkspace && (args.requireMobileReady || args.requireElectronReady)) {
+  if (bootstrapWorkspace && (args.requireClientsReady?.length ?? 0) > 0) {
     console.log(
-      `[Hub] Preparing ${bootstrapWorkspace} for ${[
-        args.requireElectronReady ? "desktop" : null,
-        args.requireMobileReady ? "mobile" : null,
-      ]
-        .filter(Boolean)
-        .join(" and ")} pairing`
+      `[Hub] Preparing ${bootstrapWorkspace} for ${args.requireClientsReady!.join(" and ")} pairing`
     );
     await ensureWorkspaceRuntime(activeState, bootstrapWorkspace);
   }

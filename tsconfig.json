@@ -38,6 +38,9 @@
       ],
       "@panticonic/builtin/eval-engine": ["./packages/builtin/src/eval-engine/index.ts"],
       "@panticonic/builtin/webhook-engine": ["./packages/builtin/src/webhook-engine/index.ts"],
+      "@vibestudio/client-host-core": ["./hosts/core/src/index.ts"],
+      "@vibestudio/client-host-core/node": ["./hosts/core/src/nodeArtifactStore.ts"],
+      "@vibestudio/client-host-core/*": ["./hosts/core/src/*"],
       "@vibestudio/content-addressing": ["./packages/content-addressing/src/index.ts"],
       "@vibestudio/credential-client": ["./packages/credential-client/src/index.ts"],
       "@vibestudio/credential-client/*": ["./packages/credential-client/src/*"],
@@ -76,7 +79,7 @@
       "@vibestudio/workspace-contracts/*": ["./packages/workspace-contracts/src/*"]
     }
   },
-  "include": ["src/**/*", "packages/**/*", "hosts/desktop/**/*", "hosts/terminal/**/*"],
+  "include": ["src/**/*", "packages/**/*", "hosts/core/**/*", "hosts/desktop/**/*", "hosts/terminal/**/*"],
   "exclude": [
     "node_modules",
     "dist",

@@ -136,6 +136,9 @@ importers:
       '@vibestudio/browser-import-archive':
         specifier: workspace:*
         version: link:packages/browser-import-archive
+      '@vibestudio/client-host-core':
+        specifier: workspace:*
+        version: link:hosts/core
       '@vibestudio/content-addressing':
         specifier: workspace:*
         version: link:packages/content-addressing
@@ -475,6 +478,25 @@ importers:
         specifier: https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.2.tgz
         version: '@panticonic/iroh-win32-x64-msvc@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.2.tgz'
 
+  hosts/core:
+    dependencies:
+      '@vibestudio/service-schemas':
+        specifier: workspace:*
+        version: link:../../packages/service-schemas
+      '@vibestudio/shared':
+        specifier: workspace:*
+        version: link:../../packages/shared
+      '@vibestudio/workspace-contracts':
+        specifier: workspace:*
+        version: link:../../packages/workspace-contracts
+    devDependencies:
+      '@types/node':
+        specifier: ^24.10.1
+        version: 24.10.9
+      typescript:
+        specifier: 7.0.2
+        version: 7.0.2
+
   hosts/react-native:
     dependencies:
       '@babel/runtime':
@@ -510,6 +532,9 @@ importers:
       '@vibestudio/browser-data':
         specifier: workspace:*
         version: link:../../packages/browser-data
+      '@vibestudio/client-host-core':
+        specifier: workspace:*
+        version: link:../core
       '@vibestudio/mobile-iroh':
         specifier: workspace:*
         version: link:../../packages/mobile-iroh
@@ -13187,9 +13212,7 @@ snapshots:
       metro-runtime: 0.82.5
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.79.7': {}
 

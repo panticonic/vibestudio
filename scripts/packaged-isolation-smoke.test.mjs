@@ -57,7 +57,7 @@ test("records phase boundaries and elapsed time on success and failure", async (
     measureAcceptancePhase(
       result,
       "packagedWorkspaceRequireElectronReady",
-      "server launch to require-electron-ready hub record; not GUI shell readiness",
+      "server launch to require-client-ready hub record; not GUI shell readiness",
       async () => {
         now = 67;
         throw failure;
@@ -67,7 +67,7 @@ test("records phase boundaries and elapsed time on success and failure", async (
     (error) => error === failure
   );
   assert.deepEqual(result.timings.packagedWorkspaceRequireElectronReady, {
-    boundary: "server launch to require-electron-ready hub record; not GUI shell readiness",
+    boundary: "server launch to require-client-ready hub record; not GUI shell readiness",
     status: "failed",
     elapsedMs: 27,
   });
