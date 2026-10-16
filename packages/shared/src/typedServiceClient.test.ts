@@ -6,6 +6,7 @@ import {
   defineServiceMethods,
   describeArgsValidationError,
   fixedPreparedAuthorityRequirement,
+  parseServiceMethodArgs,
   parseServiceMethodReturn,
   parseQualifiedServiceMethod,
   qualifyServiceMethod,
@@ -519,4 +520,29 @@ it("shows each supported positional call shape for union arguments", async () =>
   await expect((client.status as (...args: unknown[]) => Promise<unknown>)()).rejects.toThrow(
     "git.status(arg1) or git.status(arg1, { refresh })"
   );
+});
+
+describe("parseServiceMethodArgs", () => {
+  const options = z.object({ recursive: z.boolean().optional() });
+  const definition = {
+    args: z.union([
+      z.tuple([z.string(), options.optional()]),
+      z.tuple([z.string(), z.string(), options.optional()]),
+    ]),
+    returns: z.array(z.string()),
+  } as unknown as Parameters<typeof parseServiceMethodArgs>[2];
+
+  it("accepts an omitted optional trailing argument of any call shape, and keeps it omitted", () => {
+    expect(parseServiceMethodArgs("fs", "readdir", definition, ["."])).toEqual(["."]);
+    expect(parseServiceMethodArgs("fs", "readdir", definition, ["ctx", "."])).toEqual(["ctx", "."]);
+    expect(parseServiceMethodArgs("fs", "readdir", definition, [".", { recursive: true }])).toEqual(
+      [".", { recursive: true }]
+    );
+  });
+
+  it("still rejects arguments no call shape accepts", () => {
+    expect(() => parseServiceMethodArgs("fs", "readdir", definition, [1])).toThrow(
+      /failed schema validation/
+    );
+  });
 });

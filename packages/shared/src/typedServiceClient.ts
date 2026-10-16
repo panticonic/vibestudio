@@ -640,6 +640,27 @@ function expectedCallShape(service: string, method: string, definition: MethodSc
   return `${service}.${method}(${args.join(", ")})`;
 }
 
+/**
+ * Zod tuples require their full item count even when trailing items are
+ * optional, so an omitted trailing argument is padded with `undefined` for
+ * validation: to the tuple's length, or, for a union of call shapes, to the
+ * length of each shape in turn.
+ */
+function parsePaddedArgs(schema: z.ZodTypeAny, args: unknown[]): unknown[] {
+  const padded = (shape: z.ZodTypeAny) => {
+    const items = (shape as unknown as { _def?: { items?: readonly unknown[] } })._def?.items;
+    return items ? [...args, ...Array(Math.max(0, items.length - args.length))] : args;
+  };
+  const shapes = (schema as unknown as { _def?: { options?: readonly z.ZodTypeAny[] } })._def
+    ?.options;
+  if (shapes)
+    for (const shape of shapes) {
+      const result = shape.safeParse(padded(shape));
+      if (result.success) return result.data as unknown[];
+    }
+  return schema.parse(padded(schema)) as unknown[];
+}
+
 /** The shared argument validator for unary and streaming schema clients. */
 export function parseServiceMethodArgs<Definition extends MethodSchema>(
   service: string,
@@ -649,12 +670,7 @@ export function parseServiceMethodArgs<Definition extends MethodSchema>(
 ): ArgsOf<z.infer<Definition["args"]>> {
   let parsedArgs: unknown[];
   try {
-    const tupleItems = (definition.args as unknown as { _def?: { items?: readonly unknown[] } })
-      ._def?.items;
-    const paddedArgs = tupleItems
-      ? [...args, ...Array(Math.max(0, tupleItems.length - args.length))]
-      : args;
-    parsedArgs = definition.args.parse(paddedArgs) as unknown[];
+    parsedArgs = parsePaddedArgs(definition.args, args);
     // Zod tuples require their full item count even when the trailing item is
     // optional. Padding is only a validation detail; preserve omission on the
     // transport unless a schema default materialized an actual value.
