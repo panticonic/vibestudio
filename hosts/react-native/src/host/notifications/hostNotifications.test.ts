@@ -30,8 +30,8 @@ function harness(
   const decided: Array<[string, string]> = [];
   let permission = options.permission ?? "granted";
   let decideFails = true;
-  const reported: Array<{ id: string; actionId: string; text?: string | undefined }> = [];
-  const reportFailure: { error: Error | null } = { error: null };
+  const replies: Array<{ workspaceId: string; target: string; text: string }> = [];
+  const replyFailure: { error: Error | null } = { error: null };
   const l = {
     tokenRefresh: undefined as undefined | ((token: string) => void),
     message: undefined as undefined | ((message: RemoteMessage) => void),
@@ -94,9 +94,9 @@ function harness(
     },
     platform: options.platform ?? "android",
     isConfigured: () => options.configured ?? true,
-    reportAction: async (_scope, id, actionId, text) => {
-      if (reportFailure.error) throw reportFailure.error;
-      reported.push({ id, actionId, text });
+    replyToConversation: async (replyScope, target, text) => {
+      if (replyFailure.error) throw replyFailure.error;
+      replies.push({ workspaceId: replyScope.workspaceId, target, text });
     },
     decide: async (t, decision) => {
       if (decideFails) throw new Error("not connected");
@@ -111,8 +111,8 @@ function harness(
     displayed,
     cancelled,
     decided,
-    reported,
-    reportFailure,
+    replies,
+    replyFailure,
     notifee,
     messaging,
     deviceIdSet,
@@ -416,92 +416,98 @@ describe("host notifications", () => {
     await h.host.start();
   });
 
-  describe("server-defined notifications with reply", () => {
-    const pushed = (over: Record<string, string> = {}): RemoteMessage => ({
+  describe("agent messages with a reply action", () => {
+    const channelTargetId = "do:workers/pubsub-channel:PubSubChannel:ch-1";
+    const pushed = (over: Record<string, string | undefined> = {}): RemoteMessage => ({
       data: {
-        kind: "server-notification",
+        kind: "user-inbox",
         ...scope,
         notificationId: "n-1",
+        inboxKind: "agent.message",
         title: "Agent",
         body: "Ready?",
-        actionsJson: JSON.stringify([
-          { id: "reply", title: "Reply", input: "text" },
-          { id: "dismiss", title: "Dismiss" },
-        ]),
+        priority: "normal",
+        channelId: "ch-1",
+        channelTargetId,
+        actionsJson: JSON.stringify([{ id: "reply", title: "Reply", input: "text" }]),
         ...over,
-      },
+      } as Record<string, string>,
     });
-    const displayedNotification = (h: ReturnType<typeof harness>) => h.displayed.at(-1)!;
-    const actionEvent = (h: ReturnType<typeof harness>, actionId: string, input?: string): NotificationEvent => ({
+    const shown = (h: ReturnType<typeof harness>) => h.displayed.at(-1)!;
+    const replyEvent = (h: ReturnType<typeof harness>, input?: string): NotificationEvent => ({
       kind: "action",
-      actionId,
+      actionId: "reply",
       ...(input !== undefined ? { input } : {}),
-      notification: displayedNotification(h),
+      notification: shown(h),
+    });
+    const show = async (h: ReturnType<typeof harness>, message = pushed()) => {
+      await h.host.start();
+      await h.l.message!(message);
+      await vi.waitFor(() => expect(h.displayed).toHaveLength(1));
+    };
+
+    it("draws a reply field on Android and registers the reply category for iOS", async () => {
+      const h = harness();
+      await show(h);
+      const actions = (shown(h).android as { actions: Array<Record<string, unknown>> }).actions;
+      expect(actions).toEqual([
+        {
+          title: "Reply",
+          pressAction: { id: "reply" },
+          input: { placeholder: "Reply", allowFreeFormInput: true },
+        },
+      ]);
+      expect(shown(h).ios).toEqual({ categoryId: "vibestudio-user-inbox-reply" });
+      const categories = h.notifee.setNotificationCategories.mock.calls[0]![0];
+      expect(categories.find((c) => c.id === "vibestudio-user-inbox-reply")?.actions[0]).toMatchObject({
+        id: "reply",
+        input: expect.anything(),
+      });
     });
 
-    it("draws the producer's actions on Android, with a reply field where asked", async () => {
+    it("posts a typed reply into the push's conversation and workspace with no client running, then retires the notification", async () => {
       const h = harness();
-      await h.host.start();
-      await h.l.message!(pushed());
-      await vi.waitFor(() => expect(h.displayed).toHaveLength(1));
-      const shown = displayedNotification(h);
-      expect(shown.id).toBe(keyOf("n-1"));
-      expect(shown.body).toBe("Ready?");
-      const actions = (shown.android as { actions: Array<Record<string, unknown>> }).actions;
-      expect(actions[0]).toMatchObject({ title: "Reply", pressAction: { id: "reply" }, input: expect.anything() });
-      expect(actions[1]).toMatchObject({ title: "Dismiss", pressAction: { id: "dismiss" } });
-      expect(actions[1]).not.toHaveProperty("input");
-    });
-
-    it("relays a typed reply to the producer with no client running, then retires the notification", async () => {
-      const h = harness();
-      await h.host.start();
-      await h.l.message!(pushed());
-      await vi.waitFor(() => expect(h.displayed).toHaveLength(1));
-      await h.l.backgroundEvent!(actionEvent(h, "reply", "on my way"));
-      expect(h.reported).toEqual([{ id: "n-1", actionId: "reply", text: "on my way" }]);
+      await show(h);
+      await h.l.backgroundEvent!(replyEvent(h, " on my way "));
+      expect(h.replies).toEqual([{ workspaceId: scope.workspaceId, target: channelTargetId, text: "on my way" }]);
       expect(h.cancelled).toEqual([keyOf("n-1")]);
     });
 
-    it("relays an action without input with no text", async () => {
+    it("says a failed reply on the notification and keeps the reply action", async () => {
       const h = harness();
-      await h.host.start();
-      await h.l.message!(pushed());
-      await vi.waitFor(() => expect(h.displayed).toHaveLength(1));
-      await h.l.foreground!(actionEvent(h, "dismiss"));
-      expect(h.reported).toEqual([{ id: "n-1", actionId: "dismiss", text: undefined }]);
-    });
-
-    it("says a failed relay on the notification and keeps its actions, so the reply is not lost silently", async () => {
-      const h = harness();
-      await h.host.start();
-      await h.l.message!(pushed());
-      await vi.waitFor(() => expect(h.displayed).toHaveLength(1));
-      h.reportFailure.error = new Error("not connected");
-      await h.l.backgroundEvent!(actionEvent(h, "reply", "hi"));
+      await show(h);
+      h.replyFailure.error = new Error("not connected");
+      await h.l.backgroundEvent!(replyEvent(h, "hi"));
       expect(h.cancelled).toEqual([]);
-      const shown = displayedNotification(h);
       expect(h.displayed).toHaveLength(2);
-      expect(shown.body).toBe("Not sent: not connected");
-      expect((shown.android as { actions: unknown[] }).actions).toHaveLength(2);
+      expect(shown(h).body).toBe("Not sent: not connected");
+      expect((shown(h).android as { actions: unknown[] }).actions).toHaveLength(1);
     });
 
-    it("ignores an action the producer never declared and a press on the body", async () => {
+    it("sends nothing for an empty reply, an undeclared action or a press on the body", async () => {
       const h = harness();
-      await h.host.start();
-      await h.l.message!(pushed());
-      await vi.waitFor(() => expect(h.displayed).toHaveLength(1));
-      await h.l.backgroundEvent!(actionEvent(h, "approve"));
-      await h.l.backgroundEvent!({ kind: "press", notification: displayedNotification(h) });
-      expect(h.reported).toEqual([]);
+      await show(h);
+      await h.l.backgroundEvent!(replyEvent(h, "   "));
+      await h.l.backgroundEvent!({ ...replyEvent(h, "hi"), actionId: "approve" });
+      await h.l.backgroundEvent!({ kind: "press", notification: shown(h) });
+      expect(h.replies).toEqual([]);
     });
 
-    it("shows nothing for a malformed notification", async () => {
+    it("an entry without actions has no reply", async () => {
+      const h = harness();
+      await show(h, pushed({ actionsJson: undefined }));
+      expect((shown(h).android as { actions?: unknown }).actions).toBeUndefined();
+      expect(shown(h).ios).toEqual({});
+      await h.l.backgroundEvent!(replyEvent(h, "hi"));
+      expect(h.replies).toEqual([]);
+    });
+
+    it("shows nothing for malformed actions or actions without a conversation", async () => {
       const h = harness();
       await h.host.start();
       await h.l.message!(pushed({ actionsJson: "not json" }));
-      await h.l.message!(pushed({ actionsJson: JSON.stringify([{ id: "open", title: "Open" }]) }));
-      await h.l.message!(pushed({ serverId: "bad" }));
+      await h.l.message!(pushed({ actionsJson: JSON.stringify([{ id: "open", title: "Open", input: "text" }]) }));
+      await h.l.message!(pushed({ channelTargetId: undefined, inboxKind: "other" }));
       expect(h.displayed).toEqual([]);
     });
   });

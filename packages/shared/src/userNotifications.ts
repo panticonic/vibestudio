@@ -1,3 +1,4 @@
+import { z } from "zod";
 import { readWorkspacePushScope } from "./workspacePushScope.js";
 import { ChannelInviteSchema, type ChannelInvite } from "./channelInvites.js";
 
@@ -79,6 +80,60 @@ export interface AgentMessageNotificationData {
   rung: "inbox" | "interrupt";
 }
 
+/** The OS notification category of a pushed inbox entry; iOS draws actions only for categories registered at launch. */
+export const USER_INBOX_CATEGORY = "vibestudio-user-inbox";
+/** The category of a pushed inbox entry that carries a reply action. */
+export const USER_INBOX_REPLY_CATEGORY = "vibestudio-user-inbox-reply";
+
+/** `open` is the press on the notification body, never a producer action. */
+const RESERVED_USER_INBOX_ACTION_IDS: ReadonlySet<string> = new Set(["open"]);
+export const USER_INBOX_ACTIONS_MAX = 3;
+
+/**
+ * Reply actions of a pushed inbox entry. Each draws a native reply field; the
+ * device posts the typed text, as the person, into the entry's conversation
+ * (`channelTargetId`) with no client running.
+ */
+export const UserInboxActionsSchema = z
+  .array(
+    z
+      .object({
+        id: z.string().min(1),
+        title: z.string().min(1),
+        input: z.literal("text"),
+      })
+      .strict()
+  )
+  .min(1)
+  .max(USER_INBOX_ACTIONS_MAX)
+  .superRefine((actions, ctx) => {
+    const seen = new Set<string>();
+    for (const [index, action] of actions.entries()) {
+      if (RESERVED_USER_INBOX_ACTION_IDS.has(action.id) || seen.has(action.id)) {
+        ctx.addIssue({
+          code: "custom",
+          path: [index, "id"],
+          message: `Action id "${action.id}" is reserved or repeated`,
+        });
+      }
+      seen.add(action.id);
+    }
+  });
+export type UserInboxAction = z.infer<typeof UserInboxActionsSchema>[number];
+
+/** The actions a push's `actionsJson` carries; null when absent or invalid. */
+export function readUserInboxActions(raw: unknown): UserInboxAction[] | null {
+  if (typeof raw !== "string") return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  const result = UserInboxActionsSchema.safeParse(parsed);
+  return result.success ? result.data : null;
+}
+
 /**
  * FCM data payload for a pushed inbox entry (messaging plan §4.5 step 5,
  * §4.10.9). Values are strings because FCM data maps are string-only. The
@@ -98,6 +153,8 @@ export type PushUserInboxDataPayload = import("./workspacePushScope.js").Workspa
   messageId?: string;
   senderParticipantId?: string;
   senderHandle?: string;
+  /** JSON of `UserInboxAction[]` (FCM data is string-only); requires `channelTargetId`. */
+  actionsJson?: string;
 };
 
 export function isPushUserInboxDataPayload(value: unknown): value is PushUserInboxDataPayload {
@@ -109,6 +166,16 @@ export function isPushUserInboxDataPayload(value: unknown): value is PushUserInb
     typeof record["notificationId"] === "string" &&
     typeof record["title"] === "string";
   if (!base) return false;
+  if (record["actionsJson"] !== undefined) {
+    const target = record["channelTargetId"];
+    if (
+      readUserInboxActions(record["actionsJson"]) === null ||
+      typeof target !== "string" ||
+      !target.trim()
+    ) {
+      return false;
+    }
+  }
   return (
     record["inboxKind"] !== AGENT_MESSAGE_NOTIFICATION_KIND ||
     (typeof record["channelTargetId"] === "string" && record["channelTargetId"].trim().length > 0)

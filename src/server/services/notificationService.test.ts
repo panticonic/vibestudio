@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
-import { createNotificationService } from "./notificationService.js";
+import { UserInboxPushRequestSchema } from "@vibestudio/service-schemas/notification";
+import {
+  isPushUserInboxDataPayload,
+  USER_INBOX_REPLY_CATEGORY,
+} from "@vibestudio/shared/userNotifications";
+import { createNotificationService, userInboxPushData } from "./notificationService.js";
 
 describe("server notification service", () => {
   it("requires a current server-granted chrome capability even for a client named shell", async () => {
@@ -342,5 +347,64 @@ describe("server notification service", () => {
       service.handler({ caller: worker }, "pushUserInbox", ["usr_carol", request])
     ).resolves.toBe(0);
     expect(push.sendToTargets).toHaveBeenCalledTimes(1);
+  });
+
+  describe("reply actions on a user-inbox push", () => {
+    const base = {
+      notificationId: "agent.message:m1:usr_alice",
+      kind: "agent.message",
+      title: "Briefing ready",
+      priority: "normal" as const,
+      channelId: "ch-news",
+      channelTargetId: "do:workers/pubsub-channel:PubSubChannel:ch-news",
+    };
+    const reply = { id: "reply", title: "Reply", input: "text" as const };
+
+    it("carries validated actions as actionsJson, in the reply category", async () => {
+      const request = UserInboxPushRequestSchema.parse({ ...base, actions: [reply] });
+      const data = userInboxPushData(request);
+      expect(data.actionsJson).toBe(JSON.stringify([reply]));
+      const scoped = { ...data, serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa", workspaceId: "w", userId: "u" };
+      expect(isPushUserInboxDataPayload(scoped)).toBe(true);
+      expect(userInboxPushData(UserInboxPushRequestSchema.parse(base))).not.toHaveProperty("actionsJson");
+
+      const push = {
+        listRegistrations: () => [{ userId: "usr_alice", clientId: "phone-a" }],
+        sendToTargets: vi.fn(async () => [{ sent: true }]),
+      };
+      const service = createNotificationService({
+        eventService: { emit: vi.fn(), emitToUser: vi.fn() } as never,
+        push: push as never,
+      }).definition;
+      const worker = createVerifiedCaller("worker:news", "worker", null, null, null);
+      await service.handler({ caller: worker }, "pushUserInbox", ["usr_alice", request]);
+      expect(push.sendToTargets).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ category: USER_INBOX_REPLY_CATEGORY })
+      );
+    });
+
+    it("rejects invalid actions", () => {
+      const parse = (over: Record<string, unknown>) =>
+        UserInboxPushRequestSchema.safeParse({ ...base, ...over }).success;
+      expect(parse({ actions: [{ id: "open", title: "Open", input: "text" }] })).toBe(false);
+      expect(parse({ actions: [reply, reply] })).toBe(false);
+      expect(parse({ actions: [{ id: "reply", title: "Reply" }] })).toBe(false);
+      expect(parse({ actions: [] })).toBe(false);
+      expect(parse({ actions: [reply], channelTargetId: undefined })).toBe(false);
+      expect(
+        parse({ actions: ["a", "b", "c", "d"].map((id) => ({ id, title: id, input: "text" })) })
+      ).toBe(false);
+    });
+
+    it("a push whose actionsJson is malformed is not a user-inbox payload", () => {
+      const scoped = {
+        ...userInboxPushData(UserInboxPushRequestSchema.parse(base)),
+        serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+        workspaceId: "w",
+        userId: "u",
+      };
+      expect(isPushUserInboxDataPayload({ ...scoped, actionsJson: "nope" })).toBe(false);
+    });
   });
 });

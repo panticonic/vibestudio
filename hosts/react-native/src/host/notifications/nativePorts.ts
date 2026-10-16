@@ -119,8 +119,11 @@ function firebaseConfigured(): boolean {
   return (host?.firebaseConfigured ?? host?.getConstants?.()?.firebaseConfigured) !== false;
 }
 
-/** Everything but `decide` and `reportAction`, which the host runtime implements over its workspace connections. */
-export function createNativeNotificationPorts(): Omit<HostNotificationsPorts, "decide" | "reportAction"> {
+/** Everything but `decide` and `replyToConversation`, which the host runtime implements over its workspace connections. */
+export function createNativeNotificationPorts(): Omit<
+  HostNotificationsPorts,
+  "decide" | "replyToConversation"
+> {
   return {
     messaging: firebaseMessaging,
     notifee: notifeePort,

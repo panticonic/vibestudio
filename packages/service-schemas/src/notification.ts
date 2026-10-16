@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { NotificationPayload } from "@vibestudio/shared/events";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
+import { UserInboxActionsSchema } from "@vibestudio/shared/userNotifications";
 
 export type NotificationShowRequest = Omit<
   NotificationPayload,
@@ -61,8 +62,14 @@ export const UserInboxPushRequestSchema = z
     messageId: z.string().min(1).optional(),
     senderParticipantId: z.string().optional(),
     senderHandle: z.string().optional(),
+    /** Reply actions: the device posts the typed text, as the person, into `channelTargetId`. */
+    actions: UserInboxActionsSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine((request) => !request.actions || Boolean(request.channelTargetId), {
+    path: ["actions"],
+    message: "actions require channelTargetId, the conversation a reply is posted into",
+  });
 export type UserInboxPushRequest = z.infer<typeof UserInboxPushRequestSchema>;
 
 export const NotificationActionSchema = z.object({

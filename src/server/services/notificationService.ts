@@ -16,7 +16,11 @@ import { notificationMethods } from "@vibestudio/service-schemas/notification";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { isTrustedDeviceCaller, type CapabilityTrustDeps } from "./clientTrust.js";
 import type { UserInboxPushRequest } from "@vibestudio/service-schemas/notification";
-import type { PushUserInboxDataPayload } from "@vibestudio/shared/userNotifications";
+import {
+  USER_INBOX_CATEGORY,
+  USER_INBOX_REPLY_CATEGORY,
+  type PushUserInboxDataPayload,
+} from "@vibestudio/shared/userNotifications";
 import type { PushServiceInternal } from "./pushService.js";
 
 /**
@@ -57,6 +61,7 @@ export function userInboxPushData(
     ...(request.messageId ? { messageId: request.messageId } : {}),
     ...(request.senderParticipantId ? { senderParticipantId: request.senderParticipantId } : {}),
     ...(request.senderHandle ? { senderHandle: request.senderHandle } : {}),
+    ...(request.actions ? { actionsJson: JSON.stringify(request.actions) } : {}),
   };
 }
 
@@ -86,7 +91,7 @@ export function createNotificationService(deps: NotificationServiceDeps): {
     const results = await deps.push.sendToTargets(targets, {
       title: request.title,
       ...(request.body ? { body: request.body } : {}),
-      category: "vibestudio-user-inbox",
+      category: request.actions ? USER_INBOX_REPLY_CATEGORY : USER_INBOX_CATEGORY,
       data: userInboxPushData(request),
     });
     return results.filter((result) => result.sent).length;

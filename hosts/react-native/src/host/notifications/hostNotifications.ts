@@ -21,6 +21,8 @@ import {
 } from "@vibestudio/shared/workspacePushScope";
 import {
   isPushUserInboxDataPayload,
+  readUserInboxActions,
+  USER_INBOX_REPLY_CATEGORY,
   type PushUserInboxDataPayload,
 } from "@vibestudio/shared/userNotifications";
 import type {
@@ -34,15 +36,11 @@ import type {
 import {
   APPROVAL_NOTIFICATION_CHANNEL_ID,
   INBOX_NOTIFICATION_CHANNEL_ID,
+  androidReplyActions,
   getAndroidNotificationActions,
   notificationCategories,
   type NotificationCategory,
 } from "./categories";
-import {
-  androidServerActions,
-  readServerNotification,
-  type ServerNotification,
-} from "./serverNotification";
 import {
   enqueueAction,
   isBackgroundDecision,
@@ -145,16 +143,14 @@ export interface HostNotificationsPorts {
    */
   decide(target: WorkspaceApprovalTarget, decision: BackgroundApprovalDecision): Promise<void>;
   /**
-   * Return the person's choice on a server-defined notification, with reply
-   * text for an action that takes input, to its producer in that workspace
-   * (`notification.reportAction`). Rejects when the workspace has no usable
-   * connection or the server refuses.
+   * Post `text`, as the person, into the conversation `channelTargetId` of the
+   * push's workspace, over the device's own connection. Waits for that
+   * connection to be ready; rejects when there is none or the channel refuses.
    */
-  reportAction(
+  replyToConversation(
     scope: WorkspacePushScope,
-    notificationId: string,
-    actionId: string,
-    text?: string
+    channelTargetId: string,
+    text: string
   ): Promise<void>;
   now?(): number;
 }
@@ -278,11 +274,6 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
       await displayInbox(message.data, message);
       return;
     }
-    const server = readServerNotification(message.data);
-    if (server) {
-      await displayServerNotification(server, message.data ?? {});
-      return;
-    }
     const data: Partial<PushApprovalDataPayload> = message.data ?? {};
     if (data.kind === "approval-cancel") {
       const cancelKey = data.cancelKey ?? data.approvalId;
@@ -311,78 +302,50 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
   /**
    * A pushed inbox entry (messaging plan 4.10.9). Its id is the durable entry's
    * id, so a redriven push replaces rather than stacks, and a press carries the
-   * deep-link facts straight to the conversation.
+   * deep-link facts straight to the conversation. An entry with reply actions
+   * draws a native reply field (Android `RemoteInput`; on iOS the action of the
+   * category registered at launch), so it can be answered from a lock screen.
    */
-  async function displayInbox(data: PushUserInboxDataPayload, message: RemoteMessage): Promise<void> {
+  async function displayInbox(
+    data: PushUserInboxDataPayload,
+    message: RemoteMessage,
+    body: string = data.body ?? message.notification?.body ?? ""
+  ): Promise<void> {
+    const actions = readUserInboxActions(data.actionsJson) ?? [];
     await notifee.display({
       id: workspaceNotificationKey(data, data.notificationId),
       title: data.title || message.notification?.title || "New message",
-      body: data.body ?? message.notification?.body ?? "",
-      data: { ...data },
-      android: {
-        channelId: INBOX_NOTIFICATION_CHANNEL_ID,
-        pressAction: { id: "open", launchActivity: "default" },
-        ...(data.priority === "high" ? { importance: 4 } : {}),
-      },
-      ios: {},
-    });
-  }
-
-  /**
-   * A server-defined notification with its own actions. Android draws each
-   * action, with a reply field where the producer asked for one. iOS can only
-   * draw actions of categories registered at launch, so it shows the
-   * notification without them.
-   */
-  async function displayServerNotification(
-    notification: ServerNotification,
-    data: Record<string, string | undefined>,
-    body: string = notification.body
-  ): Promise<void> {
-    await notifee.display({
-      id: workspaceNotificationKey(notification.scope, notification.notificationId),
-      title: notification.title,
       body,
       data: { ...data },
       android: {
         channelId: INBOX_NOTIFICATION_CHANNEL_ID,
         pressAction: { id: "open", launchActivity: "default" },
-        actions: androidServerActions(notification.actions),
+        ...(data.priority === "high" ? { importance: 4 } : {}),
+        ...(actions.length > 0 ? { actions: androidReplyActions(actions) } : {}),
       },
-      ios: {},
+      ios: actions.length > 0 ? { categoryId: USER_INBOX_REPLY_CATEGORY } : {},
     });
   }
 
   /**
-   * The person chose an action of a server-defined notification. The choice
-   * goes to the producer through the workspace's connection; success retires
-   * the notification, and a failure is said on the notification itself with
-   * its actions kept, so what was typed is never silently lost.
+   * The person typed a reply into a pushed entry. It is posted into that
+   * entry's conversation through the device's own connection to its workspace;
+   * success retires the notification, and a failure is said on the
+   * notification itself with its reply kept, so what was typed is never
+   * silently lost.
    */
-  async function relayServerAction(
-    notification: ServerNotification,
-    data: Record<string, string | undefined>,
-    event: NotificationEvent
-  ): Promise<void> {
-    const action = notification.actions.find((candidate) => candidate.id === event.actionId);
-    if (!action) return;
+  async function replyToInbox(data: PushUserInboxDataPayload, event: NotificationEvent): Promise<void> {
+    const action = readUserInboxActions(data.actionsJson)?.find((entry) => entry.id === event.actionId);
+    const text = event.input?.trim();
+    if (!action || !text || !data.channelTargetId) return;
     try {
-      await ports.reportAction(
-        notification.scope,
-        notification.notificationId,
-        action.id,
-        action.input === "text" ? (event.input ?? "") : undefined
-      );
+      await ports.replyToConversation(data, data.channelTargetId, text);
     } catch (error) {
-      console.warn(`${LOG} could not report ${action.id} for ${notification.notificationId}:`, error);
-      await displayServerNotification(
-        notification,
-        data,
-        `Not sent: ${error instanceof Error ? error.message : String(error)}`
-      );
+      console.warn(`${LOG} could not send the reply for ${data.notificationId}:`, error);
+      await displayInbox(data, {}, `Not sent: ${error instanceof Error ? error.message : String(error)}`);
       return;
     }
-    await notifee.cancel(workspaceNotificationKey(notification.scope, notification.notificationId));
+    await notifee.cancel(workspaceNotificationKey(data, data.notificationId));
   }
 
   async function showSyncing(
@@ -421,17 +384,10 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
 
   async function handleNotificationEvent(event: NotificationEvent): Promise<void> {
     const notification = event.notification;
-    const server = readServerNotification(notification?.data);
-    if (server) {
-      // Its press only brings the app forward; each action goes to its producer.
-      if (event.kind === "action" && event.actionId !== "open") {
-        await relayServerAction(server, notification?.data as Record<string, string | undefined>, event);
-      }
-      return;
-    }
     const opens = event.kind === "press" || (event.kind === "action" && event.actionId === "open");
     if (isPushUserInboxDataPayload(notification?.data)) {
       if (opens) await open({ kind: "inbox", payload: notification.data });
+      else if (event.kind === "action") await replyToInbox(notification.data, event);
       return;
     }
     const target = readApprovalTarget(notification?.data);

@@ -1371,68 +1371,87 @@ function createDedupePlugin(runtimeNodeModules: string, packages: string[]): esb
   };
 }
 
+/**
+ * What `@workspace/runtime` means inside a client page. Shared libraries
+ * (chat UI, media helpers) import the panel runtime; a client page has no
+ * panel runtime, so every export resolves to a stub that throws when used.
+ * The export names are read from the runtime module the page would have
+ * imported, so the stub never drifts from the runtime it stands in for.
+ * A few portable values keep a client-page meaning.
+ */
+const CLIENT_RUNTIME_VALUES: Record<string, string> = {
+  id: '"client"',
+  contextId: '""',
+  rpc: "{}",
+  parent: "{}",
+  gatewayConfig: "{}",
+  agentApi: "{}",
+  Rpc: "{}",
+  z: "{}",
+  defineContract: "(contract) => contract",
+  isValidContextId: "() => false",
+  normalizePath: "(value) => String(value)",
+  getFileName: '(value) => String(value).split("/").pop() ?? ""',
+  resolvePath: '(...parts) => parts.join("/")',
+};
+
+async function runtimeExportNames(entry: string): Promise<string[]> {
+  const result = await esbuild.build({
+    entryPoints: [entry],
+    bundle: true,
+    write: false,
+    metafile: true,
+    format: "esm",
+    platform: "neutral",
+    logLevel: "silent",
+    // Only the module's own re-export graph decides its names.
+    plugins: [
+      {
+        name: "client-runtime-exports-external",
+        setup(build) {
+          build.onResolve({ filter: /^[^./]/ }, (args) => ({ path: args.path, external: true }));
+        },
+      },
+    ],
+  });
+  const output = Object.values(result.metafile.outputs)[0];
+  if (!output) throw new Error(`Could not read the exports of ${entry}`);
+  return output.exports;
+}
+
 function createClientRuntimeShimPlugin(): esbuild.Plugin {
   const unavailable = `() => { throw new Error(${JSON.stringify(
     `${RUNTIME_MODULE} panel APIs are not available in workspace client pages`
   )}); }`;
-  const ns = `new Proxy({}, { get: () => unavailable })`;
-  const contents = `const unavailable = ${unavailable};
-// --- Portable runtime surface (identical names on panel/worker/eval) ---
-export const id = "client";
-export const contextId = "";
-export const rpc = {};
-export const fs = new Proxy({}, { get: () => unavailable });
-export const callMain = unavailable;
-export const parent = {};
-export const getParent = unavailable;
-export const getParentWithContract = unavailable;
-export const gad = ${ns};
-export const workspace = ${ns};
-export const credentials = ${ns};
-export const git = ${ns};
-export const vcs = ${ns};
-export const webhooks = ${ns};
-export const extensions = ${ns};
-export const approvals = ${ns};
-export const notifications = ${ns};
-export const workers = ${ns};
-export const doTargetId = unavailable;
-export const createDurableObjectServiceClient = unavailable;
-export const gatewayConfig = {};
-export const gatewayFetch = unavailable;
-export const openExternal = unavailable;
-export const openPanel = unavailable;
-export const getPanelHandle = unavailable;
-export const panelTree = ${ns};
-// --- Portable authoring helpers ---
-export const Rpc = {};
-export const z = {};
-export const defineContract = (contract) => contract;
-export const buildPanelLink = unavailable;
-export const parseContextId = unavailable;
-export const isValidContextId = () => false;
-export const getInstanceId = unavailable;
-export const normalizePath = (value) => String(value);
-export const getFileName = (value) => String(value).split("/").pop() ?? "";
-export const resolvePath = (...parts) => parts.join("/");
-export const createGatewayFetch = () => unavailable;
-// --- Panel-only namespaces / domain ---
-export const panel = ${ns};
-export const journal = ${ns};
-export const agentApi = {};
-export const adblock = ${ns};
-export default {};`;
   return {
-    name: "app-runtime-shim",
+    name: "client-runtime-shim",
     setup(build) {
-      build.onResolve({ filter: new RegExp(`^${escapeRegex(RUNTIME_MODULE)}$`) }, () => ({
-        path: RUNTIME_MODULE,
-        namespace: "app-runtime-shim",
-      }));
-      build.onLoad({ filter: /.*/, namespace: "app-runtime-shim" }, () => ({
-        contents,
-        loader: "js",
-      }));
+      build.onResolve({ filter: new RegExp(`^${escapeRegex(RUNTIME_MODULE)}$`) }, async (args) => {
+        if (args.pluginData === "client-runtime-shim") return null;
+        const resolved = await build.resolve(args.path, {
+          kind: args.kind,
+          resolveDir: args.resolveDir,
+          importer: args.importer,
+          pluginData: "client-runtime-shim",
+        });
+        if (resolved.errors.length > 0) {
+          throw new Error(`Could not resolve ${RUNTIME_MODULE}: ${resolved.errors[0]!.text}`);
+        }
+        return { path: resolved.path, namespace: "client-runtime-shim" };
+      });
+      build.onLoad({ filter: /.*/, namespace: "client-runtime-shim" }, async (args) => {
+        const names = await runtimeExportNames(args.path);
+        const lines = names
+          .filter((name) => name !== "default")
+          .map((name) => `export const ${name} = ${CLIENT_RUNTIME_VALUES[name] ?? "stub"};`);
+        return {
+          contents: `const unavailable = ${unavailable};
+const stub = new Proxy(unavailable, { get: () => unavailable });
+${lines.join("\n")}
+export default {};`,
+          loader: "js",
+        };
+      });
     },
   };
 }

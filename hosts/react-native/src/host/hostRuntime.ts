@@ -20,7 +20,8 @@ import { clientsMethods } from "@vibestudio/service-schemas/clients";
 import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import { createTypedRpcServiceClient } from "@vibestudio/shared/typedRpcServiceClient";
-import { notificationMethods } from "@vibestudio/service-schemas/notification";
+import { channelClientRpcMethods } from "@vibestudio/service-schemas/channel";
+import { createRpcMethodCaller } from "@vibestudio/shared/rpcMethods";
 import { mainRpcMethod } from "@vibestudio/service-schemas/mainRpc";
 import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
 import { parsePanelLocationLink } from "@vibestudio/shared/panelLocation";
@@ -1016,27 +1017,28 @@ export class HostRuntime {
   }
 
   /**
-   * Return the person's choice on a server-defined notification to its
-   * producer in that workspace, from a notification action (no client needs to
-   * run). Uses the device's shared connection to that workspace and releases it
-   * afterwards.
+   * Post `text`, as the person, into a conversation of a workspace: the reply
+   * typed into a pushed message's notification (no client needs to run). Uses
+   * the device's shared connection to that workspace and releases it
+   * afterwards. A reply that arrives while the device is still connecting
+   * waits for that bring-up to settle; if it settles without a connection, its
+   * reason is the error.
    */
-  async reportNotificationAction(
+  async replyToConversation(
     scope: { workspaceId: string },
-    notificationId: string,
-    actionId: string,
-    text?: string
+    channelTargetId: string,
+    text: string
   ): Promise<void> {
+    if (!this.pipes) await this.bringUp(false);
     const pipes = this.pipes;
-    if (!pipes) throw new Error("This device is not connected.");
+    if (!pipes) throw new Error(this.ui.get().message || "This device is not connected.");
     const connection = await pipes.acquire(scope.workspaceId);
     try {
-      const notification = createTypedRpcServiceClient(
+      await createRpcMethodCaller(
         connection.rpc,
-        { targetId: "main", namespace: "notification" },
-        notificationMethods
-      );
-      await notification.reportAction(notificationId, actionId, text);
+        channelTargetId,
+        channelClientRpcMethods
+      )("sendAsCaller", [text]);
     } finally {
       await pipes.release(scope.workspaceId);
     }

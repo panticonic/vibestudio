@@ -103,9 +103,9 @@ export function startMobileHost(options: {
       if (!runtime) return Promise.reject(new Error("The host runtime has not started."));
       return runtime.decideApproval(target, decision);
     },
-    reportAction: (scope, notificationId, actionId, text) => {
+    replyToConversation: (scope, channelTargetId, text) => {
       if (!runtime) return Promise.reject(new Error("The host runtime has not started."));
-      return runtime.reportNotificationAction(scope, notificationId, actionId, text);
+      return runtime.replyToConversation(scope, channelTargetId, text);
     },
   });
 

@@ -6,6 +6,7 @@ import {
   NOTIFICATION_ACTION_IDS_INPUT_REQUIRED,
   NOTIFICATION_ACTION_IDS_STANDARD,
 } from "@vibestudio/shared/approvalContract";
+import { USER_INBOX_REPLY_CATEGORY, type UserInboxAction } from "@vibestudio/shared/userNotifications";
 
 export const APPROVAL_NOTIFICATION_CHANNEL_ID = "approvals";
 /** Escalated agent messages and other durable inbox entries (messaging plan §4.5). */
@@ -30,6 +31,8 @@ export interface NotificationCategory {
     title: string;
     foreground?: boolean;
     destructive?: boolean;
+    /** The action draws a reply field (iOS `UNTextInputNotificationAction`). */
+    input?: { placeholderText: string; buttonText: string };
     ios?: { foreground?: boolean; destructive?: boolean };
   }>;
 }
@@ -94,6 +97,22 @@ export function getAndroidNotificationActions(
   }
 }
 
+/** The actions of a reply entry as notifee draws them on Android: each carries a reply field (`RemoteInput`). */
+export function androidReplyActions(actions: readonly UserInboxAction[]): Array<{
+  title: string;
+  pressAction: { id: string };
+  input: { placeholder: string; allowFreeFormInput: true };
+}> {
+  return actions.map((action) => ({
+    title: action.title,
+    pressAction: { id: action.id },
+    input: { placeholder: action.title, allowFreeFormInput: true as const },
+  }));
+}
+
+/** The id of the one reply action iOS can draw: its category is fixed at launch, so the push cannot name others. */
+export const IOS_REPLY_ACTION_ID = "reply";
+
 /** The iOS categories notifee registers so the OS renders actions on a lock screen. */
 export function notificationCategories(): NotificationCategory[] {
   return [
@@ -115,6 +134,16 @@ export function notificationCategories(): NotificationCategory[] {
         foreground: action.foreground,
         ios: { foreground: action.foreground },
       })),
+    },
+    {
+      id: USER_INBOX_REPLY_CATEGORY,
+      actions: [
+        {
+          id: IOS_REPLY_ACTION_ID,
+          title: "Reply",
+          input: { placeholderText: "Reply", buttonText: "Send" },
+        },
+      ],
     },
   ];
 }
