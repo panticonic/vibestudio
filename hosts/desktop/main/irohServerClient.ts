@@ -47,7 +47,7 @@ import type {
   PanelSession,
   ClientPrincipalSessions,
   ScopedServerCaller,
-  ServerClient,
+  ConnectedServerClient,
   ServerMessageListener,
 } from "./serverClient.js";
 import {
@@ -94,7 +94,7 @@ export interface IrohServerClientArgs {
  * The desktop shell's `ServerClient` over the Iroh pipe, plus additive
  * transport observability the loopback WS client has no equivalent for.
  */
-export interface IrohServerClient extends ServerClient {
+export interface IrohServerClient extends ConnectedServerClient {
   /** Process-supervisor edge for one atomic native endpoint replacement. */
   invalidateEndpointGeneration(generation: number, reason: string): void;
 }

@@ -2,27 +2,35 @@ import { readWorkspaceTransportIdentity } from "./workspaceTransportIdentity.js"
 /**
  * Client preload: the `web-host-1` bridge every web client runs against.
  *
- * The client principal is enforced in the main process from WebContents
- * metadata; this preload is only the renderer-facing surface. Everything a
+ * The client principal is attested by the main process from WebContents
+ * metadata when it hands this document its RPC port; this preload is only the
+ * renderer-facing surface. Everything a
  * client may ask of the host sits behind a capability the host checks on every
  * call, so a client that was not granted one gets a rejection, not a stub.
  */
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
-import { createIpcTransport } from "./ipcTransport.js";
-import { createIpcStreamBridge } from "./ipcStreamBridge.js";
+import { createRpcPortTransport } from "./rpcPortTransport.js";
 import type { WorkspaceConnectionState } from "@vibestudio/shared/workspaceConnection";
+
+interface ClientUpdateOffer {
+  clientId: string;
+  source: string;
+  buildKey: string;
+  effectiveVersion: string | null;
+  previousEffectiveVersion: string | null;
+}
 
 let nextListenerId = 1;
 const activeListeners = new Map<
   number,
   (event: IpcRendererEvent, eventName: string, payload: unknown) => void
 >();
-const clientTransport = {
-  ...createIpcTransport(),
-  ...createIpcStreamBridge(),
-  identity: readWorkspaceTransportIdentity(process.argv),
-};
+const identity = readWorkspaceTransportIdentity(process.argv);
+// RPC runs over one port straight to the connection process; main only hands it out.
+const rpc = createRpcPortTransport({ homeWorkspaceId: identity.workspaceId });
+const clientTransport = { ...rpc.transport, ...rpc.streams, identity };
+rpc.open();
 
 const vibestudioClient = {
   /** Which client this is, its principal, build and granted capabilities. */
@@ -60,6 +68,25 @@ const vibestudioClient = {
   setShellOverlayActive: (active: boolean) =>
     ipcRenderer.send("vibestudio:shell.overlay-active", active),
   inspectWorkspaceFolder: () => ipcRenderer.invoke("vibestudio:inspectWorkspaceFolder"),
+  /** This client's own pending update (every client may take its own; none another's). */
+  update: {
+    pending: () =>
+      ipcRenderer.invoke("vibestudio:client:update-pending") as Promise<ClientUpdateOffer | null>,
+    onUpdate(handler: (offer: ClientUpdateOffer | null) => void) {
+      const listener = (_event: IpcRendererEvent, offer: ClientUpdateOffer | null) =>
+        handler(offer);
+      ipcRenderer.on("vibestudio:client-update", listener);
+      return () => ipcRenderer.off("vibestudio:client-update", listener);
+    },
+    restartAtSafePoint: () => ipcRenderer.invoke("vibestudio:client:update-apply") as Promise<void>,
+  },
+  /** Persisted per client per device, one bounded JSON object, written atomically by the host. */
+  state: {
+    get: () =>
+      ipcRenderer.invoke("vibestudio:client:state-get") as Promise<Record<string, unknown>>,
+    set: (value: Record<string, unknown>) =>
+      ipcRenderer.invoke("vibestudio:client:state-set", value) as Promise<void>,
+  },
   /** `native-menus`: contribute the application menu and the client's own popup. */
   menu: {
     set: (model: unknown) => ipcRenderer.invoke("vibestudio:menu:set", model) as Promise<void>,

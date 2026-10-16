@@ -264,6 +264,7 @@ test("publishes immutable complete generations and leaves the prior one readable
       "prepare-workspace-templates.mjs",
       ...Object.values(SERVER_WORKER_ENTRIES.standalone),
       "server-electron.cjs",
+      "connectionProcess.cjs",
       "adblock-engine-worker.cjs",
       "browserPrivacyPreload.cjs",
       "browserTransport.js",
@@ -325,6 +326,7 @@ test("publishes immutable complete generations and leaves the prior one readable
     fs.mkdirSync(path.join(root, "dist/workerd-programs"), { recursive: true });
     for (const entry of [
       "server-electron.cjs",
+      "connectionProcess.cjs",
       "adblock-engine-worker.cjs",
       "browserPrivacyPreload.cjs",
       "browserTransport.js",
@@ -415,6 +417,7 @@ test("relocated source and desktop generations resolve relative to the new check
       "prepare-workspace-templates.mjs",
       ...Object.values(SERVER_WORKER_ENTRIES.standalone),
       "main.cjs",
+      "connectionProcess.cjs",
       "adblock-engine-worker.cjs",
       "server-electron.cjs",
       "panelPreload.cjs",

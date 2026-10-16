@@ -7,8 +7,7 @@
 
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 import type { RpcEnvelope } from "@vibestudio/rpc";
-import { createIpcTransport } from "./ipcTransport.js";
-import { createIpcStreamBridge } from "./ipcStreamBridge.js";
+import { createRpcPortTransport } from "./rpcPortTransport.js";
 import type { PanelBootObservation } from "@vibestudio/shared/panel/observation";
 
 // ID-based event listener pattern (contextBridge cannot serialize closures)
@@ -18,20 +17,22 @@ const activeListeners = new Map<
   (event: IpcRendererEvent, eventName: string, payload: unknown) => void
 >();
 
-// Panel RPC over IPC (same `vibestudio:rpc:send`/`:message` channels as the shell
-// and app transports). Created once so this webview's inbound listener is wired.
-const rpcTransport = createIpcTransport();
+// Panel RPC runs over one port straight to the connection process; main only
+// attests which panel this document is and hands the port out.
+const rpc = createRpcPortTransport();
+const rpcTransport = rpc.transport;
+rpc.open();
 
 const vibestudioShell = {
   // Panel RPC envelope bridge — `createPanelTransport` posts each envelope to the
-  // host (ipcDispatcher) as this panel's logical session and receives the demuxed
+  // connection process as this panel's logical session and receives the demuxed
   // inbound envelopes; the desktop analogue of the mobile PanelWebView postMessage
   // bridge. Without these, getShellBridge() throws at panel startup (blank panel).
   postEnvelope: (envelope: RpcEnvelope) => rpcTransport.send(envelope),
   onEnvelope: (handler: (envelope: RpcEnvelope) => void) => rpcTransport.onMessage(handler),
   onRecovery: rpcTransport.onRecovery,
 
-  ...createIpcStreamBridge(),
+  ...rpc.streams,
 
   getPanelInit: () => ipcRenderer.invoke("vibestudio:getPanelInit"),
   getBootstrapConfig: () => ipcRenderer.invoke("vibestudio:getPanelInit"),

@@ -29,6 +29,7 @@ test("generation transport validates build receipt identity independently of poi
         ...SOURCE_SERVER_PREREQUISITE_ARTIFACTS,
         ...[
           "main.cjs",
+          "connectionProcess.cjs",
           "adblock-engine-worker.cjs",
           "server-electron.cjs",
           "panelPreload.cjs",

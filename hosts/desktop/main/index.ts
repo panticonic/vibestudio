@@ -22,12 +22,14 @@ import { nativeViewMayUsePermission } from "./nativeViewPermissionPolicy.js";
 import {
   app,
   dialog,
+  MessageChannelMain,
   nativeTheme,
   Notification,
   session,
   ipcMain,
   powerMonitor,
   shell,
+  utilityProcess,
   type Session,
   type WebContents,
 } from "electron";
@@ -221,7 +223,19 @@ import {
   type StartupMode,
   type ConnectedStartupMode,
 } from "./startupMode.js";
-import { establishServerSession, type SessionConnection } from "./serverSession.js";
+import type { SessionConnection } from "./sessionConnection.js";
+import { ConnectionLink, type PortBinding } from "./connectionLink.js";
+import type { ClientBindingState } from "../connection/connectionProtocol.js";
+import { launchConnectionProcess, type ConnectionProcessHandle } from "./connectionProcess.js";
+import { RendererPortBroker } from "./rendererPorts.js";
+import { ClientStateStore } from "./clientState.js";
+import { showNativeReplyNotification } from "./nativeNotificationReply.js";
+import { createHostServiceEndpoint } from "./hostServiceEndpoint.js";
+import {
+  loadDeviceCredentialByServerId,
+  preflightDeviceCredentialStoreForPairing,
+  saveDeviceCredential,
+} from "./services/deviceCredentialStore.js";
 import { ordinaryQuitServerDecision } from "./quitServerPolicy.js";
 import { installProcessSignalShutdown, installSystemShutdown } from "./processSignalShutdown.js";
 import type { StartupConnectionProgress } from "../../../src/startupConnectionProgress.js";
@@ -405,7 +419,11 @@ function shouldAutoPairPendingDevIrohLink(): boolean {
   return isDev() && startupInvocation.devIrohRemote;
 }
 
-let activeIpcDispatcher: import("./ipcDispatcher.js").IpcDispatcher | null = null;
+/** The connection utility process, and main's end of the channel to it. */
+let connectionProcess: ConnectionProcessHandle | null = null;
+let connectionLink: ConnectionLink | null = null;
+/** Hands each renderer document its port to the connection process. */
+let rendererPorts: RendererPortBroker | null = null;
 let panelCycler: import("./panelCycleController.js").PanelCycler | null = null;
 type DesktopUiWorkspaceRuntime = import("./workspaceRuntimeController.js").DesktopWorkspaceRuntime;
 const desktopWorkspaceRuntimes = new Map<string, Promise<DesktopUiWorkspaceRuntime>>();
@@ -566,7 +584,7 @@ const panelHost = new PanelHostWindow({
   openPanelLocation: sendIncomingPanelLocation,
   getSystemWorkspaceId: () => serverSession?.workspaceId ?? null,
   onCodeIdentityChanged: (nativeId) => {
-    void activeIpcDispatcher?.revokeUiCaller(nativeId).catch(console.error);
+    void connectionLink?.revokeUi(nativeId).catch(console.error);
   },
   eventService,
   isHeadlessHost: IS_HEADLESS_HOST,
@@ -608,6 +626,8 @@ const clientWindows: ClientWindows = new ClientWindows(
       });
     },
     closed: (window) => clientWindows.notifyClosed(window),
+    stateChanged: (window) =>
+      connectionLink?.updateClient(window.callerId, clientBindingState(window)),
     rendererGone: (window, reason) => {
       surfaceMainProcessFatal(
         `${window.spec.title} stopped`,
@@ -618,7 +638,7 @@ const clientWindows: ClientWindows = new ClientWindows(
   {
     closed: (window) => {
       clientMenus.clear(window.windowId);
-      void activeIpcDispatcher?.releaseClientWindow(window.callerId).catch((error: unknown) => {
+      void connectionLink?.releaseCaller(window.callerId).catch((error: unknown) => {
         log.warn(
           `Could not release the sessions of ${window.callerId}: ${formatUnknownError(error)}`
         );
@@ -664,17 +684,80 @@ const corsApprovalCache = new Set<string>();
 const pendingCorsApprovals = new Map<string, Promise<{ allowed: boolean; cacheable: boolean }>>();
 
 /**
- * Gate server calls a client relays through main. The approval queue
- * (credential, capability, install, device-code and client-config approvals)
- * is reachable only from a client that holds `approval-surface`: any other
- * client could otherwise enumerate and silently grant or deny another
- * principal's approvals.
+ * Start the connection utility process and the channel to it, once.
+ *
+ * The hub connection, its logical sessions, the local hub process and the
+ * remote asset facade live there, so renderer RPC never occupies this
+ * process's event loop (docs/client-hosts-and-clients-plan.md §5.1.1).
  */
-function authorizeClientServerCall(callerId: string, service: string): void {
-  if (service !== "shellApproval") return;
-  if (!clientWindows.byCaller(callerId)?.spec.capabilities.includes("approval-surface")) {
-    throw new Error(`shellApproval is only available to an approval surface, not ${callerId}`);
-  }
+function startConnection(): ConnectionLink {
+  if (connectionLink) return connectionLink;
+  const launched = launchConnectionProcess({
+    fork: () =>
+      utilityProcess.fork(path.join(__dirname, "connectionProcess.cjs"), [], {
+        serviceName: "Vibestudio connection",
+        stdio: "inherit",
+      }),
+    createPorts: () => {
+      const { port1, port2 } = new MessageChannelMain();
+      return [port1, port2];
+    },
+  });
+  connectionProcess = launched;
+  connectionLink = new ConnectionLink(launched.channel);
+  // The process's exit is the authoritative end of the connection: every
+  // pending call has already failed with its reason (the channel is failed by
+  // the same event), renderers learn the reason from here, and the connection
+  // error is shown rather than retried on a timer.
+  void launched.exited.then((exit) => {
+    rendererPorts?.connectionLost(exit.reason);
+    if (exit.requested) return;
+    log.error(`[connection] ${exit.reason}`);
+    workspaceConnection.failure(exit.reason);
+  });
+  return connectionLink;
+}
+
+/** Stop serving renderer RPC before views and the connection are dismantled. */
+let retireWebsiteDocuments: (() => Promise<void>) | null = null;
+let rendererRpcShutdown: Promise<void> | null = null;
+function shutdownRendererRpc(): Promise<void> {
+  rendererRpcShutdown ??= (async () => {
+    rendererPorts?.uninstall();
+    const retire = retireWebsiteDocuments;
+    retireWebsiteDocuments = null;
+    const link = connectionLink;
+    const results = await Promise.allSettled([retire?.(), link?.shutdownPorts()]);
+    const failures = results.flatMap((result) =>
+      result.status === "rejected" ? [result.reason] : []
+    );
+    if (failures.length) throw new AggregateError(failures, "Renderer RPC shutdown failed");
+  })();
+  return rendererRpcShutdown;
+}
+
+/** The capability state a client window's sessions in the connection process are held to. */
+function clientBindingState(window: ClientWindow): ClientBindingState {
+  return {
+    capabilities: window.spec.capabilities,
+    executionDigest: window.spec.codeIdentity.executionDigest,
+    effectiveVersion: window.spec.codeIdentity.effectiveVersion,
+    principalId: window.spec.principalId,
+    workspaceId: window.spec.workspaceId,
+  };
+}
+
+/** Who a client window's document is, and what its session may do. */
+function clientWindowBinding(window: ClientWindow): PortBinding {
+  return {
+    caller: {
+      callerId: window.callerId,
+      callerKind: "client",
+      runtimeId: window.spec.principalId,
+      workspaceId: window.spec.workspaceId,
+    },
+    state: { hostsPanels: window.hostsPanels, client: clientBindingState(window) },
+  };
 }
 
 /** Windows of running clients that hold `capability`. */
@@ -748,7 +831,7 @@ const shellSurfaceRelays: {
         panelHost.focusWorkspace(runtime.workspaceId);
         const chromeWorkspaceId = serverSession?.workspaceId;
         if (chromeWorkspaceId) {
-          activeIpcDispatcher?.sendEventToShell(chromeWorkspaceId, "workspace-focused", {
+          connectionLink?.sendEventToShell(chromeWorkspaceId, "workspace-focused", {
             workspaceId: runtime.workspaceId,
           });
         }
@@ -1090,7 +1173,7 @@ async function handleCredentialSessionCaptureRequest(
     }
 
     panelHost.focusWorkspace(personal.workspaceId);
-    activeIpcDispatcher?.sendEventToShell(
+    connectionLink?.sendEventToShell(
       assertPresent(serverSession).workspaceId,
       "workspace-focused",
       {
@@ -1506,6 +1589,27 @@ function installBootstrapConnectionHandlers(): void {
 // Clients
 // =============================================================================
 
+/** What a client may see of its own pending update. */
+function clientUpdateOffer(info: import("./clientUpdates.js").PendingClientUpdateInfo | null): {
+  clientId: string;
+  source: string;
+  buildKey: string;
+  effectiveVersion: string | null;
+  previousEffectiveVersion: string | null;
+} | null {
+  return info
+    ? {
+        clientId: info.appId,
+        source: info.source,
+        buildKey: info.buildKey,
+        effectiveVersion: info.effectiveVersion,
+        previousEffectiveVersion: info.previousEffectiveVersion,
+      }
+    : null;
+}
+
+const clientStateStore = new ClientStateStore(path.join(app.getPath("userData"), "client-state"));
+
 /** Verified client bytes live under userData, content-addressed by integrity. */
 const clientArtifactStore = new NodeArtifactStore(
   path.join(app.getPath("userData"), "client-artifacts")
@@ -1530,6 +1634,11 @@ function createDesktopClientHost(conn: SessionConnection): DesktopClientHost {
     windows: clientWindows,
     supervision: supervisionRelay,
     state: new ClientHostState(path.join(app.getPath("userData"), "client-host-state.json")),
+    updateOffered: (clientId) => {
+      const offer = clientHost ? clientUpdateOffer(clientHost.pendingFor(clientId)) : null;
+      for (const window of clientWindows.windowsOf(clientId))
+        window.send("vibestudio:client-update", offer);
+    },
     gate: launchGate,
     workspaceId: () => conn.workspaceId,
     notify: showUserNotification,
@@ -2059,6 +2168,27 @@ app.on("ready", async () => {
       nativeNotification.show();
     }
   };
+  const handleReplyNotification: NonNullable<
+    NonNullable<
+      Parameters<
+        typeof import("./workspaceRuntimeController.js").createDesktopWorkspaceRuntime
+      >[0]["events"]
+    >["onReplyNotification"]
+  > = (notification, report) => {
+    showNativeReplyNotification(notification, {
+      platform: process.platform,
+      isSupported: () => Notification.isSupported(),
+      create: (options) => new Notification(options),
+      report: (_id, actionId, text) => report(actionId, text),
+      // The in-app copy answers nothing once the reply was delivered.
+      replied: (id) => eventService.emit("notification:dismiss", { id }),
+      failed: (id, error) => {
+        log.warn(`Notification reply for ${id} failed: ${formatUnknownError(error)}`);
+        showUserNotification("Reply not delivered", formatUnknownError(error));
+      },
+      focus: () => panelHost.showAndFocus(),
+    });
+  };
   let workspaceCatalogBootstrap: Promise<void> | null = null;
   const ensureDesktopWorkspace = async (id: string): Promise<DesktopUiWorkspaceRuntime> => {
     const sessions = assertPresent(serverSession).workspaceSessions;
@@ -2110,6 +2240,7 @@ app.on("ready", async () => {
         },
         events: {
           onAttentionRequired: handleAttentionRequired,
+          onReplyNotification: handleReplyNotification,
           onNotificationAction: (id, actionId) =>
             releaseUpdateController?.handleNotificationAction(id, actionId),
           onApprovalPendingChanged: (pending) =>
@@ -2180,6 +2311,7 @@ app.on("ready", async () => {
     >[0]["events"]
   > = {
     onAttentionRequired: handleAttentionRequired,
+    onReplyNotification: handleReplyNotification,
     onNotificationAction: (id, actionId) =>
       releaseUpdateController?.handleNotificationAction(id, actionId),
     onSupervisionChanged: handleSupervisionChange,
@@ -2218,75 +2350,81 @@ app.on("ready", async () => {
     const connectedStartupMode: ConnectedStartupMode | null =
       startupMode.kind === "local" ? startupMode : null;
     const establish = (mode: ConnectedStartupMode | null) =>
-      establishServerSession({
-        mode,
-        confirmExistingLocalHub: async (lease) => {
-          const { response } = await dialog.showMessageBox({
-            type: "question",
-            buttons: ["Stop it and start over", "Reconnect", "Cancel"],
-            defaultId: 1,
-            cancelId: 2,
-            title: "Vibestudio is already running",
-            message: "Vibestudio is still running in the background.",
-            detail:
-              "Reconnect to pick up where it left off, including any tasks that are still " +
-              "running. Stopping it ends those tasks before starting a fresh session. " +
-              `(Background process ${lease.pid}, port ${lease.gatewayPort}.)`,
-          });
-          if (response === 0) return "replace";
-          if (response === 1) return "attach";
-          return "cancel";
+      startConnection().establish(
+        {
+          mode,
+          // The hub owns child startup. Request the known focus target alongside
+          // System, before either desktop is built.
+          prepareInitialWorkspace: !IS_HEADLESS_HOST,
+          pendingPairing: pendingRemotePairing ?? undefined,
+          pendingPairLabel: readPendingPairLabel(),
+          storedRemote: storedRemoteAtLaunch ?? undefined,
+          appVersion: app.getVersion(),
+          userDataPath: app.getPath("userData"),
         },
-        onInitialWorkspaceResolved: IS_HEADLESS_HOST
-          ? undefined
-          : (id, prepare) => {
-              // The hub remains the owner of child startup. Request the known
-              // focus target alongside System, before either desktop is built.
-              void prepare().catch((error: unknown) => {
-                log.warn(
-                  `[workspace] Could not prepare initial workspace ${id}: ${formatUnknownError(error)}`
+        {
+          confirmExistingLocalHub: async (lease) => {
+            const { response } = await dialog.showMessageBox({
+              type: "question",
+              buttons: ["Stop it and start over", "Reconnect", "Cancel"],
+              defaultId: 1,
+              cancelId: 2,
+              title: "Vibestudio is already running",
+              message: "Vibestudio is still running in the background.",
+              detail:
+                "Reconnect to pick up where it left off, including any tasks that are still " +
+                "running. Stopping it ends those tasks before starting a fresh session. " +
+                `(Background process ${lease.pid}, port ${lease.gatewayPort}.)`,
+            });
+            if (response === 0) return "replace";
+            if (response === 1) return "attach";
+            return "cancel";
+          },
+          // The OS keystore is reachable only from this process.
+          credentials: {
+            load: loadDeviceCredentialByServerId,
+            preflight: preflightDeviceCredentialStoreForPairing,
+            save: saveDeviceCredential,
+          },
+          onStartupProgress: (progress) => {
+            bootstrapStartupProgress = progress;
+            pushBootstrapConnectionState();
+          },
+          onLocalRecoveryFailure: (error) => workspaceConnection.failure(error.message),
+          onCredentialSaveFailed: (error) => {
+            log.error(`[connection] could not save the device credential: ${error.message}`);
+            workspaceConnection.failure(error.message);
+          },
+          onMainSessionTerminalClose: (error) => {
+            const message = error.message || "The paired server ended this session.";
+            log.error(`[connection] paired workspace session ended: ${message}`);
+            workspaceConnection.end();
+            // The server revoked this device (from here or from another device):
+            // its credential can never authenticate again, so forget it and
+            // return to the chooser instead of offering a dead reconnect.
+            if ((error as { code?: unknown }).code !== CLOSE_TOKEN_REVOKED) return;
+            if (isRemoteSession) clearStoredRemotePairing();
+            if (!IS_HEADLESS_HOST) {
+              void relaunchApp().catch((relaunchError: unknown) => {
+                log.error(
+                  `[connection] relaunch after device revocation failed: ${formatUnknownError(relaunchError)}`
                 );
               });
-            },
-        onStartupProgress: (progress) => {
-          bootstrapStartupProgress = progress;
-          pushBootstrapConnectionState();
-        },
-        pendingPairing: pendingRemotePairing ?? undefined,
-        pendingPairLabel: readPendingPairLabel(),
-        storedRemote: storedRemoteAtLaunch ?? undefined,
-        centralData,
-        onLocalRecoveryFailure: (error) => workspaceConnection.failure(error.message),
-        onMainSessionTerminalClose: (error) => {
-          const message = error.message || "The paired server ended this session.";
-          log.error(`[connection] paired workspace session ended: ${message}`);
-          workspaceConnection.end();
-          // The server revoked this device (from here or from another device):
-          // its credential can never authenticate again, so forget it and
-          // return to the chooser instead of offering a dead reconnect.
-          if ((error as { code?: unknown }).code !== CLOSE_TOKEN_REVOKED) return;
-          if (isRemoteSession) clearStoredRemotePairing();
-          if (!IS_HEADLESS_HOST) {
-            void relaunchApp().catch((relaunchError: unknown) => {
-              log.error(
-                `[connection] relaunch after device revocation failed: ${formatUnknownError(relaunchError)}`
-              );
+            }
+          },
+          onConnectionStatusChanged: (status) => {
+            const wasRecovering = workspaceConnection.snapshot().phase === "reconnecting";
+            if (!(status === "connected" && wasRecovering)) workspaceConnection.transport(status);
+          },
+          onTransportDiagnosticsChanged: (remoteTransport) => {
+            if (!serverClientRef || !isRemoteSession) return;
+            eventService.emit("remote-transport-diagnostics-changed", {
+              remoteTransport,
             });
-          }
-        },
-        onConnectionStatusChanged: (status) => {
-          const wasRecovering = workspaceConnection.snapshot().phase === "reconnecting";
-          if (!(status === "connected" && wasRecovering)) workspaceConnection.transport(status);
-        },
-        onTransportDiagnosticsChanged: (remoteTransport) => {
-          if (!serverClientRef || !isRemoteSession) return;
-          eventService.emit("remote-transport-diagnostics-changed", {
-            remoteTransport,
-          });
-        },
-        onReconnectProgress: (progress) => workspaceConnection.reconnect(progress),
-        // Workspace runtimes subscribe to recovery on their immutable clients.
-      });
+          },
+          onReconnectProgress: (progress) => workspaceConnection.reconnect(progress),
+        }
+      );
 
     // Phase 1: Establish server session (spawn the local child server)
     try {
@@ -2445,10 +2583,11 @@ app.on("ready", async () => {
     );
     abortPendingSystemRuntimeStartup = systemRuntimePublication.abort;
 
-    // Create IpcDispatcher (replaces Electron-side RpcServer for shell)
-    // Forwards server-service calls to the server, dispatches Electron-local
-    // services to the local dispatcher.
-    const { IpcDispatcher } = await import("./ipcDispatcher.js");
+    // Renderer RPC. Each renderer document asks main for its port once; main
+    // attests who the document is and gives the connection process one end of a
+    // fresh channel, bound to that principal's session, and the document the
+    // other. Requests, responses, events and streams then flow between the
+    // document and the connection process without crossing this process.
     const { WebsiteWorkspaceBridge } = await import("./websiteWorkspaceBridge.js");
     const websiteWorkspaceBridge = new WebsiteWorkspaceBridge({
       resolve: (contents) => {
@@ -2470,7 +2609,10 @@ app.on("ready", async () => {
       },
       retireTransport: (contents) => {
         const nativeId = panelHost.viewManager?.findViewIdByWebContentsId(contents.id);
-        if (nativeId) activeIpcDispatcher?.retirePanelDocument(nativeId);
+        if (nativeId)
+          void connectionLink?.retireDocument(nativeId).catch((error: unknown) => {
+            log.warn(`Could not retire the document of ${nativeId}: ${formatUnknownError(error)}`);
+          });
       },
     });
     ipcMain.handle("vibestudio:website:document", (event) => websiteWorkspaceBridge.begin(event));
@@ -2480,146 +2622,63 @@ app.on("ready", async () => {
     ipcMain.handle("vibestudio:website:disconnect", (event, documentId: string) =>
       websiteWorkspaceBridge.disconnect(event, documentId)
     );
-    const ipcDispatcher = new IpcDispatcher({
-      retireDocuments: async () => {
-        ipcMain.removeHandler("vibestudio:website:document");
-        ipcMain.removeHandler("vibestudio:website:connect");
-        ipcMain.removeHandler("vibestudio:website:disconnect");
-        await websiteWorkspaceBridge.close();
-      },
-      workspaceId: conn.workspaceId,
-      resolveWorkspaceRuntime: ensureDesktopWorkspace,
-      resolveUiRuntime: async (caller, destination) => {
-        // A client acts as this device in routed workspaces only while it holds
-        // `device-session`, which the server grants solely to trusted clients.
-        const window = clientWindows.byCaller(caller.callerId);
-        if (
-          caller.callerKind !== "client" ||
-          !window?.spec.capabilities.includes("device-session")
-        ) {
-          return null;
-        }
-        const identity = {
-          workspaceId: window.spec.workspaceId,
-          runtimeId: window.spec.principalId,
-        };
-        const code = window.spec.codeIdentity;
-        const workspaces = (await conn.hubControlClient.call(
-          "hubControl",
-          "listWorkspaces",
-          []
-        )) as import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[];
-        const system = workspaces.find((entry) => entry.privateRole === "system");
-        if (
-          system?.workspaceId !== identity.workspaceId ||
-          identity.workspaceId !== conn.workspaceId
-        ) {
-          return null;
-        }
-        if (
-          destination.kind === "workspace" &&
-          !workspaces.some((entry) => entry.workspaceId === destination.workspaceId)
-        ) {
-          return null;
-        }
-        const workspace =
-          destination.kind === "workspace"
-            ? await ensureDesktopWorkspace(destination.workspaceId)
-            : undefined;
-        const target = {
-          destination,
-          serverClient: workspace?.serverClient ?? conn.hubControlClient,
-          ...(workspace ? { workspace } : {}),
-        };
-        const current = clientWindows.byCaller(caller.callerId);
-        if (
-          !current?.spec.capabilities.includes("device-session") ||
-          current.spec.workspaceId !== identity.workspaceId ||
-          current.spec.principalId !== identity.runtimeId ||
-          current.spec.codeIdentity.executionDigest !== code.executionDigest ||
-          current.spec.codeIdentity.effectiveVersion !== code.effectiveVersion
-        ) {
-          return null;
-        }
-        const currentMembers = (await conn.hubControlClient.call(
-          "hubControl",
-          "listWorkspaces",
-          []
-        )) as import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[];
-        if (
-          currentMembers.find((entry) => entry.privateRole === "system")?.workspaceId !==
-          identity.workspaceId
-        )
-          return null;
-        if (
-          destination.kind === "workspace" &&
-          !currentMembers.some((entry) => entry.workspaceId === destination.workspaceId)
-        )
-          return null;
-        return target;
-      },
-      dispatcher,
-      serverClient: conn.serverClient,
-      getChromeWebContents: () => clientWindows.panelHost()?.contents() ?? null,
-      resolveCallerForWebContents: (webContentsId) => {
-        const clientWindow = clientWindows.byWebContents(webContentsId);
-        if (clientWindow) {
-          return {
-            callerId: clientWindow.callerId,
-            callerKind: "client",
-            runtimeId: clientWindow.spec.principalId,
-            workspaceId: clientWindow.spec.workspaceId,
-          };
-        }
+    retireWebsiteDocuments = async () => {
+      ipcMain.removeHandler("vibestudio:website:document");
+      ipcMain.removeHandler("vibestudio:website:connect");
+      ipcMain.removeHandler("vibestudio:website:disconnect");
+      await websiteWorkspaceBridge.close();
+    };
+    startConnection().serveHost(
+      createHostServiceEndpoint({
+        resolveWorkspace: ensureDesktopWorkspace,
+        codeIdentityForCaller: codeIdentityForView,
+        panelRuntimeConnection: (nativeId) => {
+          const identity = panelHost.viewManager?.getViewInfo(nativeId)?.workspaceIdentity;
+          if (!identity) return undefined;
+          return openNativeControllers
+            .get(identity.workspaceId)
+            ?.orchestrator.getPanelRuntimeConnection(identity.runtimeId);
+        },
+      })
+    );
+    rendererPorts = new RendererPortBroker({
+      link: () => connectionLink,
+      resolveBinding: (contents) => {
+        const clientWindow = clientWindows.byWebContents(contents.id);
+        if (clientWindow) return clientWindowBinding(clientWindow);
         const viewManager = panelHost.viewManager;
         if (!viewManager) return null;
-        const overlayOwner =
-          viewManager.findHostedShellViewIdByContentOverlayWebContentsId(webContentsId);
+        const overlayOwner = viewManager.findHostedShellViewIdByContentOverlayWebContentsId(
+          contents.id
+        );
         const overlayWindow = overlayOwner ? clientWindows.byCaller(overlayOwner) : null;
-        if (overlayWindow) {
-          return {
-            callerId: overlayWindow.callerId,
-            callerKind: "client",
-            runtimeId: overlayWindow.spec.principalId,
-            workspaceId: overlayWindow.spec.workspaceId,
-          };
-        }
-        const callerId = viewManager.findViewIdByWebContentsId(webContentsId);
+        if (overlayWindow) return clientWindowBinding(overlayWindow);
+        const callerId = viewManager.findViewIdByWebContentsId(contents.id);
         if (!callerId) return null;
         const viewInfo = viewManager.getViewInfo(callerId);
         if (viewInfo?.browser) {
-          const contents = viewManager.getWebContents(callerId);
-          if (!contents || !websiteWorkspaceBridge.connected(contents)) return null;
+          const viewContents = viewManager.getWebContents(callerId);
+          if (!viewContents || !websiteWorkspaceBridge.connected(viewContents)) return null;
         }
         const caller = resolveElectronViewCaller(callerId, viewInfo);
         const identity = viewInfo?.workspaceIdentity;
         return caller && identity
           ? {
-              ...caller,
-              browser: viewInfo?.browser === true,
-              documentId: viewInfo?.browser
-                ? websiteWorkspaceBridge.documentId(viewManager.getWebContents(callerId)!)
-                : undefined,
-              runtimeId: identity.runtimeId,
-              workspaceId: identity.workspaceId,
+              caller: {
+                ...caller,
+                browser: viewInfo?.browser === true,
+                documentId: viewInfo?.browser
+                  ? websiteWorkspaceBridge.documentId(viewManager.getWebContents(callerId)!)
+                  : undefined,
+                runtimeId: identity.runtimeId,
+                workspaceId: identity.workspaceId,
+              },
+              state: { hostsPanels: false },
             }
           : null;
       },
-      getCodeIdentityForCaller: codeIdentityForView,
-      getWebContentsForCaller: (callerId) =>
-        clientWindows.byCaller(callerId)?.contents() ??
-        panelHost.viewManager?.getWebContents(callerId) ??
-        null,
-      getPanelRuntimeConnection: (nativeId) => {
-        const identity = panelHost.viewManager?.getViewInfo(nativeId)?.workspaceIdentity;
-        if (!identity) return undefined;
-        return openNativeControllers
-          .get(identity.workspaceId)
-          ?.orchestrator.getPanelRuntimeConnection(identity.runtimeId);
-      },
-      authorizeClientServerCall: authorizeClientServerCall,
     });
-    activeIpcDispatcher = ipcDispatcher;
+    rendererPorts.install();
     // The same workspace runtime owns ordinary native services and presentation
     // for every workspace. System adds only its app/account host services below.
     // Set up test API for E2E testing (only when VIBESTUDIO_TEST_MODE=1)
@@ -2659,10 +2718,12 @@ app.on("ready", async () => {
     });
     setupTestApi(testOwner(workspaceController), {
       getActiveWorkspaceAssetDiagnostics: () =>
-        [...openNativeControllers.values()].slice(0, 50).map((runtime) => ({
-          workspaceId: runtime.workspaceId,
-          transfers: runtime.getAssetDiagnostics(),
-        })),
+        Promise.all(
+          [...openNativeControllers.values()].slice(0, 50).map(async (runtime) => ({
+            workspaceId: runtime.workspaceId,
+            transfers: await runtime.getAssetDiagnostics(),
+          }))
+        ),
       resolveWorkspace: async (id) => testOwner(await ensureDesktopWorkspace(id)),
       getServerConnectionStatus: () => workspaceController.getConnectionStatus(),
       callHostedClient: async (service, method, args) => {
@@ -2710,7 +2771,7 @@ app.on("ready", async () => {
         // workspace's shell, so that is where the focus change is announced.
         const chromeWorkspaceId = serverSession?.workspaceId;
         if (chromeWorkspaceId) {
-          activeIpcDispatcher?.sendEventToShell(chromeWorkspaceId, "workspace-focused", {
+          connectionLink?.sendEventToShell(chromeWorkspaceId, "workspace-focused", {
             workspaceId,
           });
         }
@@ -2763,7 +2824,7 @@ app.on("ready", async () => {
       workspaceCatalogOrder = workspaces.map((entry) => entry.workspaceId);
       const chromeWorkspaceId = serverSession?.workspaceId;
       if (chromeWorkspaceId) {
-        activeIpcDispatcher?.sendEventToShell(chromeWorkspaceId, "hub:workspace-catalog-changed", {
+        connectionLink?.sendEventToShell(chromeWorkspaceId, "hub:workspace-catalog-changed", {
           workspaces,
         });
       }
@@ -2892,6 +2953,26 @@ app.on("ready", async () => {
         hostAbi: CURRENT_HOST_ABI.web,
         grantedCapabilities: [...window.spec.capabilities],
       };
+    });
+    // A client observes and applies only its own update, and keeps only its own state.
+    const ownClient = (event: Electron.IpcMainInvokeEvent): ClientWindow => {
+      const window = clientWindows.byWebContents(event.sender.id);
+      if (!window) throw new Error("Only a client window can use its own update and state");
+      return window;
+    };
+    ipcMain.handle("vibestudio:client:update-pending", (event) =>
+      clientUpdateOffer(clientHost?.pendingFor(ownClient(event).spec.clientId) ?? null)
+    );
+    ipcMain.handle("vibestudio:client:update-apply", async (event) => {
+      const clientId = ownClient(event).spec.clientId;
+      if (!clientHost || !(await clientHost.apply(clientId)))
+        throw new Error(`${clientId} has no pending update`);
+    });
+    ipcMain.handle("vibestudio:client:state-get", (event) =>
+      clientStateStore.get(ownClient(event).spec.clientId)
+    );
+    ipcMain.handle("vibestudio:client:state-set", (event, value: unknown) => {
+      clientStateStore.set(ownClient(event).spec.clientId, value);
     });
     ipcMain.handle("vibestudio:menu:set", (event, model: unknown) => {
       const window = requireClientWindow(event, "native-menus", "vibestudio:menu:set");
@@ -3106,22 +3187,24 @@ app.on("ready", async () => {
     openNativeControllers.clear();
     await Promise.allSettled(runtimes.map(async (runtime) => (await runtime).close()));
     systemRuntime = null;
-    if (activeIpcDispatcher) {
-      await activeIpcDispatcher
-        .shutdown()
-        .catch((error) => console.error("IPC cleanup failed", error));
-      activeIpcDispatcher = null;
-    }
+    await shutdownRendererRpc().catch((error) =>
+      console.error("Renderer RPC cleanup failed", error)
+    );
 
-    if (serverSession) {
+    const failedSession = serverSession;
+    if (failedSession) {
       cleanupPromises.push(
-        serverSession.close().catch((e) => console.error("[App] session cleanup error:", e))
+        failedSession.close().catch((e) => console.error("[App] session cleanup error:", e))
       );
     }
     // Leave the local hub running: it is detached by design, the
     // next launch reattaches to it, and the idle-exit monitor reaps it if no
     // client ever comes back.
-    serverSession?.hubProcessManager?.detach();
+    cleanupPromises.push(
+      Promise.resolve(failedSession?.hubProcessManager?.detach()).catch((e) =>
+        console.error("[App] hub detach error:", e)
+      )
+    );
     serverSession = null;
     await Promise.all(cleanupPromises);
 
@@ -3233,6 +3316,7 @@ app.on("will-quit", (event) => {
   const relaunchQuit = quitIntent.kind === "relaunch";
   const hasResourcesToClean =
     serverSession ||
+    connectionProcess ||
     systemRuntime?.cdpHostProvider ||
     currentHostDevelopmentExecutor ||
     relaunchQuit;
@@ -3268,11 +3352,7 @@ app.on("will-quit", (event) => {
     joinShutdown("runtime startup", abortStartup(new Error("Application is shutting down")));
   let developmentExecutorClose: Promise<void> | null = null;
 
-  if (activeIpcDispatcher) {
-    const ipcDispatcher = activeIpcDispatcher;
-    activeIpcDispatcher = null;
-    joinShutdown("renderer IPC", ipcDispatcher.shutdown());
-  }
+  if (connectionLink) joinShutdown("renderer RPC", shutdownRendererRpc());
 
   if (currentHostDevelopmentExecutor) {
     const executor = currentHostDevelopmentExecutor;
@@ -3287,7 +3367,8 @@ app.on("will-quit", (event) => {
     // stop-or-detach the local server and close the connection.
     const session = serverSession;
     serverSession = null;
-    session.hubProcessManager?.beginShutdown();
+    const beganShutdown = session.hubProcessManager?.beginShutdown();
+    if (beganShutdown) joinShutdown("hub supervision", beganShutdown);
     const stopServer =
       session.serverOwnership === "desktop-local" &&
       session.hubProcessManager !== null &&
@@ -3348,8 +3429,10 @@ app.on("will-quit", (event) => {
         } else {
           // Keep: leave the detached process running; the attachment record stays
           // so the next launch reattaches instantly.
-          session.hubProcessManager?.detach();
-          if (session.hubProcessManager) console.log("[App] Hub left running (detached)");
+          if (session.hubProcessManager) {
+            await session.hubProcessManager.detach();
+            console.log("[App] Hub left running (detached)");
+          }
         }
       },
     });
@@ -3363,7 +3446,9 @@ app.on("will-quit", (event) => {
       );
       if (errors.length) throw new AggregateError(errors, "Application shutdown failed");
     })
-    .then(() => {
+    .then(async () => {
+      // Last: the hub stop above runs through this process.
+      await connectionProcess?.dispose();
       console.log("[App] Shutdown complete");
       app.exit(quitIntent.kind === "relaunch" ? quitIntent.exitCode : 0);
     })

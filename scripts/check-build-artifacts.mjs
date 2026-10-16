@@ -40,6 +40,18 @@ const contracts = [
     ],
   },
   {
+    path: "dist/connectionProcess.cjs",
+    runtime: "Electron utilityProcess",
+    format: "cjs",
+    mustContain: ['"use strict"'],
+    forbidden: [
+      {
+        pattern: "throw Error('Dynamic require of \"",
+        reason: "CJS utility-process connection host should have native require.",
+      },
+    ],
+  },
+  {
     path: "dist/server-electron.cjs",
     runtime: "Electron utilityProcess",
     format: "cjs",

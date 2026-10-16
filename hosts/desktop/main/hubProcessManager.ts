@@ -31,11 +31,7 @@ import {
   type HubReadyPayload,
 } from "@vibestudio/service-schemas/hubControl";
 import { getEsbuildBinaryPath, getServerProcessEntryPath } from "./paths.js";
-import {
-  loadDeviceCredentialByServerId,
-  saveDeviceCredential,
-  type DeviceCredentialEntry,
-} from "./services/deviceCredentialStore.js";
+import type { DeviceCredentialEntry } from "./services/deviceCredentialStore.js";
 import {
   terminateOwnedProcessTree,
   type ProcessTreeTerminationResult,
@@ -80,8 +76,18 @@ function hubStartupFailureDetail(logPath: string, startOffset: number): string |
  * resolves it; transport-only clients need not open an unused workspace. */
 export type InitialWorkspaceResolved = (workspaceId: string, prepare: () => Promise<void>) => void;
 
+/**
+ * The local hub's device credential. The OS keystore is reachable only from the
+ * Electron main process, so the connection process reads and commits it there.
+ */
+export interface LocalDeviceCredentials {
+  load(serverId: string): Promise<DeviceCredentialEntry | null>;
+  save(credential: DeviceCredentialEntry): Promise<void>;
+}
+
 export interface HubProcessManagerConfig {
   workspaceName: string | null;
+  credentials: LocalDeviceCredentials;
   onInitialWorkspaceResolved?: InitialWorkspaceResolved;
   appRoot: string;
   appVersion: string;
@@ -427,7 +433,7 @@ export class HubProcessManager {
   }
 
   private async ensureDeviceCredential(target: HubProcessTarget): Promise<DeviceCredentialEntry> {
-    const existing = loadDeviceCredentialByServerId(target.record.serverId);
+    const existing = await this.config.credentials.load(target.record.serverId);
     if (existing) return existing;
     const inviteCode = target.rootInviteCode;
     const expiresAt = target.rootInviteExpiresAt;
@@ -465,7 +471,7 @@ export class HubProcessManager {
       label,
       pairedAt: Date.now(),
     };
-    saveDeviceCredential(credential);
+    await this.config.credentials.save(credential);
     return credential;
   }
 

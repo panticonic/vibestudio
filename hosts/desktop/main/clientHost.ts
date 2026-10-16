@@ -87,6 +87,8 @@ export interface DesktopClientHostDeps {
   /** The System workspace id: the client principal is registered there. */
   workspaceId(): string;
   notify(title: string, message: string): void;
+  /** A newer build of a running client was announced and is waiting for the person. */
+  updateOffered?(clientId: string): void;
   /** Called once a client has a window, before the gate closes. */
   clientStarted?(client: ReadyClient, window: ClientWindow): void | Promise<void>;
 }
@@ -482,6 +484,7 @@ export class DesktopClientHost implements PendingClientUpdates {
       effectiveVersion: update.effectiveVersion,
       previousEffectiveVersion: running.client.effectiveVersion,
     });
+    this.deps.updateOffered?.(clientId);
   }
 
   list(): PendingClientUpdateInfo[] {
@@ -501,6 +504,11 @@ export class DesktopClientHost implements PendingClientUpdates {
       });
     }
     return pending;
+  }
+
+  /** The pending update of one client, for the client itself. */
+  pendingFor(clientId: string): PendingClientUpdateInfo | null {
+    return this.list().find((update) => update.appId === clientId) ?? null;
   }
 
   async apply(clientId: string): Promise<boolean> {

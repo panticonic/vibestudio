@@ -12,10 +12,6 @@ vi.mock("electron", () => ({ app: { getPath: () => "/tmp/session-test" } }));
 vi.mock("./paths.js", () => ({ getAppRoot: vi.fn(), getServerProcessBuildId: vi.fn() }));
 vi.mock("./hubProcessManager.js", () => ({ HubProcessManager: vi.fn() }));
 vi.mock("./serverClient.js", () => ({ createServerClient: vi.fn() }));
-vi.mock("./services/deviceCredentialStore.js", () => ({
-  preflightDeviceCredentialStoreForPairing: vi.fn(),
-  saveDeviceCredential: mocks.save,
-}));
 vi.mock("./desktopIrohConnectionSupervisor.js", () => ({
   DesktopIrohConnectionSupervisor: class {
     connect = mocks.connect;
@@ -26,6 +22,16 @@ vi.mock("../../../src/node/panelAssets/panelAssetFacade.js", () => ({
   startPanelAssetFacade: async () => ({ port: 12345, close: mocks.facadeClose }),
 }));
 import { establishServerSession } from "./serverSession.js";
+
+const sessionArgs = {
+  appVersion: "0.1.84",
+  userDataPath: "/tmp/session-test",
+  credentials: {
+    load: async () => null,
+    preflight: async () => {},
+    save: async (credential: unknown) => mocks.save(credential),
+  },
+};
 
 const reach = {
   endpointId: "01".repeat(32),
@@ -45,7 +51,7 @@ const entries = [
 
 beforeEach(() => vi.clearAllMocks());
 describe("remote startup workspace focus", () => {
-  it("retires the supervisor while a workspace directory acquisition is pending", async () => {
+  it("retires the supervisor while a workspace connection is pending", async () => {
     let release!: () => void;
     const retirement = new Promise<void>((resolve) => {
       release = resolve;
@@ -103,11 +109,12 @@ describe("remote startup workspace focus", () => {
       release();
     });
     const connection = await establishServerSession({
+      ...sessionArgs,
       mode: null,
       pendingPairing: { ...reach, code: "test-code" },
       centralData: {} as CentralDataManager,
     });
-    const rejected = expect(connection.workspaceSessions.get("project-id")).rejects.toBe(failure);
+    const rejected = expect(connection.connectWorkspace("project-id")).rejects.toBe(failure);
     await pending;
     const closing = connection.close();
     try {
@@ -166,6 +173,7 @@ describe("remote startup workspace focus", () => {
       })
       .mockResolvedValue(workspace);
     const connection = await establishServerSession({
+      ...sessionArgs,
       mode: null,
       pendingPairing: { ...reach, code: "test-code" },
       centralData: {} as CentralDataManager,

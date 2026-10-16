@@ -57,13 +57,15 @@ export interface TestApi {
   forWorkspace(workspaceId: string): Promise<TestApi>;
   listWorkspaces(): Promise<import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[]>;
   getServerConnectionStatus(): "connected" | "connecting" | "disconnected";
-  getPanelAssetDiagnostics():
-    | import("@vibestudio/shared/panelInterfaces").PanelAssetDiagnostics
-    | null;
-  getActiveWorkspaceAssetDiagnostics(): Array<{
-    workspaceId: string;
-    transfers: import("@vibestudio/shared/panelInterfaces").PanelAssetDiagnostics | null;
-  }>;
+  getPanelAssetDiagnostics(): Promise<
+    import("@vibestudio/shared/panelInterfaces").PanelAssetDiagnostics | null
+  >;
+  getActiveWorkspaceAssetDiagnostics(): Promise<
+    Array<{
+      workspaceId: string;
+      transfers: import("@vibestudio/shared/panelInterfaces").PanelAssetDiagnostics | null;
+    }>
+  >;
 
   /** Get the full panel tree as a flat array */
   getPanelTree(): Panel[];
@@ -229,7 +231,9 @@ export interface TestWorkspaceOwner {
   panelOrchestrator: PanelOrchestrator;
   panelRegistry: PanelRegistry;
   getPanelView(): PanelView | null;
-  getAssetDiagnostics?(): import("@vibestudio/shared/panelInterfaces").PanelAssetDiagnostics | null;
+  getAssetDiagnostics?(): Promise<
+    import("@vibestudio/shared/panelInterfaces").PanelAssetDiagnostics | null
+  >;
   inspectAgentState?(channelId: string, participantId: string): Promise<unknown>;
 }
 
@@ -265,7 +269,7 @@ export function setupTestApi(
           listWorkspaces: selectors.listWorkspaces,
           getServerConnectionStatus: selectors.getServerConnectionStatus,
           getActiveWorkspaceAssetDiagnostics:
-            selectors.getActiveWorkspaceAssetDiagnostics ?? (() => []),
+            selectors.getActiveWorkspaceAssetDiagnostics ?? (async () => []),
           getLaunchGateView: () => selectors.launchGate.view(),
           resolveLaunchApprovals: (decision) => selectors.launchGate.resolveApprovals(decision),
           callHostedClient: (service, method, args = []) =>
@@ -326,7 +330,7 @@ function createWorkspaceTestApi(
   };
 
   return {
-    getPanelAssetDiagnostics: () => getAssetDiagnostics?.() ?? null,
+    getPanelAssetDiagnostics: async () => (await getAssetDiagnostics?.()) ?? null,
     ...selectors,
     getPanelTree(): Panel[] {
       const result: Panel[] = [];

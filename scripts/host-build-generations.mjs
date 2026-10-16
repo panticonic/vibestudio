@@ -19,6 +19,7 @@ const REQUIRED = {
   source: SOURCE_SERVER_PREREQUISITE_ARTIFACTS.map((entry) => entry.slice("dist/".length)),
   desktop: [
     "main.cjs",
+    "connectionProcess.cjs",
     "adblock-engine-worker.cjs",
     "server-electron.cjs",
     "panelPreload.cjs",

@@ -14,7 +14,7 @@ import type { FormFillManager } from "./autofill/formFillManager.js";
 import type { BrowserFaviconObserver } from "./services/browserFaviconObserver.js";
 import type { BrowserPermissionController } from "./services/browserPermissionController.js";
 import type { ApprovalAttention } from "./approvalAttention.js";
-import type { WorkspaceSessionConnection } from "./serverSession.js";
+import type { WorkspaceSessionConnection } from "./sessionConnection.js";
 import { WebsiteNotificationBridge } from "./services/websiteNotificationBridge.js";
 import { BrowserHistoryRecorder } from "./browserHistoryRecorder.js";
 import {

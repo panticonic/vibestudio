@@ -27,7 +27,8 @@ import { panelLogMethods, type PanelLogRecord } from "@vibestudio/service-schema
 import { getPanelSource } from "@vibestudio/shared/panel/accessors";
 import type { ServerEventBridgeDeps } from "./serverEventBridge.js";
 import type { PanelTreeInvalidation } from "@vibestudio/shared/panel/treeIndex";
-import type { WorkspaceSessionConnection } from "./serverSession.js";
+import { replyNotificationOf } from "./nativeNotificationReply.js";
+import type { WorkspaceSessionConnection } from "./sessionConnection.js";
 import { createDesktopWorkspaceController } from "./desktopWorkspaceController.js";
 import type { PanelHostWindow } from "./panelHostWindow.js";
 import { WorkspaceNativeViews } from "./workspaceNativeViews.js";
@@ -129,6 +130,7 @@ export function createDesktopWorkspaceRuntime(deps: {
     | "onApprovalResolved"
     | "onAttentionRequired"
     | "onNotificationAction"
+    | "onReplyNotification"
   >;
   app?: Pick<
     Parameters<typeof createAppService>[0],
@@ -477,6 +479,14 @@ export function createDesktopWorkspaceRuntime(deps: {
   const stopAttention = connection.serverClient.onDirectEvent("notification:show", (payload) => {
     const attention = notificationAttention("notification:show", payload);
     if (attention) deps.events?.onAttentionRequired?.(attention.title, attention.message);
+    const reply = replyNotificationOf(payload);
+    if (reply) {
+      deps.events?.onReplyNotification?.(reply, (actionId, text) =>
+        connection.serverClient
+          .call("notification", "reportAction", [reply.id, actionId, text])
+          .then(() => undefined)
+      );
+    }
   });
   let semanticRecoveryEpoch = 0;
   let rendererRecovery = new AbortController();
@@ -990,7 +1000,7 @@ export function createDesktopWorkspaceRuntime(deps: {
     serverClient: connection.serverClient,
     dispatcher,
     container,
-    getAssetDiagnostics: () => connection.panelHttpServer.getAssetDiagnostics?.() ?? null,
+    getAssetDiagnostics: () => connection.assetDiagnostics(),
     get personalBrowser() {
       return personalBrowser;
     },

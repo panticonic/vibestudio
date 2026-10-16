@@ -514,6 +514,23 @@ const __injected_dirname__ = typeof __dirname !== 'undefined' ? __dirname : (typ
   },
 };
 
+// The connection utility process: owns the hub connection, the Iroh endpoint,
+// the local hub process and the renderer ports (docs/client-hosts-and-clients-plan.md
+// section 5.1.1). Started by main with utilityProcess.fork.
+const connectionProcessConfig = {
+  entryPoints: ["hosts/desktop/connection/connectionProcess.ts"],
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "cjs",
+  outfile: "dist/connectionProcess.cjs",
+  external: ["electron", "esbuild", "@number0/iroh"],
+  sourcemap: isDev,
+  minify: !isDev,
+  logOverride,
+  banner: mainConfig.banner,
+};
+
 function createPreloadConfig(name) {
   return {
     entryPoints: [`hosts/desktop/preload/${name}.ts`],
@@ -824,6 +841,7 @@ async function build() {
         buildArtifactGroups(
           [
             mainConfig,
+            connectionProcessConfig,
             adblockWorkerConfig,
             ...preloadConfigs,
             browserTransportConfig,

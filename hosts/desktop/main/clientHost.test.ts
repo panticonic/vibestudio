@@ -241,6 +241,7 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
   const gate: Array<{ title: string | null; status: LaunchGateStatus }> = [];
   let dismissed = 0;
   const notices: Array<[string, string]> = [];
+  const offered: string[] = [];
   const supervision = new SupervisionRelay();
   const state = new ClientHostState(join(dir, "state.json"));
   host = new DesktopClientHost({
@@ -263,6 +264,7 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
     },
     workspaceId: () => "system",
     notify: (title, message) => notices.push([title, message]),
+    updateOffered: (clientId) => offered.push(clientId),
   });
   host.follow();
   return {
@@ -276,6 +278,7 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
     closedWindows,
     gate,
     notices,
+    offered,
     supervision,
     state,
     metadataDigest,
@@ -421,6 +424,16 @@ describe("DesktopClientHost updates", () => {
     await t.host.launch({ default: true });
     return t.windowsMade[0]!;
   }
+
+  it("tells the client its own pending update, and only its own", async () => {
+    const t = harness();
+    await running(t);
+    expect(t.host.pendingFor("browser")).toBeNull();
+    t.supervision.emit(adopted("bk2", "bk1"));
+    await vi.waitFor(() => expect(t.offered).toEqual(["browser"]));
+    expect(t.host.pendingFor("browser")).toMatchObject({ appId: "browser", buildKey: "bk2" });
+    expect(t.host.pendingFor("chat")).toBeNull();
+  });
 
   it("offers a newer build and swaps the window to it only when the person takes it", async () => {
     const t = harness();

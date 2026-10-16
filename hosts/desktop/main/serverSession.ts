@@ -3,26 +3,29 @@ import { nativeStorageScope } from "./nativeStorageScope.js";
  * ServerSession — server connection establishment.
  *
  * Subsumes local attach-or-spawn vs remote connect and workspace info fetch.
- * Returns a single SessionConnection with everything needed to continue
+ * Returns a single ConnectedSession with everything needed to continue
  * startup. There is ONE auth model in all topologies: device pairing +
  * refresh credentials. Locally the desktop owns a detached hub and routes into
  * a child over its loopback proxy; remotely it reaches the child over Iroh.
  */
 
-import { app } from "electron";
 import { createHash, randomBytes } from "node:crypto";
 import * as path from "node:path";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { getAppRoot, getServerProcessBuildId } from "./paths.js";
-import { HubProcessManager, type InitialWorkspaceResolved } from "./hubProcessManager.js";
-import { createServerClient, type ServerClient, type ConnectionStatus } from "./serverClient.js";
+import {
+  HubProcessManager,
+  type InitialWorkspaceResolved,
+  type LocalDeviceCredentials,
+} from "./hubProcessManager.js";
+import {
+  createServerClient,
+  type ConnectedServerClient,
+  type ConnectionStatus,
+} from "./serverClient.js";
 import type { DeviceCredential } from "@vibestudio/rpc/protocol/wsProtocol";
 import { startPanelAssetFacade } from "../../../src/node/panelAssets/panelAssetFacade.js";
-import {
-  preflightDeviceCredentialStoreForPairing,
-  saveDeviceCredential,
-  type StoredRemote,
-} from "./services/deviceCredentialStore.js";
+import type { DeviceCredentialEntry, StoredRemote } from "./services/deviceCredentialStore.js";
 import type { PanelHttpServerLike } from "@vibestudio/shared/panelInterfaces";
 import type { RemoteTransportDiagnostics } from "@vibestudio/shared/types";
 import type { ServerInfo } from "./serverInfo.js";
@@ -36,7 +39,6 @@ import {
   HubWorkspaceRouteSchema,
   type HubWorkspaceRoute,
 } from "@vibestudio/service-schemas/hubControl";
-import { WorkspaceSessionDirectory } from "./workspaceSessionDirectory.js";
 import { serverAuthRouteUrl, serverRpcWsUrl } from "@vibestudio/shared/connect";
 import { assertIrohReach, type ConnectPairing, type IrohReach } from "@vibestudio/iroh-transport";
 import { DesktopIrohConnectionSupervisor } from "./desktopIrohConnectionSupervisor.js";
@@ -52,6 +54,51 @@ import {
 } from "../../../src/startupConnectionProgress.js";
 
 const log = createDevLogger("ServerSession");
+
+/**
+ * Where a device credential is kept. The OS keystore is reachable only from the
+ * Electron main process, so the connection process asks main to commit one.
+ */
+export interface DeviceCredentialPersistence extends LocalDeviceCredentials {
+  /** Prove a freshly issued secret can be committed before a one-time pairing is consumed. */
+  preflight(): Promise<void>;
+  save(credential: DeviceCredentialEntry): Promise<void>;
+}
+
+/**
+ * Commits rotated credentials from callbacks that cannot wait. A failed commit
+ * is never swallowed: it is reported to the owner and is rethrown by
+ * {@link CredentialWriter.settle} wherever the caller can still fail the connection.
+ */
+class CredentialWriter {
+  private readonly inflight = new Set<Promise<void>>();
+  private failure: unknown = null;
+
+  constructor(
+    private readonly persistence: DeviceCredentialPersistence,
+    private readonly failed: (error: Error) => void
+  ) {}
+
+  write(credential: StoredRemote): void {
+    const write = this.persistence.save(credential).catch((error: unknown) => {
+      this.failure ??= error;
+      this.failed(error instanceof Error ? error : new Error(String(error)));
+    });
+    this.inflight.add(write);
+    void write.finally(() => this.inflight.delete(write));
+  }
+
+  async settle(): Promise<void> {
+    await Promise.all([...this.inflight]);
+    if (this.failure !== null) {
+      const cause = this.failure instanceof Error ? this.failure.message : String(this.failure);
+      throw new Error(
+        `The server accepted the pairing link, but Vibestudio could not save the issued device credential: ${cause} The pairing link is now used; fix local credential storage and request a fresh link.`,
+        { cause: this.failure }
+      );
+    }
+  }
+}
 
 async function throwAfterOwnedCleanup(
   failure: unknown,
@@ -105,7 +152,7 @@ function ownSessionResources(
   };
 }
 
-export interface WorkspaceSessionConnection {
+export interface ConnectedWorkspace {
   nativeStorageScope: string;
   connectionMode: "local" | "remote";
   /**
@@ -126,7 +173,7 @@ export interface WorkspaceSessionConnection {
   statePath: string;
   workspaceConfig: WorkspaceConfig;
   /** Exact selected-workspace session. All workspace services belong here. */
-  serverClient: ServerClient;
+  serverClient: ConnectedServerClient;
   /** Idempotently close every transport/facade owned by this session. */
   close(): Promise<void>;
   panelHttpServer: PanelHttpServerLike;
@@ -138,14 +185,21 @@ export interface WorkspaceSessionConnection {
    * (re)connect.
    */
   getCdpAuthToken: () => string;
+  /** Follow the bearer as it is refreshed; the listener is not called with the current value. */
+  onCdpAuthToken(listener: (token: string) => void): () => void;
 }
 
-export interface SessionConnection extends WorkspaceSessionConnection {
+export interface ConnectedSession extends ConnectedWorkspace {
   initialFocusedWorkspaceId?: string;
   /** Stable control transport, independent of panel focus and workspace connections. */
-  hubControlClient: ServerClient;
+  hubControlClient: ConnectedServerClient;
   hubProcessManager: HubProcessManager | null;
-  workspaceSessions: WorkspaceSessionDirectory<WorkspaceSessionConnection>;
+  /**
+   * Open another workspace's connection over this session. The caller owns the
+   * returned connection and closes it; {@link ConnectedSession.close} ends the
+   * primary workspace connection and the hub.
+   */
+  connectWorkspace(workspaceId: string): Promise<ConnectedWorkspace>;
 }
 
 function createStartupPhaseReporter(
@@ -170,7 +224,7 @@ function buildServerInfo(
   externalHost: string,
   protocol: "http" | "https",
   gatewayConfig: { serverUrl: string },
-  getClient: () => ServerClient
+  getClient: () => ConnectedServerClient
 ): ServerInfo {
   return {
     gatewayConfig,
@@ -208,6 +262,13 @@ export interface IrohReconnectProgress {
  */
 export async function establishServerSession(args: {
   mode: ConnectedStartupMode | null;
+  /** The product version, for local hub attach decisions. */
+  appVersion: string;
+  /** The application's per-user data directory. */
+  userDataPath: string;
+  credentials: DeviceCredentialPersistence;
+  /** A credential commit failed after the connection was established. */
+  onCredentialSaveFailed?: (error: Error) => void;
   pendingPairing?: ConnectPairing;
   /** Human-readable label for a freshly-paired device (from the pairing dialog). */
   pendingPairLabel?: string;
@@ -230,7 +291,7 @@ export async function establishServerSession(args: {
   onRecovery?: (kind: "resubscribe" | "cold-recover") => void | Promise<void>;
   onLocalRecoveryFailure?: (error: Error) => void;
   onMainSessionTerminalClose?: (error: Error) => void;
-}): Promise<SessionConnection> {
+}): Promise<ConnectedSession> {
   const { mode, pendingPairing, storedRemote } = args;
 
   // (a) FRESH pair: the bootstrap chooser handed us a pairing link this launch.
@@ -252,8 +313,9 @@ export async function establishServerSession(args: {
   const externalHost = "localhost";
   const hubProcessManager = new HubProcessManager({
     workspaceName: mode.workspaceName,
+    credentials: args.credentials,
     appRoot: getAppRoot(),
-    appVersion: app.getVersion(),
+    appVersion: args.appVersion,
     buildId: getServerProcessBuildId(),
     centralData: args.centralData,
     confirmExistingHub: args.confirmExistingLocalHub,
@@ -279,6 +341,7 @@ export async function establishServerSession(args: {
   const gatewayConfig = { serverUrl: target.serverUrl, workspace: target.workspaceId };
 
   let cdpAuthToken = "";
+  const cdpListeners = new Set<(token: string) => void>();
   const refreshCdpAuthToken = async (): Promise<void> => {
     const serverUrl = hubProcessManager.getCurrentServerUrl();
     if (!serverUrl) return;
@@ -296,7 +359,10 @@ export async function establishServerSession(args: {
         return;
       }
       const payload = (await response.json()) as { shellToken?: string };
-      if (payload.shellToken) cdpAuthToken = payload.shellToken;
+      if (payload.shellToken) {
+        cdpAuthToken = payload.shellToken;
+        for (const listener of cdpListeners) listener(cdpAuthToken);
+      }
     } catch (error) {
       log.warn(
         `[Server] child refresh-shell error: ${error instanceof Error ? error.message : String(error)}`
@@ -321,7 +387,7 @@ export async function establishServerSession(args: {
     onRecovery: args.onRecovery,
     onDisconnect: () => console.error("[App] Local workspace connection closed"),
   });
-  let hubControlClient: ServerClient | null = null;
+  let hubControlClient: ConnectedServerClient | null = null;
   try {
     hubControlClient = await createServerClient(
       target.gatewayPort,
@@ -369,7 +435,7 @@ export async function establishServerSession(args: {
     };
 
     const storageScope = nativeStorageScope("local", target.serverId, target.deviceId);
-    const initial: WorkspaceSessionConnection = {
+    const initial: ConnectedWorkspace = {
       nativeStorageScope: storageScope,
       connectionMode: "local",
       serverOwnership: "desktop-local",
@@ -391,21 +457,25 @@ export async function establishServerSession(args: {
       panelHttpServer,
       serverInfo,
       getCdpAuthToken: () => cdpAuthToken,
+      onCdpAuthToken: (listener) => {
+        cdpListeners.add(listener);
+        return () => cdpListeners.delete(listener);
+      },
     };
-    const workspaceSessions = new WorkspaceSessionDirectory(initial, async (workspaceId) => {
+    const connectWorkspace = async (workspaceId: string): Promise<ConnectedWorkspace> => {
       const route = HubWorkspaceRouteSchema.parse(
         await connectedHubControlClient.call("hubControl", "routeWorkspace", [{ workspaceId }])
       );
       return connectLocalWorkspace(route, target.deviceId, target.refreshToken, storageScope);
-    });
+    };
     return {
       ...initial,
       initialFocusedWorkspaceId: target.initialFocusedWorkspaceId,
       hubControlClient: connectedHubControlClient,
       hubProcessManager,
-      workspaceSessions,
+      connectWorkspace,
       close: ownSessionResources([
-        { label: "local workspace sessions", close: () => workspaceSessions.close() },
+        { label: "local workspace client", close: () => initial.close() },
         { label: "local hub control client", close: () => connectedHubControlClient.close() },
       ]),
     };
@@ -431,6 +501,9 @@ export async function establishServerSession(args: {
 
 /** The connect-callback subset both remote-session paths forward to the pipe. */
 type RemoteConnectArgs = {
+  userDataPath: string;
+  credentials: DeviceCredentialPersistence;
+  onCredentialSaveFailed?: (error: Error) => void;
   onStartupProgress?: (progress: StartupConnectionProgress) => void;
   onInitialWorkspaceResolved?: InitialWorkspaceResolved;
   onConnectionStatusChanged?: (status: ConnectionStatus) => void;
@@ -449,7 +522,7 @@ function createDesktopIrohSupervisor(
 
 /**
  * Connect to a paired Iroh remote as the RETURNING device and shape it into a
- * {@link SessionConnection}. The shell re-authenticates with its refresh token
+ * {@link ConnectedSession}. The shell re-authenticates with its refresh token
  * (`refresh:<deviceId>:<refreshToken>`); the RPC plane rides the pipe exactly as
  * the local loopback-WS plane does.
  */
@@ -457,8 +530,11 @@ async function establishRemoteSession(
   stored: StoredRemote,
   args: RemoteConnectArgs,
   origin: "fresh pairing" | "returning device" = "returning device"
-): Promise<SessionConnection> {
+): Promise<ConnectedSession> {
   let current = stored;
+  const writer = new CredentialWriter(args.credentials, (error) =>
+    args.onCredentialSaveFailed?.(error)
+  );
   const rotate = (credential: DeviceCredential): void => {
     current = {
       ...current,
@@ -466,7 +542,7 @@ async function establishRemoteSession(
       refreshToken: credential.refreshToken,
       rotatedAt: Date.now(),
     };
-    saveDeviceCredential(current);
+    writer.write(current);
   };
   const auth = () => `refresh:${current.deviceId}:${current.refreshToken}`;
   const supervisor = createDesktopIrohSupervisor(
@@ -506,6 +582,7 @@ async function establishRemoteSession(
     });
     phase("prepare-workspace-session");
     const connection = await buildRemoteSessionConnection(
+      args.userDataPath,
       serverClient,
       hubControlClient,
       route.workspace,
@@ -538,7 +615,7 @@ async function establishFreshPairSession(
   pairing: ConnectPairing,
   args: RemoteConnectArgs,
   label?: string
-): Promise<SessionConnection> {
+): Promise<ConnectedSession> {
   assertIrohReach(pairing);
   const endpointSecretBytes = randomBytes(32);
   const endpointSecret = endpointSecretBytes.toString("base64url");
@@ -558,9 +635,12 @@ async function establishFreshPairSession(
     args.onStartupProgress
   );
   phase("check-credential-storage");
-  preflightDeviceCredentialStoreForPairing();
+  await args.credentials.preflight();
+  const writer = new CredentialWriter(args.credentials, (error) =>
+    args.onCredentialSaveFailed?.(error)
+  );
   phase("redeem-pairing-link");
-  let controlClient: ServerClient;
+  let controlClient: ConnectedServerClient;
   try {
     controlClient = await supervisor.connect(pairing, {
       // The server assigns the real `shell:<deviceId>` principal when it redeems the
@@ -596,7 +676,7 @@ async function establishFreshPairSession(
             refreshToken: credential.refreshToken,
             rotatedAt: Date.now(),
           };
-          persistFreshDeviceCredential(currentStored);
+          writer.write(currentStored);
         }
       },
     });
@@ -604,7 +684,7 @@ async function establishFreshPairSession(
     await supervisor.close().catch(() => undefined);
     throw error;
   }
-  let workspaceClient: ServerClient | null = null;
+  let workspaceClient: ConnectedServerClient | null = null;
   try {
     if (!paired.current) {
       throw new Error(
@@ -635,7 +715,8 @@ async function establishFreshPairSession(
       ...(label ? { label } : {}),
       pairedAt: Date.now(),
     };
-    persistFreshDeviceCredential(currentStored);
+    writer.write(currentStored);
+    await writer.settle();
     const auth = () => {
       const active = currentStored;
       if (!active) throw new Error("Fresh pairing credential was not committed");
@@ -653,7 +734,7 @@ async function establishFreshPairSession(
           refreshToken: credential.refreshToken,
           rotatedAt: Date.now(),
         };
-        persistFreshDeviceCredential(currentStored);
+        writer.write(currentStored);
       },
       onConnectionStatusChanged: args.onConnectionStatusChanged,
       onTransportDiagnosticsChanged: args.onTransportDiagnosticsChanged,
@@ -663,6 +744,7 @@ async function establishFreshPairSession(
     });
     phase("prepare-workspace-session");
     const connection = await buildRemoteSessionConnection(
+      args.userDataPath,
       workspaceClient,
       controlClient,
       route.workspace,
@@ -693,25 +775,14 @@ function storedReach(
   return stored;
 }
 
-function persistFreshDeviceCredential(credential: StoredRemote): void {
-  try {
-    saveDeviceCredential(credential);
-  } catch (error) {
-    const cause = error instanceof Error ? error.message : String(error);
-    throw new Error(
-      `The server accepted the pairing link, but Vibestudio could not save the issued device credential: ${cause} The pairing link is now used; fix local credential storage and request a fresh link.`,
-      { cause: error }
-    );
-  }
-}
-
 async function connectLocalWorkspace(
   route: HubWorkspaceRoute,
   deviceId: string,
   refreshToken: string,
   storageScope: string
-): Promise<WorkspaceSessionConnection> {
+): Promise<ConnectedWorkspace> {
   let cdpAuthToken = "";
+  const cdpListeners = new Set<(token: string) => void>();
   const refresh = async (signal?: AbortSignal): Promise<string> => {
     const response = await fetch(serverAuthRouteUrl(route.serverUrl, "refresh-shell"), {
       method: "POST",
@@ -725,6 +796,7 @@ async function connectLocalWorkspace(
       throw new Error("Workspace authentication returned no session token");
     }
     cdpAuthToken = payload.shellToken;
+    for (const listener of cdpListeners) listener(cdpAuthToken);
     return cdpAuthToken;
   };
   const url = new URL(route.serverUrl);
@@ -778,6 +850,10 @@ async function connectLocalWorkspace(
         () => serverClient
       ),
       getCdpAuthToken: () => cdpAuthToken,
+      onCdpAuthToken: (listener) => {
+        cdpListeners.add(listener);
+        return () => cdpListeners.delete(listener);
+      },
       close: ownSessionResources([
         { label: "local workspace client", close: () => serverClient.close() },
       ]),
@@ -792,21 +868,32 @@ async function connectLocalWorkspace(
 }
 
 async function buildRemoteSessionConnection(
-  serverClient: ServerClient,
-  hubControlClient: ServerClient,
+  userDataPath: string,
+  serverClient: ConnectedServerClient,
+  hubControlClient: ConnectedServerClient,
   workspaceName: string,
   storageScope: string,
   closeRemote: () => Promise<void>,
-  connectWorkspace: (route: HubWorkspaceRoute) => Promise<ServerClient>
-): Promise<SessionConnection> {
-  const initial = await shapeRemoteWorkspaceConnection(serverClient, workspaceName, storageScope);
-  const workspaceSessions = new WorkspaceSessionDirectory(initial, async (workspaceId) => {
+  connectWorkspace: (route: HubWorkspaceRoute) => Promise<ConnectedServerClient>
+): Promise<ConnectedSession> {
+  const initial = await shapeRemoteWorkspaceConnection(
+    userDataPath,
+    serverClient,
+    workspaceName,
+    storageScope
+  );
+  const connectWorkspaceOverPipe = async (workspaceId: string): Promise<ConnectedWorkspace> => {
     const route = HubWorkspaceRouteSchema.parse(
       await hubControlClient.call("hubControl", "routeWorkspace", [{ workspaceId }])
     );
     const client = await connectWorkspace(route);
     try {
-      return await shapeRemoteWorkspaceConnection(client, route.workspace, storageScope);
+      return await shapeRemoteWorkspaceConnection(
+        userDataPath,
+        client,
+        route.workspace,
+        storageScope
+      );
     } catch (error) {
       return throwAfterOwnedCleanup(
         error,
@@ -814,30 +901,31 @@ async function buildRemoteSessionConnection(
         "Remote workspace connection establishment"
       );
     }
-  });
+  };
   return {
     ...initial,
     hubControlClient,
     hubProcessManager: null,
-    workspaceSessions,
+    connectWorkspace: connectWorkspaceOverPipe,
     // Revoke the supervisor before joining acquisitions that depend on its I/O.
     close: ownSessionResources([
-      { label: "remote workspace directory", close: () => workspaceSessions.close() },
+      { label: "remote workspace client", close: () => initial.close() },
       { label: "remote Iroh connection supervisor", close: closeRemote },
     ]),
   };
 }
 
 /**
- * Shape an already-connected remote Iroh pipe into a {@link SessionConnection}.
+ * Shape an already-connected remote Iroh pipe into a {@link ConnectedSession}.
  * Shared by the fresh-pair and returning-device paths — the only difference
  * between them is HOW the pipe authenticated (one-time code vs refresh token).
  */
 async function shapeRemoteWorkspaceConnection(
-  serverClient: ServerClient,
+  userDataPath: string,
+  serverClient: ConnectedServerClient,
   workspaceName: string,
   storageScope: string
-): Promise<WorkspaceSessionConnection> {
+): Promise<ConnectedWorkspace> {
   const protocol = "http" as const;
   const externalHost = "localhost";
   // There is no local gateway/workerd process in remote mode — the RPC plane
@@ -846,7 +934,7 @@ async function shapeRemoteWorkspaceConnection(
   // up an assets-only façade that proxies each request to the remote server's
   // own gateway over the pipe (gateway.fetch RPC). The façade lives for the
   // whole session and is closed alongside the connection supervisor by
-  // SessionConnection.close.
+  // ConnectedSession.close.
   // Persist the façade's asset cache + stable loopback port under userData so the
   // content-addressed cache and the webview HTTP cache both survive restarts.
   const workspaceClient = createTypedServiceClient("workspace", workspaceMethods, (svc, m, a) =>
@@ -854,7 +942,7 @@ async function shapeRemoteWorkspaceConnection(
   );
   const wsInfo = await workspaceClient.getInfo();
   const workspaceStateDirectory = path.join(
-    app.getPath("userData"),
+    userDataPath,
     "connections",
     storageScope,
     "workspaces",
@@ -916,6 +1004,7 @@ async function shapeRemoteWorkspaceConnection(
       serverInfo,
       // CDP over the pipe uses the RPC-channel socket, not a bearer.
       getCdpAuthToken: () => "",
+      onCdpAuthToken: () => () => undefined,
     };
   } catch (error) {
     return throwAfterOwnedCleanup(

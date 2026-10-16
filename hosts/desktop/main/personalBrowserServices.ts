@@ -3,7 +3,7 @@ import path from "node:path";
 import { app } from "electron";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import type { EventService } from "@vibestudio/shared/eventsService";
-import type { WorkspaceSessionConnection } from "./serverSession.js";
+import type { WorkspaceSessionConnection } from "./sessionConnection.js";
 import type { PanelHostWindow } from "./panelHostWindow.js";
 import type { BrowserPermissionController } from "./services/browserPermissionController.js";
 import { createBrowserDataClient } from "@vibestudio/browser-data";

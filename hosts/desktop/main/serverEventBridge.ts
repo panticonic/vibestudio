@@ -45,6 +45,14 @@ export interface ServerEventBridgeDeps {
   onCredentialCaptureRequest?(payload: Record<string, unknown>): Promise<Record<string, unknown>>;
   /** Apply actions whose implementation is owned by this desktop host. */
   onNotificationAction?(id: string, actionId: string): void | Promise<void>;
+  /**
+   * A server notification with an action that takes reply text. The host may
+   * render a native reply field; `report` sends the reply as that action.
+   */
+  onReplyNotification?(
+    notification: import("./nativeNotificationReply.js").ReplyNotification,
+    report: (actionId: string, text: string) => Promise<void>
+  ): void;
 }
 
 const HOST_DIRECT_EVENT_NAMES = [

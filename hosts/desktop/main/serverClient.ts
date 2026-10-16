@@ -174,12 +174,17 @@ export interface HostUiSession extends Omit<PanelSession, "close"> {
   close(): Promise<void>;
 }
 
+/**
+ * The connection as the Electron main process sees it: calls, streams, events
+ * and the host methods the server may call back. The connection itself lives
+ * in the connection utility process; main holds a proxy that implements this
+ * contract over the control channel.
+ */
 export interface ServerClient {
   /** Permanent session retirement; transient transport loss does not close the owner. */
   isClosed(): boolean;
   onRecovery(listener: (kind: "resubscribe" | "cold-recover") => void | Promise<void>): () => void;
   onConnectionStatusChange(listener: (status: ConnectionStatus) => void): () => void;
-  openHostUiSession(signal?: AbortSignal): Promise<HostUiSession>;
   /**
    * Publish one Electron-owned host method to the authenticated server.
    * Direct routed calls from workspace principals are rejected at this client
@@ -211,20 +216,6 @@ export interface ServerClient {
   ): Promise<unknown>;
   /** Admit client principal sessions on this connection (null withdraws them). */
   setClientPrincipalSessions(sessions: ClientPrincipalSessions | null): void;
-  /** End one client window's own session of its principal. Idempotent. */
-  releaseClientSession(caller: ScopedServerCaller): Promise<void>;
-  /** Relay one already-formed envelope over a client principal's scoped session. */
-  sendAs(caller: ScopedServerCaller, envelope: RpcEnvelope): Promise<void>;
-  /** Forward server-originated messages for a client principal session hosted in this process. */
-  addMessageListener(caller: ScopedServerCaller, listener: ServerMessageListener): () => void;
-  /**
-   * Open a dedicated session for a desktop panel principal, redeeming its
-   * existing runtime lease (`connectionId`) with a one-shot grant for
-   * `runtimeEntityId`. The host relays the panel's raw envelopes over it; see
-   * {@link PanelSession}. The host-opened session is the panel's sole transport,
-   * so it redeems the lease with no conflict.
-   */
-  openPanelSession(runtimeEntityId: string, connectionId: string): Promise<PanelSession>;
   /**
    * Stream a backend service method's `Response` on the session's native
    * transport. Remote Iroh sessions use one QUIC stream per request; loopback
@@ -243,14 +234,6 @@ export interface ServerClient {
     args: unknown[],
     options?: RpcStreamOptions
   ): Promise<DecodedFramedStream>;
-  /** Stream a backend service as an Electron-hosted runtime principal. */
-  streamAs(
-    caller: ScopedServerCaller,
-    service: string,
-    method: string,
-    args: unknown[],
-    options?: RpcStreamOptions
-  ): Promise<Response>;
   /** Listen only to an event addressed to this authenticated shell session. */
   onDirectEvent<E extends EventName>(
     event: E,
@@ -277,6 +260,39 @@ export interface ServerClient {
   /** Close connection, reject all pending calls, stop reconnection */
   close(): Promise<void>;
 }
+
+/**
+ * What the connection process adds to a {@link ServerClient}: the logical
+ * sessions that renderer ports are bound to. Only the connection process holds
+ * these, because only it carries renderer traffic.
+ */
+export interface ServerSessionTransports {
+  openHostUiSession(signal?: AbortSignal): Promise<HostUiSession>;
+  /** End one client window's own session of its principal. Idempotent. */
+  releaseClientSession(caller: ScopedServerCaller): Promise<void>;
+  /** Relay one already-formed envelope over a client principal's scoped session. */
+  sendAs(caller: ScopedServerCaller, envelope: RpcEnvelope): Promise<void>;
+  /** Forward server-originated messages for a client principal session hosted in this process. */
+  addMessageListener(caller: ScopedServerCaller, listener: ServerMessageListener): () => void;
+  /**
+   * Open a dedicated session for a desktop panel principal, redeeming its
+   * existing runtime lease (`connectionId`) with a one-shot grant for
+   * `runtimeEntityId`. The renderer's port carries the panel's raw envelopes
+   * over it; see {@link PanelSession}.
+   */
+  openPanelSession(runtimeEntityId: string, connectionId: string): Promise<PanelSession>;
+  /** Stream a backend service as an Electron-hosted runtime principal. */
+  streamAs(
+    caller: ScopedServerCaller,
+    service: string,
+    method: string,
+    args: unknown[],
+    options?: RpcStreamOptions
+  ): Promise<Response>;
+}
+
+/** A client with its renderer-facing sessions, as the connection process holds it. */
+export interface ConnectedServerClient extends ServerClient, ServerSessionTransports {}
 
 export interface ServerClientOptions {
   /** Host metadata bound into both WebSocket admission and session auth. */
@@ -315,7 +331,7 @@ export async function createServerClient(
   serverRpcPort: number,
   authToken: string,
   options?: ServerClientOptions
-): Promise<ServerClient> {
+): Promise<ConnectedServerClient> {
   let activeAuthToken = authToken;
   const getWsUrl = options?.getWsUrl ?? (() => serverRpcWsUrl(`http://127.0.0.1:${serverRpcPort}`));
   const shouldReconnect = options?.reconnect ?? !!options?.getWsUrl;

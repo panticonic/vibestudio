@@ -2,7 +2,7 @@ import { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { EventService } from "@vibestudio/shared/eventsService";
 import { PanelOrchestrator } from "./panelOrchestrator.js";
 import { createElectronShellCore } from "./shellCore/createElectronShellCore.js";
-import type { WorkspaceSessionConnection } from "./serverSession.js";
+import type { WorkspaceSessionConnection } from "./sessionConnection.js";
 
 type PresentationDependencies = Omit<
   ConstructorParameters<typeof PanelOrchestrator>[0],

@@ -1,0 +1,56 @@
+<!doctype html>
+<meta charset="utf-8" />
+<script>
+  // Drives RPCs through this document's port and reports their latency.
+  window.__runRpcLoad = async (count, payloadBytes, inFlight) => {
+    const bridge = window.__vibestudioTransport;
+    const self = bridge.identity.runtimeId;
+    const payload = new Uint8Array(payloadBytes);
+    const pending = new Map();
+    const latencies = [];
+    bridge.onMessage((envelope) => {
+      const message = envelope.message;
+      if (message.type !== "response") return;
+      const entry = pending.get(message.requestId);
+      if (!entry) return;
+      pending.delete(message.requestId);
+      if (message.error) entry.reject(new Error(message.error.message));
+      else {
+        latencies.push(performance.now() - entry.startedAt);
+        entry.resolve();
+      }
+    });
+    const call = (id) =>
+      new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject, startedAt: performance.now() });
+        bridge
+          .send({
+            from: self,
+            target: "main",
+            delivery: { caller: { callerId: self, callerKind: "client" } },
+            provenance: [{ callerId: self, callerKind: "client" }],
+            message: {
+              type: "request",
+              requestId: id,
+              fromId: self,
+              method: "echo.run",
+              args: [payload],
+            },
+          })
+          .catch(reject);
+      });
+    const started = performance.now();
+    let next = 0;
+    const lane = async () => {
+      while (next < count) await call("r" + next++);
+    };
+    await Promise.all(Array.from({ length: inFlight }, lane));
+    const elapsedMs = performance.now() - started;
+    latencies.sort((a, b) => a - b);
+    const at = (q) =>
+      Math.round(
+        latencies[Math.min(latencies.length - 1, Math.floor(q * latencies.length))] * 1000
+      ) / 1000;
+    return { rpcs: count, elapsedMs: Math.round(elapsedMs), p50: at(0.5), p99: at(0.99) };
+  };
+</script>

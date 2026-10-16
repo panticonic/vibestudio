@@ -7,8 +7,8 @@ import {
   type RpcDestination,
 } from "@vibestudio/rpc";
 import { FRAME_END, FRAME_ERROR } from "@vibestudio/rpc/protocol/streamCodec";
-import type { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
-import type { HostUiSession, ServerClient } from "./serverClient.js";
+import type { HostServiceEndpoint } from "./hostServices.js";
+import type { ConnectedServerClient, HostUiSession } from "../main/serverClient.js";
 
 /** Native ownership metadata, never supplied by the renderer. */
 export interface NativeIpcCaller {
@@ -21,12 +21,12 @@ export interface NativeIpcCaller {
 }
 export interface WorkspaceIpcRuntime {
   workspaceId: string;
-  serverClient: ServerClient;
-  dispatcher: ServiceDispatcher;
+  serverClient: ConnectedServerClient;
+  dispatcher: HostServiceEndpoint;
 }
 export interface UiIpcRuntime {
   destination: RpcDestination;
-  serverClient: ServerClient;
+  serverClient: ConnectedServerClient;
   workspace?: WorkspaceIpcRuntime;
 }
 /** null is a completed denial; a rejected check has not decided admission. */

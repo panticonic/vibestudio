@@ -6,7 +6,7 @@ import {
   createDesktopWorkspaceRuntime,
   prepareDesktopWorkspaceRuntime,
 } from "./workspaceRuntimeController.js";
-import type { WorkspaceSessionConnection } from "./serverSession.js";
+import type { WorkspaceSessionConnection } from "./sessionConnection.js";
 import type { PanelHostWindow } from "./panelHostWindow.js";
 import type { CdpHostProvider } from "./cdpHostProvider.js";
 import { createHostCaller, createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";

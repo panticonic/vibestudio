@@ -24,11 +24,6 @@ const credentialStore = {
   loadDeviceCredentialByServerId: vi.fn(),
   saveDeviceCredential: vi.fn(),
 };
-vi.mock("./services/deviceCredentialStore.js", () => ({
-  loadDeviceCredentialByServerId: (...args: unknown[]) =>
-    credentialStore.loadDeviceCredentialByServerId(...args),
-  saveDeviceCredential: (...args: unknown[]) => credentialStore.saveDeviceCredential(...args),
-}));
 
 const spawnMock = vi.fn();
 vi.mock("node:child_process", () => ({
@@ -146,6 +141,10 @@ function manager(
     appVersion: "1.2.3",
     buildId: BUILD_ID,
     centralData: centralData as never,
+    credentials: {
+      load: async (serverId) => credentialStore.loadDeviceCredentialByServerId(serverId),
+      save: async (credential) => credentialStore.saveDeviceCredential(credential),
+    },
     onRecoveryFailure: vi.fn(),
     onInitialWorkspaceResolved: options.onInitialWorkspaceResolved,
     ...(options.onOwnedHubSpawn ? { onOwnedHubSpawn: options.onOwnedHubSpawn } : {}),

@@ -84,6 +84,10 @@
     {
       "source": "hosts/desktop/main/index.ts",
       "reason": "Desktop bootstrap and observer, not an artifact owner."
+    },
+    {
+      "source": "hosts/desktop/connection/smoke/loadHarnessMain.ts",
+      "reason": "RPC load-test harness; answers with a fixed fake digest and owns no build."
     }
   ]
 }

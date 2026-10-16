@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { isRpcConnectionLost, RpcBoundaryError, type RpcEnvelope } from "@vibestudio/rpc";
 import { UiSessions, type UiIpcRuntime } from "./uiSessions.js";
 import { FRAME_HEAD } from "@vibestudio/rpc/protocol/streamCodec";
-import type { HostUiSession } from "./serverClient.js";
+import type { HostUiSession } from "../main/serverClient.js";
 
 const caller = {
   callerId: "native-system-app",

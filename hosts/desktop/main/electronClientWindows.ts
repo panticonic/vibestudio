@@ -32,6 +32,8 @@ export interface ElectronClientWindowDeps {
   closed(window: ClientWindow): void;
   /** The renderer behind this window stopped; it is not recoverable by reloading. */
   rendererGone(window: ClientWindow, reason: string): void;
+  /** The window's build or granted capabilities changed; its sessions are held to the new ones. */
+  stateChanged(window: ClientWindow): void;
 }
 
 /**
@@ -165,11 +167,13 @@ class PlainClientWindow implements ClientWindow {
       throw new Error("A window can move only to another build of its own client");
     }
     this.currentSpec = next;
+    this.deps.stateChanged(this);
     await this.contents()?.loadURL(next.entryUrl);
   }
 
   setCapabilities(capabilities: readonly ClientCapability[]): void {
     this.currentSpec = { ...this.currentSpec, capabilities };
+    this.deps.stateChanged(this);
   }
 
   send(channel: string, ...args: unknown[]): void {
@@ -285,11 +289,13 @@ class PanelHostingClientWindow implements ClientWindow {
       next.codeIdentity
     );
     this.currentSpec = next;
+    this.deps.stateChanged(this);
   }
 
   setCapabilities(capabilities: readonly ClientCapability[]): void {
     this.deps.panelHost.viewManager?.setClientCapabilities(this.callerId, capabilities);
     this.currentSpec = { ...this.currentSpec, capabilities };
+    this.deps.stateChanged(this);
   }
 
   send(channel: string, ...args: unknown[]): void {

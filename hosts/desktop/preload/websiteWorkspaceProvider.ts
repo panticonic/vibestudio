@@ -1,7 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { WorkspaceProvider } from "@vibestudio/rpc";
-import { createIpcTransport } from "./ipcTransport.js";
-import { createIpcStreamBridge } from "./ipcStreamBridge.js";
+import { createRpcPortTransport } from "./rpcPortTransport.js";
 import { createWebsiteConnectionIntent } from "./websiteConnectionIntent.js";
 
 /** A document-private handshake; neither the challenge nor native IPC is exposed. */
@@ -14,8 +13,11 @@ export function exposeWebsiteWorkspaceProvider(): void {
   const document = ipcRenderer.invoke("vibestudio:website:document") as Promise<string>;
   // Loading an ordinary website is valid even if presentation ownership is gone.
   void document.catch(() => {});
-  const transport = createIpcTransport();
-  const streams = createIpcStreamBridge();
+  // The port is requested only once the person connects this document: until
+  // then it has no principal to act as.
+  const rpc = createRpcPortTransport();
+  const transport = rpc.transport;
+  const streams = rpc.streams;
   const listeners = new Set<() => void>();
   let connected = false;
   let generation = 0;
@@ -28,6 +30,7 @@ export function exposeWebsiteWorkspaceProvider(): void {
   ipcRenderer.on("vibestudio:website:disconnected", () => {
     ++generation;
     connected = false;
+    rpc.close("The website was disconnected from the workspace");
     for (const listener of [...listeners]) listener();
   });
   const provider: WorkspaceProvider = {
@@ -37,11 +40,13 @@ export function exposeWebsiteWorkspaceProvider(): void {
       const result = await ipcRenderer.invoke("vibestudio:website:connect", await document);
       if (attempt !== generation) throw new Error("Website connection was retired");
       connected = true;
+      rpc.open();
       return result;
     },
     async disconnect() {
       ++generation;
       connected = false;
+      rpc.close("The website disconnected from the workspace");
       await ipcRenderer.invoke("vibestudio:website:disconnect", await document);
     },
     onDisconnect(handler) {
