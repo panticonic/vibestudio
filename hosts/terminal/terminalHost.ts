@@ -1,89 +1,57 @@
-import * as fs from "node:fs";
-import * as os from "node:os";
-import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRpcClient, type RpcConnectionStatus } from "@vibestudio/rpc";
 import type { RecoveryKind } from "@vibestudio/rpc/protocol/recoveryCoordinator";
 import {
-  TERMINAL_BROWSER_HOST_CONTRACT_VERSION,
-  type TerminalBrowserExit,
-  type TerminalBrowserHost,
-  type TerminalBrowserModule,
-  type TerminalBrowserServerInfo,
-  type TerminalBrowserWorkspace,
-  type TerminalServerConnectionState,
-} from "@vibestudio/shell-core/terminal/terminalBrowserHost";
-import {
-  AppPrincipalGrantResponseSchema,
-  type AppPrincipalGrantResponse,
-} from "@vibestudio/service-schemas/auth";
+  ClientUpdateObserver,
+  type ClientUpdate,
+  type LaunchedClient,
+  type PrincipalGrants,
+  type SupervisionEvents,
+} from "@vibestudio/client-host-core";
+import type {
+  TerminalClientExit,
+  TerminalClientHost,
+  TerminalClientModule,
+  TerminalClientServerInfo,
+  TerminalClientState,
+  TerminalClientUpdate,
+  TerminalClientUpdates,
+  TerminalClientWorkspace,
+  TerminalServerConnectionState,
+} from "@vibestudio/shell-core/terminal/terminalClientHost";
 import { CliError } from "../../src/cli/output.js";
 import { shellCallerId, type PrincipalTransport, type RpcClient } from "../../src/cli/rpcClient.js";
 import { guardTerminal } from "./ttyRestore.js";
-import { createTerminalFiles } from "./terminalFiles.js";
-import { gatewayMethods } from "@vibestudio/service-schemas/gateway";
-import {
-  createTypedServiceClient,
-  qualifyServiceMethod,
-} from "@vibestudio/shared/typedServiceClient";
-
-/** Requests the device's terminal-app principal over the CLI's own connection. */
-export async function requestTerminalAppGrant(
-  device: Pick<RpcClient, "call">,
-  source: string | null,
-  options?: { signal?: AbortSignal }
-): Promise<AppPrincipalGrantResponse> {
-  return AppPrincipalGrantResponseSchema.parse(
-    await device.call("auth.grantAppPrincipal", [{ principal: "terminal-app", source }], options)
-  );
-}
+import { createGatedModules } from "./hostModules.js";
+import type { TerminalHostState } from "./hostState.js";
 
 /**
- * Fetch the terminal app's primary ESM module — exactly the build its
- * principal is bound to — and import it into this process.
- *
- * The bytes travel over the CLI's authenticated connection (`gateway.fetch`),
- * so a remote Iroh server works like a local one. The module is written to a
- * private scratch directory only so Node can import it with a file URL (and
- * stack traces name a file); the directory is removed once it is loaded.
+ * The reason the server gives when it closes a client's sessions because the
+ * System owner withdrew the client's device-level trust (§4.4.1).
  */
-export async function loadTerminalBrowserModule(
-  device: Pick<RpcClient, "stream">,
-  app: AppPrincipalGrantResponse["app"],
-  options?: { signal?: AbortSignal }
-): Promise<TerminalBrowserModule> {
-  const entry = app.artifacts.filter((artifact) => artifact.role === "primary");
+export const TRUST_REVOKED_REASON = "trust-revoked";
+
+/**
+ * Import the client's verified primary module from the artifact cache. The
+ * cache verified the bytes against the integrity the server sealed before
+ * they were stored, and Node loads the stored file by its own name (so stack
+ * traces name a file); nothing is written or removed here.
+ */
+export async function importClientModule(launched: LaunchedClient): Promise<TerminalClientModule> {
+  const { client } = launched;
+  const entry = launched.artifacts.filter((artifact) => artifact.role === "primary");
   if (entry.length !== 1 || !entry[0]!.path.endsWith(".mjs")) {
     throw new CliError(
-      `The terminal app ${app.source} has no single ESM entry module in build ${app.buildKey}.`
+      `The terminal client ${client.source} has no single ESM entry module in build ${client.buildKey}.`
     );
   }
-  const gateway = createTypedServiceClient("gateway", gatewayMethods, (service, method, args) =>
-    device.stream("main", qualifyServiceMethod(service, method), args, options)
-  );
-  const response = await gateway.fetch({ path: entry[0]!.route, method: "GET" });
-  if (!response.ok) {
-    throw new CliError(
-      `Could not download the terminal app (${app.source}): HTTP ${response.status} ` +
-        `${(await response.text()).slice(0, 200)}`
-    );
+  const loaded = (await import(
+    pathToFileURL(entry[0]!.handle).href
+  )) as Partial<TerminalClientModule>;
+  if (typeof loaded.run !== "function") {
+    throw new CliError(`The terminal client ${client.source} does not export run(host).`);
   }
-  const source = Buffer.from(await response.arrayBuffer());
-  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-terminal-app-"));
-  try {
-    const file = path.join(scratch, path.basename(entry[0]!.path));
-    fs.writeFileSync(file, source, { mode: 0o600 });
-    const loaded = (await import(pathToFileURL(file).href)) as Partial<TerminalBrowserModule>;
-    if (typeof loaded.run !== "function") {
-      throw new CliError(
-        `The terminal app ${app.source} does not export run(host). It was built for an ` +
-          "older terminal contract; update the workspace's System template."
-      );
-    }
-    return loaded as TerminalBrowserModule;
-  } finally {
-    fs.rmSync(scratch, { recursive: true, force: true });
-  }
+  return loaded as TerminalClientModule;
 }
 
 /**
@@ -135,51 +103,109 @@ export class TerminalConnectionState {
   }
 }
 
-export interface TerminalBrowserRunOptions {
-  /** The CLI's device connection to the System workspace, where the browser is installed. */
+export interface TerminalClientRunOptions {
+  /** The CLI's device connection to the System workspace, where clients are installed. */
   device: RpcClient;
-  /** The CLI's device connection to the workspace the browser shows (may be `device`). */
+  /** The CLI's device connection to the workspace the client shows (may be `device`). */
   workspaceDevice: RpcClient;
-  grant: AppPrincipalGrantResponse;
-  module: TerminalBrowserModule;
-  system: TerminalBrowserWorkspace;
-  workspace: TerminalBrowserWorkspace;
-  server: TerminalBrowserServerInfo;
+  launched: LaunchedClient;
+  /** Grants for the exact verified build; redeemed again on every reconnect. */
+  grants: PrincipalGrants;
+  module: TerminalClientModule;
+  system: TerminalClientWorkspace;
+  workspace: TerminalClientWorkspace;
+  server: TerminalClientServerInfo;
   /** Owned server lifetime: its exit is an authoritative terminal event. */
   serverExited?: Promise<string>;
+  /** The System workspace's `supervision:changed`, for update observation. */
+  events: SupervisionEvents;
+  hostState: Pick<TerminalHostState, "isDevelopment">;
+  state: TerminalClientState;
   signal?: AbortSignal;
-  listWorkspaces(): Promise<TerminalBrowserWorkspace[]>;
+  listWorkspaces(): Promise<TerminalClientWorkspace[]>;
   openExternal(url: string): Promise<void>;
   stdin: NodeJS.ReadStream;
   stdout: NodeJS.WriteStream;
 }
 
-export type TerminalBrowserRunResult =
-  | { kind: "exit"; exit: TerminalBrowserExit }
-  /** The app's active build changed under a running browser; load the new one. */
-  | { kind: "app-updated" };
+export type TerminalClientRunResult =
+  | { kind: "exit"; exit: TerminalClientExit }
+  /** The client asked to be re-entered on a newer build (or development mode adopted one). */
+  | { kind: "restart" }
+  /** The server withdrew this client's trust and closed its sessions. */
+  | { kind: "trust-revoked" };
 
 /**
- * Connect the app principal (System) and this device's workspace session over
- * the CLI's transports, hand the browser its host, and run it until it
+ * Connect the client's principal (System) and this device's workspace session
+ * over the CLI's transports, hand the client its host, and run it until it
  * settles. The terminal is restored on every exit path, including errors and
- * `process.exit` inside the app.
+ * `process.exit` inside the client.
  */
-export async function runTerminalBrowser(
-  options: TerminalBrowserRunOptions
-): Promise<TerminalBrowserRunResult> {
-  const { device, grant } = options;
+export async function runTerminalClient(
+  options: TerminalClientRunOptions
+): Promise<TerminalClientRunResult> {
+  const { device, launched } = options;
+  const { client, grant } = launched;
   const state = new TerminalConnectionState(options.server.endpoint);
   options.signal?.throwIfAborted();
   const lifetime = new AbortController();
   const signal = options.signal
     ? AbortSignal.any([options.signal, lifetime.signal])
     : lifetime.signal;
-  let appUpdated = false;
-  let initialGrant: string | null = grant.connectionGrant;
+  let restartRequested = false;
+  let trustRevoked = false;
+  const failures: unknown[] = [];
+  const requestRestart = (cause: string) => {
+    if (restartRequested) return;
+    restartRequested = true;
+    state.lose(cause);
+  };
+
+  // Update observation (§4.6): the server announces, this host decides.
+  let pendingUpdate: TerminalClientUpdate | null = null;
+  const updateListeners = new Set<(update: TerminalClientUpdate) => void>();
+  const update: TerminalClientUpdates = {
+    pending: () => pendingUpdate,
+    onUpdate: (listener) => {
+      updateListeners.add(listener);
+      return () => updateListeners.delete(listener);
+    },
+    restartAtSafePoint: () => {
+      if (!pendingUpdate) throw new CliError("There is no update to restart into.");
+      requestRestart("restarting into the updated client");
+    },
+  };
+  const observer = new ClientUpdateObserver({
+    events: options.events,
+    source: client.source,
+    buildKey: client.buildKey,
+    policy: () => "restart-at-safe-point",
+    developmentMode: () => options.hostState.isDevelopment(client.id),
+    onUpdate: (ready: ClientUpdate, policy) => {
+      pendingUpdate = {
+        buildKey: ready.buildKey,
+        effectiveVersion: ready.effectiveVersion,
+        previousBuildKey: ready.previousBuildKey,
+      };
+      // Development mode adopts at once: the client is re-entered on the new build.
+      if (policy === "immediate") {
+        requestRestart("restarting into the rebuilt client (development mode)");
+        return;
+      }
+      for (const listener of [...updateListeners]) {
+        try {
+          listener(pendingUpdate);
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+    },
+    onError: (error) => failures.push(error),
+  });
+
   // Every (re)authentication redeems a fresh one-use grant for the same
-  // principal. A grant bound to another build means the app was updated:
-  // the running module can no longer be the principal's executable.
+  // principal and the same verified build.
+  let initialGrant: string | null = grant.connectionGrant;
   const getToken = async (authenticationSignal?: AbortSignal): Promise<string> => {
     const requestSignal = authenticationSignal
       ? AbortSignal.any([signal, authenticationSignal])
@@ -191,25 +217,23 @@ export async function runTerminalBrowser(
       initialGrant = null;
       return token;
     }
-    const next = await requestTerminalAppGrant(device, grant.app.source, {
-      signal: requestSignal,
-    });
-    if (next.app.buildKey !== grant.app.buildKey) {
-      appUpdated = true;
-      state.lose("the terminal app was updated; reloading it");
-      throw new CliError("the terminal app was updated");
-    }
-    return next.connectionGrant;
+    return (
+      await options.grants.acquire({
+        source: client.source,
+        buildKey: client.buildKey,
+        executionDigest: client.executionDigest,
+      })
+    ).connectionGrant;
   };
   const onAbort = () => state.lose("the terminal invocation was cancelled");
   signal.addEventListener("abort", onAbort, { once: true });
   const transports: PrincipalTransport[] = [];
   const unsubscribes: Array<() => void> = [];
   const connect = async (
-    connection: "app" | "workspace",
+    connection: "client" | "workspace",
     open: (onRecovery: (kind: RecoveryKind) => void) => Promise<PrincipalTransport>,
     selfId: string,
-    callerKind: "app" | "shell"
+    callerKind: "client" | "shell"
   ) => {
     const recoveryHandlers = new Set<(kind: RecoveryKind) => void>();
     const transport = await open((kind) => {
@@ -230,23 +254,29 @@ export async function runTerminalBrowser(
       },
     });
   };
-  const onTerminalClose = (error: Error) => state.lose(error.message);
+  const onClientClose = (error: Error) => {
+    // The server's close reason is authoritative: trust withdrawn is not a lost connection.
+    if (error.message === TRUST_REVOKED_REASON) trustRevoked = true;
+    state.lose(error.message);
+  };
+  const onWorkspaceClose = (error: Error) => state.lose(error.message);
   let releaseTerminal: (() => void) | null = null;
-  let outcome: { ok: true; result: TerminalBrowserRunResult } | { ok: false; error: unknown };
+  let outcome: { ok: true; result: TerminalClientRunResult } | { ok: false; error: unknown };
   try {
+    await observer.start();
     const rpc = await connect(
-      "app",
+      "client",
       (onRecovery) =>
         device.openPrincipalTransport({
-          selfId: grant.callerId,
+          selfId: grant.principalId,
           getToken,
           clientLabel: "Vibestudio terminal",
           onRecovery,
-          onTerminalClose,
+          onTerminalClose: onClientClose,
           signal,
         }),
-      grant.callerId,
-      "app"
+      grant.principalId,
+      "client"
     );
     const workspaceRpc = await connect(
       "workspace",
@@ -254,17 +284,22 @@ export async function runTerminalBrowser(
         options.workspaceDevice.openShellTransport({
           clientLabel: "Vibestudio terminal",
           onRecovery,
-          onTerminalClose,
+          onTerminalClose: onWorkspaceClose,
           signal,
         }),
       shellCallerId(grant.deviceId),
       "shell"
     );
     void options.serverExited?.then((cause) => state.lose(cause));
-    const host: TerminalBrowserHost = {
-      contractVersion: TERMINAL_BROWSER_HOST_CONTRACT_VERSION,
+    const host: TerminalClientHost = {
+      client: {
+        id: client.id,
+        source: client.source,
+        buildKey: client.buildKey,
+        grantedCapabilities: client.grantedCapabilities,
+      },
+      intent: client.intent ?? null,
       rpc,
-      appId: grant.callerId,
       system: options.system,
       workspace: options.workspace,
       workspaceRpc,
@@ -275,12 +310,26 @@ export async function runTerminalBrowser(
       onConnectionState: (listener) => state.subscribe(listener),
       listWorkspaces: () => options.listWorkspaces(),
       openExternal: (url) => options.openExternal(url),
-      files: createTerminalFiles(workspaceRpc, signal),
+      ...createGatedModules({
+        granted: client.grantedCapabilities,
+        stdout: options.stdout,
+        workspaceRpc,
+        lifetime: signal,
+      }),
+      state: options.state,
+      update,
       signal,
     };
     releaseTerminal = guardTerminal(options.stdin, options.stdout);
     const exit = await options.module.run(host);
-    outcome = { ok: true, result: appUpdated ? { kind: "app-updated" } : { kind: "exit", exit } };
+    outcome = {
+      ok: true,
+      result: trustRevoked
+        ? { kind: "trust-revoked" }
+        : restartRequested
+          ? { kind: "restart" }
+          : { kind: "exit", exit },
+    };
   } catch (error) {
     outcome = { ok: false, error };
   }
@@ -289,7 +338,7 @@ export async function runTerminalBrowser(
     () => releaseTerminal?.(),
     () => signal.removeEventListener("abort", onAbort),
     ...unsubscribes,
-    () => lifetime.abort(new Error("terminal browser exited")),
+    () => lifetime.abort(new Error("terminal client exited")),
   ]) {
     try {
       cleanup();
@@ -297,23 +346,26 @@ export async function runTerminalBrowser(
       cleanupFailures.push(error);
     }
   }
-  // Join every session's close; none may be abandoned, and no failure is dropped.
+  // Join every session's close and the observation's end; none may be abandoned, and no failure is dropped.
   const closeFailures = (
-    await Promise.allSettled(transports.map(async (transport) => transport.close()))
+    await Promise.allSettled([
+      observer.stop(),
+      ...transports.map(async (transport) => transport.close()),
+    ])
   ).flatMap((result) => (result.status === "rejected" ? [result.reason as unknown] : []));
-  closeFailures.unshift(...cleanupFailures);
+  closeFailures.unshift(...cleanupFailures, ...failures);
   if (!outcome.ok) {
     if (closeFailures.length === 0) throw outcome.error;
     throw new AggregateError(
       [outcome.error, ...closeFailures],
-      "The terminal browser failed and its connections could not all be closed"
+      "The terminal client failed and its connections could not all be closed"
     );
   }
   if (closeFailures.length === 1) throw closeFailures[0];
   if (closeFailures.length > 1) {
     throw new AggregateError(
       closeFailures,
-      "The terminal browser's connections could not all be closed"
+      "The terminal client's connections could not all be closed"
     );
   }
   return outcome.result;

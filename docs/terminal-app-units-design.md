@@ -11,10 +11,9 @@ terminal plan revision (`docs/terminal-refurbish-plan.md`, "Revision
 Direction from the user: a terminal app is to a terminal browser what a panel is
 to the Electron shell. It is an ordinary workspace unit hosted by a client. It
 differs from a panel only in that it runs as a Node program in a workspace PTY
-instead of in a browser view. Terminal apps have nothing to do with AppHost,
-`vibestudio.app`, app targets, app principals, `DeviceAppPrincipals`,
-candidates or rollback, or `apps:*` events. Only the terminal browser itself is
-an app.
+instead of in a browser view. Terminal apps have nothing to do with ClientHost,
+`vibestudio.client`, client runtimes, client principals, candidates or
+rollback, or `clients:*` events. Only the terminal browser itself is a client.
 
 ## What a panel is today, and the terminal equivalent
 

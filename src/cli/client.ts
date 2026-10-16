@@ -34,7 +34,14 @@ import {
   serverEndpoint,
 } from "./remoteClient.js";
 import { RpcClient, type DeviceCredential } from "./rpcClient.js";
-import { createTerminalCommand } from "../../hosts/terminal/terminalCommand.js";
+import {
+  clientCommandFor,
+  createClientsCommands,
+  createOpenCommand,
+  createTerminalCommand,
+  type TerminalCommandContext,
+} from "../../hosts/terminal/terminalCommand.js";
+import { GROUP_DESCRIPTIONS, GROUP_ORDER, isCliBuiltInCommand } from "./commandGroups.js";
 import { isTerminalHangup } from "../../hosts/terminal/ttyRestore.js";
 import { workspaceLabel } from "../node/workspaceLabel.js";
 import { agentCommands, createSelectedWorkspaceClient } from "./agent/index.js";
@@ -808,9 +815,18 @@ const mobileCommands: CliCommand[] = [
  * The full command registry. Extension point: later command groups
  * (fs, vcs, eval, ...) append their `CliCommand[]` here.
  */
+const terminalHostContext: TerminalCommandContext = {
+  appRoot: repoRoot,
+  hostVersion: packageVersion(),
+  // Every group the CLI defines, now or later: a client command never shadows one.
+  isBuiltIn: isCliBuiltInCommand,
+};
+
 const commandRegistry: CliCommand[] = [
   ...remoteCommands,
-  createTerminalCommand({ appRoot: repoRoot }),
+  createTerminalCommand(terminalHostContext),
+  createOpenCommand(terminalHostContext),
+  ...createClientsCommands(terminalHostContext),
   ...mobileCommands,
   ...createModelCommands({
     connect: (providerId, options) =>
@@ -828,27 +844,6 @@ const commandRegistry: CliCommand[] = [
   ...systemTestCommands,
   ...storageCommands,
 ];
-
-/** Every command group, in help order, with its one-line description. */
-const GROUP_DESCRIPTIONS: Record<string, string> = {
-  remote: "pairing, servers, workspaces, and remote hosts",
-  terminal: "open the terminal browser, starting a local server when needed",
-  mobile: "develop, install, inspect, and pair mobile clients",
-  model: "connect and renew model-provider credentials",
-  agent: "sessions, diagnostics, services, and workspace skills",
-  approvals: "list, decide, and follow pending approval requests",
-  fs: "read and edit files in the active agent context",
-  vcs: "inspect, commit, merge, and push workspace repositories",
-  templates: "discover, inspect, author, and publish workspace templates",
-  workspace: "maintain checked-in workspace source declarations",
-  eval: "run sandboxed code in the active agent context",
-  channel: "list, read, send, and follow conversation channels",
-  context: "materialize and watch remote context folders",
-  panel: "inspect and capture workspace panels",
-  "system-test": "run and inspect headless agentic system tests on a paired instance",
-  storage: "inspect and prune regenerable caches",
-};
-const GROUP_ORDER = Object.keys(GROUP_DESCRIPTIONS);
 
 export async function main(argv: string[]): Promise<number> {
   const [group, ...rest] = argv;
@@ -875,6 +870,15 @@ export async function main(argv: string[]): Promise<number> {
     return 0;
   }
   if (!GROUP_ORDER.includes(group)) {
+    // A terminal client may register `vibestudio <command>` (integration.terminal.command).
+    const clientCommand = clientCommandFor(group, terminalHostContext);
+    if (clientCommand) {
+      if (wantsHelp(rest)) {
+        console.log(renderCommandHelp(clientCommand));
+        return 0;
+      }
+      return await runParsed(clientCommand, rest);
+    }
     console.error(`Unknown command: ${group}`);
     printHelp();
     return 2;

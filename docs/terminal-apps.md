@@ -1,7 +1,7 @@
 # Terminal apps and the terminal browser
 
 Vibestudio runs in a plain terminal as well as in the desktop app. The
-**terminal browser** (`apps/terminal-browser` in the System template) is the
+**terminal browser** (`clients/terminal-browser` in the System template) is the
 terminal counterpart of the desktop shell. It owns your terminal, shows tabs,
 and is the trusted place where you answer approvals.
 
@@ -281,19 +281,32 @@ stream. Each re-attaches on its connection's recovery, never on a timer.
 
 ### The browser
 
-The contract with the CLI is
-`packages/shell-core/src/terminal/terminalBrowserHost.ts`:
+The contract with the CLI is the terminal host ABI `terminal-host-1`,
+`packages/shell-core/src/terminal/terminalClientHost.ts` (`TerminalClientHost`).
+The host checks the client manifest's `hostAbi` before it runs anything:
 
-- `host.rpc` is the browser's app principal in System, used for settings.
+- `host.client` is the running build (`id`, `source`, `buildKey`,
+  `grantedCapabilities`); `host.intent` is the intent it was launched with, or
+  null.
+- `host.rpc` is the client's principal in System
+  (`client:<id>:terminal:<deviceId>`).
 - `host.workspaceRpc` is this device's session in the shown workspace, used for
   sessions, apps and approvals.
 - `host.signal` owns the invocation. Cancellation reaches transport creation,
   pending calls and transfers; shutdown joins their cleanup.
-- `host.files` handles explicit user upload/download/export gestures through
-  the existing context-scoped filesystem service. Workspace apps cannot invoke
-  this trusted client-file capability themselves.
+- `host.state` is the client's persisted settings, kept by the host for this
+  client on this device.
+- `host.files`, `host.clipboard` and `host.notify` exist only when the server
+  granted `local-files`, `clipboard` or `notifications`. `files` handles
+  explicit upload/download/export/attach gestures, one path the person chose per
+  call (workspace apps cannot invoke it); `clipboard` writes OSC 52; `notify`
+  uses OSC 9, 777 or 99 for the detected terminal and the bell otherwise.
+- `host.update` reports a newer ready build of this client. The client calls
+  `restartAtSafePoint()` when it is safe to be re-entered; in development mode
+  the host re-enters the client itself.
 - `run` settles with `quit`, `switch-workspace` or `connection-lost`. It never
-  exits the process, and it restores the terminal on every path.
+  exits the process, and it restores the terminal on every path
+  (`guardTerminal` is the host's).
 
 Rendering:
 
@@ -304,19 +317,24 @@ Rendering:
 
 ### How `vibestudio terminal` starts the browser
 
-The browser is a client app, like the desktop shell: the server builds it and
-the client runs it. `vibestudio terminal` (or `pnpm start:terminal` /
+The browser is a client, like the desktop shell: the server builds it and the
+terminal host runs it. `vibestudio terminal` (or `pnpm start:terminal` /
 `pnpm dev:terminal` from a source checkout; see [cli.md](cli.md#terminal))
 does the following:
 
 1. Connects with its paired device credential. It starts this machine's local
    server first when the device is not paired or that server is not running.
-2. Routes to the System workspace (where client apps are installed) and to the
+2. Routes to the System workspace (where clients are installed) and to the
    shown workspace, Personal by default.
-3. Runs the launch gate for the `terminal` target while the TTY is still in line
-   mode: build, startup approvals, and activation.
-4. Obtains the browser's app principal, downloads its primary module, imports it
-   and calls `run(host)`.
+3. Asks the server to launch the default client (`clients.launch`) while the
+   TTY is still in line mode: build, startup approvals, and activation.
+4. Fetches the client's artifacts into the verified cache under the CLI state
+   directory, checking each against the integrity the server sealed.
+5. Obtains the principal of exactly that build (`auth.grantClientPrincipal`),
+   imports the verified module from the cache and calls `run(host)`.
+
+Any terminal client starts the same way: `vibestudio open <id>`, or
+`vibestudio <command>` for a client that declares `integration.terminal.command`.
 
 ### Latency
 

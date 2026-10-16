@@ -1,37 +1,92 @@
 import { EventEmitter } from "node:events";
-import { describe, expect, it, vi } from "vitest";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RpcConnectionStatus, RpcEnvelope } from "@vibestudio/rpc";
-import type { TerminalBrowserHost } from "@vibestudio/shell-core/terminal/terminalBrowserHost";
-import type { AppPrincipalGrantResponse } from "@vibestudio/service-schemas/auth";
+import type { LaunchedClient } from "@vibestudio/client-host-core";
+import type { SupervisionChange } from "@vibestudio/shared/events";
+import type {
+  TerminalClientHost,
+  TerminalClientUpdate,
+} from "@vibestudio/shell-core/terminal/terminalClientHost";
+import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import type { PrincipalTransportOptions, RpcClient } from "../../src/cli/rpcClient.js";
 import {
   TerminalConnectionState,
-  loadTerminalBrowserModule,
-  runTerminalBrowser,
+  TRUST_REVOKED_REASON,
+  importClientModule,
+  runTerminalClient,
 } from "./terminalHost.js";
 
-function grant(buildKey = "build-1", token = "grant-1"): AppPrincipalGrantResponse {
+const DIGEST = "d".repeat(64);
+const PRINCIPAL = "client:browser:terminal:dev_1";
+
+function launched(
+  options: { buildKey?: string; token?: string; granted?: ClientCapability[] } = {}
+): LaunchedClient {
+  const buildKey = options.buildKey ?? "build-1";
   return {
-    connectionGrant: token,
-    expiresAt: Date.now() + 60_000,
-    callerId: "app:apps/terminal-browser:dev_1",
-    deviceId: "dev_1",
-    serverId: "srv",
-    serverBootId: "boot",
-    workspaceId: "ws_system",
-    app: {
-      appId: "@workspace-apps/terminal-browser",
-      source: "apps/terminal-browser",
+    client: {
+      source: "clients/terminal-browser",
+      id: "browser",
+      runtime: "terminal",
+      title: "Vibestudio Terminal",
       buildKey,
-      effectiveVersion: "ev",
-      artifacts: [
-        {
-          path: "index.mjs",
-          role: "primary",
-          contentType: "text/javascript",
-          route: `/_a/${buildKey}/index.mjs`,
-        },
-      ],
+      executionDigest: DIGEST,
+      effectiveVersion: "1",
+      hostAbi: "terminal-host-1",
+      artifacts: [],
+      grantedCapabilities: options.granted ?? [],
+      deniedOptional: [],
+    },
+    artifacts: [
+      {
+        path: "index.mjs",
+        role: "primary",
+        contentType: "text/javascript",
+        integrity: `sha256-${"a".repeat(64)}`,
+        handle: "/cache/index.mjs",
+      },
+    ],
+    grant: {
+      connectionGrant: options.token ?? "grant-1",
+      expiresAt: Date.now() + 60_000,
+      principalId: PRINCIPAL,
+      deviceId: "dev_1",
+      serverId: "srv",
+      serverBootId: "boot",
+      workspaceId: "ws_system",
+    },
+  };
+}
+
+function supervisionChange(buildKey: string): SupervisionChange {
+  return {
+    identity: { kind: "client", entityId: "clients/terminal-browser" },
+    source: "clients/terminal-browser",
+    status: "running",
+    lastError: null,
+    artifact: { effectiveVersion: "2", buildKey, executionDigest: null },
+    canRollback: true,
+    change: "adopted",
+    previousBuildKey: "build-1",
+    previousEffectiveVersion: "1",
+    client: { id: "browser", runtime: "terminal", grantedCapabilities: [] },
+  } as SupervisionChange;
+}
+
+function fakeEvents() {
+  const listeners = new Set<(change: SupervisionChange) => void>();
+  return {
+    subscribe: vi.fn(async () => undefined),
+    unsubscribe: vi.fn(async () => undefined),
+    on: vi.fn((_event: "supervision:changed", listener: (change: SupervisionChange) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }),
+    emit(change: SupervisionChange) {
+      for (const listener of [...listeners]) listener(change);
     },
   };
 }
@@ -81,37 +136,51 @@ function fakeTty() {
   };
 }
 
-function harness(module: { run: (host: TerminalBrowserHost) => Promise<unknown> }) {
+function harness(
+  module: { run: (host: TerminalClientHost) => Promise<unknown> },
+  options: { granted?: ClientCapability[]; development?: boolean } = {}
+) {
   const transport = fakeTransport();
   const workspaceTransport = fakeTransport();
   let transportOptions: PrincipalTransportOptions | null = null;
   let workspaceOptions: Omit<PrincipalTransportOptions, "selfId" | "getToken"> | null = null;
   const device = {
-    openPrincipalTransport: vi.fn(async (options: PrincipalTransportOptions) => {
-      transportOptions = options;
-      await options.getToken();
+    openPrincipalTransport: vi.fn(async (opened: PrincipalTransportOptions) => {
+      transportOptions = opened;
+      await opened.getToken();
       return transport;
     }),
-    call: vi.fn(async () => grant()),
   };
   const workspaceDevice = {
     openShellTransport: vi.fn(
-      async (options: Omit<PrincipalTransportOptions, "selfId" | "getToken">) => {
-        workspaceOptions = options;
+      async (opened: Omit<PrincipalTransportOptions, "selfId" | "getToken">) => {
+        workspaceOptions = opened;
         return workspaceTransport;
       }
     ),
   };
+  const grants = {
+    acquire: vi.fn(
+      async (_build: { source: string; buildKey: string; executionDigest: string }) =>
+        launched({ token: "grant-2" }).grant
+    ),
+  };
+  const events = fakeEvents();
+  const state = { get: vi.fn(async () => ({ saved: true })), set: vi.fn(async () => undefined) };
   const tty = fakeTty();
   const run = () =>
-    runTerminalBrowser({
+    runTerminalClient({
       device: device as unknown as RpcClient,
       workspaceDevice: workspaceDevice as unknown as RpcClient,
-      grant: grant(),
+      launched: launched(options.granted ? { granted: options.granted } : {}),
+      grants,
       module: module as never,
       system: { id: "ws_system", name: "system" },
       workspace: { id: "ws_personal", name: "personal" },
       server: { kind: "owned", endpoint: "http://127.0.0.1:4000", logFile: "/tmp/server.log" },
+      events,
+      hostState: { isDevelopment: () => options.development === true },
+      state,
       listWorkspaces: async () => [{ id: "ws_system", name: "system" }],
       openExternal: vi.fn(async () => undefined),
       stdin: tty.stdin,
@@ -121,6 +190,9 @@ function harness(module: { run: (host: TerminalBrowserHost) => Promise<unknown> 
     transport,
     workspaceTransport,
     device,
+    grants,
+    events,
+    state,
     tty,
     run,
     options: () => transportOptions!,
@@ -133,89 +205,134 @@ describe("TerminalConnectionState", () => {
     const state = new TerminalConnectionState("http://127.0.0.1:4000");
     const seen: string[] = [];
     state.subscribe((next) => seen.push(next.phase));
-    state.transportStatus("app", "connecting");
+    state.transportStatus("client", "connecting");
     expect(state.current()).toMatchObject({ phase: "reconnecting" });
     state.transportStatus("workspace", "connecting");
-    state.transportStatus("app", "connected");
+    state.transportStatus("client", "connected");
     // Connected again only once every connection is.
     expect(state.current()).toMatchObject({ phase: "reconnecting" });
     state.transportStatus("workspace", "connected");
     state.lose("the local server exited (code 1)");
-    state.transportStatus("app", "connected");
+    state.transportStatus("client", "connected");
     expect(state.current()).toEqual({ phase: "lost", cause: "the local server exited (code 1)" });
     expect(seen).toEqual(["reconnecting", "connected", "lost"]);
   });
 });
 
-describe("runTerminalBrowser", () => {
-  it("hands the browser an app-principal host for System and a device session for the shown workspace", async () => {
-    let received: TerminalBrowserHost | null = null;
-    const { run, device, transport, workspaceTransport, options } = harness({
+describe("runTerminalClient", () => {
+  it("hands the client its principal host for System and a device session for the shown workspace", async () => {
+    let received: TerminalClientHost | null = null;
+    const { run, grants, transport, workspaceTransport, options, state } = harness({
       run: async (host) => {
         received = host;
         return { kind: "quit" };
       },
     });
     await expect(run()).resolves.toEqual({ kind: "exit", exit: { kind: "quit" } });
-    const host = received as unknown as TerminalBrowserHost;
-    expect(host.contractVersion).toBe(3);
-    expect(host.appId).toBe("app:apps/terminal-browser:dev_1");
-    expect(host.rpc.selfId).toBe("app:apps/terminal-browser:dev_1");
+    const host = received as unknown as TerminalClientHost;
+    expect(host.client).toEqual({
+      id: "browser",
+      source: "clients/terminal-browser",
+      buildKey: "build-1",
+      grantedCapabilities: [],
+    });
+    expect(host.intent).toBeNull();
+    expect(host.rpc.selfId).toBe(PRINCIPAL);
     expect(host.system).toEqual({ id: "ws_system", name: "system" });
     expect(host.workspace).toEqual({ id: "ws_personal", name: "personal" });
     expect(host.workspaceRpc.selfId).toBe("shell:dev_1");
     expect(host.connectionState()).toEqual({ phase: "connected" });
     expect(await host.listWorkspaces()).toEqual([{ id: "ws_system", name: "system" }]);
-    expect(options().selfId).toBe("app:apps/terminal-browser:dev_1");
+    expect(await host.state.get()).toEqual({ saved: true });
+    expect(options().selfId).toBe(PRINCIPAL);
     // The first authentication redeems the grant the launch already obtained.
-    expect(device.call).not.toHaveBeenCalled();
+    expect(grants.acquire).not.toHaveBeenCalled();
+    expect(state.get).toHaveBeenCalled();
     expect(transport.close).toHaveBeenCalled();
     expect(workspaceTransport.close).toHaveBeenCalled();
   });
 
-  it("re-grants on reconnect and reports an app update as a reload", async () => {
-    const { run, device, options } = harness({
-      run: async (host) => {
-        device.call.mockResolvedValueOnce(grant("build-1", "grant-2"));
-        await expect(options().getToken()).resolves.toBe("grant-2");
-        device.call.mockResolvedValueOnce(grant("build-2", "grant-3"));
-        await expect(options().getToken()).rejects.toThrow("updated");
-        expect(host.connectionState()).toMatchObject({ phase: "lost" });
-        return { kind: "connection-lost", cause: "updated" };
+  it("exposes a host module only when its capability was granted", async () => {
+    const seen: Array<Pick<TerminalClientHost, "files" | "clipboard" | "notify">> = [];
+    for (const granted of [
+      [],
+      ["clipboard", "notifications", "local-files"],
+    ] as ClientCapability[][]) {
+      const { run } = harness(
+        {
+          run: async (host) => {
+            seen.push({ files: host.files, clipboard: host.clipboard, notify: host.notify });
+            return { kind: "quit" };
+          },
+        },
+        { granted }
+      );
+      await run();
+    }
+    expect(seen[0]).toEqual({ files: undefined, clipboard: undefined, notify: undefined });
+    expect(Object.keys(seen[1]!.files ?? {}).sort()).toEqual([
+      "download",
+      "read",
+      "saveText",
+      "upload",
+    ]);
+    expect(seen[1]!.clipboard).toBeDefined();
+    expect(seen[1]!.notify).toBeDefined();
+    // Granting one module does not expose the others.
+    const only: Array<Pick<TerminalClientHost, "files" | "clipboard" | "notify">> = [];
+    const { run } = harness(
+      {
+        run: async (host) => {
+          only.push({ files: host.files, clipboard: host.clipboard, notify: host.notify });
+          return { kind: "quit" };
+        },
       },
-    });
-    await expect(run()).resolves.toEqual({ kind: "app-updated" });
-    expect(device.call).toHaveBeenCalledWith(
-      "auth.grantAppPrincipal",
-      [{ principal: "terminal-app", source: "apps/terminal-browser" }],
-      { signal: expect.any(AbortSignal) }
+      { granted: ["clipboard"] }
     );
+    await run();
+    expect(only[0]!.clipboard).toBeDefined();
+    expect(only[0]!.files).toBeUndefined();
+    expect(only[0]!.notify).toBeUndefined();
   });
 
-  it("restores the terminal and closes the session when the browser throws", async () => {
-    const { run, tty, transport } = harness({
+  it("binds every re-grant to the exact verified build", async () => {
+    const { run, grants, options } = harness({
       run: async () => {
-        throw new Error("browser crashed");
+        await expect(options().getToken()).resolves.toBe("grant-2");
+        return { kind: "quit" };
       },
     });
-    await expect(run()).rejects.toThrow("browser crashed");
+    await run();
+    expect(grants.acquire).toHaveBeenCalledWith({
+      source: "clients/terminal-browser",
+      buildKey: "build-1",
+      executionDigest: DIGEST,
+    });
+  });
+
+  it("restores the terminal and closes the session when the client throws", async () => {
+    const { run, tty, transport } = harness({
+      run: async () => {
+        throw new Error("client crashed");
+      },
+    });
+    await expect(run()).rejects.toThrow("client crashed");
     expect(tty.stdout.write).toHaveBeenCalledWith(expect.stringContaining("\x1b[?1049l"));
     expect(tty.stdin.isRaw).toBe(false);
     expect(transport.close).toHaveBeenCalled();
   });
 
-  it("binds a reconnect grant to its authentication owner without ending the browser", async () => {
+  it("binds a reconnect grant to its authentication owner without ending the client", async () => {
     const authentication = new AbortController();
     const reason = new Error("reconnect superseded");
-    const { run, device, options } = harness({
+    const { run, grants, options } = harness({
       run: async (host) => {
-        device.call.mockImplementationOnce(async (...args: unknown[]) => {
-          const signal = (args[2] as { signal: AbortSignal }).signal;
-          expect(signal).not.toBe(host.signal);
-          return new Promise<never>((_resolve, reject) => {
-            signal.addEventListener("abort", () => reject(signal.reason), { once: true });
-          });
-        });
+        grants.acquire.mockImplementationOnce(
+          () =>
+            new Promise<never>((_resolve, reject) => {
+              authentication.signal.addEventListener("abort", () => reject(reason), { once: true });
+            })
+        );
         const grantRequest = options().getToken(authentication.signal);
         authentication.abort(reason);
         await expect(grantRequest).rejects.toBe(reason);
@@ -227,7 +344,7 @@ describe("runTerminalBrowser", () => {
   });
 
   it("joins both transports and retains independent cleanup failures", async () => {
-    const browserFailure = new Error("browser crashed");
+    const clientFailure = new Error("client crashed");
     const releaseFailure = new Error("terminal restore failed");
     const closeFailure = new Error("transport close failed");
     const { run, tty, transport, workspaceTransport } = harness({
@@ -235,14 +352,14 @@ describe("runTerminalBrowser", () => {
         tty.stdout.write.mockImplementation(() => {
           throw releaseFailure;
         });
-        throw browserFailure;
+        throw clientFailure;
       },
     });
     transport.close.mockRejectedValueOnce(closeFailure);
     const failure = await run().catch((error: unknown) => error);
     expect(failure).toBeInstanceOf(AggregateError);
     expect((failure as AggregateError).errors).toEqual([
-      browserFailure,
+      clientFailure,
       releaseFailure,
       closeFailure,
     ]);
@@ -278,30 +395,119 @@ describe("runTerminalBrowser", () => {
       exit: { kind: "connection-lost", cause: "credential revoked" },
     });
   });
+
+  it("treats a session closed with trust-revoked as withdrawn trust, not a lost connection", async () => {
+    const { run, options } = harness({
+      run: async (host) => {
+        options().onTerminalClose?.(new Error(TRUST_REVOKED_REASON));
+        // The client sees an ordinary end and leaves; the host knows why.
+        return {
+          kind: "connection-lost",
+          cause: (host.connectionState() as { cause: string }).cause,
+        };
+      },
+    });
+    await expect(run()).resolves.toEqual({ kind: "trust-revoked" });
+  });
+
+  it("offers a newer build to the client and re-enters it only when the client asks", async () => {
+    let announced: TerminalClientUpdate | null = null;
+    const { run, events } = harness({
+      run: async (host) => {
+        expect(host.update.pending()).toBeNull();
+        expect(() => host.update.restartAtSafePoint()).toThrow("no update");
+        host.update.onUpdate((update) => {
+          announced = update;
+        });
+        events.emit(supervisionChange("build-2"));
+        expect(announced).toEqual({
+          buildKey: "build-2",
+          effectiveVersion: "2",
+          previousBuildKey: "build-1",
+        });
+        expect(host.update.pending()).toEqual(announced);
+        // Nothing was adopted: the client keeps its connection until it asks.
+        expect(host.connectionState()).toEqual({ phase: "connected" });
+        host.update.restartAtSafePoint();
+        return { kind: "quit" };
+      },
+    });
+    await expect(run()).resolves.toEqual({ kind: "restart" });
+    expect(events.subscribe).toHaveBeenCalledWith("supervision:changed");
+    expect(events.unsubscribe).toHaveBeenCalledWith("supervision:changed");
+  });
+
+  it("ignores a build that is already running and other clients' builds", async () => {
+    const { run, events } = harness({
+      run: async (host) => {
+        events.emit(supervisionChange("build-1"));
+        events.emit({ ...supervisionChange("build-9"), source: "clients/other" });
+        expect(host.update.pending()).toBeNull();
+        return { kind: "quit" };
+      },
+    });
+    await expect(run()).resolves.toEqual({ kind: "exit", exit: { kind: "quit" } });
+  });
+
+  it("adopts a rebuild at once in development mode, without asking the client", async () => {
+    const asked = vi.fn();
+    const { run, events } = harness(
+      {
+        run: async (host) => {
+          host.update.onUpdate(asked);
+          events.emit(supervisionChange("build-2"));
+          // The host ended the client's connection so it settles by itself.
+          expect(host.connectionState()).toMatchObject({ phase: "lost" });
+          return { kind: "connection-lost", cause: "restarting" };
+        },
+      },
+      { development: true }
+    );
+    await expect(run()).resolves.toEqual({ kind: "restart" });
+    expect(asked).not.toHaveBeenCalled();
+  });
 });
 
-describe("loadTerminalBrowserModule", () => {
-  it("imports the primary module fetched over the device connection", async () => {
-    const device = {
-      stream: vi.fn(
-        async () =>
-          new Response("export async function run() { return { kind: 'quit' }; }", { status: 200 })
-      ),
-    };
-    const module = await loadTerminalBrowserModule(device as never, grant().app);
-    await expect(module.run({} as never)).resolves.toEqual({ kind: "quit" });
-    expect(device.stream).toHaveBeenCalledWith(
-      "main",
-      "gateway.fetch",
-      [{ path: "/_a/build-1/index.mjs", method: "GET" }],
-      undefined
+describe("importClientModule", () => {
+  const scratch: string[] = [];
+  afterEach(() => {
+    for (const dir of scratch.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+  function cached(source: string, name = "index.mjs"): LaunchedClient {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-import-test-"));
+    scratch.push(dir);
+    const file = path.join(dir, name);
+    fs.writeFileSync(file, source);
+    const base = launched();
+    return { ...base, artifacts: [{ ...base.artifacts[0]!, path: name, handle: file }] };
+  }
+
+  it("imports the verified module from the cache, by its own file", async () => {
+    const module = await importClientModule(
+      cached("export async function run() { return { kind: 'quit' }; }")
     );
+    await expect(module.run({} as never)).resolves.toEqual({ kind: "quit" });
   });
 
   it("rejects a module without run(host)", async () => {
-    const device = { stream: vi.fn(async () => new Response("export const x = 1;")) };
-    await expect(loadTerminalBrowserModule(device as never, grant().app)).rejects.toThrow(
+    await expect(importClientModule(cached("export const x = 1;"))).rejects.toThrow(
       "does not export run(host)"
     );
+  });
+
+  it("requires exactly one primary .mjs entry", async () => {
+    const base = cached("export async function run() {}");
+    await expect(
+      importClientModule({
+        ...base,
+        artifacts: [...base.artifacts, ...base.artifacts],
+      })
+    ).rejects.toThrow("no single ESM entry module");
+    await expect(
+      importClientModule({
+        ...base,
+        artifacts: [{ ...base.artifacts[0]!, path: "index.js" }],
+      })
+    ).rejects.toThrow("no single ESM entry module");
   });
 });

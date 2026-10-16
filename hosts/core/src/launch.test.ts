@@ -4,7 +4,11 @@ import { buildHostDescriptor } from "./hostDescriptor.js";
 import { ClientLauncher, type Call, type LaunchState } from "./launch.js";
 import { MemoryStore, integrityOf, responseOf } from "./testing.js";
 
-const descriptor = buildHostDescriptor({ host: "terminal", hostVersion: "1", implemented: ["notifications"] });
+const descriptor = buildHostDescriptor({
+  host: "terminal",
+  hostVersion: "1",
+  implemented: ["notifications"],
+});
 const DIGEST = "a".repeat(64);
 const grantResponse = {
   connectionGrant: "g",
@@ -27,7 +31,12 @@ async function readyClient(over: Record<string, unknown> = {}) {
     effectiveVersion: "1",
     hostAbi: descriptor.runtimes.terminal!,
     artifacts: [
-      { path: "/_c/bk1/main.mjs", role: "primary", contentType: "text/javascript", integrity: await integrityOf("main") },
+      {
+        path: "main.mjs",
+        role: "primary",
+        contentType: "text/javascript",
+        integrity: await integrityOf("main"),
+      },
     ],
     grantedCapabilities: [],
     deniedOptional: [],
@@ -47,8 +56,10 @@ function setup(results: unknown[]) {
   };
   const store = new MemoryStore();
   let fetches = 0;
-  const cache = new ClientArtifactCache(store, async () => {
+  const routes: string[] = [];
+  const cache = new ClientArtifactCache(store, async (route) => {
     fetches += 1;
+    routes.push(route);
     return responseOf("main");
   });
   const grantCalls: unknown[] = [];
@@ -63,7 +74,7 @@ function setup(results: unknown[]) {
       },
     },
   });
-  return { launcher, calls, store, grantCalls, fetches: () => fetches };
+  return { launcher, calls, store, grantCalls, routes, fetches: () => fetches };
 }
 
 const launchCalls = (calls: { service: string; method: string }[]) =>
@@ -77,14 +88,21 @@ describe("ClientLauncher", () => {
     if (state.state !== "ready") return;
     expect(state.launched.artifacts).toHaveLength(1);
     expect(state.launched.artifacts[0]!.handle).toContain("main.mjs");
+    expect(t.routes).toEqual(["/_a/bk1/main.mjs"]);
     expect(state.launched.grant.principalId).toBe("client:chat:terminal:dev");
-    expect(t.grantCalls).toEqual([{ source: "clients/chat-terminal", buildKey: "bk1", executionDigest: DIGEST }]);
+    expect(t.grantCalls).toEqual([
+      { source: "clients/chat-terminal", buildKey: "bk1", executionDigest: DIGEST },
+    ]);
     expect(t.calls[0]!.args[0]).toMatchObject({ host: descriptor, select: { default: true } });
   });
 
   it("fails with host-abi-mismatch before fetching or granting", async () => {
-    const t = setup([{ state: "ready", client: await readyClient({ hostAbi: "terminal-host-0" }) }]);
-    await expect(t.launcher.launch({ default: true })).rejects.toMatchObject({ code: "host-abi-mismatch" });
+    const t = setup([
+      { state: "ready", client: await readyClient({ hostAbi: "terminal-host-0" }) },
+    ]);
+    await expect(t.launcher.launch({ default: true })).rejects.toMatchObject({
+      code: "host-abi-mismatch",
+    });
     expect(t.fetches()).toBe(0);
     expect(t.grantCalls).toEqual([]);
   });
@@ -92,11 +110,18 @@ describe("ClientLauncher", () => {
   it("stores nothing and grants nothing on an integrity mismatch", async () => {
     const client = await readyClient({
       artifacts: [
-        { path: "/_c/bk1/main.mjs", role: "primary", contentType: "text/javascript", integrity: await integrityOf("other") },
+        {
+          path: "main.mjs",
+          role: "primary",
+          contentType: "text/javascript",
+          integrity: await integrityOf("other"),
+        },
       ],
     });
     const t = setup([{ state: "ready", client }]);
-    await expect(t.launcher.launch({ default: true })).rejects.toMatchObject({ code: "integrity-mismatch" });
+    await expect(t.launcher.launch({ default: true })).rejects.toMatchObject({
+      code: "integrity-mismatch",
+    });
     expect(t.store.writes).toBe(0);
     expect(t.grantCalls).toEqual([]);
   });
@@ -144,7 +169,10 @@ describe("ClientLauncher", () => {
     const next = await t.launcher.resolveApprovals(gate.approvals, "once");
     expect(next?.state).toBe("ready");
     const resolves = t.calls.filter((c) => c.method === "resolveBootstrap");
-    expect(resolves.map((c) => c.args)).toEqual([[["ap1"], "deny"], [["ap1"], "once"]]);
+    expect(resolves.map((c) => c.args)).toEqual([
+      [["ap1"], "deny"],
+      [["ap1"], "once"],
+    ]);
   });
 
   it("passes rollbackTo through and propagates a launch RPC failure", async () => {

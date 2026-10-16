@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { IntentLinkError, invokeBackgroundIntent, isClientLink, parseClientIntentLink } from "./intents.js";
+import {
+  IntentLinkError,
+  invokeBackgroundIntent,
+  isClientLink,
+  parseClientIntentLink,
+} from "./intents.js";
 import { buildHostDescriptor } from "./hostDescriptor.js";
 
 describe("parseClientIntentLink", () => {
   it("parses the custom-scheme grammar", () => {
-    expect(parseClientIntentLink("vibestudio://c/chat/open-conversation?channel=a%20b&x=1")).toEqual({
+    expect(
+      parseClientIntentLink("vibestudio://c/chat/open-conversation?channel=a%20b&x=1")
+    ).toEqual({
       id: "chat",
       intent: "open-conversation",
       params: { channel: "a b", x: "1" },
@@ -51,7 +58,11 @@ describe("parseClientIntentLink", () => {
 
 describe("invokeBackgroundIntent", () => {
   it("calls clients.invokeIntent with the host descriptor", async () => {
-    const descriptor = buildHostDescriptor({ host: "terminal", hostVersion: "1", implemented: ["notifications"] });
+    const descriptor = buildHostDescriptor({
+      host: "terminal",
+      hostVersion: "1",
+      implemented: ["notifications"],
+    });
     const calls: unknown[][] = [];
     const result = await invokeBackgroundIntent(
       async (service, method, args) => {

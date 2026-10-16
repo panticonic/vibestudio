@@ -74,7 +74,11 @@ describe("ClientArtifactCache", () => {
     const store = new MemoryStore();
     const cache = new ClientArtifactCache(store, async (route) => responseOf(route));
     const [a, b, c] = await Promise.all(["/a", "/b", "/c"].map(integrityOf));
-    for (const [path, integrity] of [["/a", a], ["/b", b], ["/c", c]] as const) {
+    for (const [path, integrity] of [
+      ["/a", a],
+      ["/b", b],
+      ["/c", c],
+    ] as const) {
       await cache.ensure({ path, integrity: integrity! });
     }
     const removed = await cache.retain(

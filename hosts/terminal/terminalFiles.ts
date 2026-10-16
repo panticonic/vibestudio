@@ -3,7 +3,7 @@ import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import type { RpcClient } from "@vibestudio/rpc";
 import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
-import type { TerminalBrowserFiles } from "@vibestudio/shell-core/terminal/terminalBrowserHost";
+import type { TerminalClientFiles } from "@vibestudio/shell-core/terminal/terminalClientHost";
 import { runWithOwnedCleanup } from "../../scripts/lib/owned-cleanup.mjs";
 
 /** Upload uses the ordinary single-write fs API and the chat attachment budget. */
@@ -82,7 +82,7 @@ async function saveLocal(
 export function createTerminalFiles(
   rpc: Pick<RpcClient, "call">,
   lifetime: AbortSignal
-): TerminalBrowserFiles {
+): TerminalClientFiles {
   const signalFor = (signal?: AbortSignal) =>
     signal ? AbortSignal.any([lifetime, signal]) : lifetime;
   return {
@@ -140,6 +140,11 @@ export function createTerminalFiles(
           );
         return offset;
       });
+    },
+    async read(input, options) {
+      const signal = signalFor(options?.signal);
+      const bytes = await readLocal(input.localPath, signal);
+      return { path: path.resolve(input.localPath), size: bytes.byteLength, bytes };
     },
     async saveText(input, options) {
       const signal = signalFor(options?.signal);

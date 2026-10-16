@@ -46,7 +46,10 @@ describe("NodeArtifactStore", () => {
   it("backs a cache end to end", async () => {
     const { store: s } = await store();
     const cache = new ClientArtifactCache(s, async () => responseOf("body"));
-    const handle = await cache.ensure({ path: "/x/entry.mjs", integrity: await integrityOf("body") });
+    const handle = await cache.ensure({
+      path: "/x/entry.mjs",
+      integrity: await integrityOf("body"),
+    });
     expect(handle.endsWith("entry.mjs")).toBe(true);
   });
 });

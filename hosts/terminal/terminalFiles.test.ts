@@ -37,6 +37,22 @@ describe("trusted terminal file gestures", () => {
     ]);
   });
 
+  it("reads exactly the one regular file the person named, for an attachment", async () => {
+    const { root, call, files } = await fixture();
+    const source = path.join(root, "photo.bin");
+    await fs.writeFile(source, new Uint8Array([9, 8, 7]));
+    const read = await files.read({ localPath: source });
+    expect(read).toEqual({ path: source, size: 3, bytes: new Uint8Array([9, 8, 7]) });
+    // A directory is not a file the person attached, and the read never touches the workspace.
+    await expect(files.read({ localPath: root })).rejects.toThrow("regular file");
+    const huge = path.join(root, "huge");
+    const handle = await fs.open(huge, "w");
+    await handle.truncate(TERMINAL_UPLOAD_MAX_BYTES + 1);
+    await handle.close();
+    await expect(files.read({ localPath: huge })).rejects.toThrow("8 MB");
+    expect(call).not.toHaveBeenCalled();
+  });
+
   it("rejects over-budget local files before allocating or transmitting them", async () => {
     const { root, call, files } = await fixture();
     const source = path.join(root, "large");

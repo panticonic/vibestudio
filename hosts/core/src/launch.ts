@@ -13,7 +13,7 @@ import type {
   HostDescriptor,
   ReadyClient,
 } from "@vibestudio/workspace-contracts/clients";
-import type { ClientArtifactCache } from "./artifactCache.js";
+import { clientArtifactRoute, type ClientArtifactCache } from "./artifactCache.js";
 import { ClientLaunchError } from "./errors.js";
 
 /** One RPC call on the host's device shell session. */
@@ -112,7 +112,11 @@ export class ClientLauncher {
 
   constructor(private readonly options: ClientLauncherOptions) {
     this.clients = createTypedServiceClient("clients", clientsMethods, options.call);
-    this.shellApproval = createTypedServiceClient("shellApproval", shellApprovalMethods, options.call);
+    this.shellApproval = createTypedServiceClient(
+      "shellApproval",
+      shellApprovalMethods,
+      options.call
+    );
     this.companions = (options.companions ?? []).map((companion) =>
       createTypedServiceClient("shellApproval", shellApprovalMethods, companion)
     );
@@ -156,9 +160,7 @@ export class ClientLauncher {
       const owner = this.companionOwners.get(approval) ?? this.shellApproval;
       byOwner.set(owner, [...(byOwner.get(owner) ?? []), approval.approvalId]);
     }
-    await Promise.all(
-      [...byOwner].map(([owner, ids]) => owner.resolveBootstrap(ids, decision))
-    );
+    await Promise.all([...byOwner].map(([owner, ids]) => owner.resolveBootstrap(ids, decision)));
     return decision === "once" && this.last ? this.attempt() : null;
   }
 
@@ -208,10 +210,15 @@ export class ClientLauncher {
       );
     }
     const artifacts = await Promise.all(
-      client.artifacts.map(async (artifact): Promise<VerifiedArtifact> => ({
-        ...artifact,
-        handle: await this.options.cache.ensure(artifact),
-      }))
+      client.artifacts.map(
+        async (artifact): Promise<VerifiedArtifact> => ({
+          ...artifact,
+          handle: await this.options.cache.ensure({
+            integrity: artifact.integrity,
+            path: clientArtifactRoute(client.buildKey, artifact.path),
+          }),
+        })
+      )
     );
     const grant = await this.options.grants.acquire({
       source: client.source,

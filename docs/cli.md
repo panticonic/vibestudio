@@ -134,8 +134,8 @@ node dist/cli/client.mjs --help     # or: pnpm cli --help
 ## Terminal
 
 `vibestudio terminal` opens the terminal browser: a full-screen TUI for your
-workspaces that runs in this terminal. It is one command; there are no
-subcommands.
+workspaces that runs in this terminal. Other terminal clients are opened with
+`vibestudio open` and `vibestudio clients` (see below).
 
 ```sh
 vibestudio terminal ["<pairing-link>"] [--workspace <name>] [--yes] [--keep-server] [--label <name>]
@@ -180,12 +180,49 @@ vibestudio terminal "<compact-payload>"              # pair with a remote server
 vibestudio terminal --workspace dev --keep-server
 ```
 
-The terminal browser is a client: the command fetches the build that the
-server made for the workspace's `clientDefaults.terminal` over its own
-connection and runs it in this process. A newer adopted build is loaded the
-next time the browser reconnects or the command is run again. From a source
+The terminal browser is a client: the command asks the server to launch the
+workspace's default terminal client, fetches its build over its own connection
+into a verified cache (each artifact is checked against the integrity the
+server sealed before it is imported) and runs it in this process. A newer
+adopted build is offered at a safe point (the browser's launcher), and used the
+next time the command is run. From a source
 checkout, use `pnpm start:terminal` or `pnpm dev:terminal` (see
 [Development](#development)).
+
+### Terminal clients
+
+```sh
+vibestudio open <client> [intent] [words…] [--param key=value …] [--develop] [--workspace <name>] [--yes]
+vibestudio clients list
+vibestudio clients link <client> [--name <command>]
+vibestudio clients unlink <command>
+```
+
+`vibestudio open <client>` launches any terminal client the System workspace
+declares, through the same path as `vibestudio terminal`. A client that
+declares `integration.terminal.command` also answers to `vibestudio <command>`
+(for example `vibestudio chat`); the command table follows `clients.list` and
+`clients:changed`, and a client command never shadows a built-in command.
+
+A **background intent** (for example `ask`) runs on the server and prints its
+result to stdout; no client is loaded on this machine. Words after the intent
+and piped stdin become the intent's single `text` parameter:
+
+```sh
+git diff | vibestudio chat ask "review this"
+```
+
+`--develop` puts that client in development mode on this device: a rebuild is
+adopted at once by re-entering the client (`--develop=false` ends it).
+`vibestudio clients link` writes a `~/.local/bin` shim that launches the client;
+`unlink` removes it, and a shim whose client is gone is removed when the client
+list next changes. Shims and development mode are recorded in
+`<stateDir>/terminal-host.json`.
+
+If the System workspace withdraws a client's device-level trust, its sessions
+end and the command reports it ("Vibestudio no longer trusts <client> to act as
+this device"); a client that held that power only optionally is launched again
+without it.
 
 ## Workspace template registry
 
@@ -296,8 +333,8 @@ The equivalent desktop path is connection badge → **Paired devices** →
 another device** and share the complete one-time link.
 
 Pairing saves a durable device credential. After pairing, desktop, mobile, and
-terminal hosts all choose a workspace, ask the server to launch their selected
-host target, and show the same privileged workspace-unit approval before
+terminal hosts all choose a workspace, ask the server to launch a client for
+their host (`clients.launch`), and show the same privileged workspace-unit approval before
 running workspace code. Choosing another workspace retains the same hub device
 identity and replaces only the routed child reach; it does not require pairing
 again.

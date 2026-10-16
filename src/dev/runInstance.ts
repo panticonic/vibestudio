@@ -60,6 +60,8 @@ interface TerminalLaunch {
   log: fs.WriteStream;
   yes: boolean;
   workspace?: string;
+  /** This checkout's release version, told to the server in the host descriptor. */
+  hostVersion: string;
 }
 
 async function prunePersistentInstanceBuildCache(root: string, instanceId: string): Promise<void> {
@@ -495,12 +497,19 @@ async function runOwnedTerminal(
   supervisor: DevInstanceSupervisor,
   termination: LaunchTermination
 ): Promise<number> {
-  const [{ runTerminalSessions }, { loadCliCredentials, requireDeviceCliCredentials }, command] =
-    await Promise.all([
-      import("../../hosts/terminal/terminalSessions.js"),
-      import("../cli/credentialStore.js"),
-      import("../../hosts/terminal/terminalCommand.js"),
-    ]);
+  const [
+    { runTerminalSessions },
+    { loadCliCredentials, requireDeviceCliCredentials },
+    command,
+    { TerminalHostState },
+    { isCliBuiltInCommand },
+  ] = await Promise.all([
+    import("../../hosts/terminal/terminalSessions.js"),
+    import("../cli/credentialStore.js"),
+    import("../../hosts/terminal/terminalCommand.js"),
+    import("../../hosts/terminal/hostState.js"),
+    import("../cli/commandGroups.js"),
+  ]);
   try {
     const loaded = loadCliCredentials();
     if (!loaded) {
@@ -510,9 +519,14 @@ async function runOwnedTerminal(
       );
     }
     const credentials = requireDeviceCliCredentials(loaded, "pnpm dev:terminal");
+    const hostState = new TerminalHostState();
     const exit = await runTerminalSessions({
       credentials,
       ...(terminal.workspace ? { workspace: terminal.workspace } : {}),
+      select: { default: true },
+      hostVersion: terminal.hostVersion,
+      hostState,
+      shims: { state: hostState, isBuiltIn: isCliBuiltInCommand },
       server: {
         kind: "owned",
         endpoint: new URL(credentials.url).origin,
@@ -538,6 +552,7 @@ async function runOwnedTerminal(
 
 function openTerminalLog(
   root: string,
+  repoRoot: string,
   options: { yes: boolean; workspace?: string }
 ): TerminalLaunch {
   const logFile = path.join(root, "logs", "server.log");
@@ -553,6 +568,11 @@ function openTerminalLog(
     log: fs.createWriteStream("", { fd: logFd, autoClose: false }),
     yes: options.yes,
     ...(options.workspace ? { workspace: options.workspace } : {}),
+    hostVersion: (
+      JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+        version: string;
+      }
+    ).version,
   };
 }
 
@@ -637,7 +657,7 @@ async function main(): Promise<void> {
     ...(cleanRoomProfileRoot ? { profileRoot: cleanRoomProfileRoot } : {}),
     startedAt: Date.now(),
   });
-  const terminal = terminalOptions ? openTerminalLog(root, terminalOptions) : undefined;
+  const terminal = terminalOptions ? openTerminalLog(root, repoRoot, terminalOptions) : undefined;
   // The TTY belongs to the user: the launcher's own warnings go to the log.
   const releaseWarnings = terminal
     ? routeProcessWarnings((text) => terminal.log.write(text))

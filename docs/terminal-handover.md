@@ -28,7 +28,7 @@ These decisions are settled. Don't reopen them without new evidence.
   `terminal-apps/<name>`, the same unit kind `panel`. There is no new manifest
   block; the location alone makes a unit terminal-hosted.
 - **AppHost.** Only the terminal browser is an AppHost app
-  (`system/apps/terminal-browser`, target `terminal`).
+  (`system/clients/terminal-browser`, runtime `terminal`).
 - **Where apps run.** A terminal app is an ordinary Node program in a PTY owned
   by the Base `shell` extension, inside the workspace native runtime sandbox.
   The browser proxies those sessions to the real terminal.
@@ -136,8 +136,8 @@ belongs to someone else.
   `release`. Main's `sourcesReady` receipt hands prepared sources to the server
   before the owned release producer finishes; packaging still requires its
   completion. Producer failures propagate to the foreground owner.
-- **Browser contract.** `packages/shell-core/src/terminal/terminalBrowserHost.ts`
-  is the contract between the CLI and the browser, now version 2. It carries
+- **Browser contract.** `packages/shell-core/src/terminal/terminalClientHost.ts`
+  is the contract between the CLI and the browser (host ABI `terminal-host-1`, formerly `terminalBrowserHost.ts` v2/v3). It carries
   `system` and `workspaceRpc`; `readLocalFile` has been removed. Personal is
   the default workspace.
 
@@ -189,7 +189,7 @@ belongs to someone else.
 
 ### Browser (System)
 
-- **Location.** `system/apps/terminal-browser`. Tabs are shell sessions.
+- **Location.** `system/clients/terminal-browser`. Tabs are shell sessions.
 - **Escape sequences passed through:**
   - OSC 0/2 titles;
   - BEL/OSC 9/OSC 777 attention badges;
@@ -432,7 +432,7 @@ belongs to someone else.
     Browser readiness also included an explicit first-run approval, whose wait
     must not be charged to compilation.
 
-    Native `profileBuild("apps/terminal-browser", {ref: "main", verifyCache: true})`
+    Native `profileBuild("clients/terminal-browser", {ref: "main", verifyCache: true})`
     exposed two false validation failures: build reports omitted declared
     type-only development dependencies, and authority folding applied the mobile
     context-boundary baseline to every app target. Reports now reuse the existing

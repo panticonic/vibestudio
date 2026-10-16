@@ -551,6 +551,9 @@ export class RpcClient {
     options.signal?.throwIfAborted();
     const url = this.url;
     let closing = false;
+    // The server states why it ended a session (`trust-revoked`, ...) in the
+    // WebSocket close reason; the transport reports only that it ended.
+    let closeReason = "";
     const transport = wsClientTransport({
       selfId: options.selfId,
       getWsUrl: () => serverRpcWsUrl(url),
@@ -565,14 +568,22 @@ export class RpcClient {
       adapter: {
         now: () => Date.now(),
         getAuthToken: (signal) => options.getToken(signal),
-        createSocket: (socketUrl, protocols) => new NodeWsLike(new WebSocket(socketUrl, protocols)),
+        createSocket: (socketUrl, protocols) => {
+          const socket = new WebSocket(socketUrl, protocols);
+          socket.on("close", (_code, reason) => {
+            closeReason = reason.toString("utf8");
+          });
+          return new NodeWsLike(socket);
+        },
       },
     });
     const unsubscribe = transport.onStatusChange!((status) => {
       if (status === "disconnected" && transport.isClosed() && !closing) {
         unsubscribe();
         options.onTerminalClose?.(
-          new ConnectionError("the server ended the session (credential revoked or app retired)")
+          new ConnectionError(
+            closeReason || "the server ended the session (credential revoked or client retired)"
+          )
         );
       }
     });

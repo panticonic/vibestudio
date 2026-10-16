@@ -293,100 +293,156 @@ async function roster(inv: ParsedInvocation): Promise<number> {
   }
 }
 
+/** One live follow of a channel's durable log over the push transport. */
+export interface ChannelFollow {
+  /** Settles when the subscription ends: resolved when the server closes it, rejected on failure. */
+  ended: Promise<void>;
+  /** Stops following and joins the subscription. */
+  stop(): Promise<void>;
+}
+
+/**
+ * Follow `channelId` live: each durable event is rendered once, in order, and
+ * a recovered transport resubscribes from the last rendered event. This is the
+ * one mechanism that reads a channel (`channel tail`, and a background
+ * intent's `text-stream` result).
+ */
+export async function followChannel(
+  client: RpcClient,
+  options: {
+    callerId: string;
+    channelId: string;
+    render(event: ServerLogEvent): void;
+    /** Events replayed from before the follow began (default 10). */
+    replayMessageLimit?: number;
+  }
+): Promise<ChannelFollow> {
+  const { callerId, channelId } = options;
+  const target = await existingChannelTarget(client, channelId);
+  let lastRenderedSeq = 0;
+  const render = (event: ServerLogEvent): void => {
+    if (event.id <= lastRenderedSeq) return;
+    lastRenderedSeq = event.id;
+    options.render(event);
+  };
+
+  const handle = `cli-${callerId.slice(-8)}`;
+  let generation = 0;
+  let stopped = false;
+  let active:
+    | { generation: number; controller: AbortController; terminal: Promise<void> }
+    | undefined;
+  let settleEnded!: { resolve(): void; reject(error: Error): void };
+  const ended = new Promise<void>((resolve, reject) => {
+    settleEnded = { resolve, reject };
+  });
+  ended.catch(() => {});
+  const subscribe = async (): Promise<void> => {
+    const previous = active;
+    const currentGeneration = ++generation;
+    const controller = new AbortController();
+    previous?.controller.abort();
+
+    let resolveAck!: () => void;
+    let rejectAck!: (error: Error) => void;
+    const ack = new Promise<void>((resolve, reject) => {
+      resolveAck = resolve;
+      rejectAck = reject;
+    });
+    let acknowledged = false;
+    const terminal = (async () => {
+      try {
+        const response = await channelCaller(client, target).subscribe(
+          [
+            callerId,
+            {
+              handle,
+              replay: true,
+              replayMessageLimit: options.replayMessageLimit ?? 10,
+              ...(lastRenderedSeq > 0 ? { sinceId: lastRenderedSeq } : {}),
+            },
+          ],
+          { signal: controller.signal }
+        );
+        for await (const record of readChannelSubscriptionRecords<
+          { envelope?: import("@vibestudio/service-schemas/channel").ChannelReplayEnvelope },
+          {
+            channelId?: string;
+            message?: { kind?: string; event?: ServerLogEvent };
+          }
+        >(response)) {
+          if (active?.generation !== currentGeneration) break;
+          if (record.kind === "subscribed") {
+            if (acknowledged) throw new Error("channel subscription sent more than one ACK");
+            acknowledged = true;
+            for (const event of record.result.envelope?.logEvents ?? []) render(event);
+            resolveAck();
+            continue;
+          }
+          if (!acknowledged) throw new Error("channel subscription delivered data before its ACK");
+          const payload = record.payload;
+          if (payload.channelId !== channelId) continue;
+          if (payload.message?.kind === "log" && payload.message.event) {
+            render(payload.message.event);
+          }
+        }
+        if (!acknowledged) throw new Error("channel subscription closed before its ACK");
+        if (active?.generation === currentGeneration && !stopped) settleEnded.resolve();
+      } catch (error) {
+        const failure = error instanceof Error ? error : new Error(String(error));
+        if (!acknowledged) rejectAck(failure);
+        if (!controller.signal.aborted && active?.generation === currentGeneration) {
+          settleEnded.reject(failure);
+        }
+        throw failure;
+      }
+    })();
+    terminal.catch(() => {});
+    active = { generation: currentGeneration, controller, terminal };
+    await ack;
+  };
+  const offRecovery = await client.onRecovery(async () => {
+    await subscribe();
+  });
+  try {
+    await subscribe();
+  } catch (error) {
+    offRecovery();
+    throw error;
+  }
+  return {
+    ended,
+    stop: async () => {
+      stopped = true;
+      offRecovery();
+      active?.controller.abort();
+      await active?.terminal.catch(() => {});
+    },
+  };
+}
+
 async function tail(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const channelId = requireChannelId(inv);
     const { client, callerId } = resolveSessionScope(inv);
-    const target = await existingChannelTarget(client, channelId);
-
-    let lastRenderedSeq = 0;
-    const render = (event: ServerLogEvent): void => {
-      if (event.id <= lastRenderedSeq) return;
-      lastRenderedSeq = event.id;
-      const entry = toHistoryEntry(event);
-      if (json) {
-        console.log(JSON.stringify(entry));
-        return;
-      }
-      const who = entry.senderHandle ?? entry.senderId ?? "?";
-      const body = entry.text ?? `(${entry.type})`;
-      console.log(`#${entry.seq}\t${who}\t${body}`);
-    };
-
-    const handle = `cli-${callerId.slice(-8)}`;
-    let generation = 0;
-    let active:
-      | { generation: number; controller: AbortController; terminal: Promise<void> }
-      | undefined;
-    const subscribe = async (): Promise<void> => {
-      const previous = active;
-      const currentGeneration = ++generation;
-      const controller = new AbortController();
-      previous?.controller.abort();
-
-      let resolveAck!: () => void;
-      let rejectAck!: (error: Error) => void;
-      const ack = new Promise<void>((resolve, reject) => {
-        resolveAck = resolve;
-        rejectAck = reject;
-      });
-      let acknowledged = false;
-      const terminal = (async () => {
-        try {
-          const response = await channelCaller(client, target).subscribe(
-            [
-              callerId,
-              {
-                handle,
-                replay: true,
-                replayMessageLimit: 10,
-                ...(lastRenderedSeq > 0 ? { sinceId: lastRenderedSeq } : {}),
-              },
-            ],
-            { signal: controller.signal }
-          );
-          for await (const record of readChannelSubscriptionRecords<
-            { envelope?: import("@vibestudio/service-schemas/channel").ChannelReplayEnvelope },
-            {
-              channelId?: string;
-              message?: { kind?: string; event?: ServerLogEvent };
-            }
-          >(response)) {
-            if (active?.generation !== currentGeneration) break;
-            if (record.kind === "subscribed") {
-              if (acknowledged) throw new Error("channel subscription sent more than one ACK");
-              acknowledged = true;
-              for (const event of record.result.envelope?.logEvents ?? []) render(event);
-              resolveAck();
-              continue;
-            }
-            if (!acknowledged)
-              throw new Error("channel subscription delivered data before its ACK");
-            const payload = record.payload;
-            if (payload.channelId !== channelId) continue;
-            if (payload.message?.kind === "log" && payload.message.event) {
-              render(payload.message.event);
-            }
-          }
-          if (!acknowledged) throw new Error("channel subscription closed before its ACK");
-        } catch (error) {
-          const failure = error instanceof Error ? error : new Error(String(error));
-          if (!acknowledged) rejectAck(failure);
-          if (!controller.signal.aborted && active?.generation === currentGeneration) {
-            console.error(`channel subscription closed: ${failure.message}`);
-          }
-          throw failure;
+    const follow = await followChannel(client, {
+      callerId,
+      channelId,
+      render: (event) => {
+        const entry = toHistoryEntry(event);
+        if (json) {
+          console.log(JSON.stringify(entry));
+          return;
         }
-      })();
-      terminal.catch(() => {});
-      active = { generation: currentGeneration, controller, terminal };
-      await ack;
-    };
-    const offRecovery = await client.onRecovery(async () => {
-      await subscribe();
+        const who = entry.senderHandle ?? entry.senderId ?? "?";
+        const body = entry.text ?? `(${entry.type})`;
+        console.log(`#${entry.seq}\t${who}\t${body}`);
+      },
     });
-    await subscribe();
+    follow.ended.catch((error: Error) => {
+      console.error(`channel subscription closed: ${error.message}`);
+    });
     if (!json) console.error(`tailing ${channelId} (Ctrl-C to stop)…`);
 
     await new Promise<void>((resolve) => {
@@ -394,9 +450,7 @@ async function tail(inv: ParsedInvocation): Promise<number> {
       process.on("SIGINT", stop);
       process.on("SIGTERM", stop);
     });
-    offRecovery();
-    active?.controller.abort();
-    await active?.terminal.catch(() => {});
+    await follow.stop();
     await client.close();
     return 0;
   } catch (error) {

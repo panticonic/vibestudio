@@ -27,6 +27,11 @@ export interface ClientArtifactStore {
  */
 export type ClientArtifactFetch = (route: string) => Promise<Response>;
 
+/** The gateway route of one file of an immutable client build: `/_a/<buildKey>/<path>`. */
+export function clientArtifactRoute(buildKey: string, path: string): string {
+  return `/_a/${buildKey}/${path.replace(/^\/+/u, "")}`;
+}
+
 /** `sha256-<hex>`, the integrity form the build store seals on every artifact. */
 export async function sha256Integrity(bytes: Uint8Array): Promise<string> {
   const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes as BufferSource));
@@ -86,7 +91,9 @@ export class ClientArtifactCache {
     return flight;
   }
 
-  private async fill(artifact: Pick<ClientArtifactDescriptor, "path" | "integrity">): Promise<string> {
+  private async fill(
+    artifact: Pick<ClientArtifactDescriptor, "path" | "integrity">
+  ): Promise<string> {
     const { integrity, path } = artifact;
     if (!integrity.startsWith("sha256-")) {
       throw new ClientLaunchError(

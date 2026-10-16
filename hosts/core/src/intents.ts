@@ -75,7 +75,8 @@ export function parseClientIntentLink(link: string): ClientIntentRequest {
     throw new IntentLinkError("not-client-link", "Not a client link");
   }
   const match = CUSTOM.exec(link) ?? WEB.exec(link);
-  if (!match) throw new IntentLinkError("malformed-link", "Client link must name a client and an intent");
+  if (!match)
+    throw new IntentLinkError("malformed-link", "Client link must name a client and an intent");
   const [, id, intent, rawParams] = match;
   if (!isValidClientId(id)) {
     throw new IntentLinkError("invalid-client-id", `Invalid client id: ${id}`);
