@@ -491,7 +491,7 @@ export function createDesktopDeviceOps(deps: DesktopDriverDeps): {
     },
 
     async nextApproval(_args, signal) {
-      return abortable(feed.next(), signal);
+      return feed.next(signal);
     },
 
     async releaseApprovals() {
@@ -536,15 +536,6 @@ function artifactsOf(records: readonly InstalledLauncher[]) {
       path: artifactPath,
     }))
   );
-}
-
-function abortable<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    if (signal.aborted) return reject(abortReason(signal));
-    const onAbort = () => reject(abortReason(signal));
-    signal.addEventListener("abort", onAbort, { once: true });
-    promise.then(resolve, reject).finally(() => signal.removeEventListener("abort", onAbort));
-  });
 }
 
 function toLite(listing: z.infer<typeof ClientListingSchema>) {

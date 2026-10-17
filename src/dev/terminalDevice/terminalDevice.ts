@@ -293,8 +293,8 @@ export function createTerminalDevice(
       return null;
     },
 
-    async nextApproval() {
-      return ports.approvals.feed.next();
+    async nextApproval(_args, signal) {
+      return ports.approvals.feed.next(signal);
     },
 
     async releaseApprovals() {

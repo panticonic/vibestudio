@@ -32,9 +32,12 @@ const INHERITED_ROUTING = [
 
 /**
  * A device profile under `root`. The device under test (`"home"`) and the
- * driver's own connection (`"driver"`) are separate profiles of the same
- * account: a CLI profile admits one process per Iroh endpoint at a time, so
- * the driver cannot share the profile its PTYs run the CLI under.
+ * driver's own connection (`"driver"`) are separate devices of the same
+ * account. A device's connections all share one caller id, which is what the
+ * server addresses a drive request to: the driver must not share that id with
+ * the CLI processes the device under test runs, or every one of them would
+ * receive the driver's requests and the driver's disconnect would go unnoticed
+ * while any of them lived.
  */
 export function terminalDeviceLayout(
   root: string,

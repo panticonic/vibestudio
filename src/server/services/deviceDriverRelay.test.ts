@@ -84,6 +84,21 @@ describe("DeviceDriverRelay", () => {
     expect(() => f.relay.answer("shell:t", "u1", callId, { ok: true })).toThrow(/Unknown/u);
   });
 
+  it("settles on cancellation even when the driver never answers or disconnects", async () => {
+    const f = fixture();
+    f.connect("shell:t");
+    const abort = new AbortController();
+    const calls = [
+      f.relay.drive("u1", { deviceKind: "terminal", op: "nextApproval" }, abort.signal),
+      f.relay.drive("u1", { deviceKind: "terminal", op: "waitForListing" }, abort.signal),
+    ];
+    abort.abort(new Error("run cancelled"));
+    const settled = await Promise.allSettled(calls);
+    expect(settled.map((s) => s.status)).toEqual(["rejected", "rejected"]);
+    // A late disconnect has nothing left to settle.
+    f.disconnect("shell:t");
+  });
+
   it("refuses without a connected driver of the kind, or with more than one", async () => {
     const f = fixture();
     await expect(f.relay.drive("u1", { deviceKind: "desktop", op: "list" })).rejects.toMatchObject({

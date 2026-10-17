@@ -18,7 +18,10 @@ import { tsImport } from "tsx/esm/api";
 import { mintDevicePairingLink } from "./lib/device-pairing-link.mjs";
 import { runParentOwnedMain } from "./lib/parent-owned-main.mjs";
 
-const { createDevelopmentClientLifetime } = await tsImport("./development-client-lifecycle.ts", import.meta.url);
+const { createDevelopmentClientLifetime } = await tsImport(
+  "./development-client-lifecycle.ts",
+  import.meta.url
+);
 
 const repoRoot = process.cwd();
 
@@ -61,20 +64,38 @@ device operations to its system tests. Runs until stopped.`);
   process.once("SIGINT", requestStop);
   process.once("SIGTERM", requestStop);
   try {
-    // Two devices of the account: the one under test, and the driver's own
-    // connection (a CLI profile admits one process per endpoint at a time).
+    // Two devices of the account: the one under test, and the driver's own.
+    // The server addresses a drive request to a device's caller id, shared by
+    // all of that device's connections, so the driver cannot be the device
+    // whose CLI processes the tests start.
     const links = {
-      device: await mintDevicePairingLink(repoRoot, parsed.instanceId, parsed.ttlMs, lifetime.acquire),
-      driver: await mintDevicePairingLink(repoRoot, parsed.instanceId, parsed.ttlMs, lifetime.acquire),
+      device: await mintDevicePairingLink(
+        repoRoot,
+        parsed.instanceId,
+        parsed.ttlMs,
+        lifetime.acquire
+      ),
+      driver: await mintDevicePairingLink(
+        repoRoot,
+        parsed.instanceId,
+        parsed.ttlMs,
+        lifetime.acquire
+      ),
     };
     console.log(`[terminal-executor] minted device invites on ${parsed.instanceId}`);
     // The CLI's credential and path modules bind their stores when first
     // imported, so the device's own environment has to be in place first.
-    const { terminalDeviceLayout } = await tsImport("../src/dev/terminalDevice/layout.ts", import.meta.url);
+    const { terminalDeviceLayout } = await tsImport(
+      "../src/dev/terminalDevice/layout.ts",
+      import.meta.url
+    );
     const layout = terminalDeviceLayout(tempRoot, repoRoot, process.env, "driver");
     for (const key of Object.keys(process.env)) delete process.env[key];
     Object.assign(process.env, layout.env);
-    const { runTerminalDevice } = await tsImport("../src/dev/terminalDevice/run.ts", import.meta.url);
+    const { runTerminalDevice } = await tsImport(
+      "../src/dev/terminalDevice/run.ts",
+      import.meta.url
+    );
     await runTerminalDevice({
       root: tempRoot,
       repoRoot,

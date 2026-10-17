@@ -18,7 +18,16 @@ function fixture() {
   const request = (callId: string, op: string, args: unknown = [{}]) =>
     listeners.get("development:device-drive-request")!({ callId, op, args });
   const cancel = (callId: string) => listeners.get("development:device-drive-cancel")!({ callId });
-  const answers = () => calls.filter((c) => c.method === "answer").map((c) => c.args[0] as { callId: string; outcome: { ok: boolean; value?: unknown; failure?: { message?: string } } });
+  const answers = () =>
+    calls
+      .filter((c) => c.method === "answer")
+      .map(
+        (c) =>
+          c.args[0] as {
+            callId: string;
+            outcome: { ok: boolean; value?: unknown; failure?: { message?: string } };
+          }
+      );
   const settled = async () => {
     for (let i = 0; i < 5; i++) await Promise.resolve();
   };
@@ -33,7 +42,11 @@ describe("serveDeviceDriver", () => {
       deviceKind: "terminal",
       ops: { binDirectory: async () => "/bin" },
     });
-    expect(f.calls[0]).toMatchObject({ service: "deviceDriver", method: "register", args: [{ deviceKind: "terminal" }] });
+    expect(f.calls[0]).toMatchObject({
+      service: "deviceDriver",
+      method: "register",
+      args: [{ deviceKind: "terminal" }],
+    });
     f.request("c1", "binDirectory");
     await f.settled();
     expect(f.answers()).toEqual([{ callId: "c1", outcome: { ok: true, value: "/bin" } }]);
@@ -110,7 +123,8 @@ describe("serveDeviceDriver", () => {
 });
 
 describe("ApprovalFeed", () => {
-  const approval = (id: string) => ({ approvalId: id, kind: "capability" }) as unknown as PendingApproval;
+  const approval = (id: string) =>
+    ({ approvalId: id, kind: "capability" }) as unknown as PendingApproval;
 
   it("hands each approval out once and wakes on a queue change", async () => {
     let pending = [approval("a1")];
@@ -128,5 +142,66 @@ describe("ApprovalFeed", () => {
     feed.release();
     expect(await waiting).toBeNull();
     expect(await feed.next()).toBeNull();
+  });
+
+  it("settles a waiter whose caller aborted, and does not hand it an approval", async () => {
+    let pending: PendingApproval[] = [];
+    const feed = new ApprovalFeed(async () => pending);
+    const abort = new AbortController();
+    const waiting = feed.next(abort.signal);
+    const reason = new Error("test cancelled");
+    abort.abort(reason);
+    await expect(waiting).rejects.toBe(reason);
+    // The abandoned wait left nothing behind: the approval still goes to the next caller.
+    pending = [approval("a1")];
+    feed.notify();
+    expect((await feed.next())?.approvalId).toBe("a1");
+  });
+
+  it("does not consume an approval read after its caller aborted", async () => {
+    const abort = new AbortController();
+    let reads = 0;
+    const feed = new ApprovalFeed(async () => {
+      if (reads++ === 0) abort.abort(new Error("gone"));
+      return [approval("a1")];
+    });
+    await expect(feed.next(abort.signal)).rejects.toThrow("gone");
+    expect((await feed.next())?.approvalId).toBe("a1");
+  });
+});
+
+describe("a driver whose approval wait is pending", () => {
+  it("is cancelled by the server and retires on close instead of waiting for an approval", async () => {
+    const listeners = new Map<string, (payload: unknown) => void>();
+    const answers: unknown[] = [];
+    const feed = new ApprovalFeed(async () => []);
+    const driver = await serveDeviceDriver({
+      transport: {
+        async call(_service, method, args) {
+          if (method === "answer") answers.push(args[0]);
+          return { accepted: true };
+        },
+        onDirectEvent(event, listener) {
+          listeners.set(event, listener);
+          return () => listeners.delete(event);
+        },
+      },
+      deviceKind: "terminal",
+      ops: { nextApproval: (_args, signal) => feed.next(signal) },
+    });
+    listeners.get("development:device-drive-request")!({
+      callId: "c1",
+      op: "nextApproval",
+      args: [{}],
+    });
+    listeners.get("development:device-drive-request")!({
+      callId: "c2",
+      op: "nextApproval",
+      args: [{}],
+    });
+    listeners.get("development:device-drive-cancel")!({ callId: "c1" });
+    // c2 is still pending; closing must abort and join it.
+    await driver.close();
+    expect(answers).toEqual([]);
   });
 });

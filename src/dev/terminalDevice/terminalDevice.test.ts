@@ -264,3 +264,31 @@ describe("terminal device", () => {
     expect(await f.op("integrationArtifacts", {})).toEqual([]);
   });
 });
+
+describe("terminal device cancellation", () => {
+  it("settles a pending approval wait when its call is cancelled", async () => {
+    const feed = new ApprovalFeed(async () => []);
+    const device = createTerminalDevice(
+      {
+        clients: {
+          list: async () => [],
+          launch: async () => ({ state: "unavailable", reason: "x" }),
+          invokeIntent: async () => ({}),
+        },
+        bootId: async () => "boot-1",
+        changes: new ChangeSignal(),
+        approvals: { feed, resolve: async () => undefined },
+        hostState: {
+          read: () => ({ schemaVersion: 1, shims: {}, develop: {}, commands: {}, clients: {} }),
+        },
+      } as TerminalDevicePorts,
+      { home, env: { HOME: home } }
+    );
+    const abort = new AbortController();
+    const pending = device.ops.nextApproval!({}, abort.signal);
+    const reason = new Error("test cancelled");
+    abort.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    await device.close();
+  });
+});

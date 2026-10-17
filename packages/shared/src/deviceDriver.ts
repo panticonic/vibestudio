@@ -53,7 +53,11 @@ export interface ClientListingLite {
 
 export type LaunchOutcome =
   | { state: "ready"; surfaceId: string; instance: ClientInstanceIdentity }
-  | { state: "unavailable"; reason: string; missing?: { capabilities?: string[]; hostAbi?: string } }
+  | {
+      state: "unavailable";
+      reason: string;
+      missing?: { capabilities?: string[]; hostAbi?: string };
+    }
   | { state: "approval-required"; approvals: number };
 
 export interface SurfaceInfo {
@@ -69,8 +73,7 @@ export interface SurfaceInfo {
 
 export type IntentOutcome =
   /** `fields`: the keys of the server's result object (it is `{ text }` and nothing else). */
-  | { ok: true; text: string; fields: string[] }
-  | { ok: false; code: string; message: string };
+  { ok: true; text: string; fields: string[] } | { ok: false; code: string; message: string };
 
 export interface IntegrationArtifact {
   clientId: string;
@@ -112,7 +115,12 @@ export interface ClientDeviceWire {
   /** Resolves with the first device session of `clientId` closed with a typed reason. */
   waitForSessionClosed(args: { clientId: string }): { reason: string; principalId: string };
   closeSurface(args: { surfaceId: string }): null;
-  invokeIntent(args: { id: string; intent: string; params?: Record<string, string>; stdin?: string }): IntentOutcome;
+  invokeIntent(args: {
+    id: string;
+    intent: string;
+    params?: Record<string, string>;
+    stdin?: string;
+  }): IntentOutcome;
   /** Host-mediated launcher install (`integration.install`); the device confirms in its own UI. */
   installLauncher(args: { id: string }): IntegrationArtifact;
   integrationArtifacts(args: Record<string, never>): IntegrationArtifact[];
@@ -182,7 +190,9 @@ export async function serveDeviceDriver(options: {
     if (closed) return;
     const { callId, op, args } = payload as { callId: string; op: string; args: unknown };
     const abort = new AbortController();
-    const handler = (ops as Record<string, ((a: unknown, s: AbortSignal) => Promise<unknown>) | undefined>)[op];
+    const handler = (
+      ops as Record<string, ((a: unknown, s: AbortSignal) => Promise<unknown>) | undefined>
+    )[op];
     const done = (async () => {
       let outcome: unknown;
       try {
@@ -217,7 +227,8 @@ export async function serveDeviceDriver(options: {
     async close() {
       closed = true;
       for (const unsubscribe of unsubscribes) unsubscribe();
-      for (const entry of running.values()) entry.abort.abort(new Error("The device driver is closing"));
+      for (const entry of running.values())
+        entry.abort.abort(new Error("The device driver is closing"));
       await Promise.allSettled([...running.values()].map((entry) => entry.done));
     },
   };
@@ -228,7 +239,7 @@ export async function serveDeviceDriver(options: {
  * queue. `notify` is called when the queue changes (the
  * `shell-approval:pending-changed` event); `next` hands out each pending
  * approval once, waiting on that notification, and returns null after
- * `release`.
+ * `release`. A pending `next` also settles when its `signal` aborts.
  */
 export class ApprovalFeed {
   private readonly handedOut = new Set<string>();
@@ -241,13 +252,43 @@ export class ApprovalFeed {
     for (const wake of this.waiters.splice(0)) wake();
   }
 
-  async next(): Promise<PendingApproval | null> {
+  async next(signal?: AbortSignal): Promise<PendingApproval | null> {
     for (;;) {
+      signal?.throwIfAborted();
       if (this.released) return null;
-      const wake = new Promise<void>((resolve) => this.waiters.push(resolve));
-      const pending = await this.listPending();
+      let stopWaiting = (): void => {};
+      const wake = new Promise<void>((resolve, reject) => {
+        const waiter = (): void => {
+          signal?.removeEventListener("abort", abort);
+          resolve();
+        };
+        const abort = (): void => {
+          const index = this.waiters.indexOf(waiter);
+          if (index >= 0) this.waiters.splice(index, 1);
+          reject(signal!.reason);
+        };
+        this.waiters.push(waiter);
+        signal?.addEventListener("abort", abort, { once: true });
+        stopWaiting = () => {
+          signal?.removeEventListener("abort", abort);
+          const index = this.waiters.indexOf(waiter);
+          if (index >= 0) this.waiters.splice(index, 1);
+        };
+      });
+      // A wait abandoned below must not leave its rejection unobserved.
+      wake.catch(() => {});
+      let pending: readonly PendingApproval[];
+      try {
+        pending = await this.listPending();
+        // A caller that gave up must not be handed (and so consume) an approval.
+        signal?.throwIfAborted();
+      } catch (error) {
+        stopWaiting();
+        throw error;
+      }
       const fresh = pending.find((approval) => !this.handedOut.has(approval.approvalId));
       if (fresh) {
+        stopWaiting();
         this.handedOut.add(fresh.approvalId);
         return fresh;
       }
