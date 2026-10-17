@@ -66,14 +66,18 @@ function controlClient(rpc: RpcClient, options?: { signal?: AbortSignal }) {
   );
 }
 
-async function withControl<T>(
+/**
+ * One RPC connection to the hub's control transport (loopback or Iroh). The
+ * hub serves `hubControl` and the hub-owned `shellApproval` queue over it. The
+ * caller owns the returned client and must close it.
+ */
+export async function openHubControlRpc(
   creds: CliDeviceIdentity,
-  operation: (client: ReturnType<typeof controlClient>) => Promise<T>,
   options: { signal?: AbortSignal } = {}
-): Promise<T> {
+): Promise<RpcClient> {
   options.signal?.throwIfAborted();
   const local = await resolveLocalHubControlTransport(creds);
-  const rpc = new RpcClient(
+  return new RpcClient(
     {
       url: local?.serverUrl ?? creds.url,
       deviceId: creds.deviceId,
@@ -84,6 +88,14 @@ async function withControl<T>(
     },
     options
   );
+}
+
+async function withControl<T>(
+  creds: CliDeviceIdentity,
+  operation: (client: ReturnType<typeof controlClient>) => Promise<T>,
+  options: { signal?: AbortSignal } = {}
+): Promise<T> {
+  const rpc = await openHubControlRpc(creds, options);
   let result: T | undefined;
   let operationError: unknown;
   let operationFailed = false;

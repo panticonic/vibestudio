@@ -4,11 +4,11 @@ Vibestudio approval prompts use one server-owned queue and two shell surfaces:
 Electron and mobile. The queue is the source of truth; notifications are a
 delivery surface for pending queue entries.
 
-The CLI is also a presenter for the same live queue. Use `vibestudio approvals
+The CLI is also a presenter for the same live queues (workspace and hub). Use `vibestudio approvals
 list`, `show`, and `watch` to inspect requests and `resolve`, `review`, `rules`,
 or `submit` to answer them. These commands can handle approvals originating in
 the desktop client or background processes, subject to the authenticated
-account's visibility and authority. See [Workspace approvals](cli.md#workspace-approvals)
+account's visibility and authority. See [Hub and workspace approvals](cli.md#hub-and-workspace-approvals)
 for command syntax, structured responses, and the watch protocol.
 
 Approval kinds:

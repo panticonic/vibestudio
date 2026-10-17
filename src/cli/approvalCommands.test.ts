@@ -13,13 +13,15 @@ const rpc = vi.hoisted(() => ({
   streamReadable: vi.fn(),
   close: vi.fn(),
 }));
-const credentials = vi.hoisted(() => vi.fn());
+const identity = vi.hoisted(() => vi.fn());
+const openHub = vi.hoisted(() => vi.fn());
 vi.mock("./rpcClient.js", () => ({
   RpcClient: vi.fn(function () {
     return rpc;
   }),
 }));
-vi.mock("./credentialStore.js", () => ({ loadCliCredentials: credentials }));
+vi.mock("./credentialStore.js", () => ({ loadCliIdentity: identity }));
+vi.mock("./remoteClient.js", () => ({ openHubControlRpc: openHub }));
 
 const base = {
   approvalId: "desktop-request",
@@ -40,7 +42,8 @@ const capability = {
 
 beforeEach(() => {
   vi.resetAllMocks();
-  credentials.mockReturnValue({ kind: "device", workspaceName: "desktop-workspace" });
+  // An agent profile reaches only its workspace queue; device tests below add the hub.
+  identity.mockReturnValue({ kind: "agent", workspaceName: "desktop-workspace" });
   rpc.close.mockResolvedValue(undefined);
   rpc.callTarget.mockResolvedValue(undefined);
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -62,7 +65,10 @@ describe("workspace approval CLI", () => {
     rpc.call.mockResolvedValue([capability]);
     expect(await run("list")).toBe(0);
     expect(await run("show", base.approvalId)).toBe(0);
-    expect(output()).toEqual([[capability], capability]);
+    expect(output()).toEqual([
+      [{ ...capability, source: "workspace" }],
+      { ...capability, source: "workspace" },
+    ]);
     expect(rpc.call.mock.calls).toEqual([
       ["shellApproval.listPending", []],
       ["shellApproval.listPending", []],
@@ -125,9 +131,12 @@ describe("workspace approval CLI", () => {
       heading: "Updating parts",
       parts: [],
     };
-    rpc.call.mockImplementation(async (method: string) =>
-      method === "shellApproval.resolveInstallReview" ? receipt : undefined
-    );
+    rpc.call.mockImplementation(async (method: string) => {
+      if (method === "shellApproval.listPending") {
+        return ["review-1", "rules-1"].map((approvalId) => ({ ...capability, approvalId }));
+      }
+      return method === "shellApproval.resolveInstallReview" ? receipt : undefined;
+    });
     const review = {
       decision: "update",
       allowNow: [{ identityKey: "part-1", permissions: ["row-1"] }],
@@ -135,7 +144,9 @@ describe("workspace approval CLI", () => {
     const rules = { decision: "accept", selected: ["facet-1"] };
     expect(await run("review", "review-1", JSON.stringify(review))).toBe(0);
     expect(await run("rules", "rules-1", JSON.stringify(rules))).toBe(0);
-    expect(rpc.call.mock.calls).toEqual([
+    expect(
+      rpc.call.mock.calls.filter(([method]) => method !== "shellApproval.listPending")
+    ).toEqual([
       ["shellApproval.resolveInstallReview", ["review-1", review]],
       ["shellApproval.resolveTaskRules", ["rules-1", rules]],
     ]);
@@ -212,11 +223,11 @@ describe("workspace approval CLI", () => {
     expect(rpc.call).toHaveBeenCalledTimes(1);
   });
 
-  it("requires pairing and a workspace without opening a connection", async () => {
-    credentials.mockReturnValue(null);
+  it("requires pairing without opening a connection", async () => {
+    identity.mockReturnValue(null);
     expect(await run("watch")).toBe(3);
-    credentials.mockReturnValue({ kind: "device" });
     expect(await run("list")).toBe(3);
+    expect(openHub).not.toHaveBeenCalled();
     expect(rpc.streamReadable).not.toHaveBeenCalled();
     expect(rpc.call).not.toHaveBeenCalled();
   });
@@ -236,6 +247,132 @@ function finiteStream(records: EventWatchRecord[]): import("@vibestudio/rpc").De
     }),
   };
 }
+
+const hubReview = {
+  ...base,
+  approvalId: "hub-revoke",
+  callerId: "shell:cli-device",
+  kind: "capability" as const,
+  capability: "devices.revoke",
+  title: "Revoke device",
+  allowedDecisions: ["once", "deny"] as const,
+};
+
+function hubRpc() {
+  return { call: vi.fn(), streamReadable: vi.fn(), close: vi.fn().mockResolvedValue(undefined) };
+}
+
+describe("hub approvals for a paired device", () => {
+  let hub: ReturnType<typeof hubRpc>;
+  beforeEach(() => {
+    hub = hubRpc();
+    openHub.mockResolvedValue(hub);
+    identity.mockReturnValue({ kind: "device", phase: "workspace", workspaceName: "w" });
+  });
+
+  it("lists hub and workspace approvals together, labelled by source", async () => {
+    rpc.call.mockResolvedValue([capability]);
+    hub.call.mockResolvedValue([hubReview]);
+    expect(await run("list")).toBe(0);
+    expect(output()).toEqual([
+      [
+        { ...capability, source: "workspace" },
+        { ...hubReview, source: "hub" },
+      ],
+    ]);
+    expect(rpc.close).toHaveBeenCalledOnce();
+    expect(hub.close).toHaveBeenCalledOnce();
+  });
+
+  it("routes a decision to the queue that owns the approval", async () => {
+    rpc.call.mockResolvedValue([capability]);
+    hub.call.mockImplementation(async (method: string) =>
+      method === "shellApproval.listPending" ? [hubReview] : undefined
+    );
+    expect(await run("resolve", hubReview.approvalId, "once")).toBe(0);
+    expect(hub.call).toHaveBeenCalledWith("shellApproval.resolve", ["hub-revoke", "once"]);
+    expect(rpc.call).not.toHaveBeenCalledWith("shellApproval.resolve", expect.anything());
+    expect(await run("resolve", "missing", "once")).toBe(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("No pending approval"));
+  });
+
+  it("serves an account-phase device from the hub alone", async () => {
+    identity.mockReturnValue({ kind: "device", phase: "account" });
+    hub.call.mockResolvedValue([hubReview]);
+    expect(await run("list")).toBe(0);
+    expect(output()).toEqual([[{ ...hubReview, source: "hub" }]]);
+    expect(rpc.call).not.toHaveBeenCalled();
+  });
+
+  it("closes the workspace connection when the hub cannot be reached", async () => {
+    openHub.mockRejectedValue(new Error("hub unreachable"));
+    expect(await run("list")).toBe(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("hub unreachable"));
+    expect(rpc.close).toHaveBeenCalledOnce();
+  });
+
+  it("watches both queues, tags records by source, and joins both on stop", async () => {
+    const watching = { kind: "watching", events: ["shell-approval:pending-changed"], epoch: "e" };
+    const snapshot = (pending: unknown[]) => ({
+      kind: "snapshot",
+      event: "shell-approval:pending-changed",
+      sequence: 0,
+      payload: { pending },
+    });
+    const open =
+      (records: unknown[]) =>
+      async (_t: string, _m: string, _a: unknown[], { signal }: { signal: AbortSignal }) => ({
+        status: 200,
+        statusText: "OK",
+        headers: [],
+        finalUrl: "",
+        body: new ReadableStream<Uint8Array>({
+          start(controller) {
+            for (const record of records) {
+              controller.enqueue(encodeEventWatchRecord(record as EventWatchRecord));
+            }
+            signal.addEventListener("abort", () => controller.close());
+          },
+        }),
+      });
+    rpc.streamReadable.mockImplementation(open([watching, snapshot([capability])]));
+    hub.streamReadable.mockImplementation(open([watching, snapshot([hubReview])]));
+    const seen: Array<{ source: string; kind: string }> = [];
+    vi.mocked(console.log).mockImplementation((line) => {
+      seen.push(JSON.parse(String(line)));
+      if (seen.filter((r) => r.kind === "snapshot").length === 2) process.emit("SIGTERM");
+    });
+    expect(await run("watch")).toBe(0);
+    expect(seen.map((r) => r.source).sort()).toEqual(["hub", "hub", "workspace", "workspace"]);
+    expect(rpc.close).toHaveBeenCalledOnce();
+    expect(hub.close).toHaveBeenCalledOnce();
+  });
+
+  it("propagates one queue's watch failure and stops the other", async () => {
+    const hang = async (
+      _t: string,
+      _m: string,
+      _a: unknown[],
+      { signal }: { signal: AbortSignal }
+    ) => ({
+      status: 200,
+      statusText: "OK",
+      headers: [],
+      finalUrl: "",
+      body: new ReadableStream<Uint8Array>({
+        start(controller) {
+          signal.addEventListener("abort", () => controller.close());
+        },
+      }),
+    });
+    rpc.streamReadable.mockImplementation(hang);
+    hub.streamReadable.mockRejectedValue(new Error("hub watch failed"));
+    expect(await run("watch")).toBe(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("hub watch failed"));
+    expect(rpc.close).toHaveBeenCalledOnce();
+    expect(hub.close).toHaveBeenCalledOnce();
+  });
+});
 
 describe("approval watch ownership", () => {
   it("streams existing desktop prompts and subsequent changes, then cancels and joins on SIGTERM", async () => {

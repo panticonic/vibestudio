@@ -10,7 +10,7 @@ export const GROUP_DESCRIPTIONS: Record<string, string> = {
   mobile: "develop, install, inspect, and pair mobile clients",
   model: "connect and renew model-provider credentials",
   agent: "sessions, diagnostics, services, and workspace skills",
-  approvals: "list, decide, and follow pending approval requests",
+  approvals: "list, decide, and follow pending hub and workspace approval requests",
   fs: "read and edit files in the active agent context",
   vcs: "inspect, commit, merge, and push workspace repositories",
   templates: "discover, inspect, author, and publish workspace templates",

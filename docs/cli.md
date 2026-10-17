@@ -609,11 +609,17 @@ Remote reach is Iroh (pair by QR: Endpoint ID, explicit relays, and one-time cod
 see [transport-sessions.md](./architecture/transport-sessions.md) and
 [iroh-relay-operations.md](./iroh-relay-operations.md).
 
-## Workspace approvals
+## Hub and workspace approvals
 
-The `approvals` commands operate on the selected workspace's live server queue.
-They include prompts triggered by actions in the desktop or mobile client and
-by background work. No `agent attach`, eval run, or matching caller/context is
+The `approvals` commands operate on two live queues as one surface: the
+selected workspace's, and the hub's, which holds account-level prompts such as
+`remote revoke-device` or workspace creation. Every entry carries
+`source: "workspace"` or `source: "hub"`; `list` and `watch` cover both, and
+`show`, `resolve`, `review`, `rules`, and `submit` route to the queue that owns
+the ID. A paired device reaches both (an account with no workspace selected
+reaches only the hub); an agent profile reaches only its workspace. The
+workspace queue includes prompts triggered by actions in the desktop or mobile
+client and by background work. No `agent attach`, eval run, or matching caller/context is
 required. Pair the CLI under the account that can answer the prompts and select
 the workspace where the operation is waiting:
 

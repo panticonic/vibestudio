@@ -99,9 +99,11 @@ CLI eval has no chat binding; use `vibestudio channel send` when a workflow must
 post to a conversation. Linked-agent sessions cannot run eval. Read
 [EVAL.md](EVAL.md) for bindings, imports, cancellation, and persistent scope.
 
-## Handle workspace approvals
+## Handle hub and workspace approvals
 
-The selected workspace's live approval queue includes requests triggered by
+The selected workspace's live approval queue, plus the hub's (account prompts such
+as `remote revoke-device`; a paired device answers both, entries are labelled
+`source`), includes requests triggered by
 desktop/mobile actions and background processes. It is independent of your
 attached eval/session scope:
 
@@ -125,7 +127,7 @@ Do not pass secrets as shell arguments. Preparing prompts cannot yet be answered
 and stale prompts may already have been resolved by another client. A decision
 resumes its waiting operation; observe that operation's result to establish
 completion. Unexpected watch termination fails visibly; a new watch starts with
-the current queue. See [the CLI approval reference](../../docs/cli.md#workspace-approvals)
+the current queue. See [the CLI approval reference](../../docs/cli.md#hub-and-workspace-approvals)
 for response shapes and lifecycle behavior. Eval's `--approval-level` only
 automates capability approvals in that eval and its task descendants.
 
