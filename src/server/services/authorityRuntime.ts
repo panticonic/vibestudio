@@ -84,7 +84,7 @@ export function testPolicyAuthorityDecision(
     tier: "gated" | "critical";
     irreversible?: boolean;
   }
-): { ruleId: string; decision: "once" | "task" | "deny" } | null {
+): { ruleId: string; decision: "once" | "task" | "deny" | "queue" } | null {
   const policy =
     authorization?.testPolicy ?? caller.testPolicy ?? caller.executionSession?.testPolicy;
   if (!policy) return null;

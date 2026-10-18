@@ -561,6 +561,34 @@ describe("approvalQueue", () => {
     await queue.resolve(queue.listPending()[0]!.approvalId, "dismiss");
   });
 
+  it("carries a client trust change onto the pending capability card", async () => {
+    const { queue } = createQueue();
+    const trustChange = [
+      {
+        source: "clients/hello",
+        title: "Hello",
+        runtime: "web" as const,
+        gained: [{ capability: "approval-surface", summary: "show approvals" }],
+        lost: [],
+        effectiveVersion: null,
+      },
+    ];
+    void queue.request({
+      kind: "capability",
+      callerId: "agent:publisher",
+      callerKind: "worker",
+      requestedByUserId: "test-user",
+      repoPath: "workers/agent-worker",
+      effectiveVersion: "hash-1",
+      capability: "workspace.publish",
+      title: "Let Hello act as this device",
+      trustChange,
+    });
+
+    expect(queue.listPending()[0]).toMatchObject({ kind: "capability", trustChange });
+    await queue.resolve(queue.listPending()[0]!.approvalId, "dismiss");
+  });
+
   it("attaches structured requester identity from the resolver", async () => {
     const { queue } = createQueue({
       resolveRequester: (input) => ({

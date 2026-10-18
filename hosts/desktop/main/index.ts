@@ -1393,6 +1393,7 @@ async function handleCredentialSessionCaptureRequest(
 async function handleSupervisionChange(change: SupervisionChange): Promise<void> {
   supervisionRelay.emit(change);
   clientHost?.clientsChanged();
+  driverSignals.supervisionChanged();
 }
 
 function initializePanelTreeOnce(reason: string): Promise<void> {

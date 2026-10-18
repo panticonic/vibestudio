@@ -34,6 +34,10 @@ import type { PackageGraph, GraphNode, PackageGraphManifestIssue } from "./packa
 import { declaredExportSubpaths } from "./packageGraph.js";
 import { resolveExportSubpath } from "@vibestudio/typecheck/workspace";
 import {
+  WORKSPACE_CONFIG_PATH,
+  WorkspaceConfigInvalidError,
+} from "@vibestudio/workspace/configParser";
+import {
   computeEffectiveVersions,
   loadPersistedEvState,
   persistEvState,
@@ -1892,6 +1896,16 @@ export async function initBuildSystemV2(
               // application rpcSchema with its repair) must reach the report
               // intact rather than being flattened into prose.
               diagnostics.push(...error.diagnostics);
+            } else if (error instanceof WorkspaceConfigInvalidError) {
+              // The author's manifest is wrong: repair it; the host is fine.
+              diagnostics.push({
+                source: "schema",
+                severity: "error",
+                file: WORKSPACE_CONFIG_PATH,
+                line: 1,
+                column: 1,
+                message: error.message,
+              });
             } else {
               diagnostics.push({
                 source: "infrastructure",

@@ -192,7 +192,7 @@ describe("desktop device ops", () => {
     f.close();
   });
 
-  it("launches through the host and waits past a preparing state", async () => {
+  it("launches through the host and waits past preparing and approval-required states", async () => {
     const f = fixture();
     const window = fakeWindow("w1", "chat");
     const launching = f.run("launch", { id: "chat" });
@@ -202,6 +202,11 @@ describe("desktop device ops", () => {
       select,
       state: { state: "preparing", phase: "build", reason: "x" },
     } as LaunchObservation);
+    // An install review waiting for the person is not an answer either.
+    f.signals.launchObserved({
+      select,
+      state: { state: "approval-required", approvals: [{}] },
+    } as unknown as LaunchObservation);
     f.open.push(window);
     f.signals.launchObserved({
       select,
@@ -285,6 +290,34 @@ describe("desktop device ops", () => {
     f.signals.changed(window);
     expect(await rebuilt).toEqual({ clientId: "chat", instanceId: "w1", buildKey: "b2" });
     expect(await granted).toMatchObject({ grantedCapabilities: ["notifications"] });
+    f.close();
+  });
+
+  it("settles waitForBuildChange with the rejection when the rebuild is not adopted", async () => {
+    const f = fixture();
+    f.open.push(fakeWindow("w1", "chat", "b1"));
+    f.listed.push({ ...listing("chat"), lastError: "build failed: TS2304" } as never);
+    const rebuilt = f.run("waitForBuildChange", { surfaceId: "w1", fromBuildKey: "b1" });
+    await expect(rebuilt).rejects.toMatchObject({
+      code: "EBUILDREJECTED",
+      message: expect.stringContaining("TS2304"),
+    });
+    f.close();
+  });
+
+  it("wakes waitForBuildChange on a supervision change", async () => {
+    const f = fixture();
+    f.open.push(fakeWindow("w1", "chat", "b1"));
+    f.listed.push(listing("chat") as never);
+    const rebuilt = f.run("waitForBuildChange", { surfaceId: "w1", fromBuildKey: "b1" });
+    const outcome = rebuilt.then(
+      () => null,
+      (error: Error) => error
+    );
+    await Promise.resolve();
+    f.listed[0] = { ...listing("chat"), lastError: "adoption refused" } as never;
+    f.signals.supervisionChanged();
+    expect(await outcome).toMatchObject({ code: "EBUILDREJECTED" });
     f.close();
   });
 

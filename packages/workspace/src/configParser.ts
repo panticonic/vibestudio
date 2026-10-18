@@ -37,6 +37,15 @@ export { WORKSPACE_CLIENT_PACKAGE_SCOPE, WORKSPACE_EXTENSION_PACKAGE_SCOPE };
 
 export const WORKSPACE_CONFIG_PATH = "meta/vibestudio.yml";
 
+/**
+ * The workspace manifest's content is wrong (missing, unparsable, or violating
+ * its schema). The author wrote it, so it is a source error to repair, not an
+ * infrastructure failure of reading it.
+ */
+export class WorkspaceConfigInvalidError extends Error {
+  override readonly name = "WorkspaceConfigInvalidError";
+}
+
 export interface WorkspaceConfigReader {
   readText(path: string): Promise<string | null>;
 }
@@ -71,7 +80,7 @@ export async function readWorkspaceConfig(
   id: string
 ): Promise<WorkspaceConfig> {
   const content = await reader.readText(WORKSPACE_CONFIG_PATH);
-  if (content === null) throw new Error(`${WORKSPACE_CONFIG_PATH} is missing`);
+  if (content === null) throw new WorkspaceConfigInvalidError(`${WORKSPACE_CONFIG_PATH} is missing`);
   let runtime: ReturnType<typeof rootRuntimeFromTemplateManifest>;
   try {
     runtime = rootRuntimeFromTemplateManifest(
@@ -90,29 +99,50 @@ export async function readWorkspaceConfig(
       )
     )
   );
-  return parseWorkspaceConfigContentWithId(content, id, (source) => manifests.get(source) ?? null);
+  try {
+    return parseWorkspaceConfigContentWithId(content, id, (source) => manifests.get(source) ?? null);
+  } catch (error) {
+    throw error instanceof WorkspaceConfigInvalidError ? error : workspaceConfigError(error);
+  }
 }
 
-function workspaceConfigIssueMessage(issue: ZodIssue): string {
+function workspaceConfigIssueMessage(issue: ZodIssue, file = WORKSPACE_CONFIG_PATH): string {
   const path = issue.path.join(".");
   if (
     issue.code === "invalid_type" &&
     issue.path[issue.path.length - 1] === "source" &&
     typeof issue.path[issue.path.length - 2] === "number"
   ) {
-    return `meta/vibestudio.yml: every \`${String(issue.path[0])}\` entry needs a non-empty \`source\``;
+    return `${file}: every \`${String(issue.path[0])}\` entry needs a non-empty \`source\``;
   }
   if (issue.code === "unrecognized_keys") {
     const owner = path || "workspace configuration";
-    return `meta/vibestudio.yml: unknown \`${owner}\` key ${issue.keys.map((key) => `"${key}"`).join(", ")}`;
+    return `${file}: unknown \`${owner}\` key ${issue.keys.map((key) => `"${key}"`).join(", ")}`;
   }
   if (issue.code === "invalid_type" && issue.expected === "array") {
-    return `meta/vibestudio.yml: \`${path}\` must be a list`;
+    return `${file}: \`${path}\` must be a list`;
   }
-  return `meta/vibestudio.yml: \`${path}\`: ${issue.message}`;
+  return `${file}: \`${path}\`: ${issue.message}`;
 }
 
-function workspaceConfigError(error: unknown): Error {
+/** A selected service's package.json is its own source file: errors in it name it, not the manifest. */
+function parseServicePackage(source: string, content: string) {
+  const file = `${source}/package.json`;
+  try {
+    return z
+      .object({ vibestudio: z.object({ services: z.array(WorkspaceServiceExportSchema) }) })
+      .parse(JSON.parse(content));
+  } catch (error) {
+    const detail =
+      error instanceof ZodError && error.issues[0]
+        ? workspaceConfigIssueMessage(error.issues[0], file)
+        : `${file}: ${error instanceof Error ? error.message : String(error)}`;
+    throw new WorkspaceConfigInvalidError(detail, { cause: error });
+  }
+}
+
+function workspaceConfigError(error: unknown): WorkspaceConfigInvalidError {
+  if (error instanceof WorkspaceConfigInvalidError) return error;
   const detail =
     error instanceof ZodError
       ? error.issues[0]
@@ -121,7 +151,7 @@ function workspaceConfigError(error: unknown): Error {
       : error instanceof Error
         ? error.message
         : String(error);
-  return new Error(
+  return new WorkspaceConfigInvalidError(
     detail.startsWith("meta/vibestudio.yml") ? detail : `meta/vibestudio.yml: ${detail}`,
     { cause: error }
   );
@@ -167,9 +197,7 @@ export function parseWorkspaceConfigContentWithId(
       normalizeWorkspaceRepoPath(source);
       const content = readServiceManifest(source);
       if (content === null) throw new Error(`Service ${name} requires ${source}/package.json`);
-      const pkg = z
-        .object({ vibestudio: z.object({ services: z.array(WorkspaceServiceExportSchema) }) })
-        .parse(JSON.parse(content));
+      const pkg = parseServicePackage(source, content);
       const exported = pkg.vibestudio.services.filter((service) => service.name === name);
       if (exported.length !== 1)
         throw new Error(`${source}/package.json must export service ${name} exactly once`);

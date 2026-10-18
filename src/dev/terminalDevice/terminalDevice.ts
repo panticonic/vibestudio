@@ -227,8 +227,17 @@ export function createTerminalDevice(
     async waitForBuildChange({ surfaceId, fromBuildKey }, signal) {
       const surface = surfaceOf(surfaceId);
       const next = await untilChanged(async () => {
-        const active = listingOf(surface.clientId, await ports.clients.list())?.activeBuildKey;
-        return active && active !== fromBuildKey ? active : undefined;
+        const listing = listingOf(surface.clientId, await ports.clients.list());
+        const active = listing?.activeBuildKey;
+        if (active && active !== fromBuildKey) return active;
+        // A rebuild that failed is the outcome: no build will be adopted for it.
+        if (listing?.lastError) {
+          throw Object.assign(
+            new Error(`The rebuild of ${surface.clientId} was not adopted: ${listing.lastError}`),
+            { code: "EBUILDREJECTED" }
+          );
+        }
+        return undefined;
       }, signal);
       surface.buildKey = next;
       return identityOf(surface);
@@ -383,6 +392,7 @@ function liteListing(listing: ClientListing) {
     trusted: listing.trusted,
     isDefault: listing.isDefault,
     ...(listing.unavailableReason ? { unavailableReason: listing.unavailableReason } : {}),
+    ...(listing.lastError ? { lastError: listing.lastError } : {}),
     intents: listing.intents.map((intent) => ({
       name: intent.name,
       kind: intent.kind,

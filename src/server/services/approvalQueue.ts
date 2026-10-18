@@ -191,6 +191,8 @@ export interface CapabilityApprovalQueueRequest extends ApprovalQueueRequestBase
   resourceScope?: PendingCapabilityApproval["resourceScope"];
   grantResourceKey?: string;
   details?: PendingCapabilityApproval["details"];
+  /** A change to which clients hold device-level power, shown as its own section. */
+  trustChange?: PendingCapabilityApproval["trustChange"];
   snapshot?: PendingCapabilityApproval["snapshot"];
   cardType?: PendingCapabilityApproval["cardType"];
   allowedDecisions?: PendingCapabilityApproval["allowedDecisions"];
@@ -1151,6 +1153,7 @@ export function createApprovalQueue(deps: {
           resourceScope: req.resourceScope ?? null,
           grantResourceKey: req.grantResourceKey ?? null,
           details: req.details ?? null,
+          trustChange: req.trustChange ?? null,
           snapshot: req.snapshot ?? null,
           cardType: req.cardType ?? null,
           allowedDecisions: req.allowedDecisions ? [...req.allowedDecisions].sort() : null,
@@ -1410,6 +1413,7 @@ export function createApprovalQueue(deps: {
         resource: req.resource,
         resourceScope: req.resourceScope,
         details: req.details,
+        ...(req.trustChange ? { trustChange: req.trustChange } : {}),
         snapshot: req.snapshot,
         cardType: req.cardType,
         allowedDecisions: req.allowedDecisions,

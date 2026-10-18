@@ -3,7 +3,10 @@ import {
   buildWorkspaceDeclarations,
   type WorkspaceDeclarations,
 } from "@vibestudio/workspace/singletonRegistry";
-import { readWorkspaceConfig } from "@vibestudio/workspace/configParser";
+import {
+  readWorkspaceConfig,
+  WorkspaceConfigInvalidError,
+} from "@vibestudio/workspace/configParser";
 
 type WorkspaceConfigFile = {
   content: { kind: "text"; text: string } | { kind: "bytes"; base64: string };
@@ -45,12 +48,13 @@ function snapshotFromState(
       },
       workspaceId
     ).catch((error) => {
-      throw new Error(
-        `Cannot read workspace configuration from ${ref}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-        { cause: error }
-      );
+      const message = `Cannot read workspace configuration from ${ref}: ${
+        error instanceof Error ? error.message : String(error)
+      }`;
+      // Content the author wrote stays a source error through the wrapper.
+      throw error instanceof WorkspaceConfigInvalidError
+        ? new WorkspaceConfigInvalidError(message, { cause: error })
+        : new Error(message, { cause: error });
     });
     snapshot = { config };
     cache.set(key, snapshot);

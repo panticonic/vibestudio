@@ -1841,6 +1841,72 @@ describe("AcquisitionCoordinator", () => {
     grantStore.close();
   });
 
+  it("lets a case declare a critical prompt the person answers: no failure, no policy grant", async () => {
+    const path = mkdtempSync(join(tmpdir(), "authority-acq-test-queue-"));
+    const grantStore = new CapabilityGrantStore({ statePath: path });
+    const requestWithHandle = vi.fn(() => ({
+      approvalId: "a1",
+      decision: new Promise(() => undefined),
+      cancel: vi.fn(),
+    }));
+    const coordinator = new AcquisitionCoordinator({
+      approvalQueue: { requestWithHandle, request: vi.fn(), cancelForCaller: vi.fn() } as never,
+      grantStore,
+    });
+    const snap = {
+      ...snapshot(),
+      capability: "workspace.publish",
+      resourceKey: "workspace-trust-change:publication:p1",
+      callerPrincipal: "session:chat-1" as const,
+      executionMode: "test" as const,
+      testPolicyId: "test:run-123:case:trust",
+    };
+    const caller = {
+      ...createVerifiedCaller("do:test-runner", "do"),
+      testPolicy: {
+        policyId: snap.testPolicyId,
+        kind: "case" as const,
+        orchestratorPolicyId: "test:run-123",
+        case: {
+          testId: "trust",
+          agent: {
+            model: "openai-codex:gpt-5.3-codex-spark",
+            approvalLevel: 2 as const,
+            fallback: "disabled" as const,
+          },
+          authority: [
+            {
+              ruleId: "trust-change-person",
+              capability: { kind: "exact" as const, key: snap.capability },
+              resource: { kind: "prefix" as const, prefix: "workspace-trust-change:publication:" },
+              tier: "critical" as const,
+              decision: "queue" as const,
+            },
+          ],
+          unexpectedPrompts: "fail" as const,
+        },
+      },
+    };
+    try {
+      const info = coordinator.request({
+        snapshot: snap,
+        snapshotDigest: invocationSnapshotDigest(snap),
+        tier: "critical",
+        caller,
+        renderedAction: "give clients device-level power",
+        resource: { kind: "exact", key: snap.resourceKey },
+        presentation: reviewedPresentation(),
+      });
+      expect(info).toMatchObject({ pending: true });
+      expect(info).not.toHaveProperty("preauthorized", true);
+      expect(grantStore.listAuthorityGrants()).toEqual([]);
+    } finally {
+      await coordinator.quiescePresentations();
+      grantStore.close();
+      rmSync(path, { recursive: true, force: true });
+    }
+  });
+
   it("never routes a test-mode invocation with missing or mismatched policy to the UI", () => {
     const grantStore = new CapabilityGrantStore({
       statePath: mkdtempSync(join(tmpdir(), "authority-acq-test-integrity-")),

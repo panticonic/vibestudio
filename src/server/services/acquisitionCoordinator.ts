@@ -1156,9 +1156,10 @@ export class AcquisitionCoordinator {
           }
         );
       }
-      if (missingRuleIndex >= 0) {
+      if (missingRuleIndex >= 0 || rules.some((rule) => rule?.decision === "queue")) {
         // Orchestrator policies intentionally cannot ratify critical or
-        // irreversible work; those requests continue through the real queue.
+        // irreversible work; those requests continue through the real queue,
+        // as do prompts a case declared the person answers (`queue`).
       } else {
         this.deps.grantStore.transaction(() => {
           inputs.forEach((facet, index) => {

@@ -1139,6 +1139,12 @@ describe("ClientHost releases", () => {
         errorDetails: { phase: "build", source: WEB_SOURCE },
       },
     });
+    // The listing carries the refusal beside the build that stays in use, so a
+    // host waiting for the new build learns it will not come.
+    host.setDeclared([{ source: WEB_SOURCE, ref: "main" }]);
+    expect(
+      (await host.listClients(desktopHost())).find((listing) => listing.source === WEB_SOURCE)
+    ).toMatchObject({ lastError: "broken client code", activeBuildKey: "client-key" });
     expect(eventService.emit).toHaveBeenCalledWith(
       "supervision:changed",
       expect.objectContaining({

@@ -5,6 +5,31 @@ import { createInvocationSnapshot } from "@vibestudio/shared/authority/invocatio
 import { shellApprovalMethods, templateInstallResolutionSchema } from "./shellApproval.js";
 
 describe("shellApproval service contract", () => {
+  it("carries a capability card's trust change across the approval wire", () => {
+    const approval = {
+      approvalId: "approval-trust",
+      callerId: "code:workers/agent-worker@v",
+      callerKind: "do" as const,
+      repoPath: "workers/agent-worker",
+      effectiveVersion: "v",
+      requestedAt: 1,
+      kind: "capability" as const,
+      capability: "workspace.publish",
+      title: "Let Hello act as this device",
+      trustChange: [
+        {
+          source: "clients/hello",
+          title: "Hello",
+          runtime: "web" as const,
+          gained: [{ capability: "approval-surface", summary: "show approvals" }],
+          lost: [],
+          effectiveVersion: null,
+        },
+      ],
+    };
+    expect(shellApprovalMethods.listPending.returns.parse([approval])).toEqual([approval]);
+  });
+
   it.each([true, false])(
     "preserves website identity across the approval wire (document: %s)",
     (document) => {

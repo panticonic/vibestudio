@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { WorkspaceConfigInvalidError } from "@vibestudio/workspace/configParser";
 import { resolveWorkspaceService } from "./workspaceServices.js";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
 import {
@@ -30,6 +31,31 @@ describe("workspace config source", () => {
     expect(config.id).toBe(WORKSPACE_ID);
     expect(readFile).toHaveBeenCalledWith("state:main", "meta/vibestudio.yml");
   });
+  it("keeps unreadable content a source error through the read wrapper, and a failed read an ordinary error", async () => {
+    const duplicateKeys = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\nservices: []\nservices: []\n`;
+    const invalid = await readWorkspaceConfigFromState(
+      { readFile: async () => textFile(duplicateKeys) },
+      WORKSPACE_ID,
+      "state:dup"
+    ).catch((error: unknown) => error);
+    expect(invalid).toBeInstanceOf(WorkspaceConfigInvalidError);
+    expect((invalid as Error).message).toMatch(
+      /Cannot read workspace configuration from state:dup.*unique/s
+    );
+
+    const unreadable = await readWorkspaceConfigFromState(
+      {
+        readFile: async () => {
+          throw new Error("store offline");
+        },
+      },
+      WORKSPACE_ID,
+      "state:offline"
+    ).catch((error: unknown) => error);
+    expect(unreadable).not.toBeInstanceOf(WorkspaceConfigInvalidError);
+    expect((unreadable as Error).message).toContain("store offline");
+  });
+
   it("coalesces one exact state across callers without sharing mutable configuration", async () => {
     const readFile = vi.fn(async (_ref: string, filePath: string) =>
       filePath === "meta/vibestudio.yml" ? textFile(MANIFEST) : null

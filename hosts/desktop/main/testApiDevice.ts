@@ -85,6 +85,8 @@ function abortReason(signal: AbortSignal): Error {
  */
 export class DesktopDriverSignals {
   readonly clients = new Topic();
+  /** A supervised unit's build was adopted, rejected or failed (`supervision:changed`). */
+  readonly supervision = new Topic();
   readonly approvals = new Topic();
   /** A window's build or granted capabilities changed. */
   readonly windowChanged = new Topic<ClientWindow>();
@@ -93,6 +95,9 @@ export class DesktopDriverSignals {
 
   clientsChanged(): void {
     this.clients.emit();
+  }
+  supervisionChanged(): void {
+    this.supervision.emit();
   }
   approvalsChanged(): void {
     this.approvals.emit();
@@ -246,18 +251,19 @@ export function createDesktopDeviceOps(deps: DesktopDriverDeps): {
 
   /** Run `check` now and after every `topic` emission until it returns a value. */
   async function until<T>(
-    topic: { arm(signal: AbortSignal): Armed },
+    topic: { arm(signal: AbortSignal): Armed } | readonly { arm(signal: AbortSignal): Armed }[],
     signal: AbortSignal,
     check: () => Promise<T | undefined> | T | undefined
   ): Promise<T> {
+    const topics = Array.isArray(topic) ? topic : [topic as { arm(signal: AbortSignal): Armed }];
     for (;;) {
-      const armed = topic.arm(signal);
+      const armed = topics.map((t) => t.arm(signal));
       try {
         const found = await check();
         if (found !== undefined) return found;
-        await armed.wait();
+        await Promise.race(armed.map((a) => a.wait()));
       } finally {
-        armed.dispose();
+        for (const a of armed) a.dispose();
       }
     }
   }
@@ -301,7 +307,14 @@ export function createDesktopDeviceOps(deps: DesktopDriverDeps): {
           if ("failure" in observation) {
             stop();
             reject(observation.failure);
-          } else if (observation.state.state !== "preparing") {
+          } else if (
+            observation.state.state !== "preparing" &&
+            observation.state.state !== "approval-required"
+          ) {
+            // A build still preparing and an install review still waiting for
+            // the person are not answers: this driver is the person's device,
+            // its approval surface answers the review, and the host continues
+            // the launch when the review is resolved.
             stop();
             resolve(observation);
           }
@@ -334,8 +347,6 @@ export function createDesktopDeviceOps(deps: DesktopDriverDeps): {
             reason: state.reason,
             ...(state.missing ? { missing: state.missing } : {}),
           };
-        case "approval-required":
-          return { state: "approval-required", approvals: state.approvals.length };
         default:
           throw coded("EINVAL", `Unexpected launch state ${state.state}`);
       }
@@ -419,9 +430,17 @@ export function createDesktopDeviceOps(deps: DesktopDriverDeps): {
     },
 
     async waitForBuildChange({ surfaceId, fromBuildKey }, signal) {
-      return until(signals.windowChanged, signal, () => {
+      return until([signals.windowChanged, signals.supervision], signal, async () => {
         const info = infoOf(surfaceId);
         if (info.instance.buildKey !== fromBuildKey) return info.instance;
+        // A rebuild that failed is the outcome: no build will be adopted for it.
+        const rejected = (await listingOf(info.instance.clientId))?.lastError;
+        if (rejected) {
+          throw coded(
+            "EBUILDREJECTED",
+            `The rebuild of ${info.instance.clientId} was not adopted: ${rejected}`
+          );
+        }
         if (info.closed) {
           throw coded(
             "ECLOSED",
@@ -547,6 +566,7 @@ function toLite(listing: z.infer<typeof ClientListingSchema>) {
     trusted: listing.trusted,
     isDefault: listing.isDefault,
     ...(listing.unavailableReason ? { unavailableReason: listing.unavailableReason } : {}),
+    ...(listing.lastError ? { lastError: listing.lastError } : {}),
     intents: listing.intents.map((intent) => ({
       name: intent.name,
       kind: intent.kind,

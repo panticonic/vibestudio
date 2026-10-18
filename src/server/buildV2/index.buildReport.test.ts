@@ -111,7 +111,8 @@ function fakeSource(
 async function loadWithMocks(
   options: {
     blockingAuthorityConsumer?: boolean;
-    authorityEnvironmentFailure?: Error;
+    /** A factory runs after the module reset, so its classes match the code under test. */
+    authorityEnvironmentFailure?: Error | (() => Promise<Error>);
     isolatedExports?: unknown;
     invalidPanelManifest?: boolean;
     resolvedBuildKey?: string;
@@ -281,7 +282,9 @@ async function loadWithMocks(
     ...(options.authorityEnvironmentFailure
       ? {
           workspaceAuthorityEnvironmentAt: async () => {
-            throw options.authorityEnvironmentFailure;
+            throw typeof options.authorityEnvironmentFailure === "function"
+              ? await options.authorityEnvironmentFailure()
+              : options.authorityEnvironmentFailure;
           },
         }
       : options.blockingAuthorityConsumer
@@ -777,6 +780,32 @@ describe("BuildSystemV2 — explicit build reports", () => {
           severity: "error",
           file: "",
           message: expect.stringContaining(providerFailure.message),
+        }),
+      ])
+    );
+  });
+
+  it("reports an invalid workspace manifest as a source error the author repairs, not infrastructure", async () => {
+    env = await loadWithMocks({
+      authorityEnvironmentFailure: async () => {
+        const { WorkspaceConfigInvalidError } = await import("@vibestudio/workspace/configParser");
+        return new WorkspaceConfigInvalidError(
+          "Cannot read workspace configuration from state:x: meta/vibestudio.yml: Map keys must be unique"
+        );
+      },
+    });
+
+    const report = await env.buildSystem.getBuildReport("@workspace-panels/app", CANDIDATE_VIEW);
+
+    expect(report.status).toBe("failed");
+    expect(report.diagnostics.some((d) => d.source === "infrastructure")).toBe(false);
+    expect(report.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          source: "schema",
+          severity: "error",
+          file: "meta/vibestudio.yml",
+          message: expect.stringContaining("Map keys must be unique"),
         }),
       ])
     );

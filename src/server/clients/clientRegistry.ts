@@ -934,6 +934,7 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         isDefault: defaultSource !== null && normalizeRepoPath(defaultSource) === source,
         trusted: this.isTrustedSource(source),
         ...(compatibility.ok ? {} : { unavailableReason: compatibility.reason }),
+        ...(entry?.lastError ? { lastError: entry.lastError } : {}),
         intents: clientIntents(block),
         ...(terminalCommand ? { terminalCommand } : {}),
         activeBuildKey: entry?.activeBundleKey ?? null,

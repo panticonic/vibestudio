@@ -384,6 +384,12 @@ export interface ClientListing {
   trusted: boolean;
   /** Why this host cannot run it, when it cannot. */
   unavailableReason?: string;
+  /**
+   * Why the newest build was not adopted: a build, contract or admission failure.
+   * A unit that keeps running its adopted build still reports it; the next build
+   * attempt clears it.
+   */
+  lastError?: string;
   intents: ClientIntentDecl[];
   terminalCommand?: string;
   activeBuildKey: string | null;

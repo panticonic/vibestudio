@@ -226,7 +226,13 @@ export interface AgentExecutionTestAuthorityRule {
   capability: AgentExecutionTestCapabilityScope;
   resource: ResourceScope;
   tier: "gated" | "critical";
-  decision: "once" | "task" | "deny";
+  /**
+   * `queue` declares a prompt the scenario expects the person to answer: it
+   * continues through the real approval queue instead of being decided by the
+   * policy (and instead of failing as unexpected). The only way a test can
+   * expect a critical confirmation without ratifying it.
+   */
+  decision: "once" | "task" | "deny" | "queue";
 }
 
 export interface AgentExecutionTestAgentPolicy {

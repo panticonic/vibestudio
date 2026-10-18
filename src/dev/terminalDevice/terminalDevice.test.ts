@@ -250,6 +250,31 @@ describe("terminal device", () => {
     }
   });
 
+  it("settles waitForBuildChange with the rejection when the rebuild is not adopted", async () => {
+    const f = fixture();
+    try {
+      const launched = await f.op("launch", { id: "chat" });
+      if (launched.state !== "ready") throw new Error("not ready");
+      const changed = f.op("waitForBuildChange", {
+        surfaceId: launched.surfaceId,
+        fromBuildKey: "b1",
+      });
+      const outcome = changed.then(
+        () => null,
+        (error: Error & { code?: string }) => error
+      );
+      // update-rejected: the adopted build stays active and carries the error.
+      f.state.listings[0] = { ...listing("chat", "b1"), lastError: "build failed: TS2304" };
+      f.changes.bump();
+      expect(await outcome).toMatchObject({
+        code: "EBUILDREJECTED",
+        message: expect.stringContaining("TS2304"),
+      });
+    } finally {
+      await f.device.close();
+    }
+  });
+
   it("reports a background intent's keys and its failure code", async () => {
     const f = fixture();
     expect(await f.op("invokeIntent", { id: "chat", intent: "ask" })).toEqual({

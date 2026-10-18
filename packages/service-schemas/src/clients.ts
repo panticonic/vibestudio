@@ -153,6 +153,7 @@ export const ClientListingSchema = z
     isDefault: z.boolean(),
     trusted: z.boolean(),
     unavailableReason: z.string().optional(),
+    lastError: z.string().optional(),
     intents: z.array(ClientIntentDeclSchema),
     terminalCommand: z.string().optional(),
     activeBuildKey: z.string().nullable(),

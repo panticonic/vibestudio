@@ -705,6 +705,18 @@ const approvalInputFieldSchema = z.discriminatedUnion("type", [
     .strict(),
 ]) satisfies z.ZodType<PendingClientConfigField>;
 
+const clientTrustChangeSchema = z
+  .object({
+    source: z.string(),
+    title: z.string(),
+    icon: z.string().optional(),
+    runtime: z.enum(CLIENT_RUNTIMES),
+    gained: z.array(z.object({ capability: z.string(), summary: z.string() }).strict()),
+    lost: z.array(z.object({ capability: z.string(), summary: z.string() }).strict()),
+    effectiveVersion: z.string().nullable(),
+  })
+  .strict();
+
 export const pendingApprovalSchema = z.discriminatedUnion("kind", [
   z
     .object({
@@ -769,6 +781,7 @@ export const pendingApprovalSchema = z.discriminatedUnion("kind", [
       ...pendingApprovalBaseShape,
       kind: z.literal("capability"),
       capability: z.string(),
+      trustChange: z.array(clientTrustChangeSchema).optional(),
       severity: z.enum(["standard", "severe"]).optional(),
       grantResourceKey: z.string().optional(),
       title: z.string(),

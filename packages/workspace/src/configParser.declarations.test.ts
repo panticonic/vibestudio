@@ -3,6 +3,7 @@ import {
   parseWorkspaceConfigContentWithId,
   parseWorkspaceSystemEpochEnvelope,
   readWorkspaceConfig,
+  WorkspaceConfigInvalidError,
   resolveClientDefault,
   resolveExtensionsForRuntimes,
   resolveRuntimeRequiredExtensions,
@@ -449,6 +450,30 @@ it("resolves selected service exports from the same exact tree as workspace wiri
   expect(() =>
     parse("services:\n  - { source: workers/notes, name: notes, action: obsolete }\n")
   ).toThrow(/unknown.*action/);
+});
+
+it("names a service package's own package.json when its export block is wrong", async () => {
+  const content = `systemEpoch: ${WORKSPACE_SYSTEM_EPOCH}\nservices:\n  - { source: workers/notes, name: notes }\n`;
+  const read = (pkg: string) =>
+    readWorkspaceConfig(
+      {
+        readText: async (filePath) =>
+          filePath === "meta/vibestudio.yml"
+            ? content
+            : filePath === "workers/notes/package.json"
+              ? pkg
+              : null,
+      },
+      "workspace"
+    ).catch((error: unknown) => error);
+  const missing = await read(JSON.stringify({ vibestudio: { title: "Notes" } }));
+  expect(missing).toBeInstanceOf(WorkspaceConfigInvalidError);
+  expect((missing as Error).message).toMatch(
+    /^workers\/notes\/package\.json: `vibestudio\.services` must be a list/
+  );
+  const unparsable = await read("{ not json");
+  expect(unparsable).toBeInstanceOf(WorkspaceConfigInvalidError);
+  expect((unparsable as Error).message).toMatch(/^workers\/notes\/package\.json: /);
 });
 
 it("rejects singleton runtime identity in workspace source", () => {

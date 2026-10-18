@@ -47,6 +47,8 @@ export interface ClientListingLite {
   trusted: boolean;
   isDefault: boolean;
   unavailableReason?: string;
+  /** Why the newest build was not adopted, when it was not. */
+  lastError?: string;
   intents: ClientIntentDeclLite[];
   activeBuildKey: string | null;
 }
@@ -57,8 +59,7 @@ export type LaunchOutcome =
       state: "unavailable";
       reason: string;
       missing?: { capabilities?: string[]; hostAbi?: string };
-    }
-  | { state: "approval-required"; approvals: number };
+    };
 
 export interface SurfaceInfo {
   instance: ClientInstanceIdentity;
