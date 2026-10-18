@@ -652,6 +652,9 @@ const clientWindows: ClientWindows = new ClientWindows(
     },
   }),
   {
+    opened: async (window) => {
+      await assertPresent(connectionLink).holdClientSession(clientWindowBinding(window).caller);
+    },
     closed: (window, reason) => {
       driverSignals.closed(window, reason);
       clientMenus.clear(window.windowId);

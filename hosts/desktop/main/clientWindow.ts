@@ -69,6 +69,11 @@ export interface ClientWindowFactory {
 }
 
 export interface ClientWindowEvents {
+  /**
+   * A window exists. The host acquires what a running client's window holds
+   * for its whole life; a failure fails the open.
+   */
+  opened(window: ClientWindow): Promise<void>;
   /** A window ended, by the person closing it or by the host closing it. */
   closed(window: ClientWindow, reason: string | null): void;
 }
@@ -104,6 +109,7 @@ export class ClientWindows {
       : await this.factory.plain(windowId, spec);
     this.windows.set(window.windowId, window);
     this.byCallerId.set(window.callerId, window);
+    await this.events.opened(window);
     return window;
   }
 

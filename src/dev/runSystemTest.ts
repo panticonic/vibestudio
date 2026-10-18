@@ -16,6 +16,7 @@ import {
   systemTestPreparationFailureDetail,
 } from "./systemTestPreparation.js";
 import { attachDeviceDrivers } from "./deviceExecutors.js";
+import { forwardTerminationSignals, holdThroughTerminationSignals } from "./terminationSignals.js";
 import {
   adoptSelfDevelopmentProjects,
   selfDevelopmentProjects,
@@ -65,8 +66,13 @@ function runCli(instanceId: string, command: readonly string[]): Promise<number>
       env: process.env,
       stdio: "inherit",
     });
-    child.once("error", reject);
+    const release = forwardTerminationSignals(child);
+    child.once("error", (error) => {
+      release();
+      reject(error);
+    });
     child.once("exit", (code, signal) => {
+      release();
       if (signal) reject(new Error(`system-test CLI exited from signal ${signal}`));
       else resolve(code ?? 1);
     });
@@ -271,6 +277,8 @@ async function main(): Promise<void> {
   } catch (error) {
     commandFailure = error;
   }
+  // A signal now must not abandon the drivers: they are being stopped.
+  const releaseHold = holdThroughTerminationSignals(() => undefined);
   try {
     await drivers?.stop();
   } catch (error) {
@@ -280,6 +288,8 @@ async function main(): Promise<void> {
         [commandFailure, error],
         "The command and device driver retirement both failed"
       );
+  } finally {
+    releaseHold();
   }
   if (commandFailure !== undefined) throw commandFailure;
 }

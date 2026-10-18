@@ -235,6 +235,7 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
       },
     },
     {
+      opened: async () => undefined,
       closed: (window, reason) => {
         closedWindows.push([window as FakeWindow, reason]);
         host.windowClosed(window);

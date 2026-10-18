@@ -139,6 +139,8 @@ export interface BoundPort {
  */
 export class RendererPortHost {
   private readonly sessions = new Set<RendererPortSession>();
+  /** The principal session a running client's window holds from the start, by window id. */
+  private readonly heldSessions = new Map<string, () => Promise<void>>();
   private readonly clientScopes = new Map<string, { refs: number; scoped: ScopedServerCaller }>();
   private shuttingDown = false;
   readonly responsiveness = createIpcResponsivenessReporter({
@@ -173,8 +175,13 @@ export class RendererPortHost {
   }
 
   /** Every session of `callerId` ends (its window was destroyed). */
-  release(callerId: string, reason: string): Promise<void> {
-    return this.closeWhere((session) => session.callerId === callerId, reason);
+  async release(callerId: string, reason: string): Promise<void> {
+    const held = this.heldSessions.get(callerId);
+    this.heldSessions.delete(callerId);
+    await Promise.all([
+      held?.(),
+      this.closeWhere((session) => session.callerId === callerId, reason),
+    ]);
   }
 
   /** A document's session ends because the document was retired. */
@@ -211,38 +218,67 @@ export class RendererPortHost {
 
   /** The workspace-scoped session a client principal's window shares across its documents. */
   acquireClientScope(
-    session: RendererPortSession,
+    window: { callerId: string; runtimeId: string },
     runtime: WorkspaceIpcRuntime
   ): { scoped: ScopedServerCaller; release(): Promise<void> } {
     const scoped = {
-      callerId: session.runtimeId,
+      callerId: window.runtimeId,
       callerKind: "client" as const,
-      instanceId: session.callerId,
+      instanceId: window.callerId,
     };
-    const entry = this.clientScopes.get(session.callerId) ?? { refs: 0, scoped };
+    const entry = this.clientScopes.get(window.callerId) ?? { refs: 0, scoped };
     entry.refs += 1;
-    this.clientScopes.set(session.callerId, entry);
+    this.clientScopes.set(window.callerId, entry);
     let released = false;
     return {
       scoped,
       release: async () => {
         if (released) return;
         released = true;
-        const current = this.clientScopes.get(session.callerId);
+        const current = this.clientScopes.get(window.callerId);
         if (!current) return;
         current.refs -= 1;
         if (current.refs > 0) return;
-        this.clientScopes.delete(session.callerId);
+        this.clientScopes.delete(window.callerId);
         await runtime.serverClient.releaseClientSession(scoped);
       },
     };
+  }
+
+  /**
+   * A running client always holds its principal session, whether or not any
+   * document ever makes an RPC: the server's authoritative close
+   * (`trust-revoked`, `retired`) is observed on it and reaches the host's one
+   * reaction path. The window's end releases it.
+   */
+  async holdClientSession(caller: NativeIpcCaller): Promise<void> {
+    if (this.shuttingDown) throw new Error("Renderer sessions are closed");
+    if (this.heldSessions.has(caller.callerId)) return;
+    const runtime = await this.deps.resolveWorkspace(caller.workspaceId ?? this.deps.workspaceId);
+    const scope = this.acquireClientScope(
+      { callerId: caller.callerId, runtimeId: caller.runtimeId ?? caller.callerId },
+      runtime
+    );
+    this.heldSessions.set(caller.callerId, scope.release);
+    try {
+      await runtime.serverClient.openClientSession(scope.scoped);
+    } catch (error) {
+      this.heldSessions.delete(caller.callerId);
+      await scope.release();
+      throw error;
+    }
   }
 
   /** Close every session; the connection is going away. */
   async shutdown(): Promise<void> {
     if (this.shuttingDown) return;
     this.shuttingDown = true;
-    await this.closeWhere(() => true, "The desktop app is shutting down");
+    const held = [...this.heldSessions.values()];
+    this.heldSessions.clear();
+    await Promise.all([
+      ...held.map((release) => release()),
+      this.closeWhere(() => true, "The desktop app is shutting down"),
+    ]);
   }
 
   /** Forget a session that closed itself. */

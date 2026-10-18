@@ -112,6 +112,17 @@ const request = (from: string): RpcEnvelope =>
   });
 
 describe("a client's principal session", () => {
+  it("holds the principal session for a running client that never opens one, and acts on its revocation", () => {
+    const t = setup();
+    t.instance.holdPrincipalSession();
+    expect(t.opened).toHaveLength(1);
+    expect(t.opened[0]!.kind).toBe("principal");
+
+    t.opened[0]!.handlers.onTerminalClose(new Error("trust-revoked"));
+
+    expect(t.hooks.trustRevoked).toHaveBeenCalledTimes(1);
+  });
+
   it("spends the launch's grant once, then redeems a fresh grant for the exact build at each re-authentication", async () => {
     const t = setup();
     const api = await createRnClientApi(t.channel);

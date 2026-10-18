@@ -47,14 +47,39 @@ function setup() {
     made.push(window);
     return window;
   };
+  const opened: string[] = [];
+  let openFailure: Error | null = null;
   const windows: ClientWindows = new ClientWindows(
     { plain: make(false), panelHosting: make(true) },
-    { closed: (window, reason) => closed.push([window.windowId, reason]) }
+    {
+      opened: async (window) => {
+        opened.push(window.windowId);
+        if (openFailure) throw openFailure;
+      },
+      closed: (window, reason) => closed.push([window.windowId, reason]),
+    }
   );
-  return { windows, closed, made };
+  return {
+    windows,
+    closed,
+    made,
+    opened,
+    failOpening: (error: Error) => {
+      openFailure = error;
+    },
+  };
 }
 
 describe("ClientWindows", () => {
+  it("announces each new window to the host before open resolves, and fails the open when the host cannot hold it", async () => {
+    const { windows, opened, failOpening } = setup();
+    const window = await windows.open(spec("chat"));
+    expect(opened).toEqual([window.windowId]);
+
+    failOpening(new Error("no session"));
+    await expect(windows.open(spec("chat"))).rejects.toThrow("no session");
+  });
+
   it("lets a client open several windows, each belonging to exactly one client", async () => {
     const { windows } = setup();
     const a1 = await windows.open(spec("chat"));

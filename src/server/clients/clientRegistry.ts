@@ -1709,12 +1709,12 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   /** The one place a client's state leaves the host: diagnostics, then hosts. */
   private publish(change: SupervisionChange, entry: ClientRegistryEntry): void {
     const name = change.identity.entityId;
-    // What a client held when hosts first heard of it is the baseline a later
-    // trust change is measured against; a client adopted after startup would
-    // otherwise read as having held nothing when its trust is withdrawn.
-    if (!this.trustedDeviceCapabilities.has(name)) {
-      this.trustedDeviceCapabilities.set(name, this.deviceLevelCapabilities(entry));
-    }
+    // What hosts were last told a client holds is the baseline a later trust
+    // change is measured against. Every announcement refreshes it: a client
+    // whose trust reached it through supervision (adoption, a published
+    // `trust.clients` resolved at reconcile) would otherwise still read as
+    // holding what it held when first seen, and its withdrawal would go unnoticed.
+    this.trustedDeviceCapabilities.set(name, this.deviceLevelCapabilities(entry));
     this.deps.diagnostics.record({
       workspaceId: this.deps.workspaceId,
       entityId: name,

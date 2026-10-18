@@ -119,6 +119,7 @@ export class ConnectionHost {
       const { hostsPanels, client, ...caller } = binding;
       this.portHost().bind(port, { caller, state: { hostsPanels, ...(client ? { client } : {}) } });
     });
+    handle("ports.hold-client-session", ({ caller }) => this.portHost().holdClientSession(caller));
     handle("ports.shutdown", () => this.ports?.shutdown());
     handle("ports.update", ({ callerId, client }) =>
       this.portHost().updateClient(callerId, client)

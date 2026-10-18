@@ -17,6 +17,9 @@ import { ClientSessionRelay, type SessionOpeners } from "./sessionRelay";
 import { BrokerError } from "./ports";
 import type { HostNotifications } from "./notifications/hostNotifications";
 
+/** The session id of the principal session the host itself holds for a running client. */
+const HELD_PRINCIPAL_SESSION_ID = "s-host-held-principal";
+
 /** What a client's `clipboard`, `open-external` and `browser-import` calls reach on the device. */
 export interface DeviceCapabilityPorts {
   setClipboard(text: string): Promise<void>;
@@ -149,6 +152,15 @@ export class ClientInstance {
 
   deliver(event: ClientHostEvent): void {
     if (!this.stopped) this.options.deliver(event);
+  }
+
+  /**
+   * A running client always holds its principal session, whether or not its
+   * JavaScript ever opens one: the server's authoritative close
+   * (`trust-revoked`) is observed on it and tears the instance down.
+   */
+  holdPrincipalSession(): void {
+    this.relay.openPrincipal(HELD_PRINCIPAL_SESSION_ID, this.principalToken);
   }
 
   /** The instance is going away: no event reaches it and every session is retired. */

@@ -102,6 +102,7 @@ export interface MainToConnection {
   "launch.retain": { retained: RetainedClientBuild[] };
   "artifacts.read": { integrity: string };
   "ports.bind": { binding: NativeIpcCaller & PortBindingState };
+  "ports.hold-client-session": { caller: NativeIpcCaller };
   "ports.update": { callerId: string; client: ClientBindingState };
   "ports.release": { callerId: string };
   "ports.shutdown": Record<string, never>;

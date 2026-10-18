@@ -2279,6 +2279,36 @@ describe("ClientHost capabilities and trust", () => {
       );
     });
 
+    it("revokes a session granted a device-level capability by a trust change that reached the client through supervision", async () => {
+      const harness = await makeHarness({
+        trusted: [],
+        block: webBlock({
+          capabilities: { required: [], optional: ["notifications", "panel-hosting"] },
+        }),
+      });
+      const { host, trusted, revokePrincipalSessions } = harness;
+      installClient(host, harness.graphNode, { capabilities: ["notifications", "panel-hosting"] });
+      await host.initialize();
+      const principal = await host.grantPrincipal("device-1", {
+        source: WEB_SOURCE,
+        buildKey: "client-key",
+        executionDigest: DIGEST,
+      });
+      // Trust is published and the client's hosts hear of the widened set
+      // through supervision, not through a prior applyTrust of this exact set.
+      trusted.push(WEB_SOURCE);
+      host.registry.patch(WEB_NAME, { lastError: "rebuilt" });
+      expect(host.hasClientCapability(principal.principalId, "panel-hosting")).toBe(true);
+
+      trusted.splice(0, trusted.length);
+      host.applyTrust();
+
+      expect(revokePrincipalSessions).toHaveBeenCalledExactlyOnceWith(
+        principal.principalId,
+        "trust-revoked"
+      );
+    });
+
     it("applies a grant at once without revoking any session", async () => {
       const { host, trusted, revokePrincipalSessions, eventService, principal } =
         await trustedWithPrincipal();

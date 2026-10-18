@@ -349,6 +349,9 @@ export async function createIrohServerClient(
     setClientPrincipalSessions(sessions) {
       principalSessions = sessions;
     },
+    async openClientSession(caller): Promise<void> {
+      await getScopedClient(caller);
+    },
     async releaseClientSession(caller): Promise<void> {
       const key = scopedKey(caller);
       const existing = scopedClients.get(key);

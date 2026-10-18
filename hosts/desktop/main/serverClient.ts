@@ -268,6 +268,12 @@ export interface ServerSessionTransports {
   /** Admit client principal sessions on this connection (null withdraws them). */
   setClientPrincipalSessions(sessions: ClientPrincipalSessions | null): void;
   openHostUiSession(signal?: AbortSignal): Promise<HostUiSession>;
+  /**
+   * Hold one client window's own session of its principal open now, not at its
+   * first RPC. A running client always holds its session, so the server's
+   * authoritative close (`trust-revoked`, `retired`) always reaches the host.
+   */
+  openClientSession(caller: ScopedServerCaller): Promise<void>;
   /** End one client window's own session of its principal. Idempotent. */
   releaseClientSession(caller: ScopedServerCaller): Promise<void>;
   /** Relay one already-formed envelope over a client principal's scoped session. */
@@ -500,6 +506,9 @@ export async function createServerClient(
   return {
     setClientPrincipalSessions(sessions) {
       principalSessions = sessions;
+    },
+    async openClientSession(caller): Promise<void> {
+      await getScopedClient(caller);
     },
     async releaseClientSession(caller): Promise<void> {
       const key = scopedKey(caller);

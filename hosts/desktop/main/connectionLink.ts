@@ -392,6 +392,14 @@ export class ConnectionLink {
     );
   }
 
+  /**
+   * A client window opened: its principal session is held from now until the
+   * window ends, so the server's close of it is always observable.
+   */
+  holdClientSession(caller: PortBinding["caller"]): Promise<void> {
+    return this.channel.request("ports.hold-client-session", { caller });
+  }
+
   /** End every renderer session; the app is shutting down. */
   shutdownPorts(): Promise<void> {
     return this.channel.request("ports.shutdown", {});

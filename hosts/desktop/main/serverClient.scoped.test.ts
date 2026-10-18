@@ -692,6 +692,25 @@ describe("ServerClient scoped runtime callers", () => {
     await expect.poll(() => harness.sessionsEnded).toEqual([{ caller, reason: "trust-revoked" }]);
   });
 
+  it("observes a trust revocation on a session that never made a call", async () => {
+    const harness = await startRpcHarness();
+    const client = await createServerClient(harness.port, "shell-token");
+    cleanup.push(() => client.close());
+    client.setClientPrincipalSessions(harness.sessions);
+    const caller = {
+      callerId: "@workspace-apps/shell",
+      callerKind: "client" as const,
+      instanceId: "window-1",
+    };
+    await client.openClientSession(caller);
+    expect(harness.appConnectionCount()).toBe(1);
+    expect(harness.sessionsEnded).toEqual([]);
+
+    harness.endAppSession(CLOSE_TOKEN_REVOKED, "trust-revoked");
+
+    await expect.poll(() => harness.sessionsEnded).toEqual([{ caller, reason: "trust-revoked" }]);
+  });
+
   it("surfaces the auth-result deviceCredential via onPaired (pairing-code bootstrap)", async () => {
     const harness = await startRpcHarness();
     const paired: Array<{ deviceId: string; refreshToken: string }> = [];

@@ -40,6 +40,7 @@ function fakeClient() {
       listeners.add(listener);
       return () => listeners.delete(listener);
     }),
+    openClientSession: vi.fn(async () => undefined),
     releaseClientSession: vi.fn(async () => undefined),
   };
   return {
@@ -243,6 +244,30 @@ describe("connection process", () => {
     expect((answer?.envelope.message as { error?: { message: string } }).error?.message).toContain(
       "approval surface"
     );
+  });
+
+  it("holds a client window's principal session with no document and no RPC, until the window ends", async () => {
+    const { link, workspace } = await setup();
+    await link.holdClientSession(binding.caller);
+    expect(workspace.client.openClientSession).toHaveBeenCalledWith({
+      callerId: "client:chat:web:dev",
+      callerKind: "client",
+      instanceId: "window:chat:1",
+    });
+    expect(workspace.client.callAs).not.toHaveBeenCalled();
+    expect(workspace.client.releaseClientSession).not.toHaveBeenCalled();
+
+    // A document of the window comes and goes; the window's session stays.
+    const doc = renderer();
+    await link.bindPort(binding, doc.near);
+    doc.send({ t: "send", envelope: request("svc.m", "a") });
+    await tick();
+    doc.closeFar();
+    await tick();
+    expect(workspace.client.releaseClientSession).not.toHaveBeenCalled();
+
+    await link.releaseCaller("window:chat:1");
+    expect(workspace.client.releaseClientSession).toHaveBeenCalledTimes(1);
   });
 
   it("releases a document's session when its port closes, and only that session", async () => {

@@ -751,6 +751,7 @@ export class HostRuntime {
     };
     this.running.set(tag, running);
     try {
+      instance.holdPrincipalSession();
       if (reloadTag && previous) await this.ports.native.reloadClient(tag, bundle);
       else
         await this.ports.native.startClient({

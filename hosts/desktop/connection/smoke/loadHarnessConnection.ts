@@ -44,6 +44,7 @@ function echoClient(): ConnectedServerClient {
     },
     sendAs: async () => undefined,
     addMessageListener: noop,
+    openClientSession: async () => undefined,
     releaseClientSession: async () => undefined,
   };
 }
