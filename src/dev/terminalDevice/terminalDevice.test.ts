@@ -131,6 +131,43 @@ describe("terminal device", () => {
     }
   });
 
+  it("waits for the person's install review to be answered before it launches", async () => {
+    let reviewed = false;
+    const f = fixture({
+      launch: async (): Promise<ClientLaunchResult> =>
+        reviewed
+          ? ({
+              state: "ready",
+              client: {
+                source: "clients/chat-terminal",
+                id: "chat",
+                runtime: "terminal",
+                title: "chat",
+                buildKey: "b1",
+                executionDigest: "0".repeat(64),
+                effectiveVersion: "1",
+                hostAbi: "1",
+                artifacts: [],
+                grantedCapabilities: [],
+                deniedOptional: [],
+              } as never,
+            } as ClientLaunchResult)
+          : ({ state: "approval-required", approvals: [{}] } as unknown as ClientLaunchResult),
+    });
+    try {
+      const launching = f.op("launch", { id: "chat" });
+      let settled = false;
+      void launching.then(() => (settled = true));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      reviewed = true;
+      f.changes.bump();
+      expect((await launching).state).toBe("ready");
+    } finally {
+      await f.device.close();
+    }
+  });
+
   it("rejects a text wait when the program ends without showing it", async () => {
     const f = fixture();
     try {

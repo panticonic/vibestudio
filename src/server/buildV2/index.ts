@@ -512,7 +512,7 @@ export interface BuildSystemV2 {
   /** Side-effect-free verified lookup of one workspace-owned build record. */
   peekBuildByKey(key: string): Promise<StoredBuildResult | null>;
   /** Synchronous metadata-only read for atomic publication-journal transactions. */
-  peekVerifiedBuildByKey(key: string): StoredBuildResult | null;
+  peekVerifiedBuildExecution(key: string, executionDigest: string): StoredBuildResult | null;
 
   /**
    * Binder API for runtime entities. Resolves a build content selector to an
@@ -3103,8 +3103,8 @@ export async function initBuildSystemV2(
       return store.readLocal(key);
     },
 
-    peekVerifiedBuildByKey(key: string): StoredBuildResult | null {
-      return store.peekLocal(key);
+    peekVerifiedBuildExecution(key: string, executionDigest: string): StoredBuildResult | null {
+      return store.peekLocalExecution(key, executionDigest);
     },
 
     getEffectiveVersion(unitNameOrPath: string): string | null {

@@ -881,6 +881,16 @@ describe("build artifact helpers", () => {
           .serviceAuthorityDigest
       ).toBe("a".repeat(64));
       expect(rebound.metadata.sourceState).toEqual({ kind: "event", eventId: "event:second" });
+      // The publication journal resolves the exact execution a caller names:
+      // the superseded one stays resolvable beside the key's current one.
+      expect(store.peekLocalExecution(buildKey, firstExecutionDigest)?.metadata.execution).toEqual(
+        first.metadata.execution
+      );
+      expect(
+        store.peekLocalExecution(buildKey, rebound.metadata.execution!.executionDigest)?.metadata
+          .execution
+      ).toEqual(rebound.metadata.execution);
+      expect(store.peekLocalExecution(buildKey, "0".repeat(64))).toBeNull();
       expect((await store.get(buildKey))?.metadata.execution?.sourceState.state).toEqual({
         kind: "event",
         eventId: "event:second",

@@ -531,6 +531,7 @@ describe("UnitHost", () => {
       approvalCoordinator?: UnitApprovalCoordinator<TestApproval>;
       isAdmitted?: (repoPath: string, effectiveVersion: string) => boolean;
       decision?: "accepted" | "deny";
+      recordApprovedReview?: (reviewed: { entries: TestApproval[] }) => void;
       /** Stands in for the durable activation-trust file. */
       approvalStore?: {
         has(key: string): boolean;
@@ -626,6 +627,7 @@ describe("UnitHost", () => {
         return opts.decision ?? "accepted";
       },
       ...(opts.approvalCoordinator ? { approvalCoordinator: opts.approvalCoordinator } : {}),
+      ...(opts.recordApprovedReview ? { recordApprovedReview: opts.recordApprovedReview } : {}),
       onApprovalDenied: (items) => {
         denied.push(...items.map((item) => item.node.name));
       },
@@ -676,6 +678,25 @@ describe("UnitHost", () => {
 
     expect(applied).toEqual(["@workspace-extensions/a"]);
     expect(prompted).toEqual([[{ name: node.name, ref: "main" }]]);
+  });
+
+  it("records the versions an accepted review admits before applying them, and records nothing for a refusal", async () => {
+    const order: string[] = [];
+    const accepted = makeHarness({
+      recordApprovedReview: ({ entries }) => order.push(`record:${entries.map((e) => e.name)}`),
+      applyTrusted: async () => {
+        order.push("apply");
+      },
+    });
+    await accepted.host.reconcileDeclared([{ source: "extensions/a", ref: "main" }]);
+    await accepted.host.whenSettled();
+    expect(order).toEqual(["record:@workspace-extensions/a", "apply"]);
+
+    const recorded = vi.fn();
+    const declined = makeHarness({ decision: "deny", recordApprovedReview: recorded });
+    await declined.host.reconcileDeclared([{ source: "extensions/a", ref: "main" }]);
+    await declined.host.whenSettled();
+    expect(recorded).not.toHaveBeenCalled();
   });
 
   it("publishes accepted coordinated units as building before their apply slot runs", async () => {

@@ -136,6 +136,21 @@ describe("ApprovalFeed", () => {
     expect((await second)?.approvalId).toBe("a2");
   });
 
+  it("hands out an approval only once it is ready", async () => {
+    const preparing = {
+      approvalId: "a1",
+      kind: "capability",
+      lifecycle: { state: "preparing" },
+    } as unknown as PendingApproval;
+    let pending: PendingApproval[] = [preparing];
+    const feed = new ApprovalFeed(async () => pending);
+    const waiting = feed.next();
+    await Promise.resolve();
+    pending = [{ ...preparing, lifecycle: { state: "ready" } } as unknown as PendingApproval];
+    feed.notify();
+    expect((await waiting)?.approvalId).toBe("a1");
+  });
+
   it("settles every waiter with null on release", async () => {
     const feed = new ApprovalFeed(async () => []);
     const waiting = feed.next();

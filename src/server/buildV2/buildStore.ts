@@ -1128,8 +1128,33 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     return path.resolve(dir);
   }
 
+  /**
+   * Executions this process has verified and since superseded. A build key's
+   * newest source-state rebinding replaces the cached descriptor, while a
+   * caller that resolved the previous execution still names it by digest; the
+   * publication journal must resolve that exact execution, not the key's latest.
+   */
+  const supersededExecutions = new ByteBudgetCache<string, StoredBuildResult>(
+    8 * 1024 * 1024,
+    buildDescriptorBytes
+  );
+
+  function executionCacheId(buildKey: string, executionDigest: string): string {
+    return `${buildKey}\0${executionDigest}`;
+  }
+
   function rememberVerifiedLocalBuild(build: StoredBuildResult): StoredBuildResult {
-    verifiedLocalBuilds.set(localBuildCacheId(build.dir), build);
+    const cacheId = localBuildCacheId(build.dir);
+    const previous = verifiedLocalBuilds.get(cacheId);
+    const previousDigest = previous?.metadata.execution?.executionDigest;
+    if (
+      previous &&
+      previousDigest &&
+      previousDigest !== build.metadata.execution?.executionDigest
+    ) {
+      supersededExecutions.set(executionCacheId(previous.buildKey, previousDigest), previous);
+    }
+    verifiedLocalBuilds.set(cacheId, build);
     for (const style of build.metadata.sharedStyles ?? [])
       sharedStyleOwners.set(style.digest, build.buildKey);
     return build;
@@ -1208,6 +1233,17 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
    */
   function peekLocal(key: string): StoredBuildResult | null {
     return verifiedLocalBuilds.get(localBuildCacheId(getBuildDir(key))) ?? null;
+  }
+
+  /**
+   * `peekLocal` for one exact execution: the key's current descriptor when it is
+   * that execution, otherwise a superseded execution this process verified.
+   * Metadata-only, like `peekLocal`.
+   */
+  function peekLocalExecution(key: string, executionDigest: string): StoredBuildResult | null {
+    const current = peekLocal(key);
+    if (current?.metadata.execution?.executionDigest === executionDigest) return current;
+    return supersededExecutions.get(executionCacheId(key, executionDigest)) ?? null;
   }
 
   /** Read and verify a workspace-owned build without claiming shared-cache ownership. */
@@ -2079,6 +2115,7 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     has,
     findSharedStyleBuild,
     peekLocal,
+    peekLocalExecution,
     readLocal,
     get,
     compilationMetadata,

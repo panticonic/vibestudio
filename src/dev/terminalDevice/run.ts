@@ -71,8 +71,17 @@ export async function runTerminalDevice(options: {
     const changes = new ChangeSignal();
     const feed = new ApprovalFeed(() => approvals.listPending());
     events = await openServerEvents(device);
-    const watched: readonly EventName[] = ["clients:changed", "shell-approval:pending-changed"];
+    // What changes a client's readiness is announced by `clients:changed` (the
+    // declarations) and by `supervision:changed` (a build adopted or failed): a
+    // launch or a build wait that listened to the first alone would never see
+    // an approved client finish building.
+    const watched: readonly EventName[] = [
+      "clients:changed",
+      "supervision:changed",
+      "shell-approval:pending-changed",
+    ];
     events.events.on("clients:changed", () => changes.bump());
+    events.events.on("supervision:changed", () => changes.bump());
     events.events.on("shell-approval:pending-changed", () => feed.notify());
     await events.events.subscribeAll(watched);
 

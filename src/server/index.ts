@@ -520,7 +520,8 @@ async function main() {
   const executionPublicationJournal = new ExecutionPublicationJournal(
     statePath,
     (buildKey, executionDigest) => {
-      const build = buildSystemInstance?.peekVerifiedBuildByKey(buildKey) ?? null;
+      const build =
+        buildSystemInstance?.peekVerifiedBuildExecution(buildKey, executionDigest) ?? null;
       if (build) return executionArtifactRefFromBuild(workspaceId, build);
       return productSeedArtifactByIdentity.get(`${buildKey}\0${executionDigest}`) ?? null;
     }
@@ -1154,7 +1155,7 @@ async function main() {
    */
   const prepareDecidedUnits = (
     units: readonly ReviewedUnit[],
-    origin: "launch-gate" | "host-build",
+    origin: import("./services/unitAdmissionStore.js").UnitAdmissionOrigin,
     sourceOrigins?: ReadonlyMap<string, InstallReviewOrigin | null>
   ) => {
     if (units.length === 0) {
@@ -6585,6 +6586,15 @@ async function main() {
         eventService,
         approvalQueue,
         approvalCoordinator: unitInstallReviewCoordinator,
+        // A client declared after startup is offered at the launch gate when it
+        // is applied; accepting that review admits the exact versions, the same
+        // record the startup gate makes.
+        recordApprovedReview: ({ entries, origins }) =>
+          prepareDecidedUnits(entries, "launch-gate", origins).committed(),
+        // An accepted publication admits the clients it lands beside their
+        // activation trust, in the same transaction as the ref move.
+        prepareAdmission: (units, origin, sourceOrigins) =>
+          prepareDecidedUnits(units, origin, sourceOrigins),
         // The gate asks whose code this is, so it is answered from workspace
         // state the server reads rather than from anything under review.
         resolveUnitOrigins,

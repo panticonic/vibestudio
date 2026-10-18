@@ -286,7 +286,12 @@ export class ApprovalFeed {
         stopWaiting();
         throw error;
       }
-      const fresh = pending.find((approval) => !this.handedOut.has(approval.approvalId));
+      // An approval still preparing cannot be answered (the queue refuses it);
+      // it is handed out once the queue announces it ready.
+      const fresh = pending.find(
+        (approval) =>
+          !this.handedOut.has(approval.approvalId) && approval.lifecycle?.state !== "preparing"
+      );
       if (fresh) {
         stopWaiting();
         this.handedOut.add(fresh.approvalId);

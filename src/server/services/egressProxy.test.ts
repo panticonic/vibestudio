@@ -562,6 +562,59 @@ describe("EgressProxy", () => {
     }
   });
 
+  it("delivers a held platform RPC's response head before its body", async () => {
+    // The RPC server flushes its head to acknowledge admission and answers
+    // later; a caller cancels only after seeing that head.
+    let finishTarget!: () => void;
+    const target = createServer((_req: IncomingMessage, res: ServerResponse) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.flushHeaders();
+      finishTarget = () => res.end(JSON.stringify({ result: "late" }));
+    });
+    let proxy: EgressProxy | null = null;
+    try {
+      const targetPort = await new Promise<number>((resolve, reject) => {
+        target.once("error", reject);
+        target.listen(0, "127.0.0.1", () => {
+          target.off("error", reject);
+          resolve((target.address() as AddressInfo).port);
+        });
+      });
+      proxy = createProxy(createCredential(), new MemoryAuditLog(), {
+        authorizePlatformRpcCallback: () => true,
+      });
+      const proxyPort = await proxy.start();
+
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = httpRequest(
+          {
+            host: "127.0.0.1",
+            port: proxyPort,
+            method: "POST",
+            path: `http://127.0.0.1:${targetPort}/rpc`,
+            headers: {
+              Authorization: "Bearer platform-token",
+              "X-vibestudio-Runtime-Id": "do:workers/agent-worker:AiChatWorker:agent-1",
+            },
+          },
+          (response) => {
+            // The body has not been produced yet: this is the head alone.
+            resolve(response.statusCode ?? 0);
+            response.resume();
+          }
+        );
+        req.on("error", reject);
+        req.end("{}");
+      });
+
+      expect(status).toBe(200);
+      finishTarget();
+    } finally {
+      await proxy?.stop();
+      await new Promise<void>((resolve) => target.close(() => resolve()));
+    }
+  });
+
   it("rejects unauthenticated direct proxy HTTP forwarding", async () => {
     const proxy = createProxy();
     try {

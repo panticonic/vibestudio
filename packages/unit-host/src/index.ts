@@ -386,6 +386,16 @@ export interface UnitHostOptions<
     trigger: UnitReconcileTrigger
   ): Promise<UnitApprovalDecision>;
   approvalCoordinator?: UnitApprovalCoordinator<ApprovalEntry>;
+  /**
+   * Record that the person accepted these exact versions, before they are
+   * applied. Applying a version checks its admission (`isAdmitted`), so a
+   * review that is answered but not recorded would let the build finish and
+   * then refuse to run it with the question already asked.
+   */
+  recordApprovedReview?(reviewed: {
+    entries: ApprovalEntry[];
+    origins?: ReadonlyMap<string, InstallReviewOrigin>;
+  }): void;
   onApprovalDenied?(items: Array<ResolvedUnitDeclaration<Decl, Node>>): void;
   onBackgroundError(error: unknown): void;
 }
@@ -1247,6 +1257,7 @@ export class UnitHost<
         ...(origins ? { origins } : {}),
         applyApproved: async () => {
           outcome = "accepted";
+          this.opts.recordApprovedReview?.({ entries, ...(origins ? { origins } : {}) });
           // Acceptance is the state transition from "waiting for a human"
           // to "work is in flight". Publish it for the whole accepted batch
           // before any member waits for an apply/build slot.
@@ -1269,6 +1280,7 @@ export class UnitHost<
       this.opts.onApprovalDenied?.(items);
       return "declined";
     }
+    this.opts.recordApprovedReview?.({ entries });
     const apply = this.prepareTrustedApplications(items, maxConcurrentApplies);
     this.markAcceptedItemsBuilding(items);
     await apply();

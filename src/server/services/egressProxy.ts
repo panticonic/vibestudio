@@ -2827,6 +2827,11 @@ export class EgressProxy {
         (upstreamResponse) => {
           statusCode = upstreamResponse.statusCode ?? 502;
           res.writeHead(statusCode, upstreamResponse.headers);
+          // `writeHead` only queues the head; it is sent with the first body
+          // chunk. A held response (an RPC whose server flushes its head to
+          // acknowledge admission and answers much later) must reach the caller
+          // now: its cancellation is ordered after that acknowledgement.
+          res.flushHeaders();
           upstreamResponse.on("data", (chunk: Buffer | string) => {
             bytesIn += Buffer.byteLength(chunk);
           });

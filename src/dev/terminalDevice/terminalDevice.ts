@@ -34,7 +34,7 @@ export interface TerminalDevicePorts {
     }): Promise<Record<string, unknown>>;
   };
   bootId(): Promise<string>;
-  /** Bumped by every `clients:changed`. */
+  /** Bumped by every `clients:changed` and `supervision:changed`. */
   changes: ChangeSignal;
   approvals: {
     feed: ApprovalFeed;
@@ -98,7 +98,7 @@ export function createTerminalDevice(
   const listingOf = (id: string, listings: ClientListing[]) =>
     terminalOnly(listings).find((l) => l.id === id);
 
-  /** Re-evaluate `check` after every `clients:changed` until it yields a value. */
+  /** Re-evaluate `check` after every client or supervision change until it yields a value. */
   async function untilChanged<T>(
     check: () => Promise<T | undefined>,
     signal: AbortSignal
@@ -145,11 +145,16 @@ export function createTerminalDevice(
     },
 
     async launch({ id, develop }, signal) {
-      // The same answer the CLI is about to receive: ready, unavailable on this
-      // host, or waiting on an approval nobody here may answer by itself.
+      // The answer the CLI is about to receive: ready, or unavailable on this
+      // host. A build still preparing, and an install review still waiting for
+      // the person, are not answers: this driver is the person's device, its
+      // approval surface answers the review, and the registry announces the
+      // outcome with `clients:changed` and `supervision:changed`.
       const plan = await untilChanged(async () => {
         const result = await ports.clients.launch(id);
-        return result.state === "preparing" ? undefined : result;
+        return result.state === "preparing" || result.state === "approval-required"
+          ? undefined
+          : result;
       }, signal);
       if (plan.state === "unavailable") {
         return {
@@ -157,9 +162,6 @@ export function createTerminalDevice(
           reason: plan.reason,
           ...(plan.missing ? { missing: plan.missing } : {}),
         };
-      }
-      if (plan.state === "approval-required") {
-        return { state: "approval-required", approvals: plan.approvals.length };
       }
       const screen = new PtyScreen(size);
       const pty = spawnPty(vibestudio, ["open", id, ...(develop ? ["--develop"] : [])], {

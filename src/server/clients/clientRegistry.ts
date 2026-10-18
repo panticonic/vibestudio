@@ -1,4 +1,3 @@
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHostBuildUnitGate } from "@vibestudio/shared/hostBuildUnits";
 import {
@@ -49,6 +48,7 @@ import type {
   UnitAuthorityManifest,
 } from "@vibestudio/shared/authorityManifest";
 import type { InstallReviewOrigin } from "@vibestudio/shared/authority/unitInstallReview";
+import type { UnitAdmissionOrigin } from "../services/unitAdmissionStore.js";
 import {
   readWorkspaceConfig,
   resolveDeclaredClients,
@@ -57,7 +57,6 @@ import {
 import {
   UnitManifestError,
   clientUnitManifestDescriptor,
-  readAndValidateUnitManifest,
   validateUnitManifest,
 } from "@vibestudio/shared/unitManifest";
 import {
@@ -207,6 +206,8 @@ interface ClientGraphNode {
   kind: string;
   relativePath: string;
   path: string;
+  /** From the exact manifest the graph was discovered from. */
+  packageVersion?: string;
   internalDeps: string[];
   manifest: {
     displayName?: string;
@@ -266,6 +267,17 @@ export interface ClientHostDeps {
   approvalQueue: ApprovalQueueLike;
   notificationService?: NotificationServiceLike;
   approvalCoordinator?: UnitApprovalCoordinator<ReviewedUnit>;
+  /** Prepares the admission of the exact versions an accepted publication lands. */
+  prepareAdmission?: (
+    units: readonly ReviewedUnit[],
+    origin: UnitAdmissionOrigin,
+    sourceOrigins?: ReadonlyMap<string, InstallReviewOrigin | null>
+  ) => { committed(): void; failed(error: unknown): void };
+  /** Records the versions a review the person just accepted admits. */
+  recordApprovedReview?: (reviewed: {
+    entries: ReviewedUnit[];
+    origins?: ReadonlyMap<string, InstallReviewOrigin>;
+  }) => void;
   /**
    * Where these units' bytes came from, derived by the server from workspace
    * state it reads itself. The launch gate is organized on origin, so a
@@ -304,6 +316,8 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     ReviewedUnit
   >;
   private lastDeclared: WorkspaceClientDeclaration[] = [];
+  /** What each publication candidate presented, by build identity, until it is accepted. */
+  private readonly reviewedByIdentityKey = new Map<string, ReviewedUnit>();
   /** Device-level capabilities each client held at the last trust evaluation. */
   private trustedDeviceCapabilities = new Map<string, readonly ClientCapability[]>();
   private lastDevStatusDiagnosticKey: string | null = null;
@@ -370,7 +384,7 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           message: `meta/vibestudio.yml declares clients that don't exist: ${sources.join(", ")}.`,
         });
       },
-      validateBeforeApproval: (node) => this.validateClientManifestAtPath(node.path, node.name),
+      validateBeforeApproval: (node) => this.validateClientManifest(node),
       approvalEntry: (node, decl) => this.buildBatchEntry(node, decl),
       approvalOrigins: (entries) => this.resolveOriginsFor(entries),
       requestApproval: async (entries, trigger) => {
@@ -392,6 +406,9 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         });
       },
       approvalCoordinator: deps.approvalCoordinator,
+      ...(deps.recordApprovedReview
+        ? { recordApprovedReview: (reviewed) => deps.recordApprovedReview!(reviewed) }
+        : {}),
       onBackgroundError: (err) => {
         console.error(
           "[ClientHost] Background client approval flow failed:",
@@ -732,28 +749,9 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           )
         : { requests: [], provides: [] };
       const authority = unitAuthorityManifestFromPackageJson(packageJsonSource, candidate.unitName);
-      identityKeys.push(identityKey);
-      identityKeysByRepo.set(candidate.unitPath, identityKey);
-      if (
-        current &&
-        !providerChanged &&
-        canonicalAuthority({
-          manifest: previousAuthority,
-          serviceBindings: current.serviceBindings,
-          serviceReviews: current.serviceReviews,
-        }) ===
-          canonicalAuthority({
-            manifest: authority,
-            serviceBindings: candidate.serviceBindings,
-            serviceReviews: candidate.serviceReviews,
-          })
-      ) {
-        unchangedCount += 1;
-        continue;
-      }
       const vibestudio = packageJson.vibestudio!;
       const icon = typeof vibestudio.icon === "string" ? vibestudio.icon : undefined;
-      units.push({
+      const reviewed: ReviewedUnit = {
         ...createReviewedUnitBase({
           unitKind: "client",
           name: candidate.unitName,
@@ -782,7 +780,30 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         },
         integrity: null,
         provider,
-      });
+      };
+      // Admitted either way: the accepting decision covers every client the
+      // publication lands, and only a declared-authority change earns a row.
+      this.reviewedByIdentityKey.set(identityKey, reviewed);
+      identityKeys.push(identityKey);
+      identityKeysByRepo.set(candidate.unitPath, identityKey);
+      if (
+        current &&
+        !providerChanged &&
+        canonicalAuthority({
+          manifest: previousAuthority,
+          serviceBindings: current.serviceBindings,
+          serviceReviews: current.serviceReviews,
+        }) ===
+          canonicalAuthority({
+            manifest: authority,
+            serviceBindings: candidate.serviceBindings,
+            serviceReviews: candidate.serviceReviews,
+          })
+      ) {
+        unchangedCount += 1;
+        continue;
+      }
+      units.push(reviewed);
       if (current) previousRequests.set(candidate.unitPath, previousAuthority.requests);
     }
     return { units, identityKeys, unchangedCount, previousRequests, identityKeysByRepo };
@@ -792,8 +813,44 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     this.unitHost.acceptPreapprovedTrust(keys);
   }
 
-  preparePreapprovedTrust(keys: Iterable<string>) {
-    return this.unitHost.preparePreapprovedTrust(keys);
+  /**
+   * Record what an accepted publication landed: activation trust for the exact
+   * builds, and their admission (that their declared authority was reviewed).
+   * A version that is trusted but not admitted is built and then refused at
+   * activation, so the two commit or roll back together.
+   */
+  preparePreapprovedTrust(
+    keys: Iterable<string>,
+    origin: UnitAdmissionOrigin = "publication",
+    _allowNow?: ReadonlyMap<string, readonly string[]>,
+    sourceOrigins?: ReadonlyMap<string, InstallReviewOrigin | null>
+  ): { committed(): void; failed(error: unknown): void } {
+    const accepted = [...new Set(keys)];
+    const trust = this.unitHost.preparePreapprovedTrust(accepted);
+    const reviewed = accepted.flatMap((key) => {
+      const unit = this.reviewedByIdentityKey.get(key);
+      return unit ? [unit] : [];
+    });
+    let admission: { committed(): void; failed(error: unknown): void } | undefined;
+    try {
+      admission = this.deps.prepareAdmission?.(reviewed, origin, sourceOrigins);
+    } catch (error) {
+      trust.failed(error);
+      throw error;
+    }
+    return {
+      committed: () => {
+        trust.committed();
+        admission?.committed();
+      },
+      failed: (error) => {
+        try {
+          admission?.failed(error);
+        } finally {
+          trust.failed(error);
+        }
+      },
+    };
   }
 
   listWorkspaceUnits(): Array<{
@@ -1712,7 +1769,7 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     await this.unitHost.applyRuntimeDeclaration({
       node,
       decl,
-      validateBeforeApply: () => this.validateClientManifestAtPath(node.path, node.name),
+      validateBeforeApply: () => this.validateClientManifest(node),
       needsBuildRefresh: (entry) => this.needsBuildRefresh(entry, node, decl),
       buildAndActivate: async (n, d) => {
         await this.buildAndActivate(n, d);
@@ -1791,7 +1848,7 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     const block = requireClientBlock(node);
     return this.unitHost.activateBuild({
       name: node.name,
-      version: readPackageVersion(node.path),
+      version: readPackageVersion(node),
       sourceRepo: node.relativePath,
       ref,
       buildDir: build.dir,
@@ -1962,7 +2019,7 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       ...createPendingUnitRegistryEntry({
         unitKind: "client",
         name: node.name,
-        version: readPackageVersion(node.path),
+        version: readPackageVersion(node),
         sourceRepo: node.relativePath,
         ref: decl.ref,
         building,
@@ -1995,7 +2052,7 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
         name: node.name,
         displayName: clientTitle(node, block),
         ...(node.manifest.icon ? { icon: node.manifest.icon } : {}),
-        version: readPackageVersion(node.path),
+        version: readPackageVersion(node),
         sourceRepo: node.relativePath,
         ref: decl.ref,
         effectiveVersion: candidate.effectiveVersion,
@@ -2185,18 +2242,18 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     );
   }
 
-  private validateClientManifestAtPath(nodePath: string, unitName: string): void {
+  /**
+   * Validate the manifest the graph was discovered from. The workspace source
+   * directory is not a mirror of main (a client published after provisioning
+   * has no files there), so a graph node's `path` is an identity, not a file.
+   */
+  private validateClientManifest(node: ClientGraphNode): void {
     try {
-      readAndValidateUnitManifest(
-        clientUnitManifestDescriptor,
-        path.join(nodePath, "package.json"),
-        { unitName },
-        fs.readFileSync as (p: string, encoding: "utf-8") => string
-      );
+      validateUnitManifest(clientUnitManifestDescriptor, node.manifest, { unitName: node.name });
     } catch (err) {
       if (err instanceof UnitManifestError) throw err;
       throw new UnitManifestError(
-        `Client ${unitName} manifest validation failed: ${errorMessage(err)}`,
+        `Client ${node.name} manifest validation failed: ${errorMessage(err)}`,
         "MANIFEST_INTERNAL"
       );
     }
@@ -2315,11 +2372,8 @@ export function isCapabilityActiveStatus(status: ClientRegistryEntry["status"]):
   return status === "running" || status === "available";
 }
 
-function readPackageVersion(nodePath: string): string {
-  const pkg = JSON.parse(fs.readFileSync(path.join(nodePath, "package.json"), "utf8")) as {
-    version?: string;
-  };
-  return pkg.version ?? "0.0.0";
+function readPackageVersion(node: { packageVersion?: string }): string {
+  return node.packageVersion ?? "0.0.0";
 }
 
 function clientDevDiagnosticsEnabled(): boolean {

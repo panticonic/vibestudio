@@ -158,21 +158,23 @@ function createClientNode(
 ) {
   const nodePath = path.join(workspacePath, source);
   fs.mkdirSync(nodePath, { recursive: true });
-  fs.writeFileSync(
-    path.join(nodePath, "package.json"),
-    JSON.stringify(opts.manifest ?? manifestFor(opts.name, opts.block))
-  );
+  const packageManifest = opts.manifest ?? manifestFor(opts.name, opts.block);
+  fs.writeFileSync(path.join(nodePath, "package.json"), JSON.stringify(packageManifest));
   fs.writeFileSync(path.join(nodePath, opts.block.entry), "export default null;\n");
   return {
     name: opts.name,
     kind: "client" as const,
     relativePath: source,
     path: nodePath,
+    packageVersion: packageManifest["version"] as string,
     internalDeps: [] as string[],
+    // The graph node carries the manifest it was discovered from; the registry
+    // validates it rather than reading the (unmirrored) source directory.
     manifest: {
       displayName: opts.block.title ?? opts.name,
       icon: "🖥️",
       client: opts.block,
+      ...((packageManifest["vibestudio"] as Record<string, unknown> | undefined) ?? {}),
     },
   };
 }
@@ -292,6 +294,7 @@ async function makeHarness(
   opts: {
     root?: string;
     isAdmitted?: ClientHostDeps["isAdmitted"];
+    prepareAdmission?: ClientHostDeps["prepareAdmission"];
     openUnitReviewFor?: ClientHostDeps["openUnitReviewFor"];
     seeded?: boolean;
     invalidManifest?: boolean;
@@ -433,6 +436,7 @@ async function makeHarness(
     prepareRuntime,
     buildSystem,
     isAdmitted: opts.isAdmitted,
+    ...(opts.prepareAdmission ? { prepareAdmission: opts.prepareAdmission } : {}),
     openUnitReviewFor: opts.openUnitReviewFor,
     eventService: eventService as never,
     approvalQueue,
@@ -895,6 +899,40 @@ describe("ClientHost declarations and review", () => {
     expect(approval.units).toMatchObject([{ authority: { serviceReviews } }]);
   });
 
+  it("admits the exact clients an accepted publication lands, with their activation trust", async () => {
+    const admitted: Array<{ ev: string | null | undefined; origin: string }> = [];
+    const outcomes: string[] = [];
+    const { host, buildSystem } = await makeHarness({
+      readWorkspaceFileAtState: async (_state, filePath) =>
+        filePath === "meta/vibestudio.yml" ? workspaceYaml({ clients: [WEB_SOURCE] }) : null,
+      prepareAdmission: (units, origin) => {
+        for (const unit of units) admitted.push({ ev: unit.ev, origin });
+        return {
+          committed: () => outcomes.push("committed"),
+          failed: () => outcomes.push("failed"),
+        };
+      },
+    });
+    host.setDeclared([{ source: WEB_SOURCE, ref: "main" }]);
+    const current = await buildSystem.resolveBuildUnitIdentity();
+    buildSystem.resolveBuildUnitIdentity.mockResolvedValueOnce({
+      ...current,
+      effectiveVersion: "ev-next",
+    });
+    // An update that changes no declared authority earns no review row, and is
+    // still admitted: the version must run once the publication lands.
+    const approval = await host.unitChangeApprovalForCommit("state:next");
+    expect(approval.units).toEqual([]);
+
+    const transaction = host.preparePreapprovedTrust(approval.identityKeys);
+    expect(admitted).toEqual([{ ev: "ev-next", origin: "publication" }]);
+    transaction.committed();
+    expect(outcomes).toEqual(["committed"]);
+
+    host.preparePreapprovedTrust(approval.identityKeys).failed(new Error("ref write failed"));
+    expect(outcomes).toEqual(["committed", "failed"]);
+  });
+
   it("treats an omitted capability declaration as empty", async () => {
     const { host, appPath } = await makeHarness({
       readWorkspaceFileAtState: async (_state, filePath) =>
@@ -962,6 +1000,19 @@ describe("ClientHost declarations and review", () => {
       "supervision:changed",
       expect.objectContaining({ change: "adopted" })
     );
+  });
+
+  it("takes a declared client's version and manifest from the graph, not the source directory", async () => {
+    // The source directory does not mirror main: a client published after the
+    // workspace was provisioned has no files there.
+    const { host, appPath } = await makeHarness({ seeded: true });
+    fs.rmSync(appPath, { recursive: true, force: true });
+
+    await host.reconcileDeclared([{ source: WEB_SOURCE, ref: "main" }]);
+    await host.whenSettled();
+
+    expect(host.registry.get(WEB_NAME)).toMatchObject({ version: "1.0.0" });
+    expect(host.registry.get(WEB_NAME)?.lastError ?? null).toBeNull();
   });
 
   it("fails closed when a trusted client manifest drifts to native fields", async () => {
