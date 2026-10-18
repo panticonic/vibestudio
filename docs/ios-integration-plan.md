@@ -6,11 +6,17 @@ records the implementation surface and the evidence still required for acceptanc
 
 ## Invariants
 
-- The native host ABI is `rn-host-5` on Android and iOS.
-- Workspace app delivery uses the shared streamed bundle mechanism over the
-  active paired connection.
-- The native shell owns pairing, scanner, paste-link entry, OAuth browser
-  sessions, push registration, lifecycle reset, and panel surface hosting.
+- The native host ABI is `rn-host-6` on Android and iOS
+  (`CURRENT_HOST_ABI["react-native"]`).
+- The host runtime (`hosts/react-native/src/host/`) starts with the process, owns
+  the device credential and the one physical Iroh connection per reach, and runs
+  each client (a System `clients/<id>` unit, unit kind `client`) in its own React
+  Native instance. Client bundles are delivered over that connection through the
+  shared streamed delivery module and run only when their SHA-256 matches the
+  integrity the server sealed.
+- The native host owns pairing, scanner, paste-link entry, OAuth browser
+  sessions, push registration and lifecycle reset. Clients reach device
+  capabilities only through the capability broker.
 - iOS signing and associated domains are generated from local configuration;
   static entitlement files are not checked in.
 - iOS install and dev flows are CLI-supported for simulator and device builds.
@@ -19,18 +25,20 @@ records the implementation surface and the evidence still required for acceptanc
 
 ## Work Package Outcomes
 
-| WP                       | Outcome                                                                                                                                                                                   | Primary artifacts                                                                                                                                                                                                                 |
-| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| WP-i1 native host parity | Android and iOS use `rn-host-5` and the same streamed delivery module. The shipped entrypoint rejects stale bundle contracts and releases bootstrap transport ownership before reloading. | `apps/mobile/index.js`, `apps/mobile/metroNativeBoundary.cjs`, `packages/mobile-iroh/src/bundleDelivery.ts`, `workspace/apps/mobile/src/services/appBootstrap.ts`                                                                 |
-| WP-i2 signing            | Xcode signing configuration is generated locally. Associated domains, camera, notification, and local-network usage are config-driven.                                                    | `scripts/cli/ios-entitlements.mjs`, `hosts/ios/Signing.template.xcconfig`, `hosts/ios/.gitignore`, `hosts/ios/Vibestudio.xcodeproj/project.pbxproj`, `tests/ios-entitlements.test.ts`                           |
-| WP-i3 install            | `mobile install --platform ios` builds, installs, and launches simulator/device targets with entitlement generation and CocoaPods checks.                                                 | `scripts/cli/mobile-install.mjs`, `hosts/ios/README.md`, `docs/cli.md`                                                                                                                                                      |
-| WP-i4 dev loop           | `mobile dev --platform ios` uses the simctl backend for install, launch, screenshot, and log streaming; mobile-debug documents both Android and iOS backends.                             | `scripts/cli/mobile-dev.mjs`, `scripts/cli/mobile-logs.mjs`, `workspace/extensions/mobile-debug/index.ts`, `workspace/extensions/mobile-debug/SKILL.md`                                                                           |
-| WP-i5 OAuth              | iOS OAuth opens through `ASWebAuthenticationSession` and returns through the configured custom scheme without conflating OAuth with pairing.                                              | `hosts/ios/Vibestudio/VibestudioAuthSession.mm`, `workspace/apps/mobile/src/services/oauthLoopback.ts`, `workspace/apps/mobile/src/services/oauthLoopback.test.ts`                                                          |
-| WP-i6 pairing entry      | iOS has URL handling, paste-link support, camera permission, scanner wiring, and the same pair-link grammar as Android.                                                                   | `apps/mobile/index.js`, `hosts/ios/Vibestudio/AppDelegate.mm`, `hosts/ios/Vibestudio/Info.plist`, `workspace/apps/mobile/src/components/LoginScreen.tsx`                                                              |
-| WP-i7 push               | Push provisioning is surfaced through doctor/config checks and documented alongside Firebase/APNs setup.                                                                                  | `scripts/cli/mobile-doctor.mjs`, `docs/approvals.md`, `hosts/ios/Vibestudio/GoogleService-Info.template.plist`                                                                                                              |
-| WP-i8 app surface parity | iOS uses safe-area aware mobile UI, lifecycle reconnect/reset hooks, app update prompts, and inspectable WebViews where supported.                                                        | `workspace/apps/mobile/src/services/appUpdatePrompt.ts`, `workspace/apps/mobile/src/services/shellClient.ts`, `workspace/apps/mobile/src/components/ApprovalSheet.test.tsx`, `hosts/ios/Vibestudio/VibestudioMobileHost.mm` |
-| WP-i9 smoke and CI       | Android has end-to-end smoke. iOS smoke is unsupported; CI defines a Debug simulator compilation job, which does not exercise pairing or rendered workspace content.                      | `scripts/cli/mobile-smoke.mjs`, `scripts/full-system-smoke.mjs`, `.github/workflows/build-mobile.yml`, `package.json`                                                                                                             |
-| WP-i10 docs and skills   | Mobile, shell, extension, remote-access, onboarding, server-log, and testing skills describe the iOS path and the current ABI.                                                            | `workspace/apps/mobile/SKILL.md`, `workspace/extensions/mobile-debug/SKILL.md`, `workspace/extensions/react-native/SKILL.md`, `workspace/skills/appdev/MOBILE.md`, `workspace/skills/system-testing/SKILL.md`                     |
+| WP | Outcome | Primary artifacts |
+| -- | ------- | ----------------- |
+| WP-i1 native host parity | Android and iOS use `rn-host-6`, the same host runtime and the same streamed delivery module. | `hosts/react-native/index.js`, `hosts/react-native/src/host/hostRuntime.ts`, `packages/mobile-iroh/src/bundleDelivery.ts`, `hosts/ios/Vibestudio/VibestudioHostRuntime.mm` |
+| WP-i2 signing | Xcode signing configuration is generated locally. Associated domains, camera, notification, and local-network usage are config-driven. | `scripts/cli/ios-entitlements.mjs`, `hosts/ios/Signing.template.xcconfig`, `hosts/ios/.gitignore`, `hosts/ios/Vibestudio.xcodeproj/project.pbxproj`, `tests/ios-entitlements.test.ts` |
+| WP-i3 install | `mobile install --platform ios` builds, installs, and launches simulator/device targets with entitlement generation and CocoaPods checks. | `scripts/cli/mobile-install.mjs`, `hosts/ios/README.md`, `docs/cli.md` |
+| WP-i4 dev loop | `mobile dev --platform ios` uses the simctl backend for install, launch, screenshot, and log streaming; mobile-debug documents both Android and iOS backends. | `scripts/cli/mobile-dev.mjs`, `scripts/cli/mobile-logs.mjs`, `system/extensions/mobile-debug/index.ts`, `system/extensions/mobile-debug/SKILL.md` |
+| WP-i5 OAuth | iOS OAuth opens through `ASWebAuthenticationSession` and returns through the configured custom scheme without conflating OAuth with pairing. | `hosts/ios/Vibestudio/VibestudioAuthSession.mm`, `system/clients/mobile-browser/src/services/oauthLoopback.ts`, `system/clients/mobile-browser/src/services/oauthLoopback.test.ts` |
+| WP-i6 pairing entry | iOS has URL handling, paste-link support, camera permission, scanner wiring, and the same pair-link grammar as Android. | `hosts/react-native/index.js`, `hosts/react-native/connectLinkRouter.js`, `hosts/react-native/src/HostScreen.tsx`, `hosts/ios/Vibestudio/AppDelegate.mm`, `hosts/ios/Vibestudio/Info.plist` |
+| WP-i7 push | Push provisioning is surfaced through doctor/config checks and documented alongside Firebase/APNs setup. | `scripts/cli/mobile-doctor.mjs`, `docs/approvals.md`, `hosts/ios/Vibestudio/GoogleService-Info.template.plist` |
+| WP-i8 surface parity | iOS uses safe-area aware mobile UI, lifecycle reconnect/reset hooks, client update prompts, and inspectable WebViews where supported. | `system/clients/mobile-browser/src/services/shellClient.ts`, `system/clients/mobile-browser/src/components/WorkspaceApprovalSurface.tsx`, `hosts/ios/Vibestudio/VibestudioMobileHost.mm` |
+| WP-i9 smoke and CI | Android has end-to-end smoke. iOS smoke is unsupported; CI defines a Debug simulator compilation job, which does not exercise pairing or rendered workspace content. | `scripts/cli/mobile-smoke.mjs`, `.github/workflows/build-mobile.yml`, `package.json` |
+| WP-i10 docs and skills | The clientdev, mobile-debug, react-native, remote-access, server-logs and system-testing skills describe the iOS path and the current ABI. | `system/clients/mobile-browser/SKILL.md`, `system/extensions/mobile-debug/SKILL.md`, `system/extensions/react-native/SKILL.md`, `system/skills/clientdev/MOBILE.md`, `system/skills/remote-access/SKILL.md` |
+
+Paths starting with `system/` are in the System template checkout.
 
 ## CLI Surface
 

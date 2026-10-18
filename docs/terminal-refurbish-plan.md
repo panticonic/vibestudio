@@ -1,7 +1,11 @@
 # Terminal apps refurbishment plan
 
-Status: proposal (2026-10-12). Supersedes the operational parts of
-`docs/terminal-apps.md`, which will be rewritten in phase 5.
+Status: historical (2026-10-12). Delivered; `docs/terminal-apps.md` is the current
+guide. This plan predates the client model: its `apps/terminal-browser`,
+`hostTargets` and `AppHost` references describe removed surfaces (the browser is
+now the System `clients/terminal-browser` client, runtime `terminal`, ABI
+`terminal-host-1`) and its default prefix `Ctrl-Space` became `Ctrl-B`. See
+`docs/client-hosts-and-clients-plan.md`.
 
 Goal: one command starts (or attaches to) a server and opens a full-featured
 terminal browser in the current TTY, and the Base template ships a terminal chat

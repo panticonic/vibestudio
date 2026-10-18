@@ -47,7 +47,7 @@ Generated surfaces include:
 - `build-resources/brand/vibestudio-logo*`
 - `build-resources/brand/vibestudio-symbol*`
 - `workspace/packages/ui/src/assets/*`
-- `workspace/apps/mobile/src/assets/*`
+- `clients/mobile-browser/src/assets/*` (System template)
 - `hosts/react-native/assets/*`
 - `hosts/android/app/src/main/res/mipmap-*`
 - `hosts/android/app/src/main/res/drawable/launch_screen.xml`
@@ -60,7 +60,7 @@ Generated surfaces include:
 Use the shared components instead of importing PNGs directly in product UI:
 
 - Web/workspace UI: `VibestudioLogo` from `@workspace/ui`
-- Workspace mobile app: `VibestudioLogo` from `workspace/apps/mobile/src/components/VibestudioLogo`
+- Mobile client: `VibestudioLogo` from `clients/mobile-browser/src/components/VibestudioLogo` (System template)
 - Shipped native host fallback: `VibestudioLogo` from `hosts/react-native/VibestudioLogo.js`
 
 The web component uses the vector masters directly. Native surfaces consume

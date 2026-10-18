@@ -182,7 +182,8 @@ matrix on that set. Never mix successful results from different release sets.
                                    optional owned stock-relay override
 ```
 
-Each client process/app owns one Iroh `Endpoint` for its lifetime and uses it
+Each host process owns one fresh in-memory Iroh `Endpoint`, delegated to its device by
+the device's signing key (see "Delegation" below), and uses it
 for both the stable hub-control connection and the selected workspace-child
 connection. Each server process owns one persistent endpoint identity. The hub
 does not proxy workspace data; `hubControl.routeWorkspace({workspaceId})`
@@ -769,7 +770,7 @@ Add a remote-transport doctor that verifies:
 - explicit shipped-or-operator relay configuration and absence of implicit
   binding defaults;
 - relay registration and ALPN acceptance;
-- device credential endpoint binding;
+- device key delegation of the process's endpoint;
 - one bounded direct/relayed probe where the environment permits it;
 - native artifact availability for the running target;
 - no installed WebRTC/signaling/TURN dependencies or config.
@@ -1051,8 +1052,8 @@ pass over Iroh on an isolated managed instance.
 2. Replace stored remote schema atomically; an old WebRTC record produces a
    clear re-pair state and is removed, never translated.
 3. Persist the per-credential device key and its device-key-bound device
-   credential as one valid/invalid unit, and re-scope the CLI's cross-process
-   connection lock from the signaling room to the endpoint identity.
+   credential as one valid/invalid unit. The CLI's cross-process connection lock
+   is deleted: each process binds its own delegated endpoint.
 4. Replace connection UI, diagnostics, pair-link parsing, CLI output, and
    deployment configuration terminology.
 5. Package/sign/notarize the pinned native library and remove macOS x64.
@@ -1199,8 +1200,8 @@ signaling rooms, DTLS fingerprints, or WebRTC is not transport-neutral.
 - `src/server/webrtcIngress.ts`, `src/server/webrtcSessionShim.ts`, and tests;
 - `hosts/desktop/main/webrtcServerClient.ts` and WebRTC session/client wiring;
 - CLI WebRTC clients, flags, URL handling, and test harness. The cross-process
-  connection lock survives as an endpoint-identity lock: it is renamed and
-  re-keyed from the signaling room, not deleted;
+  connection lock is deleted outright: every process binds its own endpoint, so
+  nothing needs to serialize processes of one device;
 - `src/node/webrtc/` and all native WebRTC loading/packaging helpers;
 - stable DTLS certificate state and fingerprint advertisement;
 - routed signaling-room state and room arming;
@@ -1261,7 +1262,7 @@ repository-wide text patterns because they have unrelated meanings elsewhere.
 | Pair link               | Carries server Endpoint ID, relay set, one-time code, expiry, and protocol version; no fingerprint/signaling/ICE fields. |
 | Connection status       | Shows connecting/direct/relayed/reconnecting/offline plus relay region when useful, not ICE states.                      |
 | Network changes         | Iroh path management handles live changes; physical reconnect preserves logical recovery semantics.                      |
-| Security                | Returning auth requires refresh credential and the originally paired client Endpoint key.                                |
+| Security                | Returning auth requires refresh credential and the originally paired device signing key (endpoints are delegated by it).                                |
 | Mobile background       | Endpoint shuts down and reconnects on foreground; no promise of indefinite background reachability.                      |
 | macOS Intel             | No build, updater artifact, or support claim.                                                                            |
 | Developer setup         | The shipped public Iroh relays require no signaling/TURN or relay account setup.                                         |

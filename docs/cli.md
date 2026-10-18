@@ -163,7 +163,7 @@ The command's own diagnostics (such as Node warnings) go to
 `<stateDir>/logs/terminal.log`.
 
 The browser shows your Personal workspace, like the desktop app;
-`--workspace <name>` shows another, and inside the browser `Ctrl-Space w`
+`--workspace <name>` shows another, and inside the browser `Ctrl-B w`
 switches. The browser itself is a client app installed in your account's
 System workspace (the desktop shell's own connection routes there too).
 Before it takes over the screen, the command prepares it there and asks any

@@ -155,8 +155,8 @@ security boundary.
 Biometric locking was removed as an explicit product decision. Vibestudio is not
 a banking app; the device lock screen plus the existing authenticated shell
 connection are considered sufficient. Re-adding biometric gating would require
-restoring the deleted biometric files and reintroducing the app-level gate in
-`apps/mobile/App.tsx`.
+restoring the deleted biometric files and reintroducing the gate in the mobile client
+(`clients/mobile-browser` in the System template) or the native host.
 
 ## Limitations
 

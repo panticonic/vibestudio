@@ -43,7 +43,7 @@ Sessions belong to you, not to the device or the client. You can resume them
 from another computer, or from the desktop app's terminal panel.
 
 Every key goes to the program in the focused tab except the **prefix key**
-(Ctrl-Space by default; change it in Settings). Press the prefix, then:
+(Ctrl-B by default; change it in Settings). Press the prefix, then:
 
 | Key                      | Action                                                              |
 | ------------------------ | ------------------------------------------------------------------- |
@@ -187,7 +187,7 @@ approval attributed to your app's code identity:
   focused tab, and badges the tab otherwise;
 - never draw your own "approve?" prompt.
 
-The launch material includes `approvalsKey` (for example "Ctrl-Space a"), so
+The launch material includes `approvalsKey` (for example "Ctrl-B a"), so
 your UI can say how to open the overlay.
 
 Two complete examples:

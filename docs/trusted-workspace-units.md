@@ -3,46 +3,48 @@
 Vibestudio treats trusted workspace units as declared, approved source units with
 stable package identity. Trust is not derived from a special filesystem segment:
 
-- `@workspace-apps/foo` lives at `workspace/apps/foo`
-- `@workspace-extensions/bar` lives at `workspace/extensions/bar`
+- `@workspace-clients/foo` lives at `clients/foo`
+- `@workspace-extensions/bar` lives at `extensions/bar`
 
 The package name is the code identity. The flat source path is the repo layout.
 
-For authoring guidance, see `workspace/skills/appdev/SKILL.md`.
+For authoring guidance, see the `clientdev` skill (`skills/clientdev/SKILL.md`)
+in the System workspace.
 
 ## Unit Kinds
 
 - Panels are user-facing workspace surfaces.
 - Workers and Durable Objects are userland runtime code.
 - Extensions are trusted Node service units.
-- Apps are trusted client units with an explicit target:
-  - `electron` runs as a hosted shell view.
-  - `react-native` is delivered to the native mobile host through a signed build
-    provider bootstrap.
-  - `terminal` produces one primary Node ESM (`.mjs`) artifact that the
-    `vibestudio terminal` CLI downloads over its own connection and runs
-    in-process (adoption policy `artifact-only`).
+- Clients (`clients/<id>`, unit kind `client`) are trusted units that a host
+  runs for one runtime, declared by `vibestudio.client.runtime` and
+  `vibestudio.client.hostAbi`:
+  - `web` (`web-host-1`) runs as a window of the desktop host.
+  - `react-native` (`rn-host-6`) is delivered to the native mobile host and runs
+    in its own React Native instance.
+  - `terminal` (`terminal-host-1`) produces one primary Node ESM (`.mjs`)
+    artifact that the `vibestudio` CLI downloads over its own connection and
+    runs in-process.
 
-## App Update Adoption
+## Client Update Adoption
 
-Trusted app activation is server-side; client adoption is target-specific.
+Client activation is server-side; adoption is a host decision, taken on
+`supervision:changed`. A client in development mode (a per-client, per-device
+host setting, never a manifest field) adopts a rebuild at once and restarts only
+that client.
 
-- Electron clients keep an already-loaded app view on the current build when a
-  new trusted build arrives. The shell surfaces `Load update` and `Roll back`
-  actions through notifications and the App updates settings section.
-- React Native clients use a native prompt. `Install` prepares and activates the
-  current trusted bundle; `Roll back` switches the server to a retained previous
-  build before activating it.
-- Terminal clients keep the loaded module until `vibestudio terminal` loads the
-  app again: on the next run, or when the CLI reconnects and its renewed app
-  principal grant names a newer build.
+- Desktop clients keep an already-loaded window on the current build and offer
+  the update; development mode reloads the window.
+- React Native clients prompt, then the host recreates that client's instance;
+  rollback switches the server to a retained previous build first.
+- Terminal clients are offered a restart at a safe point; otherwise the next
+  launch uses the new build.
 
-The protocol surface is the `supervision:changed` event (one event for every
-supervised unit, carrying each target's adoption policy),
+The protocol surface is the `supervision:changed` event, `clients:changed`,
 `runtime.supervision.versions`, and `runtime.supervision.rollback`. Release
 operations use exact `{kind, releaseId}` identities. Rollback history is kept by
-the unit host for apps and extensions alike, with a bounded retention limit, and
-old artifacts remain servable while they are retained.
+the unit host for clients and extensions alike, with a bounded retention limit,
+and old artifacts remain servable while they are retained.
 
 ## Device And Principal Model
 
@@ -51,25 +53,25 @@ Remote clients use two layers of identity:
 - A `DeviceCredential` is long-lived and native/client-held. It contains a
   device id and refresh token.
 - A `PrincipalGrant` is short-lived and scoped to one concrete runtime
-  principal, such as a device's React Native or terminal app principal.
+  principal, such as one client's principal on a device.
 - A `PairingInvite` is one-time bootstrap material used to create a new device
   credential.
 - `ConnectionInfo` describes the server URL clients should use for HTTP/RPC and
   pairing deep links.
 
-Desktop and mobile remote shells refresh a `shell` token from their device
-credential. A paired device host that runs a workspace client itself (the
+A paired device host that runs a workspace client itself (the
 desktop, mobile and terminal hosts) first resolves and verifies the client's
 build with `clients.launch`, then obtains that client's principal grant over its
 existing authenticated connection with the RPC
 `auth.grantClientPrincipal([{ source, buildKey, executionDigest }])`. The grant
 names the device-scoped principal `client:<id>:<runtime>:<deviceId>`, is bound
-to the exact build the host verified, and is bound to the caller's transport
-endpoint, so it works over loopback and Iroh alike.
+to the exact build the host verified, and is bound to the device key behind the caller's connection (an Iroh
+process endpoint is delegated by the device's signing key, which only signs), so
+it works over loopback and Iroh alike.
 
 ## Capability Checks
 
-Capabilities are declared in the app manifest and checked at the service
-boundary. User/device pairing is not an app capability: authenticated clients
+Capabilities are declared in the client manifest and checked at the service
+boundary. User/device pairing is not a client capability: authenticated clients
 use the typed `hubControl` service, which binds `pairDevice` to the acting user
 and role-gates `inviteUser` at the hub.

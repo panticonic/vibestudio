@@ -9,7 +9,6 @@
     "dist",
     "hosts/react-native/*.config.js",
     "hosts/react-native/index.js",
-    "workspace/apps/mobile/src/polyfills/*.js",
     "src/server/services/relaySeam.integration.test.ts"
   ],
   "options": {

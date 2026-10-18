@@ -9,8 +9,8 @@ const migrationRoots = [
   "src",
   "packages/shared/src",
   "packages/extension/src",
-  "apps/mobile/src",
-  "apps/shell",
+  "hosts",
+  "clients",
 ];
 
 const approvedRawMainCalls = new Set([
@@ -56,8 +56,8 @@ describe("typed service client guard", () => {
     const violations: string[] = [];
 
     for (const root of migrationRoots) {
-      // Apps ship in the System template; host surfaces stay in this repository.
-      const sourceRoots = root.startsWith("apps/")
+      // Clients ship in the System template; host surfaces stay in this repository.
+      const sourceRoots = root === "clients"
         ? exactUnitRoots(root).map((unitRoot) => unitRoot.slice(0, -root.length - 1))
         : [repoRoot];
       for (const sourceRoot of sourceRoots)

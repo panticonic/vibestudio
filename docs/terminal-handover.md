@@ -1,6 +1,9 @@
 # Terminal apps: handover (2026-10-13)
 
-This is the state of the terminal refurbishment at handover, and how to finish
+This is the state of the terminal refurbishment at handover (a dated snapshot:
+the branch and worktree table in section 2 is historical, and the client model of
+[client-hosts-and-clients-plan.md](client-hosts-and-clients-plan.md) has since
+replaced `AppHost`), and how to finish
 and extend it. Read it together with:
 
 - [terminal-refurbish-plan.md](terminal-refurbish-plan.md): the original plan.
@@ -27,8 +30,9 @@ These decisions are settled. Don't reopen them without new evidence.
 - **Unit model.** Terminal apps are workspace-bound units modelled on panels:
   `terminal-apps/<name>`, the same unit kind `panel`. There is no new manifest
   block; the location alone makes a unit terminal-hosted.
-- **AppHost.** Only the terminal browser is an AppHost app
-  (`system/clients/terminal-browser`, runtime `terminal`).
+- **Client.** Only the terminal browser is a client
+  (`system/clients/terminal-browser`, unit kind `client`, runtime `terminal`,
+  host ABI `terminal-host-1`). Terminal apps are not clients.
 - **Where apps run.** A terminal app is an ordinary Node program in a PTY owned
   by the Base `shell` extension, inside the workspace native runtime sandbox.
   The browser proxies those sessions to the real terminal.
@@ -218,25 +222,24 @@ belongs to someone else.
   model message or rewrites the inherited native knowledge prefix. The local
   notice is in-memory, not timer-expiring, and is not sent to agents.
 
-### Apps lifecycle (AppHost and unit-host)
+### Client lifecycle (`ClientHost` and unit-host)
 
-- **Build contract.** `src/server/buildV2/appBuildContract.ts`
-  (`validateAppBuildContract`) is enforced inside the build, so the
-  protected-main gate rejects bad app artifacts. `buildApp` is a table of
-  three target adapters.
-- **Admission and review.** Admission is exact and uniform for every app
-  target (`packages/unit-host/src/exactUnitAdmission.ts`). An unreviewed app
-  opens its review (`unitHost.requestReview`, `whenReviewed`) instead of
-  failing. Electron and mobile continue on `shell-approval:resolved`.
+The 2026-10-13 `AppHost` app targets were replaced by the client model (see
+[client-hosts-and-clients-plan.md](client-hosts-and-clients-plan.md)).
+
+- **Build contract.** `src/server/clients/clientBuildContract.ts`
+  (`validateClientBuildContract`) is enforced inside the build, so the
+  protected-main gate rejects bad client artifacts. The build has one adapter
+  per runtime (`web`, `react-native`, `terminal`).
+- **Admission and review.** Admission is exact and uniform for every client
+  (`packages/unit-host/src/exactUnitAdmission.ts`). An unreviewed client opens
+  its review instead of failing.
 - **History.** Version history and rollback live in `@vibestudio/unit-host`,
   so extensions have rollback too.
-- **Events.** `supervision:changed` replaced `apps:available`, `apps:status`,
-  `apps:lifecycle` and `extensions:status`. Adoption policy is a per-target
-  table.
+- **Events.** `supervision:changed` and `clients:changed`.
 - **Serving.** `src/server/buildArtifactTransport.ts` is the serving core
-  shared by panels and apps. `PanelHttpServer.serveAppArtifact` replaced the
-  `/_a/` handler in AppHost. There is one protocol for both: `Accept-Encoding`
-  negotiation plus `Range`/`If-Range` over the negotiated representation.
+  shared by panels and clients: `Accept-Encoding` negotiation plus
+  `Range`/`If-Range` over the negotiated representation.
 
 ### Tests
 
@@ -435,7 +438,7 @@ belongs to someone else.
     Native `profileBuild("clients/terminal-browser", {ref: "main", verifyCache: true})`
     exposed two false validation failures: build reports omitted declared
     type-only development dependencies, and authority folding applied the mobile
-    context-boundary baseline to every app target. Reports now reuse the existing
+    context-boundary baseline to every client runtime. Reports now reuse the existing
     compiler graph, without changing runtime composition; authority folding and
     checkout audit apply the mobile baseline consistently, preserving explicit
     crossing checks for every target. Forty-nine focused regressions pass.

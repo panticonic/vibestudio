@@ -54,9 +54,10 @@ dependencies for both.
 directories. Panels whose primary artifact is a Node module get the same. No
 new store, no new admission and no new lifecycle.
 
-The CLI's terminal **browser** keeps `buildTerminalApp` (an app target): it is
-downloaded into the CLI as one self-contained module, so it cannot use a runtime
-dependency projection next to a server-side build directory.
+The terminal **browser** is not a terminal app. It is a client (unit kind
+`client`, runtime `terminal`) built by `buildTerminalClient`: it is downloaded into
+the CLI as one self-contained module, so it cannot use a runtime dependency
+projection next to a server-side build directory.
 
 ## Instance and principal: the wall
 

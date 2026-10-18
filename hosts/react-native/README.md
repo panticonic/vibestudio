@@ -42,7 +42,7 @@ with jest (`pnpm test:mobile`).
 
 The host runtime owns first pairing. It accepts the HTTPS pair
 carrier (`https://vibestudio.app/p#...`) and the custom scheme
-(`vibestudio://connect/...`) through the same shared compact-v3 parser, and also exposes
+(`vibestudio://connect/...`) through the same shared pairing parser (reach v5), and also exposes
 in-app Scan QR and Paste pairing link actions for fresh installs and recovery.
 Once a client runs, it owns ordinary device management through the host API:
 **Settings** → **Devices** → **Connect another device** creates and shares a
