@@ -31,7 +31,6 @@
  */
 import type { LaunchSurfaces } from "./integration";
 
-
 export const HOST_RUNTIME_MODULE = "VibestudioHostRuntime";
 /** The host's own root component (pairing, review, messages): `app.json` `name`, started by MainActivity / the first scene. */
 export const HOST_ROOT_COMPONENT = "Vibestudio";
@@ -167,6 +166,13 @@ export interface HostRuntimeNativeModule {
 }
 
 export type HostRuntimeEvent =
+  /**
+   * Android: whether any of the app's activities (the host's screen or a
+   * client's task) is in the foreground. Native sends it when the host runtime
+   * becomes ready and on every change. The device connections follow it rather
+   * than the host screen's own lifecycle, which pauses whenever a client is in front.
+   */
+  | { type: "process-foreground"; foreground: boolean }
   /** A client instance called its broker. Reply with `respond` or `reject`. */
   | { type: "client-request"; tag: string; requestId: string; method: string; argsJson: string }
   /**

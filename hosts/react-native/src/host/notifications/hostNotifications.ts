@@ -364,7 +364,8 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
     message: RemoteMessage,
     options: { body?: string; replyable?: boolean } = {}
   ): Promise<void> {
-    const actions = options.replyable === false ? [] : (readUserInboxActions(data.actionsJson) ?? []);
+    const actions =
+      options.replyable === false ? [] : (readUserInboxActions(data.actionsJson) ?? []);
     let conversation: ConversationLaunch | null = null;
     if (data.channelId) {
       try {
@@ -392,8 +393,13 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
    * sent keeps its reply action, so what was typed is never silently lost; one
    * that was sent but could not be acknowledged loses it, so it is never sent twice.
    */
-  async function replyToInbox(data: PushUserInboxDataPayload, event: NotificationEvent): Promise<void> {
-    const action = readUserInboxActions(data.actionsJson)?.find((entry) => entry.id === event.actionId);
+  async function replyToInbox(
+    data: PushUserInboxDataPayload,
+    event: NotificationEvent
+  ): Promise<void> {
+    const action = readUserInboxActions(data.actionsJson)?.find(
+      (entry) => entry.id === event.actionId
+    );
     const text = event.input?.trim();
     if (!action || !text || !data.channelTargetId) return;
     let outcome: ReplyOutcome;
@@ -401,17 +407,28 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
       outcome = await ports.replyToInbox(data, text);
     } catch (error) {
       console.warn(`${LOG} could not send the reply for ${data.notificationId}:`, error);
-      await displayInbox(data, {}, {
-        body: `Not sent: ${error instanceof Error ? error.message : String(error)}`,
-      });
+      await displayInbox(
+        data,
+        {},
+        {
+          body: `Not sent: ${error instanceof Error ? error.message : String(error)}`,
+        }
+      );
       return;
     }
     if (!outcome.acknowledged) {
-      console.warn(`${LOG} sent the reply for ${data.notificationId} but could not acknowledge it:`, outcome.reason);
-      await displayInbox(data, {}, {
-        body: `Sent, but this message could not be marked as read: ${outcome.reason}`,
-        replyable: false,
-      });
+      console.warn(
+        `${LOG} sent the reply for ${data.notificationId} but could not acknowledge it:`,
+        outcome.reason
+      );
+      await displayInbox(
+        data,
+        {},
+        {
+          body: `Sent, but this message could not be marked as read: ${outcome.reason}`,
+          replyable: false,
+        }
+      );
       return;
     }
     await ports.inbox.cancel(workspaceNotificationKey(data, data.notificationId));
@@ -442,7 +459,9 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
           continue;
         }
         await mutate(async () =>
-          writeActions((await readActions()).filter((current) => !sameQueuedAction(current, action)))
+          writeActions(
+            (await readActions()).filter((current) => !sameQueuedAction(current, action))
+          )
         );
         await notifee.cancel(workspaceNotificationKey(action, action.approvalId));
       }
@@ -465,10 +484,18 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
     if (event.kind === "action" && isBackgroundDecision(event.actionId)) {
       const queuedAt = now();
       await mutate(async () =>
-        writeActions(enqueueAction(await readActions(queuedAt), { ...target, decision: event.actionId as BackgroundApprovalDecision, queuedAt }, queuedAt))
+        writeActions(
+          enqueueAction(
+            await readActions(queuedAt),
+            { ...target, decision: event.actionId as BackgroundApprovalDecision, queuedAt },
+            queuedAt
+          )
+        )
       );
       await drain();
-      const stillQueued = (await pendingActions()).some((entry) => sameApprovalTarget(entry, target));
+      const stillQueued = (await pendingActions()).some((entry) =>
+        sameApprovalTarget(entry, target)
+      );
       if (stillQueued) await showSyncing(target, notification);
       return;
     }
@@ -524,28 +551,33 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
   async function start(): Promise<void> {
     if (started) throw new Error("Host notifications are already started");
     started = true;
-    if (!ports.isConfigured()) {
+    const configured = ports.isConfigured();
+    if (configured) {
+      // Registered before the first await: an event that cold-starts the process must find its handler.
+      const displayRemote = guarded("display a push", displayMessage);
+      const onEvent = guarded("handle a notification event", handleNotificationEvent);
+      messaging.setBackgroundMessageHandler(displayRemote);
+      notifee.onBackgroundEvent(onEvent);
+      subscriptions = [
+        messaging.onTokenRefresh((next) => {
+          token = next;
+          emit({ type: "notification-token", token: next });
+        }),
+        messaging.onMessage((message) => void displayRemote(message)),
+        notifee.onForegroundEvent(onEvent),
+        messaging.onNotificationOpenedApp((message) => {
+          const opened = openFromMessage(message);
+          if (opened) void guarded("open a notification", open)(opened);
+        }),
+      ];
+    } else {
       console.info(`${LOG} Firebase is not configured. Push disabled.`);
-      return;
     }
-    const displayRemote = guarded("display a push", displayMessage);
-    const onEvent = guarded("handle a notification event", handleNotificationEvent);
-    messaging.setBackgroundMessageHandler(displayRemote);
-    notifee.onBackgroundEvent(onEvent);
-    subscriptions = [
-      messaging.onTokenRefresh((next) => {
-        token = next;
-        emit({ type: "notification-token", token: next });
-      }),
-      messaging.onMessage((message) => void displayRemote(message)),
-      notifee.onForegroundEvent(onEvent),
-      messaging.onNotificationOpenedApp((message) => {
-        const opened = openFromMessage(message);
-        if (opened) void guarded("open a notification", open)(opened);
-      }),
-    ];
 
+    // Local notifications (a background intent's answer) need their channels whether or not
+    // push is configured: the OS drops a notification posted to a channel that does not exist.
     await setUpDisplay();
+    if (!configured) return;
     let initial: RemoteMessage | null = null;
     try {
       initial = await messaging.getInitialNotification();
@@ -617,7 +649,9 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
  * registered at launch fixes the one reply action, so the push cannot name
  * others. (Android draws inbox entries natively; see `nativePorts.ts`.)
  */
-export function notifeeInboxDisplay(notifee: Pick<NotifeePort, "display" | "cancel">): InboxDisplayPort {
+export function notifeeInboxDisplay(
+  notifee: Pick<NotifeePort, "display" | "cancel">
+): InboxDisplayPort {
   return {
     display: (notification) =>
       notifee.display({

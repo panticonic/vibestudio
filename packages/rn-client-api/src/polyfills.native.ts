@@ -1,3 +1,3 @@
 import type {} from "./nativeAbortGlobals.js";
 import type {} from "./nativePlatformGlobals.js";
-import "./polyfills.js";
+import "./installPolyfills.js";

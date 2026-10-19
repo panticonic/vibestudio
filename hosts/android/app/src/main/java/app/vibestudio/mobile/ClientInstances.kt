@@ -210,7 +210,12 @@ object ClientInstances {
     private fun startActivity(spec: ClientSpec) {
         application.startActivity(
             Intent(application, ClientActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
+                // Started from the application context, which requires NEW_TASK;
+                // NEW_DOCUMENT | MULTIPLE_TASK makes it a task of its own per client.
+                .addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT or
+                        Intent.FLAG_ACTIVITY_MULTIPLE_TASK,
+                )
                 .putExtra(EXTRA_TAG, spec.tag)
                 .putExtra(EXTRA_CLIENT_ID, spec.clientId)
                 .putExtra(EXTRA_TITLE, spec.title),

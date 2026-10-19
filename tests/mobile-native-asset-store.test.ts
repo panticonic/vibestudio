@@ -3,15 +3,20 @@ import { describe, expect, it } from "vitest";
 import { exactTemplateRoots } from "./exactUserlandRoot";
 import { join } from "node:path";
 
-const android = readFileSync(
-  new URL(
-    "../hosts/android/app/src/main/java/app/vibestudio/mobile/VibestudioMobileHostModule.kt",
-    import.meta.url
-  ),
+// The Android store is split: the React module exposes the bridge methods and
+// owns per-instance write handles; PanelAssetStore owns the on-disk lifecycle.
+const androidDir = "../hosts/android/app/src/main/java/app/vibestudio/mobile/";
+const androidModule = readFileSync(
+  new URL(`${androidDir}VibestudioPanelHostModule.kt`, import.meta.url),
   "utf8"
 );
+const androidStore = readFileSync(
+  new URL(`${androidDir}PanelAssetStore.kt`, import.meta.url),
+  "utf8"
+);
+const android = `${androidModule}\n${androidStore}`;
 const ios = readFileSync(
-  new URL("../hosts/ios/Vibestudio/VibestudioMobileHost.mm", import.meta.url),
+  new URL("../hosts/ios/Vibestudio/VibestudioPanelHost.mm", import.meta.url),
   "utf8"
 );
 const tcpPatch = readFileSync(
@@ -19,11 +24,11 @@ const tcpPatch = readFileSync(
   "utf8"
 );
 const facade = readFileSync(
-  join(exactTemplateRoots.system, "apps/mobile/src/services/panelAssetFacade.ts"),
+  join(exactTemplateRoots.system, "clients/mobile-browser/src/services/panelAssetFacade.ts"),
   "utf8"
 );
 const store = readFileSync(
-  join(exactTemplateRoots.system, "apps/mobile/src/services/mobileAssetStore.ts"),
+  join(exactTemplateRoots.system, "clients/mobile-browser/src/services/mobileAssetStore.ts"),
   "utf8"
 );
 
@@ -58,22 +63,22 @@ describe("native mobile asset store contract", () => {
   });
 
   it("keeps Android indexes backed up while excluding reconstructable payloads", () => {
-    expect(android).toContain("reactApplicationContext.filesDir");
-    expect(android).toContain("reactApplicationContext.noBackupFilesDir");
+    expect(androidStore).toContain("context.filesDir");
+    expect(androidStore).toContain("context.noBackupFilesDir");
     expect(android).toContain("assetIndexRoot().deleteRecursively()");
     expect(android).toContain("assetPayloadRoot().deleteRecursively()");
     expect(tcpPatch).toContain("getNoBackupFilesDir()");
   });
 
   it("rejects oversized and no-store artifacts before returning a stored handle", () => {
-    const androidLimit = android.indexOf("size <= MAX_ASSET_STORE_BYTES");
-    const androidResult = android.indexOf(
+    const androidLimit = androidStore.indexOf("size <= MAX_ASSET_STORE_BYTES");
+    const androidResult = androidStore.indexOf(
       "storedAssetResult(digest, size, metadataJson)",
       androidLimit
     );
     expect(androidLimit).toBeGreaterThan(0);
     expect(androidResult).toBeGreaterThan(androidLimit);
-    expect(android).toContain('"no-store" !in cacheDirectives');
+    expect(androidStore).toContain('"no-store" !in cacheDirectives');
 
     const iosLimit = ios.indexOf("size > VibestudioAssetStoreMaxBytes");
     const iosResult = ios.indexOf("storedAssetResult:digest", iosLimit);
@@ -87,20 +92,23 @@ describe("native mobile asset store contract", () => {
   });
 
   it("does not abort active populations during memory-pressure trim", () => {
-    const androidTrim = android.slice(
-      android.indexOf("fun assetStoreTrim"),
-      android.indexOf("fun assetStoreClear")
+    const androidTrim = androidModule.slice(
+      androidModule.indexOf("fun assetStoreTrim"),
+      androidModule.indexOf("fun assetStoreClear")
     );
+    const androidStoreTrim = androidStore.slice(
+      androidStore.indexOf("fun trim("),
+      androidStore.indexOf("fun clear()")
+    );
+    expect(androidStoreTrim).not.toContain("abortAll");
     const iosTrim = ios.slice(
       ios.indexOf("RCT_EXPORT_METHOD(assetStoreTrim"),
       ios.indexOf("RCT_EXPORT_METHOD(assetStoreClear")
     );
     expect(androidTrim).not.toContain("abortAllAssetWrites");
     expect(iosTrim).not.toContain("abortAllAssetWrites");
-    expect(android).toContain(
-      "abortAllAssetWrites()\n                assetIndexRoot().deleteRecursively()"
-    );
-    expect(android).toContain(
+    expect(androidStore).toContain("abortAll()\n            assetIndexRoot().deleteRecursively()");
+    expect(androidStore).toContain(
       'check(assetWrites.isEmpty()) { "Asset-store clear left active write handles" }'
     );
     expect(ios).toContain(
@@ -110,13 +118,13 @@ describe("native mobile asset store contract", () => {
   });
 
   it("turns a restored dangling index mapping into a self-healing miss", () => {
-    expect(android).toContain(
+    expect(androidStore).toContain(
       "entries.remove(entryKey)\n            writeAssetIndex(namespaceKey, index)\n            return null"
     );
     expect(ios).toContain(
       "[entries removeObjectForKey:entryKey];\n    [self writeAssetIndex:index namespace:namespaceKey];\n    return nil;"
     );
-    expect(android).not.toContain(
+    expect(androidStore).not.toContain(
       'throw IllegalStateException("Asset-store index points to a missing or truncated blob")'
     );
     expect(ios).not.toContain('format:@"Asset-store index points to a missing or truncated blob"');
@@ -153,9 +161,7 @@ describe("native mobile asset store contract", () => {
     expect(androidWriter).toContain("final Socket socketToWrite;");
     expect(androidWriter).toContain("synchronized (TcpSocketClient.this)");
     expect(androidWriter).toContain("socketToWrite = socket;");
-    expect(androidWriter).toContain(
-      "final OutputStream output = socketToWrite.getOutputStream();"
-    );
+    expect(androidWriter).toContain("final OutputStream output = socketToWrite.getOutputStream();");
     expect(androidWriter).not.toContain("socket.getOutputStream()");
   });
 

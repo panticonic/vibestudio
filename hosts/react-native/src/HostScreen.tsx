@@ -149,7 +149,10 @@ function HomeScreenShortcuts({ runtime }: { runtime: HostRuntime }) {
       (shortcuts) => active && setList({ status: "ready", shortcuts }),
       (error: unknown) =>
         active &&
-        setList({ status: "failed", message: error instanceof Error ? error.message : String(error) })
+        setList({
+          status: "failed",
+          message: error instanceof Error ? error.message : String(error),
+        })
     );
     return () => {
       active = false;
@@ -186,6 +189,33 @@ function HomeScreenShortcuts({ runtime }: { runtime: HostRuntime }) {
 }
 
 /**
+ * Development mode per client on this device (docs/client-hosts-and-clients-plan.md 7.4):
+ * a client in it adopts each published rebuild at once, reloading only itself.
+ */
+function ClientDevelopment({
+  runtime,
+  clients,
+}: {
+  runtime: HostRuntime;
+  clients: HostUiState["clients"];
+}) {
+  if (clients.length === 0) return null;
+  return (
+    <View style={styles.actions}>
+      <Text style={styles.sectionTitle}>Develop</Text>
+      {clients.map((client) => (
+        <ActionButton
+          key={client.id}
+          title={`Develop ${client.title}: ${client.development ? "on" : "off"}`}
+          variant="secondary"
+          onPress={() => void runtime.setDevelopmentMode(client.id, !client.development)}
+        />
+      ))}
+    </View>
+  );
+}
+
+/**
  * The host's own screen: pairing, the launch review and messages. A running
  * client has its own screen; this one is what the person sees before a client
  * exists, when something needs their decision, and when a client ended.
@@ -199,20 +229,17 @@ export function createHostScreen(runtime: HostRuntime) {
     const scannerLastValue = useRef<string | null>(null);
     const cameraDevice = useCameraDevice("back");
 
-    const present = useCallback(
-      async (rawUrl: string): Promise<boolean> => {
-        const handled = await runtime.handleLink(rawUrl);
-        if (!handled) {
-          setNotice(
-            "That is not a Vibestudio link. Keep the camera pointed at the QR shown by your trusted desktop or server."
-          );
-        } else {
-          setNotice(null);
-        }
-        return handled;
-      },
-      []
-    );
+    const present = useCallback(async (rawUrl: string): Promise<boolean> => {
+      const handled = await runtime.handleLink(rawUrl);
+      if (!handled) {
+        setNotice(
+          "That is not a Vibestudio link. Keep the camera pointed at the QR shown by your trusted desktop or server."
+        );
+      } else {
+        setNotice(null);
+      }
+      return handled;
+    }, []);
 
     const codeScanner = useCodeScanner({
       codeTypes: ["qr"],
@@ -356,7 +383,10 @@ export function createHostScreen(runtime: HostRuntime) {
                 />
               </View>
             ) : ui.phase === "running" ? (
-              <HomeScreenShortcuts runtime={runtime} />
+              <>
+                <HomeScreenShortcuts runtime={runtime} />
+                <ClientDevelopment runtime={runtime} clients={ui.clients} />
+              </>
             ) : (
               <View style={styles.actions}>
                 {scannerOpen ? (

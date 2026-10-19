@@ -57,7 +57,8 @@ export function parseShortcuts(dump, packageName) {
     if (!inPackage) continue;
     const info = line.match(/ShortcutInfo \{id=(\S+?), flags=0x[0-9a-f]+ \[([^\]]*)\]/u);
     if (!info) continue;
-    const flags = info[2].split(/\s+/u);
+    // The flag names run together on a real device: `[DynIc-rStr]`.
+    const flags = info[2];
     shortcuts.push({
       id: info[1],
       dynamic: flags.includes("Dyn"),
@@ -103,14 +104,19 @@ export async function assertSecondClientSeparateTask(deps, { packageName, client
       `The launcher menu has no dynamic shortcut ${link}; it has ${JSON.stringify(shortcuts.map((s) => s.id))}`
     );
   }
-  const before = clientTasks(await adbCapture("shell", "dumpsys", "activity", "activities"), packageName);
+  const before = clientTasks(
+    await adbCapture("shell", "dumpsys", "activity", "activities"),
+    packageName
+  );
   await adb("shell", "input", "keyevent", "KEYCODE_HOME");
   await adb(...ingressIntentArgs(packageName, link));
   await waitForPhase(`client-running.${clientId}`, deadlineMs);
   const after = await adbCapture("shell", "dumpsys", "activity", "activities");
   const task = newClientTask(after, packageName, before);
   if (task === null) {
-    throw new Error(`${clientId} did not start in a task of its own (client tasks before: ${[...before]})`);
+    throw new Error(
+      `${clientId} did not start in a task of its own (client tasks before: ${[...before]})`
+    );
   }
   return task;
 }

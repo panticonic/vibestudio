@@ -13,7 +13,10 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
 import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
-import { readCurrentHostBuildGeneration, releaseHostBuildGeneration } from "../host-build-generations.mjs";
+import {
+  readCurrentHostBuildGeneration,
+  releaseHostBuildGeneration,
+} from "../host-build-generations.mjs";
 import { hasOwnershipFailure } from "../lib/owned-cleanup.mjs";
 import { createConnectDeepLink, parseConnectLink } from "./lib/connect-grammar.generated.mjs";
 import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
@@ -41,7 +44,24 @@ import {
 import { flagValue } from "./lib/args.mjs";
 import { visibleAgentTurnState } from "./lib/mobile-agent-turn-state.mjs";
 import { mobileApprovalSurfaceState } from "./lib/mobile-approval-surface.mjs";
-import { assertSecondClientSeparateTask } from "./lib/mobile-smoke-clients.mjs";
+import {
+  assertSecondClientSeparateTask,
+  clientLink,
+  clientTasks,
+  ingressIntentArgs,
+  parseShortcuts,
+} from "./lib/mobile-smoke-clients.mjs";
+import {
+  HELLO_CLIENT_ID,
+  HELLO_ECHO_INTENT,
+  authorHelloSource,
+  echoed,
+  editHelloSource,
+  helloGreeting,
+  helloUpdatedGreeting,
+  notificationText,
+  systemWorkspaceName,
+} from "./lib/mobile-smoke-client-dev.mjs";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
 const mobileInstallScript = path.join(repoRoot, "scripts", "cli", "mobile-install.mjs");
@@ -211,15 +231,17 @@ function pipeChildOutput(child, prefix) {
 }
 
 function spawnManaged(acquire, command, args, options = {}) {
-  const child = acquire(() => spawn(command, args, {
-    cwd: options.cwd ?? repoRoot,
-    env: options.env ?? process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-    // Long-lived smoke dependencies own a process group. The hub, workerd,
-    // native builds can fork children which a bare ChildProcess.kill()
-    // cannot prove have retired.
-    detached: process.platform !== "win32",
-  }));
+  const child = acquire(() =>
+    spawn(command, args, {
+      cwd: options.cwd ?? repoRoot,
+      env: options.env ?? process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      // Long-lived smoke dependencies own a process group. The hub, workerd,
+      // native builds can fork children which a bare ChildProcess.kill()
+      // cannot prove have retired.
+      detached: process.platform !== "win32",
+    })
+  );
   pipeChildOutput(child, options.label ?? command);
   child.once("error", (error) => {
     prefixAndWrite(
@@ -895,8 +917,7 @@ async function retainAndroidBundleFailure(device, packageName, failure, compiler
       diagnostic: hermesDiagnostic,
     };
   }
-  const location =
-    parseHermesLocation(failureText) ?? parseHermesLocation(hermesDiagnostic);
+  const location = parseHermesLocation(failureText) ?? parseHermesLocation(hermesDiagnostic);
   excerpt = bundleLineExcerpt(bundleText, location);
   const report = {
     capturedAt: new Date().toISOString(),
@@ -924,7 +945,9 @@ async function retainAndroidBundleFailure(device, packageName, failure, compiler
     { mode: 0o600 }
   );
   await fsp.chmod(path.join(diagnosticDir, "diagnostic.json"), 0o600);
-  console.error(`[mobile-smoke] Retained activated Android bundle failure evidence: ${diagnosticDir}`);
+  console.error(
+    `[mobile-smoke] Retained activated Android bundle failure evidence: ${diagnosticDir}`
+  );
   if (location) {
     console.error(
       `[mobile-smoke] Hermes failure location: ${JSON.stringify(location)} (excerpt retained in diagnostic.json)`
@@ -1141,6 +1164,264 @@ function buildConnectLinkFromLog(loggedLink) {
   });
 }
 
+/**
+ * A paired CLI of the smoke's account, in a config root of its own: what an agent
+ * uses to author and publish (`vibestudio eval run`). Deliberately the product's CLI,
+ * not a test-only path to the server.
+ */
+function createSmokeCli({ root, lifetime }) {
+  const env = { ...process.env, VIBESTUDIO_INSTANCE_ROOT: root };
+  delete env.VIBESTUDIO_INSTANCE;
+  const entry = [
+    path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs"),
+    path.join(repoRoot, "src", "dev", "runCli.ts"),
+  ];
+  return {
+    /** Run to completion and return the last JSON document on stdout. */
+    async json(...args) {
+      const { stdout } = await runCommand(process.execPath, [...entry, ...args, "--json"], { env });
+      const line = stdout.trim().split(/\r?\n/u).at(-1);
+      return JSON.parse(line);
+    },
+    /** Run an owned process that may wait on the device for a person's decision. */
+    run(args, label) {
+      return runOwnedCommand(lifetime, process.execPath, [...entry, ...args], { env, label });
+    },
+  };
+}
+
+/**
+ * The person answers the install review of what they just published. The CLI is the same
+ * account's second device, and `vibestudio approvals` is its approval surface; the phone
+ * only shows reviews of the workspace it has open.
+ */
+function startReviewApprover(cli, signal) {
+  const ours = new Set([`@workspace-clients/${HELLO_CLIENT_ID}`, "@workspace-workers/hello-echo"]);
+  const answered = new Set();
+  const seen = new Set();
+  const done = (async () => {
+    while (!signal.aborted) {
+      const pending = await cli.json("approvals", "list").catch((error) => {
+        console.warn(`[mobile-smoke] Listing approvals failed: ${error.message}`);
+        return [];
+      });
+      for (const approval of Array.isArray(pending) ? pending : []) {
+        if (!seen.has(approval.approvalId)) {
+          seen.add(approval.approvalId);
+          console.log(
+            `[mobile-smoke] Pending approval ${approval.approvalId}: ${approval.kind}/${approval.mode ?? "-"} "${approval.title}" parts=${JSON.stringify((approval.parts ?? []).map((part) => part.name))}`
+          );
+        }
+        if (answered.has(approval.approvalId) || approval.kind !== "unit-install-review") continue;
+        if (!(approval.parts ?? []).some((part) => ours.has(part.name))) continue;
+        answered.add(approval.approvalId);
+        const decision =
+          approval.mode === "adopt-root"
+            ? "adopt-root"
+            : approval.mode === "part-changed"
+              ? "install"
+              : "update";
+        await cli
+          .json(
+            "approvals",
+            "review",
+            approval.approvalId,
+            JSON.stringify({ decision, allowNow: [] })
+          )
+          .then(() =>
+            console.log(
+              `[mobile-smoke] Approved the install review of ${[...ours].join(", ")} (${approval.mode})`
+            )
+          )
+          .catch((error) =>
+            console.warn(
+              `[mobile-smoke] Could not answer review ${approval.approvalId}: ${error.message}`
+            )
+          );
+      }
+      await sleep(2_000);
+    }
+  })();
+  return done;
+}
+
+/**
+ * docs/client-hosts-and-clients-plan.md 7.4, Android: a client authored and published on the
+ * running server is launched on the running host, renders, answers its background intent,
+ * adopts an edit in place, and leaves every other instance as it was.
+ */
+async function runClientDevLoop({ options, logcat, cli, tempRoot, nonce, deadlineMs }) {
+  const device = options.device;
+  const pkg = options.packageName;
+  const dump = async () =>
+    (await adbCapture(device, "shell", "dumpsys", "activity", "activities")).stdout;
+  const hostPid = async () => (await adbCapture(device, "shell", "pidof", pkg)).stdout.trim();
+  const bystanders = () => ({
+    running: logcat.phaseCount("client-running.browser"),
+    reloaded: logcat.phaseCount("client-reloaded.browser"),
+    stopped: logcat.phaseCount("client-stopped.browser"),
+  });
+  const stopApprover = new AbortController();
+  const approver = startReviewApprover(cli, stopApprover.signal);
+  try {
+    await clientDevLoopBody();
+  } finally {
+    stopApprover.abort();
+    await approver;
+  }
+
+  async function clientDevLoopBody() {
+    const before = {
+      pid: await hostPid(),
+      tasks: clientTasks(await dump(), pkg),
+      browser: bystanders(),
+    };
+    const tapping = (phase, after = 0) =>
+      waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs(), { after });
+
+    // Author and publish through the server's own APIs. The call returns when the person has
+    // answered the review, so it runs beside the device waits that answer it.
+    const authorFile = path.join(tempRoot, "author-hello.ts");
+    await fsp.writeFile(authorFile, authorHelloSource(nonce));
+    const surfacesBefore = logcat.phaseCount("launch-surfaces-published");
+    const publishing = cli.run(
+      ["eval", "run", authorFile, "--approval-level", "2"],
+      "publish-hello"
+    );
+    publishing.catch(() => undefined);
+    await tapping("launch-surfaces-published", surfacesBefore);
+    const shortcuts = parseShortcuts(
+      (await adbCapture(device, "shell", "dumpsys", "shortcut")).stdout,
+      pkg
+    );
+    const helloLink = `vibestudio://c/${HELLO_CLIENT_ID}/open`;
+    if (!shortcuts.some((shortcut) => shortcut.id === helloLink && shortcut.dynamic)) {
+      throw new Error(
+        `The running host's launcher menu did not gain ${helloLink}: ${JSON.stringify(shortcuts.map((s) => s.id))}`
+      );
+    }
+    console.log(
+      `[mobile-smoke] Client dev loop: ${HELLO_CLIENT_ID} reached the running host's client index`
+    );
+
+    // Development mode is the host's own switch for one client on this device.
+    await adb(device, "shell", "am", "start", "-n", `${pkg}/${defaultActivity}`);
+    await tapButtonByText(device, "Develop Hello Android: off", deadlineMs());
+    await waitForVisibleLabel(device, "Develop Hello Android: on", deadlineMs());
+
+    // Launch it as the launcher does, in a task of its own beside the others.
+    const helloTask = await assertSecondClientSeparateTask(
+      {
+        adb: (...args) => adb(device, ...args),
+        adbCapture: async (...args) => (await adbCapture(device, ...args)).stdout,
+        logcat,
+        waitForPhase: (phase, deadline) =>
+          waitForPhaseTappingApprovals(device, logcat, phase, deadline),
+        deadlineMs: deadlineMs(),
+      },
+      { packageName: pkg, clientId: HELLO_CLIENT_ID }
+    );
+    await publishing;
+    await waitForVisibleLabel(device, helloGreeting(nonce), deadlineMs());
+    console.log(
+      `[mobile-smoke] Client dev loop: ${HELLO_CLIENT_ID} renders "${helloGreeting(nonce)}" in task ${helloTask}`
+    );
+
+    // Its background intent, through the device's own surface for one: the Ask tile.
+    const typed = `ping-${nonce}`;
+    const completedBefore = logcat.phaseCount(
+      `background-intent-completed.${HELLO_CLIENT_ID}.${HELLO_ECHO_INTENT}`
+    );
+    await adb(device, "shell", "pm", "grant", pkg, "android.permission.POST_NOTIFICATIONS");
+    const tile = `${pkg}/app.vibestudio.mobile.AskTileService`;
+    // A tile added earlier by another run is not clickable until it is added afresh and the
+    // system has bound its service; the status bar gives no signal for that binding.
+    await adbCapture(device, "shell", "cmd", "statusbar", "remove-tile", tile).catch(() => null);
+    await adb(device, "shell", "cmd", "statusbar", "add-tile", tile);
+    await sleep(1_000);
+    await adb(device, "shell", "cmd", "statusbar", "click-tile", tile);
+    await tapEditTextAndType(device, typed, deadlineMs());
+    await tapButtonByText(device, "Send", deadlineMs());
+    await logcat.waitForPhaseAfter(
+      `background-intent-completed.${HELLO_CLIENT_ID}.${HELLO_ECHO_INTENT}`,
+      completedBefore,
+      Math.max(1, deadlineMs() - Date.now())
+    );
+    const notifications = (
+      await adbCapture(device, "shell", "dumpsys", "notification", "--noredact")
+    ).stdout;
+    const body = notificationText(notifications, pkg, "Hello echo");
+    if (body !== echoed(typed)) {
+      await fsp.mkdir(screenshotDir, { recursive: true });
+      const evidence = path.join(screenshotDir, "notifications.txt");
+      await fsp.writeFile(evidence, notifications);
+      throw new Error(
+        `(notification dump retained at ${evidence}) ` +
+          `The echo intent answered ${JSON.stringify(body)}, not ${JSON.stringify(echoed(typed))}`
+      );
+    }
+    console.log(`[mobile-smoke] Client dev loop: clients.invokeIntent returned "${body}"`);
+
+    // Edit while in development mode: only the hello instance reloads, in place.
+    const reloadedBefore = logcat.phaseCount(`client-reloaded.${HELLO_CLIENT_ID}`);
+    const editFile = path.join(tempRoot, "edit-hello.ts");
+    await fsp.writeFile(editFile, editHelloSource(nonce));
+    const editing = cli.run(["eval", "run", editFile, "--approval-level", "2"], "edit-hello");
+    editing.catch(() => undefined);
+    await tapping(`client-reloaded.${HELLO_CLIENT_ID}`, reloadedBefore);
+    await editing;
+    // Adopting an update may have asked for a review on the host's own screen; return to the client.
+    await adb(device, ...ingressIntentArgs(pkg, helloLink));
+    await waitForVisibleLabel(device, helloUpdatedGreeting(nonce), deadlineMs());
+    console.log(
+      `[mobile-smoke] Client dev loop: the edit was adopted in place ("${helloUpdatedGreeting(nonce)}")`
+    );
+
+    // Nothing else moved: same host process, same bystander instances, same tasks.
+    const after = {
+      pid: await hostPid(),
+      tasks: clientTasks(await dump(), pkg),
+      browser: bystanders(),
+    };
+    if (after.pid !== before.pid)
+      throw new Error(`The host process changed (${before.pid} -> ${after.pid})`);
+    if (JSON.stringify(after.browser) !== JSON.stringify(before.browser)) {
+      throw new Error(
+        `Another client's instance changed: ${JSON.stringify(before.browser)} -> ${JSON.stringify(after.browser)}`
+      );
+    }
+    for (const task of before.tasks) {
+      if (!after.tasks.has(task)) throw new Error(`Client task ${task} was lost during the update`);
+    }
+    if (logcat.phaseCount(`client-running.${HELLO_CLIENT_ID}`) !== 1) {
+      throw new Error("The edited client was started again instead of reloaded");
+    }
+    console.log(
+      "[mobile-smoke] Client dev loop: host process, other clients and their tasks unchanged"
+    );
+  }
+}
+
+/** Focus the first text field on screen, type into it. */
+async function tapEditTextAndType(device, text, deadlineMs) {
+  while (Date.now() < deadlineMs) {
+    const xml = await dumpWindowXml(device);
+    const field = [...xml.matchAll(/<node\b[^>]*>/gu)]
+      .map(([node]) => node)
+      .find((node) => /class="android\.widget\.EditText"/u.test(node));
+    const bounds = field?.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/u);
+    if (bounds) {
+      const x = Math.round((Number(bounds[1]) + Number(bounds[3])) / 2);
+      const y = Math.round((Number(bounds[2]) + Number(bounds[4])) / 2);
+      await adb(device, "shell", "input", "tap", String(x), String(y));
+      await adb(device, "shell", "input", "text", text);
+      return;
+    }
+    await sleep(250);
+  }
+  throw new Error("The Ask prompt never showed a text field");
+}
+
 function findFreePort() {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
@@ -1153,15 +1434,17 @@ function findFreePort() {
 }
 
 function startLogcat(acquire, device, expectedPhases, deadlineMs, packageName) {
-  const child = acquire(() => spawn("adb", makeAdbArgs(device, ["logcat", "-v", "time"]), {
-    cwd: repoRoot,
-    env: process.env,
-    stdio: ["ignore", "pipe", "pipe"],
-    // Cleanup retires this child as an owned process tree, and owning a tree
-    // means owning its group. Left in the runner's own group, the teardown
-    // signal lands on the runner instead.
-    detached: process.platform !== "win32",
-  }));
+  const child = acquire(() =>
+    spawn("adb", makeAdbArgs(device, ["logcat", "-v", "time"]), {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+      // Cleanup retires this child as an owned process tree, and owning a tree
+      // means owning its group. Left in the runner's own group, the teardown
+      // signal lands on the runner instead.
+      detached: process.platform !== "win32",
+    })
+  );
   return observeMobileSmokeLog(child, { expectedPhases, deadlineMs, packageName });
 }
 
@@ -1225,11 +1508,12 @@ async function advanceWorkspaceApproval(device, xml, requestedRemaining) {
   return { acted: false, submitted: false, surface };
 }
 
-async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
+async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs, { after = 0 } = {}) {
   let nextApprovalInspectionAt = 0;
   const requestedRemaining = new Set();
+  const reached = () => logcat.hasPhase(phase) && logcat.phaseCount(phase) > after;
   while (Date.now() < deadlineMs) {
-    if (logcat.hasPhase(phase)) return;
+    if (reached()) return;
     // React Native owns the transition after it receives the press. Android can
     // retain the old clickable accessibility node while the visual tree is
     // already busy; dumping and tapping that ghost node creates duplicate
@@ -1249,13 +1533,16 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
       const xml = await dumpWindowXml(device);
       const approval = await advanceWorkspaceApproval(device, xml, requestedRemaining);
       nextApprovalInspectionAt =
-        Date.now() + (approval.surface.visible && !approval.acted ? AGENT_TURN_VISUAL_POLL_MS : 2_000);
+        Date.now() +
+        (approval.surface.visible && !approval.acted ? AGENT_TURN_VISUAL_POLL_MS : 2_000);
       if (approval.acted) continue;
     }
     await sleep(250);
   }
   try {
-    await logcat.waitForPhase(phase, deadlineMs);
+    if (after > 0)
+      await logcat.waitForPhaseAfter(phase, after, Math.max(1, deadlineMs - Date.now()));
+    else await logcat.waitForPhase(phase, deadlineMs);
   } catch (error) {
     const labels = collectWindowLabels(await dumpWindowXml(device)).slice(0, 40);
     const visible = labels.length > 0 ? `\n\nVisible UI:\n${labels.join("\n")}` : "";
@@ -1264,9 +1551,8 @@ async function waitForPhaseTappingApprovals(device, logcat, phase, deadlineMs) {
 }
 
 async function settleWorkspaceStartupApprovals(device, deadlineMs, options = {}) {
-  const discoveryDeadlineMs = options.waitForDiscovery === false
-    ? Date.now()
-    : Math.min(deadlineMs, Date.now() + 8_000);
+  const discoveryDeadlineMs =
+    options.waitForDiscovery === false ? Date.now() : Math.min(deadlineMs, Date.now() + 8_000);
   let resolved = 0;
   const requestedRemaining = new Set();
   while (Date.now() < deadlineMs) {
@@ -2116,13 +2402,15 @@ async function main() {
   // ownership helpers. Packaged CLI help needs no source toolchain.
   const { tsImport } = await import("tsx/esm/api");
   const { runParentOwnedMain } = await import("../lib/parent-owned-main.mjs");
-  const { isCancellationOnly, prepareWorkspaceRelease } = await import(
-    "../prepare-workspace-release.mjs"
+  const { isCancellationOnly, prepareWorkspaceRelease } =
+    await import("../prepare-workspace-release.mjs");
+  const { createOwnedProcessLifetime } = await tsImport(
+    "../development-client-lifecycle.ts",
+    import.meta.url
   );
-  const { createOwnedProcessLifetime } = await tsImport("../development-client-lifecycle.ts", import.meta.url);
   const { developmentTemplateSetEnv } = await import("../lib/development-template-set.mjs");
   await runParentOwnedMain(
-    signal =>
+    (signal) =>
       runSmoke(
         options,
         signal,
@@ -2158,49 +2446,50 @@ async function runSmoke(
   let managedBundleActivated = false;
   let logcat = null;
   let cleanupPromise;
-  const cleanup = () => cleanupPromise ??= (async () => {
-    const failures = [];
-    try {
-      if (preparationStopPromise) await preparationStopPromise;
-      else if (workspacePreparation && !workspacePreparationJoined)
-        await workspacePreparation.stop();
-    } catch (error) {
-      failures.push(error);
-    }
-    let lifetimeRetired = false;
-    try {
-      await lifetime.retire();
-      lifetimeRetired = true;
-    } catch (error) {
-      failures.push(error);
-    }
-    let ownershipFailure = [operationFailure, ...failures].some((error) =>
-      hasOwnershipFailure(error)
-    );
-    if (lifetimeRetired && !ownershipFailure && hostGenerationRoot) {
+  const cleanup = () =>
+    (cleanupPromise ??= (async () => {
+      const failures = [];
       try {
-        releaseHostBuildGeneration(hostGenerationRoot);
-        hostGenerationRoot = null;
-      } catch (error) {
-        failures.push(error);
-        ownershipFailure ||= hasOwnershipFailure(error);
-      }
-    }
-    if (lifetimeRetired && !ownershipFailure && !options.keepState) {
-      try {
-        await fsp.rm(tempRoot, { recursive: true, force: true });
+        if (preparationStopPromise) await preparationStopPromise;
+        else if (workspacePreparation && !workspacePreparationJoined)
+          await workspacePreparation.stop();
       } catch (error) {
         failures.push(error);
       }
-    } else {
-      console.log(`[mobile-smoke] Retained isolated state: ${tempRoot}`);
-    }
-    if (failures.length === 1) throw failures[0];
-    if (failures.length)
-      throw new AggregateError(failures, "Mobile smoke owned cleanup failed", {
-        cause: failures[0],
-      });
-  })();
+      let lifetimeRetired = false;
+      try {
+        await lifetime.retire();
+        lifetimeRetired = true;
+      } catch (error) {
+        failures.push(error);
+      }
+      let ownershipFailure = [operationFailure, ...failures].some((error) =>
+        hasOwnershipFailure(error)
+      );
+      if (lifetimeRetired && !ownershipFailure && hostGenerationRoot) {
+        try {
+          releaseHostBuildGeneration(hostGenerationRoot);
+          hostGenerationRoot = null;
+        } catch (error) {
+          failures.push(error);
+          ownershipFailure ||= hasOwnershipFailure(error);
+        }
+      }
+      if (lifetimeRetired && !ownershipFailure && !options.keepState) {
+        try {
+          await fsp.rm(tempRoot, { recursive: true, force: true });
+        } catch (error) {
+          failures.push(error);
+        }
+      } else {
+        console.log(`[mobile-smoke] Retained isolated state: ${tempRoot}`);
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length)
+        throw new AggregateError(failures, "Mobile smoke owned cleanup failed", {
+          cause: failures[0],
+        });
+    })());
   const stop = () => {
     lifetime.requestStop();
     if (workspacePreparation && !workspacePreparationJoined && !preparationStopPromise) {
@@ -2225,19 +2514,19 @@ async function runSmoke(
       const reporter = await createEmulatorPortReporter(options.timeoutMs);
       try {
         emulatorChild = spawnManaged(
-        lifetime.acquire,
-        process.env.ANDROID_EMULATOR ?? "emulator",
-        [
-          "-avd",
-          avd,
-          "-no-snapshot",
-          "-no-audio",
-          "-no-boot-anim",
-          "-no-window",
-          "-report-console",
-          reporter.argument,
-        ],
-        { label: "emulator" }
+          lifetime.acquire,
+          process.env.ANDROID_EMULATOR ?? "emulator",
+          [
+            "-avd",
+            avd,
+            "-no-snapshot",
+            "-no-audio",
+            "-no-boot-anim",
+            "-no-window",
+            "-report-console",
+            reporter.argument,
+          ],
+          { label: "emulator" }
         );
         await waitForSpawn(emulatorChild, process.env.ANDROID_EMULATOR ?? "emulator", []);
         const exited = new Promise((_, reject) => {
@@ -2393,11 +2682,11 @@ async function runSmoke(
       "embedded-usb-provisioning-approved",
       "embedded-pairing-failed",
       "embedded-pairing-complete",
-      "embedded-workspace-selected",
       "embedded-host-target-approval-required",
       "embedded-host-target-preparing",
-      "embedded-bundle-activate-start",
-      "embedded-bundle-activate-complete",
+      "client-running.browser",
+      "client-running.chat",
+      "launch-surfaces-published",
       "workspace-iroh-connected",
       "workspace-recovery-complete",
       "workspace-panel-activate-start",
@@ -2410,10 +2699,23 @@ async function runSmoke(
       "workspace-panel-asset-no-store",
     ];
     const pairingDeadlineMs = Date.now() + options.pairingTimeoutMs;
-    logcat = startLogcat(lifetime.acquire, options.device, phases, pairingDeadlineMs, options.packageName);
+    logcat = startLogcat(
+      lifetime.acquire,
+      options.device,
+      phases,
+      pairingDeadlineMs,
+      options.packageName
+    );
     await waitForLogcatReady(options.device, logcat);
 
-    const link = buildConnectLinkFromLog(invite.pairUrl);
+    // The account's first device is the CLI an agent would use (the root invite is
+    // one-use); the phone is paired from an invite that CLI mints, as a second device.
+    const cli = createSmokeCli({ root: path.join(tempRoot, "cli"), lifetime });
+    await cli.json("remote", "pair", invite.pairUrl);
+    const systemWorkspace = systemWorkspaceName(await cli.json("remote", "workspaces"));
+    await cli.json("agent", "attach", "default", "--workspace", systemWorkspace);
+    const phoneInvite = (await cli.json("remote", "pair-device")).pairing;
+    const link = buildConnectLinkFromLog(phoneInvite.pairUrl);
     const parsedLink = parseConnectLink(link);
     if (parsedLink.kind !== "ok") throw new Error(parsedLink.reason);
     console.log(
@@ -2440,20 +2742,17 @@ async function runSmoke(
       await tapButtonByText(options.device, "Pair", pairingDeadlineMs);
     }
     await logcat.waitForPhase("embedded-pairing-complete");
-    await logcat.waitForPhase("embedded-workspace-selected");
-    // Pairing, host-target launch, and the independently reloaded managed app
-    // are separate lifecycle boundaries. Give each the configured phase budget
-    // so ICE negotiation cannot silently consume the clean workspace build's
-    // budget (and a build cannot consume the managed client's connection
-    // budget). A stuck phase still fails within the configured timeout.
-    for (const phase of ["embedded-bundle-activate-start", "embedded-bundle-activate-complete"]) {
-      // Activation includes the clean managed React Native build, dependency
-      // projection, and artifact transfer. Those are build/startup work, not
-      // network pairing, and legitimately use the runner's build timeout.
-      const phaseDeadlineMs = Date.now() + options.timeoutMs;
-      await waitForPhaseTappingApprovals(options.device, logcat, phase, phaseDeadlineMs);
-      if (phase === "embedded-bundle-activate-complete") managedBundleActivated = true;
-    }
+    // The host selects the account's System workspace itself and launches the
+    // default client from the verified cache once the person has reviewed it
+    // (docs/client-hosts-and-clients-plan.md 5.3). The review and the clean
+    // managed build are startup work and receive the build budget.
+    const clientLaunchDeadlineMs = Date.now() + options.timeoutMs;
+    await waitForPhaseTappingApprovals(
+      options.device,
+      logcat,
+      "client-running.browser",
+      clientLaunchDeadlineMs
+    );
     const managedConnectionDeadlineMs = Date.now() + options.pairingTimeoutMs;
     await waitForPhaseTappingApprovals(
       options.device,
@@ -2649,7 +2948,7 @@ async function runSmoke(
     const chatTask = await assertSecondClientSeparateTask(
       {
         adb: (...args) => adb(options.device, ...args),
-        adbCapture: (...args) => adbCapture(options.device, ...args),
+        adbCapture: async (...args) => (await adbCapture(options.device, ...args)).stdout,
         logcat,
         waitForPhase: (phase, deadline) =>
           waitForPhaseTappingApprovals(options.device, logcat, phase, deadline),
@@ -2658,6 +2957,20 @@ async function runSmoke(
       { packageName: options.packageName, clientId: "chat" }
     );
     console.log(`[mobile-smoke] Launch surfaces: chat runs in its own task ${chatTask}`);
+
+    // Back to the first client's task (its approval surface is where a publication is
+    // reviewed), then the client dev loop on this running host.
+    await adb(options.device, ...ingressIntentArgs(options.packageName, clientLink("browser")));
+    await runClientDevLoop({
+      options,
+      logcat,
+      cli,
+      tempRoot,
+      nonce: `cdl${Date.now().toString(36)}`,
+      // A publication builds and type-checks the whole candidate workspace before anyone can
+      // review it; that is build work and receives the build budget, several times over.
+      deadlineMs: () => Date.now() + options.timeoutMs * 3,
+    });
 
     console.log(
       panelResult.agentTurnCompleted

@@ -14,6 +14,8 @@ class ClientPackagePolicyTest {
         "com.reactnativecommunity.asyncstorage.AsyncStoragePackage",
         "com.reactnativecommunity.clipboard.ClipboardPackage",
         "com.mrousavy.camera.react.CameraPackage",
+        // Stock Reanimated would build a client's UIManager from the host's view managers.
+        "com.swmansion.reanimated.ReanimatedPackage",
         "app.vibestudio.mobile.VibestudioIrohPackage",
         "app.vibestudio.mobile.VibestudioMobileHostPackage",
         "app.vibestudio.mobile.VibestudioHostRuntimePackage",
@@ -21,7 +23,7 @@ class ClientPackagePolicyTest {
     private val uiPackages = listOf(
         "com.facebook.react.shell.MainReactPackage",
         "com.swmansion.gesturehandler.RNGestureHandlerPackage",
-        "com.swmansion.reanimated.ReanimatedPackage",
+        "app.vibestudio.mobile.ClientReanimatedPackage",
         "com.swmansion.rnscreens.RNScreensPackage",
         "com.th3rdwave.safeareacontext.SafeAreaContextPackage",
         "com.horcrux.svg.SvgPackage",

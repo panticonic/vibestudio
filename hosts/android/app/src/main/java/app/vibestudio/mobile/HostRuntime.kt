@@ -53,6 +53,11 @@ object HostRuntime {
             .emit(EVENT, event.toString())
     }
 
+    /** Tell the host runtime whether any of the app's activities is in the foreground. */
+    fun emitProcessForeground(foreground: Boolean) {
+        emitToHost(JSONObject().put("type", "process-foreground").put("foreground", foreground))
+    }
+
     fun emitLifecycle(tag: String, state: String, message: String?) {
         emitToHost(
             JSONObject().put("type", "client-lifecycle").put("tag", tag).put("state", state)

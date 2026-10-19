@@ -12,9 +12,7 @@ import {
 
 const PKG = "app.vibestudio.mobile.internal";
 const dump = (rows: Array<[string, number]>) =>
-  rows
-    .map(([cls, task]) => `    * ActivityRecord{abc u0 ${PKG}/${cls} t${task} f}}`)
-    .join("\n");
+  rows.map(([cls, task]) => `    * ActivityRecord{abc u0 ${PKG}/${cls} t${task} f}}`).join("\n");
 
 describe("mobile smoke client surfaces", () => {
   it("reads task ids per activity of the app only", () => {
@@ -22,7 +20,9 @@ describe("mobile smoke client surfaces", () => {
       ["app.vibestudio.mobile.MainActivity", 4],
       ["app.vibestudio.mobile.ClientActivity", 5],
     ])}\n * ActivityRecord{x u0 other.pkg/app.vibestudio.mobile.ClientActivity t9 f}}`;
-    expect(taskIdsByActivity(text, PKG).get("app.vibestudio.mobile.ClientActivity")).toEqual(new Set([5]));
+    expect(taskIdsByActivity(text, PKG).get("app.vibestudio.mobile.ClientActivity")).toEqual(
+      new Set([5])
+    );
     expect(clientTasks(text, PKG)).toEqual(new Set([5]));
   });
 
@@ -45,7 +45,8 @@ describe("mobile smoke client surfaces", () => {
   it("parses dynamic, pinned and disabled shortcuts of the package", () => {
     const text = [
       `  Package: ${PKG}`,
-      "    ShortcutInfo {id=vibestudio://c/chat/open, flags=0x1 [Dyn], packageName=x}",
+      // As a real device prints it: the flag names run together.
+      "    ShortcutInfo {id=vibestudio://c/chat/open, flags=0x85 [DynIc-rStr], packageName=x}",
       "    ShortcutInfo {id=vibestudio://c/old/open, flags=0x120 [Pin Dis], packageName=x}",
       "  Package: other",
       "    ShortcutInfo {id=zzz, flags=0x1 [Dyn], packageName=y}",
@@ -58,8 +59,16 @@ describe("mobile smoke client surfaces", () => {
 
   it("delivers the link to the ingress activity, as a launcher shortcut does", () => {
     expect(ingressIntentArgs(PKG, clientLink("chat"))).toEqual([
-      "shell", "am", "start", "-W", "-a", "android.intent.action.VIEW", "-d",
-      "vibestudio://c/chat/open", "-n", `${PKG}/app.vibestudio.mobile.IngressActivity`,
+      "shell",
+      "am",
+      "start",
+      "-W",
+      "-a",
+      "android.intent.action.VIEW",
+      "-d",
+      "vibestudio://c/chat/open",
+      "-n",
+      `${PKG}/app.vibestudio.mobile.IngressActivity`,
     ]);
   });
 

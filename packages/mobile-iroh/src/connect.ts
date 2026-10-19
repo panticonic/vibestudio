@@ -244,22 +244,69 @@ export async function clearShellCredential(expected?: {
 export const createMobileIrohIdentity = mobileIrohIdentity.create;
 export const deleteMobileIrohIdentity = mobileIrohIdentity.delete;
 
+/** Whether the app is in the foreground, and when that changes. */
+export interface LifecycleSource {
+  current(): boolean;
+  subscribe(listener: (foreground: boolean) => void): () => void;
+}
+
+const reactNativeAppState: LifecycleSource = {
+  current: () => AppState.currentState === "active",
+  subscribe(listener) {
+    let state: AppStateStatus = AppState.currentState;
+    const subscription = AppState.addEventListener("change", (next) => {
+      const was = state === "active";
+      state = next;
+      if ((next === "active") !== was) listener(next === "active");
+    });
+    return () => subscription.remove();
+  },
+};
+
+/**
+ * A lifecycle source its owner drives. The Android host uses one fed by native
+ * with the process's foreground state: its connections serve every client, so
+ * they must not suspend because one activity (the host screen) paused while a
+ * client's activity is in front.
+ */
+export function createDrivenLifecycleSource(
+  initial: boolean
+): LifecycleSource & { set(foreground: boolean): void } {
+  let foreground = initial;
+  const listeners = new Set<(foreground: boolean) => void>();
+  return {
+    current: () => foreground,
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    set(next) {
+      if (next === foreground) return;
+      foreground = next;
+      for (const listener of [...listeners]) listener(next);
+    },
+  };
+}
+
+let lifecycleSource: LifecycleSource = reactNativeAppState;
+
+/** Choose what suspends and resumes this process's connections (default: React Native's AppState). */
+export function setMobileLifecycleSource(source: LifecycleSource): void {
+  lifecycleSource = source;
+}
+
 function registerLifecycle(transport: LifecycleIrohClientPipe): () => void {
-  let state: AppStateStatus = AppState.currentState;
-  const subscription = AppState.addEventListener("change", (next) => {
-    const previous = state;
-    state = next;
-    if (next === "active" && previous !== "active") {
+  return lifecycleSource.subscribe((foreground) => {
+    if (foreground) {
       void transport
         .resume()
         .catch((error) => console.warn("[mobile-iroh] foreground rebind failed", error));
-    } else if (next !== "active" && previous === "active") {
+    } else {
       void transport
         .suspend()
         .catch((error) => console.warn("[mobile-iroh] background shutdown failed", error));
     }
   });
-  return () => subscription.remove();
 }
 
 function collectRetirementFailures(results: readonly PromiseSettledResult<unknown>[]): unknown[] {
@@ -517,6 +564,9 @@ export async function connectMobileAccount(
     { onPaired }
   );
   control.deviceId = stored.credential.deviceId;
+  // The account connection is the stable hub pipe: the server it reports is the
+  // hub's Endpoint ID (workspace connections report the server id of their route).
+  control.serverId = stored.controlPairing.endpointId;
   return new MobileWorkspaceAccount(control, async (reach, onRecovery) => {
     const child = await establishIrohConnection(
       reach,

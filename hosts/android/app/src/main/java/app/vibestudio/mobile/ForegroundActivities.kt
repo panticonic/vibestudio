@@ -22,6 +22,12 @@ object ForegroundActivities : Application.ActivityLifecycleCallbacks {
     }
 
     @Volatile private var resumed: WeakReference<Activity>? = null
+
+    /** Activities between onStart and onStop: the app is in the foreground while any is. Main thread only. */
+    private var started = 0
+
+    /** Whether any of the app's activities is visible. */
+    fun isForeground(): Boolean = started > 0
     private val listeners = CopyOnWriteArraySet<ResultListener>()
 
     fun current(): Activity? = resumed?.get()?.takeUnless { it.isFinishing || it.isDestroyed }
@@ -50,8 +56,17 @@ object ForegroundActivities : Application.ActivityLifecycleCallbacks {
     }
 
     override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) = Unit
-    override fun onActivityStarted(activity: Activity) = Unit
-    override fun onActivityStopped(activity: Activity) = Unit
+
+    override fun onActivityStarted(activity: Activity) {
+        started += 1
+        if (started == 1) HostRuntime.emitProcessForeground(true)
+    }
+
+    override fun onActivityStopped(activity: Activity) {
+        started = (started - 1).coerceAtLeast(0)
+        if (started == 0) HostRuntime.emitProcessForeground(false)
+    }
+
     override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
     override fun onActivityDestroyed(activity: Activity) {
         if (resumed?.get() === activity) resumed = null

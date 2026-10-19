@@ -20,7 +20,22 @@ class MainActivity : ReactActivity() {
     override fun getMainComponentName(): String = "Vibestudio"
 
     override fun createReactActivityDelegate(): ReactActivityDelegate =
-        DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled)
+        object : DefaultReactActivityDelegate(this, mainComponentName, fabricEnabled) {
+            /**
+             * The host runtime serves every client: its timers (reconnect backoff,
+             * keepalives) and connections must keep running while a client's task is
+             * in front. React Native stops a context's timers when its activity pauses,
+             * so the host instance stays resumed ([MainApplication]) and this screen
+             * only attaches and detaches its root view.
+             */
+            override fun onPause() = Unit
+
+            override fun onDestroy() {
+                reactDelegate?.unloadApp()
+                // Detach from the destroyed activity without leaving the resumed state.
+                reactNativeHost.reactInstanceManager.onHostResume(null)
+            }
+        }
 
     @Deprecated("Forwarded to the host instance and to native listeners")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {

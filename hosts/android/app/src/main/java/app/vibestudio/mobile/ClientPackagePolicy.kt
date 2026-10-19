@@ -18,7 +18,8 @@ object ClientPackagePolicy {
     private val UI_PACKAGES = setOf(
         "com.facebook.react.shell.MainReactPackage",
         "com.swmansion.gesturehandler.RNGestureHandlerPackage",
-        "com.swmansion.reanimated.ReanimatedPackage",
+        // Never the stock ReanimatedPackage: it builds a client's UIManager from the host's view managers.
+        "app.vibestudio.mobile.ClientReanimatedPackage",
         "com.swmansion.rnscreens.RNScreensPackage",
         "com.th3rdwave.safeareacontext.SafeAreaContextPackage",
         "com.horcrux.svg.SvgPackage",

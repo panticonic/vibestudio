@@ -79,7 +79,11 @@ function change(buildKey: string, over: Partial<SupervisionChange> = {}): Superv
     change: "adopted",
     previousBuildKey: "bk-1",
     previousEffectiveVersion: "v-bk-1",
-    client: { id: "browser", runtime: "react-native", grantedCapabilities: ["device-session", "panel-hosting"] },
+    client: {
+      id: "browser",
+      runtime: "react-native",
+      grantedCapabilities: ["device-session", "panel-hosting"],
+    },
     ...over,
   } as SupervisionChange;
 }
@@ -144,10 +148,7 @@ async function setup(options: {
     serverId: "srv",
     transport: { onReconnectProgress: () => () => undefined },
     waitUntilConnected: async () => undefined,
-    openAuxiliarySession: (
-      _label: string,
-      opts: { onTerminalClose?: (error: Error) => void }
-    ) => {
+    openAuxiliarySession: (_label: string, opts: { onTerminalClose?: (error: Error) => void }) => {
       principalHandlers.onTerminalClose = opts.onTerminalClose;
       return principalSession.asSession();
     },
@@ -248,7 +249,11 @@ async function setup(options: {
   };
   const runtime = new HostRuntime(ports);
   const nativeEvent = (event: HostRuntimeEvent) => nativeHandler!(event);
-  const request = async (method: string, args: unknown[] = [], requestId = `r-${Math.random()}`) => {
+  const request = async (
+    method: string,
+    args: unknown[] = [],
+    requestId = `r-${Math.random()}`
+  ) => {
     nativeHandler!({
       type: "client-request",
       tag: TAG,
@@ -346,7 +351,10 @@ describe("launching a client", () => {
     const build = { buildKey: "bk-1", bundle: "client bundle 1" };
     const t = await setup({
       launches: [
-        { state: "approval-required", approvals: [{ kind: "unit-install-review", approvalId: "ap1", parts: [] }] },
+        {
+          state: "approval-required",
+          approvals: [{ kind: "unit-install-review", approvalId: "ap1", parts: [] }],
+        },
         await readyOf(build),
       ],
       served: { [route("bk-1")]: build.bundle, "/_a/bk-1/ios/index.bundle": build.bundle },
@@ -356,11 +364,20 @@ describe("launching a client", () => {
 
     expect(t.native.startClient).not.toHaveBeenCalled();
     expect(t.native.showHostSurface).toHaveBeenCalled();
-    expect(t.runtime.ui.get()).toMatchObject({ phase: "launching", launchStatus: "approval-required" });
+    expect(t.runtime.ui.get()).toMatchObject({
+      phase: "launching",
+      launchStatus: "approval-required",
+    });
 
     await t.runtime.resolveApprovals("once");
 
     expect(t.rpcCalls.some((call) => call.name === "shellApproval.resolveBootstrap")).toBe(true);
+    expect(t.native.startClient).toHaveBeenCalledTimes(1);
+
+    // The server announces the answer this device just gave: that must not
+    // start a second, concurrent launch of the same client.
+    await t.emitServerEvent("shell-approval:resolved", { approvalId: "ap1" });
+    await Promise.resolve();
     expect(t.native.startClient).toHaveBeenCalledTimes(1);
   });
 
@@ -521,18 +538,40 @@ const chatListing = (over: Record<string, unknown> = {}) => ({
 
 describe("intents from the OS", () => {
   const started = async (options: Parameters<typeof setup>[0] = { launches: [] }) => {
-    const t = await setup({ ...options, launches: [{ state: "unavailable", reason: "x" }, ...options.launches] });
+    const t = await setup({
+      ...options,
+      launches: [{ state: "unavailable", reason: "x" }, ...options.launches],
+    });
     await t.runtime.start();
     return t;
   };
   const launchCalls = (t: Awaited<ReturnType<typeof setup>>) =>
     t.rpcCalls.filter((call) => call.name === "clients.launch");
 
+  it("lists the device's clients with their development mode, and switches it from the host screen", async () => {
+    const t = await started({ launches: [], listing: [chatListing()] });
+    await vi.waitFor(() =>
+      expect(t.runtime.ui.get().clients).toEqual([
+        { id: "chat", title: "Chat", development: false },
+      ])
+    );
+
+    await t.runtime.setDevelopmentMode("chat", true);
+
+    expect(t.runtime.ui.get().clients).toEqual([{ id: "chat", title: "Chat", development: true }]);
+    expect(t.state.isDevelopment("chat")).toBe(true);
+  });
+
   it("routes shared text to the client whose foreground intent accepts the type", async () => {
-    const t = await started({ launches: [{ state: "unavailable", reason: "x" }], listing: [chatListing()] });
+    const t = await started({
+      launches: [{ state: "unavailable", reason: "x" }],
+      listing: [chatListing()],
+    });
     t.nativeEvent({ type: "share-in", mimeType: "text/plain", text: "hello" });
     await vi.waitFor(() => expect(launchCalls(t)).toHaveLength(2));
-    expect(launchCalls(t)[1]!.args[0]).toMatchObject({ select: { id: "chat", intent: "share", params: { text: "hello" } } });
+    expect(launchCalls(t)[1]!.args[0]).toMatchObject({
+      select: { id: "chat", intent: "share", params: { text: "hello" } },
+    });
   });
 
   it("says so when no client accepts what was shared", async () => {
@@ -542,18 +581,29 @@ describe("intents from the OS", () => {
   });
 
   it("holds an intent that arrives before the device is up and handles it once it is", async () => {
-    const t = await setup({ launches: [{ state: "unavailable", reason: "x" }, { state: "unavailable", reason: "x" }], listing: [chatListing()] });
+    const t = await setup({
+      launches: [
+        { state: "unavailable", reason: "x" },
+        { state: "unavailable", reason: "x" },
+      ],
+      listing: [chatListing()],
+    });
     // Native releases what it held the moment the host is ready, before the device is up.
     t.native.markReady.mockImplementationOnce(async () => {
       t.nativeEvent({ type: "share-in", mimeType: "text/plain", text: "early" });
     });
     await t.runtime.start();
     await vi.waitFor(() => expect(launchCalls(t)).toHaveLength(2));
-    expect(launchCalls(t)[1]!.args[0]).toMatchObject({ select: { intent: "share", params: { text: "early" } } });
+    expect(launchCalls(t)[1]!.args[0]).toMatchObject({
+      select: { intent: "share", params: { text: "early" } },
+    });
   });
 
   it("opens a link's intent only when the client declares it as foreground", async () => {
-    const t = await started({ launches: [{ state: "unavailable", reason: "x" }], listing: [chatListing()] });
+    const t = await started({
+      launches: [{ state: "unavailable", reason: "x" }],
+      listing: [chatListing()],
+    });
     t.nativeEvent({ type: "link", url: "vibestudio://c/chat/ask" });
     await vi.waitFor(() => expect(t.runtime.ui.get().message).toMatch(/no intent "ask"/));
     expect(launchCalls(t)).toHaveLength(1);
@@ -565,18 +615,30 @@ describe("intents from the OS", () => {
   it("runs a background intent server-side and shows its text as a notification", async () => {
     const t = await started({ launches: [], listing: [chatListing()], invoked: { text: "42" } });
     t.nativeEvent({ type: "background-intent", name: "ask", text: "answer?" });
-    const display = (t.notifications.handlers as never as Record<string, ReturnType<typeof vi.fn>>)["notifications.display"]!;
+    const display = (t.notifications.handlers as never as Record<string, ReturnType<typeof vi.fn>>)[
+      "notifications.display"
+    ]!;
     await vi.waitFor(() => expect(display).toHaveBeenCalled());
     expect(display).toHaveBeenCalledWith({ id: "intent:chat:ask", title: "Ask", body: "42" });
     const invoked = t.rpcCalls.find((call) => call.name === "clients.invokeIntent")!;
-    expect(invoked.args[1]).toMatchObject({ id: "chat", intent: "ask", params: { text: "answer?" } });
+    expect(invoked.args[1]).toMatchObject({
+      id: "chat",
+      intent: "ask",
+      params: { text: "answer?" },
+    });
     expect(launchCalls(t)).toHaveLength(1);
   });
 
   it("shows a failed background intent as a notification, not nothing", async () => {
-    const t = await started({ launches: [], listing: [chatListing()], invoked: new Error("quota") });
+    const t = await started({
+      launches: [],
+      listing: [chatListing()],
+      invoked: new Error("quota"),
+    });
     t.nativeEvent({ type: "background-intent", name: "ask", text: "q" });
-    const display = (t.notifications.handlers as never as Record<string, ReturnType<typeof vi.fn>>)["notifications.display"]!;
+    const display = (t.notifications.handlers as never as Record<string, ReturnType<typeof vi.fn>>)[
+      "notifications.display"
+    ]!;
     await vi.waitFor(() => expect(display).toHaveBeenCalled());
     expect(display.mock.calls[0]![0].body).toMatch(/^Failed: .*quota/);
   });
@@ -607,7 +669,11 @@ describe("launchers and launch surfaces", () => {
     await vi.waitFor(() => expect(t.native.publishLaunchSurfaces).toHaveBeenCalled());
     return t;
   };
-  const requestResult = async (t: Awaited<ReturnType<typeof started>>, method: string, args: unknown[]) => {
+  const requestResult = async (
+    t: Awaited<ReturnType<typeof started>>,
+    method: string,
+    args: unknown[]
+  ) => {
     const { responded, rejected } = await t.request(method, args);
     return rejected ? { rejected: rejected[2] } : { result: JSON.parse(responded![2] as string) };
   };
@@ -684,7 +750,12 @@ describe("launchers and launch surfaces", () => {
 
   it("disables and forgets a client's launchers when asked to remove them", async () => {
     const t = await started();
-    t.nativeEvent({ type: "shortcut-pinned", shortcutId: "vibestudio://c/chat/open", label: "Chat", link: "vibestudio://c/chat/open" });
+    t.nativeEvent({
+      type: "shortcut-pinned",
+      shortcutId: "vibestudio://c/chat/open",
+      label: "Chat",
+      link: "vibestudio://c/chat/open",
+    });
     await vi.waitFor(async () =>
       expect((await requestResult(t, "integration.list", [])).result).toHaveLength(1)
     );
@@ -699,7 +770,12 @@ describe("launchers and launch surfaces", () => {
   it("disables the launchers of a client the server no longer declares, on clients:changed", async () => {
     const listing: unknown[] = [chatListing()];
     const t = await started({ listing });
-    t.nativeEvent({ type: "shortcut-pinned", shortcutId: "vibestudio://c/chat/open", label: "Chat", link: "vibestudio://c/chat/open" });
+    t.nativeEvent({
+      type: "shortcut-pinned",
+      shortcutId: "vibestudio://c/chat/open",
+      label: "Chat",
+      link: "vibestudio://c/chat/open",
+    });
     await vi.waitFor(() => expect(t.state.launchers()).toHaveLength(1));
     listing.length = 0;
     await t.emitServerEvent("clients:changed", {});
@@ -715,7 +791,12 @@ describe("launchers and launch surfaces", () => {
   it("keeps the launchers of a client that is merely unavailable right now", async () => {
     const listing: unknown[] = [chatListing()];
     const t = await started({ listing });
-    t.nativeEvent({ type: "shortcut-pinned", shortcutId: "vibestudio://c/chat/open", label: "Chat", link: "vibestudio://c/chat/open" });
+    t.nativeEvent({
+      type: "shortcut-pinned",
+      shortcutId: "vibestudio://c/chat/open",
+      label: "Chat",
+      link: "vibestudio://c/chat/open",
+    });
     await vi.waitFor(() => expect(t.state.launchers()).toHaveLength(1));
     listing[0] = chatListing({ unavailableReason: "needs a capability" });
     await t.emitServerEvent("clients:changed", {});
@@ -768,7 +849,10 @@ describe("notifications reach the host's clients and conversations", () => {
   });
 
   it("finds no conversation launch when no client declares one", async () => {
-    const t = await setup({ launches: [{ state: "unavailable", reason: "x" }], listing: [chatListing()] });
+    const t = await setup({
+      launches: [{ state: "unavailable", reason: "x" }],
+      listing: [chatListing()],
+    });
     await t.runtime.start();
     expect(await t.runtime.conversationLaunch("ch-1")).toBeNull();
   });
@@ -787,12 +871,16 @@ describe("replying to a pushed message", () => {
     channelTargetId: "do:channel:ch-1",
   } as never;
   const replyCalls = (t: Awaited<ReturnType<typeof setup>>) =>
-    t.rpcCalls.filter((call) => call.name === "sendAsCaller" || call.name.endsWith("acknowledgeUserNotification"));
+    t.rpcCalls.filter(
+      (call) => call.name === "sendAsCaller" || call.name.endsWith("acknowledgeUserNotification")
+    );
 
   it("sends the text into the conversation, then acknowledges the durable entry as the device", async () => {
     const t = await setup({ launches: [{ state: "unavailable", reason: "x" }] });
     await t.runtime.start();
-    await expect(t.runtime.replyToInbox(entry, "on my way")).resolves.toEqual({ acknowledged: true });
+    await expect(t.runtime.replyToInbox(entry, "on my way")).resolves.toEqual({
+      acknowledged: true,
+    });
     expect(replyCalls(t)).toEqual([
       { name: "sendAsCaller", args: ["on my way"] },
       { name: "acknowledgeUserNotification", args: [{ id: "agent.message:m1:alice" }] },
@@ -800,7 +888,10 @@ describe("replying to a pushed message", () => {
   });
 
   it("reports a failed acknowledgement as an outcome, because the text was already sent", async () => {
-    const t = await setup({ launches: [{ state: "unavailable", reason: "x" }], acknowledge: new Error("gad down") });
+    const t = await setup({
+      launches: [{ state: "unavailable", reason: "x" }],
+      acknowledge: new Error("gad down"),
+    });
     await t.runtime.start();
     await expect(t.runtime.replyToInbox(entry, "hi")).resolves.toEqual({
       acknowledged: false,

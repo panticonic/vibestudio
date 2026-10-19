@@ -1,4 +1,4 @@
-/** These declarations describe the implementation installed by polyfills.ts,
+/** These declarations describe the implementation installed by installPolyfills.ts,
  * not browser APIs borrowed by a native type environment. */
 export {};
 declare global {

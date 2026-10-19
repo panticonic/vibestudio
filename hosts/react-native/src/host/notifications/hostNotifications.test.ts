@@ -177,11 +177,24 @@ describe("host notifications", () => {
   it("creates Android channels and iOS categories at start", async () => {
     const h = harness();
     await h.host.start();
-    expect(h.notifee.createChannel.mock.calls.map(([c]) => c.id)).toEqual(["approvals", "messages"]);
+    expect(h.notifee.createChannel.mock.calls.map(([c]) => c.id)).toEqual([
+      "approvals",
+      "messages",
+    ]);
     expect(h.notifee.setNotificationCategories).toHaveBeenCalled();
     const ios = harness({ platform: "ios" });
     await ios.host.start();
     expect(ios.notifee.createChannel).not.toHaveBeenCalled();
+  });
+
+  it("creates the channels without push, so local notifications are not dropped by the OS", async () => {
+    const h = harness({ configured: false });
+    await h.host.start();
+    expect(h.notifee.createChannel.mock.calls.map(([c]) => c.id)).toEqual([
+      "approvals",
+      "messages",
+    ]);
+    expect(h.messaging.onMessage).not.toHaveBeenCalled();
   });
 
   it("displays an approval prompt from a foreground message and from the background handler, with host-authored labels", async () => {
@@ -332,7 +345,11 @@ describe("host notifications", () => {
     const h = harness();
     h.listen(false);
     await h.host.start();
-    await h.l.backgroundEvent?.({ kind: "action", actionId: "open", notification: { data: { ...target } } });
+    await h.l.backgroundEvent?.({
+      kind: "action",
+      actionId: "open",
+      notification: { data: { ...target } },
+    });
     expect(await h.host.handlers["notifications.takeInitialOpen"]()).toEqual({
       kind: "approval",
       target,
@@ -426,7 +443,9 @@ describe("host notifications", () => {
     expect(h.displayed[0]).toMatchObject({ id: "local-1", title: "T", body: "B" });
     await h.host.handlers["notifications.cancel"]("local-1");
     expect(h.cancelled).toEqual(["local-1"]);
-    expect(await h.host.handlers["notifications.displayed"]()).toEqual([{ id: "x", data: { a: 1 } }]);
+    expect(await h.host.handlers["notifications.displayed"]()).toEqual([
+      { id: "x", data: { a: 1 } },
+    ]);
   });
 
   it("refuses a second start and allows restart after stop", async () => {
@@ -480,7 +499,9 @@ describe("host notifications", () => {
       });
       expect(shown(h).ios).toEqual({ categoryId: "vibestudio-user-inbox-reply" });
       const categories = h.notifee.setNotificationCategories.mock.calls[0]![0];
-      expect(categories.find((c) => c.id === "vibestudio-user-inbox-reply")?.actions[0]).toMatchObject({
+      expect(
+        categories.find((c) => c.id === "vibestudio-user-inbox-reply")?.actions[0]
+      ).toMatchObject({
         id: "reply",
         input: expect.anything(),
       });
@@ -507,7 +528,9 @@ describe("host notifications", () => {
         input: "on my way",
         data: h.inboxShown[0]!.data,
       });
-      expect(h.replies).toEqual([{ workspaceId: scope.workspaceId, target: channelTargetId, text: "on my way" }]);
+      expect(h.replies).toEqual([
+        { workspaceId: scope.workspaceId, target: channelTargetId, text: "on my way" },
+      ]);
       expect(h.cancelled).toEqual([keyOf("n-1")]);
     });
 
@@ -519,7 +542,9 @@ describe("host notifications", () => {
       expect(h.replies).toHaveLength(1);
       expect(h.cancelled).toEqual([]);
       expect(h.displayed).toHaveLength(2);
-      expect(shown(h).body).toBe("Sent, but this message could not be marked as read: gad unreachable");
+      expect(shown(h).body).toBe(
+        "Sent, but this message could not be marked as read: gad unreachable"
+      );
       expect(shown(h).ios).toEqual({});
       expect(h.inboxShown.at(-1)!.actions).toEqual([]);
     });
@@ -528,7 +553,9 @@ describe("host notifications", () => {
       const h = harness();
       await show(h);
       await h.l.backgroundEvent!(replyEvent(h, " on my way "));
-      expect(h.replies).toEqual([{ workspaceId: scope.workspaceId, target: channelTargetId, text: "on my way" }]);
+      expect(h.replies).toEqual([
+        { workspaceId: scope.workspaceId, target: channelTargetId, text: "on my way" },
+      ]);
       expect(h.cancelled).toEqual([keyOf("n-1")]);
     });
 
@@ -566,7 +593,9 @@ describe("host notifications", () => {
       const h = harness();
       await h.host.start();
       await h.l.message!(pushed({ actionsJson: "not json" }));
-      await h.l.message!(pushed({ actionsJson: JSON.stringify([{ id: "open", title: "Open", input: "text" }]) }));
+      await h.l.message!(
+        pushed({ actionsJson: JSON.stringify([{ id: "open", title: "Open", input: "text" }]) })
+      );
       await h.l.message!(pushed({ channelTargetId: undefined, inboxKind: "other" }));
       expect(h.displayed).toEqual([]);
     });

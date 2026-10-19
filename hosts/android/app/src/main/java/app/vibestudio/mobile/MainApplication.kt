@@ -48,6 +48,9 @@ class MainApplication : Application(), ReactApplication {
         IrohAndroid.installAndroidContext(this)
         registerActivityLifecycleCallbacks(ForegroundActivities)
         ClientInstances.init(this)
-        reactNativeHost.reactInstanceManager.createReactContextInBackground()
+        val host = reactNativeHost.reactInstanceManager
+        host.createReactContextInBackground()
+        // Headless and resumed for the process's life, whichever activity is in front.
+        host.onHostResume(null)
     }
 }

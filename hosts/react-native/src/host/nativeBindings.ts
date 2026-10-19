@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Clipboard from "@react-native-clipboard/clipboard";
-import { Linking, NativeEventEmitter, NativeModules, Platform } from "react-native";
+import { AppState, Linking, NativeEventEmitter, NativeModules, Platform } from "react-native";
 import {
   consumeConnectLinkReplay,
   connectPairingFromLink,
@@ -8,6 +8,7 @@ import {
   markConnectLinkConsumed,
   parseConnectLink,
 } from "@vibestudio/mobile-iroh/connectLink";
+import { createDrivenLifecycleSource, setMobileLifecycleSource } from "@vibestudio/mobile-iroh";
 import {
   createGatewayArtifactFetch,
   createMobileArtifactStore,
@@ -47,7 +48,8 @@ export function asyncStorageKeyValueStore(): KeyValueStore {
     get: (key) => AsyncStorage.getItem(key),
     set: (key, value) => AsyncStorage.setItem(key, value),
     remove: (key) => AsyncStorage.removeItem(key),
-    keys: async (prefix) => (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(prefix)),
+    keys: async (prefix) =>
+      (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(prefix)),
   };
 }
 
@@ -96,6 +98,14 @@ export function startMobileHost(options: {
     },
   };
 
+  // Android: the device connections serve every client, so they follow the
+  // process's foreground state (native reports it), not the host screen's.
+  let processForeground: ReturnType<typeof createDrivenLifecycleSource> | undefined;
+  if (platform === "android") {
+    processForeground = createDrivenLifecycleSource(AppState.currentState === "active");
+    setMobileLifecycleSource(processForeground);
+  }
+
   let runtime: HostRuntime | null = null;
   const notifications = createHostNotifications({
     ...createNativeNotificationPorts(),
@@ -141,6 +151,7 @@ export function startMobileHost(options: {
     },
     platform,
     hostVersion: options.hostVersion,
+    ...(processForeground ? { processForeground } : {}),
     ...(options.smokePhase ? { smokePhase: options.smokePhase } : {}),
   };
   runtime = new HostRuntime(ports);

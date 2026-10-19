@@ -43,6 +43,8 @@ class VibestudioHostRuntimeModule(
     @ReactMethod
     fun markReady(promise: Promise) = done(promise, "host_runtime_failed") {
         HostRuntime.broker.markReady()
+        // The host's listeners are attached: report the foreground state it may have missed.
+        ClientInstances.onMain { HostRuntime.emitProcessForeground(ForegroundActivities.isForeground()) }
     }
 
     @ReactMethod

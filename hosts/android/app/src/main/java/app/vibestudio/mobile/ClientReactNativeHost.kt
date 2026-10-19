@@ -6,6 +6,7 @@ import com.facebook.react.PackageList
 import com.facebook.react.ReactNativeHost
 import com.facebook.react.ReactPackage
 import com.facebook.react.bridge.JSExceptionHandler
+import com.swmansion.reanimated.ReanimatedPackage
 
 /**
  * The React Native host of one client instance: its own instance manager,
@@ -33,8 +34,9 @@ class ClientReactNativeHost(
 
     override fun getPackages(): List<ReactPackage> {
         // Fresh package objects per instance: PackageList builds new ones on every call.
-        val candidates = PackageList(application).packages +
-            listOf(WorkspaceWebViewPackage(), VibestudioPanelHostPackage(), OAuthLoopbackPackage())
+        val candidates = PackageList(application).packages.map { candidate ->
+            if (candidate is ReanimatedPackage) ClientReanimatedPackage { reactInstanceManager } else candidate
+        } + listOf(WorkspaceWebViewPackage(), VibestudioPanelHostPackage(), OAuthLoopbackPackage())
         return ClientPackagePolicy.filter(candidates, spec.grantedCapabilities) +
             VibestudioClientBrokerPackage(spec.tag, spec.clientId)
     }

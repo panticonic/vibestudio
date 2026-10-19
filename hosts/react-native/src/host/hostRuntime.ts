@@ -108,6 +108,8 @@ export interface HostUiState {
   launchDetail: string | null;
   /** Running clients, by title. */
   running: Array<{ tag: string; title: string }>;
+  /** The clients this device can run, with their development mode (docs/client-hosts-and-clients-plan.md 7.4). */
+  clients: Array<{ id: string; title: string; development: boolean }>;
 }
 
 const INITIAL_UI: HostUiState = {
@@ -119,6 +121,7 @@ const INITIAL_UI: HostUiState = {
   launchStatus: null,
   launchDetail: null,
   running: [],
+  clients: [],
 };
 
 /** The server events the host runtime acts on. `EventsClient` implements it. */
@@ -127,7 +130,9 @@ export interface HostEvents {
     event: E,
     listener: (payload: EventPayloads[E]) => void
   ): () => void;
-  subscribe(event: "clients:changed" | "shell-approval:resolved" | "supervision:changed"): Promise<void>;
+  subscribe(
+    event: "clients:changed" | "shell-approval:resolved" | "supervision:changed"
+  ): Promise<void>;
   unsubscribe(event: "supervision:changed"): Promise<void>;
   unsubscribeAll(): Promise<void>;
 }
@@ -181,6 +186,8 @@ export interface HostRuntimePorts {
   linkSource: HostLinkSource;
   platform: "android" | "ios";
   hostVersion: string;
+  /** Where native reports the process's foreground state (Android; absent where the app lifecycle already is the process's). */
+  processForeground?: { set(foreground: boolean): void };
   smokePhase?: (phase: string) => void;
 }
 
@@ -202,6 +209,15 @@ function isUnitInstallReview(value: unknown): value is PendingUnitInstallReviewA
     typeof value === "object" &&
     value !== null &&
     (value as { kind?: unknown }).kind === "unit-install-review"
+  );
+}
+
+/** An error with its stack and, for an AggregateError, every member: what the device log needs to find a root cause. */
+function describeFailure(error: unknown): string {
+  if (!(error instanceof Error)) return String(error);
+  const members = error instanceof AggregateError ? error.errors.map(describeFailure) : [];
+  return [error.stack ?? error.message, ...members.map((member) => `  caused by: ${member}`)].join(
+    "\n"
   );
 }
 
@@ -321,7 +337,11 @@ export class HostRuntime {
   private bringingUp: Promise<void> | null = null;
 
   private async doBringUp(launchDefault: boolean): Promise<void> {
-    this.patch({ phase: "connecting", message: "Connecting securely to your workspace...", busy: true });
+    this.patch({
+      phase: "connecting",
+      message: "Connecting securely to your workspace...",
+      busy: true,
+    });
     try {
       if (!(await this.ports.device.isPaired())) {
         this.patch({
@@ -373,7 +393,10 @@ export class HostRuntime {
     this.events = events;
     this.stopEvents.push(
       events.on("clients:changed", () => void this.onClientsChanged()),
-      events.on("shell-approval:resolved", (event) => void this.onApprovalResolved(event.approvalId)),
+      events.on(
+        "shell-approval:resolved",
+        (event) => void this.onApprovalResolved(event.approvalId)
+      ),
       events.on("supervision:changed", (change) => this.onSupervisionChange(change)),
       connection.recovery.registerResubscribeHandler("host-notifications", () =>
         this.ports.notifications.drain()
@@ -433,7 +456,11 @@ export class HostRuntime {
     if (isClientLink(url)) {
       try {
         const request = parseClientIntentLink(url);
-        await this.openClientIntent(request.id, { name: request.intent, params: request.params }, focus);
+        await this.openClientIntent(
+          request.id,
+          { name: request.intent, params: request.params },
+          focus
+        );
       } catch (error) {
         this.patch({ message: errorMessage(error) });
       }
@@ -482,7 +509,7 @@ export class HostRuntime {
         await this.bringUp();
         return true;
       } catch (error) {
-        console.error("[mobile-host] pairing failed", error);
+        console.error("[mobile-host] pairing failed", describeFailure(error));
         this.patch({ phase: "failed", message: errorMessage(error), busy: false });
         return false;
       } finally {
@@ -615,6 +642,9 @@ export class HostRuntime {
     if (!active || approvals.length === 0) return;
     this.patch({ busy: true, message: decision === "once" ? "Approving..." : "Denying..." });
     this.smoke("embedded-host-target-approval-submitted");
+    // The answer given here continues this launch (`resolveApprovals`); the launch
+    // stops waiting on those reviews so their announcement starts no second launch.
+    for (const approval of approvals) active.approvalIds.delete(approval.approvalId);
     try {
       const state = await active.launcher.resolveApprovals(approvals, decision);
       this.smoke("embedded-host-target-approval-resolved");
@@ -632,6 +662,7 @@ export class HostRuntime {
         await this.applyLaunchState(state);
       }
     } catch (error) {
+      console.error("[mobile-host] answering the launch review failed", describeFailure(error));
       this.patch({ busy: false, message: errorMessage(error) });
     }
   }
@@ -763,12 +794,15 @@ export class HostRuntime {
         });
       await observer.start();
     } catch (error) {
-      this.running.delete(tag);
+      // Only this attempt's own entry: a newer start of the tag owns the key now.
+      if (this.running.get(tag) === running) this.running.delete(tag);
       await instance.dispose().catch(() => undefined);
       throw error;
     }
     await this.retainBuilds();
-    this.smoke(`${reloadTag && previous ? "client-reloaded" : "client-running"}.${launched.client.id}`);
+    this.smoke(
+      `${reloadTag && previous ? "client-reloaded" : "client-running"}.${launched.client.id}`
+    );
     this.patch({
       phase: "running",
       busy: false,
@@ -836,22 +870,28 @@ export class HostRuntime {
     if (change.identity.kind !== "client" || !change.client) return;
     for (const running of this.running.values()) {
       if (running.source !== change.source) continue;
-      const next = change.client.grantedCapabilities.filter(isClientCapability);
+      // The announced set is the server's view of the client; this host grants
+      // only what it implements, exactly as at launch.
+      const next = change.client.grantedCapabilities
+        .filter(isClientCapability)
+        .filter((capability) => MOBILE_HOST_CAPABILITIES.includes(capability));
       const before = running.instance.capabilities;
-      const widened = next.every((capability) => before.includes(capability));
-      const same = widened && before.length === next.length;
-      if (same || change.change === "adopted" || change.change === "rolled-back") continue;
-      if (widened) {
+      const lost = before.some((capability) => !next.includes(capability));
+      const gained = next.some((capability) => !before.includes(capability));
+      if ((!lost && !gained) || change.change === "adopted" || change.change === "rolled-back")
+        continue;
+      if (!lost) {
         running.instance.setCapabilities(next);
       } else {
         // Narrowed: the server decides whether the client can still run (a required
         // capability gone) or only loses an optional one; relaunch to find out.
-        void this.reload(running.tag, "update").catch((error: unknown) =>
-          void this.stopClient(
-            running.tag,
-            "capability-revoked",
-            `${running.title} lost a capability it needs: ${errorMessage(error)}`
-          )
+        void this.reload(running.tag, "update").catch(
+          (error: unknown) =>
+            void this.stopClient(
+              running.tag,
+              "capability-revoked",
+              `${running.title} lost a capability it needs: ${errorMessage(error)}`
+            )
         );
       }
     }
@@ -973,8 +1013,14 @@ export class HostRuntime {
    * A link can only reach intents the client declares as foreground; nothing a
    * link carries can invoke a background intent.
    */
-  private async openClientIntent(id: string | null, intent: ClientIntent, focus = true): Promise<void> {
-    const listed = (await this.listClients()).filter((listing) => listing.runtime === "react-native");
+  private async openClientIntent(
+    id: string | null,
+    intent: ClientIntent,
+    focus = true
+  ): Promise<void> {
+    const listed = (await this.listClients()).filter(
+      (listing) => listing.runtime === "react-native"
+    );
     const declaring = listed.filter((listing) => isForegroundIntent(listing, intent.name));
     const chosen = id
       ? declaring.find((listing) => listing.id === id)
@@ -1004,7 +1050,10 @@ export class HostRuntime {
   private async shareIn(mimeType: string, text: string): Promise<void> {
     const target = pickShareTarget(await this.listClients(), mimeType);
     if (!target) throw new Error(`No client on this device accepts shared ${mimeType}.`);
-    await this.deliverIntent(target.id, { name: target.intent, params: { [target.textParam]: text } });
+    await this.deliverIntent(target.id, {
+      name: target.intent,
+      params: { [target.textParam]: text },
+    });
   }
 
   /**
@@ -1015,7 +1064,8 @@ export class HostRuntime {
    */
   private async runBackgroundIntent(name: string, text: string, clientId?: string): Promise<void> {
     const picked = pickBackgroundIntent(await this.listClients(), name, clientId);
-    if (!picked) throw new Error(`No client on this device declares the background intent "${name}".`);
+    if (!picked)
+      throw new Error(`No client on this device declares the background intent "${name}".`);
     const title = picked.intent.title ?? name;
     const textParam = textParamOf(picked.intent);
     const notificationId = `intent:${picked.id}:${name}`;
@@ -1035,11 +1085,14 @@ export class HostRuntime {
       title,
       body,
     });
+    this.smoke(`background-intent-completed.${picked.id}.${name}`);
   }
 
   /** What the person can pin to the home screen: launchers for the clients this device runs. */
   async pinnableShortcuts(): Promise<LaunchEntry[]> {
-    return launchEntries((await this.integrationSnapshot()).clients).flatMap((client) => client.entries);
+    return launchEntries((await this.integrationSnapshot()).clients).flatMap(
+      (client) => client.entries
+    );
   }
 
   /**
@@ -1058,7 +1111,10 @@ export class HostRuntime {
       (candidate) => candidate.clientId === id && candidate.link === open
     );
     if (!shortcut) {
-      throw new BrokerError("UNKNOWN_CLIENT", `This device has no client "${id}" to add a launcher for.`);
+      throw new BrokerError(
+        "UNKNOWN_CLIENT",
+        `This device has no client "${id}" to add a launcher for.`
+      );
     }
     return { outcome: (await this.pinShortcut(shortcut)) ? "requested" : "unsupported" };
   }
@@ -1120,6 +1176,7 @@ export class HostRuntime {
           await this.removeLaunchers(id, "This app was removed from your workspace.");
         }
         await this.ports.native.publishLaunchSurfaces(launchSurfaces(snapshot.clients));
+        this.patch({ clients: this.developableClients(listings) });
         this.smoke("launch-surfaces-published");
       })
       .catch((error: unknown) => {
@@ -1128,6 +1185,41 @@ export class HostRuntime {
   }
 
   private integrationRefresh: Promise<void> = Promise.resolve();
+
+  private developableClients(
+    listings: ReadonlyArray<{
+      id: string;
+      title: string;
+      runtime: string;
+      unavailableReason?: string | undefined;
+    }>
+  ): HostUiState["clients"] {
+    return listings
+      .filter(
+        (listing) => listing.runtime === "react-native" && listing.unavailableReason === undefined
+      )
+      .map((listing) => ({
+        id: listing.id,
+        title: listing.title,
+        development: this.ports.state.isDevelopment(listing.id),
+      }));
+  }
+
+  /**
+   * Development mode for one client on this device: a running instance of it
+   * takes rebuilds as soon as the server announces them, restarting only itself.
+   * A host-side setting, never the client's own (a published client cannot opt in).
+   */
+  async setDevelopmentMode(clientId: string, enabled: boolean): Promise<void> {
+    await this.ports.state.setDevelopment(clientId, enabled);
+    this.patch({
+      clients: this.ui
+        .get()
+        .clients.map((client) =>
+          client.id === clientId ? { ...client, development: enabled } : client
+        ),
+    });
+  }
 
   private integrationSnapshot() {
     const clients = createTypedServiceClient(
@@ -1262,12 +1354,18 @@ export class HostRuntime {
         })();
         return;
       }
+      case "process-foreground": {
+        this.ports.processForeground?.set(event.foreground);
+        return;
+      }
       case "client-restore": {
         void this.restoreClient(event.clientId);
         return;
       }
       case "link": {
-        this.whenLive(() => this.handleLink(event.url, event.focus !== false).then(() => undefined));
+        this.whenLive(() =>
+          this.handleLink(event.url, event.focus !== false).then(() => undefined)
+        );
         return;
       }
       case "shortcut-pinned": {
