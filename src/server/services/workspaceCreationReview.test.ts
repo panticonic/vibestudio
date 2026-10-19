@@ -69,24 +69,18 @@ describe("WorkspaceCreationReviewStore", () => {
 });
 
 describe("isEntirelyHostBundledCreationReview", () => {
-  it("accepts only a nonempty set whose every source has host-build provenance", () => {
+  it("accepts only a nonempty set whose every unit the host-build gate vouches for", () => {
+    const shipped = new Set(["clients/desktop-browser"]);
+    const isHostBuildUnit = (repoPath: string) => shipped.has(repoPath);
     const units = [{ source: { repo: "clients/desktop-browser" } }];
-    expect(
-      isEntirelyHostBundledCreationReview(
-        units,
-        new Map([["clients/desktop-browser", { isHostBuild: true }]])
-      )
-    ).toBe(true);
+    expect(isEntirelyHostBundledCreationReview(units, isHostBuildUnit)).toBe(true);
     expect(
       isEntirelyHostBundledCreationReview(
         [...units, { source: { repo: "extensions/custom" } }],
-        new Map([
-          ["clients/desktop-browser", { isHostBuild: true }],
-          ["extensions/custom", { isHostBuild: false }],
-        ])
+        isHostBuildUnit
       )
     ).toBe(false);
-    expect(isEntirelyHostBundledCreationReview(units, new Map())).toBe(false);
-    expect(isEntirelyHostBundledCreationReview([], new Map())).toBe(false);
+    expect(isEntirelyHostBundledCreationReview(units, () => false)).toBe(false);
+    expect(isEntirelyHostBundledCreationReview([], () => true)).toBe(false);
   });
 });

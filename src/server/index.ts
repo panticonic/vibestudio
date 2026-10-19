@@ -57,6 +57,7 @@ import {
   type EntityRecord,
 } from "@vibestudio/shared/runtime/entitySpec";
 import { isOpenPanelBrowserUrl } from "@vibestudio/shared/panelChrome";
+import { createHostBuildUnitGate } from "@vibestudio/shared/hostBuildUnits";
 import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import {
   callerAccountUserId,
@@ -8077,7 +8078,8 @@ async function main() {
         const origins = await resolveUnitOrigins(
           creationReview.units.map((unit) => unit.source.repo)
         );
-        if (isEntirelyHostBundledCreationReview(creationReview.units, origins)) {
+        const isHostBuildUnit = createHostBuildUnitGate({ statePath, workspacePath });
+        if (isEntirelyHostBundledCreationReview(creationReview.units, isHostBuildUnit)) {
           // Installing Vibestudio already authorized its own verified bundle.
           // Record that admission at creation so the bundled client can start
           // without asking it to review itself. Later workspace changes still
