@@ -222,6 +222,7 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
   const windowsMade: FakeWindow[] = [];
   const closedWindows: Array<[FakeWindow, string | null]> = [];
   let host!: DesktopClientHost;
+  let opening: Promise<void> = Promise.resolve();
   const windows: ClientWindows = new ClientWindows(
     {
       plain: (windowId, spec) => {
@@ -236,7 +237,7 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
       },
     },
     {
-      opened: async () => undefined,
+      opened: () => opening,
       closed: (window, reason) => {
         closedWindows.push([window as FakeWindow, reason]);
         host.windowClosed(window);
@@ -300,6 +301,12 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
     principals: launchHost.principalSessions(),
     launchLink,
     grantCalls: () => calls.filter((c) => c.method === "grantClientPrincipal"),
+    /** Hold every window's opening until the returned release is called. */
+    holdOpening: () => {
+      let release!: () => void;
+      opening = new Promise((resolve) => (release = resolve));
+      return release;
+    },
   };
 }
 
@@ -417,6 +424,42 @@ describe("DesktopClientHost launch and delivery", () => {
 
     t.host.clientsChanged();
     await vi.waitFor(() => expect(t.windowsMade).toHaveLength(1));
+  });
+
+  it("does not launch again when the server announces the answer the gate gave", async () => {
+    const t = harness();
+    t.launches.push({
+      state: "approval-required",
+      approvals: [{ kind: "unit-install-review", approvalId: "ap1" }],
+    });
+    t.launches.push(await readyResult(BUILD1));
+    await t.host.launch({ default: true });
+
+    // The server announces the answer while the gate's own continuation is still in flight.
+    const answering = t.host.resolveGateApprovals("once");
+    t.host.approvalResolved({ approvalKind: "unit-install-review", granted: true } as never);
+    await answering;
+    await vi.waitFor(() => expect(t.windowsMade).toHaveLength(1));
+    expect(t.calls.filter((c) => c.method === "launch")).toHaveLength(2);
+    expect(t.notices).toEqual([]);
+  });
+
+  it("keeps the gate until a starting client's window is open, when another launch races it", async () => {
+    const t = harness();
+    const release = t.holdOpening();
+    t.launches.push(await readyResult(BUILD1));
+    t.launches.push(await readyResult(BUILD1));
+    const first = t.host.launch({ default: true });
+    await vi.waitFor(() => expect(t.windowsMade).toHaveLength(1));
+    const second = t.host.launch({ default: true });
+    await vi.waitFor(() => expect(t.calls.filter((c) => c.method === "launch")).toHaveLength(2));
+    // The gate is the only window until the client's opens: dismissing it now would end the app.
+    expect(t.dismissed()).toBe(0);
+
+    release();
+    await Promise.all([first, second]);
+    expect(t.windowsMade).toHaveLength(1);
+    expect(t.dismissed()).toBe(2);
   });
 
   it("continues a review that was answered elsewhere", async () => {

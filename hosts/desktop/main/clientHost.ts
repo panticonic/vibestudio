@@ -119,6 +119,8 @@ interface RunningClient {
   observer: ClientUpdateObserver;
   /** Builds whose bytes this client's windows may still load. */
   builds: Set<string>;
+  /** The opening of the client's first window; it runs once that settles. */
+  opened: Promise<void>;
 }
 
 interface LaunchSession {
@@ -260,6 +262,8 @@ export class DesktopClientHost implements PendingClientUpdates {
       });
       return;
     }
+    // The answer continues this launch; the server's announcement of it must not start another.
+    session.state = null;
     this.deps.gate.present(null, { status: "starting", reason: "Approval recorded. Starting..." });
     await session.launcher.resolveApprovals("once");
   }
@@ -324,6 +328,9 @@ export class DesktopClientHost implements PendingClientUpdates {
       );
     }
     this.catalog.register(delivered);
+    // A launch that races a client's start joins it: until its first window is
+    // open there is nothing to focus, and the gate is the only window there is.
+    await this.running.get(client.id)?.opened.catch(() => undefined);
     const running = this.running.get(client.id);
     if (!running) {
       await this.start(client, delivered, spec);
@@ -371,10 +378,20 @@ export class DesktopClientHost implements PendingClientUpdates {
       client,
       observer,
       builds: new Set([delivered.buildKey]),
+      opened: Promise.resolve(),
     };
     this.running.set(client.id, running);
     // A launch always yields the server's current build: an offer for another is stale.
     this.clearPending(client.id);
+    running.opened = this.openFirstWindow(client, spec, observer);
+    await running.opened;
+  }
+
+  private async openFirstWindow(
+    client: ReadyClient,
+    spec: ClientWindowSpec,
+    observer: ClientUpdateObserver
+  ): Promise<void> {
     try {
       const window = await this.deps.windows.open(spec);
       await this.deps.clientStarted?.(client, window);
