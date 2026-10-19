@@ -186,6 +186,37 @@ export function appendSources(
   view: LaunchGateView,
   options: { open: boolean; onToggle?: (open: boolean) => void }
 ): void {
+  const heading = document.createElement("div");
+  heading.className = "launch-source-overview-title";
+  heading.textContent = "Code sources";
+  card.append(heading);
+
+  const overview = document.createElement("ul");
+  overview.className = "launch-source-overview";
+  overview.setAttribute("aria-label", "Code included in this workspace");
+  for (const source of view.sources) {
+    const item = document.createElement("li");
+    item.className = "launch-source-overview-item";
+    const header = document.createElement("div");
+    header.className = "launch-source-header";
+    const label = document.createElement("span");
+    label.className = "unit-name launch-origin";
+    appendOriginText(label, source.label, source.origin);
+    const counts = document.createElement("span");
+    counts.className = "unit-kind";
+    counts.textContent = source.counts;
+    header.append(label, counts);
+    item.append(header);
+    if (source.firstEncounterLine) {
+      const first = document.createElement("div");
+      first.className = "unit-meta launch-first-encounter";
+      first.textContent = source.firstEncounterLine;
+      item.append(first);
+    }
+    overview.append(item);
+  }
+  card.append(overview);
+
   const details = document.createElement("details");
   details.className = "unit-review";
   details.open = view.sourcesExpandedByDefault || options.open;

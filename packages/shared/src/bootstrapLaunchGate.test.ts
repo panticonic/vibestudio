@@ -96,11 +96,11 @@ describe("the common case", () => {
     });
 
     expect(view.summary).toBe(
-      "Vibestudio needs to run 2 programs on this computer — 1 client · 1 extension, all from Vibestudio 1.4.0."
+      "Starting this workspace will run 2 programs on this computer (1 client · 1 extension), all from Vibestudio 1.4.0."
     );
     expect(view.sources).toHaveLength(1);
     expect(view.sourcesExpandedByDefault).toBe(false);
-    expect(view.acceptLabel).toBe("Start");
+    expect(view.acceptLabel).toBe("Start workspace");
   });
 
   it("discloses the execution contract of the workspace host", () => {
@@ -204,7 +204,7 @@ describe("identity without an identity system", () => {
 
   it("marks a first encounter with an origin, and only a first encounter", () => {
     const first = launchGateSources([part({ origin: acme })]);
-    expect(first[0]!.firstEncounterLine).toBe("You haven't run code from github.com/acme before.");
+    expect(first[0]!.firstEncounterLine).toBe("This is the first time you've run code from github.com/acme.");
     const familiar = launchGateSources([part({ origin: { ...acme, firstEncounter: false } })]);
     expect(familiar[0]!.firstEncounterLine).toBeNull();
   });
@@ -232,7 +232,7 @@ describe("a workspace built from someone else's code", () => {
     const view = launchGateView({ approvals: acmeWorkspace() });
 
     expect(view.summary).toBe(
-      "This workspace is built from code at https://github.com/acme/studio."
+      "This workspace is based on code from https://github.com/acme/studio."
     );
     expect(view.sources).toHaveLength(1);
   });
@@ -240,11 +240,11 @@ describe("a workspace built from someone else's code", () => {
   it("puts the first encounter at the top level, not inside the disclosure", () => {
     const view = launchGateView({ approvals: acmeWorkspace() });
 
-    expect(view.firstEncounterLine).toBe("You haven't run code from github.com/acme before.");
+    expect(view.firstEncounterLine).toBe("This is the first time you've run code from github.com/acme.");
     // Promoted, not duplicated.
     expect(view.sources[0]!.firstEncounterLine).toBeNull();
-    expect(view.sourcesExpandedByDefault).toBe(true);
-    expect(view.disclosureLabel).toBe("Review each");
+    expect(view.sourcesExpandedByDefault).toBe(false);
+    expect(view.disclosureLabel).toBe("Review included programs");
   });
 
   it("promotes the domain beside the URL it leads with, and does not repeat it below", () => {
@@ -256,7 +256,7 @@ describe("a workspace built from someone else's code", () => {
 
   it("keeps the program count when it leads with an origin", () => {
     expect(launchGateView({ approvals: acmeWorkspace() }).programsLine).toBe(
-      "It needs to run 2 programs on this computer, including 1 extension."
+      "Starting this workspace will run 2 programs on this computer, including 1 extension."
     );
   });
 
@@ -267,7 +267,7 @@ describe("a workspace built from someone else's code", () => {
     });
 
     expect(view.summary).toBe(
-      "This workspace is built from code at https://github.com/acme/studio."
+      "This workspace is based on code from https://github.com/acme/studio."
     );
     expect(view.firstEncounterLine).toBeNull();
     expect(view.sources[0]!.firstEncounterLine).toBeNull();
@@ -280,7 +280,7 @@ describe("a workspace built from someone else's code", () => {
     });
 
     expect(view.summary).toBe(
-      "This workspace is built from code at https://github.com/acme/studio."
+      "This workspace is based on code from https://github.com/acme/studio."
     );
     expect(view.sources[0]!.label).toBe("https://github.com/acme/studio  at v2.1");
     // The name survives only in the slot that says whose name it is.
@@ -310,12 +310,12 @@ describe("more than one source", () => {
       ],
     });
 
-    expect(view.sourcesExpandedByDefault).toBe(true);
+    expect(view.sourcesExpandedByDefault).toBe(false);
     expect(view.sources.map((source) => source.origin.originKey)).toEqual([
       "github.com/acme",
       "vibestudio",
     ]);
-    expect(view.summary).toBe("Vibestudio needs to run 2 programs on this computer.");
+    expect(view.summary).toBe("Starting this workspace will run 2 programs on this computer.");
   });
 
   it("orders unfamiliar origins first and our own build last, stably", () => {
@@ -379,11 +379,11 @@ describe("more than one source", () => {
       ],
     });
 
-    expect(view.summary).toBe("Vibestudio needs to run 17 programs on this computer.");
+    expect(view.summary).toBe("Starting this workspace will run 17 programs on this computer.");
     expect(view.programsLine).toBeNull();
     // Still named, never folded into a count, and still first.
     expect(view.sources[0]!.firstEncounterLine).toBe(
-      "You haven't run code from github.com/acme before."
+      "This is the first time you've run code from github.com/acme."
     );
   });
 });
@@ -392,9 +392,9 @@ describe("declining says what it costs", () => {
   it("says the app will not start when the app is what is under review", () => {
     const view = launchGateView({ approvals: [review([part()])] });
     expect(view.declineConsequence).toBe(
-      "Vibestudio won't start. Nothing is installed or changed."
+      "Vibestudio will quit without starting this workspace."
     );
-    expect(view.declineLabel).toBe("Quit");
+    expect(view.declineLabel).toBe("Quit without starting");
   });
 
   it("says only that extension will not run when nothing else is at stake", () => {
@@ -453,9 +453,9 @@ describe("the terminal form", () => {
 
     expect(text).toContain(words("https://github.com/acme/studio  at v2.1"));
     expect(text).toContain(words('"Acme Studio" — name given by this template'));
-    expect(text).toContain(words("You haven't run code from github.com/acme before."));
+    expect(text).toContain(words("This is the first time you've run code from github.com/acme."));
     expect(text).toContain(words("run in a sandbox on the Linux host"));
-    expect(text).toContain(words("Vibestudio won't start. Nothing is installed or changed."));
+    expect(text).toContain(words("Vibestudio will quit without starting this workspace."));
   });
 
   it("leads with the same origin, first encounter, and count as the window", () => {
@@ -558,12 +558,12 @@ describe("an instance's first start", () => {
       ]),
     ];
     const view = launchGateView({ approvals });
-    expect(view.title).toBe("Start your workspaces?");
+    expect(view.title).toBe("Review code before starting");
     expect(view.summary).toBe(
-      "Your workspaces are built from code at https://github.com/acme/personal and https://github.com/acme/system."
+      "These workspaces are based on code from https://github.com/acme/personal and https://github.com/acme/system."
     );
     // One owner, said once.
-    expect(view.firstEncounterLine).toBe("You haven't run code from github.com/acme before.");
+    expect(view.firstEncounterLine).toBe("This is the first time you've run code from github.com/acme.");
     // Every program counts somewhere.
     expect(view.sources.map((source) => source.counts).sort()).toEqual([
       "1 client · 1 other part",

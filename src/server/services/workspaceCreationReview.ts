@@ -36,6 +36,21 @@ interface CreationReviewFile {
   markedAt: number;
 }
 
+/**
+ * A newly created workspace needs an interactive review only when it contains
+ * code that did not ship in the verified host bundle. The host-bundle origin
+ * is derived from the host-owned source inventory, so workspace metadata cannot
+ * claim this exemption for itself.
+ */
+export function isEntirelyHostBundledCreationReview(
+  units: readonly { source: { repo: string } }[],
+  origins: ReadonlyMap<string, { isHostBuild?: boolean }>
+): boolean {
+  return (
+    units.length > 0 && units.every((unit) => origins.get(unit.source.repo)?.isHostBuild === true)
+  );
+}
+
 export class WorkspaceCreationReviewStore {
   private readonly filePath: string;
   private state: CreationReviewFile | null = null;

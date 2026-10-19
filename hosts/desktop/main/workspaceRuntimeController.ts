@@ -400,7 +400,12 @@ export function createDesktopWorkspaceRuntime(deps: {
       pinStore: deps.headless
         ? undefined
         : new PanelPinStore(path.join(connection.statePath, "panel-pins.json")),
-      getResidentPanelIds: () => nativeViews().getDeclaredPanelSlotIds(),
+      // The panel resource sweep can be in flight while the owning desktop
+      // window is closing. Residency is only meaningful while its native view
+      // manager exists; teardown should make every panel eligible for release
+      // rather than turning this observation into an uncaught timer error.
+      getResidentPanelIds: () =>
+        window.viewManager ? nativeViews().getDeclaredPanelSlotIds() : [],
       getNativeBinding: (id) => nativeViews().getNativePanelSlotBinding(id),
       attachNativeBinding: (id) => nativeViews().attachDeclaredPanelSlot(id),
       publishPresentation: (snapshot) =>

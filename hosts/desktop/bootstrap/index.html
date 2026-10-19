@@ -293,6 +293,28 @@
         display: grid;
         gap: 14px;
       }
+      .launch-source-overview-title {
+        color: var(--text);
+        font-size: 13px;
+        font-weight: 650;
+      }
+      .launch-source-overview {
+        display: grid;
+        gap: 8px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+      .launch-source-overview-item {
+        min-width: 0;
+        border: 1px solid var(--surface-border);
+        border-radius: 8px;
+        background: var(--surface);
+        padding: 10px 12px;
+      }
+      .launch-source-overview-item .launch-first-encounter {
+        margin-top: 5px;
+      }
       .unit-summary {
         display: grid;
         gap: 10px;
@@ -338,6 +360,15 @@
         font-weight: 650;
         list-style: none;
       }
+      .unit-review > summary::after {
+        content: "＋";
+        color: var(--accent);
+        font-size: 16px;
+        line-height: 1;
+      }
+      .unit-review[open] > summary::after {
+        content: "−";
+      }
       .unit-review > summary::-webkit-details-marker {
         display: none;
       }
@@ -366,6 +397,59 @@
         background: var(--surface);
         border-radius: 8px;
         padding: 10px 12px;
+      }
+      /* `unit-list` is the source list. A source contains its own list of
+         reviewed programs, so applying the row layout to every descendant
+         made the source and its nested list compete for two columns. With a
+         long capability description that collapsed the actual review into a
+         very narrow second column. Keep source cards full width and apply the
+         compact row layout only to their program entries. */
+      .unit-list > .launch-source {
+        display: block;
+        min-width: 0;
+        border: 1px solid var(--surface-border);
+        background: var(--surface);
+        border-radius: 8px;
+        padding: 12px;
+      }
+      .launch-source-header {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 4px 12px;
+      }
+      .launch-origin,
+      .launch-origin > span {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      .launch-unit-list {
+        display: grid;
+        gap: 8px;
+        margin: 10px 0 0;
+        padding: 0;
+        list-style: none;
+      }
+      .launch-unit-list > li {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr);
+        gap: 4px 12px;
+        align-items: start;
+        min-width: 0;
+        border-top: 1px solid var(--divider);
+        padding: 9px 0 0;
+      }
+      .launch-unit-list .unit-name,
+      .launch-unit-list .unit-capabilities {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+      @media (max-width: 520px) {
+        .launch-unit-list > li {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 3px;
+        }
       }
       .unit-name {
         color: var(--text);

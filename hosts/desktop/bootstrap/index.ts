@@ -229,10 +229,11 @@ function launchStatusHeader(launch: LaunchGateStatus): {
 } {
   if (launch.status === "approval-required") {
     return {
-      eyebrow: "Workspace approval",
-      title: "Do you trust the code in this workspace?",
+      eyebrow: "Before startup",
+      title: "Review code before starting",
       copy:
-        decisionError ?? "Review the workspace code that wants to run before Vibestudio starts.",
+        decisionError ??
+        "Vibestudio is waiting for your choice before it runs this workspace's code.",
     };
   }
   if (launch.status === "unavailable" && startupDeclined) {
@@ -273,7 +274,9 @@ function launchStatusHeader(launch: LaunchGateStatus): {
 function launchStatusText(launch: LaunchGateStatus): string {
   if (launch.status === "ready") return "The workspace is approved and launching.";
   if (launch.status === "approval-required") {
-    return decisionError ?? "Review the workspace code that wants to run before Vibestudio starts.";
+    return (
+      decisionError ?? "Vibestudio is waiting for your choice before it runs this workspace's code."
+    );
   }
   if (launch.status === "starting") return launch.reason || "Starting workspace.";
   return launch.reason;
@@ -308,14 +311,7 @@ function render(): void {
     const card = document.createElement("article");
     card.className = "approval";
     card.setAttribute("role", "group");
-    card.setAttribute("aria-labelledby", "launch-gate-title");
-
-    const title = document.createElement("div");
-    title.className = "title";
-    title.id = "launch-gate-title";
-    title.textContent = view.title;
-
-    card.append(title);
+    card.setAttribute("aria-label", "Workspace code review");
     // Everything a person needs in order to decide comes before the buttons in
     // DOM order, so a screen reader reaches it before the actions: what this
     // workspace is, which domain that URL belongs to, whether it is new to them,

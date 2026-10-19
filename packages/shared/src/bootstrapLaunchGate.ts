@@ -80,7 +80,7 @@ export interface LaunchGateSource {
   /** Panels, agents and services: everything that is neither a client nor an extension. */
   others: number;
   units: LaunchGateUnitRow[];
-  /** `You haven't run code from github.com/acme before.` */
+  /** `This is the first time you've run code from github.com/acme.` */
   firstEncounterLine: string | null;
   /**
    * `Domain: attacker.net` — the emphasized part of the URL, said out loud.
@@ -98,7 +98,7 @@ export interface LaunchGateView {
   /** The one-sentence common case, or the leading fact for a foreign root. */
   summary: string;
   /**
-   * `You haven't run code from github.com/acme before.`, at the TOP LEVEL.
+   * The first run from an origin, at the top level.
    *
    * The single most useful signal available without an identity system does not
    * belong behind a disclosure, so when the workspace is built from someone
@@ -114,7 +114,7 @@ export interface LaunchGateView {
    */
   domainLine: string | null;
   /**
-   * `It needs to run 9 programs on this computer, including 4 extensions.`
+   * What will run, stated directly when the source sentence leads.
    *
    * Set only when the summary led with an origin instead of a count: the count
    * is a fact worth keeping, not something the lead sentence replaces.
@@ -123,9 +123,9 @@ export interface LaunchGateView {
   /** Present whenever any extension is in the set; never folded away. */
   nativeCodeWarning: string | null;
   sources: LaunchGateSource[];
-  /** Expanded by default the moment a second source appears. */
+  /** Individual program details start closed; sources and counts stay visible. */
   sourcesExpandedByDefault: boolean;
-  /** `See what runs` when the list is collapsed, `Review each` when it is open. */
+  /** Label for the individual program details disclosure. */
   disclosureLabel: string;
   totalPrograms: number;
   /** What declining costs, stated honestly for this exact case (§7.6.6). */
@@ -135,28 +135,37 @@ export interface LaunchGateView {
 }
 
 const LAUNCH_GATE_COPY = {
-  title: "Start this workspace?",
-  titleMany: "Start your workspaces?",
-  accept: "Start",
+  startupTitle: "Review code before starting",
+  runtimeTitle: "Allow code to run?",
+  start: "Start workspace",
+  allow: "Allow and continue",
   /** At creation the whole app is what declines; later it is one extension. */
-  quit: "Quit",
+  quit: "Quit without starting",
   dontStart: "Don't start",
-  seeWhatRuns: "See what runs",
-  reviewEach: "Review each",
+  seeWhatRuns: "Review included programs",
   selfNamed: (name: string) => `"${name}" — name given by this template`,
-  firstEncounter: (originKey: string) => `You haven't run code from ${originKey} before.`,
-  builtFrom: (url: string) => `This workspace is built from code at ${url}.`,
+  firstEncounter: (originKey: string) => `This is the first time you've run code from ${originKey}.`,
+  builtFrom: (url: string) => `This workspace is based on code from ${url}.`,
   builtFromEach: (urls: readonly string[]) =>
-    `Your workspaces are built from code at ${joinNames(urls)}.`,
+    `These workspaces are based on code from ${joinNames(urls)}.`,
   allFromOneSource: (programs: string, counts: string, label: string) =>
-    `Vibestudio needs to run ${programs} on this computer — ${counts}, all from ${label}.`,
-  programCount: (programs: string) => `Vibestudio needs to run ${programs} on this computer.`,
+    `Starting this workspace will run ${programs} on this computer (${counts}), all from ${label}.`,
+  runtimeOneSource: (programs: string, counts: string, label: string) =>
+    `Vibestudio is asking to run ${programs} on this computer (${counts}), from ${label}.`,
+  programCount: (programs: string) =>
+    `Starting this workspace will run ${programs} on this computer.`,
+  runtimeProgramCount: (programs: string) =>
+    `Vibestudio is asking to run ${programs} on this computer.`,
   /** The count survives leading with an origin; it is never dropped for it. */
   programsIncluding: (programs: string, extensions: number) =>
     extensions > 0
-      ? `It needs to run ${programs} on this computer, including ${plural(extensions, "extension")}.`
-      : `It needs to run ${programs} on this computer.`,
-  declineAtStart: "Vibestudio won't start. Nothing is installed or changed.",
+      ? `Starting this workspace will run ${programs} on this computer, including ${plural(extensions, "extension")}.`
+      : `Starting this workspace will run ${programs} on this computer.`,
+  runtimeProgramsIncluding: (programs: string, extensions: number) =>
+    extensions > 0
+      ? `Vibestudio is asking to run ${programs} on this computer, including ${plural(extensions, "extension")}.`
+      : `Vibestudio is asking to run ${programs} on this computer.`,
+  declineAtStart: "Vibestudio will quit without starting this workspace.",
   declineExtension: (name: string) =>
     `The ${name} extension won't run. The rest of your workspace works normally.`,
   declineExtensions: (names: readonly string[]) =>
@@ -304,6 +313,7 @@ export function launchGateView(input: {
     (root) => !root.origin.isHostBuild && root.origin.originStatus !== "unresolved"
   );
   const leadsWithOrigin = foreignRoots.length > 0;
+  const blocksStartup = input.blocksStartup ?? parts.some((part) => part.kind === "client");
   const singleSource = sources.length === 1;
   const only = sources[0];
 
@@ -317,17 +327,20 @@ export function launchGateView(input: {
           foreignRoots.map((root) => root.origin.url ?? root.origin.originKey)
         )
     : singleSource && only
-      ? // One fact, one button: `Vibestudio needs to run 16 programs on this
-        // computer — 3 clients and 13 extensions, all from Vibestudio 1.4.0.`
-        LAUNCH_GATE_COPY.allFromOneSource(programs, only.counts, only.label)
-      : LAUNCH_GATE_COPY.programCount(programs);
+      ? blocksStartup
+        ? LAUNCH_GATE_COPY.allFromOneSource(programs, only.counts, only.label)
+        : LAUNCH_GATE_COPY.runtimeOneSource(programs, only.counts, only.label)
+      : blocksStartup
+        ? LAUNCH_GATE_COPY.programCount(programs)
+        : LAUNCH_GATE_COPY.runtimeProgramCount(programs);
 
   // Promoted out of the disclosure, not duplicated into it: the row for this
   // source would otherwise repeat the sentence the reader just read.
   // Roots under one owner say it once.
   const firstEncounterLine =
-    [...new Set(foreignRoots.map((root) => root.firstEncounterLine).filter(isString))].join(" ") ||
-    null;
+    [
+      ...new Set(foreignRoots.map((root) => root.firstEncounterLine).filter(isString)),
+    ].join(" ") || null;
   // The domain travels with the URL it belongs to. When the lead sentence is
   // the URL, the fact belongs beside it and not further down the page.
   const domainLine =
@@ -337,19 +350,19 @@ export function launchGateView(input: {
     root.domainLine = null;
   }
 
-  const blocksStartup = input.blocksStartup ?? parts.some((part) => part.kind === "client");
-  // One source that is not ours is still a source worth opening on: collapsing
-  // it would put the only identity in this decision behind a click.
-  const sourcesExpandedByDefault =
-    sources.length > 1 || sources.some((source) => !source.origin.isHostBuild);
+  // Provenance is presented in a compact visible summary below. Keep the
+  // potentially long list of individual programs closed until requested.
+  const sourcesExpandedByDefault = false;
   return {
     approvalIds: input.approvals.map((approval) => approval.approvalId),
-    title: roots.length > 1 ? LAUNCH_GATE_COPY.titleMany : LAUNCH_GATE_COPY.title,
+    title: blocksStartup ? LAUNCH_GATE_COPY.startupTitle : LAUNCH_GATE_COPY.runtimeTitle,
     summary,
     firstEncounterLine,
     domainLine,
     programsLine: leadsWithOrigin
-      ? LAUNCH_GATE_COPY.programsIncluding(programs, extensions.length)
+      ? blocksStartup
+        ? LAUNCH_GATE_COPY.programsIncluding(programs, extensions.length)
+        : LAUNCH_GATE_COPY.runtimeProgramsIncluding(programs, extensions.length)
       : null,
     nativeCodeWarning:
       extensions.length > 0
@@ -357,16 +370,14 @@ export function launchGateView(input: {
         : null,
     sources,
     sourcesExpandedByDefault,
-    disclosureLabel: sourcesExpandedByDefault
-      ? LAUNCH_GATE_COPY.reviewEach
-      : LAUNCH_GATE_COPY.seeWhatRuns,
+    disclosureLabel: LAUNCH_GATE_COPY.seeWhatRuns,
     totalPrograms,
     declineConsequence: blocksStartup
       ? LAUNCH_GATE_COPY.declineAtStart
       : extensions.length === 1
         ? LAUNCH_GATE_COPY.declineExtension(extensions[0]?.title ?? "new")
         : LAUNCH_GATE_COPY.declineExtensions(extensions.map((extension) => extension.title)),
-    acceptLabel: LAUNCH_GATE_COPY.accept,
+    acceptLabel: blocksStartup ? LAUNCH_GATE_COPY.start : LAUNCH_GATE_COPY.allow,
     declineLabel: blocksStartup ? LAUNCH_GATE_COPY.quit : LAUNCH_GATE_COPY.dontStart,
   };
 }
@@ -402,8 +413,9 @@ export function approvalIds(approvals: PendingUnitInstallReviewApproval[]): Set<
  * text with an explicit prompt, never a truncated summary.
  *
  * Like the window it discloses in levels (§7.6.5): this is what the window
- * shows before "Review each" is opened — what the code is, whose it is, how
- * much runs, what native code may do, each source with its counts, and what
+ * shows before program details are opened — what the code is, where it came
+ * from, how much runs, what native code may do, each source with its counts,
+ * and what
  * declining costs. The programs themselves are one keypress away
  * (`formatLaunchGateUnitsForTerminal`), so the decision is never scrolled away
  * under a list of every program. Everything wraps to `width`, keeping its indent.

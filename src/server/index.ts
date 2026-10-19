@@ -1133,7 +1133,8 @@ async function main() {
     statePath,
     resolveSourceOrigin: (repoPath) => unitOriginResolver?.recordedOriginFor(repoPath) ?? null,
   });
-  const { WorkspaceCreationReviewStore } = await import("./services/workspaceCreationReview.js");
+  const { isEntirelyHostBundledCreationReview, WorkspaceCreationReviewStore } =
+    await import("./services/workspaceCreationReview.js");
   const workspaceCreationReview = new WorkspaceCreationReviewStore({ statePath });
   const { prepareUnitInstallReview } = await import("./services/unitInstallAcceptance.js");
   type ReviewedUnit = import("@vibestudio/shared/approvals").ReviewedUnit;
@@ -8073,6 +8074,27 @@ async function main() {
         workspaceCreationReview.resolve();
         workspaceCreationReviewState = { status: "not-required" };
       } else {
+        const origins = await resolveUnitOrigins(
+          creationReview.units.map((unit) => unit.source.repo)
+        );
+        if (isEntirelyHostBundledCreationReview(creationReview.units, origins)) {
+          // Installing Vibestudio already authorized its own verified bundle.
+          // Record that admission at creation so the bundled client can start
+          // without asking it to review itself. Later workspace changes still
+          // go through the ordinary install-review path.
+          buildUnitChangeApprovalProvider.acceptPreapprovedTrust(
+            creationReview.identityKeys,
+            "workspace-creation",
+            undefined,
+            origins
+          );
+          creationReviewUnits = new Set();
+          creationReviewOwed = false;
+          workspaceCreationReview.resolve();
+          workspaceCreationReviewState = { status: "not-required" };
+          console.info("[Units] Admitted the verified host bundle without a first-start review.");
+          return;
+        }
         // From here on U6 answers from the exact set under review, so no unit
         // outside it can be told to wait on a question nobody asked about it.
         creationReviewUnits = new Set(
@@ -8093,9 +8115,6 @@ async function main() {
         // the launch gate can never disagree about where the same unit came
         // from. It reads template relationship state and the creation descriptor rather
         // than assuming this workspace's root owns everything in it.
-        const origins = await resolveUnitOrigins(
-          creationReview.units.map((unit) => unit.source.repo)
-        );
         const rootOrigin =
           [...origins.values()].find((origin) => origin.isWorkspaceRoot === true) ?? null;
         // Creation is one participant in the workspace-wide startup review.

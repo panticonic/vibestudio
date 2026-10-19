@@ -165,8 +165,16 @@ contextBridge.exposeInMainWorld("__vibestudioClient", vibestudioClient);
 contextBridge.exposeInMainWorld("__vibestudioNativePanels", {
   openWorkspace: (workspaceId: string) =>
     ipcRenderer.invoke("vibestudio:shell.workspace-open", workspaceId),
-  connectNativePanelAdapter: (hello: unknown) =>
-    ipcRenderer.invoke("vibestudio:shell.panels-connect", hello),
+  connectNativePanelAdapter: (hello: unknown) => {
+    // Older shell builds send a fixed package name here. The identity that
+    // actually launched this WebContents is supplied by the main process and
+    // is the one the compositor must authenticate (not a renderer claim).
+    const sealedHello =
+      hello !== null && typeof hello === "object" && !Array.isArray(hello)
+        ? { ...hello, sealedLaunchIdentity: identity.runtimeId }
+        : hello;
+    return ipcRenderer.invoke("vibestudio:shell.panels-connect", sealedHello);
+  },
   applyNativePanelSurfaces: (snapshot: unknown) =>
     ipcRenderer.invoke("vibestudio:shell.panels-apply", snapshot),
 });
