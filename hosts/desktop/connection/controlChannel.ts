@@ -116,7 +116,12 @@ export class ControlChannel {
   private readonly listeners = new Map<string, Set<(payload: any) => void>>();
   private readonly pending = new Map<
     number,
-    { resolve(value: unknown): void; reject(error: unknown): void; mode: ResponseMode }
+    {
+      resolve(value: unknown): void;
+      reject(error: unknown): void;
+      mode: ResponseMode;
+      signal?: AbortSignal;
+    }
   >();
   private readonly inflight = new Map<number, AbortController>();
   private readonly outgoing = new Map<number, OutgoingStream>();
@@ -266,7 +271,7 @@ export class ControlChannel {
     if (signal?.aborted) return Promise.reject(signal.reason ?? new Error("Aborted"));
     const id = this.nextRequest++;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject, mode });
+      this.pending.set(id, { resolve, reject, mode, ...(signal ? { signal } : {}) });
       const bodyStream = options.body ? this.sendStream(options.body) : undefined;
       this.send(
         { k: "req", id, m: method, p: payload, ...(bodyStream ? { bs: bodyStream } : {}) },
@@ -310,7 +315,10 @@ export class ControlChannel {
             entry.reject(
               new Error("A control request that expects a value was answered with a stream")
             );
-          } else entry.resolve(new StreamedResponse(message.r, this.receiveStream(message.rs)));
+          } else
+            entry.resolve(
+              new StreamedResponse(message.r, this.receiveStream(message.rs, entry.signal))
+            );
         } else if (entry.mode === "stream")
           entry.reject(
             new Error("A control request that expects a stream was answered with a value")
@@ -356,6 +364,8 @@ export class ControlChannel {
         if (!stream) return;
         stream.stopped = true;
         stream.wake?.();
+        // An idle source holds the pump in a pending read; cancelling settles it.
+        void stream.reader.cancel(new Error("Stream stopped by its reader")).catch(() => undefined);
         return;
       }
     }
@@ -444,7 +454,27 @@ export class ControlChannel {
     }
   }
 
-  private receiveStream(id: number): ReadableStream<Uint8Array> {
+  /**
+   * The peer's byte stream `id`. The request's signal outlives its head: an
+   * abort after the head arrived errors the body and stops the sender, as a
+   * fetch's abort does.
+   */
+  private receiveStream(id: number, signal?: AbortSignal): ReadableStream<Uint8Array> {
+    signal?.addEventListener(
+      "abort",
+      () => {
+        const stream = this.incoming.get(id);
+        if (!stream) return;
+        this.incoming.delete(id);
+        try {
+          stream.controller.error(signal.reason ?? new Error("Aborted"));
+        } catch {
+          // The consumer already cancelled this stream.
+        }
+        if (!this.ended) this.send({ k: "stop", s: id });
+      },
+      { once: true }
+    );
     return new ReadableStream<Uint8Array>(
       {
         start: (controller) => {

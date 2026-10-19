@@ -124,6 +124,23 @@ describe("ControlChannel", () => {
     expect(aborted).toBe(true);
   });
 
+  it("ends a stream whose head arrived when the requester's signal aborts, and stops its sender", async () => {
+    const { main, utility } = pair();
+    let senderCancelled: () => void;
+    const cancelled = new Promise<void>((resolve) => (senderCancelled = resolve));
+    utility.handle(
+      "watch",
+      () =>
+        new StreamReply("head", new ReadableStream<Uint8Array>({ cancel: () => senderCancelled() }))
+    );
+    const controller = new AbortController();
+    const reply = await main.requestStream("watch", null, { signal: controller.signal });
+    const reading = drain(reply.body);
+    controller.abort(new Error("unsubscribed"));
+    await expect(reading).rejects.toThrow("unsubscribed");
+    await cancelled;
+  });
+
   it("settles every pending request and open stream with the failure it is ended with", async () => {
     const { main, utility } = pair();
     utility.handle("hang", () => new Promise(() => undefined));

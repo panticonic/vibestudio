@@ -2773,6 +2773,8 @@ app.on("ready", async () => {
         const callerId = viewManager.findViewIdByWebContentsId(contents.id);
         if (!callerId) return null;
         const viewInfo = viewManager.getViewInfo(callerId);
+        // A client's document is bound only through the window that owns it.
+        if (viewInfo?.type === "client") return null;
         if (viewInfo?.browser) {
           const viewContents = viewManager.getWebContents(callerId);
           if (!viewContents || !websiteWorkspaceBridge.connected(viewContents)) return null;

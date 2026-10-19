@@ -51,6 +51,12 @@ export interface ClientWindow {
   readonly hostsPanels: boolean;
   contents(): WebContents | null;
   browserWindow(): BaseWindow | null;
+  /**
+   * Load the window's document. Called once, after the window is registered:
+   * the document asks for its connection while it loads, and the host answers
+   * by finding the window that owns it.
+   */
+  load(): Promise<void>;
   show(): void;
   /** Move this window to another build of its client. */
   swap(next: ClientWindowSpec): Promise<void>;
@@ -62,10 +68,10 @@ export interface ClientWindow {
 }
 
 export interface ClientWindowFactory {
-  /** A window of a client that does not host panels. */
-  plain(windowId: string, spec: ClientWindowSpec): Promise<ClientWindow>;
-  /** The window of the panel-hosting client. */
-  panelHosting(windowId: string, spec: ClientWindowSpec): Promise<ClientWindow>;
+  /** A window of a client that does not host panels, its document not yet loaded. */
+  plain(windowId: string, spec: ClientWindowSpec): ClientWindow;
+  /** The window of the panel-hosting client, its document not yet loaded. */
+  panelHosting(windowId: string, spec: ClientWindowSpec): ClientWindow;
 }
 
 export interface ClientWindowEvents {
@@ -105,11 +111,19 @@ export class ClientWindows {
     }
     const windowId = `window:${spec.clientId}:${++this.nextWindow}`;
     const window = hostsPanels
-      ? await this.factory.panelHosting(windowId, spec)
-      : await this.factory.plain(windowId, spec);
+      ? this.factory.panelHosting(windowId, spec)
+      : this.factory.plain(windowId, spec);
     this.windows.set(window.windowId, window);
     this.byCallerId.set(window.callerId, window);
-    await this.events.opened(window);
+    try {
+      await this.events.opened(window);
+      await window.load();
+    } catch (error) {
+      // A window that could not open does not stay behind, open or registered.
+      this.close(window, "The window could not open");
+      this.notifyClosed(window);
+      throw error;
+    }
     return window;
   }
 

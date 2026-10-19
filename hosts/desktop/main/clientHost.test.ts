@@ -48,6 +48,7 @@ class FakeWindow implements ClientWindow {
   browserWindow() {
     return null;
   }
+  async load() {}
   show() {
     this.shown += 1;
   }
@@ -223,12 +224,12 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
   let host!: DesktopClientHost;
   const windows: ClientWindows = new ClientWindows(
     {
-      plain: async (windowId, spec) => {
+      plain: (windowId, spec) => {
         const window = new FakeWindow(windowId, spec, false, (w) => windows.notifyClosed(w));
         windowsMade.push(window);
         return window;
       },
-      panelHosting: async (windowId, spec) => {
+      panelHosting: (windowId, spec) => {
         const window = new FakeWindow(windowId, spec, true, (w) => windows.notifyClosed(w));
         windowsMade.push(window);
         return window;

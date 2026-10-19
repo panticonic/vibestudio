@@ -28,7 +28,7 @@ function setup() {
   const made: ClientWindow[] = [];
   const contents = new Map<string, { id: number; isDestroyed(): boolean }>();
   let next = 1;
-  const make = (hostsPanels: boolean) => async (windowId: string, s: ClientWindowSpec) => {
+  const make = (hostsPanels: boolean) => (windowId: string, s: ClientWindowSpec) => {
     const c = { id: next++, isDestroyed: () => false };
     contents.set(windowId, c);
     const window: ClientWindow = {
@@ -38,6 +38,7 @@ function setup() {
       hostsPanels,
       contents: () => c as never,
       browserWindow: () => null,
+      load: vi.fn(async () => undefined),
       show: vi.fn(),
       swap: vi.fn(),
       setCapabilities: vi.fn(),
@@ -78,6 +79,28 @@ describe("ClientWindows", () => {
 
     failOpening(new Error("no session"));
     await expect(windows.open(spec("chat"))).rejects.toThrow("no session");
+    expect(windows.windowsOf("chat")).toEqual([window]);
+  });
+
+  it("registers a window before its document loads, so the document's connection finds its owner", async () => {
+    const { windows, made } = setup();
+    let ownerWhileLoading: ClientWindow | null = null;
+    const opening = windows.open(spec("browser", ["panel-hosting"]));
+    const window = made[0]!;
+    vi.mocked(window.load).mockImplementation(async () => {
+      ownerWhileLoading = windows.byWebContents(window.contents()!.id);
+    });
+    await opening;
+    expect(ownerWhileLoading).toBe(window);
+  });
+
+  it("closes and forgets a window whose document could not load", async () => {
+    const { windows, made, closed } = setup();
+    const opening = windows.open(spec("chat"));
+    vi.mocked(made[0]!.load).mockRejectedValue(new Error("load failed"));
+    await expect(opening).rejects.toThrow("load failed");
+    expect(windows.windowsOf("chat")).toEqual([]);
+    expect(closed).toEqual([[made[0]!.windowId, "The window could not open"]]);
   });
 
   it("lets a client open several windows, each belonging to exactly one client", async () => {

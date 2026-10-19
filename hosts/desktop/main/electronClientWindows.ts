@@ -52,7 +52,7 @@ class PlainClientWindow implements ClientWindow {
   private ended = false;
   private currentSpec: ClientWindowSpec;
 
-  private constructor(
+  constructor(
     readonly windowId: string,
     spec: ClientWindowSpec,
     private readonly deps: ElectronClientWindowDeps
@@ -135,20 +135,11 @@ class PlainClientWindow implements ClientWindow {
     });
   }
 
-  static async open(
-    windowId: string,
-    spec: ClientWindowSpec,
-    deps: ElectronClientWindowDeps
-  ): Promise<PlainClientWindow> {
-    const window = new PlainClientWindow(windowId, spec, deps);
-    try {
-      await window.view!.webContents.loadURL(spec.entryUrl);
-    } catch (error) {
-      window.close();
-      throw error;
-    }
-    window.show();
-    return window;
+  async load(): Promise<void> {
+    const contents = this.contents();
+    if (!contents) throw new Error("The window ended before its document loaded");
+    await contents.loadURL(this.currentSpec.entryUrl);
+    this.show();
   }
 
   get callerId(): string {
@@ -262,7 +253,7 @@ class PanelHostingClientWindow implements ClientWindow {
   }
 
   /** Create the client's top-level view inside the panel host's window and show it. */
-  async start(): Promise<void> {
+  async load(): Promise<void> {
     this.deps.panelHost.open(this.windowId);
     await this.panelView().createViewForClient(
       this.currentSpec.principalId,
@@ -279,7 +270,10 @@ class PanelHostingClientWindow implements ClientWindow {
   }
 
   contents(): WebContents | null {
-    const contents = this.panelView().getWebContents(this.currentSpec.principalId);
+    // Before `load` opens the panel host there is no presentation, so no document.
+    const contents = this.deps.panelHost
+      .getWorkspacePanelView(this.currentSpec.workspaceId)
+      ?.getWebContents(this.currentSpec.principalId);
     return contents && !contents.isDestroyed() ? contents : null;
   }
 
@@ -325,11 +319,7 @@ export function createElectronClientWindowFactory(
   deps: ElectronClientWindowDeps
 ): ClientWindowFactory {
   return {
-    plain: (windowId, spec) => PlainClientWindow.open(windowId, spec, deps),
-    async panelHosting(windowId, spec) {
-      const window = new PanelHostingClientWindow(windowId, spec, deps);
-      await window.start();
-      return window;
-    },
+    plain: (windowId, spec) => new PlainClientWindow(windowId, spec, deps),
+    panelHosting: (windowId, spec) => new PanelHostingClientWindow(windowId, spec, deps),
   };
 }
