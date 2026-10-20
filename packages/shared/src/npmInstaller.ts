@@ -4,13 +4,12 @@ import {
   derivedCacheDatabasePath,
   type DerivedCacheLease,
 } from "./derivedCache.js";
-import { execFile, spawn } from "child_process";
 import * as fs from "fs";
-import * as os from "os";
 import * as path from "path";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
-import { getSharedDerivedDataPath } from "@vibestudio/env-paths";
+import { getProfileDataPath, getSharedDerivedDataPath } from "@vibestudio/env-paths";
+import { Ownership } from "@vibestudio/shared/ownership";
 import {
   assertNativePrerequisites,
   compileNativeLaunch,
@@ -68,13 +67,49 @@ async function runNpmInstallInSlot(
   }
 ): Promise<void> {
   options.signal?.throwIfAborted();
-  const ignoreScripts = options.ignoreScripts ?? true;
 
   const platform = process.platform;
   if (platform !== "linux" && platform !== "darwin" && platform !== "win32")
     throw new Error(`Unsupported npm runtime platform: ${platform}`);
+  // The install owns its npm process group and its scratch: the reaper retires
+  // them however this process ends, so a killed server leaves neither behind.
+  const ownership = await Ownership.open({
+    profileDir: getProfileDataPath(),
+    lifetime: "leased",
+    meta: { role: "npm-install" },
+  });
+  try {
+    await installInOwnership(ownership, platform, cwd, options);
+  } catch (error) {
+    try {
+      await ownership.close();
+    } catch (releaseFailure) {
+      throw new AggregateError(
+        [error, releaseFailure],
+        "npm installation and its retirement failed",
+        {
+          cause: error,
+        }
+      );
+    }
+    throw error;
+  }
+  await ownership.close();
+}
+
+async function installInOwnership(
+  ownership: Ownership,
+  platform: "linux" | "darwin" | "win32",
+  cwd: string,
+  options: {
+    appRoot: string;
+    signal?: AbortSignal;
+    ignoreScripts?: boolean;
+  }
+): Promise<void> {
+  const ignoreScripts = options.ignoreScripts ?? true;
   const installRoot = fs.realpathSync(cwd);
-  const utilityRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), ".delete-npm-")));
+  const utilityRoot = fs.realpathSync(await ownership.scratch(".delete-npm-"));
   const stateRoot = path.join(utilityRoot, "workspace");
   const runtimeRoot = path.join(utilityRoot, ".runtime-npm");
 
@@ -186,42 +221,30 @@ async function runNpmInstallInSlot(
         logVerbose("npm-install-profile", JSON.stringify({ phase, state: "started" }));
         let cancellation: unknown;
         let termination: Promise<void> | undefined;
-        const terminate = () =>
-          (termination ??= new Promise<void>((done, failed) => {
-            if (!child.pid) return done();
-            if (platform === "win32") {
-              execFile("taskkill", ["/T", "/F", "/PID", String(child.pid)], (error) =>
-                error ? failed(error) : done()
-              );
-            } else {
-              try {
-                process.kill(-child.pid, "SIGKILL");
-                done();
-              } catch (error) {
-                if ((error as NodeJS.ErrnoException).code === "ESRCH") done();
-                else failed(error);
-              }
-            }
-          }));
+        // Cancellation retires the whole group at once: the launcher and its
+        // guest form one group, and the reaper holds it from the moment of spawn.
+        const terminate = () => (termination ??= owned.retire("immediate"));
         const cancel = () => {
           cancellation = options.signal?.reason ?? new Error("npm installation cancelled");
           void terminate().catch(() => {});
         };
-        const child = spawn(launch.command, launch.args, {
+        const owned = ownership.spawn(launch.command, launch.args, {
           cwd: launch.cwd,
           env: launch.environment,
-          // execFile does not forward detached to spawn. This launcher and its
-          // guest must form a process group the cancellation owner can revoke.
-          detached: platform !== "win32",
           stdio: ["ignore", "pipe", "pipe"],
+          kill: "immediate",
+          label: `npm-${phase}`,
         });
+        const child = owned.child;
+        // A spawn failure reaches the caller through the child's `error` event.
+        owned.registered.catch(() => undefined);
         let stdout = "",
           stderr = "";
         let spawnError: (NodeJS.ErrnoException & { signal?: NodeJS.Signals | null }) | undefined;
-        child.stdout.on("data", (chunk) => {
+        child.stdout!.on("data", (chunk) => {
           stdout = (stdout + chunk).slice(-16_384);
         });
-        child.stderr.on("data", (chunk) => {
+        child.stderr!.on("data", (chunk) => {
           stderr = (stderr + chunk).slice(-16_384);
         });
         child.once("error", (error) => {
@@ -241,7 +264,8 @@ async function runNpmInstallInSlot(
                 ));
           options.signal?.removeEventListener("abort", cancel);
           void (async () => {
-            await termination;
+            // Cancellation retires the group; otherwise retire what the leader left.
+            await (termination ?? (child.pid === undefined ? undefined : owned.join()));
             const profile = {
               phase,
               elapsedMs: Date.now() - startedAt,

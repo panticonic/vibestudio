@@ -5,7 +5,6 @@ import {
   ClientUpdateObserver,
   type ClientUpdate,
   type LaunchedClient,
-  type PrincipalGrants,
   type SupervisionEvents,
 } from "@vibestudio/client-host-core";
 import type {
@@ -109,8 +108,6 @@ export interface TerminalClientRunOptions {
   /** The CLI's device connection to the workspace the client shows (may be `device`). */
   workspaceDevice: RpcClient;
   launched: LaunchedClient;
-  /** Grants for the exact verified build; redeemed again on every reconnect. */
-  grants: PrincipalGrants;
   module: TerminalClientModule;
   system: TerminalClientWorkspace;
   workspace: TerminalClientWorkspace;
@@ -203,27 +200,16 @@ export async function runTerminalClient(
     onError: (error) => failures.push(error),
   });
 
-  // Every (re)authentication redeems a fresh one-use grant for the same
-  // principal and the same verified build.
-  let initialGrant: string | null = grant.connectionGrant;
+  // The credential is reusable and bound to the verified build: every
+  // (re)authentication presents the one the launch acquired. A server that no
+  // longer honours it closes the session for good (`onClientClose`).
   const getToken = async (authenticationSignal?: AbortSignal): Promise<string> => {
     const requestSignal = authenticationSignal
       ? AbortSignal.any([signal, authenticationSignal])
       : signal;
     requestSignal.throwIfAborted();
     if (state.lost) throw new CliError(`terminal session ended: ${describeLost(state)}`);
-    if (initialGrant) {
-      const token = initialGrant;
-      initialGrant = null;
-      return token;
-    }
-    return (
-      await options.grants.acquire({
-        source: client.source,
-        buildKey: client.buildKey,
-        executionDigest: client.executionDigest,
-      })
-    ).connectionGrant;
+    return grant.credential;
   };
   const onAbort = () => state.lose("the terminal invocation was cancelled");
   signal.addEventListener("abort", onAbort, { once: true });

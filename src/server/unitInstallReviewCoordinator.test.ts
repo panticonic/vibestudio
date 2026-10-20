@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ReviewedUnit } from "@vibestudio/shared/approvals";
 import {
   UnitInstallReviewCoordinator,
+  UnitReviewRetiredError,
   type UnitApprovalQueueLike,
 } from "./unitInstallReviewCoordinator.js";
 
@@ -51,6 +52,60 @@ function unit(kind: "extension" | "client" | "panel" | "worker", name: string): 
 }
 
 describe("UnitInstallReviewCoordinator", () => {
+  it("retiring withdraws a published review and fails its waiters without recording a denial", async () => {
+    // Like the real queue, withdrawing the question settles it as "deny".
+    const queue = {
+      request: vi.fn(
+        (req: Parameters<UnitApprovalQueueLike["requestWithHandle"]>[0]) =>
+          new Promise<"deny">((resolve) =>
+            req.signal?.addEventListener("abort", () => resolve("deny"), { once: true })
+          )
+      ),
+    };
+    const coordinator = new UnitInstallReviewCoordinator({
+      approvalQueue: exactApprovalQueue(queue),
+      delayMs: 0,
+    });
+    const applyDenied = vi.fn();
+    const enqueued = coordinator.enqueue({
+      entries: [unit("client", "chat")],
+      trigger: "meta-change",
+      applyApproved: async () => {},
+      applyDenied,
+    });
+    const failure = expect(enqueued).rejects.toBeInstanceOf(UnitReviewRetiredError);
+    await vi.waitFor(() => expect(queue.request).toHaveBeenCalledTimes(1));
+    coordinator.retire(new Error("Server shutdown"));
+    await failure;
+    expect(applyDenied).not.toHaveBeenCalled();
+    await expect(
+      coordinator.enqueue({
+        entries: [unit("client", "late")],
+        trigger: "meta-change",
+        applyApproved: async () => {},
+        applyDenied,
+      })
+    ).rejects.toBeInstanceOf(UnitReviewRetiredError);
+  });
+
+  it("retiring fails a staged startup review that was never published", async () => {
+    const queue = { request: vi.fn(async () => "accepted" as const) };
+    const coordinator = new UnitInstallReviewCoordinator({
+      approvalQueue: exactApprovalQueue(queue),
+      autoPublishStartup: false,
+    });
+    const enqueued = coordinator.enqueue({
+      entries: [unit("client", "chat")],
+      trigger: "startup",
+      applyApproved: async () => {},
+      applyDenied: () => {},
+    });
+    const failure = expect(enqueued).rejects.toBeInstanceOf(UnitReviewRetiredError);
+    coordinator.retire(new Error("Server shutdown"));
+    await failure;
+    expect(queue.request).not.toHaveBeenCalled();
+  });
+
   it("joins the exact review before staging and waits for application without another prompt", async () => {
     let apply!: () => void;
     const applying = new Promise<void>((resolve) => {

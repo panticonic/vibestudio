@@ -159,7 +159,7 @@ export const authMethods = defineServiceMethods({
         "An authenticated device host obtains the principal of the exact client build it verified and runs itself; the client was admitted at its launch gate.",
     },
     description:
-      "Activate the calling device's principal for the exact admitted client build it verified (`client:<id>:<runtime>:<deviceId>`) and mint a one-use connection grant for it, bound to the caller's transport endpoint.",
+      "Activate the calling device's principal for the exact admitted client build it verified (`client:<id>:<runtime>:<deviceId>`) and mint a hub-validated client credential for it, bound to the caller's transport endpoint and valid in any workspace.",
     args: z.tuple([ClientPrincipalGrantRequestSchema]),
     returns: ClientPrincipalGrantResponseSchema,
     authority: { principals: ["host", "user"] },

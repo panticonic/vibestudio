@@ -6,7 +6,6 @@
  * never launches or authenticates a workspace child directly.
  */
 
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -33,22 +32,16 @@ import {
 import { getEsbuildBinaryPath, getServerProcessEntryPath } from "./paths.js";
 import type { DeviceCredentialEntry } from "./services/deviceCredentialStore.js";
 import {
-  terminateOwnedProcessTree,
-  type ProcessTreeTerminationResult,
-} from "../../../scripts/owned-process-tree.mjs";
-import {
   captureOwnedProcessIdentity,
   type OwnedProcessIdentity,
-} from "../../../src/dev/ownedProcessIdentity.js";
+} from "@vibestudio/shared/ownedProcessIdentity";
+import type { OwnedProcess, Ownership } from "@vibestudio/shared/ownership";
+import { retireGroup } from "@vibestudio/shared/ownershipLedger";
 
 const log = createDevLogger("HubProcessManager");
 const READY_POLL_INTERVAL_MS = 250;
-// Owned-tree termination normally settles from lifecycle completion. These
-// waits exist only to contain a catastrophically wedged process tree.
-const STOP_SIGTERM_TIMEOUT_MS = 5 * 60_000;
-const STOP_SIGKILL_TIMEOUT_MS = 30_000;
 
-/** The detached machine hub owns every local workspace child's captured output. */
+/** The machine hub owns every local workspace child's captured output. */
 export function getLocalHubLogPath(): string {
   return path.join(getCentralDataPath(), "logs", "hub.log");
 }
@@ -96,7 +89,14 @@ export interface HubProcessManagerConfig {
   logLevel?: string;
   centralData: CentralDataManager;
   onRecoveryFailure: (error: Error) => void;
-  onOwnedHubSpawn?: (identity: OwnedProcessIdentity) => void | Promise<void>;
+  /**
+   * Owns the hub this manager spawns: the hub's group is registered with the
+   * ownership's reaper before it runs, so it is retired (gracefully: the hub
+   * holds SQLite state) when the ownership is released or the process that
+   * opened it dies. The hub's lifetime is therefore leased to that process.
+   * `stopTree()` releases it after retiring the hub.
+   */
+  ownership: Ownership;
   /** Desktop-only confirmation before reusing a live detached hub. */
   confirmExistingHub?: (owner: HubProcessOwnerRecord) => Promise<"attach" | "replace" | "cancel">;
 }
@@ -197,8 +197,15 @@ export class HubProcessManager {
   private isStopping = false;
   private ensureAlivePromise: Promise<void> | null = null;
   private readonly lifetime = new AbortController();
-  /** PIDs proven to be this manager's hub, either by spawn or authenticated health metadata. */
-  private verifiedHubPids = new Map<number, OwnedProcessIdentity | null>();
+  /**
+   * PIDs proven to be this manager's hub, either by spawn (then `owned` is the
+   * library's handle for the group) or authenticated health metadata (a hub
+   * someone else started: retired by its exact identity, never by pid alone).
+   */
+  private verifiedHubs = new Map<
+    number,
+    { identity: OwnedProcessIdentity | null; owned: OwnedProcess | null }
+  >();
 
   constructor(private readonly config: HubProcessManagerConfig) {}
 
@@ -214,7 +221,7 @@ export class HubProcessManager {
         const attached = await this.tryAttach(existing);
         if (attached) {
           await this.terminateVerifiedHub(existing.pid);
-          this.verifiedHubPids.delete(existing.pid);
+          this.verifiedHubs.delete(existing.pid);
         }
       } else {
         processTarget = await this.tryAttach(existing);
@@ -279,7 +286,7 @@ export class HubProcessManager {
         `Hub health identity does not match owner ${owner.ownerBootId}; refusing to signal either process`
       );
     }
-    this.verifiedHubPids.set(owner.pid, identity);
+    this.verifiedHubs.set(owner.pid, { identity, owned: null });
     return {
       record: {
         gatewayPort: health.gatewayPort,
@@ -338,7 +345,11 @@ export class HubProcessManager {
         : {}),
     };
     const maxOldSpaceMb = Number(process.env["VIBESTUDIO_SERVER_MAX_OLD_SPACE_MB"]) || 4096;
-    const child = spawn(
+    // Graceful: the hub holds SQLite state and owns its workspace children, so
+    // retirement is SIGTERM, then the hub's exit, then whatever its group
+    // still holds. The hub no longer needs an IPC lease to find out its owner
+    // is gone: the reaper that registered this group retires it.
+    const owned = this.config.ownership.spawn(
       process.execPath,
       [
         `--max-old-space-size=${maxOldSpaceMb}`,
@@ -348,20 +359,21 @@ export class HubProcessManager {
         ...(this.config.workspaceName ? ["--bootstrap-workspace", this.config.workspaceName] : []),
       ],
       {
-        detached: true,
-        // Detachment isolates terminal signals, not lifetime ownership. The
-        // server revokes its execution tree when this desktop's IPC closes,
-        // including when the desktop dies before readiness or graceful stop.
-        stdio: ["ignore", logFd, logFd, "ipc"],
+        kill: "graceful",
+        label: "local-hub",
+        stdio: ["ignore", logFd, logFd],
         windowsHide: true,
         env,
       }
     );
+    const child = owned.child;
     fs.closeSync(logFd);
     let exitedWith: number | null | undefined;
     let startupFailure: Error | undefined;
     child.on("exit", (code) => {
       exitedWith = code;
+      // A hub that died on its own may leave members of its group behind.
+      this.config.ownership.scope.track(owned.join());
     });
     child.on("error", (error) => {
       startupFailure = error;
@@ -369,12 +381,9 @@ export class HubProcessManager {
     let ready: HubReadyFilePayload;
     try {
       if (child.pid) {
-        const identity =
-          process.platform === "linux" || process.platform === "darwin"
-            ? captureOwnedProcessIdentity(child.pid)
-            : null;
-        this.verifiedHubPids.set(child.pid, identity);
-        if (identity) await this.config.onOwnedHubSpawn?.(identity);
+        this.verifiedHubs.set(child.pid, { identity: owned.identity, owned });
+        // Durable with the reaper before the hub is trusted with readiness.
+        await owned.registered;
       }
       child.unref();
       ready = parseHubReadyFile(
@@ -692,7 +701,7 @@ export class HubProcessManager {
   private async discardVerifiedHub(target: HubProcessTarget): Promise<void> {
     this.currentHubPid = target.record.pid;
     await this.terminateVerifiedHub(target.record.pid);
-    this.verifiedHubPids.delete(target.record.pid);
+    this.verifiedHubs.delete(target.record.pid);
     if (this.currentHubPid === target.record.pid) this.currentHubPid = null;
   }
 
@@ -710,7 +719,13 @@ export class HubProcessManager {
     this.lifetime.abort(new Error("Local hub session is shutting down"));
   }
 
-  async stopTree(): Promise<ProcessTreeTerminationResult> {
+  /**
+   * Retire every verified hub, then release the ownership that held it,
+   * returning only once all of it is gone. Failures retain their receipts and
+   * propagate to the caller with the original cause; elapsed time never
+   * releases ownership.
+   */
+  async stopTree(): Promise<void> {
     this.beginShutdown();
     this.current = null;
     const recovery = this.ensureAlivePromise;
@@ -726,40 +741,58 @@ export class HubProcessManager {
     // Keep each verified process receipt until termination is proven. A
     // routing row belonging to a successor never grants us its lifetime.
 
-    const pids = new Set(this.verifiedHubPids.keys());
+    const pids = new Set(this.verifiedHubs.keys());
     if (this.currentHubPid !== null) pids.add(this.currentHubPid);
-    if (pids.size === 0) return { gone: true, escalated: false };
-
-    let escalated = false;
+    const failures: unknown[] = [];
     for (const pid of pids) {
-      if (!this.verifiedHubPids.has(pid)) {
-        throw new Error(`Refusing to terminate unverified hub PID ${pid}`);
+      try {
+        if (!this.verifiedHubs.has(pid)) {
+          throw new Error(`Refusing to terminate unverified hub PID ${pid}`);
+        }
+        await this.terminateVerifiedHub(pid);
+        this.verifiedHubs.delete(pid);
+        if (this.currentHubPid === pid) this.currentHubPid = null;
+      } catch (error) {
+        failures.push(error);
       }
-      const result = await this.terminateVerifiedHub(pid);
-      escalated ||= result.escalated;
-      this.verifiedHubPids.delete(pid);
-      if (this.currentHubPid === pid) this.currentHubPid = null;
     }
+    // The reaper is joined even after a failure: it is what retires whatever
+    // the failed retirement left, and its own failures are part of the result.
+    try {
+      await this.config.ownership.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) throw new AggregateError(failures, "Local hub shutdown failed");
     this.currentHubPid = null;
-    return { gone: true, escalated };
   }
 
-  private async terminateVerifiedHub(pid: number): Promise<ProcessTreeTerminationResult> {
-    if (!this.verifiedHubPids.has(pid)) {
+  private async terminateVerifiedHub(pid: number): Promise<void> {
+    const hub = this.verifiedHubs.get(pid);
+    if (!hub) {
       throw new Error(`Refusing to terminate unverified hub PID ${pid}`);
     }
-    const identity = this.verifiedHubPids.get(pid);
-    const result = await terminateOwnedProcessTree(pid, {
-      termTimeoutMs: STOP_SIGTERM_TIMEOUT_MS,
-      killTimeoutMs: STOP_SIGKILL_TIMEOUT_MS,
-      ...(identity ? { identity } : {}),
-    });
-    if (!result.gone) {
-      throw new Error(result.detail ?? `Hub process tree ${pid} survived termination`);
+    if (hub.owned) {
+      await hub.owned.retire();
+      return;
     }
-    return result;
+    // A hub this manager only attached to: retire it by its exact identity.
+    await retireGroup({
+      key: hub.identity ? `${hub.identity.pid}:${hub.identity.startCoordinate}` : String(pid),
+      pid,
+      identity: hub.identity,
+      kill: "graceful",
+      label: "attached-local-hub",
+    });
   }
 
+  /**
+   * Stop managing the hub. The hub's lifetime is leased to the process that
+   * owns this manager's ownership, so it is retired when that process closes
+   * the ownership or dies; only an attached hub (started by someone else) is
+   * left running.
+   */
   detach(): void {
     this.beginShutdown();
     this.currentHubPid = null;

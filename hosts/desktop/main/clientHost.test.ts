@@ -206,13 +206,11 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
     }
     if (service === "auth" && method === "grantClientPrincipal") {
       return {
-        connectionGrant: `grant-${calls.length}`,
-        expiresAt: 1,
+        credential: `clientcred:${calls.length}`,
         principalId: PRINCIPAL,
         deviceId: DEVICE,
         serverId: "s",
         serverBootId: "b",
-        workspaceId: "system",
       };
     }
     if (service === "shellApproval" && method === "resolveBootstrap") return [];
@@ -263,11 +261,13 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
     store,
   });
   const launchLink = new ClientLaunchLink(new ControlChannel(mainPort, "a"));
+  const holdSession = vi.fn(async (_window: ClientWindow) => undefined);
   host = new DesktopClientHost({
     hostVersion: "1.0.0",
     call,
     launches: launchLink,
     windows,
+    holdSession,
     supervision,
     state,
     gate: {
@@ -298,7 +298,8 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
     metadataDigest,
     served,
     dismissed: () => dismissed,
-    principals: launchHost.principalSessions(),
+    principals: launchHost.principalSessions("system"),
+    holdSession,
     launchLink,
     grantCalls: () => calls.filter((c) => c.method === "grantClientPrincipal"),
     /** Hold every window's opening until the returned release is called. */
@@ -566,25 +567,48 @@ describe("DesktopClientHost principal sessions and trust", () => {
     return t.windowsMade[0]!;
   }
 
-  it("grants a fresh connection for the exact verified build, only to its own principal", async () => {
+  it("presents the launch's one credential for the exact verified build, only to its own principal", async () => {
     const t = harness();
     await running(t);
     const sessions = t.principals;
 
     const before = t.grantCalls().length;
-    await expect(sessions.connectionGrant(PRINCIPAL)).resolves.toMatch(/^grant-/);
-    await expect(sessions.connectionGrant(PRINCIPAL)).resolves.toMatch(/^grant-/);
-    const requested = t
-      .grantCalls()
-      .slice(before)
-      .map((c) => c.args[0]);
-    expect(requested).toEqual([
-      { source: "clients/desktop-browser", buildKey: "bk1", executionDigest: DIGEST(1) },
-      { source: "clients/desktop-browser", buildKey: "bk1", executionDigest: DIGEST(1) },
-    ]);
-    await expect(sessions.connectionGrant("client:chat:web:dev1")).rejects.toThrow(
-      /No client launched/
-    );
+    const first = await sessions.credential(PRINCIPAL);
+    await expect(sessions.credential(PRINCIPAL)).resolves.toBe(first);
+    expect(first).toMatch(/^clientcred:/);
+    // Reuse never asks the server again.
+    expect(t.grantCalls()).toHaveLength(before);
+    await expect(sessions.credential("client:chat:web:dev1")).rejects.toThrow(/No client launched/);
+  });
+
+  it("registers a running build with a replacement connection process and holds its windows again", async () => {
+    const t = harness();
+    const window = await running(t);
+    const before = t.grantCalls().length;
+
+    await t.host.connectionReplaced();
+
+    expect(
+      t
+        .grantCalls()
+        .slice(before)
+        .map((c) => c.args[0])
+    ).toEqual([{ source: "clients/desktop-browser", buildKey: "bk1", executionDigest: DIGEST(1) }]);
+    expect(t.holdSession).toHaveBeenCalledWith(window);
+    expect(window.closeCalls).toBe(0);
+  });
+
+  it("closes and launches again a client whose session cannot be held again", async () => {
+    const t = harness();
+    const window = await running(t);
+    t.holdSession.mockRejectedValueOnce(new Error("no session"));
+    t.launches.push(await readyResult(BUILD1));
+
+    await t.host.connectionReplaced();
+
+    await vi.waitFor(() => expect(t.windowsMade).toHaveLength(2));
+    expect(window.closeCalls).toBe(1);
+    expect(t.notices[0]![1]).toMatch(/could not be reconnected/);
   });
 
   it("closes a client whose trust was revoked, says why, and relaunches what the server still offers", async () => {
@@ -598,6 +622,7 @@ describe("DesktopClientHost principal sessions and trust", () => {
 
     t.host.sessionEnded(
       { callerId: PRINCIPAL, callerKind: "client", instanceId: window.callerId },
+      "workspace-b",
       "trust-revoked"
     );
     await vi.waitFor(() => expect(t.gate.at(-1)!.status.status).toBe("unavailable"));
@@ -620,7 +645,7 @@ describe("DesktopClientHost principal sessions and trust", () => {
       await readyResult(BUILD1, { grantedCapabilities: ["device-session", "panel-hosting"] })
     );
 
-    t.host.sessionEnded({ callerId: PRINCIPAL, callerKind: "client" }, "trust-revoked");
+    t.host.sessionEnded({ callerId: PRINCIPAL, callerKind: "client" }, "system", "trust-revoked");
     await vi.waitFor(() => expect(t.windowsMade).toHaveLength(2));
     expect(window.closeCalls).toBe(1);
     expect(t.windowsMade[1]!.spec.capabilities).toEqual(["device-session", "panel-hosting"]);
@@ -629,7 +654,7 @@ describe("DesktopClientHost principal sessions and trust", () => {
   it("closes a retired client for good", async () => {
     const t = harness();
     const window = await running(t);
-    t.host.sessionEnded({ callerId: PRINCIPAL, callerKind: "client" }, "retired");
+    t.host.sessionEnded({ callerId: PRINCIPAL, callerKind: "client" }, "system", "retired");
     await vi.waitFor(() => expect(window.closeCalls).toBe(1));
     expect(t.launches).toEqual([]);
     expect(t.notices[0]![1]).toMatch(/retired/);
@@ -638,7 +663,7 @@ describe("DesktopClientHost principal sessions and trust", () => {
   it("does not act on a session that ended for another reason", async () => {
     const t = harness();
     const window = await running(t);
-    t.host.sessionEnded({ callerId: PRINCIPAL, callerKind: "client" }, "Token revoked");
+    t.host.sessionEnded({ callerId: PRINCIPAL, callerKind: "client" }, "system", "Token revoked");
     expect(window.closeCalls).toBe(0);
   });
 

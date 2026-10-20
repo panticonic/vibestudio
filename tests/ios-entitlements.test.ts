@@ -35,8 +35,8 @@ function generate(env: Record<string, string | undefined>, configuration = "Debu
 }
 
 describe("ios-entitlements", () => {
-  it("puts the app in the App Group its widget and share extension use", () => {
-    expect(generate({})).toContain(
+  it("puts the app in the App Group its widget and share extension use, when enabled", () => {
+    expect(generate({ VIBESTUDIO_IOS_APP_GROUP: "1" })).toContain(
       "<key>com.apple.security.application-groups</key>\n\t<array>\n\t\t<string>group.$(VIBESTUDIO_IOS_BUNDLE_ID)</string>"
     );
   });
@@ -52,6 +52,7 @@ describe("ios-entitlements", () => {
     const plist = generate({});
     expect(plist).not.toContain("com.apple.developer.associated-domains");
     expect(plist).not.toContain("aps-environment");
+    expect(plist).not.toContain("com.apple.security.application-groups");
   });
 
   it("emits associated domains only when a pair host is configured", () => {

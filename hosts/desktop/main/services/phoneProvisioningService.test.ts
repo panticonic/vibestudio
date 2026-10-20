@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { processGroupAlive } from "../../../../scripts/owned-process-tree.mjs";
+import { Ownership } from "@vibestudio/shared/ownership";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import { createPhoneProvisioningService } from "./phoneProvisioningService.js";
@@ -18,10 +18,17 @@ async function provision(
 }
 
 const roots: string[] = [];
+const ownerships: Ownership[] = [];
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(ownerships.splice(0).map((ownership) => ownership.close()));
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
+
+/** Tests that supply `runScript` never reach the process runner. */
+const noOwnership = async (): Promise<never> => {
+  throw new Error("This test supplies runScript and must not spawn");
+};
 
 function sourceRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "phone-provisioning-test-"));
@@ -83,39 +90,40 @@ function hubControlClient(platform: "android" | "ios" = "android") {
 
 describe("desktop phone provisioning service", () => {
   it.skipIf(process.platform === "win32")(
-    "joins detached native descendants when setup is cancelled",
+    "retires a command and the groups it owns itself when setup is cancelled",
     async () => {
       const root = sourceRoot();
       const receipt = path.join(root, "owned-native.json");
-      const binding = pathToFileURL(path.resolve("scripts/owned-process-tree.mjs")).href;
+      const ownershipModule = pathToFileURL(path.resolve("packages/shared/src/ownership.mjs")).href;
       fs.writeFileSync(
         path.join(root, "mobile-device.mjs"),
-        `
-      import { bindProcessLifetimeToParent } from ${JSON.stringify(binding)};
-      bindProcessLifetimeToParent(); process.channel.unref();
-      if (process.argv[2] === 'devices') console.log(${JSON.stringify(discovery())});
-    `
+        `if (process.argv[2] === 'devices') console.log(${JSON.stringify(discovery())});`
       );
+      // The command is itself an owner: the native tool it starts runs in its
+      // own group (as gradle/xcodebuild daemons do) registered with the
+      // command's own reaper, which survives the command's SIGKILL.
       fs.writeFileSync(
         path.join(root, "mobile-install.mjs"),
         `
-      import { spawn } from 'node:child_process';
       import { writeFileSync, renameSync } from 'node:fs';
-      import { bindProcessLifetimeToParent } from ${JSON.stringify(binding)};
-      bindProcessLifetimeToParent(); process.channel.unref();
-      const child = spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000);"], {detached:true,stdio:['ignore','pipe','ignore']});
-      child.stdout.once('data', () => {
-        writeFileSync(${JSON.stringify(receipt + ".pending")}, JSON.stringify({leader:process.pid,descendant:child.pid}));
+      import { Ownership } from ${JSON.stringify(ownershipModule)};
+      const ownership = await Ownership.open({ profileDir: ${JSON.stringify(root)}, lifetime: 'leased' });
+      const native = ownership.spawn(process.execPath, ['-e', "process.on('SIGTERM', () => {}); console.log('ready'); setInterval(() => {}, 1000);"], { kill: 'immediate', stdio: ['ignore', 'pipe', 'ignore'] });
+      native.child.stdout.once('data', () => {
+        writeFileSync(${JSON.stringify(receipt + ".pending")}, JSON.stringify({leader:process.pid,descendant:native.child.pid}));
         renameSync(${JSON.stringify(receipt + ".pending")}, ${JSON.stringify(receipt)});
       });
       setInterval(() => {}, 1000);
     `
       );
+      const ownership = await Ownership.open({ profileDir: root, lifetime: "leased" });
+      ownerships.push(ownership);
       const definition = createPhoneProvisioningService({
         appRoot: root,
         appVersion: "0.1.5",
         workspaceName: "current-workspace",
         resolveScriptPath: (name) => path.join(root, name),
+        ownership: async () => ownership,
         hubControlClient: hubControlClient(),
       });
       // Observe the native child's published readiness before starting setup.
@@ -130,24 +138,28 @@ describe("desktop phone provisioning service", () => {
       const response = (await definition.handler({} as never, "provision", [
         { platform: "android", mode: "release" },
       ])) as Response;
+      const groupAbsent = (pid: number) => {
+        // The leader and the native tool each lead their own group.
+        try {
+          process.kill(-pid, 0);
+          return false;
+        } catch (error) {
+          return (error as NodeJS.ErrnoException).code === "ESRCH";
+        }
+      };
+      let owned: { leader: number; descendant: number } | undefined;
       try {
         await ready;
-        const owned = JSON.parse(fs.readFileSync(receipt, "utf8")) as {
-          leader: number;
-          descendant: number;
-        };
-        expect(processGroupAlive(owned.descendant)).toBe(true);
+        owned = JSON.parse(fs.readFileSync(receipt, "utf8")) as typeof owned;
+        expect(groupAbsent(owned!.descendant)).toBe(false);
         await response.body!.cancel();
-        expect(processGroupAlive(owned.leader)).toBe(false);
-        expect(processGroupAlive(owned.descendant)).toBe(false);
+        expect(groupAbsent(owned!.leader)).toBe(true);
+        // The command's own reaper retires the group the command registered.
+        await vi.waitFor(() => expect(groupAbsent(owned!.descendant)).toBe(true));
       } finally {
         watcher.close();
         await response.body!.cancel();
-        if (fs.existsSync(receipt)) {
-          const owned = JSON.parse(fs.readFileSync(receipt, "utf8")) as {
-            leader: number;
-            descendant: number;
-          };
+        if (owned) {
           for (const pid of [owned.leader, owned.descendant]) {
             try {
               process.kill(-pid, "SIGKILL");
@@ -190,6 +202,7 @@ describe("desktop phone provisioning service", () => {
         appVersion: "0.1.34",
         workspaceName: "current-workspace",
         resolveScriptPath: (name) => name,
+        ownership: noOwnership,
         runScript,
         hubControlClient: hub,
       });
@@ -206,6 +219,7 @@ describe("desktop phone provisioning service", () => {
       appVersion: "0.1.34",
       workspaceName: "current-workspace",
       resolveScriptPath: (name) => name,
+      ownership: noOwnership,
       runScript: async () => ({
         stdout: JSON.stringify({
           devices: [],
@@ -233,6 +247,7 @@ describe("desktop phone provisioning service", () => {
       appVersion: "test",
       workspaceName: "current-workspace",
       resolveScriptPath: (name) => name,
+      ownership: noOwnership,
       runScript: async () => ({ stdout: "", stderr: "" }),
       hubControlClient: hubControlClient(),
     });
@@ -257,6 +272,7 @@ describe("desktop phone provisioning service", () => {
       appVersion: "0.1.5",
       workspaceName: "current-workspace",
       resolveScriptPath: (name) => name,
+      ownership: noOwnership,
       runScript,
       hubControlClient: hub,
     });
@@ -310,6 +326,7 @@ describe("desktop phone provisioning service", () => {
       appVersion: "0.1.5",
       workspaceName: "current-workspace",
       resolveScriptPath: (name) => name,
+      ownership: noOwnership,
       runScript: async (name, args) => {
         const isDiscovery = name === "mobile-device.mjs" && args[0] === "devices";
         if (isDiscovery) discoveries += 1;
@@ -355,6 +372,7 @@ describe("desktop phone provisioning service", () => {
       appVersion: "0.1.5",
       workspaceName: "current-workspace",
       resolveScriptPath: (name) => name,
+      ownership: noOwnership,
       runScript: async (name, args) => {
         const isDiscovery = name === "mobile-device.mjs" && args[0] === "devices";
         if (isDiscovery) discoveries += 1;
@@ -397,6 +415,7 @@ describe("desktop phone provisioning service", () => {
       appVersion: "0.1.5",
       workspaceName: "current-workspace",
       resolveScriptPath: (name) => name,
+      ownership: noOwnership,
       runScript,
       hubControlClient: hubControlClient(),
     });
@@ -447,6 +466,7 @@ describe("desktop phone provisioning service", () => {
         workspaceName: "current-workspace",
         hostPlatform: "darwin",
         resolveScriptPath: (name) => name,
+        ownership: noOwnership,
         runScript,
         hubControlClient: hubControlClient("ios"),
       });
@@ -495,6 +515,7 @@ describe("desktop phone provisioning service", () => {
       workspaceName: "current-workspace",
       hostPlatform: "darwin",
       resolveScriptPath: (name) => name,
+      ownership: noOwnership,
       runScript,
       hubControlClient: hubControlClient("ios"),
     });

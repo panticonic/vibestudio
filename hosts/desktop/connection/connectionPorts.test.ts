@@ -356,11 +356,11 @@ describe("connection process", () => {
     const ended = vi.fn();
     link.onClientSessionEnded(ended);
     const principals = workspace.client.setClientPrincipalSessions.mock.calls.at(-1)?.[0] as {
-      connectionGrant(id: string): Promise<string>;
+      credential(id: string): Promise<string>;
       sessionEnded(caller: unknown, reason: string): void;
     };
-    // No client was launched through this process, so it grants nobody a session.
-    await expect(principals.connectionGrant("client:chat:web:dev")).rejects.toThrow(
+    // No client was launched through this process, so it admits nobody's session.
+    await expect(principals.credential("client:chat:web:dev")).rejects.toThrow(
       /No client launched/
     );
     principals.sessionEnded(
@@ -370,8 +370,31 @@ describe("connection process", () => {
     await tick();
     expect(ended).toHaveBeenCalledWith(
       { callerId: "client:chat:web:dev", callerKind: "client" },
+      "system",
       "trust-revoked"
     );
+  });
+
+  it("admits client sessions in a workspace connected later, and reports its endings by workspace", async () => {
+    const { link, connected } = await setup();
+    const second = fakeClient();
+    (connected.connectWorkspace as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ...session(second.client as unknown as ConnectedServerClient),
+      workspaceId: "other",
+    });
+    const ended = vi.fn();
+    link.onClientSessionEnded(ended);
+
+    await link.channel.request("workspace.connect", { workspaceId: "other" });
+
+    expect(second.client.setClientPrincipalSessions).toHaveBeenCalledTimes(1);
+    const principals = second.client.setClientPrincipalSessions.mock.calls[0]![0] as {
+      sessionEnded(caller: unknown, reason: string): void;
+    };
+    const caller = { callerId: "client:chat:web:dev", callerKind: "client" };
+    principals.sessionEnded(caller, "retired");
+    await tick();
+    expect(ended).toHaveBeenCalledWith(caller, "other", "retired");
   });
 
   it("closes the sessions of every document when the connection closes", async () => {

@@ -52,13 +52,11 @@ function harness(options: { served?: string; launch?: unknown } = {}) {
       if (method === "clients.launch") return options.launch ?? ready();
       if (method === "auth.grantClientPrincipal") {
         return {
-          connectionGrant: "one-use",
-          expiresAt: 1,
+          credential: "clientcred:token",
           principalId: "client:chat:terminal:dev_1",
           deviceId: "dev_1",
           serverId: "srv",
           serverBootId: "boot",
-          workspaceId: "ws_system",
         };
       }
       throw new Error(`unexpected call ${method}`);
@@ -92,7 +90,7 @@ describe("terminal client delivery", () => {
     expect(calls.find((call) => call.method === "auth.grantClientPrincipal")?.args).toEqual([
       { source: "clients/chat-terminal", buildKey: "build-1", executionDigest: DIGEST },
     ]);
-    expect(launched.grant.connectionGrant).toBe("one-use");
+    expect(launched.grant.credential).toBe("clientcred:token");
     // The program is imported from the cache under its own name; no scratch file exists.
     const entry = launched.artifacts[0]!;
     expect(path.basename(entry.handle)).toBe("index.mjs");

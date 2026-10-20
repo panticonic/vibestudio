@@ -5475,6 +5475,7 @@ describe("RpcServer caller identity", () => {
         getUser: (id) => ({ id, handle: id, displayName: id, role: "member", createdAt: 1 }),
       },
       membershipStore: { has: () => member },
+      clientPrincipals: { getClientPrincipal: () => null },
       deviceAuthStore: {
         userFor: (id) => (deviceLive ? (id === "test" ? "user-1" : "user-2") : null),
         getAgentCredential: () => null,

@@ -180,9 +180,10 @@ to find its App Group, so a locally overridden bundle id stays consistent.
 Not registered (create in Xcode; no Xcode was available when this was written):
 
 1. App Group entitlement. `scripts/cli/ios-entitlements.mjs` generates the app's
-   `Generated/Vibestudio.entitlements`; it must also emit
-   `com.apple.security.application-groups` = `group.<VIBESTUDIO_IOS_BUNDLE_ID>`.
-   Enable the App Groups capability for that identifier in the developer portal.
+   `Generated/Vibestudio.entitlements`; with `VIBESTUDIO_IOS_APP_GROUP=1` it also
+   emits `com.apple.security.application-groups` = `group.<VIBESTUDIO_IOS_BUNDLE_ID>`
+   (opt-in, like the other gated capabilities). Enable the App Groups capability
+   for that identifier in the developer portal.
 2. Widget extension target: File > New > Target > Widget Extension (uncheck Live
    Activity and Control; the control is in the same source). Name
    `VibestudioWidgets`, bundle id `$(VIBESTUDIO_IOS_BUNDLE_ID).widgets`, deployment

@@ -6,7 +6,7 @@ import type { ClientIntentDecl, HostDescriptor } from "@vibestudio/workspace-con
 import type { ClientHost } from "./clientRegistry.js";
 
 export interface ClientLaunchServiceDeps {
-  getClientHost(): ClientHost | null;
+  getClientHost(): ClientHost;
   /**
    * Call a client's declared workspace service method (`<protocol>#<method>`:
    * a background intent's handler or an intent's dynamic-entries method) as
@@ -65,18 +65,6 @@ function dynamicEntries(intent: ClientIntentDecl, result: unknown): DynamicEntry
  * session. Resolution happens here; hosts never read the workspace manifest.
  */
 export function createClientLaunchService(deps: ClientLaunchServiceDeps): ServiceDefinition {
-  const clientHost = (method: string): ClientHost => {
-    const host = deps.getClientHost();
-    if (!host) {
-      throw new ServiceError(
-        "clients",
-        method,
-        "Clients run only from the System workspace",
-        "CLIENTS_UNAVAILABLE"
-      );
-    }
-    return host;
-  };
   const requireHost = (caller: VerifiedCaller, method: string): void => {
     const { id, kind } = caller.runtime;
     if (kind === "shell" && (id === "electron-main" || id.startsWith("shell:"))) return;
@@ -98,7 +86,7 @@ export function createClientLaunchService(deps: ClientLaunchServiceDeps): Servic
     handler: defineServiceHandler("clients", clientsMethods, {
       launch: async (ctx, [request]) => {
         requireHost(ctx.caller, "launch");
-        return clientHost("launch").launch({
+        return deps.getClientHost().launch({
           host: request.host as HostDescriptor,
           select: request.select,
           ...(request.rollbackTo ? { rollbackTo: request.rollbackTo } : {}),
@@ -106,46 +94,52 @@ export function createClientLaunchService(deps: ClientLaunchServiceDeps): Servic
       },
       list: async (ctx, [host]) => {
         requireHost(ctx.caller, "list");
-        return clientHost("list").listClients(host as HostDescriptor);
+        return deps.getClientHost().listClients(host as HostDescriptor);
       },
       integrationSnapshot: async (ctx, [host]) => {
         requireHost(ctx.caller, "integrationSnapshot");
-        const snapshot = await clientHost("integrationSnapshot").integrationSnapshot(
-          host as HostDescriptor
-        );
+        const snapshot = await deps.getClientHost().integrationSnapshot(host as HostDescriptor);
+        // One client's failure is that client's entry, never the snapshot's.
         return {
           clients: await Promise.all(
-            snapshot.clients.map(async ({ source, activeBuildKey, ...client }) => ({
-              ...client,
-              entries: Object.fromEntries(
-                await Promise.all(
-                  client.intents
-                    .filter((intent) => intent.dynamic && activeBuildKey !== null)
-                    .map(async (intent) => [
-                      intent.name,
-                      dynamicEntries(
-                        intent,
-                        await deps.callClientHandler({
-                          caller: ctx.caller,
-                          ...(ctx.signal ? { signal: ctx.signal } : {}),
-                          source,
-                          handler: intent.dynamic!,
-                          params: {},
-                        })
-                      ),
-                    ])
-                )
-              ),
-            }))
+            snapshot.clients.map(async ({ source, activeBuildKey, ...client }) => {
+              try {
+                const entries = Object.fromEntries(
+                  await Promise.all(
+                    client.intents
+                      .filter((intent) => intent.dynamic && activeBuildKey !== null)
+                      .map(async (intent) => [
+                        intent.name,
+                        dynamicEntries(
+                          intent,
+                          await deps.callClientHandler({
+                            caller: ctx.caller,
+                            ...(ctx.signal ? { signal: ctx.signal } : {}),
+                            source,
+                            handler: intent.dynamic!,
+                            params: {},
+                          })
+                        ),
+                      ])
+                  )
+                );
+                return { ...client, entries };
+              } catch (error) {
+                return {
+                  ...client,
+                  entries: {},
+                  error: error instanceof Error ? error.message : String(error),
+                };
+              }
+            })
           ),
         };
       },
       invokeIntent: async (ctx, [host, request]) => {
         requireHost(ctx.caller, "invokeIntent");
-        const resolved = clientHost("invokeIntent").resolveBackgroundIntent(
-          host as HostDescriptor,
-          request
-        );
+        const resolved = deps
+          .getClientHost()
+          .resolveBackgroundIntent(host as HostDescriptor, request);
         const params = request.params ?? {};
         for (const name of Object.keys(params)) {
           if (!resolved.intent.params || !(name in resolved.intent.params)) {

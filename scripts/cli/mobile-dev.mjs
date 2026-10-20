@@ -1,10 +1,9 @@
 import fsp from "fs/promises";
-import os from "os";
 import path from "path";
 import process from "process";
 import net from "net";
-import spawn from "cross-spawn";
 import { fileURLToPath } from "url";
+import { ownedEntry } from "../lib/owned-entry.mjs";
 import { createPnpmInvocation } from "./lib/package-manager.mjs";
 import { parseHubReadyPayload, rootBootstrapPairingInvite } from "./lib/hub-ready.mjs";
 import { INTERNAL_ANDROID_PACKAGE } from "./lib/mobile-native-android.mjs";
@@ -37,17 +36,15 @@ export function mobileDevServerArgs({ instanceId, templateCheckoutRoot, readyFil
     "--ready-file",
     readyFilePath,
     "--ephemeral",
+    // The instance ends with this launcher: its lease is the supervisor's cue.
+    "--lifetime",
+    "leased",
   ];
 }
 
-export function mobileDevMetroEnvironment(systemCheckout, env = process.env) {
-  return {
-    ...env,
-    REACT_NATIVE_PACKAGER_HOSTNAME: "127.0.0.1",
-    VIBESTUDIO_USERLAND_ROOT: systemCheckout,
-    VIBESTUDIO_WORKSPACE_APP_ROOT: path.join(systemCheckout, "apps", "mobile"),
-    VIBESTUDIO_WORKSPACE_NODE_MODULES: path.join(repoRoot, "node_modules"),
-  };
+export function mobileDevMetroEnvironment(env = process.env) {
+  // Metro bundles only the shipped host; clients are built by the server.
+  return { ...env, REACT_NATIVE_PACKAGER_HOSTNAME: "127.0.0.1" };
 }
 
 export function mobileDevInstallArgs({ platform, device, noLaunch }) {
@@ -162,97 +159,91 @@ function pipeChildOutput(child, prefix) {
   });
 }
 
-function spawnManaged(command, args, options = {}) {
-  const child = spawn(command, args, {
+/** A long-running child of this launcher's ownership, retired with it. A
+ * failure to start surfaces from `owned.registered`. */
+function spawnManaged(ownership, command, args, options = {}) {
+  const { label, kill = "graceful", ...spawnOptions } = options;
+  const owned = ownership.spawn(command, args, {
     cwd: repoRoot,
     env: process.env,
     stdio: ["ignore", "pipe", "pipe"],
-    ...options,
+    // pnpm is pnpm.cmd on Windows, which Node only starts through a shell.
+    ...(process.platform === "win32" ? { shell: true } : {}),
+    ...spawnOptions,
+    kill,
+    label: label ?? command,
   });
-  pipeChildOutput(child, options.label ?? command);
-  child.once("error", (error) => {
-    prefixAndWrite(
-      options.label ?? command,
-      `Failed to start ${command}: ${error.message}`,
-      process.stderr
-    );
-  });
-  return child;
+  pipeChildOutput(owned.child, label ?? command);
+  return owned;
 }
 
-function waitForSpawn(child, command, args, timeoutMs = 1_000) {
+/** Resolves when `owned`'s leader exits, with its status. */
+function exitOf(owned) {
+  const child = owned.child;
   return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      child.off("spawn", onSpawn);
-      child.off("error", onError);
-      if (error) reject(error);
-      else resolve();
-    };
-    const onSpawn = () => finish();
-    const onError = (error) => finish(error);
-    const timer = setTimeout(() => finish(), timeoutMs);
-    child.once("spawn", onSpawn);
-    child.once("error", onError);
-    if (child.pid) finish();
-    if (child.exitCode != null)
-      finish(new Error(`${command} ${args.join(" ")} exited before startup`));
+    if (child.exitCode !== null || child.signalCode !== null) {
+      resolve({ code: child.exitCode, signal: child.signalCode });
+      return;
+    }
+    child.once("error", reject);
+    child.once("exit", (code, signal) => resolve({ code, signal }));
   });
 }
 
-function waitForChildExit(child, timeoutMs = 8_000) {
-  if (!child || child.exitCode != null) return Promise.resolve();
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, timeoutMs);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
+/** Resolves once `port` accepts connections. The leader's exit before that, or
+ * a stop request, ends the wait: those are the terminal events, not a clock. */
+async function waitForPort(port, owned, signal, label) {
+  while (!(await isPortOpen("127.0.0.1", port))) {
+    signal.throwIfAborted();
+    const { exitCode, signalCode } = owned.child;
+    if (exitCode !== null || signalCode !== null) {
+      throw new Error(`${label} exited (${signalCode ?? exitCode}) before listening on ${port}`);
+    }
+    await sleep(250);
+  }
 }
 
-function runCommand(command, args, options = {}) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd: repoRoot,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      ...options,
-    });
-
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.on("data", (chunk) => {
-      const text = chunk.toString();
-      stdout += text;
-      if (options.label) prefixAndWrite(options.label, text, process.stdout);
-    });
-    child.stderr?.on("data", (chunk) => {
-      const text = chunk.toString();
-      stderr += text;
-      if (options.label) prefixAndWrite(options.label, text, process.stderr);
-    });
-    child.on("error", reject);
-    child.on("exit", (code) => {
-      if (code === 0) {
-        resolve({ stdout, stderr });
-      } else {
-        reject(
-          new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr || stdout}`)
-        );
-      }
-    });
+/** One-shot command, a member of this launcher's ownership. */
+async function runCommand(ownership, command, args, options = {}) {
+  const { label, ...spawnOptions } = options;
+  const owned = ownership.spawn(command, args, {
+    cwd: repoRoot,
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+    ...(process.platform === "win32" ? { shell: true } : {}),
+    ...spawnOptions,
+    kill: "immediate",
+    label: label ?? command,
   });
+  const child = owned.child;
+  let stdout = "";
+  let stderr = "";
+  child.stdout?.on("data", (chunk) => {
+    const text = chunk.toString();
+    stdout += text;
+    if (label) prefixAndWrite(label, text, process.stdout);
+  });
+  child.stderr?.on("data", (chunk) => {
+    const text = chunk.toString();
+    stderr += text;
+    if (label) prefixAndWrite(label, text, process.stderr);
+  });
+  const { code } = await exitOf(owned);
+  await owned.join();
+  if (code !== 0) {
+    throw new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr || stdout}`);
+  }
+  return { stdout, stderr };
 }
 
-async function waitForServerReady(readyFile, serverChild, timeoutMs = 120_000) {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    if (serverChild.exitCode != null) {
-      throw new Error(`Server exited before readiness (code ${serverChild.exitCode})`);
+/** Observe the server's ready-file handoff. The server's exit or a stop
+ * request is the terminal event; there is no deadline. */
+async function waitForServerReady(readyFile, owned, signal) {
+  for (;;) {
+    signal.throwIfAborted();
+    const { exitCode, signalCode } = owned.child;
+    if (exitCode !== null || signalCode !== null) {
+      throw new Error(`Server exited before readiness (${signalCode ?? exitCode})`);
     }
     try {
       const content = await fsp.readFile(readyFile, "utf8");
@@ -274,15 +265,14 @@ async function waitForServerReady(readyFile, serverChild, timeoutMs = 120_000) {
       await sleep(250);
     }
   }
-  throw new Error(`Timed out waiting for server ready file: ${readyFile}`);
 }
 
 function makeAdbArgs(device, args) {
   return device ? ["-s", device, ...args] : args;
 }
 
-async function adb(device, ...args) {
-  return runCommand("adb", makeAdbArgs(device, args), { label: "adb" });
+async function adb(ownership, device, ...args) {
+  return runCommand(ownership, "adb", makeAdbArgs(device, args), { label: "adb" });
 }
 
 function shellQuote(value) {
@@ -293,8 +283,9 @@ function shellCommand(args) {
   return args.map(shellQuote).join(" ");
 }
 
-async function startConnectIntent(device, link) {
+async function startConnectIntent(ownership, device, link) {
   const packageResult = await adb(
+    ownership,
     device,
     "shell",
     shellCommand([
@@ -312,6 +303,7 @@ async function startConnectIntent(device, link) {
   if (!(packageResult instanceof Error)) return;
 
   await adb(
+    ownership,
     device,
     "shell",
     shellCommand([
@@ -328,22 +320,18 @@ async function startConnectIntent(device, link) {
   );
 }
 
-async function hasAdbDevice(device) {
+async function hasAdbDevice(ownership, device) {
   try {
-    await adb(device, "get-state");
+    await adb(ownership, device, "get-state");
     return true;
   } catch {
     return false;
   }
 }
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2));
-  if (options.help) {
-    printHelp();
-    return;
-  }
+async function main({ signal, ownership, scratchRoot }, options) {
   const resolvedTemplates = await runCommand(
+    ownership,
     process.execPath,
     [
       "--import",
@@ -360,7 +348,6 @@ async function main() {
       "mobile dev requires development template checkouts. Configure them with `pnpm dev:templates setup` or pass --template-checkouts <dir>."
     );
   }
-  const mobileSourceRoot = selectedTemplates.checkouts.system;
   if (
     !(await fsp
       .stat(mobileDir)
@@ -369,217 +356,151 @@ async function main() {
   ) {
     throw new Error("mobile dev requires a complete Host source checkout");
   }
-  const workspaceMobileDir = path.join(mobileSourceRoot, "apps", "mobile");
-  if (
-    !(await fsp
-      .stat(workspaceMobileDir)
-      .then((stat) => stat.isDirectory())
-      .catch(() => false))
-  ) {
-    throw new Error(`Development Base has no workspace mobile source at ${workspaceMobileDir}`);
-  }
+  // Every child below is a member of this launcher's ownership: a stop request
+  // ends the wait, and releasing the ownership retires them in order.
+  const stopped = new Promise((resolve) => {
+    if (signal.aborted) resolve();
+    else signal.addEventListener("abort", resolve, { once: true });
+  });
+  const startMetro = async () => {
+    const pnpmStart = createPnpmInvocation(["start"]);
+    const metro = spawnManaged(ownership, pnpmStart.command, pnpmStart.args, {
+      cwd: mobileDir,
+      env: mobileDevMetroEnvironment(),
+      label: "metro",
+    });
+    await metro.registered;
+    await waitForPort(metroPort, metro, signal, "metro");
+    return metro;
+  };
+
   if (options.platform === "ios") {
     if (process.platform !== "darwin") {
       throw new Error(
         "iOS dev requires macOS with Xcode. Run `vibestudio mobile doctor` on a Mac."
       );
     }
-    const startedChildren = [];
-    try {
-      if (!options.noMetro && !(await isPortOpen("127.0.0.1", metroPort))) {
-        const pnpmStart = createPnpmInvocation(["start"]);
-        const metroChild = spawnManaged(pnpmStart.command, pnpmStart.args, {
-          cwd: mobileDir,
-          env: mobileDevMetroEnvironment(mobileSourceRoot),
-          label: "metro",
-        });
-        startedChildren.push(metroChild);
-        await waitForSpawn(metroChild, pnpmStart.command, pnpmStart.args);
-        await sleep(3000);
-      }
-      if (!options.noInstall) {
-        await runCommand(
-          process.execPath,
-          mobileDevInstallArgs({
-            platform: "ios",
-            device: options.device,
-            noLaunch: options.noLaunch,
-          }),
-          { cwd: repoRoot, env: process.env, label: "mobile-install-ios" }
-        );
-      }
-      console.log("[mobile-dev] iOS shell is running. Start pairing with: vibestudio mobile pair");
-      await new Promise((resolve) => {
-        process.once("SIGINT", resolve);
-        process.once("SIGTERM", resolve);
-      });
-    } finally {
-      for (const child of startedChildren.reverse()) {
-        if (child.exitCode == null && !child.killed) child.kill("SIGTERM");
-      }
-      await Promise.all(startedChildren.map((child) => waitForChildExit(child)));
+    if (!options.noMetro && !(await isPortOpen("127.0.0.1", metroPort))) await startMetro();
+    if (!options.noInstall) {
+      await runCommand(
+        ownership,
+        process.execPath,
+        mobileDevInstallArgs({
+          platform: "ios",
+          device: options.device,
+          noLaunch: options.noLaunch,
+        }),
+        { cwd: repoRoot, env: process.env, label: "mobile-install-ios" }
+      );
     }
+    console.log("[mobile-dev] iOS shell is running. Start pairing with: vibestudio mobile pair");
+    await stopped;
     return;
   }
 
-  const startedChildren = [];
-  let cleanedUp = false;
-  let emulatorChild = null;
-  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-mobile-dev-"));
-  const readyFilePath = path.join(tempRoot, "server-ready.json");
-  let readyInfo = null;
-
-  const cleanup = async (exitCode = 0) => {
-    if (cleanedUp) return;
-    cleanedUp = true;
-
-    for (const child of startedChildren.reverse()) {
-      if (child.exitCode == null && !child.killed) {
-        child.kill("SIGTERM");
-      }
+  if (!(await hasAdbDevice(ownership, options.device))) {
+    if (!options.avd) {
+      throw new Error("No Android device/emulator detected. Start one first or pass --avd <name>.");
     }
-    if (emulatorChild && emulatorChild.exitCode == null && !emulatorChild.killed) {
-      emulatorChild.kill("SIGTERM");
-    }
-    await Promise.all(startedChildren.map((child) => waitForChildExit(child)));
-    if (emulatorChild) {
-      await waitForChildExit(emulatorChild);
-    }
-    if (readyInfo?.isEphemeral && readyInfo.workspaceDir) {
-      try {
-        await fsp.access(readyInfo.workspaceDir);
-        console.warn(
-          `[mobile-dev] Ephemeral workspace still present after shutdown: ${readyInfo.workspaceDir}`
-        );
-      } catch {
-        // Server cleanup completed.
-      }
-    }
-    await Promise.all(startedChildren.map((child) => waitForChildExit(child, 2_000)));
-    await fsp.rm(readyFilePath, { force: true }).catch(() => undefined);
-    await fsp.rm(tempRoot, { recursive: true, force: true }).catch(() => undefined);
-    process.exit(exitCode);
-  };
-
-  process.on("SIGINT", () => void cleanup(0));
-  process.on("SIGTERM", () => void cleanup(0));
-
-  try {
-    if (!(await hasAdbDevice(options.device))) {
-      if (!options.avd) {
-        throw new Error(
-          "No Android device/emulator detected. Start one first or pass --avd <name>."
-        );
-      }
-      emulatorChild = spawnManaged(
-        process.env.ANDROID_EMULATOR ?? "emulator",
-        ["-avd", options.avd, "-no-snapshot", "-no-audio", "-no-boot-anim", "-no-window"],
-        {
-          label: "emulator",
-        }
-      );
-    }
-
-    if (emulatorChild) {
-      startedChildren.push(emulatorChild);
-    }
-
-    await waitForAndroidBoot(options.device);
-
-    let metroChild = null;
-    if (!options.noMetro) {
-      if (await isPortOpen("127.0.0.1", metroPort)) {
-        console.log(`[mobile-dev] Reusing Metro on port ${metroPort}`);
-      } else {
-        const pnpmStart = createPnpmInvocation(["start"]);
-        metroChild = spawnManaged(pnpmStart.command, pnpmStart.args, {
-          cwd: mobileDir,
-          env: mobileDevMetroEnvironment(mobileSourceRoot),
-          label: "metro",
-        });
-        await waitForSpawn(metroChild, pnpmStart.command, pnpmStart.args);
-        startedChildren.push(metroChild);
-        await sleep(3000);
-      }
-    }
-
-    // The server publishes one complete root invitation fact through its strict
-    // ready-file handoff. Mobile consumes its deep-link presentation directly.
-    const instanceId = `mobile-dev-${process.pid}`;
-    const serverArgs = mobileDevServerArgs({
-      instanceId,
-      templateCheckoutRoot: selectedTemplates.root,
-      readyFilePath,
-    });
-    const serverChild = spawnManaged(process.execPath, serverArgs, {
-      cwd: repoRoot,
-      env: process.env,
-      label: "server",
-    });
-    await waitForSpawn(serverChild, process.execPath, serverArgs);
-    startedChildren.push(serverChild);
-    const ready = await waitForServerReady(readyFilePath, serverChild);
-    readyInfo = ready;
-    const invite = rootBootstrapPairingInvite(ready.rootInvite);
-    if (!invite) {
-      throw new Error("Fresh isolated hub did not publish a root invite");
-    }
-    const connectLink = invite.deepLink;
-    const workspace = ready.workspaces.find((entry) => entry.ephemeral) ?? ready.workspaces[0];
-    if (!workspace) throw new Error("Hub ready file did not include a workspace");
-
-    await adb(options.device, "reverse", `tcp:${metroPort}`, `tcp:${metroPort}`);
-
-    if (!options.noInstall) {
-      await runCommand(
-        process.execPath,
-        mobileDevInstallArgs({
-          platform: "android",
-          device: options.device,
-          noLaunch: true,
-        }),
-        {
-          cwd: repoRoot,
-          env: process.env,
-          label: "mobile-install-android",
-        }
-      );
-    }
-
-    if (options.resetApp) {
-      await adb(options.device, "shell", "pm", "clear", appPackage);
-    }
-
-    if (!options.noLaunch) {
-      await adb(options.device, "shell", "am", "force-stop", appPackage).catch(() => null);
-      await startConnectIntent(options.device, connectLink);
-    }
-
-    console.log(`[mobile-dev] Ready`);
-    console.log(
-      `[mobile-dev] Workspace: ${ready.workspaceName}${ready.isEphemeral ? " (ephemeral)" : ""}`
+    spawnManaged(
+      ownership,
+      process.env.ANDROID_EMULATOR ?? "emulator",
+      ["-avd", options.avd, "-no-snapshot", "-no-audio", "-no-boot-anim", "-no-window"],
+      { label: "emulator" }
     );
-    console.log(`[mobile-dev] Transport: Iroh (public relay defaults)`);
-    console.log(`[mobile-dev] Device:    ${options.device ?? "default adb device"}`);
-
-    serverChild.on("exit", (code) => {
-      if (!cleanedUp) {
-        console.error(`[mobile-dev] Server exited with code ${code ?? 1}`);
-        void cleanup(code ?? 1);
-      }
-    });
-    metroChild?.on("exit", (code) => {
-      if (!cleanedUp) {
-        console.error(`[mobile-dev] Metro exited with code ${code ?? 1}`);
-        void cleanup(code ?? 1);
-      }
-    });
-  } catch (error) {
-    console.error(`[mobile-dev] ${error instanceof Error ? error.message : String(error)}`);
-    await cleanup(1);
   }
+
+  await waitForAndroidBoot(options.device);
+
+  let metro = null;
+  if (!options.noMetro) {
+    if (await isPortOpen("127.0.0.1", metroPort)) {
+      console.log(`[mobile-dev] Reusing Metro on port ${metroPort}`);
+    } else {
+      metro = await startMetro();
+    }
+  }
+
+  // The server publishes one complete root invitation fact through its strict
+  // ready-file handoff. Mobile consumes its deep-link presentation directly.
+  const readyFilePath = path.join(scratchRoot, "server-ready.json");
+  const instanceId = `mobile-dev-${process.pid}`;
+  const serverArgs = mobileDevServerArgs({
+    instanceId,
+    templateCheckoutRoot: selectedTemplates.root,
+    readyFilePath,
+  });
+  const server = spawnManaged(ownership, process.execPath, serverArgs, {
+    cwd: repoRoot,
+    env: process.env,
+    label: "server",
+    lease: true,
+  });
+  await server.registered;
+  const ready = await waitForServerReady(readyFilePath, server, signal);
+  const invite = rootBootstrapPairingInvite(ready.rootInvite);
+  if (!invite) {
+    throw new Error("Fresh isolated hub did not publish a root invite");
+  }
+  const connectLink = invite.deepLink;
+  const workspace = ready.workspaces.find((entry) => entry.ephemeral) ?? ready.workspaces[0];
+  if (!workspace) throw new Error("Hub ready file did not include a workspace");
+
+  await adb(ownership, options.device, "reverse", `tcp:${metroPort}`, `tcp:${metroPort}`);
+
+  if (!options.noInstall) {
+    await runCommand(
+      ownership,
+      process.execPath,
+      mobileDevInstallArgs({
+        platform: "android",
+        device: options.device,
+        noLaunch: true,
+      }),
+      {
+        cwd: repoRoot,
+        env: process.env,
+        label: "mobile-install-android",
+      }
+    );
+  }
+
+  if (options.resetApp) {
+    await adb(ownership, options.device, "shell", "pm", "clear", appPackage);
+  }
+
+  if (!options.noLaunch) {
+    await adb(ownership, options.device, "shell", "am", "force-stop", appPackage).catch(() => null);
+    await startConnectIntent(ownership, options.device, connectLink);
+  }
+
+  console.log(`[mobile-dev] Ready`);
+  console.log(
+    `[mobile-dev] Workspace: ${ready.workspaceName}${ready.isEphemeral ? " (ephemeral)" : ""}`
+  );
+  console.log(`[mobile-dev] Transport: Iroh (public relay defaults)`);
+  console.log(`[mobile-dev] Device:    ${options.device ?? "default adb device"}`);
+
+  // Run until asked to stop; a server or Metro that exits first is the failure.
+  const ended = async (owned, name) => {
+    const { code, signal: exitSignal } = await exitOf(owned);
+    throw new Error(`${name} exited (${exitSignal ?? code})`);
+  };
+  await Promise.race([stopped, ended(server, "Server"), ...(metro ? [ended(metro, "Metro")] : [])]);
+}
+
+function run() {
+  const options = parseArgs(process.argv.slice(2));
+  if (options.help) {
+    printHelp();
+    return Promise.resolve();
+  }
+  return ownedEntry((context) => main(context, options), { scratchPrefix: "mobile-dev-" });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  void main();
+  run().catch((error) => {
+    console.error(`[mobile-dev] ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  });
 }

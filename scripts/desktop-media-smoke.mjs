@@ -1,10 +1,9 @@
 import { build } from "esbuild";
-import { spawn } from "node:child_process";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { ownedEntry, retireOnAbort } from "./lib/owned-entry.mjs";
 
 // Isolated native test: capture only a test page/canvas; never the user's desktop
 // or physical camera/microphone. No Vibestudio instance or profile is reused.
@@ -12,25 +11,24 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
 const electron = require("electron");
 const screenshotPath = process.argv[2] ? resolve(process.argv[2]) : null;
-const temp = await mkdtemp(join(tmpdir(), "vibestudio-media-smoke-"));
-let child;
-try {
-  const recording = await build({
-    entryPoints: [join(root, "packages/shared/src/mediaRecording.ts")],
-    bundle: true,
-    format: "iife",
-    globalName: "Recording",
-    write: false,
-  });
-  await build({
-    entryPoints: [join(root, "hosts/desktop/preload/displayCapturePreload.ts")],
-    outfile: join(temp, "picker-preload.cjs"),
-    bundle: true,
-    platform: "node",
-    format: "cjs",
-    external: ["electron"],
-  });
-  const entry = `
+await ownedEntry(
+  async ({ ownership, signal, scratchRoot: temp }) => {
+    const recording = await build({
+      entryPoints: [join(root, "packages/shared/src/mediaRecording.ts")],
+      bundle: true,
+      format: "iife",
+      globalName: "Recording",
+      write: false,
+    });
+    await build({
+      entryPoints: [join(root, "hosts/desktop/preload/displayCapturePreload.ts")],
+      outfile: join(temp, "picker-preload.cjs"),
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      external: ["electron"],
+    });
+    const entry = `
 import { app, BrowserWindow, session, ipcMain } from 'electron';
 import { writeFile } from 'node:fs/promises';
 import http from 'node:http';
@@ -128,46 +126,43 @@ try {
 }
 run().catch(error => { console.error(error); process.exit(1); });
 `;
-  await writeFile(join(temp, "entry.mjs"), entry);
-  await build({
-    entryPoints: [join(temp, "entry.mjs")],
-    outfile: join(temp, "main.cjs"),
-    bundle: true,
-    platform: "node",
-    format: "cjs",
-    external: ["electron"],
-    tsconfig: join(root, "tsconfig.json"),
-  });
-  await writeFile(join(temp, "package.json"), JSON.stringify({ main: "main.cjs" }));
-  const env = { ...process.env };
-  delete env.ELECTRON_RUN_AS_NODE;
-  child = spawn(electron, [temp], {
-    env,
-    detached: process.platform !== "win32",
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-  child.stdout.pipe(process.stdout);
-  child.stderr.pipe(process.stderr);
-  const exit = new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("exit", (code) => resolve(code));
-  });
-  const timeout = setTimeout(() => {
-    process.kill(process.platform === "win32" ? child.pid : -child.pid, "SIGKILL");
-  }, 30000);
-  try {
-    if ((await exit) !== 0) throw new Error("Native media smoke failed");
-  } finally {
-    clearTimeout(timeout);
-  }
-} finally {
-  if (child && child.exitCode === null && child.signalCode === null) {
+    await writeFile(join(temp, "entry.mjs"), entry);
+    await build({
+      entryPoints: [join(temp, "entry.mjs")],
+      outfile: join(temp, "main.cjs"),
+      bundle: true,
+      platform: "node",
+      format: "cjs",
+      external: ["electron"],
+      tsconfig: join(root, "tsconfig.json"),
+    });
+    await writeFile(join(temp, "package.json"), JSON.stringify({ main: "main.cjs" }));
+    const env = { ...process.env };
+    delete env.ELECTRON_RUN_AS_NODE;
+    const owned = ownership.spawn(electron, [temp], {
+      kill: "immediate",
+      label: "media-smoke-electron",
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const { child } = owned;
+    child.stdout.pipe(process.stdout);
+    child.stderr.pipe(process.stderr);
+    const exit = new Promise((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code) => resolve(code));
+    });
+    // A page that never finishes is ended by the operator's stop request, which
+    // retires the whole group; the exit is the only other terminal event.
+    retireOnAbort(ownership, signal, owned);
     try {
-      process.kill(process.platform === "win32" ? child.pid : -child.pid, "SIGKILL");
-    } catch {
-      /* The owned process has already exited. */
+      if ((await exit) !== 0) {
+        signal.throwIfAborted();
+        throw new Error("Native media smoke failed");
+      }
+    } finally {
+      await owned.join();
     }
-    await new Promise((resolve) => child.once("exit", resolve));
-  }
-  await rm(temp, { recursive: true, force: true });
-}
+  },
+  { scratchPrefix: "vibestudio-media-smoke-" }
+);

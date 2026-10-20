@@ -2,6 +2,7 @@ import * as path from "node:path";
 import * as ts from "typescript/unstable/ast";
 import {
   SymbolFlags,
+  TypeFlags,
   type Checker,
   type Project,
   type Symbol as TypeScriptSymbol,
@@ -27,6 +28,10 @@ export interface WorkspaceServiceCallFact {
   methods: AbstractString;
   objectKeys: AbstractString | { kind: "not-applicable" };
   arguments: readonly SymbolicArgumentValue[];
+  /** Source text of the expression read as the service query, for diagnostics. */
+  queryExpression?: string;
+  /** Source text of the expression read as the RPC method, for diagnostics. */
+  methodExpression?: string;
   origin: {
     unitName: string;
     package?: {
@@ -78,6 +83,7 @@ interface ServiceValue {
   objectKeys: AbstractString | { kind: "not-applicable" };
   client: boolean;
   methods?: ts.Expression;
+  queryText?: string;
 }
 
 const RESOLVER_NAMES = new Set(["resolveService"]);
@@ -212,7 +218,10 @@ function unalias(
 }
 
 function literalStrings(checker: Checker, expression: ts.Expression): ReadonlySet<string> | null {
-  const type = checker.getTypeAtLocation(expression);
+  let type = checker.getTypeAtLocation(expression);
+  // A generic `K extends keyof Table & string` can only ever hold the
+  // constraint's members, so its base constraint is the finite union.
+  if (type?.isTypeParameter()) type = checker.getBaseConstraintOfType(type);
   if (!type) return null;
   const types = type.isUnionType() ? (type.getTypes() ?? []) : [type];
   const values = new Set<string>();
@@ -270,11 +279,6 @@ function importSpecifierOf(declaration: ts.Node): string | null {
 function isTestkitServiceImportDeclaration(declaration: ts.Node): boolean {
   const specifier = importSpecifierOf(declaration);
   return specifier !== null && /(?:^|\/)testkit(?:\/|$)/u.test(specifier);
-}
-
-function isUnboundServiceClientImportDeclaration(declaration: ts.Node): boolean {
-  const specifier = importSpecifierOf(declaration);
-  return specifier !== null && /(?:^|\/)workspaceServiceRpc$/u.test(specifier);
 }
 
 function isPublicNamespace(
@@ -525,6 +529,23 @@ export function analyzeWorkspaceServiceCalls(
       : callCalleeName(call);
   };
 
+  const sourceText = (node: ts.Node): string => {
+    const sourceFile = node.getSourceFile();
+    return sourceFile.text.slice(node.getStart(sourceFile), node.end);
+  };
+
+  /** Index of the service-query argument: the first parameter of the resolved
+   * callee typed as a string. Unbound helpers lead with the RPC caller; bound
+   * runtime wrappers lead with the query. */
+  const queryParameterIndex = (call: ts.CallExpression): number => {
+    const signature = checker.getResolvedSignature(call);
+    const index = (signature?.getParameters() ?? []).findIndex((parameter) => {
+      const type = checker.getTypeOfSymbol(parameter);
+      return type !== undefined && (type.flags & TypeFlags.StringLike) !== 0;
+    });
+    return index < 0 ? 0 : index;
+  };
+
   const isFactoryCall = (call: ts.CallExpression): boolean => {
     const name = resolvedFactoryName(call);
     if (!name || !CLIENT_FACTORY_NAMES.has(name)) return false;
@@ -575,6 +596,7 @@ export function analyzeWorkspaceServiceCalls(
       if (isResolverCall(current)) {
         return {
           queries: abstractString(checker, current.arguments[0] ?? current, resolveString, seen),
+          ...(current.arguments[0] ? { queryText: sourceText(current.arguments[0]) } : {}),
           objectKeys:
             current.arguments.length > 1
               ? abstractString(checker, current.arguments[1]!, resolveString, seen)
@@ -616,26 +638,18 @@ export function analyzeWorkspaceServiceCalls(
           };
         }
         const factoryName = resolvedFactoryName(current);
-        const declarations = declarationsOf(
-          input.project,
-          checker.getSymbolAtLocation(current.expression)
-        );
         // The host-side helper accepts (rpc, query, methods, objectKey); the
         // public runtime wrapper binds rpc and accepts (query, methods,
-        // objectKey). Select arguments from the declaration's module rather
-        // than arity or value heuristics (a dynamic query may itself look like
-        // an RPC value).
-        const queryIndex =
-          factoryName === "createDurableObjectServiceClient" &&
-          declarations.some(isUnboundServiceClientImportDeclaration)
-            ? 1
-            : 0;
+        // objectKey). The resolved signature decides: the query is its first
+        // string parameter, whatever module the callee was imported from.
+        const queryIndex = queryParameterIndex(current);
         const query = current.arguments[queryIndex];
         const methodTable = current.arguments[queryIndex + 1];
         const objectKey = current.arguments[queryIndex + 2];
         const genericTestkitHelper = factoryName === "callDO" || factoryName === "profileDO";
         return {
           queries: abstractString(checker, query ?? current, resolveString, seen),
+          ...(query ? { queryText: sourceText(query) } : {}),
           objectKeys:
             !genericTestkitHelper && objectKey
               ? abstractString(checker, objectKey, resolveString, seen)
@@ -677,6 +691,9 @@ export function analyzeWorkspaceServiceCalls(
                   ? { kind: "not-applicable" }
                   : unionString(combined.objectKeys, value.objectKeys),
               client: combined.client || value.client,
+              ...(combined.queryText !== undefined && combined.queryText === value.queryText
+                ? { queryText: combined.queryText }
+                : {}),
               ...(combined.methods === value.methods && combined.methods
                 ? { methods: combined.methods }
                 : {}),
@@ -1018,6 +1035,8 @@ export function analyzeWorkspaceServiceCalls(
       methods: abstractMethod,
       objectKeys: service.objectKeys,
       arguments: [],
+      ...(service.queryText !== undefined ? { queryExpression: service.queryText } : {}),
+      ...(method ? { methodExpression: sourceText(method) } : {}),
       origin: {
         unitName: unit?.name ?? input.unitRelativePath,
         ...(originPackage ? { package: originPackage } : {}),
@@ -1067,14 +1086,21 @@ export function analyzeWorkspaceServiceCalls(
     } else if (boundMethodCall) {
       if (!method) continue;
       const fact = factFor(call, "invocation", receiverValue, method);
+      // A literal, a const, or a finite union (including a generic bounded by
+      // `keyof` the descriptor table) names every method this call may reach.
       const methodKey = staticString(method as ts.Expression);
-      const descriptorName =
-        methodKey && receiverValue.methods
-          ? receiverTableMethodName(receiverValue.methods, methodKey)
-          : null;
-      fact.methods = descriptorName
-        ? { kind: "literals", values: new Set([descriptorName]) }
-        : { kind: "unknown" };
+      const methodKeys = methodKey
+        ? new Set([methodKey])
+        : literalStrings(checker, method as ts.Expression);
+      const descriptorNames = methodKeys
+        ? [...methodKeys].map((key) =>
+            receiverValue.methods ? receiverTableMethodName(receiverValue.methods, key) : null
+          )
+        : [];
+      fact.methods =
+        descriptorNames.length > 0 && descriptorNames.every((name) => name !== null)
+          ? { kind: "literals", values: new Set(descriptorNames as string[]) }
+          : { kind: "unknown" };
       if (property.name.text === "callWithOptions") {
         fact.arguments = call.arguments[1] ? rpcArgumentValues(call.arguments[1]) : [];
       } else {

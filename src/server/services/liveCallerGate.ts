@@ -2,6 +2,7 @@ import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { MembershipStore } from "@vibestudio/identity/membership";
 import type { UserStore } from "@vibestudio/identity/userStore";
+import type { IdentityDb } from "@vibestudio/identity/identityDb";
 import type { DeviceAuthStore } from "../hostCore/deviceAuthStore.js";
 import {
   bindingForLiveAgentEntity,
@@ -19,6 +20,8 @@ export function createLiveCallerGate(deps: {
   userStore: Pick<UserStore, "getUser">;
   membershipStore: Pick<MembershipStore, "has">;
   deviceAuthStore: Pick<DeviceAuthStore, "userFor" | "getAgentCredential">;
+  /** Hub-attested client principals, read live from identity.db. */
+  clientPrincipals: Pick<IdentityDb, "getClientPrincipal">;
   entityCache: Pick<EntityCache, "resolveActive">;
   isLiveExtension: (callerId: string) => Promise<boolean>;
   /** Browser hosting proves the exact connected document, independently of code admission. */
@@ -72,6 +75,25 @@ export function createLiveCallerGate(deps: {
       if (!bindingForLiveAgentEntity(entity, agentId)) return null;
       return ownerForLiveAgentEntity(entity);
     };
+    /**
+     * A client's credential lives as long as its attested principal row: the
+     * session is current only while the row is unrevoked, names this user on a
+     * device still theirs, and carries the execution digest the session was
+     * admitted with. A workspace that never saw a revoke or rebuild event
+     * therefore still closes the stale session at its next frame.
+     */
+    const liveClientOwner = (): string | null => {
+      const principal = deps.clientPrincipals.getClientPrincipal(caller.runtime.id);
+      if (
+        !principal ||
+        principal.revokedAt !== undefined ||
+        principal.executionDigest !== caller.code?.executionDigest ||
+        deps.deviceAuthStore.userFor(principal.deviceId) !== principal.userId
+      ) {
+        return null;
+      }
+      return principal.userId;
+    };
     const subject = caller.subject;
     if (subject?.userId === "system") {
       if (caller.runtime.kind === "agent") return liveAgentOwner() === "system";
@@ -115,7 +137,11 @@ export function createLiveCallerGate(deps: {
       return entity?.ownerUserId === user.id && exactActiveCodeIncarnation();
     }
 
-    if (caller.runtime.kind === "client" || caller.runtime.kind === "panel") {
+    if (caller.runtime.kind === "client") {
+      return liveClientOwner() === user.id && exactActiveCodeIncarnation();
+    }
+
+    if (caller.runtime.kind === "panel") {
       return (
         typeof authorizedBy === "string" &&
         issuerOwnsUser(authorizedBy, user.id) &&

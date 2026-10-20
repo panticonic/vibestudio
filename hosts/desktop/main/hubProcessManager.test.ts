@@ -5,7 +5,7 @@ import * as path from "node:path";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceCredentialEntry } from "./services/deviceCredentialStore.js";
-import type { OwnedProcessIdentity } from "../../../src/dev/ownedProcessIdentity.js";
+import { OwnedScope, type OwnedProcess } from "@vibestudio/shared/ownership";
 
 vi.mock("./paths.js", () => ({
   getServerProcessEntryPath: () => "/tmp/server-entry.js",
@@ -25,16 +25,41 @@ const credentialStore = {
   saveDeviceCredential: vi.fn(),
 };
 
+// The ownership library is the seam: a hub is a registered, gracefully
+// retired group. The real library is exercised in packages/shared; here its
+// owner-facing contract is faked so spawn, registration and retirement can be
+// ordered and observed.
 const spawnMock = vi.fn();
-vi.mock("node:child_process", () => ({
+const closeOwnershipMock = vi.fn(async () => undefined);
+const ownership = {
   spawn: (...args: unknown[]) => spawnMock(...args),
-}));
+  scope: new OwnedScope(),
+  close: () => closeOwnershipMock(),
+};
 
-const terminateOwnedProcessTreeMock = vi.fn();
-vi.mock("../../../scripts/owned-process-tree.mjs", () => ({
-  terminateOwnedProcessTree: (...args: unknown[]) => terminateOwnedProcessTreeMock(...args),
-}));
-vi.mock("../../../src/dev/ownedProcessIdentity.js", () => ({
+type FakeChild = EventEmitter & { pid: number; unref(): void };
+const hubs = new Map<number, OwnedProcess>();
+
+/** What `ownership.spawn` returns for a fake hub process. */
+function ownedHub(child: FakeChild, registered: Promise<void> = Promise.resolve()): OwnedProcess {
+  const owned = {
+    child: child as never,
+    identity: {
+      version: 1 as const,
+      platform: "linux" as const,
+      pid: child.pid,
+      processGroupId: child.pid,
+      startCoordinate: "birth",
+    },
+    registered,
+    retire: vi.fn(async () => undefined),
+    join: vi.fn(async () => undefined),
+  } satisfies OwnedProcess;
+  hubs.set(child.pid, owned);
+  return owned;
+}
+
+vi.mock("@vibestudio/shared/ownedProcessIdentity", () => ({
   captureOwnedProcessIdentity: (pid: number) => ({
     version: 1,
     platform: "linux",
@@ -42,6 +67,11 @@ vi.mock("../../../src/dev/ownedProcessIdentity.js", () => ({
     processGroupId: pid,
     startCoordinate: "birth",
   }),
+}));
+
+const retireGroupMock = vi.fn(async (..._args: unknown[]) => undefined);
+vi.mock("@vibestudio/shared/ownershipLedger", () => ({
+  retireGroup: (...args: unknown[]) => retireGroupMock(...args),
 }));
 
 import { getLocalHubLogPath, HubProcessManager, parseHubReadyFile } from "./hubProcessManager.js";
@@ -132,10 +162,10 @@ function manager(
   options: {
     workspaceName?: string | null;
     onInitialWorkspaceResolved?: (workspaceId: string, prepare: () => Promise<void>) => void;
-    onOwnedHubSpawn?: (identity: OwnedProcessIdentity) => void | Promise<void>;
   } = {}
 ) {
   return new HubProcessManager({
+    ownership: ownership as never,
     workspaceName: options.workspaceName === undefined ? "alpha" : options.workspaceName,
     appRoot: "/tmp/app",
     appVersion: "1.2.3",
@@ -147,7 +177,6 @@ function manager(
     },
     onRecoveryFailure: vi.fn(),
     onInitialWorkspaceResolved: options.onInitialWorkspaceResolved,
-    ...(options.onOwnedHubSpawn ? { onOwnedHubSpawn: options.onOwnedHubSpawn } : {}),
   });
 }
 
@@ -206,8 +235,9 @@ function workspaceRoute(workspace: string, workspaceId: string) {
 
 beforeEach(() => {
   spawnMock.mockReset();
-  terminateOwnedProcessTreeMock.mockReset();
-  terminateOwnedProcessTreeMock.mockResolvedValue({ gone: true, escalated: false });
+  closeOwnershipMock.mockClear();
+  retireGroupMock.mockClear();
+  hubs.clear();
   credentialStore.loadDeviceCredentialByServerId.mockReset();
   credentialStore.saveDeviceCredential.mockReset();
 });
@@ -488,7 +518,7 @@ describe("HubProcessManager", () => {
     child.unref = () => undefined;
     spawnMock.mockImplementation(() => {
       setTimeout(() => child.emit("exit", 1), 0);
-      return child;
+      return ownedHub(child);
     });
     const centralData = makeCentralData();
     centralData.isHubProcessOwned.mockReturnValue(false);
@@ -505,63 +535,66 @@ describe("HubProcessManager", () => {
       "--bootstrap-workspace",
       "alpha",
     ]);
+    // Graceful (the hub holds SQLite state) and no IPC lease: the reaper that
+    // registered the group is what revokes it.
     expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({
-      detached: true,
-      stdio: ["ignore", expect.any(Number), expect.any(Number), "ipc"],
+      kill: "graceful",
+      stdio: ["ignore", expect.any(Number), expect.any(Number)],
     });
+    expect(spawnMock.mock.calls[0]?.[2]).not.toHaveProperty("detached");
   });
 
-  it("keeps the detached hub referenced until its outer owner accepts the birth identity", async () => {
+  it("keeps the hub referenced until the reaper has durably recorded its group", async () => {
     credentialStore.loadDeviceCredentialByServerId.mockReturnValue(null);
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => Promise.reject(new Error("refused")))
     );
-    let releaseOwner!: () => void;
-    const accepted = new Promise<void>((resolve) => {
-      releaseOwner = resolve;
+    let recorded!: () => void;
+    const registered = new Promise<void>((resolve) => {
+      recorded = resolve;
     });
     let unrefCount = 0;
-    const child = new EventEmitter() as EventEmitter & { pid: number; unref(): void };
+    const child = new EventEmitter() as FakeChild;
     child.pid = 42;
     child.unref = () => {
       unrefCount += 1;
     };
-    spawnMock.mockReturnValue(child);
-    const register = vi.fn(() => accepted);
+    spawnMock.mockReturnValue(ownedHub(child, registered));
 
-    const connecting = manager(makeCentralData(null), {
-      onOwnedHubSpawn: register,
-    }).attachOrSpawn();
-    await vi.waitFor(() => expect(register).toHaveBeenCalledOnce());
+    const connecting = manager(makeCentralData(null)).attachOrSpawn();
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledOnce());
+    await new Promise((resolve) => setImmediate(resolve));
     expect(unrefCount).toBe(0);
 
-    releaseOwner();
+    recorded();
     await vi.waitFor(() => expect(unrefCount).toBe(1));
     child.emit("exit", 1);
     await expect(connecting).rejects.toThrow("Local hub exited during startup");
+    // A hub that exits on its own still has its group joined.
+    expect(hubs.get(42)?.join).toHaveBeenCalledOnce();
   });
 
-  it("cleans up the spawned hub when its outer owner rejects birth registration", async () => {
+  it("cleans up the spawned hub when the reaper refuses to record its group", async () => {
     credentialStore.loadDeviceCredentialByServerId.mockReturnValue(null);
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => Promise.reject(new Error("refused")))
     );
     let unrefCount = 0;
-    const child = new EventEmitter() as EventEmitter & { pid: number; unref(): void };
+    const child = new EventEmitter() as FakeChild;
     child.pid = 99_999_996;
     child.unref = () => {
       unrefCount += 1;
     };
-    spawnMock.mockReturnValue(child);
+    const refusal = Object.assign(new Error("reaper refused"), { code: "EOWNERSHIP" });
+    const registered = Promise.reject(refusal);
+    registered.catch(() => undefined);
+    spawnMock.mockReturnValue(ownedHub(child, registered));
 
-    await expect(
-      manager(makeCentralData(null), {
-        onOwnedHubSpawn: () => Promise.reject(new Error("owner rejected")),
-      }).attachOrSpawn()
-    ).rejects.toThrow("owner rejected");
+    await expect(manager(makeCentralData(null)).attachOrSpawn()).rejects.toThrow("reaper refused");
     expect(unrefCount).toBe(0);
+    expect(hubs.get(child.pid)?.retire).toHaveBeenCalledOnce();
   });
 
   it("stops a newly spawned hub when workspace routing fails", async () => {
@@ -574,7 +607,7 @@ describe("HubProcessManager", () => {
       refreshToken: "refresh-1",
       pairedAt: 1,
     });
-    const child = new EventEmitter() as EventEmitter & { pid: number; unref(): void };
+    const child = new EventEmitter() as FakeChild;
     child.pid = 99_999_998;
     child.unref = () => undefined;
     const centralData = makeCentralData(null);
@@ -597,7 +630,7 @@ describe("HubProcessManager", () => {
       const future = new Date(Date.now() + 1_000);
       fs.utimesSync(readyFile, future, future);
       centralData.setLease({ ...LEASE, pid: child.pid });
-      return child;
+      return ownedHub(child);
     });
     vi.stubGlobal(
       "fetch",
@@ -608,17 +641,9 @@ describe("HubProcessManager", () => {
       "workspace runtime unavailable"
     );
 
-    expect(terminateOwnedProcessTreeMock).toHaveBeenCalledWith(child.pid, {
-      termTimeoutMs: 300_000,
-      killTimeoutMs: 30_000,
-      identity: {
-        version: 1,
-        platform: "linux",
-        pid: child.pid,
-        processGroupId: child.pid,
-        startCoordinate: "birth",
-      },
-    });
+    // The library retires it: SIGTERM, the hub's exit, then its group. No
+    // deadline: the leader's exit is the event.
+    expect(hubs.get(child.pid)?.retire).toHaveBeenCalledOnce();
     expect(centralData.releaseHubProcessOwnership).not.toHaveBeenCalled();
     expect(centralData.getHubProcessOwner()).toEqual({ ...LEASE, pid: child.pid });
   });
@@ -656,7 +681,6 @@ describe("HubProcessManager", () => {
     );
 
     expect(spawnMock).not.toHaveBeenCalled();
-    expect(terminateOwnedProcessTreeMock).not.toHaveBeenCalled();
     expect(centralData.releaseHubProcessOwnership).not.toHaveBeenCalled();
   });
 
@@ -693,14 +717,14 @@ describe("HubProcessManager", () => {
       }
       throw new Error(`Unexpected signal ${String(signal)}`);
     }) as typeof process.kill);
-    const child = new EventEmitter() as EventEmitter & { pid: number; unref(): void };
+    const child = new EventEmitter() as FakeChild;
     child.pid = 42;
     child.unref = () => undefined;
     spawnMock.mockImplementation(() => {
       fs.writeFileSync(readyFile, JSON.stringify({ mode: "legacy" }));
       const future = new Date(Date.now() + 1_000);
       fs.utimesSync(readyFile, future, future);
-      return child;
+      return ownedHub(child);
     });
     const centralData = makeCentralData(null);
 
@@ -713,20 +737,73 @@ describe("HubProcessManager", () => {
     await expect(spawnDetached(RECORD.gatewayPort)).rejects.toThrow(/canonical contract/);
 
     expect(killMock).not.toHaveBeenCalled();
-    expect(terminateOwnedProcessTreeMock).toHaveBeenCalledWith(42, {
-      termTimeoutMs: 300_000,
-      killTimeoutMs: 30_000,
-      identity: {
-        version: 1,
-        platform: "linux",
-        pid: 42,
-        processGroupId: 42,
-        startCoordinate: "birth",
-      },
-    });
+    expect(hubs.get(42)?.retire).toHaveBeenCalledOnce();
     expect(spawnMock.mock.calls[0]?.[2]).toMatchObject({
       env: { VIBESTUDIO_GATEWAY_PORT: String(RECORD.gatewayPort) },
     });
     expect(fs.existsSync(readyFile)).toBe(false);
+  });
+});
+
+describe("HubProcessManager.stopTree", () => {
+  type Internals = {
+    verifiedHubs: Map<number, { identity: OwnedProcess["identity"]; owned: OwnedProcess | null }>;
+    currentHubPid: number | null;
+  };
+  const identityOf = (pid: number) => ({
+    version: 1 as const,
+    platform: "linux" as const,
+    pid,
+    processGroupId: pid,
+    startCoordinate: "birth",
+  });
+  const withSpawnedHub = (pid: number) => {
+    const child = new EventEmitter() as FakeChild;
+    child.pid = pid;
+    child.unref = () => undefined;
+    const owned = ownedHub(child);
+    const processManager = manager(makeCentralData());
+    (processManager as unknown as Internals).verifiedHubs.set(pid, {
+      identity: owned.identity,
+      owned,
+    });
+    return { processManager, owned };
+  };
+
+  it("retires the spawned hub through the library, then joins the reaper", async () => {
+    const order: string[] = [];
+    const { processManager, owned } = withSpawnedHub(4_001);
+    (owned.retire as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      order.push("retire");
+    });
+    closeOwnershipMock.mockImplementation(async () => {
+      order.push("close");
+    });
+
+    await processManager.stopTree();
+
+    expect(order).toEqual(["retire", "close"]);
+    expect(retireGroupMock).not.toHaveBeenCalled();
+  });
+
+  it("propagates the original retirement failure and still joins the reaper", async () => {
+    const failure = Object.assign(new Error("hub group survived"), { code: "EOWNERSHIP" });
+    const { processManager, owned } = withSpawnedHub(4_002);
+    (owned.retire as ReturnType<typeof vi.fn>).mockRejectedValue(failure);
+
+    await expect(processManager.stopTree()).rejects.toBe(failure);
+    expect(closeOwnershipMock).toHaveBeenCalledOnce();
+  });
+
+  it("retires a hub it only attached to by its exact identity", async () => {
+    const processManager = manager(makeCentralData());
+    const identity = identityOf(4_003);
+    (processManager as unknown as Internals).verifiedHubs.set(4_003, { identity, owned: null });
+
+    await processManager.stopTree();
+
+    expect(retireGroupMock).toHaveBeenCalledWith(
+      expect.objectContaining({ pid: 4_003, identity, kill: "graceful" })
+    );
   });
 });

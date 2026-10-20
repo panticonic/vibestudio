@@ -65,7 +65,7 @@ import {
   clientIntents,
   isClientCapability,
   isDeviceLevelCapability,
-  parseClientPrincipalId,
+  clientPrincipalId,
   type ClientCapability,
   type ClientIntentDecl,
   type ClientLaunchResult,
@@ -77,27 +77,30 @@ import {
   type HostKind,
   type ReadyClient,
 } from "@vibestudio/workspace-contracts/clients";
-import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import {
   type BuildArtifactManifestEntry,
   type BuildMetadata,
   type StoredBuildArtifact,
   type StoredBuildResult,
 } from "../buildV2/buildStore.js";
-import {
-  createCapabilityAuthorizer,
-  type CapabilityAuthorizer,
-} from "../services/capabilityAuthorizer.js";
 import type { RuntimeDiagnosticsStore } from "../runtimeDiagnosticsStore.js";
 import {
   validateClientBuildContract,
   type ClientBuildProviderDetails,
 } from "./clientBuildContract.js";
-import { ClientPrincipals, type ClientPrincipal } from "./clientPrincipals.js";
+import type {
+  WorkspaceChildClientPrincipalAttestation,
+  WorkspaceChildHubPort,
+} from "../workspaceChildHubPort.js";
+import { UnitReviewRetiredError } from "../unitInstallReviewCoordinator.js";
 import {
   requireActiveExecutionIdentity,
   type ActiveExecutionIdentity,
 } from "../runtimeExecutionIdentity.js";
+
+function sameCapabilities(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((capability) => b.includes(capability));
+}
 
 function canonicalAuthority(value: unknown): string {
   return sha256Canonical(value);
@@ -252,8 +255,6 @@ export interface ClientHostDeps {
   workspacePath: string;
   workspaceId: string;
   diagnostics: Pick<RuntimeDiagnosticsStore, "record" | "history">;
-  /** Protected hub designation, never workspace-authored client or trust configuration. */
-  isSystemWorkspace(): boolean;
   /** `trust.clients` of the current manifest, as canonical `clients/<name>` paths. */
   getTrustedClients(): readonly string[];
   /** `clientDefaults.<host>` of the current manifest, as a canonical `clients/<name>` path. */
@@ -293,11 +294,20 @@ export interface ClientHostDeps {
     repoPath: string;
     effectiveVersion: string;
   }): ExactUnitAdmissionReview | null;
-  entityCache?: Pick<EntityCache, "resolve" | "listActive" | "_onActivate" | "_onRetire">;
   executionPublicationPort?: ExecutionPublicationPort;
-  /** Invalidate every outstanding connection grant and open session of a principal. */
-  revokePrincipalSessions?(principalId: string, reason: "trust-revoked" | "retired"): void;
+  /**
+   * The hub's client-principal ledger. Principals are device-level identities
+   * this host attests into the hub and retires from it; the hub closes the
+   * sessions of what it retires.
+   */
+  principalHub: Pick<
+    WorkspaceChildHubPort,
+    "attestClientPrincipal" | "listClientPrincipals" | "retireClientPrincipals"
+  >;
 }
+
+/** What a System ClientHost vouches for about one client build on one device. */
+export type ClientPrincipalAttestation = WorkspaceChildClientPrincipalAttestation;
 
 /**
  * The server's registry of clients (docs/client-hosts-and-clients-plan.md §4.8):
@@ -307,7 +317,6 @@ export interface ClientHostDeps {
  */
 export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   readonly registry: UnitRegistry<ClientRegistryEntry>;
-  readonly principals: ClientPrincipals;
   private readonly trustResolver: UnitTrustResolver<ClientRegistryEntry>;
   private readonly unitHost: UnitHost<
     ClientRegistryEntry,
@@ -374,7 +383,7 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       makePendingEntry: (node, decl, building) => this.pendingEntryFor(node, decl, building),
       applyTrusted: (node, decl) => this.applyDeclared(node, decl),
       removeUndeclared: async (entry) => {
-        this.retirePrincipals(entry, "retired");
+        await this.retirePrincipals(entry, "retired");
         this.deps.eventService.emit("clients:changed", { reason: "retired" });
       },
       notifyUnresolved: (sources) => {
@@ -415,10 +424,6 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           err instanceof Error ? err.message : String(err)
         );
       },
-    });
-    this.principals = new ClientPrincipals({
-      workspaceId: deps.workspaceId,
-      entityCache: deps.entityCache,
     });
     deps.buildSystem.onPushBuild((source, trigger) => {
       this.admitEventWork(() => this.handleSourceRebuilt(source, trigger));
@@ -543,7 +548,7 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     opts: UnitReconcileOptions = {}
   ): Promise<void> {
     await this.initialize();
-    this.lastDeclared = this.hostedDeclarations(declared);
+    this.lastDeclared = declared.map((decl) => ({ ...decl }));
     await this.unitHost.reconcileDeclared(this.lastDeclared, opts);
     this.deps.eventService.emit("clients:changed", { reason: "declared" });
     this.emitDevStatusDiagnostic(opts.trigger ?? "startup");
@@ -553,7 +558,7 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     declared: WorkspaceClientDeclaration[],
     opts: { trigger?: UnitReconcileTrigger } = {}
   ): void {
-    this.lastDeclared = this.hostedDeclarations(declared);
+    this.lastDeclared = declared.map((decl) => ({ ...decl }));
     this.emitDevStatusDiagnostic(opts.trigger ?? "startup");
   }
 
@@ -563,7 +568,9 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     identityKeys: string[];
   }> {
     await this.initialize();
-    const review = await this.unitHost.approvalForDeclarations(this.hostedDeclarations(declared));
+    const review = await this.unitHost.approvalForDeclarations(
+      declared.map((decl) => ({ ...decl }))
+    );
     return { units: review.entries, identityKeys: review.identityKeys };
   }
 
@@ -572,24 +579,14 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     declared: WorkspaceClientDeclaration[] = this.lastDeclared
   ): Promise<ReviewedUnit[]> {
     return this.initialize().then(() =>
-      this.unitHost.seedTrustedDeclarations(this.hostedDeclarations(declared))
+      this.unitHost.seedTrustedDeclarations(declared.map((decl) => ({ ...decl })))
     );
-  }
-
-  /** Clients exist only in the System workspace: declarations anywhere else are dropped. */
-  private hostedDeclarations(declared: WorkspaceClientDeclaration[]): WorkspaceClientDeclaration[] {
-    return this.deps.isSystemWorkspace() ? declared.map((decl) => ({ ...decl })) : [];
   }
 
   private assertInitialized(): void {
     if (!this.initializationComplete) {
       throw new Error("ClientHost must be initialized before reading client version history");
     }
-  }
-
-  private assertClientHosting(): void {
-    if (!this.deps.isSystemWorkspace())
-      throw new Error("Clients run only from a designated System workspace");
   }
 
   async whenSettled(): Promise<void> {
@@ -619,10 +616,12 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       ...(this.initialization ? [this.initialization] : []),
     ];
     const lifecycle = await Promise.allSettled(lifecyclePromises);
+    // A review withdrawn because this very shutdown retired its coordinator is
+    // the expected end of a flight waiting on a human, not a shutdown failure.
     const failures = [
       ...this.eventFailures,
       ...lifecycle.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
-    ];
+    ].filter((failure) => !(failure instanceof UnitReviewRetiredError));
     this.eventFailures = [];
     if (failures.length === 1) throw failures[0];
     if (failures.length > 1) {
@@ -911,14 +910,19 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    * which is its default. A host never reads the manifest itself.
    */
   async listClients(host: HostDescriptor): Promise<ClientListing[]> {
-    if (!this.deps.isSystemWorkspace()) return [];
     await this.initialize();
     const defaultSource = this.deps.getClientDefault(host.host);
     const listings: ClientListing[] = [];
     for (const decl of this.lastDeclared) {
       const node = this.tryFindClientNode(decl.source);
       const block = node?.manifest.client;
-      if (!node || !block) continue;
+      if (!node || !block) {
+        // Declared, so it exists: a host must not read a transient absence
+        // (manifest mid-edit, graph not yet rebuilt) as "gone" and prune what
+        // it pinned for the client. Only what is not declared at all is absent.
+        listings.push(this.unresolvedListing(decl, host, defaultSource));
+        continue;
+      }
       const entry = this.registry.get(node.name);
       const compatibility = this.compatibility(node, block, host);
       const source = normalizeRepoPath(node.relativePath);
@@ -949,6 +953,32 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     );
   }
 
+  /** A declared client whose manifest cannot be read right now, reported with the reason. */
+  private unresolvedListing(
+    decl: WorkspaceClientDeclaration,
+    host: HostDescriptor,
+    defaultSource: string | null
+  ): ClientListing {
+    const source = normalizeRepoPath(decl.source);
+    const entry = this.findRegistryEntry(source);
+    const name = source.split("/").pop() ?? source;
+    return {
+      source,
+      id: name,
+      runtime: entry?.runtime ?? HOST_RUNTIME[host.host],
+      title: name,
+      hostAbi: "",
+      status: entry?.status ?? "not-built",
+      isDefault: defaultSource !== null && normalizeRepoPath(defaultSource) === source,
+      trusted: this.isTrustedSource(source),
+      unavailableReason: `${source} is declared but its client manifest cannot be read right now`,
+      ...(entry?.lastError ? { lastError: entry.lastError } : {}),
+      intents: [],
+      activeBuildKey: entry?.activeBundleKey ?? null,
+      canRollback: (entry?.previousVersions.length ?? 0) > 0,
+    };
+  }
+
   /**
    * Resolve, prepare and admit the client a host asked for (§4.5). One state
    * machine for every runtime: required extensions, then review, then the
@@ -959,9 +989,6 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     select: ClientSelection;
     rollbackTo?: string;
   }): Promise<ClientLaunchResult> {
-    if (!this.deps.isSystemWorkspace()) {
-      return { state: "unavailable", reason: "Clients run only from the System workspace" };
-    }
     await this.initialize();
     await this.unitHost.whenDeclarationsStaged();
     const resolved = this.resolveSelection(request.host, request.select);
@@ -1047,58 +1074,56 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   async prepareDefault(
     host: HostKind
   ): Promise<
-    | { ready: true; source: string; buildKey: string }
-    | { ready: false; source: string | null; reason: string }
+    | { state: "ready"; source: string; buildKey: string }
+    | { state: "awaiting-review"; source: string; reviewing: string[] }
+    | { state: "failed"; source: string | null; reason: string }
   > {
     await this.initialize();
     await this.unitHost.whenDeclarationsStaged();
     const source = this.deps.getClientDefault(host);
     if (!source) {
-      return { ready: false, source: null, reason: `No default client is declared for ${host}` };
+      return { state: "failed", source: null, reason: `No default client is declared for ${host}` };
     }
     const declared = this.lastDeclared.find(
       (decl) => normalizeRepoPath(decl.source) === normalizeRepoPath(source)
     );
     const node = this.tryFindClientNode(source);
     if (!declared || !node?.manifest.client) {
-      return { ready: false, source, reason: `${source} is not declared under clients:` };
+      return { state: "failed", source, reason: `${source} is not declared under clients:` };
     }
     const block = node.manifest.client;
     if (HOST_RUNTIME[host] !== block.runtime) {
       return {
-        ready: false,
+        state: "failed",
         source,
         reason: `${source} is a ${block.runtime} client; ${host} hosts run ${HOST_RUNTIME[host]} clients`,
       };
     }
     const runtime = await this.deps.prepareRuntime(block.runtime);
     if (runtime.state === "approval-required") {
-      return {
-        ready: false,
-        source,
-        reason: `Waiting for review of ${runtime.sources.join(", ")}`,
-      };
+      return { state: "awaiting-review", source, reviewing: runtime.sources };
     }
-    if (runtime.state !== "ready") return { ready: false, source, reason: runtime.reason };
+    if (runtime.state !== "ready") return { state: "failed", source, reason: runtime.reason };
     try {
       const build = await this.deps.buildSystem.getStoredBuild(node.name, declared.ref);
       validateClientBuildContract(node.name, block, build);
-      return { ready: true, source, buildKey: path.basename(build.dir) };
+      return { state: "ready", source, buildKey: path.basename(build.dir) };
     } catch (error) {
-      return { ready: false, source, reason: errorMessage(error) };
+      return { state: "failed", source, reason: errorMessage(error) };
     }
   }
 
   /**
-   * Exchange an authenticated device for the principal of the exact client
-   * build it verified and is about to run. The grant is bound to that build: a
-   * host that fetched anything else cannot obtain a principal for it.
+   * What this host vouches for about the exact client build a device verified
+   * and is about to run (§4.4): the payload the hub records as the device's
+   * client principal. Pure: it checks that the client is running, admitted and
+   * exactly that build, and reads the vetted capabilities and sealed authority
+   * from the active build identity. The hub, not this host, holds the principal.
    */
-  async grantPrincipal(
+  async attest(
     deviceId: string,
     expected: { source: string; buildKey: string; executionDigest: string }
-  ): Promise<ClientPrincipal> {
-    this.assertClientHosting();
+  ): Promise<ClientPrincipalAttestation> {
     await this.initialize();
     const entry = this.findRegistryEntry(expected.source);
     if (!entry || !isCapabilityActiveStatus(entry.status) || !entry.activeBundleKey) {
@@ -1114,39 +1139,69 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     }
     this.requireAdmission(entry.name, entry.source.repo, entry.activeEv!);
     const active = await this.resolveActiveClientBuild(entry);
-    const node = this.findClientNode(entry.name);
-    const block = requireClientBlock(node);
-    return this.principals.register({
-      id: block.id,
-      runtime: entry.runtime,
+    const block = requireClientBlock(this.findClientNode(entry.name));
+    return {
+      principalId: clientPrincipalId(block.id, entry.runtime, deviceId),
       deviceId,
+      clientId: block.id,
+      runtime: entry.runtime,
       source: normalizeRepoPath(entry.source.repo),
       buildKey: active.buildKey,
       effectiveVersion: entry.activeEv!,
-      identity: active.identity,
-    });
+      executionDigest: active.identity.activeExecutionDigest,
+      authority: active.identity.activeAuthority,
+      capabilities: this.effectiveCapabilities(entry),
+    };
   }
 
   /**
    * The principal a background intent runs as: the device's principal for the
-   * client's current build, activated without any client code on the device
-   * (§4.7.2). The handler's authority is that principal's.
+   * client's current build, attested into the hub without any client code on
+   * the device (§4.7.2). The handler's authority is that principal's.
    */
-  async intentPrincipal(deviceId: string, source: string): Promise<ClientPrincipal> {
+  async intentPrincipal(deviceId: string, source: string): Promise<ClientPrincipalAttestation> {
     const entry = this.findRegistryEntry(source);
     if (!entry?.activeBundleKey || !entry.activeExecutionDigest) {
       throw new Error(`Client ${source} has no running build to act for`);
     }
-    return this.grantPrincipal(deviceId, {
+    const attestation = await this.attest(deviceId, {
       source,
       buildKey: entry.activeBundleKey,
       executionDigest: entry.activeExecutionDigest,
     });
+    await this.deps.principalHub.attestClientPrincipal(attestation);
+    return attestation;
   }
 
-  /** Retire every client principal of one device (the device was unpaired). */
-  retireDevice(deviceId: string): number {
-    return this.principals.retireDevice(deviceId);
+  /**
+   * Startup reconciliation of the principals this workspace attested: they
+   * survive a restart, so each row is kept only while attesting it again now
+   * would produce exactly what the hub holds. A client that is gone, no longer
+   * running or trusted, or on a different build or capability set has its row
+   * retired. Hub failures propagate; nothing is retried.
+   */
+  async reconcilePrincipals(): Promise<void> {
+    await this.initialize();
+    const rows = await this.deps.principalHub.listClientPrincipals({
+      attesterWorkspaceId: this.deps.workspaceId,
+    });
+    for (const row of rows) {
+      let current: ClientPrincipalAttestation | null = null;
+      try {
+        current = await this.attest(row.deviceId, {
+          source: row.source,
+          buildKey: row.buildKey,
+          executionDigest: row.executionDigest,
+        });
+      } catch {
+        // Not attestable now: the client is gone, stopped, rebuilt or unadmitted.
+      }
+      if (current && sameCapabilities(current.capabilities, row.capabilities)) continue;
+      await this.deps.principalHub.retireClientPrincipals(
+        { principalId: row.principalId },
+        current ? "trust-revoked" : "retired"
+      );
+    }
   }
 
   /** Launch surfaces every host projects onto its OS: intents per runnable client. */
@@ -1323,7 +1378,6 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     ref: string
   ): Promise<{ buildKey: string; effectiveVersion: string; clientName: string; source: string }> {
     await this.initialize();
-    this.assertClientHosting();
     const node = this.findClientNode(sourceOrName);
     const block = requireClientBlock(node);
     const previous = this.registry.get(node.name) ?? null;
@@ -1397,7 +1451,6 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   /** Ensure the declared release has an owned preparation and activation. */
   ensureActivated(sourceOrName: string): Promise<"ready" | "approval-required"> {
     if (this.retiring) return Promise.reject(new Error("Client host is retiring"));
-    this.assertClientHosting();
     const node = this.findClientNode(sourceOrName);
     const pending = this.activationFlights.get(node.name);
     if (pending) return pending;
@@ -1487,7 +1540,7 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   async retire(sourceOrName: string): Promise<void> {
     const entry = this.findRegistryEntry(sourceOrName);
     if (!entry) throw new Error(`Unknown client: ${sourceOrName}`);
-    this.retirePrincipals(entry, "retired");
+    await this.retirePrincipals(entry, "retired");
     this.registry.patch(entry.name, { status: "stopped", lastError: null });
     this.deps.eventService.emit("clients:changed", { reason: "retired" });
   }
@@ -1527,27 +1580,6 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   // ---------------------------------------------------------------------------
 
   /**
-   * Whether the running client principal `callerId` holds `capability`. A
-   * device-level capability is held only while the client is listed in
-   * `trust.clients`; every other capability is held when declared.
-   */
-  hasClientCapability(callerId: string, capability: ClientCapability): boolean {
-    if (!this.deps.isSystemWorkspace()) return false;
-    const principal = parseClientPrincipalId(callerId);
-    if (!principal) return false;
-    const entry = this.registry.list().find((candidate) => {
-      if (candidate.runtime !== principal.runtime) return false;
-      const node = this.tryFindClientNode(candidate.name);
-      return node?.manifest.client?.id === principal.id;
-    });
-    return (
-      !!entry &&
-      isCapabilityActiveStatus(entry.status) &&
-      this.effectiveCapabilities(entry).includes(capability)
-    );
-  }
-
-  /**
    * The server-vetted capability set for a client: its declared capabilities
    * with every device-level one removed unless the client is trusted. This is
    * the set projected onto every client-facing surface, so a client can never
@@ -1560,12 +1592,6 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     );
   }
 
-  capabilityAuthorizer(): CapabilityAuthorizer {
-    return createCapabilityAuthorizer({
-      hasClientCapability: (callerId, capability) => this.hasClientCapability(callerId, capability),
-    });
-  }
-
   private isTrustedSource(source: string): boolean {
     return this.deps
       .getTrustedClients()
@@ -1576,23 +1602,24 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    * Apply a newly published `trust.clients`. Grants take effect at once:
    * running instances observe their widened set through `supervision:changed`
    * and re-request their principal. A withdrawal is an authoritative terminal
-   * event for the affected sessions: the client's principals are retired, its
-   * outstanding grants invalidated and its sessions closed as `trust-revoked`.
+   * event for the affected principals: they are retired in the hub, which
+   * invalidates their credentials and closes their sessions as `trust-revoked`.
    */
-  applyTrust(): void {
+  async applyTrust(): Promise<void> {
     const next = this.deviceCapabilitySnapshot();
+    const previous = this.trustedDeviceCapabilities;
+    this.trustedDeviceCapabilities = next;
     let changed = false;
     for (const entry of this.registry.list()) {
-      const before = this.trustedDeviceCapabilities.get(entry.name) ?? [];
+      const before = previous.get(entry.name) ?? [];
       const after = next.get(entry.name) ?? [];
       if (before.length === after.length && before.every((item) => after.includes(item))) continue;
       changed = true;
       if (before.some((capability) => !after.includes(capability))) {
-        this.retirePrincipals(entry, "trust-revoked");
+        await this.retirePrincipals(entry, "trust-revoked");
       }
       this.publish(unitSupervisionChange(entry, null), entry);
     }
-    this.trustedDeviceCapabilities = next;
     if (changed) this.deps.eventService.emit("clients:changed", { reason: "trust" });
   }
 
@@ -1602,7 +1629,6 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    * declared device-level capabilities — differs from current main's.
    */
   async trustDeltaForCommit(stateHash: string): Promise<ClientTrustChange[]> {
-    if (!this.deps.isSystemWorkspace()) return [];
     await this.initialize();
     const config = await readWorkspaceConfig(
       { readText: (filePath) => this.deps.readWorkspaceFileAtState(stateHash, filePath) },
@@ -1616,23 +1642,48 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
       { block: ClientManifestBlock; icon?: string; ev: string | null }
     >();
     for (const decl of resolveDeclaredClients(config)) {
-      const identity = await this.deps.buildSystem.resolveBuildUnitIdentity(decl.source, stateHash);
-      if (!identity) continue;
-      const packageJson = await this.deps.readWorkspaceFileAtState(
-        stateHash,
-        `${identity.unitPath}/package.json`
-      );
-      if (!packageJson) continue;
-      const vibestudio = (JSON.parse(packageJson) as { vibestudio?: Record<string, unknown> })
-        .vibestudio;
-      validateUnitManifest(clientUnitManifestDescriptor, vibestudio, {
-        unitName: identity.unitName,
-      });
-      candidate.set(normalizeRepoPath(identity.unitPath), {
-        block: vibestudio!["client"] as ClientManifestBlock,
-        ...(typeof vibestudio!["icon"] === "string" ? { icon: vibestudio!["icon"] } : {}),
-        ev: identity.effectiveVersion,
-      });
+      // Trust gates only a client listed in `trust.clients`, here or now; a
+      // commit that touches only untrusted clients cannot change what a
+      // device lets any client do, so their manifests are not the gate's business.
+      const declaredSource = normalizeRepoPath(decl.source);
+      if (!candidateTrust.has(declaredSource) && !this.isTrustedSource(declaredSource)) continue;
+      try {
+        const identity = await this.deps.buildSystem.resolveBuildUnitIdentity(
+          decl.source,
+          stateHash
+        );
+        if (!identity) continue;
+        const packageJson = await this.deps.readWorkspaceFileAtState(
+          stateHash,
+          `${identity.unitPath}/package.json`
+        );
+        if (!packageJson) continue;
+        const vibestudio = (JSON.parse(packageJson) as { vibestudio?: Record<string, unknown> })
+          .vibestudio;
+        validateUnitManifest(clientUnitManifestDescriptor, vibestudio, {
+          unitName: identity.unitName,
+        });
+        candidate.set(normalizeRepoPath(identity.unitPath), {
+          block: vibestudio!["client"] as ClientManifestBlock,
+          ...(typeof vibestudio!["icon"] === "string" ? { icon: vibestudio!["icon"] } : {}),
+          ev: identity.effectiveVersion,
+        });
+      } catch (error) {
+        // A trusted client whose candidate manifest is invalid cannot run, so
+        // the candidate gives it no device-level capabilities: the commit is
+        // reviewed as withdrawing what it held (and a client that held none
+        // changes nothing). The defect is reported, not thrown, so a half-edited
+        // manifest never blocks an unrelated publication.
+        this.deps.diagnostics.record({
+          workspaceId: this.deps.workspaceId,
+          entityId: declaredSource,
+          kind: "client",
+          level: "error",
+          message: `Client ${declaredSource} has an invalid manifest in the candidate state: ${errorMessage(error)}`,
+          source: "lifecycle",
+          fields: { stateHash },
+        });
+      }
     }
     const current = new Map<string, { block: ClientManifestBlock; icon?: string }>();
     for (const decl of this.lastDeclared) {
@@ -1688,12 +1739,22 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     );
   }
 
-  private retirePrincipals(entry: ClientRegistryEntry, reason: "trust-revoked" | "retired"): void {
-    const node = this.tryFindClientNode(entry.name);
-    const id = node?.manifest.client?.id;
-    if (!id) return;
-    for (const principalId of this.principals.retireClient(id, entry.runtime)) {
-      this.deps.revokePrincipalSessions?.(principalId, reason);
+  /**
+   * Retire every device's principal of one client in the hub. The client is
+   * named by its source, which every attested row carries, so a client whose
+   * graph node is already gone is still retired.
+   */
+  private async retirePrincipals(
+    entry: ClientRegistryEntry,
+    reason: "trust-revoked" | "retired"
+  ): Promise<void> {
+    const source = normalizeRepoPath(entry.source.repo);
+    const rows = await this.deps.principalHub.listClientPrincipals({
+      attesterWorkspaceId: this.deps.workspaceId,
+    });
+    for (const row of rows) {
+      if (row.source !== source || row.runtime !== entry.runtime) continue;
+      await this.deps.principalHub.retireClientPrincipals({ principalId: row.principalId }, reason);
     }
   }
 
@@ -1786,7 +1847,6 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     node: ClientGraphNode,
     decl: WorkspaceClientDeclaration
   ): Promise<ClientBuildResultLike> {
-    this.assertClientHosting();
     const previous = this.registry.get(node.name) ?? null;
     const block = requireClientBlock(node);
     const diagnostic: ClientUpdateErrorDiagnostic = {
@@ -1884,7 +1944,6 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
 
   /** Validate a stored build against its client's current manifest. */
   private validateBuild(name: string, build: ClientBuildResultLike): void {
-    this.assertClientHosting();
     const details = build.metadata.details;
     if (details.kind !== "client") throw new Error(`Build for ${name} is not a client build`);
     validateClientBuildContract(
@@ -1903,7 +1962,6 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     build: ClientBuildResultLike;
     identity: ActiveExecutionIdentity;
   }> {
-    this.assertClientHosting();
     if (!entry.activeEv) {
       throw new Error(`Cannot activate client ${entry.name} without an effective version`);
     }
@@ -2234,7 +2292,6 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
   private async readDeclaredClientsFromState(
     stateHash: string
   ): Promise<WorkspaceClientDeclaration[]> {
-    if (!this.deps.isSystemWorkspace()) return [];
     return resolveDeclaredClients(
       await readWorkspaceConfig(
         { readText: (filePath) => this.deps.readWorkspaceFileAtState(stateHash, filePath) },

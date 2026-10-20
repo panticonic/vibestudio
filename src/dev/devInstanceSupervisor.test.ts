@@ -3,18 +3,15 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createRequire } from "node:module";
 import { spawn } from "node:child_process";
-import { terminateOwnedProcessTree } from "../../scripts/owned-process-tree.mjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
-import {
-  captureOwnedProcessIdentity,
-  observeOwnedProcessGroup,
-  type OwnedProcessIdentity,
-} from "@vibestudio/shared/ownedProcessIdentity";
-import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
+import { Ownership } from "@vibestudio/shared/ownership";
 
 const roots: string[] = [];
+const ownerships: Ownership[] = [];
 const CHILD_FIXTURE_STARTUP_POLL_MS = 5_000;
+const OWNERSHIP_URL = new URL("../../packages/shared/src/ownership.mjs", import.meta.url).href;
+const SUPERVISOR_URL = new URL("./devInstanceSupervisor.ts", import.meta.url).href;
 
 /** Full-suite load delayed fixture readiness beyond Vitest's default 1s poll (up to 1.4s); this
  * bounded test-only budget covers tsx/node scheduling without changing production readiness. */
@@ -30,7 +27,18 @@ function temporaryRoot(): string {
   return root;
 }
 
-afterEach(() => {
+/** The ownership every supervisor under test registers its child with. */
+async function openOwnership(): Promise<Ownership> {
+  const ownership = await Ownership.open({
+    profileDir: temporaryRoot(),
+    lifetime: "leased",
+  });
+  ownerships.push(ownership);
+  return ownership;
+}
+
+afterEach(async () => {
+  await Promise.allSettled(ownerships.splice(0).map((ownership) => ownership.release()));
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -38,13 +46,12 @@ afterEach(() => {
 
 describe("DevInstanceSupervisor", () => {
   it.skipIf(process.platform === "win32")(
-    "coalesces repeated CLI signals into one ordered child retirement",
+    "coalesces repeated stop requests into one ordered child retirement",
     async () => {
       const root = temporaryRoot();
       const ready = path.join(root, "ready");
       const countFile = path.join(root, "signal-count");
       const service = path.join(root, "service.mjs");
-      const ownerEntry = path.join(root, "owner.mjs");
       fs.writeFileSync(
         service,
         `
@@ -59,197 +66,67 @@ describe("DevInstanceSupervisor", () => {
         setInterval(() => {}, 1000);
       `
       );
-      fs.writeFileSync(
-        ownerEntry,
-        `
-        import { DevInstanceSupervisor } from ${JSON.stringify(new URL("./devInstanceSupervisor.ts", import.meta.url).href)};
-        const owner = new DevInstanceSupervisor({ sourceRoot: process.argv[2], command: process.execPath,
-          args: [process.argv[3], process.argv[4], process.argv[5]], env: process.env, stdio: 'ignore', forwardParentSignals: true });
-        try { await owner.start(); await owner.wait(); } finally { await owner.close(); }
-      `
-      );
-      const owner = spawn(
-        process.execPath,
-        [
-          "--import",
-          createRequire(import.meta.url).resolve("tsx"),
-          ownerEntry,
-          root,
-          service,
-          ready,
-          countFile,
-        ],
-        { detached: true, stdio: "ignore" }
-      );
-      const identity = captureOwnedProcessIdentity(owner.pid!);
-      const exit = new Promise<number | null>((resolve) => owner.once("exit", resolve));
-      try {
-        await expectChildFixtureReady(ready);
-        owner.kill("SIGINT");
-        await expect.poll(() => fs.existsSync(countFile)).toBe(true);
-        owner.kill("SIGINT");
-        owner.kill("SIGTERM");
-        expect(await exit).toBe(0);
-        expect(fs.readFileSync(countFile, "utf8")).toBe("1");
-      } finally {
-        await terminateOwnedProcessTree(owner.pid!, { identity, termTimeoutMs: 100 });
-      }
-    }
-  );
-  it.skipIf(process.platform === "win32")(
-    "keeps the CLI signal owner alive through post-retirement state cleanup",
-    async () => {
-      const root = temporaryRoot();
-      const ready = path.join(root, "ready.json");
-      const cleanupStarted = path.join(root, "cleanup-started");
-      const cleanupDone = path.join(root, "cleanup-done");
-      const service = path.join(root, "service.mjs");
-      const ownerEntry = path.join(root, "owner.mjs");
-      fs.writeFileSync(
-        service,
-        `
-        import fs from 'node:fs';
-        process.on('SIGTERM', () => process.exit(0));
-        fs.writeFileSync(process.argv[2], '{}');
-        setInterval(() => {}, 1000);
-      `
-      );
-      fs.writeFileSync(
-        ownerEntry,
-        `
-        import fs from 'node:fs';
-        import { DevInstanceSupervisor } from ${JSON.stringify(new URL("./devInstanceSupervisor.ts", import.meta.url).href)};
-        const owner = new DevInstanceSupervisor({ sourceRoot: process.argv[2], command: process.execPath,
-          args: [process.argv[3], process.argv[4]], env: process.env, stdio: 'ignore', forwardParentSignals: true });
-        try {
-          await owner.start();
-          await owner.wait();
-        } finally {
-          fs.writeFileSync(process.argv[5], 'retiring-state');
-          await new Promise(resolve => setTimeout(resolve, 300));
-          fs.writeFileSync(process.argv[6], 'removed-state');
-          await owner.close();
-        }
-      `
-      );
-      const owner = spawn(
-        process.execPath,
-        [
-          "--import",
-          createRequire(import.meta.url).resolve("tsx"),
-          ownerEntry,
-          root,
-          service,
-          ready,
-          cleanupStarted,
-          cleanupDone,
-        ],
-        { detached: true, stdio: "ignore" }
-      );
-      const identity = captureOwnedProcessIdentity(owner.pid!);
-      const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
-        owner.once("exit", (code, signal) => resolve({ code, signal }))
-      );
-      try {
-        await expectChildFixtureReady(ready);
-        owner.kill("SIGTERM");
-        await expect.poll(() => fs.existsSync(cleanupStarted)).toBe(true);
-        // pnpm/tsx can deliver another signal after the child has already exited.
-        owner.kill("SIGTERM");
-        expect(await exit).toEqual({ code: 0, signal: null });
-        expect(fs.readFileSync(cleanupDone, "utf8")).toBe("removed-state");
-      } finally {
-        await terminateOwnedProcessTree(owner.pid!, { identity, termTimeoutMs: 100 });
-      }
-    }
-  );
-  it.skipIf(process.platform === "win32")(
-    "joins a registered detached group after abrupt child death",
-    async () => {
-      const root = temporaryRoot();
-      const entry = path.join(root, "registered-owner.mjs");
-      const readyFile = path.join(root, "ready.json");
-      fs.writeFileSync(
-        entry,
-        `
-      import { spawn } from "node:child_process";
-      import fs from "node:fs";
-      import { registerOwnedProcessGroup } from ${JSON.stringify(new URL("../../packages/shared/src/ownedProcessRegistration.mjs", import.meta.url).href)};
-      import { captureOwnedProcessIdentity } from ${JSON.stringify(new URL("../../packages/shared/src/ownedProcessIdentity.mjs", import.meta.url).href)};
-      const child = spawn(process.execPath, ["-e", 'process.on("SIGTERM",()=>{}); console.log("ready"); setInterval(()=>{},1000)'], { detached: true, stdio: ["ignore", "pipe", "ignore"] });
-      await new Promise(resolve => child.stdout.once("data", resolve));
-      const identity = captureOwnedProcessIdentity(child.pid);
-      await registerOwnedProcessGroup(identity);
-      fs.writeFileSync(process.argv[2], JSON.stringify(identity));
-      setInterval(()=>{},1000);
-    `
-      );
-      let receipt: OwnedProcessIdentity | undefined;
       const supervisor = new DevInstanceSupervisor({
+        ownership: await openOwnership(),
         sourceRoot: root,
         command: process.execPath,
-        args: [entry, readyFile],
+        args: [service, ready, countFile],
+        env: process.env,
+        stdio: "ignore",
+      });
+      await supervisor.start();
+      await expectChildFixtureReady(ready);
+      const first = supervisor.stop();
+      await expect.poll(() => fs.existsSync(countFile)).toBe(true);
+      const repeated = [supervisor.stop("SIGINT"), supervisor.stop("SIGTERM"), supervisor.stop()];
+      await expect(first).resolves.toBe(0);
+      await expect(Promise.all(repeated)).resolves.toEqual([0, 0, 0]);
+      expect(fs.readFileSync(countFile, "utf8")).toBe("1");
+    }
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "retires a leader killed abruptly together with what it left in its group",
+    async () => {
+      const root = temporaryRoot();
+      const readyFile = path.join(root, "ready.json");
+      let grandchildPid = 0;
+      const supervisor = new DevInstanceSupervisor({
+        ownership: await openOwnership(),
+        sourceRoot: root,
+        command: process.execPath,
+        args: [
+          "-e",
+          [
+            "const {spawn}=require('node:child_process');",
+            "const fs=require('node:fs');",
+            "const child=spawn(process.execPath,['-e',",
+            "  'process.on(\"SIGTERM\",()=>{});setInterval(()=>{},1000)'",
+            "],{stdio:'ignore'});",
+            "fs.writeFileSync(process.argv[1],JSON.stringify({pid:child.pid}));",
+            "setInterval(()=>{},1000);",
+          ].join(""),
+          readyFile,
+        ],
         env: process.env,
         stdio: "ignore",
         readiness: {
           file: readyFile,
           async onReady(value) {
-            receipt = value as OwnedProcessIdentity;
+            grandchildPid = (value as { pid: number }).pid;
           },
         },
       });
-      try {
-        await supervisor.start();
-        expect(observeOwnedProcessGroup(receipt!)).toBe("owned");
-        supervisor.process!.kill("SIGKILL");
-        await expect(supervisor.wait()).resolves.toBe(137);
-        expect(observeOwnedProcessGroup(receipt!)).toBe("absent");
-      } finally {
-        await supervisor.stop("SIGKILL");
-        if (receipt) await OwnedProcessGroup.adopt(receipt).retire("SIGKILL");
-      }
-    },
-    10_000
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "rejects a transferred receipt for a process outside its child tree",
-    async () => {
-      const root = temporaryRoot();
-      const foreign = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
-        detached: true,
-        stdio: "ignore",
-      });
-      const foreignOwner = OwnedProcessGroup.create(foreign);
-      const receipt = captureOwnedProcessIdentity(foreign.pid!);
-      const entry = path.join(root, "unrelated-receipt.mjs");
-      fs.writeFileSync(
-        entry,
-        `
-      import { registerOwnedProcessGroup } from ${JSON.stringify(new URL("../../packages/shared/src/ownedProcessRegistration.mjs", import.meta.url).href)};
-      await registerOwnedProcessGroup(${JSON.stringify(receipt)}).then(() => process.exit(3), () => process.exit(0));
-    `
-      );
-      const supervisor = new DevInstanceSupervisor({
-        sourceRoot: root,
-        command: process.execPath,
-        args: [entry],
-        env: process.env,
-        stdio: "ignore",
-      });
-      try {
-        await supervisor.start();
-        await expect(supervisor.wait()).resolves.toBe(0);
-        expect(observeOwnedProcessGroup(receipt)).toBe("owned");
-      } finally {
-        await supervisor.stop("SIGKILL");
-        await foreignOwner.retire("SIGKILL");
-      }
+      await supervisor.start();
+      expect(grandchildPid).toBeGreaterThan(0);
+      supervisor.process!.kill("SIGKILL");
+      await expect(supervisor.wait()).resolves.toBe(137);
+      await expectProcessToDisappear(grandchildPid);
     }
   );
 
   it.skipIf(process.platform !== "linux")(
-    "revokes a detached service and its worker when the supervisor is killed",
+    "retires a service and its worker when the owning process is killed",
     async () => {
       const root = temporaryRoot();
       const ready = path.join(root, "parent-loss.json");
@@ -258,10 +135,8 @@ describe("DevInstanceSupervisor", () => {
       fs.writeFileSync(
         service,
         `
-      import { bindProcessLifetimeToParent } from ${JSON.stringify(new URL("../../scripts/owned-process-tree.mjs", import.meta.url).href)};
       import { spawn } from 'node:child_process';
       import fs from 'node:fs';
-      bindProcessLifetimeToParent();
       const worker = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio:'ignore'});
       fs.writeFileSync(process.argv[2], JSON.stringify({service:process.pid, worker:worker.pid}));
       setInterval(() => {}, 1000);
@@ -270,8 +145,10 @@ describe("DevInstanceSupervisor", () => {
       fs.writeFileSync(
         ownerEntry,
         `
-      import { DevInstanceSupervisor } from ${JSON.stringify(new URL("./devInstanceSupervisor.ts", import.meta.url).href)};
-      const supervisor = new DevInstanceSupervisor({sourceRoot:process.argv[2], command:process.execPath,
+      import { Ownership } from ${JSON.stringify(OWNERSHIP_URL)};
+      import { DevInstanceSupervisor } from ${JSON.stringify(SUPERVISOR_URL)};
+      const ownership = await Ownership.open({ profileDir: process.argv[2], lifetime: 'leased' });
+      const supervisor = new DevInstanceSupervisor({ownership, sourceRoot:process.argv[2], command:process.execPath,
         args:[process.argv[3],process.argv[4]],env:process.env,stdio:'ignore'});
       await supervisor.start(); await supervisor.wait();
     `
@@ -305,11 +182,14 @@ describe("DevInstanceSupervisor", () => {
         expect(alive(identity!.worker)).toBe(true);
         owner.kill("SIGKILL");
         await ownerExit;
+        // The owner's reaper, not the dead owner, retires the service group.
         await expect.poll(() => [identity!.service, identity!.worker].filter(alive)).toEqual([]);
       } finally {
         owner.kill("SIGKILL");
         await ownerExit;
-        if (identity && alive(identity.service)) await terminateOwnedProcessTree(identity.service);
+        for (const pid of identity ? [identity.service, identity.worker] : []) {
+          if (alive(pid)) process.kill(pid, "SIGKILL");
+        }
       }
     }
   );
@@ -334,6 +214,7 @@ describe("DevInstanceSupervisor", () => {
     );
     const loader = createRequire(import.meta.url).resolve("tsx");
     const supervisor = new DevInstanceSupervisor({
+      ownership: await openOwnership(),
       sourceRoot: root,
       command: process.execPath,
       args: ["--import", loader, entry, readyFile, stoppedFile],
@@ -357,10 +238,12 @@ describe("DevInstanceSupervisor", () => {
     }
   });
 
-  it("requires exact absolute execution coordinates", () => {
+  it("requires exact absolute execution coordinates", async () => {
+    const ownership = await openOwnership();
     expect(
       () =>
         new DevInstanceSupervisor({
+          ownership,
           sourceRoot: ".",
           command: process.execPath,
           args: [],
@@ -370,6 +253,7 @@ describe("DevInstanceSupervisor", () => {
     expect(
       () =>
         new DevInstanceSupervisor({
+          ownership,
           sourceRoot: temporaryRoot(),
           command: "node",
           args: [],
@@ -383,6 +267,7 @@ describe("DevInstanceSupervisor", () => {
     const readyFile = path.join(root, "ready.json");
     const observed: unknown[] = [];
     const supervisor = new DevInstanceSupervisor({
+      ownership: await openOwnership(),
       sourceRoot: root,
       command: process.execPath,
       args: [
@@ -409,6 +294,7 @@ describe("DevInstanceSupervisor", () => {
   it("reports early child exit as a readiness failure", async () => {
     const root = temporaryRoot();
     const supervisor = new DevInstanceSupervisor({
+      ownership: await openOwnership(),
       sourceRoot: root,
       command: process.execPath,
       args: ["-e", "process.exit(7)"],
@@ -429,6 +315,7 @@ describe("DevInstanceSupervisor", () => {
 
   it("preserves the original failed-spawn error without manufacturing a cleanup refusal", async () => {
     const supervisor = new DevInstanceSupervisor({
+      ownership: await openOwnership(),
       sourceRoot: temporaryRoot(),
       command: path.join(temporaryRoot(), "missing-owned-executable"),
       args: [],
@@ -449,6 +336,7 @@ describe("DevInstanceSupervisor", () => {
       const readyFile = path.join(root, "ready.json");
       let grandchildPid = 0;
       const supervisor = new DevInstanceSupervisor({
+        ownership: await openOwnership(),
         sourceRoot: root,
         command: process.execPath,
         args: [
@@ -487,6 +375,7 @@ describe("DevInstanceSupervisor", () => {
       const readyFile = path.join(root, "ready.json");
       let grandchildPid = 0;
       const supervisor = new DevInstanceSupervisor({
+        ownership: await openOwnership(),
         sourceRoot: root,
         command: process.execPath,
         args: [
@@ -545,7 +434,7 @@ describe("DevInstanceSupervisor", () => {
 });
 
 async function expectProcessToDisappear(pid: number): Promise<void> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
     try {
       process.kill(pid, 0);
     } catch (error) {

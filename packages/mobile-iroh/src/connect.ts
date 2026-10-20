@@ -28,6 +28,7 @@ import {
 } from "./nativeBridge.js";
 import {
   parseStoredMobileConnection,
+  unsupportedStoredMobileConnection,
   replaceMobileConnectionCredential,
   type FreshShellPairing,
   type ShellCredential,
@@ -217,9 +218,21 @@ export async function persistStoredMobileConnection(stored: StoredMobileConnecti
   });
 }
 
+/** The stored connection was written by an older build and cannot be used. */
+const UNSUPPORTED_STORED_CONNECTION = "STORED_CONNECTION_UNSUPPORTED";
+
 export async function loadShellCredential(): Promise<StoredMobileConnection | null> {
   const result = await Keychain.getGenericPassword({ service: KEYCHAIN_SERVICE });
-  return result ? parseStoredMobileConnection(result.password) : null;
+  if (!result) return null;
+  if (unsupportedStoredMobileConnection(result.password)) {
+    throw Object.assign(
+      new Error(
+        "This device was paired with an older Vibestudio build. Pair it again to continue."
+      ),
+      { code: UNSUPPORTED_STORED_CONNECTION }
+    );
+  }
+  return parseStoredMobileConnection(result.password);
 }
 
 export async function clearShellCredential(expected?: {
@@ -227,7 +240,9 @@ export async function clearShellCredential(expected?: {
   deviceId: string;
 }): Promise<void> {
   await serializeByKey(credentialWrites, KEYCHAIN_SERVICE, async () => {
-    const stored = await loadShellCredential();
+    const result = await Keychain.getGenericPassword({ service: KEYCHAIN_SERVICE });
+    const stored = result ? parseStoredMobileConnection(result.password) : null;
+    const unsupported = result ? unsupportedStoredMobileConnection(result.password) : undefined;
     if (
       expected &&
       (!stored ||
@@ -237,7 +252,8 @@ export async function clearShellCredential(expected?: {
       return;
     const cleared = await Keychain.resetGenericPassword({ service: KEYCHAIN_SERVICE });
     if (!cleared) throw new Error("The OS secure store refused to clear the Iroh credential");
-    if (stored) await mobileIrohIdentity.delete(stored.deviceIdentityId);
+    const identityId = stored?.deviceIdentityId ?? unsupported?.identityId;
+    if (identityId) await mobileIrohIdentity.delete(identityId);
   });
 }
 

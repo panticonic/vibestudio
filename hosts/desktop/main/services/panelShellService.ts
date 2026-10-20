@@ -11,6 +11,7 @@ import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { dialog } from "electron";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { PanelCreateOptions } from "@vibestudio/shared/panelInterfaces";
 import type { BrowserVaultNativeClient } from "./browserVaultNativeClient.js";
 
 type FindInPageResult = { activeMatchOrdinal: number; matches: number };
@@ -52,29 +53,37 @@ async function readPanelPresentation(deps: PanelViewMethodDeps, panelId: string)
   };
 }
 
+/**
+ * The one panel-creation path of `view.createPanel`: a null parent makes a
+ * root panel, otherwise the actor is the parent. Shared with the desktop
+ * device driver, which runs this same host path after the same capability gate.
+ */
+export function createPanelFor(
+  orchestrator: Pick<PanelOrchestrator, "createPanel">,
+  actorId: string,
+  parentId: string | null,
+  source: string,
+  options: (PanelCreateOptions & { stateArgs?: Record<string, unknown> }) | undefined
+): Promise<{ id: string; title: string }> {
+  const { stateArgs, ...createOptions } = options ?? {};
+  return orchestrator.createPanel(
+    parentId ?? actorId,
+    source,
+    { ...createOptions, isRoot: parentId === null },
+    stateArgs
+  );
+}
+
 export function buildPanelViewHandler(deps: PanelViewMethodDeps): ServiceHandler {
   return defineServiceHandler("view", panelMethods, {
     createPanel: async (ctx, [parentId, source, options]) => {
       requirePanelHostingClientCapability(ctx, deps.getViewManager(), "createPanel");
-      const { stateArgs, ...createOptions } = options ?? {};
-      const caller =
-        ctx.caller.runtime.kind === "client"
-          ? {
-              callerId:
-                deps.getViewManager().getViewInfo(ctx.caller.runtime.id)?.workspaceIdentity
-                  ?.runtimeId ??
-                (() => {
-                  throw new Error("Client has no workspace ownership");
-                })(),
-              callerKind: ctx.caller.runtime.kind,
-            }
-          : undefined;
-      return deps.panelOrchestrator.createPanel(
-        parentId ?? ctx.caller.runtime.id,
+      return createPanelFor(
+        deps.panelOrchestrator,
+        ctx.caller.runtime.id,
+        parentId,
         source,
-        { ...createOptions, isRoot: parentId === null },
-        stateArgs,
-        caller
+        options
       );
     },
     focusPanel: (_ctx, [panelId, options]) =>

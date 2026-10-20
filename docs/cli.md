@@ -65,8 +65,8 @@ lock prevents the desktop and standalone launchers from accidentally owning
 that identity at the same time.
 
 `--instance NAME` selects another persistent state root. `--ephemeral` creates a
-temporary root deleted after ordered shutdown; combine it with a name for
-parallel testing. Every non-`source` instance is fully isolated: its protected
+temporary root that its owner's reaper removes after ordered shutdown, or after
+the supervisor dies; combine it with a name for parallel testing. Every non-`source` instance is fully isolated: its protected
 workspace publications remain in its own acquired workspace and are never
 pushed into the promoted base-template repository. The supervisor prints
 `pnpm cli --instance NAME <command>`. The instance registry is checkout-scoped,
@@ -295,6 +295,15 @@ The first command reuses the selected server when one is explicitly supplied,
 or creates a named ephemeral server, waits for readiness, and pairs its
 instance-scoped CLI. Later commands reuse that exact instance. `stop` refuses
 to terminate instances not created by this launcher.
+
+An instance has a declared lifetime in its ownership ledger
+(`<profile>/ownership/<id>.json`). `doctor` creates it `until-stop`: it lives
+until `stop`, and a later `run` attaches to it and leaves it running. A `run`
+that creates its instance leases it to that command and retires it when the
+command ends, however it ends; `run --keep` creates it `until-stop` instead.
+Every launcher first sweeps the ledgers of dead owners, retiring their
+process groups and scratch, and `inspect` and `list` report the summed resident
+memory of an instance's registered process groups.
 
 This workflow has two explicit approval layers. `doctor --approve-startup`
 accepts only the fresh workspace’s exact, version-bound `startup` install reviews

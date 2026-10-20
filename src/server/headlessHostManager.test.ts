@@ -1,6 +1,8 @@
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { OwnedScope, type OwnedProcess } from "@vibestudio/shared/ownership";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import {
@@ -92,6 +94,7 @@ describe("HeadlessHostManager keep-alive", () => {
   let children: MockChild[];
 
   class MockChild extends EventEmitter {
+    pid: number | undefined = undefined;
     exitCode: number | null = null;
     stdout = new EventEmitter();
     stderr = new EventEmitter();
@@ -102,7 +105,24 @@ describe("HeadlessHostManager keep-alive", () => {
       queueMicrotask(() => this.emit("exit", 0));
       return true;
     });
+    /** What the ownership library hands back for this child. */
+    readonly owned: OwnedProcess = {
+      child: this as unknown as ChildProcess,
+      identity: null,
+      registered: Promise.resolve(),
+      // Graceful retirement: SIGTERM the leader, which exits.
+      retire: vi.fn(async () => {
+        this.kill("SIGTERM");
+      }),
+      join: vi.fn(async () => undefined),
+    };
   }
+
+  const ENTRY = fileURLToPath(import.meta.url);
+  const ownershipOf = (spawnFn: (entry: string) => MockChild) => ({
+    scope: new OwnedScope(),
+    spawn: vi.fn((_command: string, args: readonly string[]) => spawnFn(String(args.at(-1))).owned),
+  });
 
   const tokenManager = {
     ensureToken: vi.fn(() => "token"),
@@ -142,11 +162,11 @@ describe("HeadlessHostManager keep-alive", () => {
   });
 
   function makeManager(opts: { connect: boolean }) {
-    const spawnFn = vi.fn((_entry: string): ChildProcess => {
+    const spawnFn = vi.fn((_entry: string): MockChild => {
       const child = new MockChild();
       children.push(child);
       if (opts.connect) registerHeadless(`headless-${children.length}`);
-      return child as unknown as ChildProcess;
+      return child;
     });
     const manager = new HeadlessHostManager({
       tokenManager,
@@ -156,10 +176,10 @@ describe("HeadlessHostManager keep-alive", () => {
       config: {
         enabled: true,
         keepAlive: true,
-        entryPath: "/fake/entry.js",
+        entryPath: ENTRY,
         spawnTimeoutMs: 1_000,
       },
-      spawnFn,
+      ownership: async () => ownershipOf(spawnFn),
     });
     return { manager, spawnFn };
   }
@@ -231,7 +251,7 @@ describe("HeadlessHostManager keep-alive", () => {
 
     await vi.advanceTimersByTimeAsync(10 * 60_000);
 
-    expect(replacement.kill).not.toHaveBeenCalled();
+    expect(replacement.owned.retire).not.toHaveBeenCalled();
     expect(coordinator.getLease("panel:nav-replacement")).toMatchObject({
       clientSessionId: "headless-2",
       connectionId: "route-replacement",
@@ -253,65 +273,84 @@ describe("HeadlessHostManager keep-alive", () => {
     expect(spawnFn).not.toHaveBeenCalled();
   });
 
-  it("terminates the detached host and Chromium process group together", async () => {
-    const child = new MockChild() as MockChild & { pid: number };
+  it("retires the host and its Chromium group together on stop, with no kill timer", async () => {
+    const child = new MockChild();
     child.pid = 4_321;
-    const signalProcessGroup = vi.fn();
     const manager = new HeadlessHostManager({
       tokenManager,
       coordinator,
       isHostAvailable: () => true,
       getServerUrl: () => "http://127.0.0.1:0",
-      config: {
-        enabled: true,
-        entryPath: "/fake/entry.js",
-      },
-      spawnFn: () => {
-        registerHeadless("headless-tree");
-        return child as unknown as ChildProcess;
-      },
-      signalProcessGroup,
+      config: { enabled: true, entryPath: ENTRY },
+      ownership: async () =>
+        ownershipOf(() => {
+          registerHeadless("headless-tree");
+          return child;
+        }),
     });
 
     await manager.ensureDefaultHost();
     await manager.stop();
+    // Nothing is left to escalate after the group is retired.
+    await vi.advanceTimersByTimeAsync(60_000);
 
-    expect(signalProcessGroup).toHaveBeenCalledWith(4_321, "SIGTERM");
-    expect(child.kill).not.toHaveBeenCalled();
+    expect(child.owned.retire).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("terminates Chromium when the detached host exits first", async () => {
-    const child = new MockChild() as MockChild & { pid: number };
+  it("joins the group when the host exits first, so Chromium is not orphaned", async () => {
+    const child = new MockChild();
     child.pid = 4_322;
-    const signalProcessGroup = vi.fn();
     const manager = new HeadlessHostManager({
       tokenManager,
       coordinator,
       isHostAvailable: () => true,
       getServerUrl: () => "http://127.0.0.1:0",
-      config: {
-        enabled: true,
-        entryPath: "/fake/entry.js",
-      },
-      spawnFn: () => {
-        registerHeadless("headless-crash");
-        return child as unknown as ChildProcess;
-      },
-      signalProcessGroup,
+      config: { enabled: true, entryPath: ENTRY },
+      ownership: async () =>
+        ownershipOf(() => {
+          registerHeadless("headless-crash");
+          return child;
+        }),
     });
 
     await manager.ensureDefaultHost();
     child.exitCode = 1;
     child.emit("exit", 1);
 
-    expect(signalProcessGroup).toHaveBeenCalledWith(4_322, "SIGTERM");
+    expect(child.owned.join).toHaveBeenCalledOnce();
+    expect(child.owned.retire).not.toHaveBeenCalled();
+  });
+
+  it("reports a retirement failure through the server's ownership scope", async () => {
+    const child = new MockChild();
+    const failure = Object.assign(new Error("group survived"), { code: "EOWNERSHIP" });
+    child.owned.retire = vi.fn(async () => {
+      throw failure;
+    });
+    const ownership = ownershipOf(() => {
+      registerHeadless("headless-fail");
+      return child;
+    });
+    const manager = new HeadlessHostManager({
+      tokenManager,
+      coordinator,
+      isHostAvailable: () => true,
+      getServerUrl: () => "http://127.0.0.1:0",
+      config: { enabled: true, entryPath: ENTRY },
+      ownership: async () => ownership,
+    });
+
+    await manager.ensureDefaultHost();
+    await expect(manager.stop()).resolves.toBeUndefined();
+    await expect(ownership.scope.close()).rejects.toMatchObject({ errors: [failure] });
   });
 
   it("bounds CDP readiness after the child registers", async () => {
-    const spawnFn = vi.fn((_entry: string): ChildProcess => {
+    const spawnFn = vi.fn((_entry: string): MockChild => {
       const child = new MockChild();
       children.push(child);
-      return child as unknown as ChildProcess;
+      return child;
     });
     const manager = new HeadlessHostManager({
       tokenManager,
@@ -320,10 +359,10 @@ describe("HeadlessHostManager keep-alive", () => {
       getServerUrl: () => "http://127.0.0.1:0",
       config: {
         enabled: true,
-        entryPath: "/fake/entry.js",
+        entryPath: ENTRY,
         spawnTimeoutMs: 100,
       },
-      spawnFn,
+      ownership: async () => ownershipOf(spawnFn),
     });
 
     const pending = manager.ensureDefaultHost();
@@ -336,15 +375,15 @@ describe("HeadlessHostManager keep-alive", () => {
 
     await vi.advanceTimersByTimeAsync(250);
     await expect(pending).resolves.toBeNull();
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(child.owned.retire).toHaveBeenCalledOnce();
     await manager.stop();
   });
 
   it("returns promptly when the child reports its startup failure", async () => {
-    const spawnFn = vi.fn((_entry: string): ChildProcess => {
+    const spawnFn = vi.fn((_entry: string): MockChild => {
       const child = new MockChild();
       children.push(child);
-      return child as unknown as ChildProcess;
+      return child;
     });
     const manager = new HeadlessHostManager({
       tokenManager,
@@ -353,10 +392,10 @@ describe("HeadlessHostManager keep-alive", () => {
       getServerUrl: () => "http://127.0.0.1:0",
       config: {
         enabled: true,
-        entryPath: "/fake/entry.js",
+        entryPath: ENTRY,
         spawnTimeoutMs: 60_000,
       },
-      spawnFn,
+      ownership: async () => ownershipOf(spawnFn),
     });
 
     const pending = manager.ensureDefaultHost();
@@ -367,17 +406,17 @@ describe("HeadlessHostManager keep-alive", () => {
     await vi.advanceTimersByTimeAsync(250);
 
     await expect(pending).resolves.toBeNull();
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(child.owned.retire).toHaveBeenCalledOnce();
     await manager.stop();
   });
 
   it("degrades gracefully and disables auto-spawn after repeated failures", async () => {
     // Host never connects → each spawn times out and records a failure. After
     // maxRestarts the manager disables itself instead of looping forever.
-    const spawnFn = vi.fn((_entry: string): ChildProcess => {
+    const spawnFn = vi.fn((_entry: string): MockChild => {
       const child = new MockChild();
       children.push(child);
-      return child as unknown as ChildProcess;
+      return child;
     });
     const manager = new HeadlessHostManager({
       tokenManager,
@@ -387,11 +426,11 @@ describe("HeadlessHostManager keep-alive", () => {
       config: {
         enabled: true,
         keepAlive: true,
-        entryPath: "/fake/entry.js",
+        entryPath: ENTRY,
         spawnTimeoutMs: 100,
         maxRestarts: 2,
       },
-      spawnFn,
+      ownership: async () => ownershipOf(spawnFn),
     });
 
     manager.startKeepAlive();

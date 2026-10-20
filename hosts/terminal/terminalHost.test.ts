@@ -50,13 +50,11 @@ function launched(
       },
     ],
     grant: {
-      connectionGrant: options.token ?? "grant-1",
-      expiresAt: Date.now() + 60_000,
+      credential: options.token ?? "grant-1",
       principalId: PRINCIPAL,
       deviceId: "dev_1",
       serverId: "srv",
       serverBootId: "boot",
-      workspaceId: "ws_system",
     },
   };
 }
@@ -159,12 +157,6 @@ function harness(
       }
     ),
   };
-  const grants = {
-    acquire: vi.fn(
-      async (_build: { source: string; buildKey: string; executionDigest: string }) =>
-        launched({ token: "grant-2" }).grant
-    ),
-  };
   const events = fakeEvents();
   const state = { get: vi.fn(async () => ({ saved: true })), set: vi.fn(async () => undefined) };
   const tty = fakeTty();
@@ -173,7 +165,6 @@ function harness(
       device: device as unknown as RpcClient,
       workspaceDevice: workspaceDevice as unknown as RpcClient,
       launched: launched(options.granted ? { granted: options.granted } : {}),
-      grants,
       module: module as never,
       system: { id: "ws_system", name: "system" },
       workspace: { id: "ws_personal", name: "personal" },
@@ -190,7 +181,6 @@ function harness(
     transport,
     workspaceTransport,
     device,
-    grants,
     events,
     state,
     tty,
@@ -222,7 +212,7 @@ describe("TerminalConnectionState", () => {
 describe("runTerminalClient", () => {
   it("hands the client its principal host for System and a device session for the shown workspace", async () => {
     let received: TerminalClientHost | null = null;
-    const { run, grants, transport, workspaceTransport, options, state } = harness({
+    const { run, transport, workspaceTransport, options, state } = harness({
       run: async (host) => {
         received = host;
         return { kind: "quit" };
@@ -245,8 +235,6 @@ describe("runTerminalClient", () => {
     expect(await host.listWorkspaces()).toEqual([{ id: "ws_system", name: "system" }]);
     expect(await host.state.get()).toEqual({ saved: true });
     expect(options().selfId).toBe(PRINCIPAL);
-    // The first authentication redeems the grant the launch already obtained.
-    expect(grants.acquire).not.toHaveBeenCalled();
     expect(state.get).toHaveBeenCalled();
     expect(transport.close).toHaveBeenCalled();
     expect(workspaceTransport.close).toHaveBeenCalled();
@@ -295,19 +283,15 @@ describe("runTerminalClient", () => {
     expect(only[0]!.notify).toBeUndefined();
   });
 
-  it("binds every re-grant to the exact verified build", async () => {
-    const { run, grants, options } = harness({
+  it("presents the launch's credential on every authentication", async () => {
+    const { run, options } = harness({
       run: async () => {
-        await expect(options().getToken()).resolves.toBe("grant-2");
+        const first = await options().getToken();
+        await expect(options().getToken()).resolves.toBe(first);
         return { kind: "quit" };
       },
     });
     await run();
-    expect(grants.acquire).toHaveBeenCalledWith({
-      source: "clients/terminal-browser",
-      buildKey: "build-1",
-      executionDigest: DIGEST,
-    });
   });
 
   it("restores the terminal and closes the session when the client throws", async () => {
@@ -322,20 +306,13 @@ describe("runTerminalClient", () => {
     expect(transport.close).toHaveBeenCalled();
   });
 
-  it("binds a reconnect grant to its authentication owner without ending the client", async () => {
+  it("an authentication cancelled by its owner does not end the client", async () => {
     const authentication = new AbortController();
     const reason = new Error("reconnect superseded");
-    const { run, grants, options } = harness({
+    const { run, options } = harness({
       run: async (host) => {
-        grants.acquire.mockImplementationOnce(
-          () =>
-            new Promise<never>((_resolve, reject) => {
-              authentication.signal.addEventListener("abort", () => reject(reason), { once: true });
-            })
-        );
-        const grantRequest = options().getToken(authentication.signal);
         authentication.abort(reason);
-        await expect(grantRequest).rejects.toBe(reason);
+        await expect(options().getToken(authentication.signal)).rejects.toBe(reason);
         expect(host.signal.aborted).toBe(false);
         return { kind: "quit" };
       },

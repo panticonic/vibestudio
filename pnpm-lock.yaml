@@ -916,6 +916,9 @@ importers:
       '@vibestudio/dev-log':
         specifier: workspace:*
         version: link:../dev-log
+      '@vibestudio/env-paths':
+        specifier: workspace:*
+        version: link:../env-paths
       '@vibestudio/rpc':
         specifier: workspace:*
         version: link:../rpc

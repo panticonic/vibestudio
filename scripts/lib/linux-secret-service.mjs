@@ -4,14 +4,18 @@
  * Electron's `safeStorage` refuses to save a device credential without an OS
  * keyring. The keyring and D-Bus sockets use a short private runtime path so
  * Unix-domain socket names stay within the kernel limit, while HOME and other
- * durable state remain under the caller-owned temporary root.
+ * durable state remain under the caller-owned temporary root. Every process and
+ * the IPC directory belong to the caller's `Ownership`: its reaper retires them
+ * even when the caller is killed.
  */
-import { spawn } from "node:child_process";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 
 const repoRoot = process.cwd();
+/** dbus-daemon refuses a listening socket path of 99 bytes or more
+ * (_DBUS_MAX_SUN_PATH_LENGTH), well under the kernel's sun_path of 108. */
+const UNIX_SOCKET_PATH_LIMIT = 98;
 
 export function prefixAndWrite(prefix, text, stream) {
   for (const line of text.split(/\r?\n/)) {
@@ -20,50 +24,34 @@ export function prefixAndWrite(prefix, text, stream) {
   }
 }
 
-export function spawnManaged(command, args, options = {}) {
-  const child = spawn(command, args, {
-    cwd: options.cwd ?? repoRoot,
-    env: options.env ?? process.env,
-    stdio: [options.pipeStdin ? "pipe" : "ignore", "pipe", "pipe"],
-    detached: process.platform !== "win32",
-  });
-  child.stdout?.on("data", (chunk) =>
-    prefixAndWrite(options.label ?? command, chunk.toString(), process.stdout)
-  );
-  child.stderr?.on("data", (chunk) =>
-    prefixAndWrite(options.label ?? command, chunk.toString(), process.stderr)
-  );
-  child.once("error", (error) => {
-    prefixAndWrite(
-      options.label ?? command,
-      `Failed to start ${command}: ${error.message}`,
-      process.stderr
-    );
-  });
-  return child;
-}
-
 /**
- * Start an isolated session bus and Secret Service. The caller owns every
- * acquired process and must call the returned `dispose` after its Electron
- * clients have exited. Startup failure and cancellation retire partial setup.
+ * Start an isolated session bus and Secret Service. Every process is spawned
+ * through `ownership`; the caller must call the returned `dispose` after its
+ * Electron clients have exited. Startup failure and cancellation retire partial
+ * setup. The IPC directory is reaper scratch, removed when `ownership` is.
  */
-export async function startEphemeralLinuxSecretService(tempRoot, acquire, retire, { signal } = {}) {
+export async function startEphemeralLinuxSecretService(ownership, tempRoot, { signal } = {}) {
   if (process.platform !== "linux") return { env: {}, electronArgs: [], dispose: async () => {} };
-  if (typeof retire !== "function") {
-    throw new TypeError("An exact process retirement callback is required for the secret service");
-  }
   signal?.throwIfAborted();
 
   const home = path.join(tempRoot, "home");
   const configHome = path.join(tempRoot, "xdg");
   const dataHome = path.join(tempRoot, "xdg-data");
-  // Keep IPC names short even when the caller's disk-backed state path is deep.
-  const ipcRoot = await fsp.mkdtemp(path.join("/tmp", "vs-ipc-"));
+  // Short names inside the reaper's disk-backed scratch keep socket paths
+  // within the kernel limit.
+  const ipcRoot = await ownership.scratch("ipc-");
   const runtimeDir = path.join(ipcRoot, "r");
   const controlDir = path.join(ipcRoot, "k");
   const busConfig = path.join(ipcRoot, "b.conf");
   const busSocket = path.join(runtimeDir, "b");
+  // The longest socket the daemons bind below these directories.
+  for (const socketPath of [busSocket, path.join(controlDir, "pkcs11")]) {
+    if (Buffer.byteLength(socketPath) > UNIX_SOCKET_PATH_LIMIT) {
+      throw new Error(
+        `The profile's ownership scratch path is too deep for a Unix socket (${socketPath})`
+      );
+    }
+  }
   const children = { bus: null, keyring: null, waiter: null };
   let disposal;
 
@@ -73,7 +61,7 @@ export async function startEphemeralLinuxSecretService(tempRoot, acquire, retire
       for (const child of [children.waiter, children.keyring, children.bus]) {
         if (!child) continue;
         try {
-          await retire(child);
+          await child.retire();
         } catch (error) {
           failures.push(error);
         }
@@ -81,7 +69,6 @@ export async function startEphemeralLinuxSecretService(tempRoot, acquire, retire
       if (failures.length) {
         throw new AggregateError(failures, "Isolated secret-service process retirement failed");
       }
-      await fsp.rm(ipcRoot, { recursive: true, force: true });
     })();
     return disposal;
   };
@@ -136,53 +123,55 @@ export async function startEphemeralLinuxSecretService(tempRoot, acquire, retire
       XDG_DATA_HOME: dataHome,
       XDG_RUNTIME_DIR: runtimeDir,
     };
-    children.bus = acquire(() =>
-      spawn(
-        "dbus-daemon",
-        [`--config-file=${busConfig}`, "--nofork", "--nopidfile", "--print-address=1"],
-        {
-          cwd: repoRoot,
-          env: serviceEnv,
-          stdio: ["ignore", "pipe", "pipe"],
-          detached: true,
-        }
-      )
+    children.bus = spawnService(
+      ownership,
+      "dbus-daemon",
+      [`--config-file=${busConfig}`, "--nofork", "--nopidfile", "--print-address=1"],
+      { env: serviceEnv, stdio: ["ignore", "pipe", "pipe"] }
     );
-    children.bus.stderr?.on("data", (chunk) =>
+    children.bus.child.stderr?.on("data", (chunk) =>
       prefixAndWrite("desktop-secret-bus", chunk.toString(), process.stderr)
     );
-    const busAddress = await waitForBusAddress(children.bus, signal);
+    const busAddress = await waitForBusAddress(children.bus.child, signal);
     signal?.throwIfAborted();
 
     const keyringEnv = { ...serviceEnv, DBUS_SESSION_BUS_ADDRESS: busAddress };
-    children.waiter = acquire(() =>
-      spawn("gdbus", ["wait", `--address=${busAddress}`, "org.freedesktop.secrets"], {
-        cwd: repoRoot,
-        env: keyringEnv,
-        stdio: ["ignore", "ignore", "pipe"],
-        detached: true,
-      })
+    children.waiter = spawnService(
+      ownership,
+      "gdbus",
+      ["wait", `--address=${busAddress}`, "org.freedesktop.secrets"],
+      { env: keyringEnv, stdio: ["ignore", "ignore", "pipe"] }
     );
-    children.waiter.stderr?.on("data", (chunk) =>
+    children.waiter.child.stderr?.on("data", (chunk) =>
       prefixAndWrite("desktop-secret-service-wait", chunk.toString(), process.stderr)
     );
 
-    children.keyring = acquire(() =>
-      spawnManaged(
-        "gnome-keyring-daemon",
-        ["--foreground", "--unlock", "--components=secrets", `--control-directory=${controlDir}`],
-        {
-          cwd: repoRoot,
-          env: keyringEnv,
-          label: "desktop-secret-service",
-          pipeStdin: true,
-        }
+    children.keyring = spawnService(
+      ownership,
+      "gnome-keyring-daemon",
+      ["--foreground", "--unlock", "--components=secrets", `--control-directory=${controlDir}`],
+      { env: keyringEnv, stdio: ["pipe", "pipe", "pipe"] }
+    );
+    const keyring = children.keyring.child;
+    for (const [stream, write] of [
+      [keyring.stdout, process.stdout],
+      [keyring.stderr, process.stderr],
+    ]) {
+      stream?.on("data", (chunk) =>
+        prefixAndWrite("desktop-secret-service", chunk.toString(), write)
+      );
+    }
+    keyring.once("error", (error) =>
+      prefixAndWrite(
+        "desktop-secret-service",
+        `Failed to start gnome-keyring-daemon: ${error.message}`,
+        process.stderr
       )
     );
-    children.keyring.stdin?.end(randomUUID());
-    await waitForSecretService(children.waiter, children.bus, children.keyring, signal);
+    keyring.stdin?.end(randomUUID());
+    await waitForSecretService(children.waiter.child, children.bus.child, keyring, signal);
     signal?.throwIfAborted();
-    if (children.bus.exitCode !== null || children.keyring.exitCode !== null) {
+    if (children.bus.child.exitCode !== null || keyring.exitCode !== null) {
       throw new Error("The isolated desktop secret service exited during readiness");
     }
     console.log("[desktop-smoke] Started an isolated Linux secret service for device credentials");
@@ -201,6 +190,20 @@ export async function startEphemeralLinuxSecretService(tempRoot, acquire, retire
   } catch (error) {
     return failStartup(error);
   }
+}
+
+/** One service process of the secret service, killed at once when retired. */
+function spawnService(ownership, command, args, { env, stdio }) {
+  const owned = ownership.spawn(command, args, {
+    kill: "immediate",
+    label: command,
+    cwd: repoRoot,
+    env,
+    stdio,
+  });
+  // The startup waits report a failure to start; later errors have no reader.
+  owned.child.on("error", () => undefined);
+  return owned;
 }
 
 function waitForBusAddress(child, signal) {

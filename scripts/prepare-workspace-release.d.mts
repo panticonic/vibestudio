@@ -1,3 +1,4 @@
+import type { Ownership } from "@vibestudio/shared/ownership";
 export type WorkspacePreparationProgress =
   | { phase: "sources"; done: number; total: number; item: string }
   | { phase: "runtimes"; done: number; total: number | null; item: string };
@@ -8,6 +9,8 @@ export interface WorkspaceReleasePreparation {
 }
 export function isCancellationOnly(error: unknown, active?: Set<object>): boolean;
 export function prepareWorkspaceRelease(input: {
+  /** The owner of the producer: its group is retired with this ownership. */
+  ownership: Ownership;
   appRoot: string;
   output: string;
   sourceOutput?: string;

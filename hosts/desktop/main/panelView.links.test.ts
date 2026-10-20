@@ -483,7 +483,6 @@ describe("PanelView plain panel links", () => {
         panelId,
         "about/server-logs",
         { isRoot: true },
-        undefined,
         undefined
       );
     });
@@ -548,7 +547,6 @@ describe("PanelView plain panel links", () => {
         panelId,
         "panels/chat",
         {},
-        undefined,
         undefined
       );
     });
@@ -573,7 +571,6 @@ describe("PanelView plain panel links", () => {
         {
           placement: { disposition: "side", preferredWidth: 640, minWidth: 440 },
         },
-        undefined,
         undefined
       );
     });
@@ -590,8 +587,7 @@ describe("PanelView plain panel links", () => {
       expect(panelOrchestrator.createBrowserUrlPanel).toHaveBeenCalledWith(
         panelId,
         "https://example.com/",
-        { focus: true, placement: "child" },
-        undefined
+        { focus: true, placement: "child" }
       );
     });
     expect(event.preventDefault).toHaveBeenCalled();
@@ -616,8 +612,7 @@ describe("PanelView plain panel links", () => {
       expect(panelOrchestrator.createBrowserUrlPanel).toHaveBeenCalledWith(
         panelId,
         "http://127.0.0.1:1234/panels/chat/",
-        { focus: false, placement: "child" },
-        undefined
+        { focus: false, placement: "child" }
       );
     });
     expect(panelOrchestrator.createPanel).not.toHaveBeenCalled();
@@ -640,8 +635,7 @@ describe("PanelView plain panel links", () => {
       expect(panelOrchestrator.createBrowserUrlPanel).toHaveBeenCalledWith(
         panelId,
         "https://accounts.google.com/",
-        { focus: true, placement: "child" },
-        undefined
+        { focus: true, placement: "child" }
       );
     });
   });
@@ -708,7 +702,7 @@ describe("PanelView plain panel links", () => {
     );
   });
 
-  it("opens managed links from client views as client-scoped root panels", async () => {
+  it("opens managed links from client views as host-created root panels", async () => {
     const { panelId, panelView, webContents, panelOrchestrator } = createHarness({
       viewType: "client",
     });
@@ -728,8 +722,7 @@ describe("PanelView plain panel links", () => {
         panelId,
         "about/help",
         { isRoot: true },
-        undefined,
-        { callerId: "@workspace-apps/shell", callerKind: "client" }
+        undefined
       );
     });
     expect(event.preventDefault).toHaveBeenCalled();
@@ -767,8 +760,7 @@ describe("PanelView context menu contributions", () => {
       "https://example.com/article",
       // A child of the panel the link was in, and focused: the person asked
       // for it, so it is what they are now looking at.
-      { placement: "child", focus: true },
-      undefined
+      { placement: "child", focus: true }
     );
   });
 

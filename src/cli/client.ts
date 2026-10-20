@@ -11,6 +11,7 @@ import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/work
 import { normalizeTemplateGitUrl } from "@vibestudio/workspace/templateCoordinates";
 import {
   clearCliCredentials,
+  hasLegacyCliCredential,
   loadCliCredentials,
   loadCliIdentity,
   saveCliCredentials,
@@ -717,8 +718,10 @@ const remoteCommands: CliCommand[] = [
     run: async (inv) => {
       const json = jsonMode(inv.flags["json"] === true);
       try {
-        const credentials = loadCliIdentity();
-        if (credentials) requireDeviceCliIdentity(credentials, "remote logout");
+        if (!hasLegacyCliCredential()) {
+          const credentials = loadCliIdentity();
+          if (credentials) requireDeviceCliIdentity(credentials, "remote logout");
+        }
         clearCliCredentials();
         printResult({ loggedOut: true }, { json, human: () => console.log("logged out") });
         return 0;
@@ -877,7 +880,12 @@ export async function main(argv: string[]): Promise<number> {
   }
   if (!GROUP_ORDER.includes(group)) {
     // A terminal client may register `vibestudio <command>` (integration.terminal.command).
-    const clientCommand = clientCommandFor(group, terminalHostContext);
+    let clientCommand: CliCommand | null;
+    try {
+      clientCommand = clientCommandFor(group, terminalHostContext);
+    } catch (error) {
+      return printError(error, { json: false });
+    }
     if (clientCommand) {
       if (wantsHelp(rest)) {
         console.log(renderCommandHelp(clientCommand));

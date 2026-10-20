@@ -7,13 +7,13 @@
 import fs from "node:fs/promises";
 import { closeSync, openSync, readFileSync } from "node:fs";
 import path from "node:path";
-import os from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { spawn, execFile } from "node:child_process";
+import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { _electron as electron } from "@playwright/test";
 import { parseHubReadyPayload } from "./cli/lib/hub-ready.mjs";
 import { resolveMacAppExecutable } from "./lib/mac-app-executable.mjs";
+import { ownedEntry } from "./lib/owned-entry.mjs";
 
 const execute = promisify(execFile);
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -50,20 +50,19 @@ async function awaitExit(child, timeoutMs) {
   while (!childExited(child) && Date.now() < deadline) await delay(50);
   return childExited(child);
 }
-async function forceStop(child, grouped = true) {
+/** Playwright started the GUI itself, so it is not an owned group: stop its process. */
+async function forceStop(child) {
   if (childExited(child)) return;
   if (process.platform === "win32")
     await execute("taskkill", ["/PID", String(child.pid), "/T", "/F"]);
   else {
     try {
-      if (grouped) process.kill(-child.pid, "SIGKILL");
-      else child.kill("SIGKILL");
+      child.kill("SIGKILL");
     } catch (error) {
       if (error.code !== "ESRCH") throw error;
     }
   }
-  if (!(await awaitExit(child, 10000)))
-    throw new Error("Owned packaged process did not exit; fixture quarantined");
+  if (!(await awaitExit(child, 10000))) throw new Error("Packaged GUI process did not exit");
 }
 async function closeGui(gui) {
   let timer;
@@ -75,7 +74,7 @@ async function closeGui(gui) {
       }),
     ]);
   } catch (error) {
-    await forceStop(gui.process(), false);
+    await forceStop(gui.process());
     throw error;
   } finally {
     clearTimeout(timer);
@@ -206,17 +205,20 @@ export function spawnCaptured(child, logPath) {
  * composed. Writes to a regular file are synchronous, so the same crash arrives
  * whole.
  */
-function launch(command, args, environment, cwd, logPath) {
+function launch(ownership, command, args, environment, cwd, logPath) {
   const log = logPath ? openSync(logPath, "a", 0o600) : "pipe";
-  const child = spawn(command, args, {
+  // Ordered shutdown is requested over IPC; the group is killed at once when
+  // the smoke has to retire it.
+  const owned = ownership.spawn(command, args, {
+    kill: "immediate",
+    label: "packaged-server",
     env: environment,
     cwd,
     stdio: ["ignore", log, log, "ipc"],
-    detached: process.platform !== "win32",
     windowsHide: true,
   });
   if (typeof log === "number") closeSync(log);
-  return spawnCaptured(child, logPath);
+  return { ...spawnCaptured(owned.child, logPath), owned };
 }
 
 export async function measureAcceptancePhase(
@@ -247,11 +249,10 @@ export async function measureAcceptancePhase(
   }
 }
 
-export async function runPackagedIsolationSmoke(options) {
+export async function runPackagedIsolationSmoke(options, ownership) {
   const executable = await resolvePackagedExecutable(options.app);
-  const fixture = await fs.realpath(
-    await fs.mkdtemp(path.join(os.tmpdir(), "vibestudio-packaged-isolation-"))
-  );
+  // Reaper scratch: removed only after every owned group has retired.
+  const fixture = await fs.realpath(await ownership.scratch("vibestudio-packaged-isolation-"));
   const outDir = options.outDir ?? path.join(process.cwd(), "test-results", "packaged-isolation");
   await fs.mkdir(outDir, { recursive: true, mode: 0o700 });
   await Promise.all(
@@ -297,7 +298,6 @@ export async function runPackagedIsolationSmoke(options) {
   const result = { platform: process.platform, arch: process.arch, executable };
   let gui;
   let server;
-  let safeCleanup = true;
   try {
     const { identity, page, pageErrors } = await measureAcceptancePhase(
       result,
@@ -361,6 +361,7 @@ export async function runPackagedIsolationSmoke(options) {
       "Packaged server launch to hub ready-file after --require-client-ready=desktop for fresh workspace 'dev'; server artifact readiness, not GUI pairing or visible selected shell",
       async () => {
         server = launch(
+          ownership,
           executable,
           [
             path.join(here, "lib", "packaged-server-bootstrap.cjs"),
@@ -454,6 +455,7 @@ export async function runPackagedIsolationSmoke(options) {
       throw new Error(
         `Packaged server shutdown failed (${server.child.exitCode}): ${server.tail()}`
       );
+    await server.owned.join();
     result.workspace.shutdown = true;
     server = undefined;
     const remaining = await fs.readdir(workspaces);
@@ -485,27 +487,23 @@ export async function runPackagedIsolationSmoke(options) {
         await closeGui(gui);
       } catch (error) {
         failures.push(error);
-        safeCleanup = false;
       }
-    for (const item of [server])
-      if (item) {
-        try {
-          await forceStop(item.child);
-        } catch (error) {
-          failures.push(error);
-        }
-        safeCleanup = false;
+    if (server)
+      try {
+        await server.owned.retire();
+      } catch (error) {
+        failures.push(error);
       }
-    // Runtime failures can leave sandbox descendants under stock best-effort
-    // cancellation. Never recursively delete a fixture whose retirement is unknown.
-    if (safeCleanup) await fs.rm(fixture, { recursive: true, force: true });
-    else console.error(`Packaged smoke fixture quarantined: ${fixture}`);
     if (failures.length) throw new AggregateError(failures, "Packaged smoke cleanup failed");
   }
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  runPackagedIsolationSmoke(parseOptions(process.argv.slice(2)))
-    .then((result) => console.log(JSON.stringify(result, null, 2)))
+  ownedEntry(({ ownership }) =>
+    runPackagedIsolationSmoke(parseOptions(process.argv.slice(2)), ownership)
+  )
+    .then((result) => {
+      if (result) console.log(JSON.stringify(result, null, 2));
+    })
     .catch((error) => {
       console.error(error);
       process.exitCode = 1;

@@ -1012,7 +1012,7 @@ describe("runtimeService deferred panel activation", () => {
         listContextEdgesByOwner: async (input) => instance.contextEdgeListByOwner(input),
         listContextEdgesByChild: async (id) => instance.contextEdgeListByChild(id),
       },
-      getClientHost: () => null,
+      hasClientCapability: () => false,
     });
     for (const operation of ["openPanel", "updatePanelState", "close"] as const) {
       await expect(
@@ -1789,6 +1789,28 @@ describe("runtimeService.createEntity context policy", () => {
 
     expect(handle.contextId).toBe("ctx-caller");
     expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  it("creates a client's entities in fresh contexts: its own context is a routed partition, not a parent workspace", async () => {
+    const { service, entityCache } = await buildDeps();
+    const caller = appCaller("client:browser:web:desktop");
+    entityCache._onActivate({
+      id: caller.runtime.id,
+      kind: "client",
+      source: { repoPath: "clients/browser", effectiveVersion: "v1" },
+      contextId: "ctx-client",
+      key: "browser:web:desktop",
+      createdAt: 1,
+      status: "active",
+      cleanupComplete: true,
+    });
+
+    const handle = (await service.handler({ caller }, "createEntity", [doCreateSpec()])) as {
+      contextId: string;
+    };
+
+    expect(handle.contextId).not.toBe("ctx-client");
+    expect(handle.contextId).toMatch(/^[0-9a-f-]{36}$/);
   });
 
   it("derives an external agent relay context from the bound entity", async () => {

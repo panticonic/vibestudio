@@ -7,11 +7,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { EventEmitter } from "node:events";
 import { spawn, type ChildProcess } from "node:child_process";
-import { processGroupAlive } from "../../scripts/owned-process-tree.mjs";
-import {
-  OwnedProcessGroup,
-  type OwnedProcessGroupHandle,
-} from "@vibestudio/shared/ownedProcessGroup";
+import { Ownership, type OwnedProcess } from "@vibestudio/shared/ownership";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getWorkspaceDir } from "@vibestudio/env-paths";
@@ -40,7 +36,7 @@ import {
   HubCompletePairingBodySchema,
   HubDeviceCredentialBodySchema,
   openHubDataStores,
-  reapWorkspaceChildProcessGroup,
+  reapWorkspaceChild,
   revokeHubDevice,
   revokeHubUser,
   restoreRoutedWorkspaceRuntimes,
@@ -54,6 +50,18 @@ import {
   type WorkspaceRuntime,
 } from "./hubServer.js";
 import { WORKSPACE_EPOCH_HANDOFF_EXIT_CODE } from "./historicalWorkspaceHost.js";
+
+/** A fake OwnedProcess whose join/retire the test controls. */
+function fakeOwned(overrides: Partial<OwnedProcess> = {}): OwnedProcess {
+  return {
+    child: Object.assign(new EventEmitter(), { pid: 4321 }) as unknown as ChildProcess,
+    identity: null,
+    registered: Promise.resolve(),
+    retire: vi.fn(async () => undefined),
+    join: vi.fn(async () => undefined),
+    ...overrides,
+  };
+}
 
 describe("hub shutdown ownership", () => {
   it("preserves a failed listener acquisition without retiring another gateway", async () => {
@@ -212,6 +220,9 @@ describe("hub shutdown ownership", () => {
           events.push("child:done");
         },
       ],
+      closeProcessOwnership: () => {
+        events.push("processes:released");
+      },
       closeGateway: () => {
         events.push("gateway:closed");
       },
@@ -234,9 +245,12 @@ describe("hub shutdown ownership", () => {
     await vi.waitFor(() => expect(events).toContain("child:start"));
     expect(events.indexOf("root:done")).toBeLessThan(events.indexOf("rpc:stop"));
     expect(events).not.toContain("central:closed");
+    // The reaper is joined only after every child it owns has been retired.
+    expect(events).not.toContain("processes:released");
     finishChild();
     await operation;
-    expect(events.slice(-5)).toEqual([
+    expect(events.slice(-6)).toEqual([
+      "processes:released",
       "gateway:closed",
       "governance:closed",
       "ownership:released",
@@ -246,7 +260,7 @@ describe("hub shutdown ownership", () => {
   });
 
   it("retains original failures and attempts every admitted cleanup and store retirement", async () => {
-    const errors = Array.from({ length: 12 }, (_, index) => new Error(`cleanup:${index}`));
+    const errors = Array.from({ length: 13 }, (_, index) => new Error(`cleanup:${index}`));
     const calls: number[] = [];
     const fail = (index: number) => async () => {
       calls.push(index);
@@ -260,18 +274,19 @@ describe("hub shutdown ownership", () => {
       joinMaintenance: fail(4),
       closeGrants: fail(5),
       stopChildren: () => [fail(6), fail(7)],
-      closeGateway: fail(8),
-      closeGovernance: fail(9),
-      releaseOwnership: fail(10),
-      closeCentralData: fail(11),
+      closeProcessOwnership: fail(8),
+      closeGateway: fail(9),
+      closeGovernance: fail(10),
+      releaseOwnership: fail(11),
+      closeCentralData: fail(12),
       closeIdentity: () => {
-        calls.push(12);
+        calls.push(13);
       },
     }).catch((error: unknown) => error);
     const flatten = (error: unknown): unknown[] =>
       error instanceof AggregateError ? error.errors.flatMap(flatten) : [error];
     expect(flatten(failure)).toEqual(errors);
-    expect(calls).toEqual(Array.from({ length: 13 }, (_, index) => index));
+    expect(calls).toEqual(Array.from({ length: 14 }, (_, index) => index));
   });
 });
 
@@ -429,10 +444,33 @@ describe("routed workspace restoration", () => {
 });
 
 describe("workspace child process-tree ownership", () => {
+  const profiles: string[] = [];
+  const ownerships: Ownership[] = [];
+  const openOwnership = async () => {
+    const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-hub-ownership-"));
+    profiles.push(profileDir);
+    const ownership = await Ownership.open({ profileDir, lifetime: "leased" });
+    ownerships.push(ownership);
+    return { ownership, profileDir };
+  };
+  afterEach(async () => {
+    await Promise.allSettled(ownerships.splice(0).map((ownership) => ownership.close()));
+    for (const profile of profiles.splice(0)) fs.rmSync(profile, { recursive: true, force: true });
+  });
+  const groupAlive = (pid: number): boolean => {
+    try {
+      process.kill(-pid, 0);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
+      throw error;
+    }
+  };
   it.runIf(process.platform !== "win32")(
     "confirms the runtime group is gone after its leader exits first",
     async () => {
-      const child = spawn(
+      const { ownership } = await openOwnership();
+      const owned = ownership.spawn(
         process.execPath,
         [
           "-e",
@@ -442,103 +480,201 @@ describe("workspace child process-tree ownership", () => {
       process.exit(0);
     `,
         ],
-        { detached: true, stdio: "ignore" }
+        { kill: "graceful", stdio: "ignore" }
       );
-      const owner = OwnedProcessGroup.create(child);
-      try {
-        await new Promise<void>((resolve, reject) => {
-          child.once("exit", () => resolve());
-          child.once("error", reject);
-        });
-        expect(processGroupAlive(child.pid!)).toBe(true);
-        await reapWorkspaceChildProcessGroup(child, owner);
-        expect(processGroupAlive(child.pid!)).toBe(false);
-      } finally {
-        await owner.retire("SIGKILL");
-      }
+      await new Promise<void>((resolve, reject) => {
+        owned.child.once("exit", () => resolve());
+        owned.child.once("error", reject);
+      });
+      expect(groupAlive(owned.child.pid!)).toBe(true);
+      await reapWorkspaceChild(owned);
+      expect(groupAlive(owned.child.pid!)).toBe(false);
     }
   );
-  function fakeChild(overrides: Partial<ChildProcess> = {}): ChildProcess {
-    const emitter = new EventEmitter();
-    return Object.assign(emitter, {
-      pid: 4321,
-      exitCode: null,
-      signalCode: null,
-      killed: false,
-      kill: vi.fn(() => true),
-      ...overrides,
-    }) as unknown as ChildProcess;
-  }
 
-  it("signals only the owning server for graceful shutdown and waits for its exit", async () => {
-    const child = fakeChild();
-    child.kill = vi.fn(() => {
-      queueMicrotask(() => child.emit("exit", 0, null));
-      return true;
-    });
+  it.runIf(process.platform !== "win32")(
+    "retires a workspace server gracefully: its ordered shutdown completes before anything is killed",
+    async () => {
+      const { ownership, profileDir } = await openOwnership();
+      const receipt = path.join(profileDir, "ordered-shutdown.json");
+      const owned = ownership.spawn(
+        process.execPath,
+        [
+          "-e",
+          `
+      const fs = require('node:fs');
+      const { spawn } = require('node:child_process');
+      // The workerd stand-in: a group member that ignores SIGTERM.
+      const workerd = spawn(process.execPath, ['-e', "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)"], { stdio: 'ignore' });
+      process.on('SIGTERM', () => {
+        // Ordered drain takes real time; SIGKILL arriving now would cut it off.
+        setTimeout(() => {
+          fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ workerd: workerd.pid }));
+          process.exit(0);
+        }, 400);
+      });
+      console.log('ready');
+      setInterval(() => {}, 1000);
+    `,
+        ],
+        { kill: "graceful", stdio: ["ignore", "pipe", "ignore"] }
+      );
+      await new Promise<void>((resolve) => owned.child.stdout!.once("data", () => resolve()));
+      await terminateWorkspaceChild(owned);
 
-    await terminateWorkspaceChild(child, { reap: async () => undefined });
-
-    expect(child.kill).toHaveBeenCalledWith("SIGTERM");
-  });
-
-  it("refuses to derive retirement authority from an exited child's numeric PID", async () => {
-    await expect(reapWorkspaceChildProcessGroup(fakeChild({ exitCode: 0 }))).rejects.toThrow(
-      "no retained process creation receipt"
-    );
-  });
+      const { workerd } = JSON.parse(fs.readFileSync(receipt, "utf8")) as { workerd: number };
+      // The server finished its drain, and the group's survivor was then retired.
+      expect(groupAlive(owned.child.pid!)).toBe(false);
+      expect(() => process.kill(workerd, 0)).toThrow(/ESRCH/);
+    }
+  );
 
   it("joins the exact creation owner before reporting workspace retirement", async () => {
     let release!: () => void;
     const receipt = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const owner: OwnedProcessGroupHandle = {
-      identity: null,
-      join: vi.fn(() => receipt),
-      retire: vi.fn(),
-    };
+    const owned = fakeOwned({ join: vi.fn(() => receipt) });
     let retired = false;
-    const retirement = reapWorkspaceChildProcessGroup(fakeChild({ exitCode: 0 }), owner).then(
-      () => {
-        retired = true;
-      }
-    );
+    const retirement = reapWorkspaceChild(owned).then(() => {
+      retired = true;
+    });
     await new Promise((resolve) => setImmediate(resolve));
-    expect(owner.join).toHaveBeenCalledOnce();
+    expect(owned.join).toHaveBeenCalledOnce();
     expect(retired).toBe(false);
     release();
     await retirement;
     expect(retired).toBe(true);
-    expect(owner.retire).not.toHaveBeenCalled();
+    expect(owned.retire).not.toHaveBeenCalled();
   });
 
   it("preserves the original creation owner's retirement failure", async () => {
     const failure = Object.assign(new Error("native ownership observation failed"), {
       code: "EOWNERSHIP",
     });
-    const owner: OwnedProcessGroupHandle = {
-      identity: null,
-      join: vi.fn(async () => {
-        throw failure;
-      }),
-      retire: vi.fn(),
-    };
-    await expect(
-      reapWorkspaceChildProcessGroup(fakeChild({ exitCode: 0 }), owner)
-    ).rejects.toMatchObject({
+    const owned = fakeOwned({ join: vi.fn(async () => Promise.reject(failure)) });
+    await expect(reapWorkspaceChild(owned)).rejects.toMatchObject({
       message: "Workspace child 4321 descendant retirement failed",
       cause: failure,
     });
   });
 
-  it("does not signal a child whose OS exit is already recorded", async () => {
-    const child = fakeChild({ exitCode: 0 });
-
-    await terminateWorkspaceChild(child, { reap: async () => undefined });
-
-    expect(child.kill).not.toHaveBeenCalled();
+  it("carries a graceful retirement failure to the waiting caller with its cause", async () => {
+    const failure = Object.assign(new Error("group survived SIGKILL"), { code: "EOWNERSHIP" });
+    const owned = fakeOwned({ retire: vi.fn(async () => Promise.reject(failure)) });
+    await expect(terminateWorkspaceChild(owned)).rejects.toMatchObject({
+      message: "Workspace child 4321 retirement failed",
+      cause: failure,
+    });
+    expect(owned.retire).toHaveBeenCalledWith();
   });
+
+  it.runIf(process.platform !== "win32")(
+    "retires every child through the library on hub shutdown and reports each original failure",
+    async () => {
+      const { ownership } = await openOwnership();
+      const orderly = ownership.spawn(
+        process.execPath,
+        [
+          "-e",
+          "process.on('SIGTERM',()=>process.exit(0));console.log('up');setInterval(()=>{},1000)",
+        ],
+        { kill: "graceful", stdio: ["ignore", "pipe", "ignore"] }
+      );
+      await new Promise<void>((resolve) => orderly.child.stdout!.once("data", () => resolve()));
+      const failure = Object.assign(new Error("second child group survived"), {
+        code: "EOWNERSHIP",
+      });
+      const doomed = fakeOwned({ retire: vi.fn(async () => Promise.reject(failure)) });
+      const children = new Map<ChildProcess, OwnedProcess>([
+        [orderly.child, orderly],
+        [doomed.child, doomed],
+      ]);
+      const released = vi.fn(async () => undefined);
+
+      const result = await shutdownHubRuntime({
+        stopRootInvitation: () => undefined,
+        stopIngress: () => undefined,
+        stopRpc: () => undefined,
+        quiesceAuthority: () => undefined,
+        closeGrants: () => undefined,
+        joinMaintenance: () => undefined,
+        stopChildren: () =>
+          [...children].map(([child, owned]) => async () => {
+            await terminateWorkspaceChild(owned);
+            children.delete(child);
+          }),
+        closeProcessOwnership: released,
+        closeGateway: () => undefined,
+        closeGovernance: () => undefined,
+        releaseOwnership: () => undefined,
+        closeCentralData: () => undefined,
+        closeIdentity: () => undefined,
+      }).catch((error: unknown) => error);
+
+      // The healthy child was retired and the failing one did not stop that,
+      // nor the release of the reaper; the original cause is preserved.
+      expect(groupAlive(orderly.child.pid!)).toBe(false);
+      expect(released).toHaveBeenCalledOnce();
+      const flatten = (error: unknown): unknown[] =>
+        error instanceof AggregateError ? error.errors.flatMap(flatten) : [error];
+      expect(flatten(result)).toEqual([
+        expect.objectContaining({
+          message: "Workspace child 4321 retirement failed",
+          cause: failure,
+        }),
+      ]);
+      expect([...children.values()]).toEqual([doomed]);
+    }
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "a hub killed outright still has its workspace child retired gracefully by its reaper",
+    async () => {
+      const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-hub-killed-"));
+      profiles.push(profileDir);
+      const receipt = path.join(profileDir, "child-shutdown.json");
+      const ownershipModule = new URL("../../packages/shared/src/ownership.mjs", import.meta.url)
+        .href;
+      // The hub stand-in registers a workspace child exactly as the hub does.
+      const hub = spawn(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          `
+      import { Ownership } from ${JSON.stringify(ownershipModule)};
+      const ownership = await Ownership.open({ profileDir: ${JSON.stringify(profileDir)}, lifetime: 'leased' });
+      const owned = ownership.spawn(process.execPath, ['-e', ${JSON.stringify(
+        `process.on('SIGTERM',()=>{require('node:fs').writeFileSync(${JSON.stringify(receipt)},'drained');process.exit(0)});console.log('child-up');setInterval(()=>{},1000)`
+      )}], { kill: 'graceful', stdio: ['ignore', 'pipe', 'ignore'] });
+      owned.child.stdout.once('data', () => console.log(JSON.stringify({ child: owned.child.pid })));
+      await owned.registered;
+      setInterval(() => {}, 1000);
+    `,
+        ],
+        { stdio: ["ignore", "pipe", "inherit"] }
+      );
+      try {
+        const childPid = await new Promise<number>((resolve, reject) => {
+          let buffer = "";
+          hub.stdout!.on("data", (chunk: Buffer) => {
+            buffer += chunk.toString();
+            const line = buffer.split("\n").find((candidate) => candidate.startsWith("{"));
+            if (line) resolve((JSON.parse(line) as { child: number }).child);
+          });
+          hub.once("exit", () => reject(new Error("hub stand-in exited early")));
+        });
+        process.kill(hub.pid!, "SIGKILL");
+        // No signal was sent to the child by anything but the dead hub's reaper.
+        await vi.waitFor(() => expect(groupAlive(childPid)).toBe(false), { timeout: 15_000 });
+        expect(fs.readFileSync(receipt, "utf8")).toBe("drained");
+      } finally {
+        if (hub.exitCode === null) hub.kill("SIGKILL");
+      }
+    },
+    30_000
+  );
 });
 
 describe("workspace child startup diagnostics", () => {
@@ -595,7 +731,7 @@ describe("workspace child exit reconciliation", () => {
         ],
       ]),
       runtimes: new Map([["dev", runtime]]),
-      workspaceChildren: new Set([child]),
+      workspaceChildren: new Map([[child, fakeOwned({ child })]]),
       shuttingDown: false,
     } as unknown as HubRuntimeState;
   }
@@ -692,7 +828,7 @@ describe("workspace child exit reconciliation", () => {
       { shouldRestart: () => true, reap: reaped, restart }
     );
 
-    expect(reaped).toHaveBeenCalledWith(child);
+    expect(reaped).toHaveBeenCalledWith(expect.objectContaining({ child }));
     expect(restart).toHaveBeenCalledOnce();
     expect(state.runtimes.get("dev")).toBe(replacement);
     expect(state.workspaceChildTokens.has("child-token")).toBe(false);
@@ -726,7 +862,7 @@ describe("workspace child exit reconciliation", () => {
       { shouldRestart: () => true, reap, restart }
     );
 
-    expect(reap).toHaveBeenCalledWith(child);
+    expect(reap).toHaveBeenCalledWith(expect.objectContaining({ child }));
     expect(state.workspaceChildren.has(child)).toBe(false);
     expect(restart).not.toHaveBeenCalled();
   });
@@ -791,7 +927,7 @@ describe("workspace child exit reconciliation", () => {
       { shouldRestart: () => true, reap, restart }
     );
 
-    expect(reap).toHaveBeenCalledWith(child);
+    expect(reap).toHaveBeenCalledWith(expect.objectContaining({ child }));
     expect(restart).not.toHaveBeenCalled();
     expect(state.runtimes.has("dev")).toBe(false);
   });
@@ -1296,7 +1432,8 @@ describe("hub RPC pairing surfacing (§5)", () => {
       workspaceChildTokens: new Map(),
       workspacePresence: new Map(),
       runtimes: new Map([[runtime.name, runtime]]),
-      workspaceChildren: new Set([runtime.child]),
+      ownership: {} as never,
+      workspaceChildren: new Map(),
       shuttingDown: false,
     };
     state.controlTransport = {

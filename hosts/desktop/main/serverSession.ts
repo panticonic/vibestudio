@@ -42,7 +42,7 @@ import {
 import { serverAuthRouteUrl, serverRpcWsUrl } from "@vibestudio/shared/connect";
 import { assertIrohReach, type ConnectPairing, type IrohReach } from "@vibestudio/iroh-transport";
 import { DesktopIrohConnectionSupervisor } from "./desktopIrohConnectionSupervisor.js";
-import { registerOwnedProcessGroup } from "@vibestudio/shared/ownedProcessRegistration";
+import { createLazyOwnership } from "../../../src/node/lazyOwnership.js";
 import {
   FRESH_REMOTE_STARTUP_CONNECTION_PHASES,
   LOCAL_STARTUP_CONNECTION_PHASES,
@@ -54,6 +54,13 @@ import {
 } from "../../../src/startupConnectionProgress.js";
 
 const log = createDevLogger("ServerSession");
+
+/**
+ * Ownership of the local hub this process spawns. One per process: a session
+ * retried after a failed attempt attaches to the hub the first one started.
+ * `HubProcessManager.stopTree()` releases it.
+ */
+const localHubOwnership = createLazyOwnership({ role: "desktop-local-hub" }, { sweepStale: true });
 
 /**
  * Where a device credential is kept. The OS keystore is reachable only from the
@@ -311,7 +318,21 @@ export async function establishServerSession(args: {
 
   const protocol = "http" as const;
   const externalHost = "localhost";
+  // The desktop is a launcher: it retires what a dead predecessor left behind,
+  // then owns the hub it spawns for as long as this process lives.
+  const ownership = await localHubOwnership.get();
+  ownership.signal.addEventListener(
+    "abort",
+    () => {
+      const reason = ownership.signal.reason;
+      const error = reason instanceof Error ? reason : new Error(String(reason));
+      console.error("[App] Local hub ownership was lost:", error);
+      args.onLocalRecoveryFailure?.(error);
+    },
+    { once: true }
+  );
   const hubProcessManager = new HubProcessManager({
+    ownership,
     workspaceName: mode.workspaceName,
     credentials: args.credentials,
     appRoot: getAppRoot(),
@@ -324,7 +345,6 @@ export async function establishServerSession(args: {
       console.error("[App] Local hub recovery failed:", error);
       args.onLocalRecoveryFailure?.(error);
     },
-    onOwnedHubSpawn: registerOwnedProcessGroup,
   });
   const phase = createStartupPhaseReporter(
     "local connect",

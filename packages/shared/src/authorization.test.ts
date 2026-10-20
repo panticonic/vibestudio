@@ -394,7 +394,7 @@ describe("compositional authority", () => {
       remediation: {
         kind: "update-installed-code-manifest",
         message:
-          "Add this authority request to the installed unit manifest, then submit the new exact version for user review.",
+          "This installed code is fixed. Agent: run this operation from server-side `eval`, where you can request it and the user can approve it. Developer: add this authority request to the installed unit manifest, then submit the new exact version for user review.",
         request: {
           capability: "fs.write",
           resource: { kind: "exact", key: RESOURCE },

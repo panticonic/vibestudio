@@ -62,3 +62,20 @@ export function signalOwnedProcessIdentity(
 ): void;
 
 export function ownedProcessDescendsFrom(rootPid: number, candidatePid: number): boolean;
+
+/** Birth identity of one process: PID + kernel start coordinate + boot. */
+export interface ProcessStart {
+  pid: number;
+  startCoordinate: string;
+  bootId: string;
+}
+export type ProcessLiveness = "live" | "dead" | "foreign-boot";
+export function bootId(): string;
+export function captureProcessStart(pid: number): ProcessStart;
+export function observeProcessStart(start: ProcessStart): ProcessLiveness;
+/** Resident set size in KiB, or null when the process is gone or unreadable. */
+export function readRssKb(pid: number): number | null;
+export function setOomScoreAdj(
+  pid: number,
+  score: number
+): { ok: true } | { ok: false; error: string };

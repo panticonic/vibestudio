@@ -1,11 +1,18 @@
 #!/usr/bin/env node
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { spawn } from "node:child_process";
+import type { StdioOptions } from "node:child_process";
 import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
+import { getProfileDataPath } from "@vibestudio/env-paths";
+import { Ownership, awaitRetirement, readLedger, sweep } from "@vibestudio/shared/ownership";
+import { ledgerDirOf } from "@vibestudio/shared/ownershipLedger";
+import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
 import {
   adoptSystemTestSession,
-  ensureSystemTestInstance,
+  acquireSystemTestInstance,
+  commandProvisionsSystemTestInstance,
+  describeInstanceLedger,
   isLocalSystemTestHelpCommand,
   managedTestSessionName,
   parseSystemTestLauncherArgs,
@@ -16,7 +23,6 @@ import {
   systemTestPreparationFailureDetail,
 } from "./systemTestPreparation.js";
 import { attachDeviceDrivers } from "./deviceExecutors.js";
-import { forwardTerminationSignals, holdThroughTerminationSignals } from "./terminationSignals.js";
 import {
   adoptSelfDevelopmentProjects,
   selfDevelopmentProjects,
@@ -24,17 +30,24 @@ import {
 } from "./selfDevelopmentAdoption.js";
 
 const require = createRequire(import.meta.url);
-const tsxCli = require.resolve("tsx/cli");
+const tsxLoader = pathToFileURL(require.resolve("tsx")).href;
+const TERMINATION_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
 const HELP = `Usage: pnpm system-test [--instance ID] [--workspace NAME] COMMAND [ARGS...]
 
 Self-provisions one isolated Vibestudio server for headless agentic acceptance.
+Only doctor and run provision it; every other command (list, inspect, trajectory,
+rerun, ...) addresses a running instance and fails if there is none.
 
 Commands:
-  doctor                         Provision, pair, and check infrastructure
+  doctor                         Provision, pair, and check infrastructure; the instance
+                                 it creates lives until \`stop\`
   list --json                    List tests from the live system-test runner
   run TEST_NAME [TEST_NAME...]    Run selected exact tests; use --concurrency N
-                                 for independent cases in one accounted run
+                                 for independent cases in one accounted run. An
+                                 instance this command creates is leased to it and
+                                 retired when it ends, unless --keep; an instance
+                                 \`doctor\` created is attached to and left running
   inspect RUN_ID --json          Inspect a bounded failed-run packet
   trajectory RUN_ID TEST --full --json
                                  Inspect the full trajectory when needed
@@ -47,6 +60,8 @@ Options:
                                  Fixed when the instance pairs; cases naming units
                                  the workspace does not install are reported
                                  not-installed rather than run.
+  --keep                         With run: create the instance until \`stop\` instead of
+                                 leasing it to this command
   --persistent                   Keep this instance's state across restarts
   --self-development             Adopt this checkout as projects/vibestudio
   --device terminal|desktop      Attach that device driver for the command and stop it
@@ -56,34 +71,82 @@ Options:
 `;
 
 function cliArgv(instanceId: string, command: readonly string[]): string[] {
-  return [tsxCli, "src/dev/runCli.ts", "--instance", instanceId, ...command];
+  return ["--import", tsxLoader, "src/dev/runCli.ts", "--instance", instanceId, ...command];
 }
 
-function runCli(instanceId: string, command: readonly string[]): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, cliArgv(instanceId, ["system-test", ...command]), {
-      cwd: process.cwd(),
-      env: process.env,
-      stdio: "inherit",
-    });
-    const release = forwardTerminationSignals(child);
-    child.once("error", (error) => {
-      release();
-      reject(error);
-    });
-    child.once("exit", (code, signal) => {
-      release();
-      if (signal) reject(new Error(`system-test CLI exited from signal ${signal}`));
-      else resolve(code ?? 1);
-    });
+interface CliResult {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * One ordinary CLI process, a member of this launcher's ownership: killed at
+ * once if the launcher is terminated, and retired by the launcher's reaper if
+ * the launcher dies. Its group is joined before the result is returned.
+ */
+async function spawnCli(
+  ownership: Ownership,
+  instanceId: string,
+  command: readonly string[],
+  stdio: StdioOptions,
+  label: string
+): Promise<CliResult> {
+  const owned = ownership.spawn(process.execPath, cliArgv(instanceId, command), {
+    cwd: process.cwd(),
+    env: process.env,
+    stdio,
+    kill: "immediate",
+    label: `cli:${command[0] ?? "command"}`,
   });
+  let stdout = "";
+  let stderr = "";
+  owned.child.stdout?.setEncoding("utf8");
+  owned.child.stdout?.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  owned.child.stderr?.setEncoding("utf8");
+  owned.child.stderr?.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+  // `close`, not `exit`: the captured output is complete only once the pipes end.
+  const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+    (resolve, reject) => {
+      owned.child.once("error", reject);
+      owned.child.once("close", (code, signal) => resolve({ code, signal }));
+    }
+  );
+  const [status] = await Promise.all([closed, owned.registered]);
+  await owned.join();
+  if (status.signal) throw new Error(`${label} exited from signal ${status.signal}`);
+  return { code: status.code ?? 1, stdout, stderr };
+}
+
+async function runCli(
+  ownership: Ownership,
+  instanceId: string,
+  command: readonly string[]
+): Promise<number> {
+  return (
+    await spawnCli(ownership, instanceId, ["system-test", ...command], "inherit", "system-test CLI")
+  ).code;
+}
+
+/** Run one ordinary CLI command and capture what it reported. */
+function captureCli(
+  ownership: Ownership,
+  instanceId: string,
+  command: readonly string[]
+): Promise<CliResult> {
+  return spawnCli(ownership, instanceId, command, ["ignore", "pipe", "pipe"], command[0] ?? "CLI");
 }
 
 async function prepareFreshInstance(
+  ownership: Ownership,
   instanceId: string,
   expectedWorkspaceId: string
 ): Promise<void> {
-  const prepared = await captureCli(instanceId, [
+  const prepared = await captureCli(ownership, instanceId, [
     "system-test",
     "doctor",
     "--approve-startup",
@@ -100,43 +163,15 @@ async function prepareFreshInstance(
   assertSystemTestPreparationResult(prepared.stdout, expectedWorkspaceId);
 }
 
-/** Run one ordinary CLI command and capture what it reported. */
-function captureCli(
-  instanceId: string,
-  command: readonly string[]
-): Promise<{ code: number; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, cliArgv(instanceId, command), {
-      cwd: process.cwd(),
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("exit", (code, signal) => {
-      if (signal) reject(new Error(`${command[0]} exited from signal ${signal}`));
-      else resolve({ code: code ?? 1, stdout, stderr });
-    });
-  });
-}
-
 async function adoptSelfDevelopmentSource(
+  ownership: Ownership,
   instanceId: string,
   projects: readonly SelfDevelopmentProject[]
 ): Promise<void> {
   if (projects.length === 0) return;
   const adopted = await adoptSelfDevelopmentProjects({
     projects,
-    runCli: (args) => captureCli(instanceId, args),
+    runCli: (args) => captureCli(ownership, instanceId, args),
   });
   for (const project of adopted) {
     console.error(
@@ -167,44 +202,35 @@ function pairedWorkspaceId(instanceRoot: string): string {
   return value["workspaceId"];
 }
 
-async function main(): Promise<void> {
-  const repoRoot = path.resolve(process.cwd());
-  const parsed = parseSystemTestLauncherArgs(process.argv.slice(2));
-  if (isLocalSystemTestHelpCommand(parsed.command)) {
-    if (parsed.command.length === 1) {
-      process.stdout.write(HELP);
-    } else {
-      // Subcommand descriptions are also local metadata. Enter the CLI's
-      // parser directly so help never binds to or provisions a server.
-      const { main: runLocalCli } = await import("../cli/client.js");
-      process.exitCode = await runLocalCli(["system-test", ...parsed.command]);
-    }
-    return;
-  }
-  if (parsed.command[0] === "stop") {
-    if (parsed.command.length !== 1)
-      throw new Error("usage: pnpm system-test [--instance ID] stop");
-    const stopped = await stopManagedSystemTestInstance(repoRoot, parsed.instanceId);
-    console.error(
-      stopped
-        ? `[system-test] stopped managed instance ${parsed.instanceId}`
-        : `[system-test] managed instance ${parsed.instanceId} is not running`
-    );
-    return;
-  }
-  if (parsed.command.length === 0) {
-    throw new Error("usage: pnpm system-test [--instance ID] COMMAND [ARGS...]");
-  }
-  if (parsed.devices?.length && parsed.command.includes("--detach")) {
-    throw new Error(
-      "--device drivers live only as long as this command; a detached run would outlive them. Run it attached."
-    );
-  }
-  const ensured = await ensureSystemTestInstance(repoRoot, parsed.instanceId, {
+interface CommandContext {
+  repoRoot: string;
+  parsed: ReturnType<typeof parseSystemTestLauncherArgs>;
+  ownership: Ownership;
+  signal: AbortSignal;
+  /** Leased supervisors whose retirement this launcher must join before it ends. */
+  joins: Array<{ ledgerId: string; pid: number }>;
+}
+
+async function runCommand({
+  repoRoot,
+  parsed,
+  ownership,
+  signal,
+  joins,
+}: CommandContext): Promise<void> {
+  // `run` leases the instance it creates to this launcher, so the instance
+  // cannot outlive the command that wanted it; `doctor` (and `run --keep`)
+  // create it until `stop`, which a later `run` attaches to and leaves alone.
+  const lifetime = parsed.command[0] === "run" && !parsed.keep ? "leased" : "until-stop";
+  const ensured = await acquireSystemTestInstance(repoRoot, parsed.instanceId, parsed.command, {
     explicitInstance: parsed.explicitInstance,
     persistent: parsed.persistent,
     ...(parsed.selfDevelopment ? { selfDevelopment: true } : {}),
     ...(parsed.workspace ? { workspace: parsed.workspace } : {}),
+    lifetime,
+    ownership,
+    onLeased: (supervisor) => joins.push(supervisor),
+    signal,
   });
   process.env["VIBESTUDIO_INSTANCE_ROOT"] = ensured.instance.root;
   process.env["VIBESTUDIO_INSTANCE"] = ensured.instance.id;
@@ -212,6 +238,9 @@ async function main(): Promise<void> {
     `[system-test] ${ensured.created ? "created" : "using"} instance ${ensured.instance.id}; ` +
       `workspace=${pairedWorkspaceId(ensured.instance.root)}`
   );
+  if (!commandProvisionsSystemTestInstance(parsed.command)) {
+    console.error(`[system-test] ${describeInstanceLedger(ensured.ledger)}`);
+  }
   // The ready record means the host is addressable, not that asynchronous
   // workspace installation/admission has settled. A server provisioned for
   // unattended system tests owns that startup review, so settle it before the
@@ -229,14 +258,18 @@ async function main(): Promise<void> {
     // resolved, the workspace refuses to invoke the extension that adopts a
     // project. It also creates the system-test session, whose context forks
     // main at that moment — so tests move to a session created afterwards.
-    await prepareFreshInstance(ensured.instance.id, pairedWorkspaceId(ensured.instance.root));
+    await prepareFreshInstance(
+      ownership,
+      ensured.instance.id,
+      pairedWorkspaceId(ensured.instance.root)
+    );
   }
   if (parsed.selfDevelopment) {
-    const projects =
-      ensured.selfDevelopmentProjects.length > 0
-        ? ensured.selfDevelopmentProjects
-        : selfDevelopmentProjects(repoRoot);
-    await adoptSelfDevelopmentSource(ensured.instance.id, projects);
+    await adoptSelfDevelopmentSource(
+      ownership,
+      ensured.instance.id,
+      selfDevelopmentProjects(repoRoot)
+    );
     const session = adoptSystemTestSession(ensured.instance, "self-development");
     console.error(`[system-test] tests on this instance run under session ${session}`);
   }
@@ -266,6 +299,7 @@ async function main(): Promise<void> {
   // ready (so they pair into a prepared account), stopped on every exit path.
   const drivers = parsed.devices?.length
     ? await attachDeviceDrivers({
+        ownership,
         repoRoot,
         instanceId: ensured.instance.id,
         kinds: parsed.devices,
@@ -273,12 +307,10 @@ async function main(): Promise<void> {
     : null;
   let commandFailure: unknown;
   try {
-    process.exitCode = await runCli(ensured.instance.id, scopedCommand);
+    process.exitCode = await runCli(ownership, ensured.instance.id, scopedCommand);
   } catch (error) {
     commandFailure = error;
   }
-  // A signal now must not abandon the drivers: they are being stopped.
-  const releaseHold = holdThroughTerminationSignals(() => undefined);
   try {
     await drivers?.stop();
   } catch (error) {
@@ -288,10 +320,111 @@ async function main(): Promise<void> {
         [commandFailure, error],
         "The command and device driver retirement both failed"
       );
-  } finally {
-    releaseHold();
   }
   if (commandFailure !== undefined) throw commandFailure;
+}
+
+async function main(): Promise<void> {
+  const repoRoot = path.resolve(process.cwd());
+  const parsed = parseSystemTestLauncherArgs(process.argv.slice(2));
+  if (isLocalSystemTestHelpCommand(parsed.command)) {
+    if (parsed.command.length === 1) {
+      process.stdout.write(HELP);
+    } else {
+      // Subcommand descriptions are also local metadata. Enter the CLI's
+      // parser directly so help never binds to or provisions a server.
+      const { main: runLocalCli } = await import("../cli/client.js");
+      process.exitCode = await runLocalCli(["system-test", ...parsed.command]);
+    }
+    return;
+  }
+  if (parsed.keep && parsed.command[0] !== "run") {
+    throw new Error("--keep applies to `run`: doctor always creates its instance until stop");
+  }
+  const profileDir = getProfileDataPath();
+  const ledgerDir = ledgerDirOf(profileDir);
+  // Every command reconciles ownership first: whatever a launcher or
+  // supervisor that died left behind is retired before anything is looked up.
+  const reconciled = await sweep(ledgerDir);
+  for (const id of reconciled.retired) {
+    console.error(`[system-test] retired the leftovers of ownership ${id}`);
+  }
+  if (parsed.command[0] === "stop") {
+    if (parsed.command.length !== 1)
+      throw new Error("usage: pnpm system-test [--instance ID] stop");
+    const stopped = await stopManagedSystemTestInstance(repoRoot, parsed.instanceId);
+    console.error(
+      stopped
+        ? `[system-test] stopped managed instance ${parsed.instanceId}`
+        : `[system-test] managed instance ${parsed.instanceId} is not running`
+    );
+    return;
+  }
+  if (parsed.command.length === 0) {
+    throw new Error("usage: pnpm system-test [--instance ID] COMMAND [ARGS...]");
+  }
+  if (parsed.devices?.length && parsed.command.includes("--detach")) {
+    throw new Error(
+      "--device drivers live only as long as this command; a detached run would outlive them. Run it attached."
+    );
+  }
+
+  const ownership = await Ownership.open({
+    profileDir,
+    lifetime: "leased",
+    meta: { kind: "system-test-launcher", instance: parsed.instanceId, command: parsed.command[0] },
+  });
+  // A termination request ends the command's workload at once through the
+  // idempotent release; the command's own flow then unwinds and this function
+  // exits with the signal's status once the retirement is joined.
+  const interrupt = new AbortController();
+  const interruption: { signal: NodeJS.Signals | null } = { signal: null };
+  const onSignal = (signal: NodeJS.Signals): void => {
+    interruption.signal ??= signal;
+    interrupt.abort(new Error(`Interrupted by ${signal}`));
+    void ownership.release().catch(() => undefined);
+  };
+  for (const signal of TERMINATION_SIGNALS) process.on(signal, onSignal);
+  const joins: Array<{ ledgerId: string; pid: number }> = [];
+  let failure: unknown;
+  let retirementFailure: unknown;
+  try {
+    await runCommand({ repoRoot, parsed, ownership, signal: interrupt.signal, joins });
+  } catch (error) {
+    failure = error;
+  }
+  try {
+    await ownership.release();
+  } catch (error) {
+    retirementFailure = error;
+  }
+  // A leased instance's own reaper retires its root and record after the
+  // supervisor exits; this command is not done until that has been joined.
+  for (const { ledgerId, pid } of joins) {
+    try {
+      // Only the claim our supervisor holds: a racing launcher's instance is not ours to join.
+      if (readLedger(ledgerDir, ledgerId)?.owner.pid === pid) {
+        await awaitRetirement(ledgerDir, ledgerId);
+      }
+    } catch (error) {
+      retirementFailure ??= error;
+    }
+  }
+  for (const signal of TERMINATION_SIGNALS) process.off(signal, onSignal);
+  if (interruption.signal) {
+    // The workload ended because it was told to; only a failed retirement is a failure.
+    process.exitCode = signalExitCode(interruption.signal);
+    if (retirementFailure !== undefined) throw retirementFailure;
+    return;
+  }
+  if (failure !== undefined && retirementFailure !== undefined) {
+    throw new AggregateError(
+      [failure, retirementFailure],
+      "The command and its resource retirement both failed"
+    );
+  }
+  if (failure !== undefined) throw failure;
+  if (retirementFailure !== undefined) throw retirementFailure;
 }
 
 try {
@@ -301,6 +434,9 @@ try {
   console.error(
     JSON.stringify({
       error: error instanceof Error ? error.message : String(error),
+      ...(error instanceof Error && error.cause !== undefined
+        ? { cause: error.cause instanceof Error ? error.cause.message : String(error.cause) }
+        : {}),
       classification: record["classification"] ?? "infrastructure",
       recoverable: record["recoverable"] ?? false,
       ...(record["automaticRecovery"] ? { automaticRecovery: record["automaticRecovery"] } : {}),

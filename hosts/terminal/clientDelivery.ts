@@ -5,7 +5,6 @@ import {
   buildHostDescriptor,
   principalGrantsOverCall,
   type Call,
-  type PrincipalGrants,
 } from "@vibestudio/client-host-core";
 import { NodeArtifactStore } from "@vibestudio/client-host-core/node";
 import { gatewayMethods } from "@vibestudio/service-schemas/gateway";
@@ -54,7 +53,6 @@ export function deviceCall(device: Pick<RpcClient, "call">): Call {
 export interface TerminalClientDelivery {
   launcher: ClientLauncher;
   cache: ClientArtifactCache;
-  grants: PrincipalGrants;
   descriptor: HostDescriptor;
 }
 
@@ -88,5 +86,5 @@ export function createTerminalDelivery(input: {
     grants,
     companions: (input.companions ?? []).map(deviceCall),
   });
-  return { launcher, cache, grants, descriptor };
+  return { launcher, cache, descriptor };
 }

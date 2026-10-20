@@ -1,4 +1,4 @@
-import type { PrincipalGrants, LaunchedClient } from "@vibestudio/client-host-core";
+import type { LaunchedClient } from "@vibestudio/client-host-core";
 import type {
   InstalledLauncher,
   InstallLauncherOutcome,
@@ -60,7 +60,6 @@ export interface ClientInstanceOptions {
   launched: LaunchedClient;
   platform: "android" | "ios";
   openers: SessionOpeners;
-  grants: PrincipalGrants;
   state: HostState;
   device: DeviceCapabilityPorts;
   integration: IntegrationPorts;
@@ -85,7 +84,6 @@ export class ClientInstance {
   private granted: ClientCapability[];
   private pendingUpdate: UpdateOffer | null = null;
   private pendingIntent: ClientIntent | null;
-  private initialGrant: string | null;
   private stopped = false;
 
   constructor(private readonly options: ClientInstanceOptions) {
@@ -94,7 +92,6 @@ export class ClientInstance {
     this.principalId = clientPrincipalId(client.id, "react-native", grant.deviceId);
     this.granted = [...client.grantedCapabilities];
     this.pendingIntent = options.intent;
-    this.initialGrant = grant.connectionGrant;
     this.relay = new ClientSessionRelay({
       tag: this.principalId,
       openers: options.openers,
@@ -171,23 +168,12 @@ export class ClientInstance {
 
   // -------------------------------------------------------------------------
 
-  private principalToken = async (): Promise<string> => {
-    // Every (re)authentication redeems a fresh one-use grant for the same
-    // principal and the same verified build; the launch's own grant is spent first.
-    if (this.initialGrant) {
-      const token = this.initialGrant;
-      this.initialGrant = null;
-      return token;
-    }
-    const { client } = this.options.launched;
-    return (
-      await this.options.grants.acquire({
-        source: client.source,
-        buildKey: client.buildKey,
-        executionDigest: client.executionDigest,
-      })
-    ).connectionGrant;
-  };
+  /**
+   * The credential is reusable and bound to the verified build: every
+   * (re)authentication presents the one the launch acquired. A server that no
+   * longer honours it closes the session for good.
+   */
+  private principalToken = async (): Promise<string> => this.options.launched.grant.credential;
 
   private handlers(): ClientBrokerOptions["handlers"] {
     const { device, hooks, notifications, integration } = this.options;
@@ -197,7 +183,8 @@ export class ClientInstance {
       "client.describe": () => this.describe(),
       "session.openPrincipal": (sessionId) => relay.openPrincipal(sessionId, this.principalToken),
       "session.openAccountControl": (sessionId) => relay.openAccountControl(sessionId),
-      "session.openWorkspace": (sessionId, workspaceId) => relay.openWorkspace(sessionId, workspaceId),
+      "session.openWorkspace": (sessionId, workspaceId) =>
+        relay.openWorkspace(sessionId, workspaceId),
       "session.openAuxiliary": (sessionId, spec) => relay.openAuxiliary(sessionId, spec),
       "session.provideToken": (sessionId, outcome) => relay.provideToken(sessionId, outcome),
       "session.ready": (sessionId) => relay.ready(sessionId),

@@ -316,6 +316,12 @@ export function isCliIdentity(value: unknown): value is CliIdentity {
   return isCliCredentials(value) || isCliAccountDeviceCredentials(value);
 }
 
+/** A credential written before `endpointSecret` became `deviceSecret`. It cannot
+ * be converted (the secret's meaning changed); the device must pair again. */
+export function isLegacyCliCredential(value: unknown): boolean {
+  return !!value && typeof value === "object" && !Array.isArray(value) && "endpointSecret" in value;
+}
+
 /** The only old device format accepted is a fully validated routed v5 record. */
 export function migrateCliIdentity(value: unknown): CliIdentity | null {
   if (isCliIdentity(value)) return value;

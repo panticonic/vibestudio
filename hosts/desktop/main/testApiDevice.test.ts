@@ -30,7 +30,7 @@ function fakeWindow(id: string, clientId: string, buildKey = "b1", capabilities:
     windowId: id,
     callerId: id,
     hostsPanels: false,
-    spec: { clientId, buildKey, capabilities },
+    spec: { clientId, buildKey, capabilities, principalId: `client:${clientId}:web:dev` },
   };
   return window as unknown as ClientWindow & { spec: { buildKey: string; capabilities: string[] } };
 }
@@ -56,7 +56,12 @@ function fixture() {
   const open: ClientWindow[] = [];
   const calls: Array<{ service: string; method: string; args: unknown[] }> = [];
   const listed: ReturnType<typeof listing>[] = [];
-  const pending: unknown[] = [];
+  // Each open workspace's approval queue, and the answers its own server received.
+  const queues = new Map<string, PendingApproval[]>([
+    ["ws-system", []],
+    ["ws-personal", []],
+  ]);
+  const approvalCalls: Array<{ workspaceId: string; method: string; args: unknown[] }> = [];
   const launchers: Array<{
     clientId: string;
     paths: string[];
@@ -86,13 +91,41 @@ function fixture() {
   };
   const closed: ClientWindow[] = [];
   let launchSelect: unknown = null;
+  const created: Array<{ workspaceId: string; args: unknown[] }> = [];
+  const registered = new Set<string>();
+  let createFailure: Error | null = null;
+  const serverCalls: Array<{
+    workspaceId: string;
+    caller: unknown;
+    service: string;
+    method: string;
+    args: unknown[];
+  }> = [];
+  // Scripted answers of the workspace servers, by `service.method`; consumed in order.
+  const serverScript = new Map<string, Array<() => unknown>>();
   const deps: DesktopDriverDeps = {
+    approvals: {
+      listPending: async () =>
+        [...queues].map(([workspaceId, pending]) => ({
+          workspaceId,
+          workspaceLabel: workspaceId,
+          pending,
+        })),
+      call: (workspaceId) => async (_service, method, args) => {
+        approvalCalls.push({ workspaceId, method, args });
+        return undefined;
+      },
+    },
     call: async (service, method, args) => {
       calls.push({ service, method, args });
       if (service === "auth") return { serverBootId: "boot-1" };
       if (service === "clients" && method === "list") return listed;
       if (service === "clients" && method === "invokeIntent") return { text: "hi" };
-      if (service === "shellApproval" && method === "listPending") return pending;
+      if (service === "runtime" && method === "supervision.list")
+        return listed.map((l) => ({
+          identity: { kind: "client", entityId: `@workspace-clients/${l.id}-desktop` },
+          source: l.source,
+        }));
       return undefined;
     },
     descriptor: {
@@ -135,6 +168,26 @@ function fixture() {
         return () => launcherListeners.delete(l);
       },
     },
+    panelWorkspace: async (role) => ({
+      workspaceId: `ws-${role}`,
+      orchestrator: {
+        createPanel: async (...args: unknown[]) => {
+          created.push({ workspaceId: `ws-${role}`, args });
+          if (createFailure) throw createFailure;
+          registered.add(`${role}-panel`);
+          return { id: `${role}-panel`, title: "Made" };
+        },
+      } as never,
+      serverClient: {
+        callAs: async (caller: unknown, service: string, method: string, args: unknown[]) => {
+          serverCalls.push({ workspaceId: `ws-${role}`, caller, service, method, args });
+          const next = serverScript.get(`${service}.${method}`)?.shift();
+          if (!next) throw new Error(`unscripted server call ${service}.${method}`);
+          return next();
+        },
+      } as never,
+      hasPanel: (panelId) => registered.has(panelId),
+    }),
     refreshIntegration: async () => undefined,
     onSessionEnded: (l) => {
       sessionListeners.add(l as never);
@@ -148,12 +201,22 @@ function fixture() {
     signals,
     open,
     listed,
-    pending,
+    pending: queues.get("ws-system")!,
+    personalPending: queues.get("ws-personal")!,
+    approvalCalls,
     calls,
     launchers,
     launcherListeners,
     sessionListeners,
     closed,
+    created,
+    serverCalls,
+    script(name: string, ...answers: Array<() => unknown>) {
+      serverScript.set(name, answers);
+    },
+    failCreateWith(error: Error) {
+      createFailure = error;
+    },
     run,
     close,
     setPage(value: string) {
@@ -167,6 +230,178 @@ function fixture() {
 }
 
 describe("desktop device ops", () => {
+  it("creates a root panel in the target workspace through the host path", async () => {
+    const f = fixture();
+    f.open.push(fakeWindow("w1", "chat", "b1", ["panel-hosting"]));
+    expect(
+      await f.run("createPanelAsClient", {
+        surfaceId: "w1",
+        workspace: "personal",
+        source: "panels/x",
+        title: "T",
+      })
+    ).toEqual({
+      workspaceId: "ws-personal",
+      panelId: "personal-panel",
+      title: "Made",
+      registered: true,
+    });
+    expect(f.created).toEqual([
+      {
+        workspaceId: "ws-personal",
+        args: ["w1", "panels/x", { title: "T", isRoot: true }, undefined],
+      },
+    ]);
+    f.close();
+  });
+
+  it("refuses to create a panel for a window without panel-hosting", async () => {
+    const f = fixture();
+    f.open.push(fakeWindow("w1", "chat"));
+    await expect(
+      f.run("createPanelAsClient", { surfaceId: "w1", workspace: "system", source: "panels/x" })
+    ).rejects.toThrow("panel-hosting");
+    expect(f.created).toEqual([]);
+    f.close();
+  });
+
+  it("propagates the creation failure and refuses a closed window", async () => {
+    const f = fixture();
+    f.open.push(fakeWindow("w1", "chat", "b1", ["panel-hosting"]));
+    f.failCreateWith(new Error("no principal session"));
+    await expect(
+      f.run("createPanelAsClient", { surfaceId: "w1", workspace: "system", source: "panels/x" })
+    ).rejects.toThrow("no principal session");
+    await expect(
+      f.run("createPanelAsClient", { surfaceId: "gone", workspace: "system", source: "panels/x" })
+    ).rejects.toThrow("No window gone");
+    f.close();
+  });
+
+  describe("callAsClient", () => {
+    const principal = "client:chat:web:dev";
+    const acquisition = (ownerRuntimeId: string) =>
+      Object.assign(new Error("Authority required"), {
+        code: "EACQUIRE",
+        errorData: { acquisition: { acquisitionId: "acq-1", ownerRuntimeId } },
+      });
+    const call = {
+      surfaceId: "w1",
+      workspace: "personal",
+      service: "workspace-state",
+      method: "panel.rebuildIndex",
+    };
+
+    it("relays the call as the window's principal session and returns the result", async () => {
+      const f = fixture();
+      f.open.push(fakeWindow("w1", "chat"));
+      f.script("workspace-state.panel.rebuildIndex", () => "done");
+      expect(await f.run("callAsClient", call)).toEqual({
+        workspaceId: "ws-personal",
+        principalId: principal,
+        value: "done",
+      });
+      expect(f.serverCalls).toEqual([
+        {
+          workspaceId: "ws-personal",
+          caller: { callerId: principal, callerKind: "client", instanceId: "w1" },
+          service: "workspace-state",
+          method: "panel.rebuildIndex",
+          args: [],
+        },
+      ]);
+      f.close();
+    });
+
+    it("waits for the decision as the same principal, then retries the original call", async () => {
+      const f = fixture();
+      f.open.push(fakeWindow("w1", "chat"));
+      f.script(
+        "workspace-state.panel.rebuildIndex",
+        () => {
+          throw acquisition(principal);
+        },
+        () => "done"
+      );
+      f.script("authority.awaitDecision", () => ({ state: "decided" }));
+      expect(await f.run("callAsClient", call)).toMatchObject({ value: "done" });
+      expect(f.serverCalls.map((c) => `${c.service}.${c.method}`)).toEqual([
+        "workspace-state.panel.rebuildIndex",
+        "authority.awaitDecision",
+        "workspace-state.panel.rebuildIndex",
+      ]);
+      expect(f.serverCalls[1]).toMatchObject({
+        args: [{ acquisitionId: "acq-1" }],
+        caller: { callerId: principal, instanceId: "w1" },
+      });
+      f.close();
+    });
+
+    it("fails with the original error when the acquisition belongs to another principal", async () => {
+      const f = fixture();
+      f.open.push(fakeWindow("w1", "chat"));
+      f.script("workspace-state.panel.rebuildIndex", () => {
+        throw acquisition("client:other:web:dev");
+      });
+      await expect(f.run("callAsClient", call)).rejects.toThrow("Authority required");
+      expect(f.serverCalls).toHaveLength(1);
+      f.close();
+    });
+
+    it("refuses a closed or unknown window", async () => {
+      const f = fixture();
+      await expect(f.run("callAsClient", call)).rejects.toThrow("No window w1");
+      f.close();
+    });
+  });
+
+  it("retires a client through the workspace's supervision", async () => {
+    const f = fixture();
+    f.listed.push(listing("chat") as never);
+    expect(await f.run("retireClient", { id: "chat" })).toBeNull();
+    expect(f.calls.at(-1)).toEqual({
+      service: "runtime",
+      method: "supervision.retire",
+      args: [{ kind: "client", entityId: "@workspace-clients/chat-desktop" }],
+    });
+    f.close();
+  });
+
+  describe("openClientSession", () => {
+    it("reports the server's refusal of a closed window's principal on a session of its own", async () => {
+      const f = fixture();
+      const window = fakeWindow("w1", "chat");
+      f.open.push(window);
+      f.open.length = 0;
+      f.signals.closed(window, "retired");
+      f.script("workspace-state.panel.sourceUsage", () => {
+        throw Object.assign(new Error("credential revoked"), { code: "EAUTH" });
+      });
+      expect(await f.run("openClientSession", { surfaceId: "w1", workspace: "system" })).toEqual({
+        ok: false,
+        code: "EAUTH",
+        message: "credential revoked",
+      });
+      expect(f.serverCalls[0]!.caller).toMatchObject({
+        callerId: "client:chat:web:dev",
+        callerKind: "client",
+      });
+      expect((f.serverCalls[0]!.caller as { instanceId: string }).instanceId).not.toBe("w1");
+      f.close();
+    });
+
+    it("probes an open window on the session it already holds", async () => {
+      const f = fixture();
+      f.open.push(fakeWindow("w1", "chat"));
+      f.script("workspace-state.panel.sourceUsage", () => []);
+      expect(await f.run("openClientSession", { surfaceId: "w1", workspace: "system" })).toEqual({
+        ok: true,
+      });
+      expect(f.serverCalls[0]!.caller).toMatchObject({ instanceId: "w1" });
+      f.close();
+    });
+  });
+
   it("reports identities from the server boot id and the open windows", async () => {
     const f = fixture();
     f.open.push(fakeWindow("w1", "chat"));
@@ -369,11 +604,53 @@ describe("desktop device ops", () => {
     const f = fixture();
     const card = capabilityCard("a1");
     f.pending.push(card);
-    expect(await f.run("nextApproval", {})).toMatchObject({ approvalId: "a1" });
-    const next = f.run("nextApproval", {});
+    const { surfaceToken } = (await f.run("openApprovals", {})) as { surfaceToken: string };
+    expect(await f.run("nextApproval", { surfaceToken })).toMatchObject({ approvalId: "a1" });
+    const next = f.run("nextApproval", { surfaceToken });
     await Promise.resolve();
-    await f.run("releaseApprovals", {});
+    await f.run("releaseApprovals", { surfaceToken });
     expect(await next).toBeNull();
+    f.close();
+  });
+
+  it("delivers a card raised in another workspace and answers it through that workspace", async () => {
+    const f = fixture();
+    f.personalPending.push(capabilityCard("p1"));
+    const { surfaceToken } = (await f.run("openApprovals", {})) as { surfaceToken: string };
+    expect(await f.run("nextApproval", { surfaceToken })).toMatchObject({
+      approvalId: "p1",
+      workspaceId: "ws-personal",
+    });
+    await f.run("resolveApproval", { approvalId: "p1", decision: "once" });
+    expect(f.approvalCalls).toEqual([
+      { workspaceId: "ws-personal", method: "resolve", args: ["p1", "once"] },
+    ]);
+    f.close();
+  });
+
+  it("wakes a waiting approval surface when either workspace's queue changes", async () => {
+    const f = fixture();
+    const { surfaceToken } = (await f.run("openApprovals", {})) as { surfaceToken: string };
+    for (const [workspaceId, queue] of [
+      ["ws-system", f.pending],
+      ["ws-personal", f.personalPending],
+    ] as const) {
+      const waiting = f.run("nextApproval", { surfaceToken });
+      await Promise.resolve();
+      queue.push(capabilityCard(`${workspaceId}-card`));
+      f.signals.approvalsChanged();
+      expect(await waiting).toMatchObject({ approvalId: `${workspaceId}-card`, workspaceId });
+    }
+    f.close();
+  });
+
+  it("keeps a second approval surface live after the first was released", async () => {
+    const f = fixture();
+    const first = (await f.run("openApprovals", {})) as { surfaceToken: string };
+    await f.run("releaseApprovals", first);
+    const second = (await f.run("openApprovals", {})) as { surfaceToken: string };
+    f.pending.push(capabilityCard("a2"));
+    expect(await f.run("nextApproval", second)).toMatchObject({ approvalId: "a2" });
     f.close();
   });
 

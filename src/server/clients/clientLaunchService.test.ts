@@ -11,49 +11,46 @@ const HOST: HostDescriptor = {
   capabilities: ["device-session"],
 };
 
-function fixture(opts: { host?: Partial<Record<keyof ClientHost, unknown>> | null } = {}) {
-  const clientHost =
-    opts.host === null
-      ? null
-      : ({
-          launch: vi.fn(async () => ({ state: "unavailable", reason: "nope" })),
-          listClients: vi.fn(async () => []),
-          integrationSnapshot: vi.fn(async () => ({
-            clients: [
-              {
-                source: "clients/chat-terminal",
-                activeBuildKey: "build-1",
-                id: "chat",
-                title: "Chat",
-                intents: [
-                  {
-                    name: "open-conversation",
-                    kind: "foreground",
-                    params: { conversation: "string" },
-                    dynamic: "vibestudio.chat.v1#recentConversations",
-                  },
-                ],
-              },
-              {
-                source: "clients/notes",
-                activeBuildKey: null,
-                id: "notes",
-                title: "Notes",
-                intents: [{ name: "recent", kind: "foreground", dynamic: "notes.v1#recent" }],
-              },
-            ],
-          })),
-          resolveBackgroundIntent: vi.fn(() => ({
-            source: "clients/chat-terminal",
-            intent: {
-              name: "ask",
-              kind: "background",
-              handler: "vibestudio.chat.v1#ask",
-              params: { prompt: "text" },
+function fixture(opts: { host?: Partial<Record<keyof ClientHost, unknown>> } = {}) {
+  const clientHost = {
+    launch: vi.fn(async () => ({ state: "unavailable", reason: "nope" })),
+    listClients: vi.fn(async () => []),
+    integrationSnapshot: vi.fn(async () => ({
+      clients: [
+        {
+          source: "clients/chat-terminal",
+          activeBuildKey: "build-1",
+          id: "chat",
+          title: "Chat",
+          intents: [
+            {
+              name: "open-conversation",
+              kind: "foreground",
+              params: { conversation: "string" },
+              dynamic: "vibestudio.chat.v1#recentConversations",
             },
-          })),
-          ...opts.host,
-        } as unknown as ClientHost);
+          ],
+        },
+        {
+          source: "clients/notes",
+          activeBuildKey: null,
+          id: "notes",
+          title: "Notes",
+          intents: [{ name: "recent", kind: "foreground", dynamic: "notes.v1#recent" }],
+        },
+      ],
+    })),
+    resolveBackgroundIntent: vi.fn(() => ({
+      source: "clients/chat-terminal",
+      intent: {
+        name: "ask",
+        kind: "background",
+        handler: "vibestudio.chat.v1#ask",
+        params: { prompt: "text" },
+      },
+    })),
+    ...opts.host,
+  } as unknown as ClientHost;
   const callClientHandler = vi.fn(
     async ({ handler }: { handler: string }): Promise<unknown> =>
       handler === "vibestudio.chat.v1#recentConversations"
@@ -108,16 +105,6 @@ describe("clients service", () => {
     ).resolves.toEqual([]);
   });
 
-  it("reports that clients run only from System when there is no ClientHost", async () => {
-    const { service, ctx } = fixture({ host: null });
-    await expect(
-      service.handler(ctx(), "launch", [{ host: HOST, select: { default: true } }])
-    ).rejects.toMatchObject({
-      code: "CLIENTS_UNAVAILABLE",
-      message: expect.stringContaining("only from the System workspace"),
-    });
-  });
-
   it("delegates launch to the registry, including a rollback request", async () => {
     const { service, clientHost, ctx } = fixture();
     await expect(
@@ -156,12 +143,55 @@ describe("clients service", () => {
     );
   });
 
-  it("rejects dynamic entries that carry parameters the intent does not declare", async () => {
+  it("reports a client whose dynamic entries are invalid in its own entry, not as a snapshot failure", async () => {
     const { service, callClientHandler, ctx } = fixture();
     callClientHandler.mockResolvedValueOnce([{ title: "Bad", params: { other: "x" } }]);
-    await expect(service.handler(ctx(), "integrationSnapshot", [HOST])).rejects.toThrow(
-      /does not declare/
-    );
+    const snapshot = (await service.handler(ctx(), "integrationSnapshot", [HOST])) as {
+      clients: Array<{ id: string; entries: unknown; error?: string }>;
+    };
+    expect(snapshot.clients.map(({ id, entries, error }) => ({ id, entries, error }))).toEqual([
+      { id: "chat", entries: {}, error: expect.stringMatching(/does not declare/) },
+      { id: "notes", entries: {}, error: undefined },
+    ]);
+  });
+
+  it("keeps projecting the other clients when one client's handler throws", async () => {
+    const { service, callClientHandler, ctx, clientHost } = fixture();
+    (clientHost!.integrationSnapshot as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      clients: [
+        {
+          source: "clients/broken",
+          activeBuildKey: "b",
+          id: "broken",
+          title: "Broken",
+          intents: [{ name: "x", kind: "foreground", dynamic: "broken.v1#x" }],
+        },
+        {
+          source: "clients/chat-terminal",
+          activeBuildKey: "build-1",
+          id: "chat",
+          title: "Chat",
+          intents: [
+            {
+              name: "open-conversation",
+              kind: "foreground",
+              params: { conversation: "string" },
+              dynamic: "vibestudio.chat.v1#recentConversations",
+            },
+          ],
+        },
+      ],
+    });
+    callClientHandler.mockImplementation(async ({ handler }: { handler: string }) => {
+      if (handler === "broken.v1#x") throw new Error("handler exploded");
+      return [{ title: "Trip plans", params: { conversation: "c-1" } }];
+    });
+    const snapshot = (await service.handler(ctx(), "integrationSnapshot", [HOST])) as {
+      clients: Array<{ id: string; entries: Record<string, unknown>; error?: string }>;
+    };
+    expect(snapshot.clients[0]).toMatchObject({ id: "broken", error: "handler exploded" });
+    expect(snapshot.clients[1]).toMatchObject({ id: "chat" });
+    expect(snapshot.clients[1]!.entries["open-conversation"]).toHaveLength(1);
   });
 
   it("requires a background intent handler to return text", async () => {

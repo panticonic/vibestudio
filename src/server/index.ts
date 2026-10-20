@@ -17,24 +17,6 @@ import { serializeRpcFailure } from "@vibestudio/rpc";
  * (which conflicts with bundled CJS __dirname references in Node ≥25).
  */
 
-import { bindProcessLifetimeToParent } from "../../scripts/owned-process-tree.mjs";
-let parentStopRequested = false;
-let parentShutdownHandler: (() => void) | undefined;
-const requestParentShutdown = (): void => {
-  if (parentShutdownHandler) parentShutdownHandler();
-  else parentStopRequested = true;
-};
-const registerParentShutdown = (handler: () => void): boolean => {
-  parentShutdownHandler = handler;
-  if (parentStopRequested) {
-    parentStopRequested = false;
-    handler();
-    return true;
-  }
-  return false;
-};
-if (process.send) bindProcessLifetimeToParent(requestParentShutdown);
-
 import {
   createOpenUnitReviewLookup,
   unitReviewCodeKey as codeIdentityKey,
@@ -83,6 +65,8 @@ import { eventWatchOwner } from "@vibestudio/service-schemas/bindings/eventsServ
 import { registerBuildProvider, unregisterBuildProvider } from "./buildV2/buildProviderRegistry.js";
 import { assertPresent, deleteDynamicProperty } from "../lintHelpers";
 import { resolveHeadlessHostAutospawn } from "./headlessHostAutospawn.js";
+import { clientGenerationBuildKeys } from "./executionRootProviders.js";
+import { requiredStartupServices } from "./requiredStartupServices.js";
 import { RuntimeStaging } from "./clients/runtimeStaging.js";
 import {
   CLIENT_RUNTIMES,
@@ -417,7 +401,7 @@ async function main() {
       );
     }
     const { runHubServer } = await import("./hubServer.js");
-    await runHubServer({ args, appRoot, registerShutdown: registerParentShutdown });
+    await runHubServer({ args, appRoot });
     return;
   }
 
@@ -701,7 +685,7 @@ async function main() {
   // ===========================================================================
 
   const tokenManager = new TokenManager();
-  const { EntityCache, callerRuntimeContextId } =
+  const { EntityCache, callerRuntimeContextId, callerBuildContextId } =
     await import("@vibestudio/shared/runtime/entityCache");
   const { ConnectionGrantService } = await import("@vibestudio/shared/connectionGrants");
   const { RuntimeDiagnosticsStore } = await import("./runtimeDiagnosticsStore.js");
@@ -950,12 +934,21 @@ async function main() {
     if (!subject || subject.userId === SYSTEM_SUBJECT.userId) return null;
     return userStore.getUser(subject.userId)?.role ?? null;
   };
+  // Client capabilities are an attested fact in the hub's identity.db, read
+  // live by every workspace: no workspace holds a private copy.
+  const { hasClientCapability: clientPrincipalHolds } = await import("./services/clientTrust.js");
+  const hasClientCapability = (callerId: string, capability: ClientCapability): boolean =>
+    clientPrincipalHolds(identityDb, callerId, capability);
+  const { ClientPrincipals, createClientSessionRetirer } =
+    await import("./clients/clientPrincipals.js");
+  const clientPrincipals = new ClientPrincipals({ workspaceId: entryWorkspaceId, entityCache });
   const { createLiveCallerGate } = await import("./services/liveCallerGate.js");
   const liveCallerGate = createLiveCallerGate({
     workspaceId: entryWorkspaceId,
     userStore,
     membershipStore,
     deviceAuthStore,
+    clientPrincipals: identityDb,
     entityCache,
     isLiveExtension: async (callerId) =>
       (await extensionHostForGateway?.resolveCodeIdentity(callerId)) != null,
@@ -2144,7 +2137,7 @@ async function main() {
         const clientHost = clientHostForGateway;
         // A published `trust.clients` takes effect live: grants widen running
         // clients, withdrawals close their sessions (§4.4.1).
-        if (trigger === "meta-change") clientHost.applyTrust();
+        if (trigger === "meta-change") await clientHost.applyTrust();
         try {
           const declared = resolveDeclaredClients(nextConfig);
           const declarationFingerprint = workspaceUnitDeclarationFingerprint(declared);
@@ -2492,6 +2485,20 @@ async function main() {
   });
   dispatcher.setOpenReviewLookup(unitReviewLookup.forRunningCode);
   const container = new ServiceContainer(dispatcher);
+  // This server's own ownership, for the detached groups it starts (the
+  // headless Chromium host, reviewed development builds). It stops after every
+  // service that declares it as a dependency, so their groups are retired by
+  // their own owners first and the reaper is joined last.
+  const processOwnership = (await import("../node/lazyOwnership.js")).createLazyOwnership({
+    role: "workspace-server",
+    workspace: workspaceName,
+  });
+  container.registerManaged({
+    name: "processOwnership",
+    dependencies: [],
+    start: async () => processOwnership,
+    stop: (ownership: typeof processOwnership) => ownership.close(),
+  });
   container.registerManaged({
     name: "entityRetirementCleanup",
     dependencies: ["doDispatch", "workerdManager", "authorityAcquisitionLifecycle", "panelRuntime"],
@@ -2697,26 +2704,7 @@ async function main() {
           buildKeyRootProvider({
             id: "client-generation",
             owner: "client-generation",
-            buildKeys() {
-              const clientHost = clientHostForGateway;
-              if (!clientHost) throw new Error("Client registry is not available");
-              return clientHost.registry.list().flatMap((entry) => [
-                ...(entry.activeBundleKey
-                  ? [
-                      {
-                        ownerId: entry.name,
-                        buildKey: entry.activeBundleKey,
-                        reason: "active" as const,
-                      },
-                    ]
-                  : []),
-                ...entry.previousVersions.map((version) => ({
-                  ownerId: entry.name,
-                  buildKey: version.activeBundleKey,
-                  reason: "rollback" as const,
-                })),
-              ]);
-            },
+            buildKeys: () => clientGenerationBuildKeys(clientHostForGateway?.registry ?? null),
             resolve: async ({ buildKey }) => {
               const build = await buildSystemInstance?.peekBuildByKey(buildKey);
               return build ? executionArtifactRefFromBuild(workspaceId, build) : null;
@@ -2915,7 +2903,7 @@ async function main() {
         const buildSystem = assertPresent(buildSystemInstance);
         return createBuildService({
           buildSystem,
-          getCallerContextId: (callerId) => callerRuntimeContextId(entityCache, callerId),
+          getCallerContextId: (callerId) => callerBuildContextId(entityCache, callerId),
           listUnits: () =>
             listBuildUnitCatalog({
               buildSystem,
@@ -2944,21 +2932,25 @@ async function main() {
   }
   const presence = createPresenceTracker({ eventService });
   container.registerRpc(createPresenceService({ presence }));
-  {
+  // The `clients` service is served only where a ClientHost exists (System).
+  if (isSystemWorkspace()) {
     const { createClientLaunchService } = await import("./clients/clientLaunchService.js");
     container.registerRpc(
       createClientLaunchService({
-        getClientHost: () => clientHostForGateway,
+        getClientHost: () => assertPresent(clientHostForGateway),
         callClientHandler: async ({ caller, signal, source, handler, params }) => {
           const clientHost = assertPresent(clientHostForGateway);
           const rpcServer = assertPresent(rpcServerForGateway);
           if (!caller.runtime.id.startsWith("shell:")) {
             throw new Error("Client handlers run for a paired device");
           }
+          // Attested into the hub like any device principal, and admitted into
+          // this workspace's entity cache so the handler runs as it.
           const principal = await clientHost.intentPrincipal(
             caller.runtime.id.slice("shell:".length),
             source
           );
+          clientPrincipals.admit(principal);
           const [protocol, method] = handler.split("#") as [string, string];
           const workers = assertPresent(
             container.get<ReturnType<typeof createWorkerService>>("workersRpc")
@@ -2985,19 +2977,6 @@ async function main() {
       })
     );
   }
-  /**
-   * Withdraw a client principal (§4.4.1): its outstanding one-use grants are
-   * invalidated and every open session is closed with a typed reason the host
-   * relays to the person.
-   */
-  const revokeClientPrincipalSessions = (
-    principalId: string,
-    reason: "trust-revoked" | "retired"
-  ): void => {
-    connectionGrants.revokeForPrincipal(principalId);
-    void rpcServerForGateway?.retireCaller(principalId, "client", reason);
-  };
-
   {
     // Account profile reads resolve live through the child's shared query-only
     // DB. Writes go directly to hubControl over the client's stable hub session.
@@ -3055,8 +3034,7 @@ async function main() {
     const { heldClearanceRowKeys } = await import("./services/unitClearanceGrants.js");
     const mainAdvanceGate = createMainAdvanceApprovalGate({
       authorizeEffect: (ctx, effect) => dispatcher.authorizeHostEffect(ctx, effect),
-      hasClientCapability: (callerId, capability) =>
-        clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
+      hasClientCapability,
       getProviders: () => [...trustedUnitHosts(), buildUnitChangeApprovalProvider],
       trustDeltaForCommit: async (stateHash) =>
         (await clientHostForGateway?.trustDeltaForCommit(stateHash)) ?? [],
@@ -3404,8 +3382,7 @@ async function main() {
         return createVcsService({
           workspaceVcs,
           entityCache,
-          hasClientCapability: (callerId, capability) =>
-            clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
+          hasClientCapability,
           // Cross-context READ authz (throw-not-prompt): back it with WS-3's
           // relationship registry so a caller may inspect only the contexts it
           // owns (lifecycle) or forked (lineage). Resolved lazily per call — the
@@ -3493,8 +3470,7 @@ async function main() {
   const { createNotificationService } = await import("./services/notificationService.js");
   const notificationResult = createNotificationService({
     eventService,
-    hasClientCapability: (callerId, capability) =>
-      clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
+    hasClientCapability,
     push: pushResult.internal,
     // Include root's implicit membership, which intentionally has no row.
     workspaceMemberUserIds: listWorkspaceMemberUserIds,
@@ -3552,8 +3528,7 @@ async function main() {
       scopeAccess: approvalWorkspaceAccess,
       deviceLabelFor: (deviceId) => identityDb.getDevice(deviceId)?.label,
       workspaceCreationReviewState: () => workspaceCreationReviewState,
-      hasClientCapability: (callerId, capability) =>
-        clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
+      hasClientCapability,
     })
   );
   const { BrowserPermissionGrantProjection, createBrowserPermissionsService } =
@@ -3571,8 +3546,7 @@ async function main() {
   const { createWebsiteHostingService } = await import("./services/websiteHostingService.js");
   const { isInteractiveClient } = await import("./services/clientTrust.js");
   const websiteChromeTrust = {
-    hasClientCapability: (callerId: string, capability: ClientCapability) =>
-      clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
+    hasClientCapability,
   };
   const websiteDocuments = new WebsiteDocuments({
     workspaceId,
@@ -3695,8 +3669,7 @@ async function main() {
       rpcServerForGateway?.getAuthorizingShell(principalId) ?? null,
     presentsOwnBrowserHandoff: (principalId) =>
       panelRuntimeCoordinator.getHostHeldLease(principalId) !== null,
-    hasClientCapability: (callerId, capability) =>
-      clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
+    hasClientCapability,
     resolveNativeInvocation,
   });
 
@@ -4482,7 +4455,7 @@ async function main() {
             contextBoundary: contextBoundaryDeps,
             entityCache,
             lifecycleContextStore,
-            getClientHost: () => clientHostForGateway,
+            hasClientCapability,
           }),
           onAlarmChanged: () => alarmDriverInstance?.notifyChanged(),
           onSlotStateChanged: notifySlotStateListeners,
@@ -4955,8 +4928,7 @@ async function main() {
             },
           },
           contextBoundary: contextBoundaryDeps,
-          hasClientCapability: (callerId, capability) =>
-            clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
+          hasClientCapability,
           stateArgsSchemaForBuild: async (buildKey) => {
             const build = await container
               .get<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
@@ -5139,8 +5111,7 @@ async function main() {
             call: (targetId, method, ...args) =>
               rpcServer.server.callTarget(targetId, method, args),
           },
-          hasClientCapability: (callerId, capability) =>
-            clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
+          hasClientCapability,
           dispatchToTarget: async (target, event) => {
             await rpcServer.server.callTarget(doTargetId(target), target.method, [event]);
           },
@@ -5388,6 +5359,7 @@ async function main() {
     hostArtifactRoot,
     container,
     workspaceId,
+    ownership: () => processOwnership.get(),
     getBuildSystem: () => assertPresent(buildSystemInstance),
     workspaceVcs,
     layout,
@@ -5594,8 +5566,7 @@ async function main() {
                   }
                 );
               },
-              hasClientCapability: (callerId, capability) =>
-                clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
+              hasClientCapability,
             },
             { caller, authorizingCaller },
             contextBoundary.operation,
@@ -5852,6 +5823,8 @@ async function main() {
         // devices and workspace-scoped agents. Fresh pairing never enters a child.
         redeemPairingCredential: createWorkspaceCredentialRedeemer({
           deviceAuthStore,
+          identity: identityDb,
+          admitClientPrincipal: (principal) => clientPrincipals.admit(principal),
           tokenManager,
           resolveUser: (userId) => userStore.getUser(userId),
           resolveRuntimeEntity: (entityId) => getEntityStore().resolveRecord(entityId),
@@ -6121,7 +6094,16 @@ async function main() {
     },
   ]);
 
+  const { createCloseClientPrincipalsRoute } = await import("./clientPrincipalRoutes.js");
   routeRegistry.registerHttpServiceRoutes([
+    createCloseClientPrincipalsRoute({
+      // The hub revoked these principals in identity.db; end what this
+      // workspace holds for them. Reconnects fail at credential validation.
+      retireClientPrincipalSessions: createClientSessionRetirer({
+        principals: clientPrincipals,
+        rpc: () => assertPresent(rpcServerForGateway),
+      }),
+    }),
     {
       serviceName: "internal",
       path: "/route",
@@ -6564,62 +6546,61 @@ async function main() {
   // ── Workers RPC service ──
 
   // ── Client host (System-workspace clients that device hosts run) ──
-  container.registerManaged({
-    name: "clientHost",
-    dependencies: ["buildSystem"],
-    async start(resolve) {
-      const { ClientHost } = await import("./clients/clientRegistry.js");
-      const buildSystemInst = assertPresent(
-        resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
-      );
-      const host = new ClientHost({
-        statePath,
-        workspacePath,
-        workspaceId,
-        diagnostics: runtimeDiagnostics,
-        isSystemWorkspace,
-        getTrustedClients: () => resolveWorkspaceTrustGrants(workspaceConfig).clients,
-        // Read live from workspaceConfig so meta-change reloads are reflected
-        // without a ClientHost restart.
-        getClientDefault: (hostKind) => resolveClientDefault(workspaceConfig, hostKind),
-        prepareRuntime,
-        buildSystem: buildSystemInst,
-        executionPublicationPort: executionPublicationJournal,
-        eventService,
-        approvalQueue,
-        approvalCoordinator: unitInstallReviewCoordinator,
-        // A client declared after startup is offered at the launch gate when it
-        // is applied; accepting that review admits the exact versions, the same
-        // record the startup gate makes.
-        recordApprovedReview: ({ entries, origins }) =>
-          prepareDecidedUnits(entries, "launch-gate", origins).committed(),
-        // An accepted publication admits the clients it lands beside their
-        // activation trust, in the same transaction as the ref move.
-        prepareAdmission: (units, origin, sourceOrigins) =>
-          prepareDecidedUnits(units, origin, sourceOrigins),
-        // The gate asks whose code this is, so it is answered from workspace
-        // state the server reads rather than from anything under review.
-        resolveUnitOrigins,
-        // Trust from before admission was recorded is not a review: an
-        // un-admitted version is offered at the launch gate once more.
-        isAdmitted: (repoPath, effectiveVersion) =>
-          unitAdmissionStore.hasVersion(repoPath, effectiveVersion),
-        openUnitReviewFor: unitReviewLookup.forUnavailableCode,
-        notificationService: notificationResult.internal,
-        entityCache,
-        readWorkspaceFileAtState,
-        describeCapability,
-        revokePrincipalSessions: (principalId, reason) =>
-          revokeClientPrincipalSessions(principalId, reason),
-      });
-      await host.initialize();
-      clientHostForGateway = host;
-      return host;
-    },
-    async stop(instance: import("./clients/clientRegistry.js").ClientHost) {
-      await instance?.shutdown();
-    },
-  });
+  if (isSystemWorkspace()) {
+    container.registerManaged({
+      name: "clientHost",
+      dependencies: ["buildSystem"],
+      async start(resolve) {
+        const { ClientHost } = await import("./clients/clientRegistry.js");
+        const buildSystemInst = assertPresent(
+          resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+        );
+        const host = new ClientHost({
+          statePath,
+          workspacePath,
+          workspaceId,
+          diagnostics: runtimeDiagnostics,
+          getTrustedClients: () => resolveWorkspaceTrustGrants(workspaceConfig).clients,
+          // Read live from workspaceConfig so meta-change reloads are reflected
+          // without a ClientHost restart.
+          getClientDefault: (hostKind) => resolveClientDefault(workspaceConfig, hostKind),
+          prepareRuntime,
+          buildSystem: buildSystemInst,
+          executionPublicationPort: executionPublicationJournal,
+          eventService,
+          approvalQueue,
+          approvalCoordinator: unitInstallReviewCoordinator,
+          // A client declared after startup is offered at the launch gate when it
+          // is applied; accepting that review admits the exact versions, the same
+          // record the startup gate makes.
+          recordApprovedReview: ({ entries, origins }) =>
+            prepareDecidedUnits(entries, "launch-gate", origins).committed(),
+          // An accepted publication admits the clients it lands beside their
+          // activation trust, in the same transaction as the ref move.
+          prepareAdmission: (units, origin, sourceOrigins) =>
+            prepareDecidedUnits(units, origin, sourceOrigins),
+          // The gate asks whose code this is, so it is answered from workspace
+          // state the server reads rather than from anything under review.
+          resolveUnitOrigins,
+          // Trust from before admission was recorded is not a review: an
+          // un-admitted version is offered at the launch gate once more.
+          isAdmitted: (repoPath, effectiveVersion) =>
+            unitAdmissionStore.hasVersion(repoPath, effectiveVersion),
+          openUnitReviewFor: unitReviewLookup.forUnavailableCode,
+          notificationService: notificationResult.internal,
+          readWorkspaceFileAtState,
+          describeCapability,
+          principalHub: workspaceChildHub,
+        });
+        await host.initialize();
+        clientHostForGateway = host;
+        return host;
+      },
+      async stop(instance: import("./clients/clientRegistry.js").ClientHost) {
+        await instance?.shutdown();
+      },
+    });
+  }
 
   // Activate a Durable Object's entity record (idempotent). A DO that calls
   // back into the server (runtime.*, console bridge) is attributed through the
@@ -7310,8 +7291,7 @@ async function main() {
     tokenManager,
     cdpGrants,
     grantStore: capabilityGrantStore,
-    hasClientCapability: (callerId: string, capability: ClientCapability) =>
-      clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
+    hasClientCapability,
     contextExists: contextBoundaryDeps.contextExists,
     resolveContextOwnerLabel: contextBoundaryDeps.resolveContextOwnerLabel,
     lifecycleContextStore,
@@ -7614,12 +7594,12 @@ async function main() {
           },
           connectionGrants,
           auditLog,
-          hasClientCapability: (callerId, capability) =>
-            clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
-          grantClientPrincipal: async (deviceId, expected) => {
+          hasClientCapability,
+          clientPrincipalHub: workspaceChildHub,
+          attestClientPrincipal: async (deviceId, expected) => {
             const clientHost = clientHostForGateway;
             if (!clientHost) throw new Error("Clients run only from the System workspace");
-            return clientHost.grantPrincipal(deviceId, expected);
+            return clientHost.attest(deviceId, expected);
           },
           resolveRuntimeEntity: (id) => getEntityStore().resolveActiveRecord(id),
         }),
@@ -7741,8 +7721,7 @@ async function main() {
         const { createWorkerdInspectorService } =
           await import("./services/workerdInspectorService.js");
         workerdInspectorDefinition = createWorkerdInspectorService({
-          hasClientCapability: (callerId, capability) =>
-            clientHostForGateway?.hasClientCapability(callerId, capability) ?? false,
+          hasClientCapability,
           listTargets: () => bridge.listTargets(),
           getEndpoint: (targetPath, principalId) => bridge.getEndpoint(targetPath, principalId),
         });
@@ -7780,7 +7759,7 @@ async function main() {
         : undefined;
     container.registerManaged({
       name: "headlessHostManager",
-      dependencies: ["cdpBridge"],
+      dependencies: ["cdpBridge", "processOwnership"],
       async start(resolve) {
         const cdpBridge = assertPresent(resolve<import("./cdpBridge.js").CdpBridge>("cdpBridge"));
         const { HeadlessHostManager } = await import("./headlessHostManager.js");
@@ -7789,6 +7768,7 @@ async function main() {
           coordinator: panelRuntimeCoordinator,
           isHostAvailable: (hostConnectionId) => cdpBridge.isProviderConnected(hostConnectionId),
           getServerUrl: () => `http://127.0.0.1:${gatewayPort}`,
+          ownership: () => processOwnership.get(),
           config: {
             enabled: autospawnEnabled,
             spawnTimeoutMs,
@@ -7806,24 +7786,7 @@ async function main() {
   }
 
   // Start the readiness dependency closure; extend the lifecycle in the background.
-  await container.startRequired([
-    "vcsAttach",
-    "runtime",
-    "workspace-state",
-    "build",
-    "workspace",
-    "auth",
-    "shellApproval",
-    "clientHost",
-    "extensionHost",
-    "panelHttpWiring",
-    "panelRuntime",
-    "approvalPushBridge",
-    "irohIngress",
-    "lifecycleDriver",
-    "alarmDriver",
-    "durableWorkDriver",
-  ]);
+  await container.startRequired(requiredStartupServices((name) => container.has(name)));
   const optionalServiceStartup = container.startAll();
   void optionalServiceStartup.catch((error) =>
     console.error("[StartupBackground] Optional service startup failed:", error)
@@ -8181,9 +8144,13 @@ async function main() {
   // Unit discovery and seed verification can be substantial on a cold
   // workspace, so cross a scheduling boundary before starting opportunistic
   // reconciliation. Pairing readiness demands only its selected host artifact.
-  container
-    .get<import("./clients/clientRegistry.js").ClientHost>("clientHost")
-    .setDeclared(resolveDeclaredClients(workspaceConfig), { trigger: "startup" });
+  // Only the System workspace constructs a ClientHost.
+  const startedClientHost = container.has("clientHost")
+    ? container.get<import("./clients/clientRegistry.js").ClientHost>("clientHost")
+    : null;
+  startedClientHost?.setDeclared(resolveDeclaredClients(workspaceConfig), {
+    trigger: "startup",
+  });
   container
     .get<import("@vibestudio/extension-host").ExtensionHost>("extensionHost")
     .setDeclared(runtimeExtensionDeclarations(workspaceConfig));
@@ -8191,6 +8158,9 @@ async function main() {
   startupWorkspaceUnitReconcile = workspaceVcs
     .whenSemanticReady()
     .then(runStartupWorkspaceUnitReconcile)
+    // Device principals outlive a restart; keep only those the settled client
+    // registry would attest again.
+    .then(() => startedClientHost?.reconcilePrincipals())
     .then(async () => {
       // publishPending starts the queue entries synchronously; its promise is the
       // later human decision/application and therefore remains detached.
@@ -8231,11 +8201,18 @@ async function main() {
     );
   } else {
     await startupWorkspaceUnitReconcile;
-    const clientHost =
-      container.get<import("./clients/clientRegistry.js").ClientHost>("clientHost");
+    const clientHost = assertPresent(startedClientHost);
     for (const hostKind of requireClientsReady) {
       const readiness = await clientHost.prepareDefault(hostKind);
-      if (!readiness.ready) {
+      if (readiness.state === "awaiting-review") {
+        // Not a failure: the review stays visible and the server serves; the
+        // person's decision, not a restart, lets the build proceed.
+        console.log(
+          `[Clients] Default ${hostKind} client ${readiness.source} is awaiting review of ${readiness.reviewing.join(", ")}`
+        );
+        continue;
+      }
+      if (readiness.state === "failed") {
         printReadinessActionBlock(`The default ${hostKind} client is not ready`, [
           `This server was started to serve ${hostKind} hosts, but the default`,
           `${hostKind} client in the System workspace cannot be built.`,
@@ -8291,6 +8268,10 @@ async function main() {
     };
 
     startupBackgroundLifetime.abort(new Error("Server shutdown cancelled startup recovery"));
+    // Reviews waiting on a human have no answerer once shutdown begins. Every
+    // flight joined below (startup reconciliation, client and extension
+    // activation) is parked on one of them, so withdraw them first.
+    unitInstallReviewCoordinator.retire(new Error("Server shutdown"));
     // Provisioning is opportunistic, but owns its admitted runtime/channel
     // operations until completion. Stop admission before joining them while
     // the runtime, durable dispatch and semantic workspace are still live.
@@ -8490,12 +8471,10 @@ async function main() {
   }
 
   requestShutdown = () => void shutdown();
-  const stoppedBeforeReady = process.send ? registerParentShutdown(requestShutdown) : false;
-  if (stoppedBeforeReady || isShuttingDown) return;
+  if (isShuttingDown) return;
   const pairing = args.readyFile && irohIngress ? getWorkspaceIrohReach() : null;
   if (isShuttingDown) return;
 
-  // Readiness guarantees the parent-owned stop callback has been installed.
   try {
     fs.writeFileSync(tokenFilePath, adminToken, { mode: 0o600 });
   } catch (err) {

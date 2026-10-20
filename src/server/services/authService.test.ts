@@ -23,7 +23,7 @@ import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import { ClientPrincipalGrantRequestSchema } from "@vibestudio/service-schemas/clients";
-import type { ClientPrincipal } from "../clients/clientPrincipals.js";
+import type { ClientPrincipalAttester } from "../hostCore/auth/principalGrants.js";
 
 function makePanelRecord(id: string): EntityRecord {
   return {
@@ -384,51 +384,35 @@ describe("auth.grantClientPrincipal", () => {
     executionDigest: "d".repeat(64),
   };
 
-  function makeClientPrincipalRecord(principal: ClientPrincipal): EntityRecord {
-    return {
-      id: principal.principalId,
-      kind: "client",
-      source: { repoPath: principal.source, effectiveVersion: principal.effectiveVersion },
-      activeBuildKey: principal.buildKey,
-      activeExecutionDigest: "a".repeat(64),
-      activeAuthority: { requests: [], provides: [] },
-      contextId: "ctx-client-device",
-      key: principal.principalId,
-      createdAt: Date.now(),
-      status: "active",
-      cleanupComplete: true,
-    };
-  }
-
-  function makeGrantService(
-    opts: {
-      grantClientPrincipal?: Parameters<typeof createAuthService>[0]["grantClientPrincipal"];
-    } = {}
-  ) {
+  function makeGrantService(opts: { attest?: ClientPrincipalAttester } = {}) {
     const identity = makeIdentity({ withRoot: true });
     const device = identity.deviceAuthStore.issueDevice({
       transport: { kind: "iroh", deviceKey: "c".repeat(64) },
       userId: identity.rootId!,
       label: "Laptop",
     });
-    const entityCache = new EntityCache();
-    const connectionGrants = new ConnectionGrantService({ entityCache });
-    const principalFor = (deviceId: string): ClientPrincipal => ({
-      principalId: `client:browser:terminal:${deviceId}`,
-      id: "browser",
-      runtime: "terminal",
-      source: BUILD.source,
-      buildKey: BUILD.buildKey,
-      effectiveVersion: "ev-terminal",
-    });
-    const grantClientPrincipal = vi.fn(
-      opts.grantClientPrincipal ??
-        (async (deviceId: string) => {
-          const principal = principalFor(deviceId);
-          entityCache._onActivate(makeClientPrincipalRecord(principal));
-          return principal;
-        })
+    const attestClientPrincipal = vi.fn<ClientPrincipalAttester>(
+      opts.attest ??
+        (async (deviceId) => ({
+          principalId: `client:browser:terminal:${deviceId}`,
+          deviceId,
+          clientId: "browser",
+          runtime: "terminal",
+          source: BUILD.source,
+          buildKey: BUILD.buildKey,
+          effectiveVersion: "ev-terminal",
+          executionDigest: BUILD.executionDigest,
+          authority: { requests: [], provides: [] },
+          capabilities: [],
+        }))
     );
+    const clientPrincipalHub = {
+      attestClientPrincipal: vi.fn(async () => undefined),
+      mintClientCredential: vi.fn(async (input: { principalId: string; deviceKey?: string }) => ({
+        credentialId: "ccr_1",
+        token: `clientcred:ccr_1:${input.deviceKey ?? "loopback"}`,
+      })),
+    };
     const service = createAuthService({
       resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
@@ -436,61 +420,39 @@ describe("auth.grantClientPrincipal", () => {
       getServerBootId: () => "boot_grant",
       getWorkspaceId: () => "workspace_grant",
       getConnectionInfo,
-      connectionGrants,
-      grantClientPrincipal,
+      attestClientPrincipal,
+      clientPrincipalHub,
     });
     const subject = { userId: identity.rootId!, handle: "root" };
     const shellCaller = (remoteDeviceKey?: string) => ({
       ...createVerifiedCaller(`shell:${device.deviceId}`, "shell", null, null, subject),
       ...(remoteDeviceKey ? { remoteDeviceKey } : {}),
     });
-    return {
-      service,
-      identity,
-      device,
-      subject,
-      shellCaller,
-      connectionGrants,
-      grantClientPrincipal,
-    };
+    return { service, device, subject, shellCaller, attestClientPrincipal, clientPrincipalHub };
   }
 
   it("rejects callers that are not an authenticated device shell", async () => {
-    const { service, grantClientPrincipal, connectionGrants, device, subject } = makeGrantService();
-    try {
-      for (const caller of [
-        createVerifiedCaller("panel:one", "panel", null, null, subject),
-        createVerifiedCaller(`shell:${device.deviceId}`, "client", null, null, subject),
-      ]) {
-        await expect(
-          service.definition.handler({ caller }, "grantClientPrincipal", [BUILD])
-        ).rejects.toMatchObject({ code: "EACCES" });
-      }
-      expect(grantClientPrincipal).not.toHaveBeenCalled();
-    } finally {
-      connectionGrants.stop();
+    const { service, attestClientPrincipal, device, subject } = makeGrantService();
+    for (const caller of [
+      createVerifiedCaller("panel:one", "panel", null, null, subject),
+      createVerifiedCaller(`shell:${device.deviceId}`, "client", null, null, subject),
+    ]) {
+      await expect(
+        service.definition.handler({ caller }, "grantClientPrincipal", [BUILD])
+      ).rejects.toMatchObject({ code: "EACCES" });
     }
+    expect(attestClientPrincipal).not.toHaveBeenCalled();
   });
 
   it("rejects a shell whose subject does not own the device", async () => {
-    const { service, grantClientPrincipal, connectionGrants, device } = makeGrantService();
-    try {
-      for (const subject of [null, { userId: "usr_other", handle: "other" }]) {
-        const caller = createVerifiedCaller(
-          `shell:${device.deviceId}`,
-          "shell",
-          null,
-          null,
-          subject
-        );
-        await expect(
-          service.definition.handler({ caller }, "grantClientPrincipal", [BUILD])
-        ).rejects.toMatchObject({ code: "EACCES" });
-      }
-      expect(grantClientPrincipal).not.toHaveBeenCalled();
-    } finally {
-      connectionGrants.stop();
+    const { service, attestClientPrincipal, device } = makeGrantService();
+    for (const subject of [null, { userId: "usr_other", handle: "other" }]) {
+      const caller = createVerifiedCaller(`shell:${device.deviceId}`, "shell", null, null, subject);
+      await expect(
+        service.definition.handler({ caller }, "grantClientPrincipal", [BUILD])
+      ).rejects.toMatchObject({ code: "EACCES" });
     }
+    expect(attestClientPrincipal).not.toHaveBeenCalled();
   });
 
   it("requires the exact build the host verified", () => {
@@ -503,75 +465,52 @@ describe("auth.grantClientPrincipal", () => {
     ).toBe(false);
   });
 
-  it("mints a grant for the device's client principal bound to the caller endpoint", async () => {
-    const { service, shellCaller, device, subject, connectionGrants, grantClientPrincipal } =
+  it("attests the caller's own device and returns a credential bound to its endpoint", async () => {
+    const { service, shellCaller, device, attestClientPrincipal, clientPrincipalHub } =
       makeGrantService();
     const endpoint = "e".repeat(64);
-    try {
-      const response = (await service.definition.handler(
-        { caller: shellCaller(endpoint) },
-        "grantClientPrincipal",
-        [BUILD]
-      )) as { connectionGrant: string; principalId: string };
-
-      expect(grantClientPrincipal).toHaveBeenCalledWith(device.deviceId, BUILD);
-      const principalId = `client:browser:terminal:${device.deviceId}`;
-      expect(response).toEqual({
-        connectionGrant: expect.stringMatching(/^[0-9a-f]{64}$/),
-        expiresAt: expect.any(Number),
-        principalId,
-        deviceId: device.deviceId,
-        serverId: expect.any(String),
-        serverBootId: "boot_grant",
-        workspaceId: "workspace_grant",
-      });
-      // The grant is bound to the requesting endpoint: another path cannot redeem it.
-      expect(connectionGrants.validate(response.connectionGrant)).toBeNull();
-      expect(connectionGrants.redeem(response.connectionGrant, endpoint)).toEqual({
-        principalId,
-        issuedBy: `shell:${device.deviceId}`,
-        subject,
-        remoteDeviceKey: endpoint,
-      });
-    } finally {
-      connectionGrants.stop();
-    }
+    const response = await service.definition.handler(
+      { caller: shellCaller(endpoint) },
+      "grantClientPrincipal",
+      [BUILD]
+    );
+    const principalId = `client:browser:terminal:${device.deviceId}`;
+    expect(response).toEqual({
+      credential: `clientcred:ccr_1:${endpoint}`,
+      principalId,
+      deviceId: device.deviceId,
+      serverId: expect.any(String),
+      serverBootId: "boot_grant",
+    });
+    expect(attestClientPrincipal).toHaveBeenCalledWith(device.deviceId, BUILD);
+    expect(clientPrincipalHub.mintClientCredential).toHaveBeenCalledWith({
+      principalId,
+      deviceKey: endpoint,
+    });
   });
 
-  it("omits the endpoint for loopback callers", async () => {
-    const { service, shellCaller, device, subject, connectionGrants } = makeGrantService();
-    try {
-      const response = (await service.definition.handler(
-        { caller: shellCaller() },
-        "grantClientPrincipal",
-        [BUILD]
-      )) as { connectionGrant: string; principalId: string };
-      expect(connectionGrants.redeem(response.connectionGrant)).toEqual({
-        principalId: `client:browser:terminal:${device.deviceId}`,
-        issuedBy: `shell:${device.deviceId}`,
-        subject,
-      });
-    } finally {
-      connectionGrants.stop();
-    }
+  it("mints an unbound credential for loopback callers", async () => {
+    const { service, shellCaller, device, clientPrincipalHub } = makeGrantService();
+    await service.definition.handler({ caller: shellCaller() }, "grantClientPrincipal", [BUILD]);
+    expect(clientPrincipalHub.mintClientCredential).toHaveBeenCalledWith({
+      principalId: `client:browser:terminal:${device.deviceId}`,
+    });
   });
 
-  it("carries the registry's refusal to the host and mints no grant", async () => {
-    const { service, shellCaller, connectionGrants } = makeGrantService({
-      grantClientPrincipal: async () => {
+  it("carries the vetting refusal to the host and mints nothing", async () => {
+    const { service, shellCaller, clientPrincipalHub } = makeGrantService({
+      attest: async () => {
         throw new Error("build-terminal is no longer the active build of clients/terminal-browser");
       },
     });
-    try {
-      await expect(
-        service.definition.handler({ caller: shellCaller() }, "grantClientPrincipal", [BUILD])
-      ).rejects.toMatchObject({
-        code: "PRINCIPAL_UNAVAILABLE",
-        message: expect.stringContaining("no longer the active build"),
-      });
-    } finally {
-      connectionGrants.stop();
-    }
+    await expect(
+      service.definition.handler({ caller: shellCaller() }, "grantClientPrincipal", [BUILD])
+    ).rejects.toMatchObject({
+      code: "PRINCIPAL_UNAVAILABLE",
+      message: expect.stringContaining("no longer the active build"),
+    });
+    expect(clientPrincipalHub.attestClientPrincipal).not.toHaveBeenCalled();
+    expect(clientPrincipalHub.mintClientCredential).not.toHaveBeenCalled();
   });
 });
 
@@ -722,6 +661,8 @@ describe("transport-specific credential redemption", () => {
     const entities = new Map<string, EntityRecord>();
     const redeem = createWorkspaceCredentialRedeemer({
       deviceAuthStore: identity.deviceAuthStore,
+      identity: identity.db,
+      admitClientPrincipal: () => undefined,
       tokenManager,
       ...(touchDevice ? { touchDevice } : {}),
       resolveUser: (userId) => identity.userStore.getUser(userId),

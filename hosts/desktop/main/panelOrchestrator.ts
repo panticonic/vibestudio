@@ -18,14 +18,8 @@ import type {
 } from "@vibestudio/shared/types";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import type { EventService } from "@vibestudio/shared/eventsService";
-import type { ScopedServerCaller, ServerClient } from "./serverClient.js";
+import type { ServerClient } from "./serverClient.js";
 import type { PanelManager } from "@vibestudio/shell-core/panelManager";
-import type { PanelOperationClients } from "@vibestudio/shell-core/panelManager";
-import {
-  createPanelMetadataClient,
-  createRuntimeClient,
-  createWorkspaceStateClient,
-} from "@vibestudio/service-schemas/clients/shellCoreClient";
 import { isPanelRuntimeLeaseConflict, isRpcConnectionLost } from "@vibestudio/rpc";
 import type {
   PanelHost,
@@ -240,17 +234,6 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   handlePanelViewCrash(panelId: string, reason: string): Promise<void> {
     return this.runtime.handleViewCrash(panelId, reason);
   }
-  private operationClients(caller?: ScopedServerCaller): PanelOperationClients | undefined {
-    if (!caller) return undefined;
-    const call = (service: string, method: string, args: unknown[]) =>
-      this.serverClient.callAs(caller, service, method, args);
-    return {
-      workspaceState: createWorkspaceStateClient(call),
-      runtime: createRuntimeClient(call),
-      panelMetadata: createPanelMetadataClient(call),
-    };
-  }
-
   // =========================================================================
   // Panel creation
   // =========================================================================
@@ -273,24 +256,19 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       placement?: PanelPlacementHint;
       focus?: boolean;
       initialLoad?: PanelInitialLoadPolicy;
-    },
-    caller?: ScopedServerCaller
+    }
   ): Promise<{ id: string; title: string }> {
     const interactionStartedAt = performance.now();
-    const result = await this.shellCore.createExecution(
-      execution,
-      {
-        parentId: createOpts.parentId ? asPanelSlotId(createOpts.parentId) : undefined,
-        title: createOpts.title,
-        slug: createOpts.slug,
-        contextId: createOpts.contextId,
-        stateArgs: createOpts.stateArgs,
-        placement: createOpts.placement,
-        isRoot: createOpts.parentId == null,
-        addAsRoot: createOpts.parentId == null,
-      },
-      this.operationClients(caller)
-    );
+    const result = await this.shellCore.createExecution(execution, {
+      parentId: createOpts.parentId ? asPanelSlotId(createOpts.parentId) : undefined,
+      title: createOpts.title,
+      slug: createOpts.slug,
+      contextId: createOpts.contextId,
+      stateArgs: createOpts.stateArgs,
+      placement: createOpts.placement,
+      isRoot: createOpts.parentId == null,
+      addAsRoot: createOpts.parentId == null,
+    });
     // Slot creation is the authoritative interaction boundary. The shell can
     // place this real, durable panel while its runtime image is still preparing;
     // neither activation nor the bounded query projection may delay feedback.
@@ -328,13 +306,11 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     callerId: string,
     source: string,
     options?: PanelCreateOptions,
-    stateArgs?: Record<string, unknown>,
-    scopedCaller?: ScopedServerCaller
+    stateArgs?: Record<string, unknown>
   ): Promise<{ id: string; title: string }> {
-    // Ordinary app-view links create under their own capability-gated authority
-    // via a scoped connection. Admitted native chrome and panel-hosted links
-    // use the trusted host path (see panelView). The source view becomes the parent slot when it's a panel,
-    // otherwise this is a new root panel.
+    // A host operation: the capability gate ran where the request entered, and
+    // the host acts under its own authority. The source view becomes the parent
+    // slot when it's a panel, otherwise this is a new root panel.
     const caller = this.registry.getPanel(callerId);
     return this.createViaProductRuntime(
       {
@@ -351,8 +327,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         ...(options?.placement ? { placement: options.placement } : {}),
         focus: options?.focus !== false,
         ...(options?.initialLoad ? { initialLoad: options.initialLoad } : {}),
-      },
-      scopedCaller
+      }
     );
   }
 
@@ -364,18 +339,10 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       env?: Record<string, string>;
       ref?: string;
       stateArgs?: Record<string, unknown>;
-    } = {},
-    scopedCaller?: ScopedServerCaller
+    } = {}
   ): Promise<{ id: string; title: string } | null> {
     if (!this.registry.getPanel(panelId)) throw new Error(`Panel not found: ${panelId}`);
-    // Panel navigation is host-mediated (trusted chrome) by default; an app
-    // caller may still drive it under its own authority via a scoped connection.
-    const result = await this.shellCore.navigate(
-      asPanelSlotId(panelId),
-      source,
-      options,
-      this.operationClients(scopedCaller)
-    );
+    const result = await this.shellCore.navigate(asPanelSlotId(panelId), source, options);
     if (!result) return null;
     // Durable navigation and local presentation form one host-owned
     // transaction. The committed entity is now reflected in the registry;
@@ -387,14 +354,9 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
   async navigatePanelHistory(
     panelId: string,
-    delta: -1 | 1,
-    caller?: ScopedServerCaller
+    delta: -1 | 1
   ): Promise<{ id: string; title: string } | null> {
-    const result = await this.shellCore.navigateHistory(
-      asPanelSlotId(panelId),
-      delta,
-      this.operationClients(caller)
-    );
+    const result = await this.shellCore.navigateHistory(asPanelSlotId(panelId), delta);
     if (!result) return null;
     await this.runtime.loadPanelIntoView(panelId, "acquire", true);
     return { id: result.id, title: result.title };
@@ -409,8 +371,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       focus?: boolean;
       initialLoad?: PanelInitialLoadPolicy;
       placement?: "child" | "sibling";
-    },
-    caller?: ScopedServerCaller
+    }
   ): Promise<{ id: string; title: string }> {
     if (typeof url !== "string" || !isOpenPanelBrowserUrl(url)) {
       throw new Error(`Invalid browser panel URL: ${String(url)}`);
@@ -428,8 +389,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
         slug: options?.slug,
         focus: options?.focus !== false,
         ...(options?.initialLoad ? { initialLoad: options.initialLoad } : {}),
-      },
-      caller
+      }
     );
   }
 
@@ -437,7 +397,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   // Panel destruction
   // =========================================================================
 
-  async closePanel(panelId: string, caller?: ScopedServerCaller): Promise<PanelLifecycleResult> {
+  async closePanel(panelId: string): Promise<PanelLifecycleResult> {
     const panel = this.registry.getPanel(panelId);
     if (!panel) throw new Error(`Panel not found: ${panelId}`);
     const result = this.lifecycleResult(panelId, "close", "closed", {
@@ -468,9 +428,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
     // Server authority closes the subtree + emits; the desktop reactively tears
     // down views/leases for removed panels (tree invalidation →
     // pruneRemovedPanelLocally).
-    await (caller
-      ? this.serverClient.callAs(caller, "workspace-state", "slot.close", [panelId])
-      : this.serverClient.call("workspace-state", "slot.close", [panelId]));
+    await this.serverClient.call("workspace-state", "slot.close", [panelId]);
 
     if (siblingToFocus) {
       this.eventService.emit("navigate-to-panel", { panelId: siblingToFocus });

@@ -3,13 +3,13 @@
  * Entry point. Authentication is accepted only from the fork-IPC init message
  * `{type:"init", token, serverUrl, idleExitMs?}`. Public argv/env token paths
  * do not exist, so capability material never appears in process listings.
+ *
+ * The host's lifetime belongs to whoever spawned it: a server starts it through
+ * its ownership, whose reaper sends SIGTERM (handled below) and then retires
+ * the host's whole group, Chromium included, even if that server is killed.
  */
 import { resolveConfig, type ConfigOverrides } from "./config.js";
 import { HeadlessHost } from "./headlessHost.js";
-import { bindProcessLifetimeToParent } from "../../../scripts/owned-process-tree.mjs";
-
-if (process.send) bindProcessLifetimeToParent();
-
 
 interface IpcInit {
   type: "init";

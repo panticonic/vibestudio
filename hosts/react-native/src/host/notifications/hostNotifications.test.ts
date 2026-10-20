@@ -35,6 +35,7 @@ function harness(
   const decided: Array<[string, string]> = [];
   let permission = options.permission ?? "granted";
   let decideFails = true;
+  let approvalGone = false;
   const replies: Array<{ workspaceId: string; target: string; text: string }> = [];
   const replyFailure: { error: Error | null; unacknowledged: string | null } = {
     error: null,
@@ -119,6 +120,8 @@ function harness(
         : { acknowledged: false, reason: replyFailure.unacknowledged };
     },
     decide: async (t, decision) => {
+      if (approvalGone)
+        throw Object.assign(new Error("No pending approval found"), { code: "ENOENT" });
       if (decideFails) throw new Error("not connected");
       decided.push([t.approvalId, decision]);
     },
@@ -141,6 +144,9 @@ function harness(
     listen: (delivered?: boolean) => host.onEvent((e) => (events.push(e), delivered)),
     connect: () => {
       decideFails = false;
+    },
+    withdrawApproval: () => {
+      approvalGone = true;
     },
   };
 }
@@ -299,7 +305,7 @@ describe("host notifications", () => {
     expect(h.displayed).toEqual([]);
   });
 
-  it("does not drop a queued decision when draining fails, and prunes only stale ones", async () => {
+  it("keeps a queued decision of any age when draining fails", async () => {
     const h = harness();
     await h.host.start();
     h.storage.set(
@@ -316,8 +322,21 @@ describe("host notifications", () => {
     const kept = JSON.parse(h.storage.get(ACTION_QUEUE_KEY) ?? "{}") as {
       actions: Array<{ approvalId: string }>;
     };
-    expect(kept.actions.map((a) => a.approvalId)).toEqual(["approval-1"]);
+    expect(kept.actions.map((a) => a.approvalId)).toEqual(["approval-1", "old"]);
     expect(h.cancelled).toEqual([]);
+  });
+
+  it("settles a queued decision when the server says the approval no longer exists", async () => {
+    const h = harness();
+    await h.host.start();
+    h.storage.set(
+      ACTION_QUEUE_KEY,
+      JSON.stringify({ version: 2, actions: [{ ...target, decision: "once", queuedAt: 0 }] })
+    );
+    h.withdrawApproval();
+    await h.host.drain();
+    expect(h.storage.has(ACTION_QUEUE_KEY)).toBe(false);
+    expect(h.cancelled).toEqual([keyOf("approval-1")]);
   });
 
   it("submits a queued decision once when drains overlap", async () => {

@@ -40,6 +40,7 @@ import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
 import { resolveDevelopmentTemplateSet } from "../src/dev/developmentTemplateSet.ts";
 import { developmentTemplateSetEnv } from "./lib/development-template-set.mjs";
 import { runOwnedCleanupSteps, runWithOwnedCleanup } from "./lib/owned-cleanup.mjs";
+import { ownedEntry } from "./lib/owned-entry.mjs";
 import { parseTemplateReleaseArtifact } from "../packages/workspace/src/templateRelease.ts";
 import { preparedWorkspaceReleaseManifestSchema } from "../src/server/preparedWorkspaceRelease.ts";
 
@@ -216,7 +217,10 @@ export async function cleanupTerminalSmoke({
   );
 }
 
-export async function main(args = process.argv.slice(2)) {
+/** `ownership` and `signal` come from `ownedEntry`: the workspace producer is a
+ * member of the ownership, and a stop request ends the producer and hangs up
+ * the terminal under test so the run unwinds through its cleanup. */
+export async function main(args, { ownership, signal, scratchRoot }) {
   let installed;
   if (args.length) {
     if (args.length !== 4 || args[0] !== "--app-directory" || args[2] !== "--expected-release") {
@@ -232,7 +236,9 @@ export async function main(args = process.argv.slice(2)) {
     "terminal-smoke"
   );
   fs.mkdirSync(scratchParent, { recursive: true, mode: 0o700 });
-  const tempRoot = fs.mkdtempSync(path.join(scratchParent, "run-"));
+  // Reaper-owned and disk-backed: removed with the ownership even if this
+  // process is killed; the cleanup below also removes it as soon as it is safe.
+  const tempRoot = scratchRoot;
   const home = path.join(tempRoot, "home");
   const configHome = path.join(tempRoot, "xdg-config");
   const stateRoot = path.join(configHome, "vibestudio");
@@ -291,7 +297,13 @@ export async function main(args = process.argv.slice(2)) {
           env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT = installed.resources;
         }
         log("preparing workspace templates");
+        const stop = () => {
+          void preparation?.stop().catch(() => {});
+          term?.kill("SIGHUP");
+        };
+        signal.addEventListener("abort", stop, { once: true });
         preparation = prepareWorkspaceRelease({
+          ownership,
           executable: installed?.executable ?? process.execPath,
           entry: path.join(
             hostArtifactRoot,
@@ -303,6 +315,7 @@ export async function main(args = process.argv.slice(2)) {
           env,
         });
         await preparation.completed;
+        signal.throwIfAborted();
 
         for (const sample of installed ? ["cold-profile", "warm-profile"] : ["source-profile"]) {
           const startedAt = performance.now();
@@ -416,7 +429,11 @@ function retainEvidence(tempRoot, scratchParent, serverLog, screen) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url))
-  main().catch((error) => {
+  ownedEntry(
+    ({ ownership, signal, scratchRoot }) =>
+      main(process.argv.slice(2), { ownership, signal, scratchRoot }),
+    { scratchPrefix: "terminal-smoke-" }
+  ).catch((error) => {
     console.error(`[terminal-smoke] ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   });

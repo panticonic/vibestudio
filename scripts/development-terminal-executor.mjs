@@ -11,17 +11,10 @@
  *
  * Runs until stopped, then retires its PTYs, connections and private root.
  */
-import * as fsp from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { tsImport } from "tsx/esm/api";
 import { mintDevicePairingLink } from "./lib/device-pairing-link.mjs";
-import { runParentOwnedMain } from "./lib/parent-owned-main.mjs";
-
-const { createDevelopmentClientLifetime } = await tsImport(
-  "./development-client-lifecycle.ts",
-  import.meta.url
-);
+import { ownedEntry } from "./lib/owned-entry.mjs";
 
 const repoRoot = process.cwd();
 
@@ -39,7 +32,7 @@ function parseArguments(argv) {
   return { instanceId, ttlMs };
 }
 
-async function main(ownerSignal) {
+async function main({ signal: ownerSignal, ownership, scratchRoot: tempRoot }) {
   const parsed = parseArguments(process.argv.slice(2));
   if (parsed.help) {
     console.log(`Attach a terminal device driver to a running instance.
@@ -52,63 +45,51 @@ device operations to its system tests. Runs until stopped.`);
     return;
   }
   ownerSignal.throwIfAborted();
-  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-terminal-executor-"));
-  const lifetime = createDevelopmentClientLifetime(tempRoot);
-  const stop = new AbortController();
-  const requestStop = () => {
-    stop.abort();
-    lifetime.requestStop();
-  };
-  ownerSignal.addEventListener("abort", requestStop, { once: true });
-  if (ownerSignal.aborted) requestStop();
-  process.once("SIGINT", requestStop);
-  process.once("SIGTERM", requestStop);
+  // Two devices of the account: the one under test, and the driver's own.
+  // The server addresses a drive request to a device's caller id, shared by
+  // all of that device's connections, so the driver cannot be the device
+  // whose CLI processes the tests start.
+  let links;
   try {
-    // Two devices of the account: the one under test, and the driver's own.
-    // The server addresses a drive request to a device's caller id, shared by
-    // all of that device's connections, so the driver cannot be the device
-    // whose CLI processes the tests start.
-    const links = {
+    links = {
       device: await mintDevicePairingLink(
         repoRoot,
         parsed.instanceId,
         parsed.ttlMs,
-        lifetime.acquire
+        ownership,
+        ownerSignal
       ),
       driver: await mintDevicePairingLink(
         repoRoot,
         parsed.instanceId,
         parsed.ttlMs,
-        lifetime.acquire
+        ownership,
+        ownerSignal
       ),
     };
-    console.log(`[terminal-executor] minted device invites on ${parsed.instanceId}`);
-    // The CLI's credential and path modules bind their stores when first
-    // imported, so the device's own environment has to be in place first.
-    const { terminalDeviceLayout } = await tsImport(
-      "../src/dev/terminalDevice/layout.ts",
-      import.meta.url
-    );
-    const layout = terminalDeviceLayout(tempRoot, repoRoot, process.env, "driver");
-    for (const key of Object.keys(process.env)) delete process.env[key];
-    Object.assign(process.env, layout.env);
-    const { runTerminalDevice } = await tsImport(
-      "../src/dev/terminalDevice/run.ts",
-      import.meta.url
-    );
-    await runTerminalDevice({
-      root: tempRoot,
-      repoRoot,
-      links,
-      signal: stop.signal,
-      log: (line) => console.log(`[terminal-executor] ${line}`),
-    });
-  } finally {
-    process.off("SIGINT", requestStop);
-    process.off("SIGTERM", requestStop);
-    ownerSignal.removeEventListener("abort", requestStop);
-    await lifetime.close();
+  } catch (error) {
+    // A stop request, not the failure it caused in the invite CLI, ended this run.
+    ownerSignal.throwIfAborted();
+    throw error;
   }
+  console.log(`[terminal-executor] minted device invites on ${parsed.instanceId}`);
+  // The CLI's credential and path modules bind their stores when first
+  // imported, so the device's own environment has to be in place first.
+  const { terminalDeviceLayout } = await tsImport(
+    "../src/dev/terminalDevice/layout.ts",
+    import.meta.url
+  );
+  const layout = terminalDeviceLayout(tempRoot, repoRoot, process.env, "driver");
+  for (const key of Object.keys(process.env)) delete process.env[key];
+  Object.assign(process.env, layout.env);
+  const { runTerminalDevice } = await tsImport("../src/dev/terminalDevice/run.ts", import.meta.url);
+  await runTerminalDevice({
+    root: tempRoot,
+    repoRoot,
+    links,
+    signal: ownerSignal,
+    log: (line) => console.log(`[terminal-executor] ${line}`),
+  });
 }
 
-await runParentOwnedMain(main, repoRoot);
+await ownedEntry(main, { appRoot: repoRoot, scratchPrefix: "vibestudio-terminal-executor-" });

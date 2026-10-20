@@ -37,6 +37,7 @@ describe("openExternalBrowser", () => {
     await Promise.resolve();
     expect(settled).toBe(false);
     expect(spawnProcess).toHaveBeenCalledWith("xdg-open", ["https://auth.example.test"], {
+      // ownership-exempt(external-application): asserts the launcher's contract.
       detached: true,
       stdio: "ignore",
     });

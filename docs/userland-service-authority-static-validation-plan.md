@@ -640,7 +640,7 @@ An arbitrary `rpc.call(target, method, args)` must not be guessed to belong to
 a workspace service. Existing direct-RPC validation continues to own that
 case.
 
-Calls through `durableObjectService(query, key)` retain the query and key on
+Calls through `durableObjectService(query, methods, key)` retain the query and key on
 the returned client so a subsequent method call can be bound without exposing
 `targetId` in source.
 

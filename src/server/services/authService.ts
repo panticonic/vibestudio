@@ -22,7 +22,12 @@ import {
 } from "@vibestudio/shared/deviceCredentials";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { User } from "@vibestudio/identity/types";
-import type { DeviceTransportBinding } from "@vibestudio/identity/identityDb";
+import type {
+  ClientPrincipalRow,
+  DeviceTransportBinding,
+  IdentityDb,
+} from "@vibestudio/identity/identityDb";
+import { CLIENT_CREDENTIAL_PREFIX } from "@vibestudio/identity/identityDb";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { AuditLog } from "@vibestudio/credential-client/audit";
 import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
@@ -33,8 +38,11 @@ import {
   shellCallerId,
   type AuthConnectionInfo,
 } from "../hostCore/auth/model.js";
-import { grantClientPrincipal } from "../hostCore/auth/principalGrants.js";
-import type { ClientPrincipal } from "../clients/clientPrincipals.js";
+import {
+  grantClientPrincipal,
+  type ClientPrincipalAttester,
+} from "../hostCore/auth/principalGrants.js";
+import type { WorkspaceChildHubPort } from "../workspaceChildHubPort.js";
 import { sendAuthError } from "../hostCore/auth/httpErrors.js";
 import { authError, authErrorCode } from "../hostCore/auth/errors.js";
 import { createCapabilityAuthorizer, type CapabilityAuthorizer } from "./capabilityAuthorizer.js";
@@ -76,6 +84,10 @@ interface DeviceCredentialRedeemerDeps {
 
 interface WorkspaceCredentialRedeemerDeps extends DeviceCredentialRedeemerDeps {
   resolveRuntimeEntity: (entityId: string) => EntityRecord | null | Promise<EntityRecord | null>;
+  /** The hub's identity.db (read-only here): the authority for client credentials. */
+  identity: Pick<IdentityDb, "validateClientCredential">;
+  /** Mirror a validated client principal into this workspace's entity cache. */
+  admitClientPrincipal: (principal: ClientPrincipalRow) => void;
 }
 
 const REFRESH_PREFIX = "refresh:";
@@ -141,6 +153,36 @@ async function redeemAgentCredential(deps: WorkspaceCredentialRedeemerDeps, toke
   };
 }
 
+/**
+ * A hub-minted `clientcred:` credential names a device-level client principal
+ * attested by the System workspace. Any workspace admits it here, into its own
+ * entity cache; this workspace's membership gate then decides whether the
+ * principal's user may enter. The principal acts on the device it runs on, so
+ * that device's shell vouches for it.
+ */
+function redeemClientCredential(
+  deps: WorkspaceCredentialRedeemerDeps,
+  token: string,
+  transport: DeviceTransportBinding
+) {
+  if (!token.startsWith(CLIENT_CREDENTIAL_PREFIX)) return null;
+  const validated = deps.identity.validateClientCredential(
+    token,
+    transport.kind === "iroh" ? transport.deviceKey : undefined
+  );
+  if (!validated) return null;
+  const { principal } = validated;
+  const user = deps.resolveUser(principal.userId);
+  if (!user || user.revokedAt !== undefined) return null;
+  deps.admitClientPrincipal(principal);
+  return {
+    callerId: principal.principalId,
+    callerKind: "client" as const,
+    subject: { userId: user.id, handle: user.handle },
+    authorizedBy: shellCallerId(principal.deviceId),
+  };
+}
+
 /** Stable hub ingress: returning devices and new pairing invites only. */
 export function createHubCredentialRedeemer(
   deps: DeviceCredentialRedeemerDeps & {
@@ -199,6 +241,9 @@ export function createWorkspaceCredentialRedeemer(deps: WorkspaceCredentialRedee
   return async (token: string, ctx: { transport: DeviceTransportBinding }) => {
     if (token.startsWith(REFRESH_PREFIX)) return redeemReturningDevice(deps, token, ctx.transport);
     if (token.startsWith(AGENT_PREFIX)) return redeemAgentCredential(deps, token);
+    if (token.startsWith(CLIENT_CREDENTIAL_PREFIX)) {
+      return redeemClientCredential(deps, token, ctx.transport);
+    }
     return null;
   };
 }
@@ -310,10 +355,12 @@ export function createAuthService(deps: {
   auditLog?: Pick<AuditLog, "append">;
   hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
   capabilityAuthorizer?: CapabilityAuthorizer;
-  grantClientPrincipal?: (
-    deviceId: string,
-    expected: { source: string; buildKey: string; executionDigest: string }
-  ) => Promise<ClientPrincipal>;
+  /** Vets and describes a client build for attestation; present only in the System workspace. */
+  attestClientPrincipal?: ClientPrincipalAttester;
+  clientPrincipalHub?: Pick<
+    WorkspaceChildHubPort,
+    "attestClientPrincipal" | "mintClientCredential"
+  >;
   resolveRuntimeEntity?: (id: string) => Promise<EntityRecord | null>;
 }): ServiceWithRoutes {
   const capabilityAuthorizer =
@@ -366,7 +413,7 @@ export function createAuthService(deps: {
     ctx: { caller: import("@vibestudio/shared/serviceDispatcher").VerifiedCaller },
     method: string,
     purpose: string
-  ): { deviceId: string; subject: NonNullable<typeof ctx.caller.subject> } {
+  ): { deviceId: string } {
     const callerId = ctx.caller.runtime.id;
     if (ctx.caller.runtime.kind !== "shell" || !callerId.startsWith("shell:")) {
       throw new ServiceError(
@@ -390,7 +437,7 @@ export function createAuthService(deps: {
         "access"
       );
     }
-    return { deviceId, subject };
+    return { deviceId };
   }
 
   const definition: ServiceDefinition = {
@@ -429,7 +476,7 @@ export function createAuthService(deps: {
         ...(ctx.caller.agentBinding ? { agentBinding: ctx.caller.agentBinding } : {}),
       }),
       grantClientPrincipal: async (ctx, [request]) => {
-        const { deviceId, subject } = requireDeviceShell(
+        const { deviceId } = requireDeviceShell(
           ctx,
           "grantClientPrincipal",
           "A client principal grant"
@@ -438,15 +485,12 @@ export function createAuthService(deps: {
           {
             getServerId: () => deps.deviceAuthStore.getServerId(),
             getServerBootId: deps.getServerBootId,
-            getWorkspaceId: deps.getWorkspaceId,
-            connectionGrants: deps.connectionGrants,
-            grantClientPrincipal: deps.grantClientPrincipal,
+            attestClientPrincipal: deps.attestClientPrincipal,
+            hub: deps.clientPrincipalHub,
           },
           {
             ...request,
             deviceId,
-            subject,
-            issuedBy: ctx.caller.runtime.id,
             ...(ctx.caller.remoteDeviceKey ? { remoteDeviceKey: ctx.caller.remoteDeviceKey } : {}),
           }
         );

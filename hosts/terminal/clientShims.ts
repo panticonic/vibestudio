@@ -15,7 +15,7 @@ const MARKER = "# vibestudio-client-shim";
 const SHIM_NAME = /^[a-z][a-z0-9-]{0,62}$/u;
 
 type Listing = Pick<ClientListing, "id" | "runtime" | "terminalCommand"> &
-  Partial<Pick<ClientListing, "intents">>;
+  Partial<Pick<ClientListing, "intents" | "unavailableReason">>;
 
 /** What a client's shim runs: its registered command, else `open <id>`. */
 export function clientInvocation(listing: Listing, table: CommandTable): string {
@@ -96,8 +96,10 @@ export interface IndexSync {
 
 /**
  * Bring host state in line with the clients the server lists: the command
- * table, and every recorded shim (removed when its client is gone, rewritten
- * when the command it launches changed). Called with each `clients.list`,
+ * table, and every recorded shim (removed only when its client is no longer
+ * declared at all, rewritten when the command it launches changed). A declared
+ * client that is unavailable here (`unavailableReason`) is still listed, so
+ * its shim stays. Called with each `clients.list`,
  * including on `clients:changed`.
  */
 export function syncClientIndex(context: ShimContext, listings: readonly Listing[]): IndexSync {

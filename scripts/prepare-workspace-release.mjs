@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import path from "node:path";
 import os from "node:os";
 import { statSync } from "node:fs";
@@ -71,9 +70,16 @@ export function resolveReleaseBuildConcurrency({
  * start at sourcesReady; installed and packaging consumers wait for completed.
  * Every caller must stop and join the producer before retiring either output.
  * `scope: "sources"` completes after source publication for on-demand runtimes.
- * @param {{ appRoot: string, output: string, sourceOutput?: string, scratch: string, env: NodeJS.ProcessEnv, executable: string, entry: string, scope?: "sources" | "release", onProgress?: (progress: object) => void }} input
+ * The producer is a member of `ownership`: its group is registered with the
+ * owner's reaper, which retires it however the owner ends. A stop request
+ * signals the producer to cancel itself; what it leaves behind is retired by
+ * the join.
+ * @param {{ ownership: import("@vibestudio/shared/ownership").Ownership, appRoot: string, output: string, sourceOutput?: string, scratch: string, env: NodeJS.ProcessEnv, executable: string, entry: string, scope?: "sources" | "release", onProgress?: (progress: object) => void }} input
  */
 export function prepareWorkspaceRelease(input) {
+  if (!input.ownership) {
+    throw new TypeError("Workspace release preparation requires its owner's ownership");
+  }
   const scope = input.scope ?? "release";
   const declaredOutput = input.env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"];
   const output = path.resolve(declaredOutput ?? input.output);
@@ -92,7 +98,7 @@ export function prepareWorkspaceRelease(input) {
   const buildConcurrency = resolveReleaseBuildConcurrency({
     configured: input.env["VIBESTUDIO_MAX_CONCURRENT_BUILDS"],
   });
-  const child = spawn(
+  const owned = input.ownership.spawn(
     input.executable,
     [
       input.entry,
@@ -120,8 +126,11 @@ export function prepareWorkspaceRelease(input) {
           : {}),
       },
       stdio: ["ignore", "pipe", "pipe", "ipc"],
+      kill: "graceful",
+      label: "workspace-release",
     }
   );
+  const child = owned.child;
   let resolveSourcesReady, rejectSourcesReady;
   const sourcesReady = new Promise((resolve, reject) => {
     resolveSourcesReady = resolve;
@@ -208,11 +217,15 @@ export function prepareWorkspaceRelease(input) {
     });
     child.kill("SIGTERM");
   };
-  process.on("SIGINT", interrupt);
-  process.on("SIGTERM", interrupt);
   const completed = joinChildProcess(child)
-    .then((result) => {
+    .then(async (result) => {
+      // The producer's own exit is the event; whatever it left behind is retired.
       const failures = [];
+      try {
+        await owned.join();
+      } catch (retirementFailure) {
+        failures.push(retirementFailure);
+      }
       if (failure) failures.push(failure);
       if (
         cancellation &&
@@ -245,10 +258,6 @@ export function prepareWorkspaceRelease(input) {
     .catch((error) => {
       rejectSourcesReady(error);
       throw error;
-    })
-    .finally(() => {
-      process.off("SIGINT", interrupt);
-      process.off("SIGTERM", interrupt);
     });
   // Source readiness and completion have different consumers. Keep both
   // failures observable while a caller awaits or joins the other phase.

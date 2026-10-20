@@ -110,14 +110,14 @@ describe("fresh mobile Iroh pairing commit", () => {
 
     expect(fixtureValue.persistConnection.mock.calls.map(([stored]) => stored)).toEqual([
       expect.objectContaining({
-        schemaVersion: 5,
+        schemaVersion: 6,
         transport: "iroh",
         phase: "paired",
         deviceIdentityId: "identity-1",
         controlPairing: expect.not.objectContaining({ code: expect.anything() }),
       }),
       expect.objectContaining({
-        schemaVersion: 5,
+        schemaVersion: 6,
         phase: "routed",
         workspacePairing: workspaceReach,
         selectedWorkspaceId: "system-private",

@@ -7,6 +7,8 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
+import { Ownership } from "@vibestudio/shared/ownership";
+import { scratchDirOf } from "@vibestudio/shared/ownershipLedger";
 import {
   awaitHubReady,
   exportReleaseBuild,
@@ -476,59 +478,6 @@ test("joins an IPC-owned process and its streams after explicit owner revocation
   assert.equal(child.connected, false);
 });
 
-test("a parent stop queued before lifecycle readiness keeps its IPC lease for graceful shutdown", async () => {
-  const child = spawn(
-    process.execPath,
-    [
-      "--input-type=module",
-      "-e",
-      `const { bindProcessLifetimeToParent } = await import(${JSON.stringify(new URL("./owned-process-tree.mjs", import.meta.url).href)});
-       let stopRequested = false;
-       let stopHandler;
-       bindProcessLifetimeToParent(() => {
-         if (stopHandler) stopHandler();
-         else stopRequested = true;
-       });
-       process.on("message", message => {
-         if (message?.type !== "install-lifecycle") return;
-         stopHandler = () => {
-           process.send({ type: "graceful", connected: process.connected });
-           setTimeout(() => process.exit(0), 10);
-         };
-         if (stopRequested) stopHandler();
-       });
-       process.send({ type: "ready" });
-       setInterval(() => {}, 1000);`,
-    ],
-    { stdio: ["ignore", "ignore", "pipe", "ipc"] }
-  );
-  const joined = joinChildProcess(child);
-  child.stderr.resume();
-  try {
-    const ready = new Promise((resolve, reject) => {
-      child.once("message", resolve);
-      child.once("error", reject);
-    });
-    await ready;
-    await new Promise((resolve, reject) =>
-      child.send({ type: "vibestudio:parent-owned-stop" }, (error) =>
-        error ? reject(error) : resolve()
-      )
-    );
-    assert.equal(child.connected, true);
-    const stopped = new Promise((resolve, reject) => {
-      child.once("message", resolve);
-      child.once("error", reject);
-    });
-    child.send({ type: "install-lifecycle" });
-    assert.deepEqual(await stopped, { type: "graceful", connected: true });
-    assert.deepEqual(await joined, { code: 0, signal: null, error: undefined });
-  } finally {
-    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-    await joined;
-  }
-});
-
 test("joins a failed spawn without requiring an exit event for a nonexistent process", async () => {
   const root = await fixture();
   const child = spawn(path.join(root, "missing-executable"), [], {
@@ -544,10 +493,10 @@ test("joins a failed spawn without requiring an exit event for a nonexistent pro
 test("installed session joins its server and listeners after operation and shutdown failures", async () => {
   const root = await fixture();
   const appRoot = path.join(root, "app");
-  const scratchParent = path.join(root, "scratch");
+  const profileDir = path.join(root, "profile");
+  const ownership = await Ownership.open({ profileDir, lifetime: "leased" });
   const serverEntry = path.join(appRoot, "dist/server.mjs");
   const cliEntry = path.join(appRoot, "dist/cli/client.mjs");
-  await fs.mkdir(scratchParent, { recursive: true });
   await fs.mkdir(path.dirname(serverEntry), { recursive: true });
   await fs.mkdir(path.dirname(cliEntry), { recursive: true });
   const serverId = `srv_${"s".repeat(24)}`;
@@ -589,7 +538,7 @@ test("installed session joins its server and listeners after operation and shutd
     `import fs from "node:fs";
      const readyArg = process.argv.indexOf("--ready-file");
      fs.writeFileSync(process.argv[readyArg + 1], ${JSON.stringify(JSON.stringify(ready))});
-     process.on("message", message => { if (message?.type === "vibestudio:parent-owned-stop") process.exit(7); });
+     process.on("SIGTERM", () => process.exit(7));
      setInterval(() => {}, 1000);`
   );
   await fs.writeFile(cliEntry, "console.log(JSON.stringify({ system: {}, base: {} }));");
@@ -598,7 +547,7 @@ test("installed session joins its server and listeners after operation and shutd
   const baselineSigint = process.listenerCount("SIGINT");
   const baselineSigterm = process.listenerCount("SIGTERM");
   await assert.rejects(
-    withStandaloneReleaseSession(appRoot, process.execPath, scratchParent, async () => {
+    withStandaloneReleaseSession(appRoot, process.execPath, ownership, async () => {
       throw operationFailure;
     }),
     (error) => {
@@ -611,16 +560,17 @@ test("installed session joins its server and listeners after operation and shutd
   );
   assert.equal(process.listenerCount("SIGINT"), baselineSigint);
   assert.equal(process.listenerCount("SIGTERM"), baselineSigterm);
-  assert.deepEqual(await fs.readdir(scratchParent), []);
+  await ownership.release();
+  assert.deepEqual(await fs.readdir(scratchDirOf(profileDir)), []);
 });
 
 test("installed verification keeps fresh state isolated while carrying the build budget", async () => {
   const root = await fixture();
   const appRoot = path.join(root, "app");
-  const scratchParent = path.join(root, "scratch");
+  const profileDir = path.join(root, "profile");
+  const ownership = await Ownership.open({ profileDir, lifetime: "leased" });
   const serverEntry = path.join(appRoot, "dist/server.mjs");
   const cliEntry = path.join(appRoot, "dist/cli/client.mjs");
-  await fs.mkdir(scratchParent, { recursive: true });
   await fs.mkdir(path.dirname(serverEntry), { recursive: true });
   await fs.mkdir(path.dirname(cliEntry), { recursive: true });
   const pairing = {
@@ -662,7 +612,7 @@ test("installed verification keeps fresh state isolated while carrying the build
      fs.writeFileSync(process.argv[readyArg + 1], ${JSON.stringify(JSON.stringify(ready))});
      fs.writeFileSync(process.env.VIBESTUDIO_INSTANCE_ROOT + "/build-concurrency", process.env.VIBESTUDIO_MAX_CONCURRENT_BUILDS ?? "missing");
      fs.writeFileSync(process.env.VIBESTUDIO_INSTANCE_ROOT + "/consumer-environment", JSON.stringify({ derived: process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR, profile: process.env.VIBESTUDIO_PROFILE_ROOT ?? null, home: process.env.HOME, config: process.env.XDG_CONFIG_HOME }));
-     process.on("message", message => { if (message?.type === "vibestudio:parent-owned-stop") process.exit(0); });
+     process.on("SIGTERM", () => process.exit(0));
      setInterval(() => {}, 1000);`
   );
   await fs.writeFile(
@@ -680,7 +630,7 @@ test("installed verification keeps fresh state isolated while carrying the build
     await withStandaloneReleaseSession(
       appRoot,
       process.execPath,
-      scratchParent,
+      ownership,
       async ({ cli, env }) => {
         assert.equal(env.VIBESTUDIO_MAX_CONCURRENT_BUILDS, "6");
         assert.equal(
@@ -692,21 +642,39 @@ test("installed verification keeps fresh state isolated while carrying the build
           process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR
         );
         assert.equal(env.HOME, path.join(path.dirname(env.VIBESTUDIO_INSTANCE_ROOT), "home"));
-        assert.deepEqual(await fs.readdir(env.VIBESTUDIO_INSTANCE_ROOT), ["build-concurrency", "consumer-environment"]);
-        assert.equal(await fs.stat(env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR).then(
-          () => true, (error) => { if (error.code === "ENOENT") return false; throw error; }
-        ), false);
+        assert.deepEqual(await fs.readdir(env.VIBESTUDIO_INSTANCE_ROOT), [
+          "build-concurrency",
+          "consumer-environment",
+        ]);
+        assert.equal(
+          await fs.stat(env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR).then(
+            () => true,
+            (error) => {
+              if (error.code === "ENOENT") return false;
+              throw error;
+            }
+          ),
+          false
+        );
         assert.equal(
           await fs.readFile(path.join(env.VIBESTUDIO_INSTANCE_ROOT, "build-concurrency"), "utf8"),
           "6"
         );
         const expectedEnvironment = {
           derived: env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR,
-          profile: null, home: env.HOME, config: env.XDG_CONFIG_HOME,
+          profile: null,
+          home: env.HOME,
+          config: env.XDG_CONFIG_HOME,
         };
-        assert.deepEqual(JSON.parse(await fs.readFile(
-          path.join(env.VIBESTUDIO_INSTANCE_ROOT, "consumer-environment"), "utf8"
-        )), expectedEnvironment);
+        assert.deepEqual(
+          JSON.parse(
+            await fs.readFile(
+              path.join(env.VIBESTUDIO_INSTANCE_ROOT, "consumer-environment"),
+              "utf8"
+            )
+          ),
+          expectedEnvironment
+        );
         assert.deepEqual(await cli(["environment"]), { concurrency: "6", ...expectedEnvironment });
       }
     );
@@ -718,16 +686,17 @@ test("installed verification keeps fresh state isolated while carrying the build
     if (priorProfile === undefined) delete process.env.VIBESTUDIO_PROFILE_ROOT;
     else process.env.VIBESTUDIO_PROFILE_ROOT = priorProfile;
   }
-  assert.deepEqual(await fs.readdir(scratchParent), []);
+  await ownership.release();
+  assert.deepEqual(await fs.readdir(scratchDirOf(profileDir)), []);
 });
 
 test("release-session cancellation aborts and joins an admitted CLI call before server shutdown", async () => {
   const root = await fixture();
   const appRoot = path.join(root, "app");
-  const scratchParent = path.join(root, "scratch");
+  const profileDir = path.join(root, "profile");
+  const ownership = await Ownership.open({ profileDir, lifetime: "leased" });
   const serverEntry = path.join(appRoot, "dist/server.mjs");
   const cliEntry = path.join(appRoot, "dist/cli/client.mjs");
-  await fs.mkdir(scratchParent, { recursive: true });
   await fs.mkdir(path.dirname(serverEntry), { recursive: true });
   await fs.mkdir(path.dirname(cliEntry), { recursive: true });
   const pairing = {
@@ -769,7 +738,7 @@ test("release-session cancellation aborts and joins an admitted CLI call before 
     `import fs from "node:fs";
      const readyArg = process.argv.indexOf("--ready-file");
      fs.writeFileSync(process.argv[readyArg + 1], ${JSON.stringify(JSON.stringify(ready))});
-     process.on("message", message => { if (message?.type === "vibestudio:parent-owned-stop") process.exit(0); });
+     process.on("SIGTERM", () => process.exit(0));
      setInterval(() => {}, 1000);`
   );
   const running = path.join(root, "cli-running");
@@ -798,7 +767,7 @@ test("release-session cancellation aborts and joins an admitted CLI call before 
     const session = withStandaloneReleaseSession(
       appRoot,
       process.execPath,
-      scratchParent,
+      ownership,
       async ({ cli }) => cli(["wait"])
     );
     const cancelled = assert.rejects(session, (error) => {
@@ -809,7 +778,8 @@ test("release-session cancellation aborts and joins an admitted CLI call before 
     process.emit("SIGTERM");
     await cancelled;
     assert.equal(await fs.readFile(retired, "utf8"), "joined");
-    assert.deepEqual(await fs.readdir(scratchParent), []);
+    await ownership.release();
+    assert.deepEqual(await fs.readdir(scratchDirOf(profileDir)), []);
   } finally {
     watcher.close();
   }
@@ -983,16 +953,18 @@ test("template preparation joins cancellation before retiring private scratch", 
     watcher.on("error", reject);
   });
   try {
+    const stopRequest = new AbortController();
     const prepared = prepareInstalledTemplateRelease({
       appRoot: root,
       resources: root,
       executable: process.execPath,
       entry,
       scratchParent: root,
+      signal: stopRequest.signal,
     });
     const cancelled = assert.rejects(prepared, /preparation cancelled/);
     await started;
-    process.emit("SIGTERM");
+    stopRequest.abort(new Error("stop requested"));
     await cancelled;
     assert.equal(await fs.readFile(receipt, "utf8"), "joined");
     assert.equal(
@@ -1031,14 +1003,17 @@ test("installed producer ignores an inherited borrowed release root", async () =
   }
 });
 
-for (const configured of [true, false]) test(`installed producer preserves ${configured ? "configured" : "profile-default"} cache selection and retires workspace state`, async () => {
-  const root = await fixture();
-  const entry = path.join(root, "producer.mjs");
-  const receipt = path.join(root, "producer-environment.json");
-  const shared = path.join(root, "shared-cache");
-  await fs.mkdir(shared);
-  await fs.writeFile(path.join(shared, "retained-content"), "cached content");
-  await fs.writeFile(entry, `import fs from "node:fs";
+for (const configured of [true, false])
+  test(`installed producer preserves ${configured ? "configured" : "profile-default"} cache selection and retires workspace state`, async () => {
+    const root = await fixture();
+    const entry = path.join(root, "producer.mjs");
+    const receipt = path.join(root, "producer-environment.json");
+    const shared = path.join(root, "shared-cache");
+    await fs.mkdir(shared);
+    await fs.writeFile(path.join(shared, "retained-content"), "cached content");
+    await fs.writeFile(
+      entry,
+      `import fs from "node:fs";
     fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({
       derived: process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR,
       profile: process.env.VIBESTUDIO_PROFILE_ROOT,
@@ -1047,32 +1022,42 @@ for (const configured of [true, false]) test(`installed producer preserves ${con
     }));
     const root = process.argv[process.argv.indexOf("--output") + 1];
     process.send({ kind: "sources-ready", root }, () =>
-      process.send({ kind: "completed" }, () => process.exit(0)));`);
-  const prior = process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR;
-  const priorProfile = process.env.VIBESTUDIO_PROFILE_ROOT;
-  const profile = path.join(root, "producer-profile");
-  process.env.VIBESTUDIO_PROFILE_ROOT = profile;
-  if (configured) process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR = shared;
-  else delete process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR;
-  try {
-    await prepareInstalledTemplateRelease({
-      appRoot: root, resources: root, executable: process.execPath,
-      entry, scratchParent: root,
-    });
-    const env = JSON.parse(await fs.readFile(receipt, "utf8"));
-    assert.equal(env.derived, configured ? shared : undefined);
-    assert.equal(env.profile, profile);
-    assert.equal(path.basename(path.dirname(env.instance)).startsWith(".template-release-"), true);
-    assert.equal(path.dirname(env.tmp), path.dirname(env.instance));
-    await assert.rejects(fs.stat(path.dirname(env.instance)), { code: "ENOENT" });
-    assert.equal(await fs.readFile(path.join(shared, "retained-content"), "utf8"), "cached content");
-  } finally {
-    if (prior === undefined) delete process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR;
-    else process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR = prior;
-    if (priorProfile === undefined) delete process.env.VIBESTUDIO_PROFILE_ROOT;
-    else process.env.VIBESTUDIO_PROFILE_ROOT = priorProfile;
-  }
-});
+      process.send({ kind: "completed" }, () => process.exit(0)));`
+    );
+    const prior = process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR;
+    const priorProfile = process.env.VIBESTUDIO_PROFILE_ROOT;
+    const profile = path.join(root, "producer-profile");
+    process.env.VIBESTUDIO_PROFILE_ROOT = profile;
+    if (configured) process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR = shared;
+    else delete process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR;
+    try {
+      await prepareInstalledTemplateRelease({
+        appRoot: root,
+        resources: root,
+        executable: process.execPath,
+        entry,
+        scratchParent: root,
+      });
+      const env = JSON.parse(await fs.readFile(receipt, "utf8"));
+      assert.equal(env.derived, configured ? shared : undefined);
+      assert.equal(env.profile, profile);
+      assert.equal(
+        path.basename(path.dirname(env.instance)).startsWith(".template-release-"),
+        true
+      );
+      assert.equal(path.dirname(env.tmp), path.dirname(env.instance));
+      await assert.rejects(fs.stat(path.dirname(env.instance)), { code: "ENOENT" });
+      assert.equal(
+        await fs.readFile(path.join(shared, "retained-content"), "utf8"),
+        "cached content"
+      );
+    } finally {
+      if (prior === undefined) delete process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR;
+      else process.env.VIBESTUDIO_SHARED_DERIVED_CACHE_DIR = prior;
+      if (priorProfile === undefined) delete process.env.VIBESTUDIO_PROFILE_ROOT;
+      else process.env.VIBESTUDIO_PROFILE_ROOT = priorProfile;
+    }
+  });
 
 test("release RPC cancellation reaches and joins the owned verifier process", async () => {
   const root = await fixture();
@@ -1099,8 +1084,15 @@ test("release RPC cancellation reaches and joins the owned verifier process", as
   });
   const controller = new AbortController();
   const cancellation = new Error("release server exited while verifier was running");
+  let closeOwnership;
   try {
+    const ownership = await Ownership.open({
+      profileDir: path.join(root, "profile"),
+      lifetime: "leased",
+    });
+    closeOwnership = ownership;
     const batch = runInstalledRpcBatch({
+      ownership,
       executable: process.execPath,
       runnerEntry: runner,
       cliEntry: path.join(root, "client.mjs"),
@@ -1120,6 +1112,7 @@ test("release RPC cancellation reaches and joins the owned verifier process", as
     assert.equal(await fs.readFile(retired, "utf8"), "joined");
   } finally {
     watcher.close();
+    await closeOwnership?.release();
   }
 });
 

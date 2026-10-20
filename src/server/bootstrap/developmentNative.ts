@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import type { CapabilityScope } from "@vibestudio/rpc";
+import type { Ownership } from "@vibestudio/shared/ownership";
 import type { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import type { EventService } from "@vibestudio/shared/eventsService";
@@ -23,6 +24,8 @@ export interface DevelopmentNativeBootstrapDeps {
   hostArtifactRoot: string;
   container: Pick<ServiceContainer, "registerManaged">;
   workspaceId: string;
+  /** The server's lazily opened ownership (registered as the `processOwnership` service). */
+  ownership(): Promise<Ownership>;
   getBuildSystem(): Pick<
     BuildSystemV2,
     "getBuildByKey" | "putStoredBuild" | "readBuildArtifactBytes"
@@ -110,7 +113,7 @@ export async function wireDevelopmentNative(
 
   deps.container.registerManaged({
     name: "developmentNative",
-    dependencies: ["developmentClientExecutor", "attachedHosts", "buildSystem"],
+    dependencies: ["developmentClientExecutor", "attachedHosts", "buildSystem", "processOwnership"],
     async start() {
       const hostExecutionDigest = readHostBuildFingerprint(deps.hostArtifactRoot).fingerprint;
       const semantic = createNativeDevelopmentSemanticAdapter(deps.workspaceVcs);
@@ -125,6 +128,7 @@ export async function wireDevelopmentNative(
         hostExecutionDigest,
         buildSystem: deps.getBuildSystem(),
         runRoots: developmentRunRoots,
+        ownership: deps.ownership,
         planSource: (input) => deps.workspaceVcs.planExactContextRepository(input),
         materializeSource: (plan, destination) =>
           deps.workspaceVcs.materializeExactRepositoryPlan(plan, destination),

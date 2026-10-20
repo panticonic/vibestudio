@@ -87,14 +87,12 @@ interface PanelOrchestratorLike {
       isRoot?: boolean;
       placement?: PanelPlacementHint;
     },
-    stateArgs?: Record<string, unknown>,
-    scopedCaller?: PanelLinkCaller
+    stateArgs?: Record<string, unknown>
   ): Promise<{ id: string; title: string }>;
   createBrowserUrlPanel(
     callerId: string,
     url: string,
-    options?: { name?: string; focus?: boolean; placement?: "child" | "sibling" },
-    scopedCaller?: PanelLinkCaller
+    options?: { name?: string; focus?: boolean; placement?: "child" | "sibling" }
   ): Promise<{ id: string; title: string }>;
   navigatePanel(
     panelId: string,
@@ -114,8 +112,6 @@ interface PanelOrchestratorLike {
   updatePanelTitle(panelId: string, title: string): Promise<void>;
   closePanel(panelId: string): Promise<unknown>;
 }
-
-type PanelLinkCaller = { callerId: string; callerKind: "client" };
 
 interface FormFillManagerLike {
   attachToWebContents(webContentsId: number, webContents: Electron.WebContents): void;
@@ -1125,20 +1121,6 @@ export class PanelView implements PanelViewLike {
     return this.requestSiteCapability(contents, "popups");
   }
 
-  /**
-   * Client-hosted views act under their own (capability-gated) authority when they
-   * open managed links. Panel-hosted views do NOT: acting as the panel would
-   * need a second runtime connection, which the panel lease gate rejects (the
-   * panel's own connection holds the lease). Host-intercepted links are already
-   * structurally scoped to the source slot, so the host translates them as
-   * trusted chrome — returning no scoped caller routes the call that way.
-   */
-  private scopedCallerForHostedView(viewId: string): PanelLinkCaller | undefined {
-    const viewInfo = this.viewManager.getViewInfo(viewId);
-    if (viewInfo?.type === "client") return { callerId: viewId, callerKind: "client" };
-    return undefined;
-  }
-
   private createOptionsForParsedLink(parsed: ParsedPanelUrl): {
     title?: string;
     slug?: string;
@@ -1176,7 +1158,6 @@ export class PanelView implements PanelViewLike {
     url: string,
     disposition: Exclude<PanelDisposition, "current">
   ): Promise<BrowserPopup> {
-    const caller = this.scopedCallerForHostedView(sourceViewId);
     const result = await this.panelOrchestrator.createPanel(
       sourceViewId,
       parsed.source,
@@ -1184,8 +1165,7 @@ export class PanelView implements PanelViewLike {
         ...this.createOptionsForParsedLink(parsed),
         ...(disposition === "root" ? { isRoot: true } : {}),
       },
-      parsed.stateArgs,
-      caller
+      parsed.stateArgs
     );
     this.sendPanelEvent?.(sourceViewId, "runtime:child-created", { childId: result.id, url });
     this.cdpHost.emitBrowserActivity?.(sourceViewId, "popup", {
@@ -1226,14 +1206,11 @@ export class PanelView implements PanelViewLike {
     url: string,
     disposition: Electron.HandlerDetails["disposition"] = "default"
   ): Promise<BrowserPopup> {
-    const caller = this.scopedCallerForHostedView(sourceViewId);
     const background = disposition === "background-tab";
-    const result = await this.panelOrchestrator.createBrowserUrlPanel(
-      sourceViewId,
-      url,
-      { focus: !background, placement: "child" },
-      caller
-    );
+    const result = await this.panelOrchestrator.createBrowserUrlPanel(sourceViewId, url, {
+      focus: !background,
+      placement: "child",
+    });
     this.sendPanelEvent?.(sourceViewId, "runtime:child-created", { childId: result.id, url });
     this.cdpHost.emitBrowserActivity?.(sourceViewId, "popup", {
       popup: { panelId: result.id, url },
@@ -1254,8 +1231,7 @@ export class PanelView implements PanelViewLike {
     const pending = flights.get(url);
     if (pending) return pending;
     // Same-frame navigation only happens for panel-hosted slots (client views open
-    // links as new root panels), so this is always a trusted-chrome translation
-    // of the source slot — no scoped caller.
+    // links as new root panels); the host translates it for the source slot.
     const navigation = this.panelOrchestrator
       .navigatePanel(panelId, parsed.source, this.navigateOptionsForParsedLink(parsed))
       .then((result) => {

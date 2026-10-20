@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { DevInstanceSupervisor } from "../../dev/devInstanceSupervisor.js";
+import { Ownership } from "@vibestudio/shared/ownership";
 import type { DevelopmentRun, DevelopmentSession } from "@vibestudio/service-schemas/development";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { createDevelopmentNativeService } from "./developmentNativeService.js";
@@ -194,7 +195,12 @@ describe("native development build ownership", () => {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "vibestudio-native-owner-"));
       const readyFile = path.join(root, "ready.json");
       let grandchildPid = 0;
+      const ownership = await Ownership.open({
+        profileDir: path.join(root, "profile"),
+        lifetime: "leased",
+      });
       const supervisor = new DevInstanceSupervisor({
+        ownership,
         sourceRoot: root,
         command: process.execPath,
         args: [
@@ -244,6 +250,7 @@ describe("native development build ownership", () => {
         expect(f.retire).not.toHaveBeenCalled();
       } finally {
         await supervisor.stop();
+        await ownership.close();
         await fs.rm(root, { recursive: true, force: true });
       }
     }

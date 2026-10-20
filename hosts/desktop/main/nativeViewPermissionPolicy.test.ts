@@ -24,8 +24,24 @@ describe("native permission fallback", () => {
       canFullscreenView: () => false,
     };
     expect(nativeViewMayUsePermission(manager, noWindows, 42, "display-capture")).toBe(false);
-    // Pointer lock belongs to no client capability, so no client may take it.
-    expect(nativeViewMayUsePermission(manager, noWindows, 42, "pointerLock")).toBe(false);
+    expect(nativeViewMayUsePermission(manager, noWindows, 42, "pointerLock")).toBe(true);
+    expect(nativeViewMayUsePermission(manager, noWindows, 42, "midiSysex")).toBe(false);
+  });
+
+  it("maps pointer lock to the window-appearance capability", () => {
+    expect(nativeViewMayUsePermission(null, windowsHolding("theme"), 7, "pointerLock")).toBe(true);
+    expect(nativeViewMayUsePermission(null, windowsHolding("clipboard"), 7, "pointerLock")).toBe(
+      false
+    );
+  });
+
+  it("lets a standalone client window fullscreen itself but not the panel host's chrome", () => {
+    const owner = (hostsPanels: boolean) => ({
+      byWebContents: () => ({ hostsPanels, spec: { capabilities: [] } }) as never,
+    });
+    expect(nativeViewMayUsePermission(null, owner(false), 7, "fullscreen")).toBe(true);
+    expect(nativeViewMayUsePermission(null, owner(true), 7, "fullscreen")).toBe(false);
+    expect(nativeViewMayUsePermission(null, noWindows, 7, "fullscreen")).toBe(false);
   });
 
   function views(overlay = true) {

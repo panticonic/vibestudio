@@ -25,6 +25,7 @@
   "dependencies": {
     "@vibestudio/browser-data": "workspace:*",
     "@vibestudio/dev-log": "workspace:*",
+    "@vibestudio/env-paths": "workspace:*",
     "@vibestudio/rpc": "workspace:*",
     "@vibestudio/service-schemas": "workspace:*",
     "@vibestudio/shell-core": "workspace:*",

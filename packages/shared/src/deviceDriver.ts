@@ -14,6 +14,13 @@ import type { PendingApproval } from "./approvals.js";
  * caller gives up, which aborts the operation's signal here.
  */
 
+/**
+ * A pending approval as a device hands it to a test. A device spanning several
+ * workspaces (the desktop) tags each card with the workspace that owns it;
+ * a single-workspace device (the terminal) leaves it out.
+ */
+export type DevicePendingApproval = PendingApproval & { workspaceId?: string };
+
 export type DeviceKind = "terminal" | "desktop";
 
 /** One running client instance: a PTY program, an Electron window. */
@@ -76,6 +83,8 @@ export type IntentOutcome =
   /** `fields`: the keys of the server's result object (it is `{ text }` and nothing else). */
   { ok: true; text: string; fields: string[] } | { ok: false; code: string; message: string };
 
+export type ClientSessionOutcome = { ok: true } | { ok: false; code: string; message: string };
+
 export interface IntegrationArtifact {
   clientId: string;
   /** `.desktop` file, shim script, ... */
@@ -127,12 +136,52 @@ export interface ClientDeviceWire {
   integrationArtifacts(args: Record<string, never>): IntegrationArtifact[];
   /** Resolves when no OS artifact remains for `clientId` (reconciled on `clients:changed`). */
   waitForArtifactsRemoved(args: { clientId: string }): null;
-  /** The next pending approval this device's approval surface has not yet returned; null once released. */
-  nextApproval(args: Record<string, never>): PendingApproval | null;
-  /** Settle every outstanding `nextApproval` with null and stop surfacing approvals. */
-  releaseApprovals(args: Record<string, never>): null;
+  /** Open an approval surface with its own lifetime; the token keys `nextApproval` and `releaseApprovals`. */
+  openApprovals(args: Record<string, never>): { surfaceToken: string };
+  /** The next pending approval this surface has not yet returned; null once the surface is released. */
+  nextApproval(args: { surfaceToken: string }): DevicePendingApproval | null;
+  /** Settle the surface's outstanding `nextApproval` with null and drop the surface. */
+  releaseApprovals(args: { surfaceToken: string }): null;
   /** Decide a pending approval as the person would; the install review is accepted whole. */
   resolveApproval(args: { approvalId: string; decision: "once" | "deny" | "accept-review" }): null;
+  /**
+   * desktop: create a root panel in the account's `workspace` exactly as the running client window
+   * `surfaceId` does (its principal, its window's scoped session), then report whether that
+   * workspace's panel registry holds the panel.
+   */
+  createPanelAsClient(args: {
+    surfaceId: string;
+    workspace: "personal" | "system";
+    source: string;
+    title?: string;
+  }): { workspaceId: string; panelId: string; title: string; registered: boolean };
+  /**
+   * desktop: make one server call as the principal of the running client window `surfaceId`, in
+   * the account's `workspace`, over the window's own direct principal session (the path its
+   * renderer's own traffic takes) and with that renderer's RPC behavior: a call that raises an
+   * authority acquisition waits on `authority.awaitDecision` as the same principal, then retries.
+   * Resolves with the call's result, or rejects with the original error.
+   */
+  callAsClient(args: {
+    surfaceId: string;
+    workspace: "personal" | "system";
+    service: string;
+    method: string;
+    args?: unknown[];
+  }): { workspaceId: string; principalId: string; value: unknown };
+  /**
+   * desktop: retire the running client `id` the way the workspace's own supervision does (`runtime`
+   * `supervision.retire`): the hub revokes its principals and closes their sessions, and the host
+   * closes the client's windows with the server's stated reason. A launch of it later runs it again.
+   */
+  retireClient(args: { id: string }): null;
+  /**
+   * desktop: make a harmless read in `workspace` as the principal of window `surfaceId` and report
+   * whether the server admitted the session. An open window uses the session it holds; a closed
+   * one gets a new session, presenting the credential the host still holds for its principal. A
+   * principal revoked at the hub is refused.
+   */
+  openClientSession(args: { surfaceId: string; workspace: "personal" | "system" }): ClientSessionOutcome;
   /** terminal: run a command line in a shell with the test-owned PATH, HOME and bin directory. */
   shell(args: { commandLine: string; stdin?: string }): ShellResult;
   /** terminal: the test-owned directory `vibestudio clients link` writes into. */
@@ -242,18 +291,18 @@ export async function serveDeviceDriver(options: {
  * approval once, waiting on that notification, and returns null after
  * `release`. A pending `next` also settles when its `signal` aborts.
  */
-export class ApprovalFeed {
+export class ApprovalFeed<T extends PendingApproval = PendingApproval> {
   private readonly handedOut = new Set<string>();
   private readonly waiters: Array<() => void> = [];
   private released = false;
 
-  constructor(private readonly listPending: () => Promise<readonly PendingApproval[]>) {}
+  constructor(private readonly listPending: () => Promise<readonly T[]>) {}
 
   notify(): void {
     for (const wake of this.waiters.splice(0)) wake();
   }
 
-  async next(signal?: AbortSignal): Promise<PendingApproval | null> {
+  async next(signal?: AbortSignal): Promise<T | null> {
     for (;;) {
       signal?.throwIfAborted();
       if (this.released) return null;
@@ -278,7 +327,7 @@ export class ApprovalFeed {
       });
       // A wait abandoned below must not leave its rejection unobserved.
       wake.catch(() => {});
-      let pending: readonly PendingApproval[];
+      let pending: readonly T[];
       try {
         pending = await this.listPending();
         // A caller that gave up must not be handed (and so consume) an approval.
@@ -307,5 +356,47 @@ export class ApprovalFeed {
   release(): void {
     this.released = true;
     this.notify();
+  }
+}
+
+/**
+ * The approval surfaces a device driver serves. Each `open` gets its own
+ * `ApprovalFeed`, so releasing one test's surface never ends the next one's.
+ */
+export class ApprovalSurfaces<T extends PendingApproval = PendingApproval> {
+  private readonly feeds = new Map<string, ApprovalFeed<T>>();
+  private opened = 0;
+
+  constructor(private readonly listPending: () => Promise<readonly T[]>) {}
+
+  open(): { surfaceToken: string } {
+    const surfaceToken = `approvals-${++this.opened}`;
+    this.feeds.set(surfaceToken, new ApprovalFeed<T>(this.listPending));
+    return { surfaceToken };
+  }
+
+  /** The approval queue changed: wake every open surface. */
+  notify(): void {
+    for (const feed of this.feeds.values()) feed.notify();
+  }
+
+  next(surfaceToken: string, signal?: AbortSignal): Promise<T | null> {
+    return this.feed(surfaceToken).next(signal);
+  }
+
+  release(surfaceToken: string): void {
+    this.feed(surfaceToken).release();
+    this.feeds.delete(surfaceToken);
+  }
+
+  /** The driver is closing: end every open surface. */
+  releaseAll(): void {
+    for (const surfaceToken of [...this.feeds.keys()]) this.release(surfaceToken);
+  }
+
+  private feed(surfaceToken: string): ApprovalFeed<T> {
+    const feed = this.feeds.get(surfaceToken);
+    if (!feed) throw new Error(`Unknown approval surface ${surfaceToken}`);
+    return feed;
   }
 }

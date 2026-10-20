@@ -20,7 +20,7 @@ import { ClientLaunchError } from "./errors.js";
 export type Call = (service: string, method: string, args: unknown[]) => Promise<unknown>;
 
 export interface PrincipalGrants {
-  /** Obtain the connection grant for exactly this verified build. */
+  /** Obtain the principal credential for exactly this verified build. */
   acquire(build: {
     source: string;
     buildKey: string;

@@ -42,6 +42,69 @@ describe("workspace RPC build catalog", () => {
     metadata["overview"]!.argsSchema = changed;
     expect(collect().inputContractDigest).not.toBe(original.inputContractDigest);
   });
+  it("rejects a workspace-authored static rpcMethods table the runtime would refuse", () => {
+    const root = ownedTempRoot("vibestudio-static-rpc-table-");
+    writeFileSync(
+      join(root, "index.ts"),
+      `import { recordStoreMethods } from "./contract.js";
+export class TaskHarborStore {
+  static override rpcMethods = recordStoreMethods;
+  @rpc({ website: { kind: "closed", reason: "private" }, principals: ["user", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  upsertRecord(input: { title: string }) {}
+}`
+    );
+    let error: unknown;
+    try {
+      collectWorkspaceRpcCatalog(root, {
+        provider: "workers/task-harbor-store",
+        authority: { requests: [], provides: [] },
+        durableObjects: true,
+      });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(BuildDiagnosticsError);
+    const [diagnostic] = (error as BuildDiagnosticsError).diagnostics;
+    expect(diagnostic!.message).toContain("workers/task-harbor-store:TaskHarborStore");
+    expect(diagnostic!.message).toContain(
+      "authority, tier, access.sensitivity, directEffect or capability"
+    );
+    expect(diagnostic!.message).toContain("methods: upsertRecord");
+    expect(diagnostic!.suggestion).toContain("createReceiverRpcMethods<Pick<Receiver, ...>>");
+  });
+
+  it("admits the documented receiver shape without a schema table", () => {
+    const root = ownedTempRoot("vibestudio-receiver-contract-");
+    writeFileSync(
+      join(root, "index.ts"),
+      `export class TaskHarborStore {
+  @rpc({ website: { kind: "closed", reason: "private" }, principals: ["user", "code"], effect: { kind: "open" }, tier: "open", sensitivity: "write" })
+  upsertRecord(input: { title: string }) {}
+}`
+    );
+    expect(
+      collectWorkspaceRpcCatalog(root, {
+        provider: "workers/task-harbor-store",
+        authority: { requests: [], provides: [] },
+        durableObjects: true,
+      }).map((method) => method.name)
+    ).toEqual(["upsertRecord"]);
+  });
+
+  it("applies the shared completeness predicate to a reviewed schema entry", () => {
+    const root = ownedTempRoot("vibestudio-schema-rpc-incomplete-");
+    writeFileSync(join(root, "provider.ts"), `class MissionsDO { @schemaRpc() overview() {} }`);
+    const metadata = workspaceRpcSchemaMetadata(workspaceRpcSchema("vibestudio.missions.v1")!);
+    const { tier: _tier, ...incomplete } = metadata["overview"]!;
+    expect(() =>
+      collectWorkspaceRpcCatalog(root, {
+        provider: "workers/missions",
+        authority: { requests: [], provides: [] },
+        rpcSchemas: { MissionsDO: { overview: incomplete } },
+      })
+    ).toThrow(/overview: missing tier/);
+  });
+
   it("rejects module-level runtime clients in Durable Object packages", () => {
     const root = ownedTempRoot("vibestudio-do-module-runtime-");
     writeFileSync(

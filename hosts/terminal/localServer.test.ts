@@ -64,6 +64,7 @@ describe("startLocalServer", () => {
         env: { ...process.env, FAKE_HUB_PREPARING: preparing },
         retain,
         stateRoot,
+        profileDir: path.join(root, "profile"),
         signal: controller.signal,
       });
       void starting.catch(() => undefined);
@@ -88,6 +89,7 @@ describe("startLocalServer", () => {
       env: process.env,
       retain: false,
       stateRoot,
+      profileDir: path.join(root, "profile"),
     });
     expect(server.ready).toMatchObject({ mode: "hub", pid: server.pid });
     expect(server.logFile).toBe(localServerPaths(stateRoot).logFile);
@@ -109,6 +111,7 @@ describe("startLocalServer", () => {
       env: { ...process.env, FAKE_HUB_FAIL: "1" },
       retain: false,
       stateRoot,
+      profileDir: path.join(root, "profile"),
     });
     await expect(failure).rejects.toBeInstanceOf(LocalServerStartError);
     await expect(failure).rejects.toThrow(localServerPaths(stateRoot).logFile);
@@ -125,6 +128,7 @@ describe("startLocalServer", () => {
       env: process.env,
       retain: true,
       stateRoot,
+      profileDir: path.join(root, "profile"),
     });
     try {
       expect(server.retained).toBe(true);
@@ -145,6 +149,7 @@ describe("startLocalServer", () => {
         env: process.env,
         retain: false,
         stateRoot,
+        profileDir: path.join(root, "profile"),
       })
     ).rejects.toThrow("pnpm start:terminal");
   });

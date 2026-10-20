@@ -16,7 +16,6 @@ import {
   type BridgeBodyChunk,
   type BridgeStreamOpen,
   type BridgeStreamRelay,
-  type RpcCallOptions,
   type RpcEnvelope,
   type RpcMessage,
   type RpcRequest,
@@ -32,8 +31,14 @@ import {
   FRAME_HEAD,
 } from "@vibestudio/rpc/protocol/streamCodec";
 import { SESSION_CONNECTION_LOST_CODE } from "@vibestudio/rpc/protocol/remoteSession";
-import type { HubWorkspaceEntry } from "@vibestudio/service-schemas/hubControl";
 import type { MessagePortLike } from "./controlChannel.js";
+import {
+  type ClientRelayWindow,
+  authorizeClientRelay,
+  callAsClient,
+  callOptionsFromEnvelope,
+  scopedClientCaller,
+} from "./clientRelay.js";
 import type { HostCall } from "./hostServices.js";
 import type { ClientBindingState, PortBindingState } from "./connectionProtocol.js";
 import {
@@ -96,30 +101,6 @@ function envelopeFor(
     callerKind: from === "main" ? ("server" as const) : ("unknown" as const),
   };
   return { from, target, delivery: { caller }, provenance: [caller], message };
-}
-
-function callOptionsFromEnvelope(envelope: RpcEnvelope): RpcCallOptions | undefined {
-  const options: RpcCallOptions = {};
-  if (envelope.destination) options.destination = envelope.destination;
-  if (envelope.delivery.idempotencyKey) options.idempotencyKey = envelope.delivery.idempotencyKey;
-  if (envelope.delivery.readOnly === true) options.readOnly = true;
-  return options.destination || options.idempotencyKey || options.readOnly ? options : undefined;
-}
-
-/**
- * Cross-client approval confidentiality: a client may call `shellApproval` only
- * while it holds the `approval-surface` capability, otherwise it could
- * enumerate and silently grant or deny another principal's approvals.
- */
-export function authorizeClientServerCall(
-  callerId: string,
-  capabilities: readonly string[] | undefined,
-  service: string
-): void {
-  if (service !== "shellApproval") return;
-  if (!capabilities?.includes("approval-surface")) {
-    throw new Error(`shellApproval is only available to an approval surface, not ${callerId}`);
-  }
 }
 
 /** What identifies one bound renderer document to the host. */
@@ -221,11 +202,7 @@ export class RendererPortHost {
     window: { callerId: string; runtimeId: string },
     runtime: WorkspaceIpcRuntime
   ): { scoped: ScopedServerCaller; release(): Promise<void> } {
-    const scoped = {
-      callerId: window.runtimeId,
-      callerKind: "client" as const,
-      instanceId: window.callerId,
-    };
+    const scoped = scopedClientCaller(window);
     const entry = this.clientScopes.get(window.callerId) ?? { refs: 0, scoped };
     entry.refs += 1;
     this.clientScopes.set(window.callerId, entry);
@@ -297,7 +274,8 @@ export class RendererPortHost {
   /**
    * Whether this client window acts as the device in routed workspaces.
    * A client holds `device-session` only when the server granted it to a
-   * trusted client, and only the System workspace's client may use it.
+   * trusted client. Which workspaces it may reach is enforced by each
+   * workspace server, which admits the principal's credential.
    */
   async resolveUi(
     session: RendererPortSession,
@@ -308,27 +286,11 @@ export class RendererPortHost {
     if (caller.callerKind !== "client" || !client?.capabilities.includes("device-session")) {
       return null;
     }
-    const identity = { workspaceId: client.workspaceId, runtimeId: client.principalId };
+    const identity = { runtimeId: client.principalId };
     const code = {
       executionDigest: client.executionDigest,
       effectiveVersion: client.effectiveVersion,
     };
-    const members = async (): Promise<HubWorkspaceEntry[]> =>
-      (await this.deps.hubControlClient.call(
-        "hubControl",
-        "listWorkspaces",
-        []
-      )) as HubWorkspaceEntry[];
-    const admitted = (entries: HubWorkspaceEntry[]): boolean => {
-      const system = entries.find((entry) => entry.privateRole === "system");
-      if (system?.workspaceId !== identity.workspaceId) return false;
-      return (
-        destination.kind !== "workspace" ||
-        entries.some((entry) => entry.workspaceId === destination.workspaceId)
-      );
-    };
-    const first = await members();
-    if (!admitted(first) || identity.workspaceId !== this.deps.workspaceId) return null;
     const workspace =
       destination.kind === "workspace"
         ? await this.deps.resolveWorkspace(destination.workspaceId)
@@ -338,18 +300,16 @@ export class RendererPortHost {
       serverClient: workspace?.serverClient ?? this.deps.hubControlClient,
       ...(workspace ? { workspace } : {}),
     };
-    // The window may have changed while membership and the runtime resolved.
+    // The window may have changed while the runtime resolved.
     const current = session.client;
     if (
       !current?.capabilities.includes("device-session") ||
-      current.workspaceId !== identity.workspaceId ||
       current.principalId !== identity.runtimeId ||
       current.executionDigest !== code.executionDigest ||
       current.effectiveVersion !== code.effectiveVersion
     ) {
       return null;
     }
-    if (!admitted(await members())) return null;
     return target;
   }
 }
@@ -361,6 +321,15 @@ export class RendererPortHost {
  */
 export class RendererPortSession {
   client: ClientBindingState | undefined;
+
+  /** This document's window as the shared client relay sees it. */
+  private relayWindow(): ClientRelayWindow {
+    return {
+      callerId: this.callerId,
+      runtimeId: this.runtimeId,
+      capabilities: this.client?.capabilities,
+    };
+  }
   private closed = false;
   private closing: Promise<void> | null = null;
   private readonly uiSessions: UiSessions;
@@ -807,7 +776,7 @@ export class RendererPortSession {
     if (envelope.target !== "main") {
       void runtime.serverClient
         .sendAs(
-          { callerId: this.runtimeId, callerKind: caller.callerKind, instanceId: this.callerId },
+          scopedClientCaller(this.relayWindow()),
           stampEnvelopeCaller(envelope, { callerId: this.runtimeId, callerKind: caller.callerKind })
         )
         .catch((error: unknown) => {
@@ -882,27 +851,16 @@ export class RendererPortSession {
           // Server is the default owner so newly registered userland/workerd
           // services are reachable without a shared routing-list update.
           if (callerKind === "client") {
+            authorizeClientRelay(this.relayWindow(), service);
             try {
-              authorizeClientServerCall(this.callerId, this.client?.capabilities, service);
-            } catch (cause) {
-              const text = formatRpcFailure(cause);
-              const code = (cause as { code?: unknown } | null)?.code;
-              throw new RpcBoundaryError(
-                text,
-                "access",
-                typeof code === "string" ? code : undefined,
-                cause
+              result = await callAsClient(
+                runtime.serverClient,
+                this.relayWindow(),
+                service,
+                method,
+                req.args,
+                callOptions
               );
-            }
-            try {
-              const scoped = {
-                callerId: this.runtimeId,
-                callerKind,
-                instanceId: this.callerId,
-              };
-              result = callOptions
-                ? await runtime.serverClient.callAs(scoped, service, method, req.args, callOptions)
-                : await runtime.serverClient.callAs(scoped, service, method, req.args);
             } catch (error) {
               // Observe the executed server boundary, never a pre-dispatch authorization refusal.
               runtime.dispatcher.observeFailure(call, service, method, error);
@@ -1063,9 +1021,9 @@ export class RendererPortSession {
         }
         response = result;
       } else if (this.caller.callerKind === "client") {
-        authorizeClientServerCall(this.callerId, this.client?.capabilities, service);
+        authorizeClientRelay(this.relayWindow(), service);
         response = await runtime.serverClient.streamAs(
-          { callerId: this.runtimeId, callerKind: "client", instanceId: this.callerId },
+          scopedClientCaller(this.relayWindow()),
           service,
           method,
           request.args,

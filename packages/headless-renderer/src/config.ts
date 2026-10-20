@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getProfileDataPath } from "@vibestudio/env-paths";
 import type { RpcClient } from "@vibestudio/rpc";
 import type { CdpHostBridgeDiagnostic, CdpHostBridgeSocket } from "./hostBridge.js";
 
@@ -94,7 +95,7 @@ export function resolveConfig(
   const idleExitEnv = env["VIBESTUDIO_HEADLESS_IDLE_EXIT_MS"];
   const clientSessionId = overrides.clientSessionId ?? `headless-${randomUUID()}`;
   const profileRoot = path.join(
-    env["VIBESTUDIO_INSTANCE_ROOT"] ?? os.tmpdir(),
+    env["VIBESTUDIO_INSTANCE_ROOT"] ?? getProfileDataPath(),
     "vibestudio-headless"
   );
   return {

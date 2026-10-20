@@ -5,11 +5,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { serializeRpcFailure } from "@vibestudio/rpc";
+import { Ownership } from "@vibestudio/shared/ownership";
 import {
   isCancellationOnly,
   prepareWorkspaceRelease,
   resolveReleaseBuildConcurrency,
 } from "./prepare-workspace-release.mjs";
+
+/** Ownership ledgers and scratch live in a profile; keep each test's private. */
+function openOwnership(root) {
+  return Ownership.open({ profileDir: path.join(root, "profile"), lifetime: "leased" });
+}
 
 async function withProducer(
   code,
@@ -19,6 +25,7 @@ async function withProducer(
 ) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-release-lifecycle-"));
   let owner;
+  const ownership = await openOwnership(root);
   try {
     const appRoot = await configureAppRoot(root);
     const entry = path.join(root, "producer.cjs");
@@ -27,6 +34,7 @@ async function withProducer(
     delete env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT;
     await configureEnv(env, root);
     owner = prepareWorkspaceRelease({
+      ownership,
       appRoot,
       output: root,
       scratch: path.join(root, "scratch"),
@@ -37,6 +45,7 @@ async function withProducer(
     await check(owner, root, env);
   } finally {
     await owner?.stop().catch(() => {});
+    await ownership.release();
     await fs.rm(root, { recursive: true, force: true });
   }
 }
@@ -124,10 +133,15 @@ void test("owns a distinct source-phase root for standalone publication and swit
 
 void test("rejects missing declared releases before starting a producer", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-release-missing-"));
+  const ownership = await Ownership.open({
+    profileDir: await fs.mkdtemp(path.join(os.tmpdir(), "workspace-release-profile-")),
+    lifetime: "leased",
+  });
   try {
     assert.throws(
       () =>
         prepareWorkspaceRelease({
+          ownership,
           appRoot: root,
           output: path.join(root, "new"),
           scratch: path.join(root, "scratch"),
@@ -139,6 +153,8 @@ void test("rejects missing declared releases before starting a producer", async 
     );
     assert.deepEqual(await fs.readdir(root), []);
   } finally {
+    await ownership.release();
+    await fs.rm(ownership.profileDir, { recursive: true, force: true });
     await fs.rm(root, { recursive: true, force: true });
   }
 });
@@ -397,6 +413,7 @@ void test("publishes an immutable source root before exhaustive completion", asy
   const script = `const fs=require("fs"); const source=process.argv[process.argv.indexOf("--source-output")+1]; process.send({kind:"sources-ready",root:source},()=>{fs.writeFileSync("sources-sent","yes"); const finish=()=>{if(fs.existsSync("allow-completion")){watcher.close();process.send({kind:"completed"},()=>process.disconnect());}}; const watcher=fs.watch(".",finish); finish();});`;
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "workspace-release-sources-"));
   let owner;
+  const ownership = await openOwnership(root);
   try {
     const entry = path.join(root, "producer.cjs");
     const sourceOutput = path.join(root, "sources");
@@ -404,6 +421,7 @@ void test("publishes an immutable source root before exhaustive completion", asy
     const env = { ...process.env };
     delete env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT;
     owner = prepareWorkspaceRelease({
+      ownership,
       appRoot: root,
       output: path.join(root, "release"),
       sourceOutput,
@@ -424,6 +442,7 @@ void test("publishes an immutable source root before exhaustive completion", asy
     assert.equal(env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT, path.join(root, "release"));
   } finally {
     await owner?.stop().catch(() => {});
+    await ownership.release();
     await fs.rm(root, { recursive: true, force: true });
   }
 });

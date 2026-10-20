@@ -1,9 +1,14 @@
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import { getProfileDataPath } from "@vibestudio/env-paths";
-import { removeSealedTree } from "@vibestudio/shared/removeSealedTree";
+import { observeProcessStart } from "@vibestudio/shared/ownedProcessIdentity";
+import {
+  ledgerDirOf,
+  ledgerLiveness,
+  readLedger,
+  type Ledger,
+} from "@vibestudio/shared/ownershipLedger";
 import { writeFileAtomicSync } from "../atomicFile.js";
 
 const INSTANCE_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -20,6 +25,14 @@ export interface DevInstanceRecord {
   profileRoot?: string;
   generationId: string;
   startedAt: number;
+  /**
+   * The ownership ledger that claims this instance id. The record is only as
+   * alive as that claim: a record whose ledger is gone, replaced, or held by a
+   * dead owner names an instance that is not running.
+   */
+  ledgerId: string;
+  /** Distinguishes this claim from a later claim of the same id. */
+  ledgerToken: string;
 }
 
 export interface DevInstanceReadyRecord {
@@ -55,8 +68,43 @@ function registryPath(repoRoot: string, id: string): string {
   return path.join(registryDir(repoRoot), `${id}.json`);
 }
 
-function registryLockPath(repoRoot: string, id: string): string {
-  return `${registryPath(repoRoot, id)}.lock`;
+/** Where an instance's registry record lives; the instance's own ownership removes it. */
+export function devInstanceRecordPath(repoRoot: string, id: string): string {
+  return registryPath(canonicalRepoRoot(repoRoot), id);
+}
+
+/** The ownership directory every launcher of this profile shares. */
+export function devInstanceLedgerDir(): string {
+  return ledgerDirOf(getProfileDataPath());
+}
+
+/**
+ * The ownership claim name of one instance. It carries the checkout key so the
+ * same instance id in two checkouts of one profile never contends for a claim.
+ */
+export function devInstanceLedgerId(repoRoot: string, id: string): string {
+  assertInstanceId(id);
+  return `instance-${repoKey(repoRoot)}-${id}`;
+}
+
+/** The ledger of a record's claim, when that claim is still the one the record names. */
+export function readDevInstanceLedger(
+  record: Pick<DevInstanceRecord, "ledgerId" | "ledgerToken">
+): Ledger | null {
+  const ledger = readLedger(devInstanceLedgerDir(), record.ledgerId);
+  return ledger && ledger.token === record.ledgerToken ? ledger : null;
+}
+
+/** True while the record's claim exists and its owning process incarnation is alive. */
+export function devInstanceHolderLive(
+  record: Pick<DevInstanceRecord, "ledgerId" | "ledgerToken">
+): boolean {
+  const ledger = readDevInstanceLedger(record);
+  return (
+    ledger !== null &&
+    ledgerLiveness(ledger) === "live" &&
+    observeProcessStart(ledger.owner) === "live"
+  );
 }
 
 export function devInstanceReadyPath(instance: Pick<DevInstanceRecord, "root">): string {
@@ -84,10 +132,12 @@ export function publishDevInstanceReady(
 }
 
 export async function waitForDevInstanceReady(
-  instance: Pick<DevInstanceRecord, "root" | "generationId" | "supervisorPid" | "id">
+  instance: Pick<DevInstanceRecord, "root" | "generationId" | "id" | "ledgerId" | "ledgerToken">,
+  signal?: AbortSignal
 ): Promise<DevInstanceReadyRecord> {
   const file = devInstanceReadyPath(instance);
   for (;;) {
+    signal?.throwIfAborted();
     try {
       const value = JSON.parse(fs.readFileSync(file, "utf8")) as Partial<DevInstanceReadyRecord>;
       if (
@@ -122,15 +172,11 @@ export async function waitForDevInstanceReady(
         throw error;
       }
     }
-    try {
-      process.kill(instance.supervisorPid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-        throw new Error(
-          `Vibestudio instance ${JSON.stringify(instance.id)} exited before CLI readiness`
-        );
-      }
-      throw error;
+    // The owner's exit is the terminal failure event; elapsed time is not.
+    if (!devInstanceHolderLive(instance)) {
+      throw new Error(
+        `Vibestudio instance ${JSON.stringify(instance.id)} exited before CLI readiness`
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -141,36 +187,17 @@ export function persistentInstanceRoot(repoRoot: string, id: string): string {
   return path.join(getProfileDataPath(), "instance-state", repoKey(repoRoot), id);
 }
 
-export function createEphemeralInstanceRoot(id: string): string {
-  assertInstanceId(id);
-  return fs.mkdtempSync(path.join(os.tmpdir(), `vibestudio-${id}-`));
-}
-
-export function removeEphemeralInstanceRoot(
-  root: string,
-  deps: {
-    rmSync?: typeof fs.rmSync;
-  } = {}
-): Error | null {
-  try {
-    // A workspace child can still be closing SQLite files or renaming its
-    // final diagnostics after the hub process exits, and a native session
-    // killed rather than retired leaves its projected toolchain sealed
-    // against writes. Both are removable; neither is removable by a plain
-    // recursive delete.
-    removeSealedTree(root, { ...(deps.rmSync ? { rmSync: deps.rmSync } : {}) });
-    return null;
-  } catch (error) {
-    return error instanceof Error ? error : new Error(String(error));
-  }
-}
-
 export function generatedInstanceId(kind: DevInstanceRecord["kind"]): string {
   return `${kind}-${randomBytes(4).toString("hex")}`;
 }
 
+/**
+ * Record a running instance. The caller must hold the instance's ownership
+ * claim (`ledgerId`): the claim, not this record, is what makes the id
+ * exclusive, so registration is a plain atomic write bound to that claim.
+ */
 export function registerDevInstance(
-  input: Omit<DevInstanceRecord, "schemaVersion" | "repoRoot" | "generationId"> & {
+  input: Omit<DevInstanceRecord, "schemaVersion" | "repoRoot" | "generationId" | "ledgerToken"> & {
     repoRoot: string;
   }
 ): DevInstanceRecord {
@@ -183,60 +210,34 @@ export function registerDevInstance(
   ) {
     throw new Error("A private developer profile must be the ephemeral instance's profile root");
   }
+  const repoRoot = canonicalRepoRoot(input.repoRoot);
+  const ledger = readLedger(devInstanceLedgerDir(), input.ledgerId);
+  if (!ledger || ledgerLiveness(ledger) !== "live") {
+    throw Object.assign(
+      new Error(
+        `Vibestudio instance ${JSON.stringify(input.id)} cannot be registered without a live ownership claim`
+      ),
+      { code: "EOWNERSHIP" }
+    );
+  }
   const record: DevInstanceRecord = {
     schemaVersion: 1,
     ...input,
     generationId: randomBytes(16).toString("hex"),
     root,
     ...(profileRoot ? { profileRoot } : {}),
-    repoRoot: canonicalRepoRoot(input.repoRoot),
+    repoRoot,
+    ledgerToken: ledger.token,
   };
-  const lockPath = registryLockPath(record.repoRoot, record.id);
-  fs.mkdirSync(path.dirname(lockPath), { recursive: true, mode: 0o700 });
-  for (;;) {
-    try {
-      const fd = fs.openSync(lockPath, "wx", 0o600);
-      fs.writeFileSync(fd, `${record.supervisorPid}\n`, "utf8");
-      fs.fsyncSync(fd);
-      fs.closeSync(fd);
-      break;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      const owner = Number(fs.readFileSync(lockPath, "utf8").trim());
-      if (!Number.isInteger(owner) || owner <= 0) {
-        fs.rmSync(lockPath, { force: true });
-        continue;
-      }
-      try {
-        process.kill(owner, 0);
-      } catch (ownerError) {
-        if ((ownerError as NodeJS.ErrnoException).code === "ESRCH") {
-          fs.rmSync(lockPath, { force: true });
-          continue;
-        }
-        throw ownerError;
-      }
-      throw new Error(
-        `Vibestudio instance ${JSON.stringify(record.id)} is already owned by supervisor PID ${owner}`
-      );
-    }
-  }
-  try {
-    writeFileAtomicSync(
-      registryPath(record.repoRoot, record.id),
-      `${JSON.stringify(record, null, 2)}\n`,
-      { mode: 0o600 }
-    );
-  } catch (error) {
-    fs.rmSync(lockPath, { force: true });
-    throw error;
-  }
+  fs.mkdirSync(registryDir(repoRoot), { recursive: true, mode: 0o700 });
+  writeFileAtomicSync(registryPath(repoRoot, record.id), `${JSON.stringify(record, null, 2)}\n`, {
+    mode: 0o600,
+  });
   return record;
 }
 
 export function unregisterDevInstance(repoRoot: string, id: string): void {
   fs.rmSync(registryPath(repoRoot, id), { force: true });
-  fs.rmSync(registryLockPath(repoRoot, id), { force: true });
 }
 
 export function readDevInstanceRecord(repoRoot: string, id: string): DevInstanceRecord {
@@ -283,6 +284,10 @@ export function readDevInstanceRecord(repoRoot: string, id: string): DevInstance
         !path.isAbsolute(record.profileRoot) ||
         record.lifecycle !== "ephemeral" ||
         record.profileRoot !== path.join(record.root, "profile"))) ||
+    typeof record.ledgerId !== "string" ||
+    record.ledgerId.length === 0 ||
+    typeof record.ledgerToken !== "string" ||
+    record.ledgerToken.length === 0 ||
     typeof record.generationId !== "string" ||
     !/^[a-f0-9]{32}$/u.test(record.generationId) ||
     typeof record.startedAt !== "number" ||
@@ -295,25 +300,23 @@ export function readDevInstanceRecord(repoRoot: string, id: string): DevInstance
 
 export function resolveDevInstance(repoRoot: string, id: string): DevInstanceRecord {
   const record = readDevInstanceRecord(repoRoot, id);
-  try {
-    process.kill(record.supervisorPid, 0);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ESRCH") {
-      throw new Error(
-        `Vibestudio instance ${JSON.stringify(id)} is no longer running ` +
-          `(stale record: ${registryPath(repoRoot, id)})`
-      );
-    }
-    throw error;
+  if (!devInstanceHolderLive(record)) {
+    throw new Error(
+      `Vibestudio instance ${JSON.stringify(id)} is no longer running ` +
+        `(stale record: ${registryPath(repoRoot, id)})`
+    );
   }
   return record;
 }
 
-/** Transfer an exact surviving generation to a new trusted supervisor PID. */
+/**
+ * Transfer an exact surviving generation to the owner holding `adopter`'s
+ * claim. The previous claim must no longer have a live owner.
+ */
 export function adoptDevInstance(
   repoRoot: string,
   expected: Pick<DevInstanceRecord, "id" | "generationId" | "root">,
-  supervisorPid = process.pid
+  adopter: { ledgerId: string; supervisorPid?: number }
 ): DevInstanceRecord {
   const current = readDevInstanceRecord(repoRoot, expected.id);
   if (
@@ -324,27 +327,24 @@ export function adoptDevInstance(
       code: "EOWNERSHIP",
     });
   }
-  if (current.supervisorPid !== supervisorPid) {
-    try {
-      process.kill(current.supervisorPid, 0);
-      throw Object.assign(
-        new Error(`Developer instance still has live supervisor ${current.supervisorPid}`),
-        { code: "EOWNERSHIP" }
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ESRCH") throw error;
-    }
+  if (current.ledgerId !== adopter.ledgerId && devInstanceHolderLive(current)) {
+    throw Object.assign(
+      new Error(`Developer instance still has a live owner (claim ${current.ledgerId})`),
+      { code: "EOWNERSHIP" }
+    );
   }
-  const lockPath = registryLockPath(current.repoRoot, current.id);
-  fs.rmSync(lockPath, { force: true });
-  const fd = fs.openSync(lockPath, "wx", 0o600);
-  try {
-    fs.writeFileSync(fd, `${supervisorPid}\n`, "utf8");
-    fs.fsyncSync(fd);
-  } finally {
-    fs.closeSync(fd);
+  const ledger = readLedger(devInstanceLedgerDir(), adopter.ledgerId);
+  if (!ledger || ledgerLiveness(ledger) !== "live") {
+    throw Object.assign(new Error("The adopting owner holds no live ownership claim"), {
+      code: "EOWNERSHIP",
+    });
   }
-  const adopted = { ...current, supervisorPid };
+  const adopted: DevInstanceRecord = {
+    ...current,
+    supervisorPid: adopter.supervisorPid ?? process.pid,
+    ledgerId: adopter.ledgerId,
+    ledgerToken: ledger.token,
+  };
   writeFileAtomicSync(
     registryPath(adopted.repoRoot, adopted.id),
     `${JSON.stringify(adopted, null, 2)}\n`,

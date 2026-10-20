@@ -1,5 +1,5 @@
-import { spawn, type ChildProcess } from "node:child_process";
 import * as path from "node:path";
+import type { OwnedProcess, Ownership } from "@vibestudio/shared/ownership";
 
 /**
  * Device drivers attached for the duration of one system-test command.
@@ -14,6 +14,11 @@ import * as path from "node:path";
  *
  * Readiness is the script announcing that its driver registered, or the
  * script exiting: both are events, so attaching never waits on a clock.
+ *
+ * Each driver is a member of the launcher's ownership, killed immediately when
+ * retired: the launcher's reaper retires it even if the launcher is killed. A
+ * driver script owns its own scratch and children through its own ownership,
+ * so retiring its group never strands them.
  */
 
 export const DEVICE_KINDS = ["terminal", "desktop"] as const;
@@ -42,7 +47,7 @@ export const DEVICE_EXECUTORS: Record<DeviceKind, DeviceExecutorSpec> = {
 
 interface Attached {
   kind: DeviceKind;
-  child: ChildProcess;
+  owned: OwnedProcess;
   exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   output: string[];
   /** Its failure to register was already reported; stopping it adds nothing. */
@@ -55,6 +60,7 @@ export interface AttachedDeviceDrivers {
 }
 
 export async function attachDeviceDrivers(input: {
+  ownership: Ownership;
   repoRoot: string;
   instanceId: string;
   kinds: readonly DeviceKind[];
@@ -76,11 +82,18 @@ export async function attachDeviceDrivers(input: {
 
   const starts = [...new Set(input.kinds)].map(async (kind) => {
     const spec = specs[kind];
-    const child = spawn(
+    const owned = input.ownership.spawn(
       process.execPath,
       [path.join(input.repoRoot, spec.script), "--instance", input.instanceId],
-      { cwd: input.repoRoot, env: process.env, stdio: ["ignore", "pipe", "pipe"] }
+      {
+        cwd: input.repoRoot,
+        env: process.env,
+        stdio: ["ignore", "pipe", "pipe"],
+        kill: "immediate",
+        label: `${kind}-device`,
+      }
     );
+    const child = owned.child;
     const output: string[] = [];
     const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
       (resolve) => {
@@ -91,7 +104,7 @@ export async function attachDeviceDrivers(input: {
         child.once("exit", (code, signal) => resolve({ code, signal }));
       }
     );
-    const driver: Attached = { kind, child, exited, output, failedToStart: false };
+    const driver: Attached = { kind, owned, exited, output, failedToStart: false };
     attached.push(driver);
     await new Promise<void>((resolve, reject) => {
       let buffered = "";
@@ -142,13 +155,15 @@ export async function attachDeviceDrivers(input: {
 }
 
 async function stopDriver(driver: Attached): Promise<void> {
-  if (driver.child.exitCode === null && driver.child.signalCode === null)
-    driver.child.kill("SIGTERM");
+  const { child } = driver.owned;
+  // A driver that ended on its own after registering was not stopped by us.
+  const endedBySelf = child.exitCode !== null || child.signalCode !== null;
+  await driver.owned.retire();
   const { code, signal } = await driver.exited;
-  if (driver.failedToStart) return;
-  if (code !== 0 && signal !== "SIGTERM") {
+  if (driver.failedToStart || !endedBySelf) return;
+  if (code !== 0) {
     throw new Error(
-      `The ${driver.kind} device driver did not stop cleanly (${signal ?? code}):\n${driver.output.slice(-20).join("\n")}`
+      `The ${driver.kind} device driver ended on its own (${signal ?? code}):\n${driver.output.slice(-20).join("\n")}`
     );
   }
 }

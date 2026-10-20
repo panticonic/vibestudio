@@ -96,7 +96,15 @@ export const CONVERSATION_PARAM = "conversation";
 
 /** What the host's own screen shows (pairing, review, messages); a running client has its own screen. */
 export interface HostUiState {
-  phase: "starting" | "needs-pairing" | "connecting" | "launching" | "running" | "failed";
+  phase:
+    | "starting"
+    | "needs-pairing"
+    | "connecting"
+    | "launching"
+    | "running"
+    /** Paired and connected with no client running (the last one was closed). */
+    | "idle"
+    | "failed";
   message: string;
   busy: boolean;
   /** A pairing link waiting for the person's confirmation. */
@@ -233,6 +241,19 @@ function describeFailure(error: unknown): string {
  * preparing is continued by the server's own events (`clients:changed`,
  * `shell-approval:resolved`) or by the person's answer.
  */
+interface ActiveLaunch {
+  readonly launcher: ClientLauncher;
+  readonly select: ClientSelection;
+  readonly reloadTag: string | null;
+  status: "preparing" | "approval-required";
+  detail: string | null;
+  approvals: PendingUnitInstallReviewApproval[];
+}
+
+function launchKey(select: ClientSelection): string {
+  return JSON.stringify(select);
+}
+
 export class HostRuntime {
   readonly ui: Store<HostUiState> = createStore(INITIAL_UI);
   private connection: DeviceConnection | null = null;
@@ -241,13 +262,8 @@ export class HostRuntime {
   private readonly running = new Map<string, Running>();
   private stopEvents: Array<() => void> = [];
   private releaseNative: (() => void) | null = null;
-  private launchGeneration = 0;
-  private activeLaunch: {
-    launcher: ClientLauncher;
-    select: ClientSelection;
-    reloadTag: string | null;
-    approvalIds: Set<string>;
-  } | null = null;
+  /** In-flight launches by selection: each client's launch has its own reviews and generation. */
+  private readonly launches = new Map<string, ActiveLaunch>();
   private cache: ClientArtifactCache | null = null;
   private pairing: Promise<boolean> | null = null;
 
@@ -362,20 +378,23 @@ export class HostRuntime {
 
   private async failBringUp(error: unknown): Promise<void> {
     const code = (error as { code?: unknown } | null)?.code;
-    if (code === "SESSION_AUTH_FAILED") {
-      // A rejected credential is terminal: drop it so the next start asks for a
-      // fresh pairing instead of looping on one the server will not honor.
+    const unusable =
+      code === "SESSION_AUTH_FAILED"
+        ? "Your saved pairing was rejected. Scan a fresh Vibestudio QR code to re-pair."
+        : code === "STORED_CONNECTION_UNSUPPORTED"
+          ? "This device was paired with an older Vibestudio build. Scan a fresh Vibestudio QR code to pair it again."
+          : null;
+    if (unusable) {
+      // A credential the server rejects, or one this build cannot read, is
+      // terminal: drop it so the next start asks for a fresh pairing instead of
+      // looping on one that can never work, and say why.
       try {
         await this.ports.device.forget();
-        this.patch({
-          phase: "needs-pairing",
-          message: "Your saved pairing was rejected. Scan a fresh Vibestudio QR code to re-pair.",
-          busy: false,
-        });
+        this.patch({ phase: "needs-pairing", message: unusable, busy: false });
       } catch (clearError) {
         this.patch({
           phase: "failed",
-          message: `Your saved pairing was rejected and could not be cleared securely: ${errorMessage(clearError)}`,
+          message: `${unusable.split(".")[0]}, and it could not be cleared securely: ${errorMessage(clearError)}`,
           busy: false,
         });
       }
@@ -539,8 +558,10 @@ export class HostRuntime {
   /**
    * Launch a client and run it. `reloadTag` replaces the running instance of
    * that tag (an adopted update or a rollback); otherwise the client starts.
+   * Resolves with the state this launch reached, or null when a newer launch
+   * of the same selection superseded it.
    */
-  async launch(select: ClientSelection, reloadTag: string | null): Promise<void> {
+  async launch(select: ClientSelection, reloadTag: string | null): Promise<LaunchState | null> {
     const connection = this.requireConnection();
     const call = this.callOf(connection);
     this.cache ??= new ClientArtifactCache(
@@ -553,26 +574,52 @@ export class HostRuntime {
       cache: this.cache,
       grants: principalGrantsOverCall(call),
     });
-    const generation = ++this.launchGeneration;
-    this.activeLaunch = { launcher, select, reloadTag, approvalIds: new Set() };
+    const key = launchKey(select);
+    const entry: ActiveLaunch = {
+      launcher,
+      select,
+      reloadTag,
+      status: "preparing",
+      detail: null,
+      approvals: [],
+    };
+    this.launches.set(key, entry);
     this.patch({ phase: "launching", busy: true, message: "Preparing your workspace..." });
     const state = await launcher.launch(select);
-    if (generation !== this.launchGeneration) return;
-    await this.applyLaunchState(state);
+    if (this.launches.get(key) !== entry) return null;
+    await this.applyLaunchState(key, entry, state);
+    return state;
   }
 
-  private async applyLaunchState(state: LaunchState): Promise<void> {
-    const active = this.activeLaunch;
+  /** The host screen shows every launch's reviews and the most urgent status. */
+  private publishLaunches(settled: Partial<HostUiState> = {}): void {
+    const entries = [...this.launches.values()];
+    const gated = entries.some((entry) => entry.status === "approval-required");
+    const preparing = entries.find((entry) => entry.status === "preparing");
+    this.patch({
+      ...settled,
+      approvals: entries.flatMap((entry) => entry.approvals),
+      ...(gated
+        ? { launchStatus: "approval-required" as const, launchDetail: null }
+        : preparing
+          ? { launchStatus: "preparing" as const, launchDetail: preparing.detail }
+          : {}),
+    });
+  }
+
+  private async applyLaunchState(
+    key: string,
+    entry: ActiveLaunch,
+    state: LaunchState
+  ): Promise<void> {
     switch (state.state) {
       case "approval-required": {
         this.smoke("embedded-host-target-approval-required");
-        if (active) active.approvalIds = new Set(state.approvals.map((a) => a.approvalId));
-        this.patch({
+        entry.status = "approval-required";
+        entry.approvals = state.approvals;
+        this.publishLaunches({
           phase: "launching",
           busy: false,
-          approvals: state.approvals,
-          launchStatus: "approval-required",
-          launchDetail: null,
           message: "Review workspace app access",
         });
         // The host's own screen carries the review.
@@ -581,89 +628,107 @@ export class HostRuntime {
       }
       case "preparing":
         this.smoke("embedded-host-target-preparing");
-        this.patch({
-          phase: "launching",
-          busy: true,
-          approvals: [],
-          launchStatus: "preparing",
-          launchDetail: state.reason,
-          message: state.reason,
-        });
+        entry.status = "preparing";
+        entry.approvals = [];
+        entry.detail = state.reason;
+        this.publishLaunches({ phase: "launching", busy: true, message: state.reason });
         return;
       case "unavailable":
-        this.activeLaunch = null;
-        this.patch({
+        this.launches.delete(key);
+        this.publishLaunches({
           phase: "failed",
           busy: false,
-          approvals: [],
           launchStatus: null,
+          launchDetail: null,
           message: state.reason,
         });
         return;
       case "ready":
-        this.activeLaunch = null;
-        this.patch({ approvals: [], launchStatus: "ready", launchDetail: null });
-        await this.run(state.launched, active?.reloadTag ?? null);
+        this.launches.delete(key);
+        this.publishLaunches({ launchStatus: "ready", launchDetail: null });
+        await this.run(state.launched, entry.reloadTag);
         return;
     }
   }
 
-  /** The server changed which clients exist or what is built: continue a launch that was preparing. */
+  private failLaunch(key: string, error: unknown): void {
+    this.launches.delete(key);
+    this.publishLaunches({
+      phase: "failed",
+      busy: false,
+      launchStatus: null,
+      launchDetail: null,
+      message: errorMessage(error),
+    });
+  }
+
+  /** The server changed which clients exist or what is built: continue every launch that was preparing. */
   private async onClientsChanged(): Promise<void> {
     this.refreshIntegration();
-    const active = this.activeLaunch;
-    if (!active) return;
-    try {
-      const state = await active.launcher.onClientsChanged();
-      if (state) await this.applyLaunchState(state);
-    } catch (error) {
-      this.activeLaunch = null;
-      this.patch({ phase: "failed", busy: false, message: errorMessage(error) });
-    }
+    await Promise.all(
+      [...this.launches].map(async ([key, entry]) => {
+        try {
+          const state = await entry.launcher.onClientsChanged();
+          if (state && this.launches.get(key) === entry) {
+            await this.applyLaunchState(key, entry, state);
+          }
+        } catch (error) {
+          this.failLaunch(key, error);
+        }
+      })
+    );
   }
 
   /** A review was answered (here or on another device): launch again so the server proceeds. */
   private async onApprovalResolved(approvalId: string): Promise<void> {
-    const active = this.activeLaunch;
-    if (!active?.approvalIds.has(approvalId)) return;
+    const found = [...this.launches].find(([, entry]) =>
+      entry.approvals.some((approval) => approval.approvalId === approvalId)
+    );
+    if (!found) return;
+    const [key, entry] = found;
     try {
-      this.patch({ busy: true, approvals: [], message: "Preparing your workspace..." });
-      await this.launch(active.select, active.reloadTag);
+      entry.approvals = [];
+      entry.status = "preparing";
+      this.publishLaunches({ busy: true, message: "Preparing your workspace..." });
+      await this.launch(entry.select, entry.reloadTag);
     } catch (error) {
-      this.activeLaunch = null;
-      this.patch({ phase: "failed", busy: false, message: errorMessage(error) });
+      this.failLaunch(key, error);
     }
   }
 
   /** The person's answer to the launch gate shown on the host screen. */
   async resolveApprovals(decision: "once" | "deny"): Promise<void> {
-    const active = this.activeLaunch;
-    const approvals = this.ui.get().approvals;
-    if (!active || approvals.length === 0) return;
+    const gated = [...this.launches].filter(([, entry]) => entry.approvals.length > 0);
+    if (gated.length === 0) return;
     this.patch({ busy: true, message: decision === "once" ? "Approving..." : "Denying..." });
     this.smoke("embedded-host-target-approval-submitted");
-    // The answer given here continues this launch (`resolveApprovals`); the launch
-    // stops waiting on those reviews so their announcement starts no second launch.
-    for (const approval of approvals) active.approvalIds.delete(approval.approvalId);
-    try {
-      const state = await active.launcher.resolveApprovals(approvals, decision);
-      this.smoke("embedded-host-target-approval-resolved");
-      if (decision === "deny") {
-        this.activeLaunch = null;
-        this.patch({
-          phase: "failed",
-          busy: false,
-          approvals: [],
-          launchStatus: null,
-          message:
-            "You chose not to start the workspace app. Nothing from it was run. Retry to review it again.",
-        });
-      } else if (state) {
-        await this.applyLaunchState(state);
+    for (const [key, entry] of gated) {
+      const approvals = entry.approvals;
+      // The answer given here continues this launch (`resolveApprovals`); the launch
+      // stops waiting on those reviews so their announcement starts no second launch.
+      entry.approvals = [];
+      entry.status = "preparing";
+      try {
+        const state = await entry.launcher.resolveApprovals(approvals, decision);
+        this.smoke("embedded-host-target-approval-resolved");
+        if (decision === "deny") {
+          this.launches.delete(key);
+          this.publishLaunches({
+            phase: "failed",
+            busy: false,
+            launchStatus: null,
+            message:
+              "You chose not to start the workspace app. Nothing from it was run. Retry to review it again.",
+          });
+        } else if (state && this.launches.get(key) === entry) {
+          await this.applyLaunchState(key, entry, state);
+        }
+      } catch (error) {
+        console.error("[mobile-host] answering the launch review failed", describeFailure(error));
+        entry.approvals = approvals;
+        entry.status = "approval-required";
+        this.publishLaunches({ busy: false, message: errorMessage(error) });
       }
-    } catch (error) {
-      console.error("[mobile-host] answering the launch review failed", describeFailure(error));
-      this.patch({ busy: false, message: errorMessage(error) });
     }
   }
 
@@ -715,7 +780,6 @@ export class HostRuntime {
 
   private instanceFor(launched: LaunchedClient, intent: ClientIntent | null): ClientInstance {
     const connection = this.requireConnection();
-    const call = this.callOf(connection);
     let instance!: ClientInstance;
     const tag = () => instance.principalId;
     instance = new ClientInstance({
@@ -726,7 +790,6 @@ export class HostRuntime {
         account: connection.account,
         pipes: this.pipes!,
       }),
-      grants: principalGrantsOverCall(call),
       state: this.ports.state,
       device: this.ports.deviceCapabilities,
       notifications: this.ports.notifications.handlers,
@@ -844,13 +907,13 @@ export class HostRuntime {
   private async reload(tag: string, _why: "update" | "rollback"): Promise<void> {
     const running = this.running.get(tag);
     if (!running) throw new Error("That client is not running.");
-    await this.launch({ source: running.source }, tag);
-    if (this.ui.get().launchStatus === "approval-required") {
+    const state = await this.launch({ source: running.source }, tag);
+    if (state?.state === "approval-required") {
       throw new Error(
         "This update needs your review. Open Vibestudio to review it; the client reloads once you approve."
       );
     }
-    if (this.ui.get().phase === "failed") throw new Error(this.ui.get().message);
+    if (state?.state === "unavailable") throw new Error(state.reason);
   }
 
   private async rollback(tag: string): Promise<void> {
@@ -942,8 +1005,7 @@ export class HostRuntime {
 
   /** Stop every client and close the device's connections. Keeps every failure. */
   private async teardownDevice(reason: ClientStopReason): Promise<void> {
-    this.launchGeneration += 1;
-    this.activeLaunch = null;
+    this.launches.clear();
     const failures: unknown[] = [];
     for (const tag of [...this.running.keys()]) {
       try {
@@ -1063,14 +1125,17 @@ export class HostRuntime {
    * from a surface (a tile) that has nowhere else to say it.
    */
   private async runBackgroundIntent(name: string, text: string, clientId?: string): Promise<void> {
-    const picked = pickBackgroundIntent(await this.listClients(), name, clientId);
-    if (!picked)
-      throw new Error(`No client on this device declares the background intent "${name}".`);
-    const title = picked.intent.title ?? name;
-    const textParam = textParamOf(picked.intent);
-    const notificationId = `intent:${picked.id}:${name}`;
+    let title = name;
+    let notificationId = `intent:${clientId ?? ""}:${name}`;
+    let picked: ReturnType<typeof pickBackgroundIntent> = null;
     let body: string;
     try {
+      picked = pickBackgroundIntent(await this.listClients(), name, clientId);
+      if (!picked)
+        throw new Error(`No client on this device declares the background intent "${name}".`);
+      title = picked.intent.title ?? name;
+      notificationId = `intent:${picked.id}:${name}`;
+      const textParam = textParamOf(picked.intent);
       const result = await invokeBackgroundIntent(
         this.callOf(this.requireConnection()),
         this.descriptor(),
@@ -1085,7 +1150,7 @@ export class HostRuntime {
       title,
       body,
     });
-    this.smoke(`background-intent-completed.${picked.id}.${name}`);
+    this.smoke(`background-intent-completed.${picked?.id ?? clientId ?? ""}.${name}`);
   }
 
   /** What the person can pin to the home screen: launchers for the clients this device runs. */
@@ -1269,12 +1334,15 @@ export class HostRuntime {
   /**
    * The client intent that shows a conversation: the foreground intent
    * `open-conversation` that takes a `conversation` parameter (the channel id),
-   * of the first client on this device that declares one. Null when none does,
-   * or the device is not connected.
+   * of the first client on this device that declares one. Null when none does.
+   * Throws when the device cannot be brought up.
    */
   async conversationLaunch(channelId: string): Promise<ConversationLaunch | null> {
+    // A push can wake a cold process before the device is up: wait for the
+    // bring-up, and say why when it settles without a connection.
+    if (!this.connection) await this.bringUp(false);
     const deviceId = this.connection?.launch.deviceId;
-    if (!deviceId) return null;
+    if (!deviceId) throw new Error(this.ui.get().message || "This device is not connected.");
     const listing = (await this.listClients()).find(
       (candidate) =>
         candidate.runtime === "react-native" &&
@@ -1341,7 +1409,7 @@ export class HostRuntime {
           await running.instance.dispose().catch(() => undefined);
           await this.retainBuilds().catch(() => undefined);
           this.patch({
-            phase: this.running.size > 0 ? "running" : "needs-pairing",
+            phase: this.running.size > 0 ? "running" : "idle",
             message:
               event.state === "crashed"
                 ? `${running.title} stopped unexpectedly${event.message ? `: ${event.message}` : "."}`

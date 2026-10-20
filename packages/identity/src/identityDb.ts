@@ -18,6 +18,7 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { DatabaseSync, type SQLOutputValue, type StatementSync } from "node:sqlite";
 import type { User, UserRole } from "./types.js";
 import { openCanonicalSqliteDatabase } from "@vibestudio/sqlite";
@@ -53,6 +54,41 @@ export interface AgentCredentialRow {
   expiresAt?: number;
   revokedAt?: number;
 }
+
+/**
+ * A hub-attested client principal `client:<id>:<runtime>:<deviceId>`. It is
+ * valid in every workspace; `authority` is the sealed UnitAuthorityManifest of
+ * the exact build (stored as JSON, parsed by the consumer that builds the
+ * EntityRecord), `capabilities` the vetted effective capability set.
+ */
+export interface ClientPrincipalRow {
+  principalId: string;
+  userId: string;
+  deviceId: string;
+  clientId: string;
+  runtime: string;
+  source: string;
+  buildKey: string;
+  effectiveVersion: string;
+  executionDigest: string;
+  authority: unknown;
+  capabilities: string[];
+  attesterWorkspaceId: string;
+  attestedAt: number;
+  revokedAt?: number;
+}
+
+export interface ClientPrincipalFilter {
+  principalId?: string;
+  clientId?: string;
+  runtime?: string;
+  deviceId?: string;
+  attesterWorkspaceId?: string;
+}
+
+/** Presentable client credential: `clientcred:<credentialId>:<secret>`. */
+export const CLIENT_CREDENTIAL_PREFIX = "clientcred:";
+const CLIENT_CREDENTIALS_PER_PRINCIPAL = 16;
 
 /** The two invite intents (WP0 §4) plus first-run root bootstrap. */
 export type PairingCodeIntent = "root-bootstrap" | "invite-user" | "pair-device";
@@ -265,6 +301,48 @@ export class IdentityDb {
   getAgentCredential(agentId: string): AgentCredentialRow | null {
     const row = this.stmt("SELECT * FROM agent_credentials WHERE agent_id = ?").get(agentId);
     return row ? rowToAgentCredential(row) : null;
+  }
+
+  getClientPrincipal(principalId: string): ClientPrincipalRow | null {
+    const row = this.stmt("SELECT * FROM client_principals WHERE principal_id = ?").get(
+      principalId
+    );
+    return row ? rowToClientPrincipal(row) : null;
+  }
+
+  /**
+   * Validate a presented `clientcred:` token. Valid only while the credential
+   * is unrevoked, its principal is unrevoked with the same execution digest,
+   * the presenting transport key matches the bound key, and the principal's
+   * user and device are still live.
+   */
+  validateClientCredential(
+    token: string,
+    deviceKey?: string
+  ): { principal: ClientPrincipalRow; credentialId: string } | null {
+    if (!token.startsWith(CLIENT_CREDENTIAL_PREFIX)) return null;
+    const rest = token.slice(CLIENT_CREDENTIAL_PREFIX.length);
+    const sep = rest.indexOf(":");
+    if (sep <= 0) return null;
+    const credentialId = rest.slice(0, sep);
+    const secret = rest.slice(sep + 1);
+    if (!secret) return null;
+    const credential = this.stmt("SELECT * FROM client_credentials WHERE credential_id = ?").get(
+      credentialId
+    );
+    if (!credential || credential["revoked_at"] != null) return null;
+    const presented = Buffer.from(hashClientSecret(secret), "utf8");
+    const stored = Buffer.from(credential["token_hash"] as string, "utf8");
+    if (presented.length !== stored.length || !timingSafeEqual(presented, stored)) return null;
+    const bound = credential["device_key"] as string | null;
+    if (bound !== (deviceKey ?? null)) return null;
+    const principal = this.getClientPrincipal(credential["principal_id"] as string);
+    if (!principal || principal.revokedAt !== undefined) return null;
+    if (principal.executionDigest !== credential["execution_digest"]) return null;
+    const user = this.stmt("SELECT revoked_at FROM users WHERE id = ?").get(principal.userId);
+    if (!user || user["revoked_at"] != null) return null;
+    if (this.userForDevice(principal.deviceId) !== principal.userId) return null;
+    return { principal, credentialId };
   }
 
   getPairingCode(code: string): PairingCodeRow | null {
@@ -612,6 +690,133 @@ export class IdentityDb {
     });
   }
 
+  /** Non-revoked principals attested by one workspace. */
+  listClientPrincipals(attesterWorkspaceId: string): ClientPrincipalRow[] {
+    return this.stmt(
+      "SELECT * FROM client_principals WHERE attester_workspace_id = ? AND revoked_at IS NULL"
+    )
+      .all(attesterWorkspaceId)
+      .map(rowToClientPrincipal);
+  }
+
+  /** Attest a client principal; re-attestation upserts in place and clears revocation. */
+  upsertClientPrincipal(row: Omit<ClientPrincipalRow, "revokedAt">): void {
+    this.assertWritable();
+    this.stmt(
+      `INSERT INTO client_principals (
+         principal_id, user_id, device_id, client_id, runtime, source, build_key,
+         effective_version, execution_digest, authority_json, capabilities_json,
+         attester_workspace_id, attested_at, revoked_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+       ON CONFLICT(principal_id) DO UPDATE SET
+         user_id = excluded.user_id,
+         device_id = excluded.device_id,
+         client_id = excluded.client_id,
+         runtime = excluded.runtime,
+         source = excluded.source,
+         build_key = excluded.build_key,
+         effective_version = excluded.effective_version,
+         execution_digest = excluded.execution_digest,
+         authority_json = excluded.authority_json,
+         capabilities_json = excluded.capabilities_json,
+         attester_workspace_id = excluded.attester_workspace_id,
+         attested_at = excluded.attested_at,
+         revoked_at = NULL`
+    ).run(
+      row.principalId,
+      row.userId,
+      row.deviceId,
+      row.clientId,
+      row.runtime,
+      row.source,
+      row.buildKey,
+      row.effectiveVersion,
+      row.executionDigest,
+      JSON.stringify(row.authority),
+      JSON.stringify(row.capabilities),
+      row.attesterWorkspaceId,
+      row.attestedAt
+    );
+  }
+
+  /**
+   * Mint a credential bound to the principal's current execution digest.
+   * Keeps the newest 16 per principal; older ones are deleted.
+   */
+  mintClientCredential(input: { principalId: string; deviceKey?: string }): {
+    credentialId: string;
+    token: string;
+  } {
+    this.assertWritable();
+    return this.transaction(() => {
+      const principal = this.getClientPrincipal(input.principalId);
+      if (!principal || principal.revokedAt !== undefined) {
+        throw new Error(`Client principal ${input.principalId} is not attested`);
+      }
+      const credentialId = `ccr_${randomBytes(18).toString("base64url")}`;
+      const secret = randomBytes(32).toString("base64url");
+      this.stmt(
+        `INSERT INTO client_credentials (
+           credential_id, token_hash, principal_id, execution_digest, device_key, created_at
+         ) VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(
+        credentialId,
+        hashClientSecret(secret),
+        input.principalId,
+        principal.executionDigest,
+        input.deviceKey ?? null,
+        this.now()
+      );
+      this.stmt(
+        `DELETE FROM client_credentials WHERE principal_id = ? AND credential_id NOT IN (
+           SELECT credential_id FROM client_credentials WHERE principal_id = ?
+           ORDER BY rowid DESC LIMIT ?)`
+      ).run(input.principalId, input.principalId, CLIENT_CREDENTIALS_PER_PRINCIPAL);
+      return { credentialId, token: `${CLIENT_CREDENTIAL_PREFIX}${credentialId}:${secret}` };
+    });
+  }
+
+  /** Revoke matching live principals and their credentials; returns the newly revoked ids. */
+  revokeClientPrincipals(
+    filter: ClientPrincipalFilter,
+    _reason: string,
+    revokedAt = this.now()
+  ): string[] {
+    this.assertWritable();
+    const columns: Array<[keyof ClientPrincipalFilter, string]> = [
+      ["principalId", "principal_id"],
+      ["clientId", "client_id"],
+      ["runtime", "runtime"],
+      ["deviceId", "device_id"],
+      ["attesterWorkspaceId", "attester_workspace_id"],
+    ];
+    const clauses: string[] = ["revoked_at IS NULL"];
+    const params: string[] = [];
+    for (const [key, column] of columns) {
+      const value = filter[key];
+      if (value === undefined) continue;
+      clauses.push(`${column} = ?`);
+      params.push(value);
+    }
+    return this.transaction(() => {
+      const ids = this.stmt(
+        `SELECT principal_id FROM client_principals WHERE ${clauses.join(" AND ")}`
+      )
+        .all(...params)
+        .map((row) => row["principal_id"] as string);
+      for (const batch of chunks(ids, IN_CLAUSE_CHUNK)) {
+        const marks = batch.map(() => "?").join(",");
+        this.stmt(
+          `UPDATE client_principals SET revoked_at = ? WHERE principal_id IN (${marks})`
+        ).run(revokedAt, ...batch);
+        this.stmt(
+          `UPDATE client_credentials SET revoked_at = ? WHERE revoked_at IS NULL AND principal_id IN (${marks})`
+        ).run(revokedAt, ...batch);
+      }
+      return ids;
+    });
+  }
+
   /** Insert a pending pairing capability. */
   insertPairingInvite(invite: PairingInviteRow): void {
     this.assertWritable();
@@ -828,6 +1033,29 @@ function rowToAgentCredential(row: Row): AgentCredentialRow {
     entityId: row["entity_id"] as string,
     createdAt: row["created_at"] as number,
     ...(row["expires_at"] != null ? { expiresAt: row["expires_at"] as number } : {}),
+    ...(row["revoked_at"] != null ? { revokedAt: row["revoked_at"] as number } : {}),
+  };
+}
+
+function hashClientSecret(secret: string): string {
+  return createHash("sha256").update(secret, "utf8").digest("hex");
+}
+
+function rowToClientPrincipal(row: Row): ClientPrincipalRow {
+  return {
+    principalId: row["principal_id"] as string,
+    userId: row["user_id"] as string,
+    deviceId: row["device_id"] as string,
+    clientId: row["client_id"] as string,
+    runtime: row["runtime"] as string,
+    source: row["source"] as string,
+    buildKey: row["build_key"] as string,
+    effectiveVersion: row["effective_version"] as string,
+    executionDigest: row["execution_digest"] as string,
+    authority: JSON.parse(row["authority_json"] as string) as unknown,
+    capabilities: JSON.parse(row["capabilities_json"] as string) as string[],
+    attesterWorkspaceId: row["attester_workspace_id"] as string,
+    attestedAt: row["attested_at"] as number,
     ...(row["revoked_at"] != null ? { revokedAt: row["revoked_at"] as number } : {}),
   };
 }

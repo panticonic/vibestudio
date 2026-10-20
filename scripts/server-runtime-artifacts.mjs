@@ -1,3 +1,5 @@
+import { OWNERSHIP_REAPER_ARTIFACTS } from "./lib/ownership-reaper-assets.mjs";
+
 const workerStemByRole = Object.freeze({
   authorityAnalysis: "authority-analysis-worker",
   libraryLowering: "library-lowering-worker",
@@ -55,6 +57,7 @@ export const STANDALONE_SERVER_RUNTIME_ARTIFACTS = Object.freeze([
   "dist/dependency-content-maintenance.cjs",
   "dist/internal-do-programs.json",
   "dist/sql-wasm.wasm",
+  ...OWNERSHIP_REAPER_ARTIFACTS,
   "dist/host-build-fingerprint.json",
   "dist/host-preparation-recipes.json",
 ]);

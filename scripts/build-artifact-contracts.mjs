@@ -3,7 +3,9 @@ import path from "node:path";
 
 /** Retained developer instances and build coordination are never release inputs. */
 export const DEVELOPMENT_DIST_ENTRIES = new Set([
-  "host-generations", "source-server-prerequisites.lock", "host-build.lock",
+  "host-generations",
+  "source-server-prerequisites.lock",
+  "host-build.lock",
   "node-payload",
 ]);
 
@@ -33,3 +35,14 @@ const __dirname = __pathDirname(__filename);`;
 /** Banner injected verbatim into the standalone Node ESM server artifact. */
 export const SERVER_ESM_BANNER = `#!/usr/bin/env node
 ${NODE_ESM_COMPAT_BANNER}`;
+
+/**
+ * `import.meta.url` of a CommonJS host bundle. esbuild erases it from CJS
+ * output, but the bundled ownership client locates its reaper beside the
+ * module it was compiled into, so the bundle supplies its own physical URL
+ * (the unpacked directory when the bundle runs from an asar archive, where the
+ * reaper ships as plain files).
+ */
+export const CJS_IMPORT_META_BANNER = `var __bundleUrl = require("node:url").pathToFileURL(__filename.replace(/\\.asar([\\\\/])/, ".asar.unpacked$1")).href;`;
+
+export const CJS_IMPORT_META_DEFINE = Object.freeze({ "import.meta.url": "__bundleUrl" });

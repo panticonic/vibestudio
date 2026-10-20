@@ -180,3 +180,28 @@ export function buildKeyRootProvider(input: {
     },
   };
 }
+
+/**
+ * The client generations a registry holds: each active build and every
+ * rollback target. A workspace without a ClientHost (any but System) holds none.
+ */
+export function clientGenerationBuildKeys(
+  registry: {
+    list(): readonly {
+      name: string;
+      activeBundleKey?: string | null;
+      previousVersions: readonly { activeBundleKey: string }[];
+    }[];
+  } | null
+): { ownerId: string; buildKey: string; reason: ExecutionRootReason }[] {
+  return (registry?.list() ?? []).flatMap((entry) => [
+    ...(entry.activeBundleKey
+      ? [{ ownerId: entry.name, buildKey: entry.activeBundleKey, reason: "active" as const }]
+      : []),
+    ...entry.previousVersions.map((version) => ({
+      ownerId: entry.name,
+      buildKey: version.activeBundleKey,
+      reason: "rollback" as const,
+    })),
+  ]);
+}

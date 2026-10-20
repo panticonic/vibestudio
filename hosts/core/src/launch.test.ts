@@ -12,13 +12,11 @@ const descriptor = buildHostDescriptor({
 });
 const DIGEST = "a".repeat(64);
 const grantResponse = {
-  connectionGrant: "g",
-  expiresAt: 1,
+  credential: "clientcred:g",
   principalId: "client:chat:terminal:dev",
   deviceId: "dev",
   serverId: "s",
   serverBootId: "b",
-  workspaceId: "w",
 };
 
 async function readyClient(over: Record<string, unknown> = {}): Promise<ReadyClient> {

@@ -13,6 +13,7 @@ import {
 } from "./serverClient.js";
 import { CLOSE_TOKEN_REVOKED } from "@vibestudio/rpc/protocol/closeCodes";
 
+const APP_CREDENTIAL = "clientcred:app";
 const cleanup: Array<() => Promise<void> | void> = [];
 
 afterEach(async () => {
@@ -46,6 +47,7 @@ async function startRpcHarness() {
   });
   const wss = new WebSocketServer({ noServer: true });
   const grantRequests: unknown[][] = [];
+  const credentialRequests: string[] = [];
   const scopedRequests: Array<{ callerId: string; callerKind: string; method: string }> = [];
   const scopedEnvelopes: Array<{
     callerId: string;
@@ -56,9 +58,7 @@ async function startRpcHarness() {
   const appSockets: Array<import("ws").WebSocket> = [];
   const sessionsEnded: Array<{ caller: ScopedServerCaller; reason: string }> = [];
   let panelSocket: import("ws").WebSocket | undefined;
-  let appGrantSequence = 0;
   let appConnectionCount = 0;
-  const redeemedAppGrants = new Set<string>();
   let reverseSequence = 0;
   const reverseCalls = new Map<
     string,
@@ -90,9 +90,7 @@ async function startRpcHarness() {
         if (msg.type === "ws:auth") {
           const credential = admissionCredentials.get(msg.token ?? "") ?? "";
           const shell = credential === "shell-token";
-          const appGrant = credential.startsWith("app-grant-");
-          const app = appGrant && !redeemedAppGrants.has(credential);
-          if (app) redeemedAppGrants.add(credential);
+          const app = credential === APP_CREDENTIAL;
           const panel = credential === "panel-grant";
           // A pairing code redeems into a shell principal and rides the freshly
           // issued device credential back on the auth-result (rpcServer.handleAuth).
@@ -274,12 +272,12 @@ async function startRpcHarness() {
   const dropAppConnection = (): void => {
     lastAppSocket().terminate();
   };
-  // The host that verified the client build issues a fresh one-use grant for
-  // every connection attempt; the harness records each request.
+  // The host that verified the client build presents the same reusable
+  // credential on every connection attempt; the harness records each use.
   const sessions: ClientPrincipalSessions = {
-    connectionGrant: async (principalId) => {
-      grantRequests.push([principalId]);
-      return `app-grant-${++appGrantSequence}`;
+    credential: async (principalId) => {
+      credentialRequests.push(principalId);
+      return APP_CREDENTIAL;
     },
     sessionEnded: (caller, reason) => {
       sessionsEnded.push({ caller, reason });
@@ -288,6 +286,7 @@ async function startRpcHarness() {
   return {
     port,
     grantRequests,
+    credentialRequests,
     scopedRequests,
     scopedEnvelopes,
     admissionPlatforms,
@@ -400,7 +399,7 @@ describe("ServerClient scoped runtime callers", () => {
       )
     ).resolves.toEqual({ callerId: "@workspace-apps/shell", callerKind: "client" });
 
-    expect(harness.grantRequests).toEqual([["@workspace-apps/shell"]]);
+    expect(harness.credentialRequests).toEqual(["@workspace-apps/shell"]);
     expect(harness.scopedRequests).toEqual([
       {
         callerId: "@workspace-apps/shell",
@@ -562,10 +561,10 @@ describe("ServerClient scoped runtime callers", () => {
           requestCancel,
         ])
       );
-    expect(harness.grantRequests).toEqual([[caller.callerId]]);
+    expect(harness.credentialRequests).toEqual([caller.callerId]);
   });
 
-  it("reconnects the client-scoped session with a fresh one-shot grant", async () => {
+  it("reconnects the client-scoped session with the same reusable credential", async () => {
     const harness = await startRpcHarness();
     const client = await createServerClient(harness.port, "shell-token");
     client.setClientPrincipalSessions(harness.sessions);
@@ -600,10 +599,10 @@ describe("ServerClient scoped runtime callers", () => {
     harness.dropAppConnection();
     await expect.poll(() => harness.appConnectionCount(), { timeout: 5_000 }).toBe(2);
     await expect
-      .poll(() => harness.grantRequests, { timeout: 5_000 })
-      .toEqual([[caller.callerId], [caller.callerId]]);
+      .poll(() => harness.credentialRequests, { timeout: 5_000 })
+      .toEqual([caller.callerId, caller.callerId]);
 
-    // Server-side grant redemption precedes the client processing its auth
+    // Server-side admission precedes the client processing its auth
     // reply. The authenticated event proves the reopened session is usable.
     await expect
       .poll(
@@ -645,9 +644,9 @@ describe("ServerClient scoped runtime callers", () => {
     await client.callAs(first, "workspace", "getInfo", []);
     await client.callAs(second, "workspace", "getInfo", []);
 
-    // One connection, and one fresh grant, per window; a repeat call reuses it.
+    // One connection, and one credential use, per window; a repeat call reuses it.
     expect(harness.appConnectionCount()).toBe(2);
-    expect(harness.grantRequests).toEqual([[principal.callerId], [principal.callerId]]);
+    expect(harness.credentialRequests).toEqual([principal.callerId, principal.callerId]);
     await expect.poll(() => firstEvents.length).toBe(1);
     await expect.poll(() => secondEvents.length).toBe(1);
 
@@ -655,7 +654,7 @@ describe("ServerClient scoped runtime callers", () => {
     await client.releaseClientSession(first);
     await client.callAs(first, "workspace", "getInfo", []);
     expect(harness.appConnectionCount()).toBe(3);
-    expect(harness.grantRequests).toHaveLength(3);
+    expect(harness.credentialRequests).toHaveLength(3);
   });
 
   it("rejects a client caller until the host provides principal sessions", async () => {

@@ -19,12 +19,7 @@ import * as os from "os";
 import * as crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
-import {
-  captureOwnedProcessIdentity,
-  type OwnedProcessIdentity,
-} from "../../scripts/owned-process-identity.mjs";
-import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
-import { closeOwnedDesktop } from "../../scripts/lib/owned-desktop-close.mjs";
+import { ownDesktop, type OwnedDesktop } from "./ownedDesktop.js";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import {
   canonicalTemplateUrlFromCheckout,
@@ -444,7 +439,24 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
   app.once("close", () => closedElectronApplications.add(app));
   const output: string[] = [];
   const child = app.process();
-  const mainOwner = OwnedProcessGroup.create(child);
+  // The app's profile is this case's private central-data directory, so every
+  // ownership ledger found there belongs to this launch.
+  const profileDir = getCentralDataDirFromEnv(workspaceInfo.env);
+  let desktop: OwnedDesktop;
+  try {
+    desktop = await ownDesktop(app, { profileDir, appProfileDir: profileDir });
+  } catch (openFailure) {
+    try {
+      await app.close();
+    } catch (closeFailure) {
+      throw new AggregateError(
+        [openFailure, closeFailure],
+        "Electron ownership failed to open and the launched application could not be closed",
+        { cause: openFailure }
+      );
+    }
+    throw openFailure;
+  }
   child.stdout?.on("data", (chunk) => output.push(String(chunk)));
   child.stderr?.on("data", (chunk) => output.push(String(chunk)));
 
@@ -510,37 +522,18 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
         }
       }
 
-      const workspaceServerPid = readReadyFilePid(
-        path.join(workspacePath, "state", "server-ready.json")
-      );
-      const centralDataDir = getCentralDataDirFromEnv(workspaceInfo.env);
-      const hubReady = readHubReadyFile(path.join(centralDataDir, "server-auth", "hub-ready.json"));
-      const orphanOwners = [workspaceServerPid, hubReady?.pid].flatMap((pid) => {
-        const identity = captureTestProcessIdentity(pid);
-        return identity ? [OwnedProcessGroup.adopt(identity)] : [];
-      });
       const cleanupErrors: unknown[] = ledgerFailure ? [ledgerFailure] : [];
       try {
-        await closeOwnedDesktop(app, mainOwner);
+        await desktop.close();
       } catch (error) {
         cleanupErrors.push(error);
       }
-      // Only actual Electron exit makes these original detached children
-      // orphaned. Retain physical proof independently of logical close errors.
+      // Retained independently of logical close errors: only actual Electron
+      // exit makes its detached children orphans of its own ownership.
       try {
-        await mainOwner.join();
+        await desktop.retire();
       } catch (error) {
-        throw new AggregateError([...cleanupErrors, error], "Electron owner did not exit");
-      }
-      const physical = await Promise.allSettled(
-        orphanOwners.map((owner) => owner.retire("SIGKILL"))
-      );
-      const physicalFailures = physical.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : []
-      );
-      cleanupErrors.push(...physicalFailures);
-      if (physicalFailures.length) {
-        throw new AggregateError(cleanupErrors, "Electron resources did not retire");
+        throw new AggregateError([...cleanupErrors, error], "Electron resources did not retire");
       }
 
       if (ownsWorkspace) {
@@ -794,62 +787,6 @@ function readLogTail(logFile: string, maxCharacters = 20_000): string {
     return content.slice(-maxCharacters).trim();
   } catch {
     return "";
-  }
-}
-
-function readReadyFilePid(readyFile: string): number | undefined {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(readyFile, "utf8")) as { pid?: unknown };
-    return typeof parsed.pid === "number" && Number.isInteger(parsed.pid) && parsed.pid > 0
-      ? parsed.pid
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-function readHubReadyFile(readyFile: string): { pid: number; serverBootId: string } | undefined {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(readyFile, "utf8")) as {
-      pid?: unknown;
-      serverBootId?: unknown;
-    };
-    if (
-      typeof parsed.pid !== "number" ||
-      !Number.isInteger(parsed.pid) ||
-      parsed.pid <= 0 ||
-      typeof parsed.serverBootId !== "string" ||
-      parsed.serverBootId.length === 0
-    ) {
-      return undefined;
-    }
-    return { pid: parsed.pid, serverBootId: parsed.serverBootId };
-  } catch {
-    return undefined;
-  }
-}
-
-function captureTestProcessIdentity(pid: number | undefined): OwnedProcessIdentity | undefined {
-  if (!pid || process.platform === "win32") return undefined;
-  try {
-    return captureOwnedProcessIdentity(pid);
-  } catch (error) {
-    if (!isProcessAlive(pid)) return undefined;
-    throw error;
-  }
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    if (process.platform === "linux") {
-      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
-      const closeParen = stat.lastIndexOf(")");
-      if (closeParen >= 0 && stat.slice(closeParen + 2).startsWith("Z ")) return false;
-    }
-    return true;
-  } catch {
-    return false;
   }
 }
 

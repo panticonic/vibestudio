@@ -21,8 +21,14 @@ export function nativeViewMayUsePermission(
     return permission === "clipboard-sanitized-write";
   }
   const viewId = views?.findViewIdByWebContentsId(webContentsId);
-  if (permission === "fullscreen")
-    return viewId ? (views?.canFullscreenView(viewId) ?? false) : false;
+  if (permission === "fullscreen") {
+    // A view the panel host composes is presented by its ViewManager. A
+    // standalone client window owns its whole frame, so its own page may
+    // take it; the panel-hosting window's chrome never fullscreens itself.
+    if (viewId) return views?.canFullscreenView(viewId) ?? false;
+    const owner = windows.byWebContents(webContentsId);
+    return owner !== null && !owner.hostsPanels;
+  }
   const capability: ClientCapability | null =
     permission === "notifications"
       ? "notifications"
@@ -30,7 +36,11 @@ export function nativeViewMayUsePermission(
         ? "open-external"
         : permission === "clipboard-read" || permission === "clipboard-sanitized-write"
           ? "clipboard"
-          : null;
+          : permission === "pointerLock"
+            ? // Pointer lock is window behaviour; `theme` is what the former
+              // `window-management` capability became for window appearance.
+              "theme"
+            : null;
   if (capability === null) return false;
   const window = windows.byWebContents(webContentsId);
   if (window) return window.spec.capabilities.includes(capability);

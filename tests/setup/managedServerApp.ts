@@ -5,7 +5,8 @@ import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { launchManagedServerOwner } from "./managedServerLease";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
-import { terminateOwnedProcessTree } from "../../scripts/owned-process-tree.mjs";
+import { getProfileDataPath } from "@vibestudio/env-paths";
+import { ownDesktop, type OwnedDesktop } from "./ownedDesktop";
 import type { TestApp } from "./electronSetup";
 
 const require = createRequire(import.meta.url);
@@ -22,43 +23,47 @@ export async function launchManagedServerApp(
   // Leave room for D-Bus/keyring socket names within Unix socket path limits.
   const directory = fs.mkdtempSync(path.join(root, "d-"));
   const logPath = test.info().outputPath("managed-owner.log");
-  const owner = launchManagedServerOwner(instance, directory, root, logPath, environment);
+  const owner = await launchManagedServerOwner(instance, directory, root, logPath, environment);
   let app: Awaited<ReturnType<typeof electron.launch>> | undefined;
+  let desktop: OwnedDesktop | undefined;
   const output: string[] = [];
   let pairingLink = "";
   let cleanupPromise: Promise<void> | undefined;
   const cleanup = () =>
     (cleanupPromise ??= (async () => {
+      const failures: unknown[] = [];
       try {
-        if (app) {
-          const process = app.process();
-          let timer: ReturnType<typeof setTimeout> | undefined;
+        if (desktop) {
           try {
-            await Promise.race([
-              app.close(),
-              new Promise((_, reject) => {
-                timer = setTimeout(() => reject(new Error("Desktop close timeout")), 20_000);
-              }),
-            ]);
-          } catch {
-            if (process.pid) await terminateOwnedProcessTree(process.pid);
-          } finally {
-            clearTimeout(timer);
+            await desktop.close();
+          } catch (error) {
+            failures.push(error);
           }
+          try {
+            await desktop.retire();
+          } catch (error) {
+            failures.push(error);
+          }
+        } else if (app) {
+          // Launched, but ownership never opened: close it through its protocol.
+          await app.close();
         }
-      } finally {
-        try {
-          await owner.stop();
-        } finally {
-          await test
-            .info()
-            .attach("managed-owner.log", { path: logPath, contentType: "text/plain" });
-          await test.info().attach("paired-desktop.log", {
-            body: output.join("").replaceAll(pairingLink || "<no-link>", "<redacted pairing link>"),
-            contentType: "text/plain",
-          });
-        }
+      } catch (error) {
+        failures.push(error);
       }
+      try {
+        await owner.stop();
+      } catch (error) {
+        failures.push(error);
+      } finally {
+        await test.info().attach("managed-owner.log", { path: logPath, contentType: "text/plain" });
+        await test.info().attach("paired-desktop.log", {
+          body: output.join("").replaceAll(pairingLink || "<no-link>", "<redacted pairing link>"),
+          contentType: "text/plain",
+        });
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length) throw new AggregateError(failures, "Managed desktop cleanup failed");
     })());
   try {
     console.log(`[website-e2e] provisioning ${instance}`);
@@ -92,6 +97,14 @@ export async function launchManagedServerApp(
         Object.entries(env).filter((entry): entry is [string, string] => entry[1] !== undefined)
       ),
       timeout: 120_000,
+    });
+    // The disposable profile's ledgers (the desktop's own hub, executors) live
+    // under the secret service's XDG config home.
+    const xdgConfigHome = secrets.env["XDG_CONFIG_HOME"];
+    desktop = await ownDesktop(app, {
+      profileDir: getProfileDataPath(),
+      ...(xdgConfigHome ? { appProfileDir: path.join(xdgConfigHome, "vibestudio") } : {}),
+      meta: { runRoot: root },
     });
     app.process().stdout?.on("data", (chunk) => output.push(String(chunk)));
     app.process().stderr?.on("data", (chunk) => output.push(String(chunk)));

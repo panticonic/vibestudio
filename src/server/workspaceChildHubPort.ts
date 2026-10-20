@@ -22,6 +22,7 @@ import type { ApprovalResolvedEvent, GovernanceRecord } from "@vibestudio/shared
 import { DEVICE_ID_PATTERN, SERVER_BOOT_ID_PATTERN } from "@vibestudio/shared/deviceCredentials";
 import { workspaceHubControlMethods } from "@vibestudio/service-schemas/workspaceHubControl";
 import { HubPairingInviteSchema } from "@vibestudio/service-schemas/hubControl";
+import type { ClientPrincipalRow } from "@vibestudio/identity/identityDb";
 import type { IssuedAgentCredential } from "./hostCore/deviceAuthStore.js";
 import { governanceListQuerySchema } from "./hostCore/governanceQuery.js";
 
@@ -149,7 +150,85 @@ export const WorkspaceChildObserveDevicesInputSchema = z
   })
   .strict();
 
+const ClientPrincipalRowSchema: z.ZodType<ClientPrincipalRow> = z.custom<ClientPrincipalRow>(
+  (value) => typeof value === "object" && value !== null
+);
+
+/** Facts a System workspace child attests about the exact client build a device runs. The hub fills userId, attester, and time. */
+export const WorkspaceChildClientPrincipalAttestSchema = z
+  .object({
+    principalId: z.string().min(1),
+    deviceId: z.string().regex(DEVICE_ID_PATTERN),
+    clientId: z.string().min(1),
+    runtime: z.string().min(1),
+    source: z.string().min(1),
+    buildKey: z.string().min(1),
+    effectiveVersion: z.string().min(1),
+    executionDigest: z.string().regex(/^[0-9a-f]{64}$/u),
+    authority: z.unknown(),
+    capabilities: z.array(z.string().min(1)),
+  })
+  .strict();
+export type WorkspaceChildClientPrincipalAttestation = z.infer<
+  typeof WorkspaceChildClientPrincipalAttestSchema
+>;
+export const WorkspaceChildClientPrincipalAttestResultSchema = z
+  .object({ attested: z.literal(true) })
+  .strict();
+
+export const WorkspaceChildClientCredentialMintInputSchema = z
+  .object({
+    principalId: z.string().min(1),
+    deviceKey: z
+      .string()
+      .length(64)
+      .regex(/^[0-9a-f]+$/u)
+      .optional(),
+  })
+  .strict();
+export const WorkspaceChildClientCredentialMintResultSchema = z
+  .object({ credentialId: z.string().min(1), token: z.string().min(1) })
+  .strict();
+
+/** A child may retire only principals it attested; it must name at least one selector. */
+export const WorkspaceChildClientPrincipalRetireInputSchema = z
+  .object({
+    filter: z
+      .object({
+        principalId: z.string().min(1).optional(),
+        clientId: z.string().min(1).optional(),
+        runtime: z.string().min(1).optional(),
+        deviceId: z.string().min(1).optional(),
+      })
+      .strict()
+      .refine((filter) => Object.values(filter).some((value) => value !== undefined), {
+        message: "Retirement requires at least one selector",
+      }),
+    reason: z.string().min(1),
+  })
+  .strict();
+export const WorkspaceChildClientPrincipalRetireResultSchema = z
+  .object({ retiredPrincipalIds: z.array(z.string().min(1)) })
+  .strict();
+
+export const WorkspaceChildClientPrincipalListInputSchema = z
+  .object({ attesterWorkspaceId: z.string().min(1) })
+  .strict();
+export const WorkspaceChildClientPrincipalListResultSchema = z
+  .object({ principals: z.array(ClientPrincipalRowSchema) })
+  .strict();
+
 export interface WorkspaceChildHubPort {
+  /** Non-revoked principals this workspace attested (for startup reconciliation). */
+  listClientPrincipals(input: { attesterWorkspaceId: string }): Promise<ClientPrincipalRow[]>;
+  attestClientPrincipal(input: WorkspaceChildClientPrincipalAttestation): Promise<void>;
+  mintClientCredential(
+    input: z.infer<typeof WorkspaceChildClientCredentialMintInputSchema>
+  ): Promise<z.infer<typeof WorkspaceChildClientCredentialMintResultSchema>>;
+  retireClientPrincipals(
+    filter: z.infer<typeof WorkspaceChildClientPrincipalRetireInputSchema>["filter"],
+    reason: string
+  ): Promise<string[]>;
   createWorkspace(
     input: z.infer<typeof WorkspaceChildCreateInputSchema>
   ): Promise<z.infer<typeof workspaceHubControlMethods.createWorkspace.returns>>;
@@ -199,6 +278,10 @@ export function createWorkspaceChildHubPort(
       | "agent-credential/mint"
       | "agent-credential/revoke"
       | "agent-credential/revoke-entity"
+      | "client-principal/attest"
+      | "client-principal/mint"
+      | "client-principal/retire"
+      | "client-principal/list"
       | "device/touch"
       | "device/invite"
       | "device/observe"
@@ -267,6 +350,41 @@ export function createWorkspaceChildHubPort(
         fetchImpl,
         url: new URL(WORKSPACE_RPC_INTERNAL_ROUTE, options.hubUrl),
       }),
+    async attestClientPrincipal(input) {
+      await post(
+        "client-principal/attest",
+        WorkspaceChildClientPrincipalAttestSchema,
+        WorkspaceChildClientPrincipalAttestResultSchema,
+        input
+      );
+    },
+    mintClientCredential: (input) =>
+      post(
+        "client-principal/mint",
+        WorkspaceChildClientCredentialMintInputSchema,
+        WorkspaceChildClientCredentialMintResultSchema,
+        input
+      ),
+    async listClientPrincipals(input) {
+      return (
+        await post(
+          "client-principal/list",
+          WorkspaceChildClientPrincipalListInputSchema,
+          WorkspaceChildClientPrincipalListResultSchema,
+          input
+        )
+      ).principals;
+    },
+    async retireClientPrincipals(filter, reason) {
+      return (
+        await post(
+          "client-principal/retire",
+          WorkspaceChildClientPrincipalRetireInputSchema,
+          WorkspaceChildClientPrincipalRetireResultSchema,
+          { filter, reason }
+        )
+      ).retiredPrincipalIds;
+    },
     mintAgentCredential: (input) =>
       post(
         "agent-credential/mint",

@@ -1,13 +1,13 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { printConnectBanner } from "./connect-banner.mjs";
 import { parseHubReadyPayload, rootBootstrapPairingInvite } from "./hub-ready.mjs";
 import { createServerInvocation, serverEntryArg } from "./server-entry.mjs";
 import { hostArtifactRootForServerEntry } from "../../host-build-generations.mjs";
-import { bindProcessLifetimeToParent } from "../../owned-process-tree.mjs";
+import { getProfileDataPath } from "@vibestudio/env-paths";
+import { Ownership } from "@vibestudio/shared/ownership";
 import { prepareWorkspaceRelease } from "../../prepare-workspace-release.mjs";
 import { flagValue } from "./args.mjs";
 
@@ -76,29 +76,6 @@ function developmentWorkspaceTemplateEnv(appRoot, checkpointTarget) {
   };
 }
 
-/**
- * Signal the complete server process tree. POSIX children are spawned as
- * process-group leaders, so targeting the negative pid reaches package-manager
- * and workerd descendants as one lifecycle unit. ESRCH falls back to the
- * ChildProcess API for injected/non-detached children and test doubles.
- */
-export function signalProcessTree(
-  childProcess,
-  signal,
-  { platform = process.platform, killProcess = process.kill } = {}
-) {
-  if (!childProcess) return false;
-  if (platform !== "win32" && Number.isInteger(childProcess.pid) && childProcess.pid > 0) {
-    try {
-      killProcess(-childProcess.pid, signal);
-      return true;
-    } catch (error) {
-      if (error?.code !== "ESRCH") throw error;
-    }
-  }
-  return childProcess.kill?.(signal) ?? false;
-}
-
 /** Signal only the supervised hub. The hub owns ordered workspace-child and
  * workerd shutdown; broadcasting a graceful signal to the whole process group
  * races that ordering. When ChildProcess.kill() already marked the handle as
@@ -116,26 +93,6 @@ export function signalHubGracefully(childProcess, signal, { killProcess = proces
     }
   }
   return childProcess.kill?.(signal) ?? false;
-}
-
-/** Reap descendants after an abnormal hub exit without signaling the already
- * exited ChildProcess handle (which is meaningless and can recursively emit
- * `exit` in process adapters/test doubles). */
-function reapExitedProcessGroup(childProcess) {
-  if (
-    process.platform === "win32" ||
-    !Number.isInteger(childProcess?.pid) ||
-    childProcess.pid <= 0
-  ) {
-    return false;
-  }
-  try {
-    process.kill(-childProcess.pid, "SIGKILL");
-    return true;
-  } catch (error) {
-    if (error?.code === "ESRCH") return false;
-    throw error;
-  }
 }
 
 function parsePort(value, label) {
@@ -256,13 +213,32 @@ by clients after pairing.
 }
 
 export async function runPairServer(config, argv = process.argv.slice(2), hooks = {}) {
-  if (process.send) bindProcessLifetimeToParent();
   const options = parsePairArgs(argv, config);
   if (options.help) {
     printPairHelp(config);
     return;
   }
+  // The hub, its handoff directory and its preparation scratch belong to this
+  // process's ownership: its reaper retires them even if this wrapper is killed.
+  const ownership = await Ownership.open({ profileDir: getProfileDataPath(), lifetime: "leased" });
+  try {
+    await serve(ownership, config, options, hooks);
+  } catch (error) {
+    // The server never took over: nothing else will release the ownership.
+    try {
+      await ownership.release();
+    } catch (releaseError) {
+      throw new AggregateError(
+        [error, ...(releaseError instanceof AggregateError ? releaseError.errors : [releaseError])],
+        "Server startup failed and its resources did not retire cleanly",
+        { cause: error }
+      );
+    }
+    throw error;
+  }
+}
 
+async function serve(ownership, config, options, hooks) {
   // A source-mode server still imports infrastructure package dist exports,
   // loads internal Durable Objects from a compact bundle, and auto-spawns the
   // compiled headless host. Rebuild all three at one boundary so live server
@@ -297,27 +273,10 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
 
   let serverArgs = buildServerArgs(options);
   let ownedReadyDir = null;
-  let ownedCheckpointRoot = null;
-  const createPreparationRoot = () => {
-    const cacheRoot = path.join(
-      process.env.XDG_CACHE_HOME ?? path.join(os.homedir(), ".cache"),
-      "vibestudio",
-      "pair-preparation"
-    );
-    fs.mkdirSync(cacheRoot, { recursive: true, mode: 0o700 });
-    return fs.mkdtempSync(path.join(cacheRoot, "launch-"));
-  };
-  const ownedCheckpointDir = () => {
-    ownedCheckpointRoot ??= createPreparationRoot();
-    return ownedCheckpointRoot;
-  };
-  const cleanupOwnedPaths = () => {
-    if (ownedReadyDir) fs.rmSync(ownedReadyDir, { recursive: true, force: true });
-    if (ownedCheckpointRoot) fs.rmSync(ownedCheckpointRoot, { recursive: true, force: true });
-  };
+  const checkpointRoot = await ownership.scratch("pair-prep-");
   let readyFile = readyFileFromServerArgs(serverArgs);
   if (!readyFile) {
-    ownedReadyDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-pair-"));
+    ownedReadyDir = await ownership.scratch("pair-");
     readyFile = path.join(ownedReadyDir, "ready.json");
     serverArgs = [...serverArgs, "--ready-file", readyFile];
   }
@@ -335,12 +294,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     if (error?.code !== "ENOENT") throw error;
   }
 
-  try {
-    await hooks.beforeStart?.({ options, serverArgs });
-  } catch (error) {
-    cleanupOwnedPaths();
-    throw error;
-  }
+  await hooks.beforeStart?.({ options, serverArgs });
 
   console.log(`[${config.logPrefix}] Loopback host: ${LOOPBACK_HOST}`);
   console.log(`[${config.logPrefix}] Gateway port: ${options.port}`);
@@ -355,23 +309,19 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
   if (config.startupHint) console.log(`${config.startupHint}\n`);
 
   let child = null;
+  // The ownership record of `child`, absent when a test hook supplied it.
+  let ownedServer = null;
   let restarting = false;
   let buffer = "";
   let stderrBuffer = "";
   const stderrLines = [];
   let hasSpawned = false;
-  let workspaceTemplateEnv;
-  try {
-    workspaceTemplateEnv = hooks.developmentWorkspaceTemplateEnv
-      ? hooks.developmentWorkspaceTemplateEnv({ repoRoot, options })
-      : developmentWorkspaceTemplateEnv(
-          options.appRoot ?? repoRoot,
-          path.join(ownedCheckpointDir(), "base")
-        );
-  } catch (error) {
-    cleanupOwnedPaths();
-    throw error;
-  }
+  const workspaceTemplateEnv = hooks.developmentWorkspaceTemplateEnv
+    ? hooks.developmentWorkspaceTemplateEnv({ repoRoot, options })
+    : developmentWorkspaceTemplateEnv(
+        options.appRoot ?? repoRoot,
+        path.join(checkpointRoot, "base")
+      );
   const baseEnv = {
     ...process.env,
     ...workspaceTemplateEnv,
@@ -414,12 +364,11 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     signalForwarders.clear();
   };
 
-  const cleanupReadyState = () => {
+  const stopReadyPoll = () => {
     if (readyPoll !== null) {
       clearTimeout(readyPoll);
       readyPoll = null;
     }
-    cleanupOwnedPaths();
   };
 
   const spawnChild = () => {
@@ -440,21 +389,23 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     }
     hasSpawned = true;
     const invocation = createServerInvocation(serverArgs);
-    child = hooks.spawnServer
-      ? hooks.spawnServer({ serverArgs, env, repoRoot, invocation })
-      : spawn(invocation.command, invocation.args, {
-          cwd: repoRoot,
-          // The hub consumes this lease before bootstrap. Even when Windows
-          // terminates the wrapper without delivering a signal, disconnect
-          // revokes the hub and its descendants before their state is retired.
-          stdio: ["inherit", "pipe", "inherit", "ipc"],
-          env,
-          // Keep the child out of the wrapper terminal's foreground process
-          // group on POSIX. Otherwise Ctrl-C reaches child and wrapper at the
-          // same instant, so workerd can stop before the hub's ordered
-          // lifecycle drain. The wrapper remains the sole signal forwarder.
-          detached: process.platform !== "win32",
-        });
+    if (hooks.spawnServer) {
+      child = hooks.spawnServer({ serverArgs, env, repoRoot, invocation });
+    } else {
+      // Owned groups run outside the wrapper terminal's foreground process
+      // group on POSIX. Otherwise Ctrl-C reaches child and wrapper at the
+      // same instant, so workerd can stop before the hub's ordered lifecycle
+      // drain. The wrapper remains the sole signal forwarder. If this wrapper
+      // dies, the reaper stops the hub gracefully and kills what it leaves.
+      ownedServer = ownership.spawn(invocation.command, invocation.args, {
+        kill: "graceful",
+        label: "hub",
+        cwd: repoRoot,
+        env,
+        stdio: ["inherit", "pipe", "inherit"],
+      });
+      child = ownedServer.child;
+    }
     wireChild(child);
     startReadyPoll();
     return child;
@@ -566,6 +517,8 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
           current.once("exit", () => resolve(undefined));
           signalHubGracefully(current, "SIGTERM");
         });
+        // The old hub is gone; retire whatever its group still holds first.
+        await ownedServer?.join();
         restarting = false;
         spawnChild();
         return true;
@@ -612,23 +565,18 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
 
     childProcess.on("exit", async (code, signal) => {
       if (restarting) return;
-      // A clean hub has already drained its children. An abnormal exit may
-      // leave descendants in the detached hub group, so reap only that crash
-      // path; signaling an already-clean test/process handle can itself emit a
-      // second exit event.
-      if (signal !== null || code !== 0) {
-        try {
-          reapExitedProcessGroup(childProcess);
-        } catch (error) {
-          console.warn(
-            `[${config.logPrefix}] Failed to reap crashed server process group: ${error instanceof Error ? error.message : String(error)}`
-          );
-        }
-      }
       ending = true;
       try {
         await preparation?.stop();
-        cleanupReadyState();
+      } catch (error) {
+        console.error(error);
+        code = 1;
+      }
+      stopReadyPoll();
+      // The hub has exited: the ownership kills whatever its group still holds
+      // (descendants of a crash) and removes the handoff and scratch directories.
+      try {
+        await ownership.release();
       } catch (error) {
         console.error(error);
         code = 1;
@@ -650,7 +598,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
 
   if (process.env.VIBESTUDIO_SERVER_ENTRY === "live") {
     try {
-      const preparationRoot = ownedCheckpointDir();
+      const preparationRoot = checkpointRoot;
       preparation = (hooks.prepareWorkspaceRelease ?? prepareWorkspaceRelease)({
         executable: process.execPath,
         entry: path.join(env.VIBESTUDIO_HOST_ARTIFACT_ROOT, "prepare-workspace-templates.mjs"),
@@ -662,7 +610,6 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
       await preparation.completed;
     } catch (error) {
       await preparation?.stop();
-      if (error.code !== "EOWNERSHIP") cleanupReadyState();
       throw error;
     }
   }
@@ -676,7 +623,7 @@ export async function runPairServer(config, argv = process.argv.slice(2), hooks 
     });
   } catch (error) {
     await preparation?.stop();
-    cleanupReadyState();
+    stopReadyPoll();
     throw error;
   }
 

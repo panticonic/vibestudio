@@ -97,7 +97,12 @@ export class TerminalHostState {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return structuredClone(EMPTY);
       throw error;
     }
-    const parsed = JSON.parse(raw) as Partial<TerminalHostStateData>;
+    let parsed: Partial<TerminalHostStateData>;
+    try {
+      parsed = JSON.parse(raw) as Partial<TerminalHostStateData>;
+    } catch (error) {
+      throw new Error(`${this.file} is not valid JSON; remove it to reset.`, { cause: error });
+    }
     if (parsed.schemaVersion !== 1) {
       throw new Error(`${this.file} has an unsupported schema version; remove it to reset.`);
     }

@@ -150,6 +150,53 @@ class OpenSchemaProbeDO extends DurableObjectBase {
   }
 }
 
+const incompleteWebsite = {
+  kind: "closed",
+  reason: "This fixture is not exposed to website origins.",
+} as const;
+
+/** The task-harbor-store shape: @rpc policy plus a schema table that declares none. */
+class IncompleteTableProbeDO extends DurableObjectBase {
+  static override rpcMethods = {
+    first: { website: incompleteWebsite, args: z.tuple([]), returns: z.string() },
+    second: {
+      website: incompleteWebsite,
+      args: z.tuple([]),
+      returns: z.string(),
+      authority: { principals: ["host"] },
+      tier: { tier: "open", session: "family", rationale: "Partially declared." },
+    },
+  } as never;
+
+  protected createTables(): void {}
+
+  @rpc({
+    website: incompleteWebsite,
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  first(): string {
+    return "first";
+  }
+
+  @rpc({
+    website: incompleteWebsite,
+    principals: ["host"],
+    effect: { kind: "open" },
+    tier: "open",
+    sensitivity: "read",
+  })
+  second(): string {
+    return "second";
+  }
+
+  activateRpc(): unknown {
+    return this.rpc;
+  }
+}
+
 class AsyncWakeProbeDO extends AlarmProbeDO {
   publishWake: () => Promise<AlarmSchedule | null | undefined> = async () => undefined;
 
@@ -626,6 +673,20 @@ describe("DurableObjectBase alarm dispatch", () => {
       tier: "open",
       sensitivity: "read",
     });
+  });
+
+  it("rejects every incomplete schema-table method together, naming fields and fixes", async () => {
+    const { instance } = await createTestDO(IncompleteTableProbeDO);
+
+    let message = "";
+    try {
+      instance.activateRpc();
+    } catch (error) {
+      message = (error as Error).message;
+    }
+    expect(message).toContain("IncompleteTableProbeDO.first: missing authority, tier, access.sensitivity");
+    expect(message).toContain("IncompleteTableProbeDO.second: missing access.sensitivity, directEffect or capability");
+    expect(message).toContain("createReceiverRpcMethods");
   });
 
   it("attributes outbound RPC to the concrete durable object entity", async () => {

@@ -572,7 +572,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
     const originContextId =
       originContextIdOverride === undefined
-        ? await store.resolveContext(caller.runtime.id)
+        ? await store.resolveWorkContext(caller.runtime.id)
         : originContextIdOverride;
     if (await callerOwnsLifecycleContext(caller, originContextId, targetContextId)) return [];
     const selection = prepareContextBoundarySelection(deps.contextBoundary, {
@@ -598,7 +598,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     // workers.create()/runtime.createEntity without a second, forgeable context
     // argument. Root host callers have no runtime context and therefore mint an
     // isolated root, preserving the explicit session/bootstrap use case.
-    return (await store.resolveContext(caller.runtime.id)) ?? randomUUID();
+    return (await store.resolveWorkContext(caller.runtime.id)) ?? randomUUID();
   }
 
   /** Ensure one durable semantic workspace context before attaching an entity. */
@@ -880,7 +880,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     const contextOwner = actors.initiatingCaller;
     const ownerContextId = hasExplicitContext
       ? null
-      : await store.resolveContext(contextOwner.runtime.id);
+      : await store.resolveWorkContext(contextOwner.runtime.id);
     const selfAgentChannelId = selfAgentChannelFromSpec(spec);
     const agentBinding = selfAgentChannelId
       ? { entityId: canonicalId, contextId, channelId: selfAgentChannelId }
@@ -1167,7 +1167,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     // author has advanced the source in a different semantic workspace.
     const sourceContextId =
       spec.kind !== "session" && spec.execution.surface === "code"
-        ? await store.resolveContext(actors.initiatingCaller.runtime.id)
+        ? await store.resolveWorkContext(actors.initiatingCaller.runtime.id)
         : null;
     let prepared: PreparedIncarnation;
     if (cloneSource && existing?.activeBuildKey) {
@@ -1370,7 +1370,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     const caller = ctx.caller;
     const delegatedOwnerContextId =
       caller.runtime.kind === "extension" && ctx.chainCaller
-        ? await store.resolveContext(ctx.chainCaller.callerId)
+        ? await store.resolveWorkContext(ctx.chainCaller.callerId)
         : undefined;
     const contextId = args.contextId ?? randomUUID();
     const context = await setUpContext(contextId);
@@ -1383,7 +1383,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     // names an unrelated owner entity.
     const ownerContextId =
       delegatedOwnerContextId === undefined
-        ? await store.resolveContext(caller.runtime.id)
+        ? await store.resolveWorkContext(caller.runtime.id)
         : delegatedOwnerContextId;
     if (ownerContextId && ownerContextId !== contextId) {
       await store.recordContextEdge({
@@ -2694,7 +2694,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         if (contextId == null || contextId === "") return { selections: [], payload: null };
         const delegatedOwnerContextId =
           ctx.caller.runtime.kind === "extension" && ctx.chainCaller
-            ? await store.resolveContext(ctx.chainCaller.callerId)
+            ? await store.resolveWorkContext(ctx.chainCaller.callerId)
             : undefined;
         return {
           selections: await prepareContextBoundary(

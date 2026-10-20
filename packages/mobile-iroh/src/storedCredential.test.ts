@@ -3,6 +3,7 @@ import {
   createPairedMobileConnection,
   createRoutedMobileConnection,
   parseStoredMobileConnection,
+  unsupportedStoredMobileConnection,
   selectMobileConnectionWorkspace,
 } from "./storedCredential.js";
 
@@ -28,7 +29,7 @@ describe("stored mobile Iroh connection", () => {
       "identity-1",
       123
     );
-    expect(paired).toMatchObject({ schemaVersion: 5, transport: "iroh", phase: "paired" });
+    expect(paired).toMatchObject({ schemaVersion: 6, transport: "iroh", phase: "paired" });
     expect(paired.controlPairing).not.toHaveProperty("code");
     const routed = createRoutedMobileConnection(paired, workspace);
     expect(parseStoredMobileConnection(JSON.stringify(routed))).toEqual(routed);
@@ -58,5 +59,24 @@ describe("stored mobile Iroh connection", () => {
       )
     ).toBeNull();
     expect(parseStoredMobileConnection("not-json")).toBeNull();
+  });
+
+  it("recognises a connection written by an older build, with its identity", () => {
+    const { deviceIdentityId, ...rest } = createPairedMobileConnection(
+      credential,
+      control,
+      "ws_default",
+      "identity-1",
+      123
+    );
+    const old = JSON.stringify({ ...rest, schemaVersion: 5, endpointIdentityId: deviceIdentityId });
+    expect(parseStoredMobileConnection(old)).toBeNull();
+    expect(unsupportedStoredMobileConnection(old)).toEqual({ identityId: "identity-1" });
+    expect(unsupportedStoredMobileConnection("not-json")).toBeUndefined();
+    expect(
+      unsupportedStoredMobileConnection(
+        JSON.stringify(createPairedMobileConnection(credential, control, "ws_default", "i", 1))
+      )
+    ).toBeUndefined();
   });
 });

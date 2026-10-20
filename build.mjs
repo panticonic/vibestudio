@@ -15,7 +15,12 @@ import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { builtinModules, createRequire } from "node:module";
 import { collectWorkersFromDependencies, workersToArray } from "./scripts/collectWorkers.mjs";
-import { NODE_ESM_COMPAT_BANNER, SERVER_ESM_BANNER } from "./scripts/build-artifact-contracts.mjs";
+import {
+  CJS_IMPORT_META_BANNER,
+  CJS_IMPORT_META_DEFINE,
+  NODE_ESM_COMPAT_BANNER,
+  SERVER_ESM_BANNER,
+} from "./scripts/build-artifact-contracts.mjs";
 import { generateConnectGrammar } from "./scripts/generate-connect-grammar.mjs";
 import { buildWorkerdPrograms } from "./scripts/build-workerd-programs.mjs";
 import { cleanHostBuildOutput } from "./scripts/clean-host-build-output.mjs";
@@ -28,6 +33,7 @@ import { buildInfrastructurePackages } from "./scripts/infrastructure-package-ca
 import { nativeWorkspaceArtifactConfigs } from "./scripts/native-workspace-artifacts.mjs";
 import { SERVER_WORKER_ENTRIES } from "./scripts/server-runtime-artifacts.mjs";
 import { copySqlJsRuntimeAsset } from "./scripts/lib/sql-js-runtime-asset.mjs";
+import { copyOwnershipReaperAssets } from "./scripts/lib/ownership-reaper-assets.mjs";
 import {
   computeHostBuildFingerprint,
   invalidateHostBuildFingerprints,
@@ -204,6 +210,8 @@ const serverElectronConfig = {
     // Preserve the installed ESM package boundary in this CommonJS server.
     "@panticonic/pi-ai",
   ],
+  define: CJS_IMPORT_META_DEFINE,
+  banner: { js: CJS_IMPORT_META_BANNER },
   sourcemap: isDev,
   minify: !isDev,
   logOverride,
@@ -510,8 +518,10 @@ const mainConfig = {
     js: `
 const __injected_filename__ = typeof __filename !== 'undefined' ? __filename : '';
 const __injected_dirname__ = typeof __dirname !== 'undefined' ? __dirname : (typeof __filename !== 'undefined' ? require('path').dirname(__filename) : '');
+${CJS_IMPORT_META_BANNER}
 `.trim(),
   },
+  define: CJS_IMPORT_META_DEFINE,
 };
 
 // The connection utility process: owns the hub connection, the Iroh endpoint,
@@ -529,6 +539,7 @@ const connectionProcessConfig = {
   minify: !isDev,
   logOverride,
   banner: mainConfig.banner,
+  define: CJS_IMPORT_META_DEFINE,
 };
 
 function createPreloadConfig(name) {
@@ -684,6 +695,7 @@ function copyAssets() {
   fs.copyFileSync("hosts/desktop/main/browserPrivacy.html", "dist/browserPrivacy.html");
   fs.copyFileSync("hosts/desktop/main/displayCapture.html", "dist/displayCapture.html");
   copySqlJsRuntimeAsset("dist");
+  copyOwnershipReaperAssets("dist");
   copyBrandAssets();
   // Bundled agent skill consumed by `vibestudio agent skill install|print`
   // (resolved as a sibling of dist/cli/client.mjs).
@@ -1022,6 +1034,7 @@ async function buildSourceServerPrerequisites() {
     ]);
     await buildServerArtifacts(["standalone"], programs);
     copySqlJsRuntimeAsset("dist");
+    copyOwnershipReaperAssets("dist");
     copyBrandAssets();
     assertHostBuildPayloadComplete(process.cwd(), "source");
 

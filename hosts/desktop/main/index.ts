@@ -11,13 +11,12 @@ import {
   type ChannelServiceProvider,
 } from "@vibestudio/shared/channelTarget";
 import { createAnonymousStartupCounter } from "./anonymousStartup.js";
+import { createLazyOwnership } from "../../../src/node/lazyOwnership.js";
 const countAnonymousStartup = createAnonymousStartupCounter();
 import { DisplayCapturePicker } from "./services/displayCapturePicker.js";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { createNativePanelHost } from "./nativePanelHost.js";
 import { closeWorkspaceSession } from "./workspaceSessionShutdown.js";
-import { bindProcessLifetimeToParent } from "../../../scripts/owned-process-tree.mjs";
-if (process.send) bindProcessLifetimeToParent();
 import { parseWorkspaceNativeViewId } from "./workspaceNativeViews.js";
 import { nativeViewMayUsePermission } from "./nativeViewPermissionPolicy.js";
 import {
@@ -117,7 +116,7 @@ const IS_DEVELOPMENT_CLIENT_EXECUTOR = startupInvocation.isDevelopmentClientExec
 // An executor appliance has no presentation surface. Reuse the established
 // headless startup containment, then stop initialization immediately after its
 // paired executor lease and direct-event subscriptions are live.
-const IS_HEADLESS_HOST = startupInvocation.isHeadlessHost;
+const IS_HEADLESS_HOST = startupInvocation.isHeadlessHost || IS_DEVELOPMENT_CLIENT_EXECUTOR;
 const {
   recoveredExitCode: recoveredLocalServerCrash,
   crashLoopExitCode: localServerCrashLoopCode,
@@ -252,7 +251,11 @@ import {
   clearStoredRemotePairing,
   readPendingPairLabel,
 } from "./services/remoteCredService.js";
-import { createApprovalAttention, type ApprovalAttention } from "./approvalAttention.js";
+import {
+  createApprovalAttention,
+  type ApprovalAttention,
+  type WorkspaceApprovalSnapshot,
+} from "./approvalAttention.js";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 
 import { createVerifiedCaller, ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
@@ -449,6 +452,8 @@ let approvalAttention: ApprovalAttention | null = null;
 let currentHostDevelopmentExecutor:
   | import("./currentHostDevelopmentClientExecutor.js").CurrentHostDevelopmentClientExecutor
   | null = null;
+/** Ownership of the phone-provisioning commands this app runs; released at shutdown. */
+const phoneProvisioningOwnership = createLazyOwnership({ role: "desktop-phone-provisioning" });
 let isCleaningUp = false; // Prevent re-entry in will-quit handler
 let shutdownRequiresLocalHubStop = false;
 let localHubStopConfirmed = false;
@@ -653,7 +658,7 @@ const clientWindows: ClientWindows = new ClientWindows(
   }),
   {
     opened: async (window) => {
-      await assertPresent(connectionLink).holdClientSession(clientWindowBinding(window).caller);
+      await holdClientWindowSession(window);
     },
     closed: (window, reason) => {
       driverSignals.closed(window, reason);
@@ -669,6 +674,11 @@ const clientWindows: ClientWindows = new ClientWindows(
   }
 );
 let clientHost: DesktopClientHost | null = null;
+
+/** A client window holds its principal session on the connection from open to close. */
+function holdClientWindowSession(window: ClientWindow): Promise<void> {
+  return assertPresent(connectionLink).holdClientSession(clientWindowBinding(window).caller);
+}
 /** Launchers, OS menus, shortcuts, tray and badge: what clients project onto the OS. */
 let desktopIntegration: DesktopIntegration | null = null;
 const supervisionRelay = new SupervisionRelay();
@@ -753,6 +763,10 @@ function startConnection(): ConnectionLink {
           pendingPairing: undefined,
           pendingPairLabel: undefined,
           storedRemote: loadStoredRemotePairing() ?? last.storedRemote,
+        });
+        // The replaced process lost the running clients' credentials and sessions.
+        void clientHost?.connectionReplaced().catch((error: unknown) => {
+          log.warn(`Could not restore the running clients: ${formatUnknownError(error)}`);
         });
       },
       lost: (exit) => {
@@ -1693,6 +1707,7 @@ function createDesktopClientHost(conn: SessionConnection): DesktopClientHost {
     launches,
     catalog: clientCatalog,
     windows: clientWindows,
+    holdSession: holdClientWindowSession,
     supervision: supervisionRelay,
     state: new ClientHostState(path.join(app.getPath("userData"), "client-host-state.json")),
     updatesChanged: (clientId) => {
@@ -1720,13 +1735,43 @@ function createDesktopClientHost(conn: SessionConnection): DesktopClientHost {
   });
   // The connection process grants client sessions for the exact build it verified;
   // an ended session (trust revoked, client retired) is reported here.
-  connectionLink?.onClientSessionEnded((caller, reason) => host.sessionEnded(caller, reason));
+  connectionLink?.onClientSessionEnded((caller, workspaceId, reason) =>
+    host.sessionEnded(caller, workspaceId, reason)
+  );
   host.follow();
   onClientLink((link) => {
     void host.openLink(link).catch(() => undefined);
     showAnyWindow();
   });
   return host;
+}
+
+/**
+ * The pending approvals of every open workspace runtime, each snapshot tagged
+ * with its workspace. The OS attention surface and the device driver both read
+ * the queue through this, so neither can miss a workspace the other sees.
+ */
+async function listWorkspaceApprovals(): Promise<WorkspaceApprovalSnapshot[] | null> {
+  const session = serverSession;
+  if (!session) return null;
+  const members = (await session.hubControlClient.call(
+    "hubControl",
+    "listWorkspaces",
+    []
+  )) as import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[];
+  return Promise.all(
+    members.flatMap((member) => {
+      const runtime = openNativeControllers.get(member.workspaceId);
+      if (!runtime) return [];
+      return [
+        runtime.serverClient.call("shellApproval", "listPending", []).then((pending) => ({
+          workspaceId: member.workspaceId,
+          workspaceLabel: workspaceLabel(member),
+          pending: pending as PendingApproval[],
+        })),
+      ];
+    })
+  );
 }
 
 /** Launch the default client, or the one a link named when the app was opened by one. */
@@ -1743,6 +1788,14 @@ async function startExecutorDeviceDriver(
   const link = assertPresent(connectionLink);
   deviceDriver = await startDesktopDeviceDriver({
     call: (service, method, args) => conn.serverClient.call(service, method, args),
+    approvals: {
+      listPending: async () => (await listWorkspaceApprovals()) ?? [],
+      call: (workspaceId) => (service, method, args) => {
+        const runtime = openNativeControllers.get(workspaceId);
+        if (!runtime) throw new Error(`Workspace ${workspaceId} is not open`);
+        return runtime.serverClient.call(service, method, args);
+      },
+    },
     transport: {
       call: (service, method, args) => conn.serverClient.call(service, method, args),
       onDirectEvent: (event, listener) =>
@@ -1761,6 +1814,15 @@ async function startExecutorDeviceDriver(
       install: (clientId) => integration().launchers.install(clientId),
       records: () => integration().launchers.records(),
       onChanged: (listener) => integration().launchers.onChanged(listener),
+    },
+    panelWorkspace: async (role) => {
+      const runtime = await assertPresent(ensureAboutOwnerWorkspace)(role);
+      return {
+        workspaceId: runtime.workspaceId,
+        orchestrator: runtime.orchestrator,
+        serverClient: runtime.serverClient,
+        hasPanel: (panelId) => runtime.registry.getPanel(panelId) !== undefined,
+      };
     },
     refreshIntegration: () => integration().integration.refresh(),
     onSessionEnded: (listener) => link.onClientSessionEnded(listener),
@@ -2248,28 +2310,7 @@ app.on("ready", async () => {
   if (!IS_HEADLESS_HOST) {
     approvalAttention = createApprovalAttention({
       getWindow: () => clientWindows.all().at(-1)?.browserWindow() ?? null,
-      listPending: async () => {
-        const session = serverSession;
-        if (!session) return null;
-        const members = (await session.hubControlClient.call(
-          "hubControl",
-          "listWorkspaces",
-          []
-        )) as import("@vibestudio/service-schemas/hubControl").HubWorkspaceEntry[];
-        return Promise.all(
-          members.flatMap((member) => {
-            const runtime = openNativeControllers.get(member.workspaceId);
-            if (!runtime) return [];
-            return [
-              runtime.serverClient.call("shellApproval", "listPending", []).then((pending) => ({
-                workspaceId: member.workspaceId,
-                workspaceLabel: workspaceLabel(member),
-                pending: pending as PendingApproval[],
-              })),
-            ];
-          })
-        );
-      },
+      listPending: listWorkspaceApprovals,
       log,
     });
   }
@@ -2363,12 +2404,14 @@ app.on("ready", async () => {
           onReplyNotification: handleReplyNotification,
           onNotificationAction: (id, actionId) =>
             releaseUpdateController?.handleNotificationAction(id, actionId),
-          onApprovalPendingChanged: (pending) =>
+          onApprovalPendingChanged: (pending) => {
+            driverSignals.approvalsChanged();
             approvalAttention?.handlePendingChanged({
               workspaceId: id,
               workspaceLabel: workspaceLabel(membership),
               pending,
-            }),
+            });
+          },
         },
         adBlockManager,
         ...(membership.privateRole === "personal"
@@ -2612,6 +2655,7 @@ app.on("ready", async () => {
       resolveScriptPath: (name) => getPhysicalAppPath(path.join("scripts", "cli", name)),
       hubControlClient: serverSession.hubControlClient,
       workspaceName: serverSession.workspaceName,
+      ownership: () => phoneProvisioningOwnership.get(),
     });
     dispatcher.registerService(desktopPhoneProvider);
     const { publishHostService } = await import("./hostServicePublisher.js");
@@ -3314,15 +3358,19 @@ app.on("ready", async () => {
     // starting state and open the startup approval gate.
     bootstrapWorkspaceRpcReady = true;
     pushBootstrapConnectionState();
-    if (IS_HEADLESS_HOST) {
+    if (IS_DEVELOPMENT_CLIENT_EXECUTOR) {
+      // The executor presents nothing: its device driver answers launches the
+      // test harness routes to this device.
+      clientHost = createDesktopClientHost(conn);
+      await startExecutorDeviceDriver(conn, clientHost);
+    } else if (IS_HEADLESS_HOST) {
       // A headless host runs no client: it keeps the panel host's compositor
       // for automation, with no client page on top of it.
       performance.mark("startup:window-created");
       panelHost.open("window:headless");
     } else {
       clientHost = createDesktopClientHost(conn);
-      if (IS_DEVELOPMENT_CLIENT_EXECUTOR) await startExecutorDeviceDriver(conn, clientHost);
-      else launchInitialClient(clientHost);
+      launchInitialClient(clientHost);
     }
 
     performance.mark("startup:workspace-window-attached");
@@ -3523,6 +3571,7 @@ app.on("will-quit", (event) => {
     developmentExecutorClose = executor.close();
     joinShutdown("development executor", developmentExecutorClose);
   }
+  joinShutdown("phone provisioning", phoneProvisioningOwnership.close());
 
   // Server client (device-paired WS connection) + the detached hub process
   if (serverSession) {
@@ -3579,22 +3628,20 @@ app.on("will-quit", (event) => {
           // desktop session is closed, while still ensuring a close failure cannot
           // leave the user-requested server alive.
           localHubStopPromise = (async () => {
-            const result = await assertPresent(session.hubProcessManager).stopTree();
-            if (!result.gone) throw new Error("The local hub process tree is still running");
+            // Returns only once the hub's whole tree is gone; any failure
+            // rejects here with its original cause.
+            await assertPresent(session.hubProcessManager).stopTree();
             localHubStopConfirmed = true;
-            console.log(
-              result.escalated
-                ? "[App] Hub process tree stopped after escalation"
-                : "[App] Hub stopped"
-            );
+            console.log("[App] Hub stopped");
           })();
           await assertPresent(localHubStopPromise);
         } else {
-          // Keep: leave the detached process running; the attachment record stays
-          // so the next launch reattaches instantly.
+          // Keep: stop managing the hub. Its lifetime is leased to this app's
+          // connection process, whose reaper retires it gracefully when that
+          // process ends, so the hub never outlives the app.
           if (session.hubProcessManager) {
             await session.hubProcessManager.detach();
-            console.log("[App] Hub left running (detached)");
+            console.log("[App] Hub released to its lease (retired when the app exits)");
           }
         }
       },

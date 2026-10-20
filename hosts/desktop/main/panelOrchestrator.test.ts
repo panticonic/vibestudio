@@ -240,14 +240,6 @@ function createOrchestrator(
   const serverClient = {
     isClosed: vi.fn(() => false),
     call: vi.fn(handleServerCall),
-    callAs: vi.fn(
-      async (
-        _caller: { callerId: string; callerKind: string },
-        service: string,
-        method: string,
-        args?: unknown[]
-      ) => handleServerCall(service, method, args)
-    ),
   };
   const cdpHost = {
     registerTarget: vi.fn(),
@@ -1699,11 +1691,11 @@ describe("PanelOrchestrator.focusPanel", () => {
 });
 
 describe("PanelOrchestrator.createPanel", () => {
-  it("creates unscoped child panels as the trusted host (shell authority)", async () => {
+  it("creates child panels as the trusted host (shell authority; the mock server client has no callAs)", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
-    const { orchestrator, panelView, serverClient, shellCore } = createOrchestrator(registry);
+    const { orchestrator, panelView, shellCore } = createOrchestrator(registry);
     const loadedPanels = new Set<string>();
     panelView.hasView.mockImplementation((panelId: string) => loadedPanels.has(panelId));
     panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
@@ -1714,10 +1706,8 @@ describe("PanelOrchestrator.createPanel", () => {
 
     expect(shellCore.createExecution).toHaveBeenCalledWith(
       { surface: "code", source: "panels/created-panel" },
-      expect.objectContaining({ parentId: caller.id }),
-      undefined
+      expect.objectContaining({ parentId: caller.id })
     );
-    expect(serverClient.callAs).not.toHaveBeenCalled();
   });
 
   it("publishes and returns a code panel without starting host-owned activation", async () => {
@@ -1784,25 +1774,14 @@ describe("PanelOrchestrator.createPanel", () => {
     panelView.createViewForPanel.mockImplementation(async (panelId: string) => {
       loadedPanels.add(panelId);
     });
-    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "client" as const };
 
-    const { id } = await orchestrator.createPanel(
-      caller.id,
-      "panels/created-panel",
-      {
-        focus: true,
-      },
-      undefined,
-      scopedCaller
-    );
+    const { id } = await orchestrator.createPanel(caller.id, "panels/created-panel", {
+      focus: true,
+    });
 
     expect(shellCore.createExecution).toHaveBeenCalledWith(
       { surface: "code", source: "panels/created-panel" },
-      expect.objectContaining({ parentId: caller.id }),
-      expect.objectContaining({
-        workspaceState: expect.any(Object),
-        runtime: expect.any(Object),
-      })
+      expect.objectContaining({ parentId: caller.id })
     );
     expect(emit).toHaveBeenCalledWith("panel-created", {
       panelId: id,
@@ -1834,18 +1813,11 @@ describe("PanelOrchestrator.createPanel", () => {
 
     const { orchestrator, panelView, serverClient, emit } = createOrchestrator(registry);
     panelView.createViewForPanel.mockRejectedValue(new Error("native view failed"));
-    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "client" as const };
 
     await expect(
-      orchestrator.createPanel(
-        caller.id,
-        "panels/created-panel",
-        {
-          focus: true,
-        },
-        undefined,
-        scopedCaller
-      )
+      orchestrator.createPanel(caller.id, "panels/created-panel", {
+        focus: true,
+      })
     ).resolves.toMatchObject({ id: "panel:tree/created-1" });
 
     const created = registry.getPanel("panel:tree/created-1")!;
@@ -1871,12 +1843,9 @@ describe("PanelOrchestrator.createPanel", () => {
       "panel:nav-panel:tree/created-1",
       expect.stringMatching(/^desktop-panel:tree\/created-1-/),
     ]);
-    expect(serverClient.callAs).not.toHaveBeenCalledWith(
-      scopedCaller,
-      "workspace-state",
-      "slot.close",
-      ["panel:tree/created-1"]
-    );
+    expect(serverClient.call).not.toHaveBeenCalledWith("workspace-state", "slot.close", [
+      "panel:tree/created-1",
+    ]);
     expect(registry.getPanel("panel:tree/created-1")?.artifacts).toMatchObject({
       viewFailure: {
         code: "navigation_failed",
@@ -1898,24 +1867,14 @@ describe("PanelOrchestrator.createPanel", () => {
     panelView.createViewForBrowser.mockImplementation(async (panelId: string) => {
       loadedPanels.add(panelId);
     });
-    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "client" as const };
 
-    const { id } = await orchestrator.createBrowserUrlPanel(
-      caller.id,
-      "https://example.com/",
-      {
-        focus: false,
-      },
-      scopedCaller
-    );
+    const { id } = await orchestrator.createBrowserUrlPanel(caller.id, "https://example.com/", {
+      focus: false,
+    });
 
     expect(shellCore.createExecution).toHaveBeenCalledWith(
       { surface: "external", url: "https://example.com/" },
-      expect.objectContaining({ parentId: caller.id }),
-      expect.objectContaining({
-        workspaceState: expect.any(Object),
-        runtime: expect.any(Object),
-      })
+      expect.objectContaining({ parentId: caller.id })
     );
     await vi.waitFor(() =>
       expect(
@@ -2016,8 +1975,7 @@ describe("PanelOrchestrator.createPanel", () => {
       { surface: "external", url: "https://example.com/" },
       expect.objectContaining({
         parentId: caller.id,
-      }),
-      undefined
+      })
     );
     expect(
       serverClient.call.mock.calls.some(
@@ -2037,7 +1995,7 @@ describe("PanelOrchestrator.createPanel", () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
     const caller = makePanel("panel:tree/caller");
     registry.addPanel(caller, null, { addAsRoot: true });
-    const { orchestrator, panelView, serverClient, shellCore } = createOrchestrator(registry);
+    const { orchestrator, panelView, shellCore } = createOrchestrator(registry);
     const loadedPanels = new Set<string>();
     panelView.hasView.mockImplementation((panelId: string) => loadedPanels.has(panelId));
     panelView.createViewForBrowser.mockImplementation(async (panelId: string) => {
@@ -2048,10 +2006,8 @@ describe("PanelOrchestrator.createPanel", () => {
 
     expect(shellCore.createExecution).toHaveBeenCalledWith(
       { surface: "external", url: "https://example.com/" },
-      expect.objectContaining({ parentId: caller.id }),
-      undefined
+      expect.objectContaining({ parentId: caller.id })
     );
-    expect(serverClient.callAs).not.toHaveBeenCalled();
   });
 
   it("keeps a created browser panel visible with an error when native browser view creation fails", async () => {
@@ -2061,17 +2017,11 @@ describe("PanelOrchestrator.createPanel", () => {
 
     const { orchestrator, panelView, serverClient } = createOrchestrator(registry);
     panelView.createViewForBrowser.mockRejectedValueOnce(new Error("native view failed"));
-    const scopedCaller = { callerId: "@workspace-apps/shell", callerKind: "client" as const };
 
     await expect(
-      orchestrator.createBrowserUrlPanel(
-        caller.id,
-        "https://example.com/",
-        {
-          focus: false,
-        },
-        scopedCaller
-      )
+      orchestrator.createBrowserUrlPanel(caller.id, "https://example.com/", {
+        focus: false,
+      })
     ).resolves.toMatchObject({ id: "panel:tree/created-1" });
 
     await vi.waitFor(() =>
@@ -2091,12 +2041,9 @@ describe("PanelOrchestrator.createPanel", () => {
       "panel:nav-panel:tree/created-1",
       expect.stringMatching(/^desktop-panel:tree\/created-1-/),
     ]);
-    expect(serverClient.callAs).not.toHaveBeenCalledWith(
-      scopedCaller,
-      "workspace-state",
-      "slot.close",
-      ["panel:tree/created-1"]
-    );
+    expect(serverClient.call).not.toHaveBeenCalledWith("workspace-state", "slot.close", [
+      "panel:tree/created-1",
+    ]);
     expect(registry.getPanel("panel:tree/created-1")?.artifacts).toMatchObject({
       buildState: "ready",
       viewFailure: {
@@ -2120,12 +2067,9 @@ describe("PanelOrchestrator.navigatePanel", () => {
       stateArgs: { initialPrompt: "hello" },
     });
 
-    expect(shellCore.navigate).toHaveBeenCalledWith(
-      panel.id,
-      "panels/chat",
-      { stateArgs: { initialPrompt: "hello" } },
-      undefined
-    );
+    expect(shellCore.navigate).toHaveBeenCalledWith(panel.id, "panels/chat", {
+      stateArgs: { initialPrompt: "hello" },
+    });
     expect(panelView.createViewForPanel).toHaveBeenCalledWith(
       panel.id,
       expect.stringContaining(

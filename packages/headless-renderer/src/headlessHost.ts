@@ -10,6 +10,8 @@ import type { BrowserAutomationRequest } from "@vibestudio/shared/panel/browserA
 import { createWorkspaceClient } from "@vibestudio/service-schemas/clients/workspaceClient";
 import { randomUUID } from "crypto";
 import { createDevLogger } from "@vibestudio/dev-log";
+import { getProfileDataPath } from "@vibestudio/env-paths";
+import { Ownership } from "@vibestudio/shared/ownership";
 import type {
   PanelHost,
   PanelHostRegistration,
@@ -71,6 +73,7 @@ export class HeadlessHost implements PanelHost {
   /** Resolves when stop() completes; main.ts awaits this. */
   readonly done: Promise<void>;
   private resolveDone!: () => void;
+  private ownership: Promise<Ownership> | null = null;
 
   constructor(private readonly config: HeadlessHostConfig) {
     this.registration = createPanelHostRegistration({
@@ -183,6 +186,10 @@ export class HeadlessHost implements PanelHost {
     await this.events?.unsubscribeAll().catch(() => {});
     this.events = null;
     await release(() => this.connection?.close());
+    // After the browser: the ownership's release joins what is left of it.
+    await release(async () => {
+      if (this.ownership) await (await this.ownership).close();
+    });
     this.resolveDone();
     if (failures.length > 0) {
       throw new AggregateError(failures, "Headless host resource retirement failed");
@@ -231,6 +238,7 @@ export class HeadlessHost implements PanelHost {
     this.browser = await launchChromium({
       executablePath: resolved.executablePath,
       profileRoot: this.config.profileRoot,
+      ownership: await this.ownedBy(),
     });
     if (this.stopped) {
       await this.retireBrowser();
@@ -330,6 +338,20 @@ export class HeadlessHost implements PanelHost {
     });
     this.browserRecovery = recovery;
     return recovery;
+  }
+
+  /**
+   * This host's own ownership, opened with its first browser: Chromium and the
+   * disposable directories it works in belong to it, so its reaper retires
+   * them even when the host is killed.
+   */
+  private ownedBy(): Promise<Ownership> {
+    this.ownership ??= Ownership.open({
+      profileDir: getProfileDataPath(),
+      lifetime: "leased",
+      meta: { role: "headless-host", label: this.config.label },
+    });
+    return this.ownership;
   }
 
   private async retireBrowser(): Promise<void> {

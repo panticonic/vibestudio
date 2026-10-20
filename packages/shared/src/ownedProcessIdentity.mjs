@@ -269,6 +269,101 @@ function boundedBasename(command) {
   const value = command.split(/[\\/]/u).at(-1) || command;
   return { value: value.slice(0, 128), truncated: value.length > 128 };
 }
+let cachedBootId;
+/**
+ * Identity of the current boot. Durable ownership records carry it so a record
+ * written before a reboot is recognised as such: its PIDs no longer name
+ * anything, and nothing recorded under it may be signalled.
+ * Linux reads the kernel's boot UUID; macOS uses the kernel boot time. Windows
+ * has no cheap stable equivalent, so it reports a constant and ownership
+ * records there never look like they predate a reboot.
+ */
+function bootId() {
+  if (cachedBootId !== undefined) return cachedBootId;
+  if (process.platform === "linux") {
+    cachedBootId = fs.readFileSync("/proc/sys/kernel/random/boot_id", "utf8").trim();
+  } else if (process.platform === "darwin") {
+    const result = spawnSync("sysctl", ["-n", "kern.boottime"], { encoding: "utf8" });
+    const match = /sec\s*=\s*(\d+),\s*usec\s*=\s*(\d+)/u.exec(result.stdout ?? "");
+    if (result.status !== 0 || !match) throw ownershipError("Cannot read the macOS boot time");
+    cachedBootId = `darwin-${match[1]}.${match[2]}`;
+  } else {
+    cachedBootId = "win32-boot-unknown";
+  }
+  if (!cachedBootId) throw ownershipError("Boot identity is empty");
+  return cachedBootId;
+}
+/** Birth identity of any process (not only a group leader): PID + start coordinate + boot. */
+function captureProcessStart(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error("Process PID is invalid");
+  if (process.platform === "linux") {
+    const stat = linuxStat(pid);
+    if (!stat.startCoordinate) throw new Error(`Process ${pid} has an incomplete /proc identity`);
+    return { pid, startCoordinate: stat.startCoordinate, bootId: bootId() };
+  }
+  if (process.platform === "darwin") {
+    const leader = darwinSnapshot(pid, pid).leader;
+    if (!leader) {
+      throw Object.assign(new Error("Process " + pid + " does not exist"), { code: "ESRCH" });
+    }
+    return { pid, startCoordinate: leader.startCoordinate, bootId: bootId() };
+  }
+  // Windows exposes no start coordinate through this surface.
+  return { pid, startCoordinate: "win32", bootId: bootId() };
+}
+/** Whether the exact recorded process is still running (exited zombies are not). */
+function observeProcessStart(start) {
+  if (start.bootId !== bootId()) return "foreign-boot";
+  try {
+    if (process.platform === "linux") {
+      const stat = linuxStat(start.pid);
+      if (stat.state === "Z" || stat.state === "X") return "dead";
+      return stat.startCoordinate === start.startCoordinate ? "live" : "dead";
+    }
+    if (process.platform === "darwin") {
+      const leader = darwinSnapshot(start.pid, start.pid).leader;
+      if (!leader || leader.state === "Z" || leader.state === "X") return "dead";
+      return leader.startCoordinate === start.startCoordinate ? "live" : "dead";
+    }
+    process.kill(start.pid, 0);
+    return "live";
+  } catch (error) {
+    if (error.code === "ESRCH") return "dead";
+    if (error.code === "EPERM" && process.platform === "win32") return "live";
+    throw error;
+  }
+}
+/** Resident set size in KiB, or null when the process is gone or unreadable. */
+function readRssKb(pid) {
+  if (process.platform === "linux") {
+    try {
+      const match = /^VmRSS:\s+(\d+)\s+kB/mu.exec(fs.readFileSync(`/proc/${pid}/status`, "utf8"));
+      return match ? Number(match[1]) : null;
+    } catch (error) {
+      if (error.code === "ENOENT" || error.code === "ESRCH") return null;
+      throw error;
+    }
+  }
+  if (process.platform === "darwin") {
+    const result = spawnSync("ps", ["-o", "rss=", "-p", String(pid)], { encoding: "utf8" });
+    const value = Number(result.stdout?.trim());
+    return result.status === 0 && Number.isFinite(value) ? value : null;
+  }
+  return null;
+}
+/**
+ * Make the kernel's OOM killer prefer this workload over the reaper (Linux).
+ * A refusal is data for the caller, never an exception: ownership still holds.
+ */
+function setOomScoreAdj(pid, score) {
+  if (process.platform !== "linux") return { ok: false, error: "oom_score_adj is Linux-only" };
+  try {
+    fs.writeFileSync(`/proc/${pid}/oom_score_adj`, String(score));
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: `${error.code ?? "ERROR"}: ${error.message}` };
+  }
+}
 function ownershipError(message) {
   return Object.assign(new Error(message), { code: "EOWNERSHIP" });
 }
@@ -299,7 +394,12 @@ function linuxStat(pid) {
   return { processGroupId, startCoordinate, state: fields[0] };
 }
 export {
+  bootId,
   captureOwnedProcessIdentity,
+  captureProcessStart,
+  observeProcessStart,
+  readRssKb,
+  setOomScoreAdj,
   observeOwnedProcess,
   observeOwnedProcessGroup,
   observeOwnedProcessGroupReceipt,

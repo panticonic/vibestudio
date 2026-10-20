@@ -260,8 +260,8 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
   // Two drains would both submit the same queued decision.
   let drainChain: Promise<unknown> = Promise.resolve();
 
-  async function readActions(at = now()): Promise<QueuedBackgroundAction[]> {
-    return loadPendingActions(await store.getItem(ACTION_QUEUE_KEY), at);
+  async function readActions(): Promise<QueuedBackgroundAction[]> {
+    return loadPendingActions(await store.getItem(ACTION_QUEUE_KEY));
   }
   async function writeActions(actions: QueuedBackgroundAction[]): Promise<void> {
     if (actions.length === 0) await store.removeItem(ACTION_QUEUE_KEY);
@@ -455,8 +455,13 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
         try {
           await ports.decide(action, action.decision);
         } catch (error) {
-          console.warn(`${LOG} could not send queued decision for ${action.approvalId}:`, error);
-          continue;
+          // The server's answer that the approval is gone (answered elsewhere
+          // or withdrawn) settles the decision; any other failure keeps it
+          // queued for the next drain.
+          if ((error as { code?: unknown } | null)?.code !== "ENOENT") {
+            console.warn(`${LOG} could not send queued decision for ${action.approvalId}:`, error);
+            continue;
+          }
         }
         await mutate(async () =>
           writeActions(
@@ -485,11 +490,11 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
       const queuedAt = now();
       await mutate(async () =>
         writeActions(
-          enqueueAction(
-            await readActions(queuedAt),
-            { ...target, decision: event.actionId as BackgroundApprovalDecision, queuedAt },
-            queuedAt
-          )
+          enqueueAction(await readActions(), {
+            ...target,
+            decision: event.actionId as BackgroundApprovalDecision,
+            queuedAt,
+          })
         )
       );
       await drain();

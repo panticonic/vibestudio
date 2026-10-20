@@ -22,7 +22,7 @@ function makePanelRecord(id: string): EntityRecord {
 function makeAppRecord(id: string): EntityRecord {
   return {
     id,
-    kind: "client",
+    kind: "worker",
     source: { repoPath: "apps/example", effectiveVersion: "1.0.0" },
     activeBuildKey: "2".repeat(64),
     activeExecutionDigest: "b".repeat(64),
@@ -68,7 +68,7 @@ describe("ConnectionGrantService", () => {
 
   it("refuses an executable record whose selected immutable build was dropped", () => {
     const entityCache = new EntityCache();
-    const incomplete = makeAppRecord("client:apps/example:device-1");
+    const incomplete = makeAppRecord("worker:apps/example:device-1");
     delete incomplete.activeBuildKey;
     entityCache._onActivate(incomplete);
     const grants = new ConnectionGrantService({ entityCache });
@@ -164,13 +164,13 @@ describe("ConnectionGrantService", () => {
 
   it("validates app grants through the principal-kind registry", () => {
     const entityCache = new EntityCache();
-    entityCache._onActivate(makeAppRecord("client:apps/example:device-1"));
+    entityCache._onActivate(makeAppRecord("worker:apps/example:device-1"));
     const grants = new ConnectionGrantService({ entityCache });
-    const { token } = grants.grant("client:apps/example:device-1", "shell:test");
+    const { token } = grants.grant("worker:apps/example:device-1", "shell:test");
 
     expect(grants.validate(token)).toEqual({
-      principalId: "client:apps/example:device-1",
-      principalKind: "client",
+      principalId: "worker:apps/example:device-1",
+      principalKind: "worker",
       issuedBy: "shell:test",
     });
     grants.stop();

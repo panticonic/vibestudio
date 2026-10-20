@@ -3,6 +3,7 @@ import * as path from "node:path";
 import {
   canonicalStoredPairing,
   isCliIdentity,
+  isLegacyCliCredential,
   migrateCliIdentity,
   isCliStoredPairing,
   type CliAgentCredentials,
@@ -35,6 +36,15 @@ export {
 
 export const credentialPath = cliCredentialPath;
 
+function assertNotLegacy(parsed: unknown, filePath: string): void {
+  if (isLegacyCliCredential(parsed)) {
+    throw new Error(
+      `The CLI credential at ${filePath} was paired with an older Vibestudio build and cannot be used. ` +
+        "Run `vibestudio remote logout` to remove it, then pair this device again."
+    );
+  }
+}
+
 export function loadCliCredentials(filePath: string = credentialPath()): CliCredentials | null {
   const identity = loadCliIdentity(filePath);
   if (identity?.kind === "device" && identity.phase === "account") {
@@ -60,6 +70,7 @@ export function loadCliIdentity(filePath: string = credentialPath()): CliIdentit
     );
     return null;
   }
+  assertNotLegacy(parsed, p);
   const identity = migrateCliIdentity(parsed);
   if (identity) {
     if (!isCliIdentity(parsed))
@@ -144,6 +155,16 @@ export function assertCliProfileIsUnpaired(filePath: string = credentialPath()):
   );
 }
 
+/** True when the file holds a credential from an older build; `remote logout`
+ * must be able to remove it even though it can no longer be loaded. */
+export function hasLegacyCliCredential(filePath: string = credentialPath()): boolean {
+  try {
+    return isLegacyCliCredential(JSON.parse(fs.readFileSync(path.resolve(filePath), "utf8")));
+  } catch {
+    return false;
+  }
+}
+
 export function clearCliCredentials(): void {
   const p = credentialPath();
   if (fs.existsSync(p)) fs.unlinkSync(p);
@@ -165,6 +186,7 @@ function readCanonicalCredentialForWrite(filePath: string): CliIdentity {
         "restore it or run `vibestudio remote logout` first"
     );
   }
+  assertNotLegacy(parsed, filePath);
   const identity = migrateCliIdentity(parsed);
   if (!identity) {
     throw new Error(

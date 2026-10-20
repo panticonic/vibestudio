@@ -2,7 +2,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { runNpmInstall } from "./npmInstaller.js";
 
 describe.runIf(process.platform === "linux")("sandboxed native npm builds", () => {
@@ -10,6 +10,8 @@ describe.runIf(process.platform === "linux")("sandboxed native npm builds", () =
     const root = await mkdtemp(path.join(os.tmpdir(), "vibestudio-native-npm-"));
     const install = path.join(root, "install");
     const canary = path.join(root, "host-secret");
+    // Ownership ledgers and scratch live in the profile; keep them hermetic.
+    vi.stubEnv("VIBESTUDIO_PROFILE_ROOT", path.join(root, "profile"));
     try {
       await mkdir(install);
       await writeFile(canary, "private host state");
@@ -54,6 +56,7 @@ describe.runIf(process.platform === "linux")("sandboxed native npm builds", () =
       expect(await readFile(path.join(install, "result"), "utf8")).toBe("42");
       expect(await readFile(canary, "utf8")).toBe("private host state");
     } finally {
+      vi.unstubAllEnvs();
       await rm(root, { recursive: true, force: true });
     }
   });

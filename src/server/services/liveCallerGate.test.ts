@@ -29,6 +29,8 @@ describe("createLiveCallerGate", () => {
     let extensionLive = true;
     let websiteLive = true;
     let currentExecutionDigest = executionDigest;
+    let principalRevoked = false;
+    let principalDigest = executionDigest;
     const gate = createLiveCallerGate({
       workspaceId: "ws_alpha",
       userStore: {
@@ -45,6 +47,18 @@ describe("createLiveCallerGate", () => {
             : null,
       },
       membershipStore: { has: () => member },
+      clientPrincipals: {
+        getClientPrincipal: (principalId) =>
+          principalId === "client:shared"
+            ? ({
+                principalId,
+                userId: "usr_alice",
+                deviceId: "dev_1",
+                executionDigest: principalDigest,
+                ...(principalRevoked ? { revokedAt: 3 } : {}),
+              } as never)
+            : null,
+      },
       deviceAuthStore: {
         userFor: () => (deviceLive ? "usr_alice" : null),
         getAgentCredential: () =>
@@ -133,6 +147,12 @@ describe("createLiveCallerGate", () => {
       },
       advanceIncarnation: () => {
         currentExecutionDigest = "b".repeat(64);
+      },
+      revokePrincipal: () => {
+        principalRevoked = true;
+      },
+      reattestPrincipal: () => {
+        principalDigest = "b".repeat(64);
       },
     };
   }
@@ -271,22 +291,48 @@ describe("createLiveCallerGate", () => {
     }
   );
 
-  it("binds a shared app connection to its live grant issuer without assigning a global owner", async () => {
-    const state = fixture();
-    const app = createVerifiedCaller(
-      "app:shared",
-      "client",
-      codeIdentity("client:shared", "client", "apps/shared"),
-      null,
-      {
-        userId: "usr_alice",
-        handle: "alice",
-      }
-    );
-    expect(await state.gate(app)).toBe(false);
-    expect(await state.gate(app, "shell:dev_1")).toBe(true);
-    state.revokeDevice();
-    expect(await state.gate(app, "shell:dev_1")).toBe(false);
+  it("keeps a client session only while its hub-attested principal row stays current", async () => {
+    const client = () =>
+      createVerifiedCaller(
+        "client:shared",
+        "client",
+        { ...codeIdentity("client:shared", "client", "apps/shared") },
+        null,
+        { userId: "usr_alice", handle: "alice" }
+      );
+
+    const base = fixture();
+    expect(await base.gate(client())).toBe(true);
+
+    const revoked = fixture();
+    revoked.revokePrincipal();
+    expect(await revoked.gate(client())).toBe(false);
+
+    // Re-attestation with a new build digest strands the session admitted with the old one.
+    const rebuilt = fixture();
+    rebuilt.reattestPrincipal();
+    expect(await rebuilt.gate(client())).toBe(false);
+
+    const unpaired = fixture();
+    unpaired.revokeDevice();
+    expect(await unpaired.gate(client())).toBe(false);
+
+    const removed = fixture();
+    removed.removeMembership();
+    expect(await removed.gate(client())).toBe(false);
+
+    // A principal the hub never attested is not a client at all.
+    expect(
+      await base.gate(
+        createVerifiedCaller(
+          "client:other",
+          "client",
+          codeIdentity("client:other", "client", "apps/shared"),
+          null,
+          { userId: "usr_alice", handle: "alice" }
+        )
+      )
+    ).toBe(false);
   });
 
   it("uses the authenticated viewer for shared panels and creator lineage for workers", async () => {
@@ -311,21 +357,6 @@ describe("createLiveCallerGate", () => {
     expect(await state.gate(worker, "shell:dev_1")).toBe(false);
     state.removeMembership();
     expect(await state.gate(panel, "shell:dev_1")).toBe(false);
-  });
-
-  it("rejects an admitted code caller after its active incarnation changes", async () => {
-    const state = fixture();
-    const app = createVerifiedCaller(
-      "app:shared",
-      "client",
-      codeIdentity("client:shared", "client", "apps/shared"),
-      null,
-      { userId: "usr_alice", handle: "alice" }
-    );
-
-    expect(await state.gate(app, "shell:dev_1")).toBe(true);
-    state.advanceIncarnation();
-    expect(await state.gate(app, "shell:dev_1")).toBe(false);
   });
 
   it("admits only the canonical system-owned extension identity", async () => {
@@ -362,7 +393,7 @@ describe("createLiveCallerGate", () => {
     // server-spawned app process exists to carry the system subject.
     const state = fixture();
     const app = createVerifiedCaller(
-      "@workspace-apps/terminal-browser",
+      "client:shared",
       "client",
       codeIdentity("@workspace-clients/terminal-browser", "client", "apps/shared"),
       null,

@@ -1,6 +1,7 @@
 import type { HostDescriptor, ClientSelection } from "@vibestudio/workspace-contracts/clients";
 import type { ControlChannel } from "../connection/controlChannel.js";
 import type {
+  ClientBuildIdentity,
   ConnectionEvents,
   LaunchStateWire,
   RetainedClientBuild,
@@ -26,6 +27,11 @@ export interface RemoteLauncher {
 
 export interface ClientLaunches {
   create(descriptor: HostDescriptor): RemoteLauncher;
+  /**
+   * Register a build that already runs with the connection process, which
+   * acquires its principal's credential. Resolves to the principal id.
+   */
+  adopt(build: ClientBuildIdentity): Promise<string>;
   /** Keep the verified artifacts of the builds windows run; drop every other cached one. */
   retain(retained: readonly RetainedClientBuild[]): Promise<void>;
   /** The bytes of a cached artifact, verified against their integrity by the connection process. */
@@ -87,6 +93,10 @@ export class ClientLaunchLink implements ClientLaunches {
           });
       },
     };
+  }
+
+  adopt(build: ClientBuildIdentity): Promise<string> {
+    return this.attached.request<string>("launch.adopt", { build });
   }
 
   retain(retained: readonly RetainedClientBuild[]): Promise<void> {

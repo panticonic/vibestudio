@@ -6,7 +6,7 @@ import {
   verifyExecutionArtifactRef,
 } from "@vibestudio/shared/execution/retention";
 import { sha256 } from "@vibestudio/shared/execution/identity";
-import { buildKeyRootProvider } from "./executionRootProviders.js";
+import { buildKeyRootProvider, clientGenerationBuildKeys } from "./executionRootProviders.js";
 
 function sharedBuildArtifacts() {
   const first = internalDOExecutionArtifacts(internalDoProgramsForFixture())[0]!;
@@ -92,5 +92,25 @@ describe("buildKeyRootProvider", () => {
     expect(resolve).toHaveBeenCalledWith(
       expect.objectContaining({ buildKey, executionDigest: first.executionDigest })
     );
+  });
+});
+
+describe("clientGenerationBuildKeys", () => {
+  it("holds no generations without a ClientHost registry", () => {
+    expect(clientGenerationBuildKeys(null)).toEqual([]);
+  });
+
+  it("roots each active build and rollback target", () => {
+    expect(
+      clientGenerationBuildKeys({
+        list: () => [
+          { name: "chat", activeBundleKey: "b2", previousVersions: [{ activeBundleKey: "b1" }] },
+          { name: "idle", activeBundleKey: null, previousVersions: [] },
+        ],
+      })
+    ).toEqual([
+      { ownerId: "chat", buildKey: "b2", reason: "active" },
+      { ownerId: "chat", buildKey: "b1", reason: "rollback" },
+    ]);
   });
 });

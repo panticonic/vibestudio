@@ -16,8 +16,6 @@ files:
   - "!dist/source-server-prerequisites.lock"
   - "!dist/host-build.lock"
   - "scripts/cli/**/*"
-  - "scripts/owned-process-tree.mjs"
-  - "scripts/owned-process-identity.mjs"
   - "scripts/historical-host-snapshot.mjs"
   # Package source exports are compiler inputs, not independent npm installs.
   # Only electron-builder's production dependency collector owns node_modules,
@@ -33,8 +31,6 @@ asar: true
 asarUnpack:
   # Desktop phone provisioning executes the canonical CLI primitives locally.
   - "scripts/cli/**/*"
-  - "scripts/owned-process-tree.mjs"
-  - "scripts/owned-process-identity.mjs"
   - "scripts/historical-host-snapshot.mjs"
   - "package.json"
   # MXC enforcement payloads must be executable outside ASAR.
@@ -48,6 +44,13 @@ asarUnpack:
   - "dist/prepare-workspace-templates.cjs"
   # Spawned after startup for low-priority dependency content maintenance.
   - "dist/dependency-content-maintenance.cjs"
+  # The ownership reaper runs as its own process, started by the bundled owner
+  # client from beside the bundle: plain files, listed by ownershipFiles.mjs.
+  - "dist/reaper.mjs"
+  - "dist/ownershipLedger.mjs"
+  - "dist/ownedProcessIdentity.mjs"
+  - "dist/darwinProcessObserver.mjs"
+  - "dist/removeSealedTree.mjs"
   # Server auto-spawn uses child_process.fork() for the standalone headless host.
   - "dist/headless-host/**/*"
   # Runtime panel/worker builds use esbuild against installed packages. Keep

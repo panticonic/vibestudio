@@ -1,4 +1,5 @@
 import { assertSingleInfrastructureModuleTree } from "../../scripts/lib/bundle-module-identity.mjs";
+import { copyOwnershipReaperAssets } from "../../scripts/lib/ownership-reaper-assets.mjs";
 import path from "node:path";
 // Bundle the headless host with esbuild: workspace packages (@vibestudio/*)
 // are TS-source exports, so they get bundled; real npm deps stay external.
@@ -40,5 +41,8 @@ const indexBuild = await esbuild.build({
 
 for (const result of [mainBuild, indexBuild])
   assertSingleInfrastructureModuleTree(result.metafile, path.resolve("../.."), process.cwd());
+
+// The bundled ownership client starts its reaper from beside the bundle.
+copyOwnershipReaperAssets("dist");
 
 console.log("headless-host build complete");

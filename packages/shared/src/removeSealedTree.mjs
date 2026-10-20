@@ -15,37 +15,26 @@ import * as path from "node:path";
  * directory caused the refusal. On permission failure, unseal the surviving
  * directories in the owned tree and retry removal.
  */
-export function removeSealedTree(
-  target: string,
-  deps: {
-    rmSync?: typeof fs.rmSync;
-    chmodSync?: typeof fs.chmodSync;
-    lstatSync?: typeof fs.lstatSync;
-  } = {}
-): void {
+export function removeSealedTree(target, deps = {}) {
   const rmSync = deps.rmSync ?? fs.rmSync;
   const chmodSync = deps.chmodSync ?? fs.chmodSync;
   const lstatSync = deps.lstatSync ?? fs.lstatSync;
   try {
     rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   } catch (error) {
-    const refusal = error as NodeJS.ErrnoException;
+    const refusal = error;
     if (refusal?.code !== "EACCES" && refusal?.code !== "EPERM") throw error;
     unsealDirectories(target, lstatSync, chmodSync);
     rmSync(target, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
   }
 }
 
-function unsealDirectories(
-  entry: string,
-  lstatSync: typeof fs.lstatSync,
-  chmodSync: typeof fs.chmodSync
-): void {
-  let stat: fs.Stats;
+function unsealDirectories(entry, lstatSync, chmodSync) {
+  let stat;
   try {
     stat = lstatSync(entry);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+    if (error.code === "ENOENT") return;
     throw error;
   }
   if (!stat.isDirectory()) return;

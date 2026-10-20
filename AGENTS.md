@@ -154,6 +154,9 @@ command.
    infrastructure checks first. Reuse a recent successful doctor result for an
    unchanged instance. Do not run doctor against an unrelated existing source
    server merely because it is already live.
+   Only `doctor` and `run` provision an instance; every other command (`list`,
+   `inspect`, `trajectory`, `rerun`, ...) needs one already running and fails
+   with a clear error rather than creating one.
 2. Use `pnpm system-test [--instance ID] list --json` only when the exact test
    name is not already known.
 3. Run the smallest relevant exact test with
@@ -240,6 +243,16 @@ temporary instance root, discarded with everything in it when the process exits
 only thing `--ephemeral` means anywhere: the supervisor consumes it and no
 launcher below it sees the word. `pnpm system-test` owns only instances it created and refuses to stop
 an unrelated instance.
+
+Process and scratch ownership is one library (`packages/shared/src/ownership*.mjs`
+and its `reaper.mjs`). An owner's reaper holds a durable ledger under
+`<profile>/ownership` and retires every registered process group and scratch
+directory when the owner releases it or dies, SIGKILL included; each launcher
+sweeps the ledgers of dead owners first. An instance is `leased` to the launcher
+that created it, or `until-stop`: `doctor` always creates `until-stop`, `run`
+creates `leased` unless `--keep`, and `stop` retires either. `inspect` and
+`list` report the summed RSS of an instance's registered groups. A raw
+`detached: true` anywhere else fails `tests/ownership-guard.test.ts`.
 
 Do not stop after merely listing artifact paths or restating validation errors.
 Inspect the smallest set of captured evidence needed to explain the concrete

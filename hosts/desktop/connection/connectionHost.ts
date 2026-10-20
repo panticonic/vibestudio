@@ -238,8 +238,6 @@ export class ConnectionHost {
       fetchArtifact: (route) => gateway.fetch({ path: route, method: "GET" }),
       store: this.deps.createArtifactStore(args.userDataPath),
     });
-    // Client sessions are granted for the exact build this process verified.
-    session.serverClient.setClientPrincipalSessions(this.launches.principalSessions());
     this.hubManager = session.hubProcessManager;
     const workspace = this.registerWorkspace(session);
     const hub = this.registerClient(session.hubControlClient);
@@ -275,6 +273,12 @@ export class ConnectionHost {
   }
 
   private registerWorkspace(connection: ConnectedWorkspace): WorkspaceDescriptor {
+    // A client principal's credential is valid at every workspace the device
+    // reaches: each connection presents the one the launch acquired.
+    if (!this.launches) throw new Error("The connection is not established");
+    connection.serverClient.setClientPrincipalSessions(
+      this.launches.principalSessions(connection.workspaceId)
+    );
     const entry = this.registerClient(connection.serverClient);
     const releaseCdp = connection.onCdpAuthToken((token) =>
       this.emit("cdp-token", { workspaceId: connection.workspaceId, token })

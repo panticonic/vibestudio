@@ -8,9 +8,12 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { getProfileDataPath } from "@vibestudio/env-paths";
+import { Ownership, sweep } from "@vibestudio/shared/ownership";
+import { ledgerDirOf } from "@vibestudio/shared/ownershipLedger";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
 import { LaunchTermination, joinProducer, runOwnedChild } from "./launchTermination.js";
 import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
+import { hasOwnershipFailure } from "../../scripts/lib/owned-cleanup.mjs";
 import { resolveDevelopmentTemplateSet } from "./developmentTemplateSet.js";
 import { assertProductLaunchArguments, productLaunchEnvironment } from "./productLaunch.js";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
@@ -49,18 +52,26 @@ async function main(): Promise<void> {
   const forwarded = templateOptions.forwarded;
 
   const repoRoot = fs.realpathSync(process.cwd());
-  // From here this launcher owns state; a termination request must reach the
+  const profileDir = getProfileDataPath();
+  // Whatever an earlier launcher that died left behind is retired first.
+  await sweep(ledgerDirOf(profileDir));
+  // Everything this launch starts or creates is owned by its ownership: the
+  // scratch root and every process are retired by its reaper, whether this
+  // launcher finishes or is killed. A termination request must reach the
   // cleanup below, not end the process before it.
+  const ownership = await Ownership.open({
+    profileDir,
+    lifetime: "leased",
+    meta: { kind: "source-product-launch", surface },
+  });
   const termination = new LaunchTermination();
-  const scratchParent = path.join(getProfileDataPath(), "source-launches");
-  fs.mkdirSync(scratchParent, { recursive: true });
-  const temporaryRoot = fs.mkdtempSync(path.join(scratchParent, "launch-"));
+  ownership.signal.addEventListener("abort", () => termination.request("SIGTERM"), { once: true });
   let desktop: DevInstanceSupervisor | undefined;
   let preparation: WorkspaceReleasePreparation | undefined;
-  let retirementFailed = false;
   let launchFailure: unknown;
   let retirementFailure: unknown;
   try {
+    const temporaryRoot = await ownership.scratch("source-launch-");
     const needsInitialWorkspace = !profileHasWorkspace();
     const defaultTemplates =
       (await resolveDevelopmentTemplateSet({
@@ -84,14 +95,20 @@ async function main(): Promise<void> {
       bootstrapSystem: needsInitialWorkspace,
       ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
     });
-    await runOwnedChild(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], {
+    await runOwnedChild(
+      ownership,
+      process.execPath,
+      ["scripts/native-host-dependencies.mjs", "--repair"],
+      { env, termination }
+    );
+    await runOwnedChild(ownership, process.execPath, ["scripts/ensure-host-build.mjs"], {
       env,
       termination,
     });
-    await runOwnedChild(process.execPath, ["scripts/ensure-host-build.mjs"], { env, termination });
     env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(repoRoot, "desktop");
     termination.signal.throwIfAborted();
     const owned = prepareWorkspaceRelease({
+      ownership,
       executable: process.execPath,
       entry: path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "prepare-workspace-templates.mjs"),
       appRoot: repoRoot,
@@ -109,6 +126,8 @@ async function main(): Promise<void> {
       return;
     }
     const supervisor = new DevInstanceSupervisor({
+      ownership,
+      label: "desktop",
       sourceRoot: repoRoot,
       command: process.execPath,
       args: [
@@ -132,8 +151,7 @@ async function main(): Promise<void> {
     const foreground = desktop.wait();
     process.exitCode = await foreground;
   } catch (error) {
-    retirementFailed = (error as NodeJS.ErrnoException)?.code === "EOWNERSHIP";
-    if (termination.requested && !retirementFailed) {
+    if (termination.requested && !hasOwnershipFailure(error)) {
       // A requested stop is not a launch failure; the cleanup below still runs.
       console.error("Interrupted.");
       process.exitCode = signalExitCode(termination.requested);
@@ -141,23 +159,22 @@ async function main(): Promise<void> {
       launchFailure = error;
     }
   } finally {
+    // The desktop and the producer are stopped and joined before their
+    // scratch is retired under them.
+    const retirement = await Promise.allSettled([desktop?.stop(), joinProducer(preparation)]);
+    const stopFailure = retirement.find((result) => result.status === "rejected");
+    if (stopFailure?.status === "rejected") retirementFailure = stopFailure.reason;
     try {
-      // A failed retirement retains the source inputs for the still-owned
-      // process. Deletion retries cannot establish that ownership has ended.
-      const retirement = await Promise.allSettled([desktop?.stop(), joinProducer(preparation)]);
-      const failure = retirement.find((result) => result.status === "rejected");
-      if (!retirementFailed && !failure) fs.rmSync(temporaryRoot, { recursive: true, force: true });
-      if (failure?.status === "rejected") retirementFailure = failure.reason;
+      await ownership.release();
     } catch (error) {
-      retirementFailure ??= error;
-    } finally {
-      try {
-        await desktop?.close();
-      } catch (error) {
-        retirementFailure ??= error;
-      }
-      termination.dispose();
+      retirementFailure =
+        retirementFailure === undefined
+          ? error
+          : new AggregateError([retirementFailure, error], "Source launch retirement failed", {
+              cause: retirementFailure,
+            });
     }
+    termination.dispose();
   }
   if (retirementFailure) {
     if (launchFailure && launchFailure !== retirementFailure)

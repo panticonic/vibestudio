@@ -84,6 +84,8 @@ export interface DesktopClientHostDeps {
   /** Launch, artifact cache and grants, which run in the connection process. */
   launches: ClientLaunches;
   windows: ClientWindows;
+  /** Hold a window's principal session on the connection (see `connectionReplaced`). */
+  holdSession(window: ClientWindow): Promise<void>;
   catalog?: ClientBuildCatalog;
   supervision: SupervisionEvents;
   state: ClientHostState;
@@ -121,6 +123,12 @@ interface RunningClient {
   builds: Set<string>;
   /** The opening of the client's first window; it runs once that settles. */
   opened: Promise<void>;
+}
+
+interface EndOutcome {
+  /** What the person is told. */
+  why: string;
+  relaunch: boolean;
 }
 
 interface LaunchSession {
@@ -579,42 +587,87 @@ export class DesktopClientHost implements PendingClientUpdates {
   }
 
   /**
-   * A client session ended for good. The server's reason is authoritative:
-   * `trust-revoked` withdraws device-level powers (§4.4.1), `retired` ends the
-   * client. Either way the person is told, and the client is launched again
-   * only if the server still offers it without what was withdrawn.
+   * A client session ended for good in `workspaceId`. The server's reason is
+   * authoritative. `trust-revoked` withdraws device-level powers (§4.4.1) and
+   * `retired` ends the client; both revoke the principal's credential, which is
+   * valid at every workspace, so a close reported by any workspace's
+   * connection ends the client (a second report finds it already gone). Any
+   * other terminal close affects only that connection and is logged.
    */
-  sessionEnded(caller: ScopedServerCaller, reason: string): void {
+  sessionEnded(caller: ScopedServerCaller, workspaceId: string, reason: string): void {
     if (this.shuttingDown) return;
     const running = this.runningByPrincipal(caller.callerId);
     if (!running) return;
     if (reason !== "trust-revoked" && reason !== "retired") {
-      log.warn(`Client ${running.clientId} session ended: ${reason}`);
+      log.warn(`Client ${running.clientId} session in ${workspaceId} ended: ${reason}`);
       return;
     }
-    if (this.retiring.has(running.clientId)) return;
-    this.retiring.add(running.clientId);
-    void this.retire(running, reason).finally(() => this.retiring.delete(running.clientId));
+    this.end(running, reason, {
+      why:
+        reason === "trust-revoked"
+          ? `${running.title} no longer holds the device powers it was trusted with, so it was closed.`
+          : `${running.title} was retired by this workspace, so it was closed.`,
+      // Optional capabilities may simply be gone: launch it again and let the
+      // server say whether it still runs without what was withdrawn.
+      relaunch: reason === "trust-revoked",
+    });
   }
 
-  private async retire(running: RunningClient, reason: "trust-revoked" | "retired"): Promise<void> {
+  /**
+   * The connection process was replaced and lost what it held for running
+   * clients: their builds' credentials and their windows' sessions. Each
+   * running build is re-registered with the new process (which acquires one
+   * credential for it) and each window's session is held again. A client that
+   * cannot be restored is closed and launched again, with the reason shown; a
+   * launch that waited on a review starts over, for its launcher ended with
+   * the old process.
+   */
+  async connectionReplaced(): Promise<void> {
+    if (this.shuttingDown) return;
+    const waiting = this.gating?.select;
+    await Promise.all(
+      [...this.running.values()].map(async (running) => {
+        try {
+          await running.opened;
+          const { source, buildKey, executionDigest } = running.client;
+          const principalId = await this.deps.launches.adopt({ source, buildKey, executionDigest });
+          if (principalId !== running.principalId) {
+            throw new Error(`The server granted ${principalId}, not ${running.principalId}`);
+          }
+          for (const window of this.deps.windows.windowsOf(running.clientId)) {
+            await this.deps.holdSession(window);
+          }
+        } catch (error) {
+          log.warn(`Could not restore ${running.clientId}: ${String(error)}`);
+          this.end(running, "reconnect-failed", {
+            why: `${running.title} could not be reconnected, so it was restarted.`,
+            relaunch: true,
+          });
+        }
+      })
+    );
+    if (waiting) await this.launch(waiting).catch(() => undefined);
+  }
+
+  /** Close a client with the person told why, optionally launching it again. */
+  private end(running: RunningClient, reason: string, outcome: EndOutcome): void {
+    if (this.retiring.has(running.clientId)) return;
+    this.retiring.add(running.clientId);
+    void this.close(running, reason, outcome).finally(() => this.retiring.delete(running.clientId));
+  }
+
+  private async close(running: RunningClient, reason: string, outcome: EndOutcome): Promise<void> {
     const { clientId, title, source } = running;
     // One window must exist while another launch is prepared, or the app would quit.
     this.deps.gate.present(title, { status: "starting", reason: `${title} is restarting.` });
-    const why =
-      reason === "trust-revoked"
-        ? `${title} no longer holds the device powers it was trusted with, so it was closed.`
-        : `${title} was retired by this workspace, so it was closed.`;
     this.forget(running);
     this.deps.windows.closeClient(clientId, reason);
-    this.deps.notify(`${title} was closed`, why);
-    if (reason === "retired") return;
-    // Optional capabilities may simply be gone: launch it again and let the
-    // server say whether it still runs without what was withdrawn.
+    this.deps.notify(`${title} was closed`, outcome.why);
+    if (!outcome.relaunch) return;
     try {
       await this.launch({ source });
     } catch (error) {
-      log.warn(`${clientId} could not relaunch after its trust changed: ${String(error)}`);
+      log.warn(`${clientId} could not relaunch after it ended (${reason}): ${String(error)}`);
     }
   }
 

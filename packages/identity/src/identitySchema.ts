@@ -2,10 +2,37 @@ import type { CanonicalSqliteMigration, CanonicalSqliteSchema } from "@vibestudi
 
 /**
  * Identity and machine-control share one file and therefore one atomic schema.
- * Version 20 is the current schema. The explicitly enumerated final
+ * Version 21 is the current schema. The explicitly enumerated final
  * pre-cutover schema below migrates transactionally; every other shape is rejected.
  */
-export const IDENTITY_DATABASE_SCHEMA_VERSION = 20;
+export const IDENTITY_DATABASE_SCHEMA_VERSION = 21;
+
+const CLIENT_PRINCIPALS_SQL = `CREATE TABLE client_principals (
+  principal_id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES users(id),
+  device_id TEXT NOT NULL REFERENCES devices(device_id),
+  client_id TEXT NOT NULL,
+  runtime TEXT NOT NULL,
+  source TEXT NOT NULL,
+  build_key TEXT NOT NULL,
+  effective_version TEXT NOT NULL,
+  execution_digest TEXT NOT NULL,
+  authority_json TEXT NOT NULL,
+  capabilities_json TEXT NOT NULL,
+  attester_workspace_id TEXT NOT NULL,
+  attested_at INTEGER NOT NULL,
+  revoked_at INTEGER
+)`;
+
+const CLIENT_CREDENTIALS_SQL = `CREATE TABLE client_credentials (
+  credential_id TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL,
+  principal_id TEXT NOT NULL REFERENCES client_principals(principal_id) ON DELETE CASCADE,
+  execution_digest TEXT NOT NULL,
+  device_key TEXT,
+  created_at INTEGER NOT NULL,
+  revoked_at INTEGER
+)`;
 
 const HUB_PROCESS_OWNER_SQL = `CREATE TABLE hub_process_owner (
   singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
@@ -108,6 +135,23 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
         expires_at INTEGER,
         revoked_at INTEGER
       )`,
+    },
+    { type: "table", name: "client_principals", sql: CLIENT_PRINCIPALS_SQL },
+    {
+      type: "index",
+      name: "client_principals_by_device",
+      sql: "CREATE INDEX client_principals_by_device ON client_principals(device_id)",
+    },
+    {
+      type: "index",
+      name: "client_principals_by_attester",
+      sql: "CREATE INDEX client_principals_by_attester ON client_principals(attester_workspace_id)",
+    },
+    { type: "table", name: "client_credentials", sql: CLIENT_CREDENTIALS_SQL },
+    {
+      type: "index",
+      name: "client_credentials_by_principal",
+      sql: "CREATE INDEX client_credentials_by_principal ON client_credentials(principal_id)",
     },
     {
       type: "table",
@@ -219,6 +263,17 @@ export const IDENTITY_DATABASE_SCHEMA: CanonicalSqliteSchema = {
  * rooms and makes unbound devices local-only before this cutover runs.
  */
 export const IDENTITY_DATABASE_MIGRATIONS: readonly CanonicalSqliteMigration[] = [
+  {
+    fromVersion: 20,
+    toVersion: 21,
+    migrate(db) {
+      // Client principals are attested at the hub and valid in every workspace.
+      db.exec(`${CLIENT_PRINCIPALS_SQL}; ${CLIENT_CREDENTIALS_SQL};
+        CREATE INDEX client_principals_by_device ON client_principals(device_id);
+        CREATE INDEX client_principals_by_attester ON client_principals(attester_workspace_id);
+        CREATE INDEX client_credentials_by_principal ON client_credentials(principal_id)`);
+    },
+  },
   {
     fromVersion: 19,
     toVersion: 20,

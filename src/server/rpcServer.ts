@@ -364,8 +364,15 @@ interface RedeemedRpcPairingCredential {
   callerId: string;
   callerKind: CallerKind;
   deviceCredential?: DeviceCredential;
+  /**
+   * Entity/context binding for an `agent:`-prefixed credential (§3.2), stamped
+   * onto the connection's VerifiedCaller. Host-verified — never from client input.
+   */
   agentBinding?: import("@vibestudio/identity/types").AgentBinding;
+  /** Host-verified account subject for the redeemed credential. */
   subject?: UserSubject;
+  /** The principal that vouches for this session, e.g. the `shell:<deviceId>` a client runs on. */
+  authorizedBy?: string;
 }
 
 type RpcCredentialResolution =
@@ -941,28 +948,7 @@ export class RpcServer {
           clientPlatform?: ClientPlatform;
           transport: import("@vibestudio/identity/identityDb").DeviceTransportBinding;
         }
-      ) =>
-        | {
-            callerId: string;
-            callerKind: CallerKind;
-            deviceCredential?: DeviceCredential;
-            /**
-             * Entity/context binding for an `agent:`-prefixed credential (§3.2),
-             * stamped onto the connection's VerifiedCaller. Host-verified — never
-             * from client input.
-             */
-            agentBinding?: import("@vibestudio/identity/types").AgentBinding;
-            /** Host-verified account subject for the redeemed credential. */
-            subject?: UserSubject;
-          }
-        | null
-        | Promise<{
-            callerId: string;
-            callerKind: CallerKind;
-            deviceCredential?: DeviceCredential;
-            agentBinding?: import("@vibestudio/identity/types").AgentBinding;
-            subject?: UserSubject;
-          } | null>;
+      ) => RedeemedRpcPairingCredential | null | Promise<RedeemedRpcPairingCredential | null>;
     }
   ) {
     if (typeof deps.ensureUserlandDoReady !== "function") {
@@ -1920,7 +1906,7 @@ export class RpcServer {
         grant.principalId,
         kind,
         undefined,
-        kind === "panel" || kind === "client" ? grant.subject : undefined
+        kind === "panel" ? grant.subject : undefined
       );
       if (this.deps.membershipGate && !this.deps.membershipGate(caller.subject)) return null;
       if (this.deps.liveCallerGate && !(await this.deps.liveCallerGate(caller, grant.issuedBy)))
@@ -1967,6 +1953,7 @@ export class RpcServer {
     let entry: import("@vibestudio/shared/tokenManager").TokenEntry | null;
     let agentBinding: import("@vibestudio/identity/types").AgentBinding | undefined;
     let subject: UserSubject | undefined;
+    let authorizedBy = connectionGrant?.issuedBy;
     let resolvedFromTokenManager = false;
     try {
       entry = connectionGrant
@@ -1991,6 +1978,7 @@ export class RpcServer {
         entry = { callerId: paired.callerId, callerKind: paired.callerKind };
         agentBinding = paired.agentBinding;
         subject = paired.subject;
+        authorizedBy = paired.authorizedBy;
       }
       if (!entry) {
         return rejectedCredential();
@@ -2030,7 +2018,7 @@ export class RpcServer {
           ...(paired?.deviceCredential ? { deviceCredential: paired.deviceCredential } : {}),
           ...(agentBinding ? { agentBinding } : {}),
           ...(subject ? { subject } : {}),
-          ...(connectionGrant?.issuedBy ? { authorizedBy: connectionGrant.issuedBy } : {}),
+          ...(authorizedBy ? { authorizedBy } : {}),
           isValidAtUpgrade,
         },
       };

@@ -53,7 +53,7 @@ it("contains an actually failed close protocol and retains its original error un
   );
   const observed = operation.catch((error) => error);
   await Promise.resolve();
-  expect(owner.retire).toHaveBeenCalledWith("SIGKILL");
+  expect(owner.retire).toHaveBeenCalledWith("immediate");
   retirement.resolve();
   expect(await observed).toBe(failure);
   expect(owner.join).not.toHaveBeenCalled();
@@ -91,4 +91,28 @@ it.each([
   await expect(closeOwnedDesktop(app, owner)).rejects.toThrow(child.message);
   expect(owner.join).toHaveBeenCalledOnce();
   expect(owner.retire).not.toHaveBeenCalled();
+});
+
+it("lets a Playwright-launched application own its tree: close failure is the original error, success needs a clean exit", async () => {
+  const failure = new Error("Original close protocol failed");
+  await expect(
+    closeOwnedDesktop({
+      process: () => ({ exitCode: null, signalCode: null }),
+      close: async () => {
+        throw failure;
+      },
+    })
+  ).rejects.toBe(failure);
+  await expect(
+    closeOwnedDesktop({
+      process: () => ({ exitCode: 0, signalCode: null }),
+      close: async () => {},
+    })
+  ).resolves.toBeUndefined();
+  await expect(
+    closeOwnedDesktop({
+      process: () => ({ exitCode: 3, signalCode: null }),
+      close: async () => {},
+    })
+  ).rejects.toThrow("exited with code 3");
 });

@@ -93,8 +93,7 @@ describe("view service", () => {
       nativeId,
       "panels/about",
       { isRoot: true },
-      undefined,
-      { callerId: "client:browser:web:dev", callerKind: "client" }
+      undefined
     );
 
     // A host origin alone does not confer the sealed native chrome capability.

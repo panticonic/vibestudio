@@ -4,9 +4,10 @@ import {
   type ClientCapability,
 } from "@vibestudio/workspace-contracts/clients";
 import type { UserRole } from "@vibestudio/identity/types";
+import type { IdentityDb } from "@vibestudio/identity/identityDb";
 
 export interface CapabilityTrustDeps {
-  /** Whether the running client principal `callerId` holds `capability` (ClientHost). */
+  /** Whether the live client principal `callerId` holds `capability` (see `hasClientCapability`). */
   hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
   /**
    * Live role lookup from the shared identity DB (WP9 §3) — resolves the
@@ -32,6 +33,22 @@ function isHostPrincipal(caller: Pick<VerifiedCaller, "runtime">): boolean {
   if (id === "server") return kind === "server";
   if (kind !== "shell") return false;
   return id === "electron-main" || id === "headless-host" || id.startsWith("shell:");
+}
+
+/**
+ * Whether the hub-attested client principal `callerId` holds `capability`.
+ * Read live from identity.db on every call: an unattested or revoked principal
+ * holds nothing, whichever workspace asks.
+ */
+export function hasClientCapability(
+  identity: Pick<IdentityDb, "getClientPrincipal">,
+  callerId: string,
+  capability: ClientCapability
+): boolean {
+  const principal = identity.getClientPrincipal(callerId);
+  return (
+    !!principal && principal.revokedAt === undefined && principal.capabilities.includes(capability)
+  );
 }
 
 export function callerHasClientCapability(

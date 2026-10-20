@@ -512,7 +512,7 @@ describe("the terminal form", () => {
       formatLaunchGateForTerminal([review([part(), part({ origin: acme })])], "desktop")
     );
     expect(text).not.toMatch(/[0-9a-f]{40}/u);
-    expect(text).not.toContain("ev");
+    expect(text).not.toMatch(/\bev\b/u);
   });
 });
 

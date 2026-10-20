@@ -355,7 +355,19 @@ describe("userland authority facts", () => {
   });
 
   it("uses the query argument of the host-side durable service client", () => {
-    const facts = analyze(`
+    const facts = analyze(
+      `
+      import { createDurableObjectServiceClient } from "@vibestudio/shared/workspaceServiceRpc";
+      import { testRpcMethods } from "./test-rpc-contract";
+      declare const rpc: object;
+      const client = createDurableObjectServiceClient(rpc, "example.notes.v1", testRpcMethods, "notes");
+      void client.call("deleteNote");
+    `,
+      undefined,
+      [
+        {
+          fileName: "ambient.d.ts",
+          content: `
       declare module "@vibestudio/shared/workspaceServiceRpc" {
         export function createDurableObjectServiceClient(
           rpc: object,
@@ -364,12 +376,10 @@ describe("userland authority facts", () => {
           objectKey?: string | null
         ): { call(method: string, ...args: unknown[]): Promise<unknown> };
       }
-      import { createDurableObjectServiceClient } from "@vibestudio/shared/workspaceServiceRpc";
-      import { testRpcMethods } from "./test-rpc-contract";
-      declare const rpc: object;
-      const client = createDurableObjectServiceClient(rpc, "example.notes.v1", testRpcMethods, "notes");
-      void client.call("deleteNote");
-    `);
+    `,
+        },
+      ]
+    );
     expect(facts).toHaveLength(2);
     expect(facts[0]?.serviceQueries).toMatchObject({
       kind: "literals",
@@ -382,6 +392,119 @@ describe("userland authority facts", () => {
     expect(facts[1]?.methods).toMatchObject({
       kind: "literals",
       values: new Set(["deleteNote"]),
+    });
+  });
+
+  it("selects the query by the resolved signature for an unbound helper re-exported by the runtime", () => {
+    const facts = analyze(
+      `
+      import { createDurableObjectServiceClient } from "@workspace/runtime/workerd-client";
+      import { testRpcMethods } from "./test-rpc-contract";
+      declare const execution: { rpc?: { call(target: string, method: string, args: unknown[]): Promise<unknown> } } | undefined;
+      class Store {
+        rpc!: { call(target: string, method: string, args: unknown[]): Promise<unknown> };
+        run() {
+          const a = createDurableObjectServiceClient(this.rpc, "vibestudio.missions.v1", testRpcMethods);
+          const PROTOCOL = "vibestudio.missions.v1";
+          const b = createDurableObjectServiceClient(execution?.rpc ?? this.rpc, PROTOCOL, testRpcMethods);
+          void a.call("getNote");
+          void b.call("deleteNote");
+        }
+      }
+    `,
+      undefined,
+      [
+        {
+          fileName: "ambient.d.ts",
+          content: `
+      declare module "@workspace/runtime/workerd-client" {
+        export function createDurableObjectServiceClient(
+          rpc: { call(target: string, method: string, args: unknown[]): Promise<unknown> },
+          query: string,
+          descriptors: object,
+          objectKey?: string | null
+        ): { call(method: string, ...args: unknown[]): Promise<unknown> };
+      }
+    `,
+        },
+      ]
+    );
+    for (const fact of facts) {
+      expect(fact.serviceQueries).toMatchObject({
+        kind: "literals",
+        values: new Set(["vibestudio.missions.v1"]),
+      });
+    }
+    expect(facts).toHaveLength(4);
+  });
+
+  it("bounds a generic method constrained to keyof the descriptor table", () => {
+    const facts = analyze(`
+      declare module "@workspace/runtime/worker" {
+        export function createDurableObjectServiceClient(
+          query: string,
+          methods: object,
+          objectKey?: string | null
+        ): { call(method: string, ...args: unknown[]): Promise<unknown> };
+      }
+      import { createDurableObjectServiceClient } from "@workspace/runtime/worker";
+      import { testRpcMethods } from "./test-rpc-contract";
+      const service = createDurableObjectServiceClient("mission-control", testRpcMethods);
+      const call = <K extends keyof typeof testRpcMethods & string>(method: K, ...args: unknown[]) =>
+        service.call(method, ...args);
+      const loose = (method: string) => service.call(method);
+      void call;
+      void loose;
+    `);
+    const invocations = facts.filter((fact) => fact.kind === "invocation");
+    expect(invocations[0]?.methods).toMatchObject({
+      kind: "literals",
+      values: new Set(["deleteNote", "getNote", "unused"]),
+    });
+    expect(invocations[1]?.methods).toMatchObject({ kind: "unknown" });
+    expect(invocations[1]?.methodExpression).toBe("method");
+  });
+
+  it("keeps a dynamic query unbounded and records its source text", () => {
+    const facts = analyze(
+      `
+      import { createDurableObjectServiceClient } from "@workspace/runtime/workerd-client";
+      import { testRpcMethods } from "./test-rpc-contract";
+      declare const rpc: object;
+      declare const process: { env: Record<string, string | undefined> };
+      createDurableObjectServiceClient(rpc, process.env.X as string, testRpcMethods);
+    `,
+      undefined,
+      [
+        {
+          fileName: "ambient.d.ts",
+          content: `
+      declare module "@workspace/runtime/workerd-client" {
+        export function createDurableObjectServiceClient(
+          rpc: object,
+          query: string,
+          descriptors: object
+        ): { call(method: string): Promise<unknown> };
+      }
+    `,
+        },
+      ]
+    );
+    expect(facts[0]?.serviceQueries).not.toMatchObject({ kind: "literals" });
+    expect(facts[0]?.queryExpression).toBe("process.env.X as string");
+  });
+
+  it("reads a bound workers.durableObjectService query first", () => {
+    const facts = analyze(`
+      declare const workers: {
+        durableObjectService(query: string, methods: object, objectKey?: string | null): { call(method: string): Promise<unknown> };
+      };
+      import { testRpcMethods } from "./test-rpc-contract";
+      workers.durableObjectService("example.notes.v1", testRpcMethods);
+    `);
+    expect(facts[0]?.serviceQueries).toMatchObject({
+      kind: "literals",
+      values: new Set(["example.notes.v1"]),
     });
   });
 

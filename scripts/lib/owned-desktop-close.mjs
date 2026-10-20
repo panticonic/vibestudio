@@ -1,14 +1,17 @@
 /** Application close owns graceful shutdown. Process ownership observes the
- * real leader exit and retires only executors orphaned by that terminal event. */
+ * real leader exit and retires only executors orphaned by that terminal event.
+ * Without an `owner` the application was launched by Playwright, which owns the
+ * process tree it spawned and contains it when a close fails. */
 export async function closeOwnedDesktop(app, owner) {
   const child = app.process();
   try {
     await app.close();
   } catch (original) {
+    if (!owner) throw original;
     // A failed close protocol is a failed release. The resource owner explicitly
     // contains that failed target and joins it, preserving the original error.
     try {
-      await owner.retire("SIGKILL");
+      await owner.retire("immediate");
     } catch (cleanup) {
       throw new AggregateError(
         [original, cleanup],
@@ -20,7 +23,7 @@ export async function closeOwnedDesktop(app, owner) {
     }
     throw original;
   }
-  await owner.join();
+  await owner?.join();
   if (child.exitCode !== 0) {
     throw new Error(
       child.exitCode !== null

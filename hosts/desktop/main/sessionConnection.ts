@@ -3,7 +3,6 @@ import type {
   PanelHttpServerLike,
 } from "@vibestudio/shared/panelInterfaces";
 import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
-import type { ProcessTreeTerminationResult } from "../../../scripts/owned-process-tree.mjs";
 import type { ServerClient } from "./serverClient.js";
 import type { ServerInfo } from "./serverInfo.js";
 import type { WorkspaceSessionDirectory } from "./workspaceSessionDirectory.js";
@@ -57,7 +56,7 @@ export interface HubProcessHandle {
   /** Leave the hub running and stop supervising it. */
   detach(): Promise<void>;
   beginShutdown(): Promise<void>;
-  stopTree(): Promise<ProcessTreeTerminationResult>;
+  stopTree(): Promise<void>;
 }
 
 export interface SessionConnection extends WorkspaceSessionConnection {

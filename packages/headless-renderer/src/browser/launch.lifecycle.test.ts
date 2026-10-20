@@ -8,13 +8,40 @@ vi.mock("node:child_process", () => ({ spawn }));
 import { launchChromium } from "./launch.js";
 class Child extends EventEmitter {
   stderr = Object.assign(new EventEmitter(), { resume: vi.fn() });
+  pid = 4242;
   exitCode: number | null = null;
   signalCode: string | null = null;
   kill = vi.fn(() => true);
 }
-const options = { executablePath: "/owned/chromium", profileRoot: "" };
+/**
+ * The ownership a host launches Chromium into. Its group retirement is the
+ * leader's SIGKILL followed by the child's `close`, as the reaper would do.
+ */
+const ownership = {
+  own: vi.fn(async () => {}),
+  spawn: vi.fn((command: string, args: string[], spawnOptions: object) => {
+    const child = spawn(command, args, spawnOptions) as Child;
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    return {
+      child,
+      identity: null,
+      registered: Promise.resolve(),
+      retire: async () => {
+        if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+        await closed;
+      },
+      join: async () => {},
+    };
+  }),
+};
+const options = {
+  executablePath: "/owned/chromium",
+  profileRoot: "",
+  ownership: ownership as never,
+};
 beforeEach(() => {
   spawn.mockReset();
+  ownership.own.mockClear();
   options.profileRoot = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-profile-test-"));
 });
 afterEach(() => fs.rmSync(options.profileRoot, { recursive: true, force: true }));
@@ -23,6 +50,7 @@ describe("Chromium launch ownership", () => {
     const child = new Child();
     spawn.mockReturnValue(child);
     const launching = launchChromium(options);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
     child.stderr.emit("data", Buffer.from("DevTools listen"));
     child.stderr.emit("data", Buffer.from("ing on ws://127.0.0.1:123/devtools/browser/owned\n"));
     const browser = await launching;
@@ -70,6 +98,7 @@ describe("Chromium launch ownership", () => {
       settled = true;
       return error;
     });
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
     child.stderr.emit(
       "data",
       Buffer.from("discarded-prefix" + "x".repeat(20000) + "native launch failure")
@@ -92,6 +121,7 @@ describe("Chromium launch ownership", () => {
     const child = new Child();
     spawn.mockReturnValue(child);
     const launching = launchChromium(options).catch((error: Error) => error);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
     child.signalCode = "SIGTRAP";
     child.emit("exit", null, "SIGTRAP");
     child.emit("close", null, "SIGTRAP");
@@ -105,6 +135,7 @@ describe("Chromium launch ownership", () => {
     spawn.mockReturnValue(child);
     const failure = new Error("executable missing");
     const launching = launchChromium(options).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledOnce());
     child.emit("error", failure);
     await Promise.resolve();
     child.emit("close", -2, null);
@@ -127,6 +158,7 @@ describe("Chromium launch ownership", () => {
     const children = [new Child(), new Child()];
     spawn.mockReturnValueOnce(children[0]).mockReturnValueOnce(children[1]);
     const launching = [launchChromium(options), launchChromium(options)];
+    await vi.waitFor(() => expect(spawn).toHaveBeenCalledTimes(2));
     const runtimeDirs = spawn.mock.calls.map((call) => call[2].env.TMPDIR);
     expect(new Set(runtimeDirs).size).toBe(2);
     for (const child of children)

@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { serializeRpcFailure } from "@vibestudio/rpc";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -9,8 +9,8 @@ import {
   createTypedServiceClient,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
-import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
-import { createOwnedProcessGroupReceiver } from "@vibestudio/shared/ownedProcessRegistration";
+import type { OwnedProcess, Ownership } from "@vibestudio/shared/ownership";
+import { createLazyOwnership } from "../../../src/node/lazyOwnership.js";
 
 const MARKER = ".vibestudio-development-client.json";
 const CHUNK_BYTES = 1024 * 1024;
@@ -32,8 +32,8 @@ interface OwnedClient {
   child: ChildProcess;
   root: string;
   completion: Promise<void> | null;
-  group: OwnedProcessGroup;
-  registered: ReturnType<typeof createOwnedProcessGroupReceiver> | null;
+  /** The client's group, registered with this executor's reaper. */
+  owned: OwnedProcess;
   retirement: Promise<void> | null;
 }
 
@@ -48,13 +48,21 @@ export class CurrentHostDevelopmentClientExecutor {
   private identity: Promise<{ executable: string; digest: string; providerId: string }> | null =
     null;
   private readonly executor: ExecutorClient;
+  private readonly ownership;
 
   constructor(
     private readonly deps: {
       client: Pick<ServerClient, "call">;
       stateRoot: string;
       electronExecutable?: string;
-      spawnProcess?: typeof spawn;
+      /**
+       * Ownership of the launched clients' groups. Defaults to this executor's
+       * own lazily opened ownership, which `close()` releases.
+       */
+      ownership?: {
+        get(): Promise<Pick<Ownership, "spawn">>;
+        close(): Promise<void>;
+      };
       /** Native dependency realm a launched client resolves through. */
       nativeModulesRoot?: string | null;
       /** Argv this executor was started with, for device-scoped switches. */
@@ -63,6 +71,7 @@ export class CurrentHostDevelopmentClientExecutor {
       log?: (message: string) => void;
     }
   ) {
+    this.ownership = deps.ownership ?? createLazyOwnership({ role: "development-client-executor" });
     this.executor = createTypedServiceClient(
       "developmentClientExecutor",
       developmentClientExecutorMethods,
@@ -115,7 +124,9 @@ export class CurrentHostDevelopmentClientExecutor {
         await this.reportExit(requestId, owned.child.exitCode, owned.child.signalCode);
       })
     );
-    const failures = [...inflight, ...retired].flatMap((result) =>
+    // Every client is retired above; releasing joins the reaper itself.
+    const released = await Promise.allSettled([this.ownership.close()]);
+    const failures = [...inflight, ...retired, ...released].flatMap((result) =>
       result.status === "rejected" ? [result.reason] : []
     );
     if (failures.length)
@@ -154,27 +165,18 @@ export class CurrentHostDevelopmentClientExecutor {
       const root = await this.materialize(claim);
       preparedRoot = root;
       if (this.closed) throw coded("ESHUTDOWN", "Development client executor is closing");
-      const child = await this.launch(root, claim);
-      const group = OwnedProcessGroup.create(child);
-      const registered = group.identity
-        ? createOwnedProcessGroupReceiver(
-            child,
-            group.identity,
-            (identity) => OwnedProcessGroup.adopt(identity),
-            { forwardToParent: typeof process.send === "function" }
-          )
-        : null;
+      const owned = await this.launch(root, claim);
+      const child = owned.child;
       launchedClient = {
         requestId,
         child,
         root,
-        group,
-        registered,
+        owned,
         retirement: null,
         completion: null,
       };
       this.children.set(requestId, launchedClient);
-      const identity = group.identity;
+      const identity = owned.identity;
       if (!identity)
         throw coded(
           "EEXECUTOR_UNAVAILABLE",
@@ -362,7 +364,7 @@ export class CurrentHostDevelopmentClientExecutor {
     }
   }
 
-  private async launch(root: string, claim: LaunchClaim): Promise<ChildProcess> {
+  private async launch(root: string, claim: LaunchClaim): Promise<OwnedProcess> {
     const identity = await this.prepareIdentity();
     const executable = fs.realpathSync(this.deps.electronExecutable ?? process.execPath);
     if ((await hashExecutable(executable)) !== identity.digest) {
@@ -370,7 +372,11 @@ export class CurrentHostDevelopmentClientExecutor {
     }
     const profile = path.join(root, "profile");
     fs.mkdirSync(profile, { recursive: true, mode: 0o700 });
-    const child = (this.deps.spawnProcess ?? spawn)(
+    const ownership = await this.ownership.get();
+    // A development client is a disposable test client: killed at once, never
+    // drained. Its group is recorded with the reaper before spawn() returns,
+    // so a killed executor still has the client (and its descendants) retired.
+    const owned = ownership.spawn(
       executable,
       [
         ...inheritedDeviceSwitches(this.deps.processArgv ?? process.argv),
@@ -379,16 +385,18 @@ export class CurrentHostDevelopmentClientExecutor {
         claim.pairingDeepLink,
       ],
       {
+        kill: "immediate",
+        label: `development-client:${claim.requestId}`,
         cwd: root,
-        detached: process.platform !== "win32",
         stdio: ["ignore", "ignore", "ignore", "ipc"],
         env: clientEnvironment(claim),
         windowsHide: true,
       }
     );
+    const child = owned.child;
     // spawn() returns before the kernel launch result. Its error is asynchronous;
     // a failed launch still owns an IPC handle until ChildProcess emits close.
-    return await new Promise<ChildProcess>((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       let failure: Error | null = null;
       const onError = (error: Error) => {
         failure = error;
@@ -401,12 +409,15 @@ export class CurrentHostDevelopmentClientExecutor {
       const onSpawn = () => {
         child.off("close", onClose);
         child.off("error", onError);
-        resolve(child);
+        resolve();
       };
       child.once("error", onError);
       child.once("close", onClose);
       child.once("spawn", onSpawn);
     });
+    // The group is durable with the reaper before the client is reported.
+    await owned.registered;
+    return owned;
   }
 
   private now(): number {
@@ -415,15 +426,14 @@ export class CurrentHostDevelopmentClientExecutor {
 
   private retireClient(owned: OwnedClient): Promise<void> {
     owned.retirement ??= (async () => {
-      const results = await Promise.allSettled([owned.group.retire(), owned.registered?.close()]);
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : []
-      );
-      if (failures.length)
+      try {
+        await owned.owned.retire();
+      } catch (cause) {
         throw Object.assign(
-          new AggregateError(failures, "Development client resources did not retire"),
+          new AggregateError([cause], "Development client resources did not retire"),
           { code: "EOWNERSHIP" }
         );
+      }
       cleanupOwnedRoot(this.deps.stateRoot, owned.root, owned.requestId);
     })();
     return owned.retirement;

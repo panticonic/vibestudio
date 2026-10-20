@@ -358,6 +358,7 @@ describe("shared workspace runtime on the native platform", () => {
           path.join(input, "detached.cjs"),
           `
         const cp = require('node:child_process');
+        // ownership-exempt(sandbox-guest): guest code under test; the sandbox, not an owner, must contain it.
         const child = cp.spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { detached: true, stdio: ['ignore', 1, 2] });
         child.unref();
         process.stdout.write('final-output');

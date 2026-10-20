@@ -19,30 +19,17 @@
 import fsp from "node:fs/promises";
 import fs from "node:fs";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { spawn } from "node:child_process";
-import { tsImport } from "tsx/esm/api";
 import { formatRpcFailure } from "@vibestudio/rpc";
 import { startEphemeralLinuxSecretService } from "./lib/linux-secret-service.mjs";
 import { developmentTemplateSetEnv } from "./lib/development-template-set.mjs";
-import { runParentOwnedMain } from "./lib/parent-owned-main.mjs";
+import { ownedEntry, retireOnAbort } from "./lib/owned-entry.mjs";
 import { hasOwnershipFailure } from "./lib/owned-cleanup.mjs";
 import { isCancellationOnly, prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
-import {
-  createDesktopObservationOwner,
-  createOwnedTemporaryDirectory,
-} from "./lib/desktop-observation-owner.mjs";
+import { createDesktopObservationOwner } from "./lib/desktop-observation-owner.mjs";
 import { inspectPresentedDesktopDocuments } from "./lib/presented-desktop-documents.mjs";
-const { createOwnedProcessLifetime } = await tsImport(
-  "./development-client-lifecycle.ts",
-  import.meta.url
-);
-const { OwnedProcessGroup } = await tsImport(
-  "@vibestudio/shared/ownedProcessGroup",
-  import.meta.url
-);
 import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { _electron as electron } from "@playwright/test";
@@ -56,7 +43,6 @@ import {
   resolveDevelopmentTemplates,
   waitForRootInvite,
 } from "./cli/lib/smoke-remote-server.mjs";
-import { captureOwnedProcessIdentity } from "./owned-process-identity.mjs";
 import { closeOwnedDesktop } from "./lib/owned-desktop-close.mjs";
 import {
   readCurrentHostBuildGeneration,
@@ -83,10 +69,13 @@ const electronBinary = resolveElectronExecutableForVibestudio();
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 let desktopGeneration = null;
+let sourceGeneration = null;
 const screenshotDir = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
 const HOSTED_SHELL_APP = "@workspace-apps/shell";
-const desktopProcessOwners = new WeakMap();
 const desktopObservationOwners = new WeakMap();
+/** The ownership handle of each Playwright-launched desktop: its group is
+ * adopted so the smoke's reaper retires it even if the smoke is killed. */
+const desktopProcessOwners = new WeakMap();
 // Capture the profile cache before the smoke replaces HOME/XDG_CONFIG_HOME.
 // Mutable server/app state remains isolated; only receipt-validated,
 // content-addressed derived artifacts are shared between independent instances.
@@ -449,13 +438,17 @@ function prefixAndWrite(prefix, text, stream) {
   }
 }
 
-function spawnManaged(command, args, options = {}) {
-  const child = spawn(command, args, {
+/** An owned smoke dependency; `own` is `{ ownership, signal }`, and a stop request retires it. */
+function spawnManaged(own, command, args, options = {}) {
+  const owned = own.ownership.spawn(command, args, {
+    kill: options.kill ?? "immediate",
+    label: options.label ?? command,
     cwd: options.cwd ?? repoRoot,
     env: options.env ?? process.env,
-    detached: process.platform !== "win32",
-    stdio: [options.pipeStdin ? "pipe" : "ignore", "pipe", "pipe", "ipc"],
+    stdio: ["ignore", "pipe", "pipe"],
   });
+  retireOnAbort(own.ownership, own.signal, owned);
+  const { child } = owned;
   child.stdout?.on("data", (chunk) =>
     prefixAndWrite(options.label ?? command, chunk.toString(), process.stdout)
   );
@@ -469,7 +462,7 @@ function spawnManaged(command, args, options = {}) {
       process.stderr
     );
   });
-  return child;
+  return owned;
 }
 
 function waitForSpawn(child, command, args, timeoutMs = 1_000) {
@@ -507,24 +500,11 @@ function waitForChildExit(child) {
   });
 }
 
-function runOwnedCommand(lifetime, command, args, options = {}) {
-  const child = lifetime.acquire(() =>
-    spawn(command, args, {
-      cwd: options.cwd ?? repoRoot,
-      env: options.env ?? process.env,
-      detached: process.platform !== "win32",
-      stdio: ["ignore", "pipe", "pipe"],
-    })
-  );
-  child.stdout?.on("data", (chunk) =>
-    prefixAndWrite(options.label ?? command, chunk.toString(), process.stdout)
-  );
-  child.stderr?.on("data", (chunk) =>
-    prefixAndWrite(options.label ?? command, chunk.toString(), process.stderr)
-  );
-  return new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code, signal) => {
+async function runOwnedCommand(own, command, args, options = {}) {
+  const owned = spawnManaged(own, command, args, options);
+  await new Promise((resolve, reject) => {
+    owned.child.once("error", reject);
+    owned.child.once("close", (code, signal) => {
       if (code === 0) resolve();
       else {
         reject(
@@ -535,6 +515,7 @@ function runOwnedCommand(lifetime, command, args, options = {}) {
       }
     });
   });
+  await owned.join();
 }
 
 async function waitForServerReady(readyFile, serverChild, timeoutMs) {
@@ -641,7 +622,6 @@ async function launchDesktopApp(deepLink, tempRoot, launchTimeoutMs, desktopEnvi
     timeout: launchTimeoutMs,
   });
   const child = app.process();
-  desktopProcessOwners.set(app, OwnedProcessGroup.create(child));
   register(app);
   // Observe asset failures without intercepting requests or replacing the
   // application's session webRequest handlers. Keep only loopback asset paths;
@@ -2310,12 +2290,10 @@ function summarizeText(text) {
 
 async function closeElectron(app) {
   if (!app) return;
-  const owner = desktopProcessOwners.get(app);
-  if (!owner) throw new Error("Electron launch lost its owned process-group receipt");
-  await closeOwnedDesktop(app, owner);
+  await closeOwnedDesktop(app, desktopProcessOwners.get(app));
 }
 
-async function main(parentOwnerSignal) {
+async function main({ signal: parentOwnerSignal, ownership, scratchRoot }) {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     printHelp();
@@ -2324,23 +2302,30 @@ async function main(parentOwnerSignal) {
 
   const deadlineController = new AbortController();
   const stopController = new AbortController();
-  const ownerSignal = AbortSignal.any([
-    parentOwnerSignal,
-    deadlineController.signal,
-    stopController.signal,
-  ]);
+  const ownerSignal = AbortSignal.any([deadlineController.signal, stopController.signal]);
+  // An operator's stop is a cancellation of this smoke; losing the ownership
+  // itself (lease or reaper) is a failure and keeps its own reason.
+  const onParentAbort = () => {
+    const reason = parentOwnerSignal.reason;
+    stopController.abort(
+      reason?.code === "ESTOP"
+        ? Object.assign(new Error("Desktop smoke interrupted"), { code: "ECANCELLED" })
+        : reason
+    );
+  };
+  parentOwnerSignal.addEventListener("abort", onParentAbort, { once: true });
+  if (parentOwnerSignal.aborted) onParentAbort();
   let deadlineFailure;
   let testDeadline;
-  const processLifetime = createOwnedProcessLifetime();
-  const acquireProcess = (start) => {
-    if (cleanupPromise || ownerSignal.aborted)
-      throw new Error("Desktop smoke lifetime is stopping");
-    return processLifetime.acquire(start);
-  };
+  const own = { ownership, signal: ownerSignal };
   const desktopApps = [];
   const registerDesktopApp = (app) => {
     desktopApps.push(app);
     desktopObservationOwners.set(app, createDesktopObservationOwner());
+    desktopProcessOwners.set(
+      app,
+      ownership.adopt(app.process(), { kill: "graceful", label: "desktop" })
+    );
     if (ownerSignal.aborted) {
       // The registered app is retained by cleanup; do not independently signal
       // its children while the same owner is closing the application.
@@ -2351,8 +2336,8 @@ async function main(parentOwnerSignal) {
   const desktopEnvironments = [];
   let electronApp = null;
   let cleanupPromise;
-  let tempRoot = "";
-  let sourceGeneration = null;
+  // Reaper scratch: removed once every owned group has retired.
+  const tempRoot = scratchRoot;
   let workspacePreparation = null;
   let workspacePreparationJoined = false;
   let workspacePreparationStopPromise = null;
@@ -2368,95 +2353,37 @@ async function main(parentOwnerSignal) {
     void workspacePreparationStopPromise.catch(() => {});
     return workspacePreparationStopPromise;
   };
-  const rootOwner = createOwnedTemporaryDirectory(
-    () => fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-desktop-smoke-")),
-    (root) => fsp.rm(root, { recursive: true, force: true })
-  );
   let desktopEnvironment;
   let deadlineMs;
 
   const cleanup = () => {
     if (cleanupPromise) return cleanupPromise;
     clearTimeout(testDeadline);
-    rootOwner.seal();
     requestWorkspacePreparationStop();
     cleanupPromise = (async () => {
       const cleanupErrors = [];
-      let localTreesGone = true;
-      if (hasOwnershipFailure(operationFailure)) localTreesGone = false;
       for (const app of desktopApps) desktopObservationOwners.get(app)?.seal();
-      try {
-        tempRoot = (await rootOwner.join()) ?? "";
-      } catch (error) {
-        localTreesGone = false;
-        cleanupErrors.push(error);
-      }
       try {
         if (workspacePreparationStopPromise) await workspacePreparationStopPromise;
       } catch (error) {
-        if (!isCancellationOnly(error)) {
-          cleanupErrors.push(error);
-          if (hasOwnershipFailure(error)) localTreesGone = false;
-        }
+        if (!isCancellationOnly(error)) cleanupErrors.push(error);
       } finally {
         if (workspacePreparationStopPromise) workspacePreparationJoined = true;
       }
       // Attempt every registered owner even when one cleanup reports failure.
+      // The desktop's own hub belongs to the desktop's ownership and retires
+      // with it; the servers and helpers belong to this smoke's.
       for (const app of desktopApps.toReversed()) {
-        let hubOwner;
-        if (options.local) {
-          try {
-            const ready = parseHubReadyPayload(
-              JSON.parse(
-                await fsp.readFile(
-                  path.join(tempRoot, "instance", "server-auth", "hub-ready.json"),
-                  "utf8"
-                )
-              )
-            );
-            if (process.platform !== "win32") {
-              hubOwner = OwnedProcessGroup.adopt(captureOwnedProcessIdentity(ready.pid));
-            }
-          } catch (error) {
-            if (error.code !== "ENOENT" && error.code !== "ESRCH") cleanupErrors.push(error);
-          }
-        }
         try {
           await closeElectron(app);
         } catch (error) {
-          localTreesGone = false;
           cleanupErrors.push(error);
         }
         try {
           await desktopObservationOwners.get(app)?.join();
         } catch (error) {
-          localTreesGone = false;
           cleanupErrors.push(error);
         }
-        let mainJoined = false;
-        try {
-          await desktopProcessOwners.get(app).join();
-          mainJoined = true;
-        } catch (error) {
-          localTreesGone = false;
-          cleanupErrors.push(error);
-        }
-        if (hubOwner && mainJoined) {
-          try {
-            // Electron has actually exited; this retained detached hub can no
-            // longer be owned by its creator. Join explicit orphan retirement.
-            await hubOwner.retire("SIGKILL");
-          } catch (error) {
-            localTreesGone = false;
-            cleanupErrors.push(error);
-          }
-        }
-      }
-      try {
-        await processLifetime.retire();
-      } catch (error) {
-        localTreesGone = false;
-        cleanupErrors.push(error);
       }
       if (options.readyFile) {
         try {
@@ -2467,32 +2394,9 @@ async function main(parentOwnerSignal) {
         try {
           await environment.dispose?.();
         } catch (error) {
-          localTreesGone = false;
           cleanupErrors.push(error);
         }
       }
-      if (localTreesGone) {
-        for (const generation of [desktopGeneration, sourceGeneration]) {
-          if (!generation) continue;
-          try {
-            releaseHostBuildGeneration(generation);
-            if (generation === desktopGeneration) desktopGeneration = null;
-            if (generation === sourceGeneration) sourceGeneration = null;
-          } catch (error) {
-            localTreesGone = false;
-            cleanupErrors.push(error);
-          }
-        }
-      }
-      if (tempRoot && localTreesGone) {
-        try {
-          await rootOwner.retire();
-        } catch (error) {
-          cleanupErrors.push(error);
-        }
-      }
-      if (tempRoot && !localTreesGone)
-        console.warn(`[desktop-smoke] Retained isolated state: ${tempRoot}`);
       if (cleanupErrors.length)
         throw new AggregateError(cleanupErrors, "Desktop smoke cleanup failed");
     })();
@@ -2501,23 +2405,13 @@ async function main(parentOwnerSignal) {
 
   const ownerLost = () => {
     // Closing the actual client settles observations before its process tree
-    // disappears. The same cleanup promise owns every resource and the root.
-    processLifetime.requestStop();
+    // disappears. The same cleanup promise owns every resource.
     requestWorkspacePreparationStop();
     void cleanup().catch((error) => {
       console.error(error);
       process.exitCode = 1;
     });
   };
-  const processSignal = () => {
-    if (!stopController.signal.aborted) {
-      stopController.abort(
-        Object.assign(new Error("Desktop smoke interrupted"), { code: "ECANCELLED" })
-      );
-    }
-  };
-  process.once("SIGINT", processSignal);
-  process.once("SIGTERM", processSignal);
   ownerSignal.addEventListener("abort", ownerLost, { once: true });
   if (ownerSignal.aborted) ownerLost();
 
@@ -2528,8 +2422,6 @@ async function main(parentOwnerSignal) {
         await fsp.unlink(options.readyFile);
       } catch {}
     }
-    tempRoot = await rootOwner.acquire();
-    ownerSignal.throwIfAborted();
     // The implicit ready record belongs to this exact smoke root. Keeping it
     // inside that root makes process-tree cleanup sufficient even when an
     // outer test runner terminates the harness before its signal handler runs.
@@ -2538,12 +2430,7 @@ async function main(parentOwnerSignal) {
     desktopEnvironment =
       process.platform === "darwin"
         ? createMacosTestKeychain({ home: path.join(tempRoot, "home"), electronBinary })
-        : await startEphemeralLinuxSecretService(
-            tempRoot,
-            acquireProcess,
-            processLifetime.retireChild,
-            { signal: ownerSignal }
-          );
+        : await startEphemeralLinuxSecretService(ownership, tempRoot, { signal: ownerSignal });
     desktopEnvironments.push(desktopEnvironment);
 
     // 1. Start the same remote-serve launcher users run. No relay override is
@@ -2580,7 +2467,7 @@ async function main(parentOwnerSignal) {
     // and workspace-release prerequisites. CI-provided release roots are
     // admitted by the same producer and reused only after full validation.
     await runOwnedCommand(
-      processLifetime,
+      own,
       process.execPath,
       [path.join(repoRoot, "build.mjs"), "--source-server-prereqs"],
       {
@@ -2593,6 +2480,7 @@ async function main(parentOwnerSignal) {
     sourceGeneration = readCurrentHostBuildGeneration(repoRoot, "source");
     serverEnv.VIBESTUDIO_HOST_ARTIFACT_ROOT = sourceGeneration;
     workspacePreparation = prepareWorkspaceRelease({
+      ownership,
       appRoot: repoRoot,
       output: path.join(tempRoot, "workspace-release"),
       scratch: path.join(tempRoot, "workspace-preparation"),
@@ -2787,13 +2675,13 @@ async function main(parentOwnerSignal) {
       await cleanup();
       return;
     }
-    const serverChild = acquireProcess(() =>
-      spawnManaged(process.execPath, serverArgs, {
-        cwd: repoRoot,
-        env: serverEnv,
-        label: "server",
-      })
-    );
+    // The remote-serve wrapper forwards SIGTERM to the hub's ordered shutdown.
+    const serverChild = spawnManaged(own, process.execPath, serverArgs, {
+      kill: "graceful",
+      cwd: repoRoot,
+      env: serverEnv,
+      label: "server",
+    }).child;
     await waitForSpawn(serverChild, process.execPath, serverArgs);
 
     await waitForServerReady(
@@ -2978,13 +2866,12 @@ async function main(parentOwnerSignal) {
       process.platform === "win32" ? 90_000 : 30_000
     );
     await fsp.rm(options.readyFile, { force: true });
-    const restoredServer = acquireProcess(() =>
-      spawnManaged(process.execPath, serverArgs, {
-        cwd: repoRoot,
-        env: serverEnv,
-        label: "server-restored",
-      })
-    );
+    const restoredServer = spawnManaged(own, process.execPath, serverArgs, {
+      kill: "graceful",
+      cwd: repoRoot,
+      env: serverEnv,
+      label: "server-restored",
+    }).child;
     await waitForSpawn(restoredServer, process.execPath, serverArgs);
     await waitForServerReady(
       options.readyFile,
@@ -3102,12 +2989,9 @@ async function main(parentOwnerSignal) {
           const environment =
             process.platform === "darwin"
               ? createMacosTestKeychain({ home: path.join(memberRoot, "home"), electronBinary })
-              : await startEphemeralLinuxSecretService(
-                  memberRoot,
-                  acquireProcess,
-                  processLifetime.retireChild,
-                  { signal: ownerSignal }
-                );
+              : await startEphemeralLinuxSecretService(ownership, memberRoot, {
+                  signal: ownerSignal,
+                });
           desktopEnvironments.push(environment);
           const member = await launchDesktopApp(
             memberDeepLink,
@@ -3239,9 +3123,22 @@ async function main(parentOwnerSignal) {
   } finally {
     clearTimeout(testDeadline);
     ownerSignal.removeEventListener("abort", ownerLost);
-    process.off("SIGINT", processSignal);
-    process.off("SIGTERM", processSignal);
+    parentOwnerSignal.removeEventListener("abort", onParentAbort);
   }
 }
 
-await runParentOwnedMain(main, repoRoot);
+// The host build generations are leased until every process that runs from
+// them has retired, which is when the entry's ownership has been released.
+let entryFailure;
+try {
+  await ownedEntry(main, { appRoot: repoRoot, scratchPrefix: "vibestudio-desktop-smoke-" });
+} catch (error) {
+  entryFailure = error;
+  throw error;
+} finally {
+  if (!hasOwnershipFailure(entryFailure)) {
+    for (const generation of [desktopGeneration, sourceGeneration]) {
+      if (generation) releaseHostBuildGeneration(generation);
+    }
+  }
+}

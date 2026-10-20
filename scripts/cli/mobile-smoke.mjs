@@ -18,6 +18,7 @@ import {
   releaseHostBuildGeneration,
 } from "../host-build-generations.mjs";
 import { hasOwnershipFailure } from "../lib/owned-cleanup.mjs";
+import { ownedEntry, retireOnAbort } from "../lib/owned-entry.mjs";
 import { createConnectDeepLink, parseConnectLink } from "./lib/connect-grammar.generated.mjs";
 import { parseHubReadyPayload } from "./lib/hub-ready.mjs";
 import {
@@ -230,18 +231,21 @@ function pipeChildOutput(child, prefix) {
   child.stderr?.on("data", (chunk) => prefixAndWrite(prefix, chunk.toString(), process.stderr));
 }
 
-function spawnManaged(acquire, command, args, options = {}) {
-  const child = acquire(() =>
-    spawn(command, args, {
-      cwd: options.cwd ?? repoRoot,
-      env: options.env ?? process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      // Long-lived smoke dependencies own a process group. The hub, workerd,
-      // native builds can fork children which a bare ChildProcess.kill()
-      // cannot prove have retired.
-      detached: process.platform !== "win32",
-    })
-  );
+/**
+ * Start a smoke dependency as an owned group: the hub, workerd and native
+ * builds fork children that a bare ChildProcess.kill() cannot prove have
+ * retired. `own` is `{ ownership, signal }`; a stop request retires the group.
+ */
+function spawnManaged(own, command, args, options = {}) {
+  const owned = own.ownership.spawn(command, args, {
+    kill: options.kill ?? "immediate",
+    label: options.label ?? command,
+    cwd: options.cwd ?? repoRoot,
+    env: options.env ?? process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  retireOnAbort(own.ownership, own.signal, owned);
+  const { child } = owned;
   pipeChildOutput(child, options.label ?? command);
   child.once("error", (error) => {
     prefixAndWrite(
@@ -250,12 +254,13 @@ function spawnManaged(acquire, command, args, options = {}) {
       process.stderr
     );
   });
-  return child;
+  return owned;
 }
 
-function runOwnedCommand(lifetime, command, args, options = {}) {
-  const child = spawnManaged(lifetime.acquire, command, args, options);
-  return new Promise((resolve, reject) => {
+async function runOwnedCommand(own, command, args, options = {}) {
+  const owned = spawnManaged(own, command, args, options);
+  const { child } = owned;
+  await new Promise((resolve, reject) => {
     child.once("error", reject);
     child.once("close", (code, signal) => {
       if (code === 0) resolve();
@@ -268,6 +273,7 @@ function runOwnedCommand(lifetime, command, args, options = {}) {
       }
     });
   });
+  await owned.join();
 }
 
 function waitForSpawn(child, command, args, timeoutMs = 1_000) {
@@ -998,7 +1004,7 @@ async function retainAndroidBundleFailure(device, packageName, failure, compiler
   console.error(`[mobile-smoke] CI bundle evidence directory: ${artifactDir}`);
 }
 
-async function runMobileInstall(options, lifetime) {
+async function runMobileInstall(options, own) {
   const args = [
     mobileInstallScript,
     "--platform",
@@ -1011,7 +1017,7 @@ async function runMobileInstall(options, lifetime) {
   if (options.noBuild) args.push("--no-build");
   if (!options.noReset) args.push("--reset-app");
   args.push("--launch");
-  await runOwnedCommand(lifetime, process.execPath, args, {
+  await runOwnedCommand(own, process.execPath, args, {
     cwd: repoRoot,
     env: process.env,
     label: "mobile-install",
@@ -1169,7 +1175,7 @@ function buildConnectLinkFromLog(loggedLink) {
  * uses to author and publish (`vibestudio eval run`). Deliberately the product's CLI,
  * not a test-only path to the server.
  */
-function createSmokeCli({ root, lifetime }) {
+function createSmokeCli({ root, own }) {
   const env = { ...process.env, VIBESTUDIO_INSTANCE_ROOT: root };
   delete env.VIBESTUDIO_INSTANCE;
   const entry = [
@@ -1185,7 +1191,7 @@ function createSmokeCli({ root, lifetime }) {
     },
     /** Run an owned process that may wait on the device for a person's decision. */
     run(args, label) {
-      return runOwnedCommand(lifetime, process.execPath, [...entry, ...args], { env, label });
+      return runOwnedCommand(own, process.execPath, [...entry, ...args], { env, label });
     },
   };
 }
@@ -1433,18 +1439,14 @@ function findFreePort() {
   });
 }
 
-function startLogcat(acquire, device, expectedPhases, deadlineMs, packageName) {
-  const child = acquire(() =>
-    spawn("adb", makeAdbArgs(device, ["logcat", "-v", "time"]), {
-      cwd: repoRoot,
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-      // Cleanup retires this child as an owned process tree, and owning a tree
-      // means owning its group. Left in the runner's own group, the teardown
-      // signal lands on the runner instead.
-      detached: process.platform !== "win32",
-    })
-  );
+function startLogcat(own, device, expectedPhases, deadlineMs, packageName) {
+  const { child } = own.ownership.spawn("adb", makeAdbArgs(device, ["logcat", "-v", "time"]), {
+    kill: "immediate",
+    label: "logcat",
+    cwd: repoRoot,
+    env: process.env,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   return observeMobileSmokeLog(child, { expectedPhases, deadlineMs, packageName });
 }
 
@@ -2399,99 +2401,76 @@ async function main() {
   }
 
   // This source-only tool validates its checkout before loading development
-  // ownership helpers. Packaged CLI help needs no source toolchain.
-  const { tsImport } = await import("tsx/esm/api");
-  const { runParentOwnedMain } = await import("../lib/parent-owned-main.mjs");
+  // helpers. Packaged CLI help needs no source toolchain.
   const { isCancellationOnly, prepareWorkspaceRelease } =
     await import("../prepare-workspace-release.mjs");
-  const { createOwnedProcessLifetime } = await tsImport(
-    "../development-client-lifecycle.ts",
-    import.meta.url
-  );
   const { developmentTemplateSetEnv } = await import("../lib/development-template-set.mjs");
-  await runParentOwnedMain(
-    (signal) =>
-      runSmoke(
-        options,
-        signal,
-        createOwnedProcessLifetime,
-        developmentTemplateSetEnv,
-        prepareWorkspaceRelease,
-        isCancellationOnly
-      ),
-    repoRoot
-  );
+  // The host build generation is leased until every process that runs from it
+  // has retired, which is when the entry's ownership has been released.
+  const generation = { root: null };
+  let failure;
+  try {
+    await ownedEntry(
+      ({ signal, ownership, scratchRoot }) =>
+        runSmoke(
+          options,
+          { ownership, signal },
+          scratchRoot,
+          generation,
+          developmentTemplateSetEnv,
+          prepareWorkspaceRelease,
+          isCancellationOnly
+        ),
+      {
+        appRoot: repoRoot,
+        scratchPrefix: options.keepState ? undefined : "vibestudio-mobile-smoke-",
+      }
+    );
+  } catch (error) {
+    failure = error;
+    throw error;
+  } finally {
+    if (generation.root && !hasOwnershipFailure(failure)) {
+      releaseHostBuildGeneration(generation.root);
+    }
+  }
 }
 
 async function runSmoke(
   options,
-  ownerSignal,
-  createOwnedProcessLifetime,
+  own,
+  scratchRoot,
+  generation,
   developmentTemplateSetEnv,
   prepareWorkspaceRelease,
   isCancellationOnly
 ) {
+  const ownerSignal = own.signal;
   ownerSignal.throwIfAborted();
-  const lifetime = createOwnedProcessLifetime();
   let emulatorChild = null;
   let readyInfo = null;
-  let hostGenerationRoot = null;
   let workspacePreparation = null;
   let preparationStopPromise = null;
   let workspacePreparationJoined = false;
-  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-mobile-smoke-"));
+  // Reaper scratch unless the person asked to keep the state for inspection.
+  const tempRoot =
+    scratchRoot ?? (await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-mobile-smoke-")));
   const readyFilePath = path.join(tempRoot, "server-ready.json");
 
   let operationFailure;
   let managedBundleActivated = false;
   let logcat = null;
   let cleanupPromise;
+  // Processes are retired by the entry's ownership; the preparation producer
+  // is joined here, before the smoke reports.
   const cleanup = () =>
     (cleanupPromise ??= (async () => {
-      const failures = [];
-      try {
-        if (preparationStopPromise) await preparationStopPromise;
-        else if (workspacePreparation && !workspacePreparationJoined)
-          await workspacePreparation.stop();
-      } catch (error) {
-        failures.push(error);
-      }
-      let lifetimeRetired = false;
-      try {
-        await lifetime.retire();
-        lifetimeRetired = true;
-      } catch (error) {
-        failures.push(error);
-      }
-      let ownershipFailure = [operationFailure, ...failures].some((error) =>
-        hasOwnershipFailure(error)
-      );
-      if (lifetimeRetired && !ownershipFailure && hostGenerationRoot) {
-        try {
-          releaseHostBuildGeneration(hostGenerationRoot);
-          hostGenerationRoot = null;
-        } catch (error) {
-          failures.push(error);
-          ownershipFailure ||= hasOwnershipFailure(error);
-        }
-      }
-      if (lifetimeRetired && !ownershipFailure && !options.keepState) {
-        try {
-          await fsp.rm(tempRoot, { recursive: true, force: true });
-        } catch (error) {
-          failures.push(error);
-        }
-      } else {
-        console.log(`[mobile-smoke] Retained isolated state: ${tempRoot}`);
-      }
-      if (failures.length === 1) throw failures[0];
-      if (failures.length)
-        throw new AggregateError(failures, "Mobile smoke owned cleanup failed", {
-          cause: failures[0],
-        });
+      if (preparationStopPromise) await preparationStopPromise;
+      else if (workspacePreparation && !workspacePreparationJoined)
+        await workspacePreparation.stop();
+      if (!scratchRoot) console.log(`[mobile-smoke] Retained isolated state: ${tempRoot}`);
     })());
   const stop = () => {
-    lifetime.requestStop();
     if (workspacePreparation && !workspacePreparationJoined && !preparationStopPromise) {
       preparationStopPromise = workspacePreparation.stop();
       void preparationStopPromise.catch(() => {});
@@ -2499,7 +2478,6 @@ async function runSmoke(
   };
   ownerSignal.addEventListener("abort", stop, { once: true });
   if (ownerSignal.aborted) stop();
-  for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, stop);
 
   try {
     const requestedDevice = options.device;
@@ -2514,7 +2492,7 @@ async function runSmoke(
       const reporter = await createEmulatorPortReporter(options.timeoutMs);
       try {
         emulatorChild = spawnManaged(
-          lifetime.acquire,
+          own,
           process.env.ANDROID_EMULATOR ?? "emulator",
           [
             "-avd",
@@ -2527,7 +2505,7 @@ async function runSmoke(
             reporter.argument,
           ],
           { label: "emulator" }
-        );
+        ).child;
         await waitForSpawn(emulatorChild, process.env.ANDROID_EMULATOR ?? "emulator", []);
         const exited = new Promise((_, reject) => {
           emulatorChild.once("exit", (code, signal) => {
@@ -2547,7 +2525,7 @@ async function runSmoke(
     await ensureDeviceInteractive(options.device);
 
     if (!options.noInstall) {
-      await runMobileInstall(options, lifetime);
+      await runMobileInstall(options, own);
     } else if (!options.noBuild) {
       await buildAndroidApk();
     }
@@ -2622,7 +2600,7 @@ async function runSmoke(
     // canonical owners the server uses, using the already-resolved template
     // selection, before starting the bounded server-readiness phase.
     await runOwnedCommand(
-      lifetime,
+      own,
       process.execPath,
       [path.join(repoRoot, "build.mjs"), "--source-server-prereqs"],
       {
@@ -2632,15 +2610,16 @@ async function runSmoke(
       }
     );
     ownerSignal.throwIfAborted();
-    hostGenerationRoot = readCurrentHostBuildGeneration(repoRoot, "source");
-    serverEnv.VIBESTUDIO_HOST_ARTIFACT_ROOT = hostGenerationRoot;
+    generation.root = readCurrentHostBuildGeneration(repoRoot, "source");
+    serverEnv.VIBESTUDIO_HOST_ARTIFACT_ROOT = generation.root;
     workspacePreparation = prepareWorkspaceRelease({
+      ownership: own.ownership,
       appRoot: repoRoot,
       output: path.join(tempRoot, "workspace-release"),
       scratch: path.join(tempRoot, "workspace-preparation"),
       env: serverEnv,
       executable: process.execPath,
-      entry: path.join(hostGenerationRoot, "prepare-workspace-templates.mjs"),
+      entry: path.join(generation.root, "prepare-workspace-templates.mjs"),
     });
     try {
       await workspacePreparation.completed;
@@ -2652,11 +2631,14 @@ async function runSmoke(
     // The server's canonical prepare call validates/reuses it rather than
     // rebuilding runtime artifacts.
     const serverReadyDeadlineMs = Date.now() + options.timeoutMs;
-    let serverChild = spawnManaged(lifetime.acquire, process.execPath, serverArgs, {
+    // The hub shuts down in order on SIGTERM; its group is killed afterwards.
+    let server = spawnManaged(own, process.execPath, serverArgs, {
+      kill: "graceful",
       cwd: repoRoot,
       env: serverEnv,
       label: "server",
     });
+    let serverChild = server.child;
     await waitForSpawn(serverChild, process.execPath, serverArgs);
 
     const ready = await waitForServerReady(
@@ -2699,18 +2681,12 @@ async function runSmoke(
       "workspace-panel-asset-no-store",
     ];
     const pairingDeadlineMs = Date.now() + options.pairingTimeoutMs;
-    logcat = startLogcat(
-      lifetime.acquire,
-      options.device,
-      phases,
-      pairingDeadlineMs,
-      options.packageName
-    );
+    logcat = startLogcat(own, options.device, phases, pairingDeadlineMs, options.packageName);
     await waitForLogcatReady(options.device, logcat);
 
     // The account's first device is the CLI an agent would use (the root invite is
     // one-use); the phone is paired from an invite that CLI mints, as a second device.
-    const cli = createSmokeCli({ root: path.join(tempRoot, "cli"), lifetime });
+    const cli = createSmokeCli({ root: path.join(tempRoot, "cli"), own });
     await cli.json("remote", "pair", invite.pairUrl);
     const systemWorkspace = systemWorkspaceName(await cli.json("remote", "workspaces"));
     await cli.json("agent", "attach", "default", "--workspace", systemWorkspace);
@@ -2871,7 +2847,7 @@ async function runSmoke(
     );
 
     const serverRestartRecoveryCount = logcat.phaseCount("workspace-recovery-complete");
-    await lifetime.retireChild(serverChild);
+    await server.retire();
     // With the old server stopped, any later pipe miss belongs to recovery.
     const serverRestartCacheablePipeMissCount = logcat.phaseCount(
       "workspace-panel-cacheable-asset-pipe-miss"
@@ -2879,11 +2855,13 @@ async function runSmoke(
     try {
       await fsp.unlink(readyFilePath);
     } catch {}
-    serverChild = spawnManaged(lifetime.acquire, process.execPath, serverArgs, {
+    server = spawnManaged(own, process.execPath, serverArgs, {
+      kill: "graceful",
       cwd: repoRoot,
       env: serverEnv,
       label: "server-restart",
     });
+    serverChild = server.child;
     await waitForSpawn(serverChild, process.execPath, serverArgs);
     // A server restart must recover the existing shell and panel transports; it
     // must not recreate the still-live WebView. The load/ready phases are
@@ -2998,7 +2976,6 @@ async function runSmoke(
     }
   } finally {
     ownerSignal.removeEventListener("abort", stop);
-    for (const signal of ["SIGINT", "SIGTERM"]) process.off(signal, stop);
     try {
       await cleanup();
     } catch (cleanupFailure) {

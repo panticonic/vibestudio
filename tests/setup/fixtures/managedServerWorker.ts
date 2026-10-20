@@ -1,6 +1,6 @@
 import { launchManagedServerOwner } from "../managedServerLease.js";
 const [instance, directory, root, log] = process.argv.slice(2) as [string, string, string, string];
-const owner = launchManagedServerOwner(instance, directory, root, log);
+const owner = await launchManagedServerOwner(instance, directory, root, log);
 process.send!({ kind: "started", ownerPid: owner.pid });
 const ready = await owner.ready;
 process.send!({ kind: "ready", ownerPid: owner.pid, helperPids: ready.helperPids });

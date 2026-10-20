@@ -43,6 +43,7 @@ const INPUT_FILES = [
   "scripts/infrastructure-package-cache.mjs",
   "scripts/build-artifact-groups.mjs",
   "scripts/lib/sql-js-runtime-asset.mjs",
+  "scripts/lib/ownership-reaper-assets.mjs",
   "scripts/lib/mac-app-executable.mjs",
   "scripts/lib/file-digest.mjs",
   "scripts/lib/join-child-process.mjs",

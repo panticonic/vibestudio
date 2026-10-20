@@ -381,8 +381,11 @@ describe("runNpmInstall", () => {
 function createFakeNpmFixture(): { root: string; appRoot: string; installDir: string } {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-installer-test-"));
   tempDirs.push(root);
-  if (tempDirs.length === 1)
+  if (tempDirs.length === 1) {
     vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));
+    // Ownership ledgers and scratch live in the profile; keep them hermetic.
+    vi.stubEnv("VIBESTUDIO_PROFILE_ROOT", path.join(root, "profile"));
+  }
   const appRoot = path.join(root, "app");
   const npmRoot = path.join(appRoot, "node_modules", "npm");
   const installDir = path.join(root, "install");

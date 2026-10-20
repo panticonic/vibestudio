@@ -4,18 +4,15 @@ import { createHash } from "node:crypto";
 import { HubReadyPayloadSchema } from "@vibestudio/service-schemas/hubControl";
 import type { DevelopmentInstance, DevelopmentRun } from "@vibestudio/service-schemas/development";
 import { DevInstanceSupervisor } from "../../dev/devInstanceSupervisor.js";
-import {
-  observeOwnedProcess,
-  signalOwnedProcessIdentity,
-  type OwnedProcessIdentity,
-} from "../../dev/ownedProcessIdentity.js";
+import { getProfileDataPath } from "@vibestudio/env-paths";
+import { Ownership, OwnershipClaimedError } from "@vibestudio/shared/ownership";
 import { pairLocalCli } from "../../cli/localPairing.js";
 import { loadCliCredentials, requireDeviceCliCredentials } from "../../cli/credentialStore.js";
 import { pairRemoteDevice } from "../../cli/remoteClient.js";
 import { RpcClient } from "../../cli/rpcClient.js";
 import {
-  adoptDevInstance,
   clearDevInstanceReady,
+  devInstanceLedgerId,
   publishDevInstanceReady,
   readDevInstanceRecord,
   registerDevInstance,
@@ -23,7 +20,6 @@ import {
   unregisterDevInstance,
   type DevInstanceRecord,
 } from "../../dev/instanceRegistry.js";
-import { writeFileAtomicSync } from "../../atomicFile.js";
 import { DEFAULT_WORKSPACE_TEMPLATES_ENV } from "@vibestudio/workspace/templateRelease";
 import {
   WORKSPACE_SOURCES_ENV,
@@ -37,7 +33,6 @@ import type {
 import type { AttachedHostBootstrapPort, AttachedHostRoutePort } from "./attachedHostController.js";
 
 const REDACT = /(?:token|password|secret|authorization|cookie|private[_-]?key)\s*[=:]\s*[^\s]+/giu;
-const PROCESS_MARKER = "development-process.json";
 
 interface ProcessOwner {
   stop(signal?: NodeJS.Signals): Promise<number>;
@@ -46,6 +41,8 @@ interface ProcessOwner {
 
 interface ActiveIsolatedHost {
   instance: DevInstanceRecord;
+  /** The instance's ownership claim: its reaper retires the host if this server dies. */
+  ownership: Ownership;
   supervisor: ProcessOwner;
   ready: boolean;
   stopping: boolean;
@@ -89,7 +86,11 @@ export class IsolatedDevelopmentHostExecutor {
       register?: typeof registerDevInstance;
       readInstance?: typeof readDevInstanceRecord;
       resolve?: typeof resolveDevInstance;
-      adopt?: typeof adoptDevInstance;
+      /** Claim an instance's ownership. Defaults to a leased claim in this profile. */
+      openOwnership?: (options: {
+        id: string;
+        meta: Record<string, unknown>;
+      }) => Promise<Ownership>;
       unregister?: typeof unregisterDevInstance;
       bootstrap?: typeof pairLocalCli;
       supervisor?: (
@@ -144,15 +145,28 @@ export class IsolatedDevelopmentHostExecutor {
 
     const register = this.deps.register ?? registerDevInstance;
     const unregister = this.deps.unregister ?? unregisterDevInstance;
-    const instance = register({
-      id: instanceId,
-      root: instanceRoot,
-      repoRoot: this.deps.controlRepoRoot,
-      supervisorPid: process.pid,
-      kind: "server",
-      lifecycle: "ephemeral",
-      startedAt: now(),
+    // The instance's claim comes first: nothing is registered or started
+    // before its ownership is durable. Leased, so a killed server cannot leave
+    // the isolated host running. Graceful kill mode is the supervisor's own.
+    const ownership = await this.openOwnership(this.deps.controlRepoRoot, instanceId, {
+      role: "isolated-development-host",
+      runId: run.runId,
     });
+    let instance: DevInstanceRecord;
+    try {
+      instance = register({
+        id: instanceId,
+        root: instanceRoot,
+        repoRoot: this.deps.controlRepoRoot,
+        supervisorPid: process.pid,
+        kind: "server",
+        lifecycle: "ephemeral",
+        startedAt: now(),
+        ledgerId: ownership.id,
+      });
+    } catch (error) {
+      throw await this.closeAfterFailure(ownership, error, "Isolated host registration");
+    }
     clearDevInstanceReady(instance);
 
     let publicInstance: DevelopmentInstance = {
@@ -176,11 +190,13 @@ export class IsolatedDevelopmentHostExecutor {
       lifecycle.onRegistered(publicInstance);
     } catch (error) {
       unregister(this.deps.controlRepoRoot, instanceId);
-      throw error;
+      throw await this.closeAfterFailure(ownership, error, "Isolated host registration");
     }
 
     const Supervisor = this.deps.supervisor ?? ((options) => new DevInstanceSupervisor(options));
     const supervisor = Supervisor({
+      ownership,
+      label: `isolated-host:${run.runId}`,
       sourceRoot: launch.sourceRoot,
       command: launch.nodePath,
       args: [launch.serverEntryPath, "--ready-file", readyFile],
@@ -193,24 +209,6 @@ export class IsolatedDevelopmentHostExecutor {
         launch
       ),
       stdio: ["ignore", "pipe", "pipe"],
-      onSpawn: (identity) => {
-        writeFileAtomicSync(
-          path.join(instanceRoot, PROCESS_MARKER),
-          `${JSON.stringify(
-            {
-              version: 1,
-              runId: run.runId,
-              snapshotDigest: run.snapshot.snapshotDigest,
-              instanceId,
-              generationId: instance.generationId,
-              identity,
-            },
-            null,
-            2
-          )}\n`,
-          { mode: 0o600 }
-        );
-      },
       readiness: {
         file: readyFile,
         onReady: async (rawReady) => {
@@ -269,6 +267,7 @@ export class IsolatedDevelopmentHostExecutor {
     });
     const active: ActiveIsolatedHost = {
       instance,
+      ownership,
       supervisor,
       ready: false,
       stopping: false,
@@ -281,26 +280,36 @@ export class IsolatedDevelopmentHostExecutor {
       this.captureLogs(run.runId, supervisor);
       await startup;
       active.ready = true;
-      void supervisor.wait().then(
-        (code) => {
-          if (active.stopping) return;
-          this.active.delete(run.runId);
-          unregister(this.deps.controlRepoRoot, instanceId);
-          clearDevInstanceReady(instance);
-          lifecycle.onExit(code, { ...publicInstance, state: "stopped", stoppedAt: now() });
-        },
-        () => {
-          if (active.stopping) return;
-          this.active.delete(run.runId);
-          unregister(this.deps.controlRepoRoot, instanceId);
-          clearDevInstanceReady(instance);
-          lifecycle.onExit(1, { ...publicInstance, state: "stopped", stoppedAt: now() });
+      const exited = async (code: number) => {
+        if (active.stopping) return;
+        this.active.delete(run.runId);
+        unregister(this.deps.controlRepoRoot, instanceId);
+        clearDevInstanceReady(instance);
+        // The host is gone; join its reaper before reporting the exit. A
+        // failure to retire what it left is reported with the exit itself.
+        const released = await active.ownership.close().then(
+          () => undefined,
+          (error: unknown) => error
+        );
+        if (released !== undefined) {
+          this.deps.onLog?.(
+            run.runId,
+            "stderr",
+            `isolated host ownership did not release cleanly: ${String(released)}`
+          );
         }
-      );
+        lifecycle.onExit(released === undefined ? code : 1, {
+          ...publicInstance,
+          state: "stopped",
+          stoppedAt: now(),
+        });
+      };
+      void supervisor.wait().then(exited, () => exited(1));
       return publicInstance;
     } catch (error) {
       try {
         await supervisor.stop();
+        await ownership.close();
       } catch (cleanupError) {
         throw new AggregateError(
           [error, cleanupError],
@@ -346,6 +355,8 @@ export class IsolatedDevelopmentHostExecutor {
     }
     active.stopping = true;
     await active.supervisor.stop();
+    // Joins the instance's reaper: the host and anything it left are gone.
+    await active.ownership.close();
     this.active.delete(run.runId);
     (this.deps.unregister ?? unregisterDevInstance)(this.deps.controlRepoRoot, recorded.instanceId);
     clearDevInstanceReady(active.instance);
@@ -408,86 +419,67 @@ export class IsolatedDevelopmentHostExecutor {
     return "unknown";
   }
 
+  /**
+   * An isolated host is leased to the server that started it: that server's
+   * reaper retires it when the server dies, so no host survives to be adopted.
+   * Taking the instance's claim again proves it. A claim another live owner
+   * holds is not ours to touch ("unknown"); a stale one is retired as it is
+   * taken over, leaving only the registry record to remove.
+   */
   async recover(
     run: DevelopmentRun,
-    onExit: (code: number) => void
+    _onExit: (code: number) => void
   ): Promise<"owned" | "stopped" | "absent" | "unknown"> {
     if (!run.instance) return "absent";
     let recorded: DevInstanceRecord;
-    let marker: ProcessMarker;
     try {
       recorded = (this.deps.readInstance ?? readDevInstanceRecord)(
         this.deps.controlRepoRoot,
         run.instance.instanceId
       );
       if (recorded.generationId !== run.instance.generationId) return "unknown";
-      marker = readProcessMarker(path.join(recorded.root, PROCESS_MARKER), run);
     } catch {
       return "unknown";
     }
-    const observation = observeOwnedProcess(marker.identity);
-    if (observation === "unknown") return "unknown";
-    if (observation === "absent") {
-      (this.deps.unregister ?? unregisterDevInstance)(this.deps.controlRepoRoot, recorded.id);
-      return "absent";
-    }
-    let adopted: DevInstanceRecord;
+    let claim: Ownership;
     try {
-      adopted = (this.deps.adopt ?? adoptDevInstance)(
-        this.deps.controlRepoRoot,
-        recorded,
-        process.pid
-      );
-    } catch {
-      return "unknown";
+      claim = await this.openOwnership(this.deps.controlRepoRoot, recorded.id, {
+        role: "isolated-development-host-recovery",
+        runId: run.runId,
+      });
+    } catch (error) {
+      if (error instanceof OwnershipClaimedError) return "unknown";
+      throw error;
     }
-    const owner = new AdoptedProcessOwner(marker.identity);
-    this.active.set(run.runId, {
-      instance: adopted,
-      supervisor: owner,
-      ready: run.hostReadiness === "ready",
-      stopping: false,
-      manager:
-        run.hostReadiness === "ready"
-          ? await (this.deps.createManager ?? createIsolatedDevelopmentManager)({
-              credentialFile: path.join(adopted.root, "cli", "credentials.json"),
-              instance: adopted,
-              childGatewayUrl: run.instance?.gatewayUrl ?? "",
-            }).catch(() => null)
-          : null,
-      attachmentPorts:
-        run.hostReadiness === "ready" && run.instance?.gatewayUrl && this.deps.createAttachmentPorts
-          ? this.deps.createAttachmentPorts({
-              credentialFile: path.join(adopted.root, "cli", "credentials.json"),
-              childGatewayUrl: run.instance.gatewayUrl,
-              childGenerationId: adopted.generationId,
-            })
-          : null,
-    });
-    if (run.hostReadiness !== "ready") {
-      await owner.stop();
-      this.active.delete(run.runId);
-      (this.deps.unregister ?? unregisterDevInstance)(this.deps.controlRepoRoot, adopted.id);
-      clearDevInstanceReady(adopted);
-      return "stopped";
+    (this.deps.unregister ?? unregisterDevInstance)(this.deps.controlRepoRoot, recorded.id);
+    clearDevInstanceReady(recorded);
+    await claim.close();
+    return "absent";
+  }
+
+  private openOwnership(
+    repoRoot: string,
+    instanceId: string,
+    meta: Record<string, unknown>
+  ): Promise<Ownership> {
+    const id = devInstanceLedgerId(repoRoot, instanceId);
+    return this.deps.openOwnership
+      ? this.deps.openOwnership({ id, meta })
+      : Ownership.open({ profileDir: getProfileDataPath(), id, lifetime: "leased", meta });
+  }
+
+  /** Release a claim after a failure, keeping the original failure first. */
+  private async closeAfterFailure(
+    ownership: Ownership,
+    error: unknown,
+    what: string
+  ): Promise<unknown> {
+    try {
+      await ownership.close();
+    } catch (cleanupError) {
+      return new AggregateError([error, cleanupError], `${what} and its ownership release failed`);
     }
-    void owner.wait().then(
-      (code) => {
-        const active = this.active.get(run.runId);
-        if (active?.stopping) return;
-        this.active.delete(run.runId);
-        (this.deps.unregister ?? unregisterDevInstance)(this.deps.controlRepoRoot, adopted.id);
-        clearDevInstanceReady(adopted);
-        onExit(code);
-      },
-      () => {
-        const active = this.active.get(run.runId);
-        if (active?.stopping) return;
-        this.active.delete(run.runId);
-        onExit(1);
-      }
-    );
-    return "owned";
+    return error;
   }
 
   private captureLogs(runId: string, supervisor: DevInstanceSupervisor): void {
@@ -548,77 +540,6 @@ export class IsolatedDevelopmentHostExecutor {
       });
     }
   }
-}
-
-interface ProcessMarker {
-  version: 1;
-  runId: string;
-  snapshotDigest: string;
-  instanceId: string;
-  generationId: string;
-  identity: OwnedProcessIdentity;
-}
-
-function readProcessMarker(filePath: string, run: DevelopmentRun): ProcessMarker {
-  const marker = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<ProcessMarker>;
-  if (
-    marker.version !== 1 ||
-    marker.runId !== run.runId ||
-    marker.snapshotDigest !== run.snapshot.snapshotDigest ||
-    marker.instanceId !== run.instance?.instanceId ||
-    marker.generationId !== run.instance?.generationId ||
-    !marker.identity
-  ) {
-    throw Object.assign(new Error("Isolated-host process marker does not match the run"), {
-      code: "EOWNERSHIP",
-    });
-  }
-  return marker as ProcessMarker;
-}
-
-class AdoptedProcessOwner implements ProcessOwner {
-  constructor(private readonly identity: OwnedProcessIdentity) {}
-
-  async wait(): Promise<number> {
-    for (;;) {
-      const observation = observeOwnedProcess(this.identity);
-      if (observation === "absent") return 1;
-      if (observation === "unknown") {
-        throw Object.assign(new Error("Adopted process ownership became ambiguous"), {
-          code: "EOWNERSHIP",
-        });
-      }
-      await delay(100);
-    }
-  }
-
-  async stop(signal: NodeJS.Signals = "SIGTERM"): Promise<number> {
-    signalOwnedProcessIdentity(this.identity, signal);
-    if (signal !== "SIGKILL" && !(await waitForAbsence(this.identity, 10_000))) {
-      signalOwnedProcessIdentity(this.identity, "SIGKILL");
-    }
-    if (!(await waitForAbsence(this.identity, 10_000))) {
-      throw Object.assign(new Error("Adopted process group did not exit"), {
-        code: "EOWNERSHIP",
-      });
-    }
-    return 0;
-  }
-}
-
-async function waitForAbsence(identity: OwnedProcessIdentity, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const observation = observeOwnedProcess(identity);
-    if (observation === "absent") return true;
-    if (observation === "unknown") {
-      throw Object.assign(new Error("Exact process ownership became ambiguous during stop"), {
-        code: "EOWNERSHIP",
-      });
-    }
-    await delay(50);
-  }
-  return false;
 }
 
 function delay(ms: number): Promise<void> {

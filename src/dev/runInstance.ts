@@ -10,10 +10,20 @@ import { createHash } from "node:crypto";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
 import { CLI_WORKSPACE_ENV, isCliWorkspaceSelection } from "./cliWorkspaceSelection.js";
 import type { StdioOptions } from "node:child_process";
+import { getProfileDataPath } from "@vibestudio/env-paths";
+import { LEASE_FD_ENV } from "@vibestudio/shared/ownershipLease";
+import {
+  Ownership,
+  OwnershipClaimedError,
+  sweep,
+  watchLease,
+  type OwnershipLifetime,
+} from "@vibestudio/shared/ownership";
+import { ledgerDirOf } from "@vibestudio/shared/ownershipLedger";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
-import { LaunchTermination, joinProducer } from "./launchTermination.js";
+import { LaunchTermination, joinProducer, runOwnedChild } from "./launchTermination.js";
 import { forEachOwnedConcurrent } from "../../scripts/lib/owned-concurrency.mjs";
-import { hasOwnershipFailure, runWithOwnedCleanup } from "../../scripts/lib/owned-cleanup.mjs";
+import { hasOwnershipFailure } from "../../scripts/lib/owned-cleanup.mjs";
 import {
   createLaunchProgress,
   runStep,
@@ -24,15 +34,19 @@ import { routeProcessWarnings, tolerateTerminalHangup } from "../../hosts/termin
 import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
 import {
   clearDevInstanceReady,
-  createEphemeralInstanceRoot,
+  devInstanceLedgerId,
+  devInstanceRecordPath,
   generatedInstanceId,
   persistentInstanceRoot,
   publishDevInstanceReady,
   registerDevInstance,
-  removeEphemeralInstanceRoot,
-  unregisterDevInstance,
   type DevInstanceRecord,
 } from "./instanceRegistry.js";
+import {
+  prepareSelfDevelopmentMirrors,
+  selfDevelopmentMirrorEnvironment,
+  selfDevelopmentProjects,
+} from "./selfDevelopmentAdoption.js";
 import { resolveDevelopmentTemplateSet } from "./developmentTemplateSet.js";
 import { developmentInstanceEnvironment } from "./developmentInstanceEnvironment.js";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
@@ -133,14 +147,39 @@ function extractInstance(argv: string[]): {
   instanceId?: string;
   templateCheckouts?: string;
   productionTemplates: boolean;
+  /** Declared lifetime of this instance's ownership claim (default until-stop). */
+  lifetime: OwnershipLifetime;
+  /** `pnpm system-test` created this instance and may stop it. */
+  systemTestManaged: boolean;
+  /** Serve the developer's own checkouts so their projects can be adopted. */
+  selfDevelopment: boolean;
   forwarded: string[];
 } {
   const forwarded: string[] = [];
   let instanceId: string | undefined;
   let templateCheckouts: string | undefined;
   let productionTemplates = false;
+  let lifetime: OwnershipLifetime = "until-stop";
+  let systemTestManaged = false;
+  let selfDevelopment = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index]!;
+    if (arg === "--lifetime" || arg.startsWith("--lifetime=")) {
+      const value = arg.startsWith("--lifetime=") ? arg.slice("--lifetime=".length) : argv[++index];
+      if (value !== "leased" && value !== "until-stop") {
+        throw new Error(`--lifetime must name leased or until-stop, not ${value ?? "nothing"}`);
+      }
+      lifetime = value;
+      continue;
+    }
+    if (arg === "--system-test-managed") {
+      systemTestManaged = true;
+      continue;
+    }
+    if (arg === "--self-development") {
+      selfDevelopment = true;
+      continue;
+    }
     if (arg === "--instance") {
       const value = argv[index + 1];
       if (!value) throw new Error("--instance requires an id");
@@ -180,6 +219,9 @@ function extractInstance(argv: string[]): {
     ...(instanceId ? { instanceId } : {}),
     ...(templateCheckouts ? { templateCheckouts } : {}),
     productionTemplates,
+    lifetime,
+    systemTestManaged,
+    selfDevelopment,
     forwarded,
   };
 }
@@ -197,59 +239,26 @@ function optionValue(argv: readonly string[], name: string): string | undefined 
   return undefined;
 }
 
-/** All launch prerequisites share the same owned process-tree lifecycle. */
-async function runPrerequisite(
-  command: string,
-  args: string[],
-  options: { env: NodeJS.ProcessEnv; stdio?: StdioOptions; termination?: LaunchTermination }
-): Promise<number> {
-  options.termination?.signal.throwIfAborted();
-  const owner = new DevInstanceSupervisor({
-    sourceRoot: fs.realpathSync(process.cwd()),
-    command,
-    args,
-    env: options.env,
-    stdio: options.stdio ?? "inherit",
-    forwardParentSignals: !options.termination,
-  });
-  const unregister = options.termination?.onRequest(
-    (signal) => void owner.stop(signal).catch(() => {})
-  );
-  return runWithOwnedCleanup(
-    async () => {
-      await owner.start();
-      const code = await owner.wait();
-      options.termination?.signal.throwIfAborted();
-      if (code !== 0) throw new Error(`${path.basename(command)} exited with code ${code}`);
-      return code;
-    },
-    async () => {
-      try {
-        await owner.close();
-      } finally {
-        unregister?.();
-      }
-    },
-    "Development prerequisite and resource retirement failed"
-  );
-}
-
+/** All launch prerequisites are members of the launcher's ownership. */
 async function prepareHostArtifacts(
   mode: Mode,
   env: NodeJS.ProcessEnv,
   termination: LaunchTermination,
+  ownership: Ownership,
   terminal?: TerminalLaunch
 ): Promise<void> {
   const startedAt = performance.now();
   const stdio: StdioOptions = terminal ? ["ignore", terminal.logFd, terminal.logFd] : "inherit";
-  await runPrerequisite(process.execPath, ["scripts/native-host-dependencies.mjs", "--repair"], {
-    env,
-    stdio,
-    termination,
-  });
+  await runOwnedChild(
+    ownership,
+    process.execPath,
+    ["scripts/native-host-dependencies.mjs", "--repair"],
+    { env, stdio, termination }
+  );
   // The desktop coordinator reuses a verified generation instead of cleaning
   // shared dist/ beneath another instance.
-  await runPrerequisite(
+  await runOwnedChild(
+    ownership,
     process.execPath,
     mode === "desktop"
       ? ["scripts/ensure-host-build.mjs"]
@@ -269,6 +278,7 @@ async function prepareHostArtifacts(
  * Preparation owns its native domains and scratch; the supervisor owns the
  * resulting immutable resources for the entire instance generation. */
 function prepareLaunchTemplates(
+  ownership: Ownership,
   env: NodeJS.ProcessEnv,
   root: string,
   generationId: string,
@@ -277,6 +287,7 @@ function prepareLaunchTemplates(
 ): WorkspaceReleasePreparation {
   const output = path.join(root, "workspace-release", generationId);
   return prepareWorkspaceRelease({
+    ownership,
     executable: process.execPath,
     entry: path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "prepare-workspace-templates.mjs"),
     appRoot: process.cwd(),
@@ -335,6 +346,7 @@ async function runServer(
   instance: DevInstanceRecord,
   resources: LaunchResources,
   termination: LaunchTermination,
+  ownership: Ownership,
   terminal?: TerminalLaunch
 ): Promise<DevInstanceSupervisor> {
   // credentialStore/environment paths are resolved at module evaluation time.
@@ -346,7 +358,14 @@ async function runServer(
   const preparationStartedAt = performance.now();
   const prepareTemplates = (report?: (progress: WorkspacePreparationProgress) => void) =>
     prepareOwnedTemplates(termination, resources, () =>
-      prepareLaunchTemplates(env, instance.root, instance.generationId, terminal?.log, report)
+      prepareLaunchTemplates(
+        ownership,
+        env,
+        instance.root,
+        instance.generationId,
+        terminal?.log,
+        report
+      )
     );
   // All source clients share the same producer and sources-ready boundary.
   // Exhaustive release production continues under that owner after launch.
@@ -369,6 +388,8 @@ async function runServer(
   const serverStep = terminal?.progress.step("Starting the server");
   let pairStep: LaunchStep | undefined;
   const supervisor = new DevInstanceSupervisor({
+    ownership,
+    label: "server",
     sourceRoot: fs.realpathSync(process.cwd()),
     command: process.execPath,
     args: [path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "server.mjs"), ...serverArgs],
@@ -429,11 +450,12 @@ async function runDesktop(
   env: NodeJS.ProcessEnv,
   instance: DevInstanceRecord,
   resources: LaunchResources,
-  termination: LaunchTermination
+  termination: LaunchTermination,
+  ownership: Ownership
 ): Promise<DevInstanceSupervisor> {
   const preparationStartedAt = performance.now();
   await prepareOwnedTemplates(termination, resources, () =>
-    prepareLaunchTemplates(env, instance.root, instance.generationId)
+    prepareLaunchTemplates(ownership, env, instance.root, instance.generationId)
   );
   console.log(
     `[Perf] development workspace sources: ${Math.round(performance.now() - preparationStartedAt)}ms`
@@ -442,6 +464,8 @@ async function runDesktop(
     termination,
     resources,
     new DevInstanceSupervisor({
+      ownership,
+      label: "desktop",
       sourceRoot: fs.realpathSync(process.cwd()),
       command: process.execPath,
       args: ["scripts/run-electron.mjs", ...forwarded],
@@ -609,6 +633,17 @@ async function main(): Promise<void> {
   const parsed = terminalOptions
     ? { ...instanceArgs, forwarded: terminalOptions.forwarded }
     : instanceArgs;
+  const profileDir = getProfileDataPath();
+  // A lease handed to this process is read once and kept out of the environment
+  // every process below inherits.
+  const lease = parsed.lifetime === "leased" ? watchLease() : null;
+  delete process.env[LEASE_FD_ENV];
+  // Whatever a supervisor or launcher that died left behind is retired before
+  // this one claims anything.
+  const reconciled = await sweep(ledgerDirOf(profileDir));
+  for (const retired of reconciled.retired) {
+    console.log(`[instance] retired the leftovers of ownership ${retired}`);
+  }
   if (mode === "server" && hasFlag(parsed.forwarded, "--help")) {
     console.log(`Developer instance options:
   --instance <id>  Use a named persistent isolated instance (default: source)
@@ -625,79 +660,171 @@ async function main(): Promise<void> {
   --production-templates Ignore configured checkouts and boot the pinned releases
 `);
     const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: "development" };
-    await runPrerequisite(process.execPath, ["build.mjs", "--source-server-prereqs"], { env });
-    env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(process.cwd(), "source");
-    process.exitCode = await runPrerequisite(
-      process.execPath,
-      [path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "server.mjs"), ...parsed.forwarded],
-      { env }
-    );
+    const helpOwnership = await Ownership.open({
+      profileDir,
+      lifetime: "leased",
+      meta: { kind: "dev-help" },
+    });
+    try {
+      await runOwnedChild(
+        helpOwnership,
+        process.execPath,
+        ["build.mjs", "--source-server-prereqs"],
+        {
+          env,
+        }
+      );
+      env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(
+        process.cwd(),
+        "source"
+      );
+      await runOwnedChild(
+        helpOwnership,
+        process.execPath,
+        [path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "server.mjs"), ...parsed.forwarded],
+        { env }
+      );
+    } finally {
+      await helpOwnership.release();
+    }
     return;
   }
   const { cleanRoom, disposable, forwarded } = resolveDevelopmentInstanceIsolation(
     parsed.forwarded
   );
   const id = parsed.instanceId ?? (disposable ? generatedInstanceId(mode) : "source");
+  const ledgerId = devInstanceLedgerId(repoRoot, id);
+  // The ownership claim is what makes this instance id exclusive: its scratch
+  // root, registry record and every process this supervisor starts are owned
+  // by the claim's reaper, which retires them whether this process finishes
+  // or is killed.
+  const ownership = await Ownership.open({
+    profileDir,
+    id: ledgerId,
+    lifetime: parsed.lifetime,
+    meta: {
+      kind: "dev-instance",
+      instanceId: id,
+      repoRoot,
+      managed: parsed.systemTestManaged,
+      selfDevelopment: parsed.selfDevelopment,
+    },
+  }).catch((error: unknown) => {
+    if (error instanceof OwnershipClaimedError) {
+      throw new Error(
+        `Vibestudio instance ${JSON.stringify(id)} is already owned by supervisor PID ${error.holder.owner.pid}`,
+        { cause: error }
+      );
+    }
+    throw error;
+  });
   // From here this launcher owns state; a termination request (Ctrl-C,
-  // SIGTERM, a terminal hang-up) must reach the cleanup below, not end the
-  // process before it.
+  // SIGTERM, a terminal hang-up), the end of the lease that keeps this
+  // instance alive, or the loss of the reaper must reach the cleanup below,
+  // not end the process before it.
   const termination = new LaunchTermination();
+  let ownershipLost: unknown;
+  const onOwnershipLost = (): void => {
+    ownershipLost = ownership.signal.reason;
+    termination.request("SIGTERM");
+  };
+  if (ownership.signal.aborted) onOwnershipLost();
+  else ownership.signal.addEventListener("abort", onOwnershipLost, { once: true });
+  if (lease) {
+    // An ordered, graceful stop: the same one a SIGTERM requests.
+    if (lease.aborted) termination.request("SIGTERM");
+    else lease.addEventListener("abort", () => termination.request("SIGTERM"), { once: true });
+  }
   // A hung-up terminal fails every write with EIO; the cleanup still runs.
   if (terminalOptions) tolerateTerminalHangup();
-  const root = disposable ? createEphemeralInstanceRoot(id) : persistentInstanceRoot(repoRoot, id);
-  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
-  const cleanRoomProfileRoot = cleanRoom ? path.join(root, "profile") : undefined;
-  const instance = registerDevInstance({
-    id,
-    root,
-    repoRoot,
-    supervisorPid: process.pid,
-    kind: mode,
-    lifecycle: disposable ? "ephemeral" : "persistent",
-    ...(cleanRoomProfileRoot ? { profileRoot: cleanRoomProfileRoot } : {}),
-    startedAt: Date.now(),
-  });
-  const terminal = terminalOptions ? openTerminalLog(root, repoRoot, terminalOptions) : undefined;
-  // The TTY belongs to the user: the launcher's own warnings go to the log.
-  const releaseWarnings = terminal
-    ? routeProcessWarnings((text) => terminal.log.write(text))
-    : undefined;
-  // In terminal mode the screen belongs to the browser: instance details go
-  // to the server log, and the user sees a handful of progress lines.
-  const detail = terminal
-    ? (line: string) => terminal.log.write(`${line}\n`)
-    : (line: string) => console.log(line);
-  if (terminal) {
-    console.log(`Vibestudio terminal (${instance.lifecycle} instance ${id})`);
-    console.log(`  log: ${terminal.logFile}`);
-  }
-  const checkpointTarget = path.join(root, "default-template-checkpoints", instance.generationId);
-  const templateCheckpointRoot = path.join(
-    root,
-    "development-template-checkpoints",
-    instance.generationId
-  );
-  let retirementFailed = false;
+  const persistentRoot = disposable ? undefined : persistentInstanceRoot(repoRoot, id);
   let launchFailure: unknown;
   let retirementFailure: unknown;
   let supervisor: DevInstanceSupervisor | undefined;
+  let terminal: TerminalLaunch | undefined;
+  let releaseWarnings: (() => void) | undefined;
   const resources: LaunchResources = {};
   const sourceCoupled = id === "source" && !disposable;
-  const env = developmentInstanceEnvironment({
-    parent: process.env,
-    repoRoot,
-    instanceRoot: root,
-    instanceId: id,
-    sourceCoupled,
-    disposable,
-    cleanRoom,
-  });
   try {
+    const root = disposable
+      ? await ownership.scratch(`vs-${id}-`)
+      : persistentInstanceRoot(repoRoot, id);
+    fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+    const cleanRoomProfileRoot = cleanRoom ? path.join(root, "profile") : undefined;
+    // Owned before it exists: the record is removed with the claim.
+    await ownership.own(devInstanceRecordPath(repoRoot, id), "instance record");
+    const instance = registerDevInstance({
+      id,
+      root,
+      repoRoot,
+      supervisorPid: process.pid,
+      ledgerId,
+      kind: mode,
+      lifecycle: disposable ? "ephemeral" : "persistent",
+      ...(cleanRoomProfileRoot ? { profileRoot: cleanRoomProfileRoot } : {}),
+      startedAt: Date.now(),
+    });
+    await ownership.markReady();
+    // Generation-scoped state is owned by the claim, so a retirement removes it
+    // whether the supervisor stopped in order or was killed.
+    const checkpointTarget = path.join(root, "default-template-checkpoints", instance.generationId);
+    const templateCheckpointRoot = path.join(
+      root,
+      "development-template-checkpoints",
+      instance.generationId
+    );
+    for (const owned of [
+      path.join(root, "workspace-release", instance.generationId),
+      path.join(root, "workspace-sources", instance.generationId),
+      path.join(root, "template-preparation", instance.generationId),
+      checkpointTarget,
+      templateCheckpointRoot,
+    ]) {
+      await ownership.own(owned, "generation state");
+    }
+    terminal = terminalOptions ? openTerminalLog(root, repoRoot, terminalOptions) : undefined;
+    // The TTY belongs to the user: the launcher's own warnings go to the log.
+    releaseWarnings = terminal
+      ? routeProcessWarnings((text) => terminal!.log.write(text))
+      : undefined;
+    // In terminal mode the screen belongs to the browser: instance details go
+    // to the server log, and the user sees a handful of progress lines.
+    const detail = terminal
+      ? (line: string) => terminal!.log.write(`${line}\n`)
+      : (line: string) => console.log(line);
+    if (terminal) {
+      console.log(`Vibestudio terminal (${instance.lifecycle} instance ${id})`);
+      console.log(`  log: ${terminal.logFile}`);
+    }
+    const env = developmentInstanceEnvironment({
+      parent: process.env,
+      repoRoot,
+      instanceRoot: root,
+      instanceId: id,
+      sourceCoupled,
+      disposable,
+      cleanRoom,
+    });
+    if (parsed.selfDevelopment) {
+      // Local mirrors of the developer's checkouts, served from the moment the
+      // server starts. They are scratch of this claim, never a path another
+      // process has to remember to remove.
+      Object.assign(
+        env,
+        selfDevelopmentMirrorEnvironment(
+          prepareSelfDevelopmentMirrors({
+            repoRoot,
+            target: await ownership.scratch("self-development-mirrors-"),
+            projects: selfDevelopmentProjects(repoRoot),
+          })
+        )
+      );
+    }
     let defaultTemplates: Awaited<ReturnType<typeof resolveDevelopmentTemplateSet>> | undefined;
     const prepareInputs = () =>
       forEachOwnedConcurrent(
         [
-          () => prepareHostArtifacts(mode, env, termination, terminal),
+          () => prepareHostArtifacts(mode, env, termination, ownership, terminal),
           async () => {
             termination.signal.throwIfAborted();
             const startedAt = performance.now();
@@ -841,7 +968,15 @@ async function main(): Promise<void> {
       await prunePersistentInstanceBuildCache(root, id);
     }
     if (terminal) {
-      supervisor = await runServer(launchArgs, env, instance, resources, termination, terminal);
+      supervisor = await runServer(
+        launchArgs,
+        env,
+        instance,
+        resources,
+        termination,
+        ownership,
+        terminal
+      );
       detail(
         `[Perf] development launch inputs ready: ${Math.round(performance.now() - launchStartedAt)}ms`
       );
@@ -856,8 +991,8 @@ async function main(): Promise<void> {
     } else {
       supervisor =
         mode === "server"
-          ? await runServer(launchArgs, env, instance, resources, termination)
-          : await runDesktop(launchArgs, env, instance, resources, termination);
+          ? await runServer(launchArgs, env, instance, resources, termination, ownership)
+          : await runDesktop(launchArgs, env, instance, resources, termination, ownership);
       detail(
         `[Perf] development launch inputs ready: ${Math.round(performance.now() - launchStartedAt)}ms`
       );
@@ -868,11 +1003,10 @@ async function main(): Promise<void> {
       ]);
     }
   } catch (error) {
-    retirementFailed = hasOwnershipFailure(error);
-    if (termination.requested && !retirementFailed) {
+    if (termination.requested && !hasOwnershipFailure(error)) {
       // A requested stop is not a launch failure: every phase it cut short
       // settles with the cancellation, and the cleanup below still runs.
-      detail(`[instance:${id}] ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`[instance:${id}] ${error instanceof Error ? error.message : String(error)}`);
       console.error("Interrupted.");
       process.exitCode = signalExitCode(termination.requested);
     } else {
@@ -881,67 +1015,44 @@ async function main(): Promise<void> {
       if (terminal) reportTerminalStartupFailure(error, terminal);
     }
   } finally {
-    try {
-      // Storage belongs to the full process lifetime, including failed
-      // startup and relaunch. Never remove source checkpoints before joining
-      // every acknowledged native owner.
-      const retirement = await Promise.allSettled([
-        resources.supervisor?.stop(),
-        joinProducer(resources.preparation),
-      ]);
-      const failure = retirement.find((result) => result.status === "rejected");
-      retirementFailed ||= !!failure;
-      if (retirementFailed) {
-        // State remains owned until every executor retires. Preserve the exact
-        // registry and source checkpoints when that join cannot be established.
-        console.error(`[instance:${id}] resource retirement failed; retaining owned state ${root}`);
-      } else {
-        fs.rmSync(path.join(root, "workspace-release", instance.generationId), {
-          recursive: true,
-          force: true,
-        });
-        fs.rmSync(path.join(root, "workspace-sources", instance.generationId), {
-          recursive: true,
-          force: true,
-        });
-        fs.rmSync(path.join(root, "template-preparation", instance.generationId), {
-          recursive: true,
-          force: true,
-        });
-        if (!disposable) await prunePersistentInstanceBuildCache(root, id);
-        fs.rmSync(checkpointTarget, { recursive: true, force: true });
-        fs.rmSync(templateCheckpointRoot, { recursive: true, force: true });
-        const cleanupError = disposable ? removeEphemeralInstanceRoot(root) : null;
-        if (cleanupError) {
-          // Preserve the registry record and root together: the stale supervisor
-          // PID makes the instance unusable, while retaining the exact root makes
-          // a leaked descendant diagnosable. Most importantly, cleanup must not
-          // replace the hub's original exit status with a bare ENOTEMPTY.
-          console.error(
-            `[instance:${id}] could not remove ephemeral state ${root}: ${cleanupError.message}`
-          );
-          process.exitCode = process.exitCode || 1;
-        } else {
-          unregisterDevInstance(repoRoot, id);
-        }
-      }
-      if (failure?.status === "rejected") retirementFailure = failure.reason;
-    } catch (error) {
-      retirementFailure ??= error;
-    } finally {
+    // Storage belongs to the full process lifetime, including failed startup
+    // and relaunch: every acknowledged owner is stopped and joined before the
+    // claim retires the state under it.
+    const retirement = await Promise.allSettled([
+      resources.supervisor?.stop(),
+      joinProducer(resources.preparation),
+    ]);
+    const stopFailure = retirement.find((result) => result.status === "rejected");
+    if (stopFailure?.status === "rejected") retirementFailure = stopFailure.reason;
+    if (persistentRoot && !stopFailure) {
       try {
-        await resources.supervisor?.close();
+        await prunePersistentInstanceBuildCache(persistentRoot, id);
       } catch (error) {
         retirementFailure ??= error;
       }
+    }
+    try {
       if (terminal) {
         releaseWarnings?.();
-        await new Promise<void>((resolve) => terminal.log.end(() => resolve()));
+        await new Promise<void>((resolve) => terminal!.log.end(() => resolve()));
         fs.closeSync(terminal.logFd);
-        if (!retirementFailure) console.log("Server stopped.");
       }
-      termination.dispose();
+    } catch (error) {
+      retirementFailure ??= error;
     }
+    try {
+      await ownership.release();
+    } catch (error) {
+      retirementFailure =
+        retirementFailure === undefined
+          ? error
+          : new AggregateError([retirementFailure, error], "Developer instance retirement failed", {
+              cause: retirementFailure,
+            });
+    }
+    termination.dispose();
+    if (ownershipLost !== undefined) retirementFailure ??= ownershipLost;
+    if (terminal && !retirementFailure) console.log("Server stopped.");
   }
   if (terminal && launchFailure && !retirementFailure) {
     // Already reported, without a stack trace, with the log tail.

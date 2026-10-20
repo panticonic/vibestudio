@@ -19,7 +19,9 @@ const RESTORE_LEGACY_HUB_LEASE = `DROP TABLE hub_process_owner;
 // Version 19 named the device signing key `endpoint_id`; fixtures that start
 // from it must hold that shape for the 19 -> 20 migration to rename.
 function restoreV19Devices(db: DatabaseSync): void {
-  db.exec(`DROP INDEX devices_by_device_key;
+  db.exec(`DROP TABLE client_credentials;
+    DROP TABLE client_principals;
+    DROP INDEX devices_by_device_key;
     DROP INDEX devices_by_user;
     ALTER TABLE devices RENAME TO devices_current;
     CREATE TABLE devices (
@@ -141,7 +143,9 @@ describe("identity package schema cut", () => {
         expiresAt: entry["expires_at"],
       }))
     );
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: IDENTITY_DATABASE_SCHEMA_VERSION,
+    });
     verified.close();
     migrated.insertPairingInvite({
       code: "account-only",
@@ -256,6 +260,8 @@ describe("identity package schema cut", () => {
     old.exec(RESTORE_LEGACY_HUB_LEASE);
     restoreV13Membership(old);
     old.exec(`
+      DROP TABLE client_credentials;
+      DROP TABLE client_principals;
       DROP TABLE user_workspaces;
       DROP TABLE workspace_rpc_policy;
       DROP INDEX devices_by_device_key;
@@ -303,7 +309,9 @@ describe("identity package schema cut", () => {
     });
     migrated.close();
     const verified = new DatabaseSync(databasePath);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: IDENTITY_DATABASE_SCHEMA_VERSION,
+    });
     expect(
       verified.prepare("SELECT name FROM sqlite_schema WHERE name = 'control_rooms'").get()
     ).toBeUndefined();
@@ -360,7 +368,9 @@ describe("identity package schema cut", () => {
     reopened.close();
 
     const verified = new DatabaseSync(databasePath);
-    expect(verified.prepare("PRAGMA user_version").get()).toEqual({ user_version: 20 });
+    expect(verified.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: IDENTITY_DATABASE_SCHEMA_VERSION,
+    });
     expect(verified.prepare("SELECT * FROM user_workspaces").all()).toEqual([]);
     expect(verified.prepare("SELECT * FROM workspace_rpc_policy").all()).toEqual([]);
     verified.close();

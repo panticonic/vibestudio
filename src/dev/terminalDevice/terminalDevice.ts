@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import * as nodePty from "node-pty";
 import type {
-  ApprovalFeed,
+  ApprovalSurfaces,
   DeviceOperations,
   IntegrationArtifact,
 } from "@vibestudio/shared/deviceDriver";
@@ -37,7 +37,7 @@ export interface TerminalDevicePorts {
   /** Bumped by every `clients:changed` and `supervision:changed`. */
   changes: ChangeSignal;
   approvals: {
-    feed: ApprovalFeed;
+    surfaces: ApprovalSurfaces;
     resolve(approvalId: string, decision: "once" | "deny" | "accept-review"): Promise<void>;
   };
   hostState: Pick<TerminalHostState, "read">;
@@ -304,12 +304,16 @@ export function createTerminalDevice(
       return null;
     },
 
-    async nextApproval(_args, signal) {
-      return ports.approvals.feed.next(signal);
+    async openApprovals() {
+      return ports.approvals.surfaces.open();
     },
 
-    async releaseApprovals() {
-      ports.approvals.feed.release();
+    async nextApproval({ surfaceToken }, signal) {
+      return ports.approvals.surfaces.next(surfaceToken, signal);
+    },
+
+    async releaseApprovals({ surfaceToken }) {
+      ports.approvals.surfaces.release(surfaceToken);
       return null;
     },
 

@@ -21,10 +21,22 @@ class WorkspaceRpcDeclarationError extends Error {}
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient";
+import {
+  describeIncompleteReceiverAuthority,
+  receiverDirectEffect,
+  validateReceiverAuthority,
+} from "@vibestudio/shared/receiverAuthorityDeclaration";
 
 export type WorkspaceRpcSchemaMetadata = Pick<
   ServiceMethodSchemas[string],
-  "website" | "authority" | "tier" | "access" | "directEffect" | "execution" | "crossWorkspace"
+  | "website"
+  | "authority"
+  | "tier"
+  | "access"
+  | "directEffect"
+  | "capability"
+  | "execution"
+  | "crossWorkspace"
 > & {
   argsSchema: Record<string, unknown>;
   returnsSchema?: Record<string, unknown>;
@@ -360,6 +372,15 @@ function effectOf(policy: StaticRpcPolicy, fields: PolicyFields): WorkspaceRpcMe
   throw new WorkspaceRpcDeclarationError(`${label} has an invalid static RPC effect`);
 }
 
+function isStaticRpcMethodsTable(member: ts.ClassElement): boolean {
+  return (
+    ts.isPropertyDeclaration(member) &&
+    (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)) &&
+    member.name.text === "rpcMethods" &&
+    !!member.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.StaticKeyword)
+  );
+}
+
 function methodName(method: ts.MethodDeclaration): string | null {
   if (ts.isIdentifier(method.name) || ts.isStringLiteral(method.name)) return method.name.text;
   return null;
@@ -473,6 +494,35 @@ export function collectWorkspaceRpcCatalog(
         }
         const visit = (node: ts.Node): void => {
           if (ts.isClassDeclaration(node) && node.name) {
+            const schemaTable = node.members.find(isStaticRpcMethodsTable);
+            if (schemaTable && !input.rpcSchemas?.[node.name.text]) {
+              const position = source.getLineAndCharacterOfPosition(schemaTable.getStart(source));
+              const exposed = node.members
+                .filter(ts.isMethodDeclaration)
+                .filter((member) => rpcDecorator(member))
+                .map(methodName)
+                .filter((name): name is string => name !== null);
+              const required = validateReceiverAuthority({});
+              diagnostics.push({
+                source: "schema",
+                severity: "error",
+                file,
+                line: position.line + 1,
+                column: position.character + 1,
+                message:
+                  `${input.provider}:${node.name.text} declares a static rpcMethods schema table. ` +
+                  "At runtime a method listed in that table takes its policy from the table, not from @rpc, " +
+                  `so every entry must declare ${required.ok ? "" : required.missing.join(", ")}; ` +
+                  "the build cannot analyze a workspace-authored table, so the first inbound call would fail with an incomplete " +
+                  `typed receiver authority declaration${exposed.length > 0 ? ` (methods: ${exposed.join(", ")})` : ""}.`,
+                suggestion:
+                  "Delete the static rpcMethods assignment and derive the exported contract with " +
+                  "createReceiverRpcMethods<Pick<Receiver, ...>>([...]) from @vibestudio/shared/rpcMethods, so policy " +
+                  "comes from each method's @rpc declaration. Schema tables with authority, tier, access.sensitivity and " +
+                  "directEffect/capability are reserved for host-reviewed contracts bound by package.json " +
+                  "vibestudio.durable.classes[].rpcSchema (@schemaRpc).",
+              });
+            }
             for (const member of node.members) {
               if (!ts.isMethodDeclaration(member)) continue;
               const decorator = rpcDecorator(member);
@@ -516,26 +566,27 @@ export function collectWorkspaceRpcCatalog(
                     );
                   }
                   schemaContract = schema;
-                  const principals = schema.authority ? authorityPrincipals(schema.authority) : [];
-                  if (
-                    principals.length === 0 ||
-                    !schema.tier ||
-                    !schema.access?.sensitivity ||
-                    !schema.directEffect
-                  ) {
+                  const validation = validateReceiverAuthority(schema);
+                  if (!validation.ok) {
                     throw new WorkspaceRpcDeclarationError(
-                      `${label} has an incomplete typed receiver authority declaration`
+                      describeIncompleteReceiverAuthority([{ label, missing: validation.missing }])
+                    );
+                  }
+                  const principals = authorityPrincipals(schema.authority!);
+                  if (principals.length === 0) {
+                    throw new WorkspaceRpcDeclarationError(
+                      describeIncompleteReceiverAuthority([{ label, missing: ["authority"] }])
                     );
                   }
                   access = {
                     principals,
-                    tier: schema.tier.tier,
-                    sensitivity: schema.access.sensitivity,
-                    ...(schema.tier.session === "codeOnly" ? { codeOnly: true } : {}),
+                    tier: schema.tier!.tier,
+                    sensitivity: schema.access!.sensitivity!,
+                    ...(schema.tier!.session === "codeOnly" ? { codeOnly: true } : {}),
                     ...(schema.crossWorkspace === true ? { crossWorkspace: true } : {}),
                   };
                   website = schema.website;
-                  effect = schema.directEffect;
+                  effect = receiverDirectEffect(schema);
                   execution = schema.execution;
                 } else {
                   // These fields are independent. Diagnose each, but never publish

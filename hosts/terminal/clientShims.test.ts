@@ -133,6 +133,16 @@ describe("shims", () => {
     expect(ctx.state.read().commands).toEqual({});
   });
 
+  it("keeps a shim whose client is declared but unavailable", () => {
+    const ctx = context();
+    const { table } = syncClientIndex(ctx, [chat]);
+    const file = linkClientShim(ctx, { name: "vchat", listing: chat, table });
+    const synced = syncClientIndex(ctx, [{ ...chat, unavailableReason: "not a member here" }]);
+    expect(synced.removedShims).toEqual([]);
+    expect(fs.existsSync(file)).toBe(true);
+    expect(Object.keys(ctx.state.read().shims)).toEqual(["vchat"]);
+  });
+
   it("rewrites a shim whose client changed its command", () => {
     const ctx = context();
     const { table } = syncClientIndex(ctx, [chat]);
@@ -170,5 +180,14 @@ describe("client index for completions", () => {
     const data = ctx.state.read();
     expect(data.commands).toEqual({ chat: { clientId: "chat" } });
     expect(data.clients).toEqual({ chat: { intents: ["open", "ask"] } });
+  });
+});
+
+describe("host state file", () => {
+  it("names the unreadable file instead of surfacing a parse stack", () => {
+    const ctx = context();
+    const file = path.join(path.dirname(ctx.directory), "host.json");
+    fs.writeFileSync(file, "{ not json");
+    expect(() => ctx.state.read()).toThrow(`${file} is not valid JSON; remove it to reset.`);
   });
 });

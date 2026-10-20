@@ -9,7 +9,7 @@ import fs from "node:fs";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createConnectDeepLink, createConnectPairUrl } from "@vibestudio/shared/connect";
 import { readCurrentHostBuildGeneration } from "../scripts/host-build-generations.mjs";
 
@@ -85,9 +85,17 @@ function ready(rootInvite: ReturnType<typeof invite> | null) {
   };
 }
 
+let profileRoot: string;
+beforeEach(() => {
+  // The runner opens its own ownership (and scratch) under the profile.
+  profileRoot = mkdtempSync(join(tmpdir(), "pair-profile-"));
+  vi.stubEnv("VIBESTUDIO_PROFILE_ROOT", profileRoot);
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
+  fs.rmSync(profileRoot, { recursive: true, force: true });
 });
 
 describe("pair-server runner", () => {

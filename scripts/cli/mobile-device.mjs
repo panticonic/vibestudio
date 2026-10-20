@@ -10,12 +10,6 @@ import {
 } from "./lib/mobile-ios.mjs";
 import { readIosSigningConfig } from "./lib/mobile-ios-signing.mjs";
 import { spawn } from "node:child_process";
-import { bindProcessLifetimeToParent } from "../owned-process-tree.mjs";
-
-if (process.send) {
-  bindProcessLifetimeToParent();
-  process.channel?.unref();
-}
 import { fileURLToPath } from "node:url";
 import {
   INTERNAL_ANDROID_PACKAGE,

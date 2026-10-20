@@ -304,11 +304,39 @@ describe("hub approvals for a paired device", () => {
     expect(rpc.call).not.toHaveBeenCalled();
   });
 
-  it("closes the workspace connection when the hub cannot be reached", async () => {
+  it("reports an unreachable hub without discarding the workspace's approvals", async () => {
+    openHub.mockRejectedValue(new Error("hub unreachable"));
+    rpc.call.mockResolvedValue([capability]);
+    expect(await run("list")).toBe(1);
+    expect(output()).toEqual([[{ ...capability, source: "workspace" }]]);
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("hub approvals unavailable: hub unreachable")
+    );
+    expect(rpc.close).toHaveBeenCalledOnce();
+  });
+
+  it("still resolves a workspace approval when the hub is unreachable", async () => {
+    openHub.mockRejectedValue(new Error("hub unreachable"));
+    rpc.call.mockImplementation(async (method: string) =>
+      method === "shellApproval.listPending" ? [capability] : undefined
+    );
+    expect(await run("resolve", capability.approvalId, "once")).toBe(0);
+    expect(rpc.call).toHaveBeenCalledWith("shellApproval.resolve", [capability.approvalId, "once"]);
+  });
+
+  it("does not claim an approval is absent when a queue could not be consulted", async () => {
+    openHub.mockRejectedValue(new Error("hub unreachable"));
+    rpc.call.mockResolvedValue([capability]);
+    expect(await run("resolve", "elsewhere", "once")).toBe(1);
+    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("hub unreachable"));
+    expect(console.error).not.toHaveBeenCalledWith(expect.stringContaining("No pending approval"));
+  });
+
+  it("fails when the only queue cannot be reached", async () => {
+    identity.mockReturnValue({ kind: "device", phase: "account" });
     openHub.mockRejectedValue(new Error("hub unreachable"));
     expect(await run("list")).toBe(1);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("hub unreachable"));
-    expect(rpc.close).toHaveBeenCalledOnce();
   });
 
   it("watches both queues, tags records by source, and joins both on stop", async () => {
@@ -348,7 +376,7 @@ describe("hub approvals for a paired device", () => {
     expect(hub.close).toHaveBeenCalledOnce();
   });
 
-  it("propagates one queue's watch failure and stops the other", async () => {
+  it("reports one queue's watch failure and keeps following the other until stopped", async () => {
     const hang = async (
       _t: string,
       _m: string,
@@ -367,8 +395,13 @@ describe("hub approvals for a paired device", () => {
     });
     rpc.streamReadable.mockImplementation(hang);
     hub.streamReadable.mockRejectedValue(new Error("hub watch failed"));
+    vi.mocked(console.error).mockImplementation((line) => {
+      if (String(line).includes("hub watch failed")) process.emit("SIGTERM");
+    });
     expect(await run("watch")).toBe(1);
-    expect(console.error).toHaveBeenCalledWith(expect.stringContaining("hub watch failed"));
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("hub approvals unavailable: hub watch failed")
+    );
     expect(rpc.close).toHaveBeenCalledOnce();
     expect(hub.close).toHaveBeenCalledOnce();
   });

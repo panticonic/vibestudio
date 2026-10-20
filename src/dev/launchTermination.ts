@@ -1,5 +1,6 @@
 import * as path from "node:path";
-import { spawn, type StdioOptions } from "node:child_process";
+import type { StdioOptions } from "node:child_process";
+import type { Ownership } from "@vibestudio/shared/ownership";
 
 const TERMINATION_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
 
@@ -36,9 +37,7 @@ export class LaunchTermination {
 
   constructor(private readonly processLike: SignalProcess = process) {
     for (const name of TERMINATION_SIGNALS) {
-      const listener = () => {
-        if (!this.controller.signal.aborted) this.controller.abort(new LaunchTerminated(name));
-      };
+      const listener = () => this.request(name);
       this.listeners.set(name, listener);
       processLike.on(name, listener);
     }
@@ -54,6 +53,15 @@ export class LaunchTermination {
     return this.controller.signal.aborted
       ? (this.controller.signal.reason as LaunchTerminated).signal
       : null;
+  }
+
+  /**
+   * Request termination programmatically, as a signal would: the lease that
+   * keeps this launcher alive was revoked, or its reaper was lost. Joins the
+   * same single cancellation.
+   */
+  request(name: TerminationSignal): void {
+    if (!this.controller.signal.aborted) this.controller.abort(new LaunchTerminated(name));
   }
 
   /**
@@ -81,11 +89,14 @@ export class LaunchTermination {
 }
 
 /**
- * Run one owned child process to its exit. A termination request asks the
- * child to stop (SIGTERM) and the returned promise still settles only when
- * the child has exited, so the launcher never retires state under it.
+ * Run one child process to its exit as a member of `ownership`: its group is
+ * registered with the reaper at spawn, so even this process dying retires it.
+ * A termination request asks the child to stop (graceful) and the returned
+ * promise still settles only when the child has exited and its group is
+ * retired, so the launcher never removes state under it.
  */
-export function runOwnedChild(
+export async function runOwnedChild(
+  ownership: Ownership,
   command: string,
   args: string[],
   options: {
@@ -94,39 +105,35 @@ export function runOwnedChild(
     termination?: LaunchTermination;
   }
 ): Promise<number> {
-  return new Promise((resolve, reject) => {
-    options.termination?.signal.throwIfAborted();
-    const child = spawn(command, args, {
-      cwd: process.cwd(),
-      env: options.env,
-      stdio: options.stdio ?? "inherit",
-    });
-    const unregister = options.termination?.onRequest(() => {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
-    });
-    child.once("error", (error) => {
-      unregister?.();
-      reject(error);
-    });
-    child.once("exit", (code, signal) => {
-      unregister?.();
-      const name = path.basename(command);
-      if (options.termination?.signal.aborted) {
-        reject(options.termination.signal.reason);
-        return;
-      }
-      if (signal) {
-        reject(new Error(`${name} exited on ${signal}`));
-        return;
-      }
-      const exitCode = code ?? 1;
-      if (exitCode !== 0) {
-        reject(new Error(`${name} exited with code ${exitCode}`));
-        return;
-      }
-      resolve(exitCode);
-    });
+  options.termination?.signal.throwIfAborted();
+  const name = path.basename(command);
+  const owned = ownership.spawn(command, args, {
+    cwd: process.cwd(),
+    env: options.env,
+    stdio: options.stdio ?? "inherit",
+    kill: "graceful",
+    label: name,
   });
+  const unregister = options.termination?.onRequest(() => {
+    // The join below settles the retirement and reports its failure.
+    void owned.retire().catch(() => undefined);
+  });
+  try {
+    const status = await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
+        owned.child.once("error", reject);
+        owned.child.once("exit", (code, signal) => resolve({ code, signal }));
+      }
+    );
+    await owned.join();
+    if (options.termination?.signal.aborted) throw options.termination.signal.reason;
+    if (status.signal) throw new Error(`${name} exited on ${status.signal}`);
+    const exitCode = status.code ?? 1;
+    if (exitCode !== 0) throw new Error(`${name} exited with code ${exitCode}`);
+    return exitCode;
+  } finally {
+    unregister?.();
+  }
 }
 
 /**

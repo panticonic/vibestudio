@@ -19,17 +19,12 @@
  * windows and answers the operations the client system tests send through the
  * server's `deviceDriver` service (`pnpm system-test run --device desktop`).
  */
-import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as fsp from "node:fs/promises";
-import * as os from "node:os";
 import * as path from "node:path";
 import { startEphemeralLinuxSecretService } from "./lib/linux-secret-service.mjs";
-import { tsImport } from "tsx/esm/api";
-import { runParentOwnedMain } from "./lib/parent-owned-main.mjs";
+import { ownedEntry, retireOnAbort } from "./lib/owned-entry.mjs";
 import { mintDevicePairingLink } from "./lib/device-pairing-link.mjs";
-
-const { createDevelopmentClientLifetime } = await tsImport("./development-client-lifecycle.ts", import.meta.url);
 
 const repoRoot = process.cwd();
 
@@ -47,7 +42,7 @@ function parseArguments(argv) {
   return { instanceId, ttlMs };
 }
 
-async function main(ownerSignal) {
+async function main({ signal: ownerSignal, ownership, scratchRoot: tempRoot }) {
   const parsed = parseArguments(process.argv.slice(2));
   if (parsed.help) {
     console.log(`Attach an Electron client-device executor to a running instance.
@@ -66,30 +61,21 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
     throw new Error(`Electron main entry not found at ${mainEntry}. Run pnpm build first.`);
   }
 
-  const tempRoot = await fsp.mkdtemp(path.join(os.tmpdir(), "vibestudio-client-executor-"));
-  const lifetime = createDevelopmentClientLifetime(tempRoot);
   let secretService;
-  let stopRequested = false;
-  const stop = () => {
-    stopRequested = true;
-    lifetime.requestStop();
-  };
-  ownerSignal.addEventListener("abort", stop, { once: true });
-  if (ownerSignal.aborted) stop();
-  process.once("SIGINT", stop);
-  process.once("SIGTERM", stop);
-
   try {
-    const deepLink = await mintDevicePairingLink(repoRoot, parsed.instanceId, parsed.ttlMs, lifetime.acquire);
-    if (stopRequested) return;
-    console.log(`[client-executor] minted a device invite on ${parsed.instanceId}`);
-    secretService = await startEphemeralLinuxSecretService(
-      tempRoot,
-      lifetime.acquire,
-      lifetime.retireChild,
-      { signal: ownerSignal }
+    const deepLink = await mintDevicePairingLink(
+      repoRoot,
+      parsed.instanceId,
+      parsed.ttlMs,
+      ownership,
+      ownerSignal
     );
-    if (stopRequested) return;
+    ownerSignal.throwIfAborted();
+    console.log(`[client-executor] minted a device invite on ${parsed.instanceId}`);
+    secretService = await startEphemeralLinuxSecretService(ownership, tempRoot, {
+      signal: ownerSignal,
+    });
+    ownerSignal.throwIfAborted();
 
     const userDataDir = path.join(tempRoot, "electron-user-data");
     const electron = path.join(repoRoot, "node_modules", "electron", "dist", "electron");
@@ -117,7 +103,7 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
     delete env.VIBESTUDIO_INSTANCE;
     delete env.VIBESTUDIO_WORKSPACE;
 
-    const child = lifetime.acquire(() => spawn(
+    const client = ownership.spawn(
       "xvfb-run",
       [
         "-a",
@@ -134,8 +120,16 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
         "--dev-iroh-remote",
         "--development-client-executor",
       ],
-      { cwd: repoRoot, env, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32" }
-    ));
+      {
+        kill: "immediate",
+        label: "electron-client",
+        cwd: repoRoot,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+      }
+    );
+    const { child } = client;
+    retireOnAbort(ownership, ownerSignal, client);
     let ready = false;
     const watch = (chunk) => {
       const text = chunk.toString();
@@ -144,7 +138,9 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
         console.log(`[client-executor] ${line}`);
         if (!ready && line.includes("executor-only client ready")) {
           ready = true;
-          console.log(`[client-executor] desktop device ready (registered with instance ${parsed.instanceId})`);
+          console.log(
+            `[client-executor] desktop device ready (registered with instance ${parsed.instanceId})`
+          );
         }
       }
     };
@@ -154,19 +150,17 @@ Runs until stopped. Requires xvfb-run, dbus-daemon, and gnome-keyring-daemon.`);
       child.once("exit", resolve);
       child.once("error", reject);
     });
-    if (!ready && !stopRequested) throw new Error(`The client executor exited before registering (code ${code})`);
+    await client.join();
+    ownerSignal.throwIfAborted();
+    if (!ready) throw new Error(`The client executor exited before registering (code ${code})`);
   } catch (error) {
-    if (!stopRequested) throw error;
+    // Work interrupted by a stop request fails because it was stopped; the
+    // request, not that failure, is what ended this run.
+    ownerSignal.throwIfAborted();
+    throw error;
   } finally {
-    process.off("SIGINT", stop);
-    process.off("SIGTERM", stop);
-    ownerSignal.removeEventListener("abort", stop);
-    try {
-      await secretService?.dispose();
-    } finally {
-      await lifetime.close();
-    }
+    await secretService?.dispose();
   }
 }
 
-await runParentOwnedMain(main, repoRoot);
+await ownedEntry(main, { appRoot: repoRoot, scratchPrefix: "vibestudio-client-executor-" });

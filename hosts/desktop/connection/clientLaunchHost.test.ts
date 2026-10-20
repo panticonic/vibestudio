@@ -31,13 +31,11 @@ async function setup() {
     }
     if (service === "auth") {
       return {
-        connectionGrant: "one-use-secret",
-        expiresAt: 1,
+        credential: "clientcred:secret",
         principalId: "client:chat:web:d",
         deviceId: "d",
         serverId: "s",
         serverBootId: "b",
-        workspaceId: "system",
       };
     }
     throw new Error(`unexpected ${service}.${method}`);
@@ -59,7 +57,7 @@ async function setup() {
 }
 
 describe("ClientLaunchHost", () => {
-  it("launches in the connection process and tells main everything but the connection grant", async () => {
+  it("launches in the connection process and tells main everything but the credential", async () => {
     const t = await setup();
     const states: unknown[] = [];
     t.main.on("launch.state", (event) => states.push(event));
@@ -70,7 +68,7 @@ describe("ClientLaunchHost", () => {
     });
     expect(result.state).toBe("ready");
     expect(result.launched.principalId).toBe("client:chat:web:d");
-    expect(JSON.stringify(result)).not.toContain("one-use-secret");
+    expect(JSON.stringify(result)).not.toContain("clientcred:secret");
     expect(result.launched.artifacts[0].handle).toContain(t.integrity);
     expect(states).toHaveLength(1);
     expect(t.fetchArtifact).toHaveBeenCalledTimes(1);
@@ -78,18 +76,31 @@ describe("ClientLaunchHost", () => {
 
   it("admits the principal it launched, for that exact build, and no other", async () => {
     const t = await setup();
-    const sessions = t.host.principalSessions();
-    await expect(sessions.connectionGrant("client:chat:web:d")).rejects.toThrow(
-      /No client launched/
-    );
+    const sessions = t.host.principalSessions("system");
+    await expect(sessions.credential("client:chat:web:d")).rejects.toThrow(/No client launched/);
     await t.main.request("launch.start", {
       launchId: 1,
       descriptor: t.descriptor,
       select: { id: "chat" },
     });
-    await expect(sessions.connectionGrant("client:chat:web:d")).resolves.toBe("one-use-secret");
-    await expect(sessions.connectionGrant("client:other:web:d")).rejects.toThrow(
-      /No client launched/
+    await expect(sessions.credential("client:chat:web:d")).resolves.toBe("clientcred:secret");
+    await expect(sessions.credential("client:other:web:d")).rejects.toThrow(/No client launched/);
+  });
+
+  it("registers an already running build for its principal, and reports where a session ended", async () => {
+    const t = await setup();
+    const ended: unknown[] = [];
+    t.main.on("clients.session-ended", (event) => ended.push(event));
+    const sessions = t.host.principalSessions("workspace-b");
+    const principal = await t.main.request("launch.adopt", {
+      build: { source: "clients/chat", buildKey: "bk1", executionDigest: "a".repeat(64) },
+    });
+    expect(principal).toBe("client:chat:web:d");
+    await expect(sessions.credential("client:chat:web:d")).resolves.toBe("clientcred:secret");
+    const caller = { callerId: "client:chat:web:d", callerKind: "client" as const };
+    sessions.sessionEnded(caller, "trust-revoked");
+    await vi.waitFor(() =>
+      expect(ended).toEqual([{ caller, workspaceId: "workspace-b", reason: "trust-revoked" }])
     );
   });
 

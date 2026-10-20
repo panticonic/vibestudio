@@ -5,11 +5,13 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   applicationSourceMaps,
+  CJS_IMPORT_META_BANNER,
   NODE_ESM_COMPAT_BANNER,
   SERVER_ESM_BANNER,
 } from "./build-artifact-contracts.mjs";
 import { assertHostNativeDependencies } from "./native-host-dependencies.mjs";
 import { SERVER_WORKER_ENTRIES } from "./server-runtime-artifacts.mjs";
+import { OWNERSHIP_REAPER_FILES } from "../packages/shared/src/ownershipFiles.mjs";
 import {
   assertSelectedNodeRuntimeArtifacts,
   NODE_RUNTIME_TARGETS,
@@ -30,7 +32,7 @@ const contracts = [
     path: "dist/main.cjs",
     runtime: "Electron main",
     format: "cjs",
-    mustContain: ['require("electron")'],
+    mustContain: ['require("electron")', CJS_IMPORT_META_BANNER],
     forbidden: [
       {
         pattern: "throw Error('Dynamic require of \"",
@@ -43,7 +45,7 @@ const contracts = [
     path: "dist/connectionProcess.cjs",
     runtime: "Electron utilityProcess",
     format: "cjs",
-    mustContain: ['"use strict"'],
+    mustContain: ['"use strict"', CJS_IMPORT_META_BANNER],
     forbidden: [
       {
         pattern: "throw Error('Dynamic require of \"",
@@ -57,6 +59,7 @@ const contracts = [
     format: "cjs",
     mustContain: [
       '"use strict"',
+      CJS_IMPORT_META_BANNER,
       'import("esbuild-svelte")',
       'import("@panticonic/pi-ai/providers/all")',
       'require("node-pty")',
@@ -135,6 +138,11 @@ const contracts = [
     runtime: "bundled sql.js runtime",
     mustStartWithBytes: [0x00, 0x61, 0x73, 0x6d],
   },
+  ...OWNERSHIP_REAPER_FILES.map((filename) => ({
+    path: `dist/${filename}`,
+    runtime: "ownership reaper (plain file beside the host bundles)",
+    format: "esm",
+  })),
   ...Object.values(SERVER_WORKER_ENTRIES.standalone).map((filename) => ({
     path: `dist/${filename}`,
     runtime: "standalone Node worker",

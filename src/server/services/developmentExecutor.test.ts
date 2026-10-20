@@ -3,6 +3,7 @@ import * as fsp from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
+import { Ownership } from "@vibestudio/shared/ownership";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   DevelopmentExecutionSnapshot,
@@ -226,6 +227,13 @@ async function pnpmFixture(root: string, name: string, source: string): Promise<
 
 describe("DevelopmentExecutor exact private execution", () => {
   let root: string;
+  /** A real reaper over the fixture root: each build command is a registered group. */
+  let ownership: Ownership | undefined;
+  const openOwnership = async () =>
+    (ownership ??= await Ownership.open({
+      profileDir: path.join(root, "profile"),
+      lifetime: "leased",
+    }));
   let storeOwner: ReturnType<typeof createBuildStoreProcessOwner>;
   let store: BuildStore;
   let buildSystem: Pick<
@@ -266,6 +274,12 @@ describe("DevelopmentExecutor exact private execution", () => {
     delete process.env["DEVELOPMENT_EXECUTOR_SECRET"];
     const failures: unknown[] = [];
     try {
+      await ownership?.close();
+    } catch (error) {
+      failures.push(error);
+    }
+    ownership = undefined;
+    try {
       await store.drainPublications();
     } catch (error) {
       failures.push(error);
@@ -294,6 +308,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       hostExecutionDigest: digest("9"),
       buildSystem,
       runRoots: runRoots(root),
+      ownership: openOwnership,
       planSource,
       materializeSource: vi.fn(),
     });
@@ -337,6 +352,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       hostExecutionDigest: digest("9"),
       buildSystem,
       runRoots: runRoots(root),
+      ownership: openOwnership,
       planSource,
       materializeSource: vi.fn(),
     });
@@ -364,6 +380,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       hostExecutionDigest: digest("9"),
       buildSystem,
       runRoots: runRoots(root),
+      ownership: openOwnership,
       planSource: async ({ repositoryId }) =>
         repositoryId === "repository:vibestudio"
           ? sourcePlan()
@@ -402,6 +419,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       hostExecutionDigest: digest("9"),
       buildSystem,
       runRoots: runRoots(root),
+      ownership: openOwnership,
       planSource: async () => sourcePlan(),
       async materializeSource(_source, destination) {
         await fsp.writeFile(path.join(destination, "pnpm-lock.yaml"), "lock");
@@ -482,6 +500,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       hostExecutionDigest: digest("9"),
       buildSystem,
       runRoots: runRoots(root),
+      ownership: openOwnership,
       planSource: async () => sourcePlan(),
       materializeSource: async () => {},
     });
@@ -512,6 +531,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       hostExecutionDigest: digest("9"),
       buildSystem,
       runRoots: runRoots(root),
+      ownership: openOwnership,
       planSource: async () => sourcePlan(),
       async materializeSource(_source, destination) {
         await fsp.writeFile(path.join(destination, "build.mjs"), "");
@@ -530,7 +550,7 @@ describe("DevelopmentExecutor exact private execution", () => {
     expect(spawnEvidence).toEqual([]);
   });
 
-  it("stops the exact owned process group cooperatively", async () => {
+  it("stops the exact owned process group at once, without a kill timer", async () => {
     const lines: string[] = [];
     let materializations = 0;
     const pnpmCli = await pnpmFixture(
@@ -548,6 +568,7 @@ describe("DevelopmentExecutor exact private execution", () => {
       hostExecutionDigest: digest("9"),
       buildSystem,
       runRoots: runRoots(root),
+      ownership: openOwnership,
       planSource: async () => sourcePlan(),
       async materializeSource(_source, destination) {
         materializations += 1;

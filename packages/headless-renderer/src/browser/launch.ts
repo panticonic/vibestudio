@@ -2,11 +2,12 @@
  * Launch headless Chromium with a loopback-only CDP endpoint (port 0) and
  * parse the DevTools WebSocket URL from stderr.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createDevLogger } from "@vibestudio/dev-log";
+import type { OwnedProcess, Ownership } from "@vibestudio/shared/ownership";
 
 const log = createDevLogger("HeadlessHost:launch");
 
@@ -80,10 +81,17 @@ export function resolveChromiumProfileRoot(opts: {
   );
 }
 
+/**
+ * Launch Chromium as a member of `ownership`: its process group is registered
+ * with the owner's reaper before anything else runs, and its disposable
+ * profile and runtime directories are removed with the ownership, so a host
+ * that is killed leaves neither a browser nor its directories behind.
+ */
 export async function launchChromium(opts: {
   executablePath: string;
   profileRoot: string;
   extraArgs?: string[];
+  ownership: Pick<Ownership, "spawn" | "own">;
 }): Promise<LaunchedChromium> {
   const profileRoot = resolveChromiumProfileRoot({
     executablePath: opts.executablePath,
@@ -94,18 +102,26 @@ export async function launchChromium(opts: {
   }
   fs.mkdirSync(profileRoot, { recursive: true });
   const profileDir = fs.mkdtempSync(path.join(profileRoot, "chromium-"));
-  let runtimeDir: string;
+  let runtimeDir = "";
   try {
+    // The runtime directory stays outside the profile: it carries Chromium's
+    // AF_UNIX sockets, whose path length the profile's depth could exceed.
     const runtimeTempRoot = chromiumRuntimeTempRoot(opts.executablePath);
     fs.mkdirSync(runtimeTempRoot, { recursive: true });
     runtimeDir = fs.mkdtempSync(path.join(runtimeTempRoot, "vsc-"));
+    await opts.ownership.own(profileDir, "chromium-profile");
+    await opts.ownership.own(runtimeDir, "chromium-runtime");
   } catch (error) {
     try {
-      await fs.promises.rm(profileDir, { recursive: true, force: true });
+      await Promise.all(
+        [profileDir, runtimeDir]
+          .filter(Boolean)
+          .map((dir) => fs.promises.rm(dir, { recursive: true, force: true }))
+      );
     } catch (cleanupError) {
       throw new AggregateError(
         [error, cleanupError],
-        "Chromium runtime directory setup failed and profile cleanup failed",
+        "Chromium directory setup failed and its cleanup failed",
         { cause: error }
       );
     }
@@ -128,9 +144,11 @@ export async function launchChromium(opts: {
     ...(process.platform === "darwin" ? ["--use-mock-keychain"] : []),
     ...(opts.extraArgs ?? []),
   ];
-  let child: ChildProcess;
+  let owned: OwnedProcess;
   try {
-    child = spawn(opts.executablePath, args, {
+    owned = opts.ownership.spawn(opts.executablePath, args, {
+      kill: "immediate",
+      label: "chromium",
       stdio: ["ignore", "ignore", "pipe"],
       // Chromium's crash reporter and other ancillary state otherwise use the
       // user's global config/cache even with a separate --user-data-dir.
@@ -159,13 +177,30 @@ export async function launchChromium(opts: {
     }
     throw error;
   }
-  const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+  const child = owned.child;
+  // A browser that cannot start reports through the child's `error` event.
+  owned.registered.catch(() => undefined);
   let retirement: Promise<void> | undefined;
+  // Retiring the group ends Chromium's helpers with it and joins its stdio.
   const stop = (): Promise<void> =>
     (retirement ??= (async () => {
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
-      await closed;
-      await removeOwnedDirectories(profileDir, runtimeDir);
+      const failures: unknown[] = [];
+      if (child.pid !== undefined) {
+        try {
+          await owned.retire("immediate");
+        } catch (error) {
+          failures.push(error);
+        }
+      }
+      try {
+        await removeOwnedDirectories(profileDir, runtimeDir);
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(failures, "Chromium retirement failed", { cause: failures[0] });
+      }
     })());
   let wsEndpoint: string;
   try {

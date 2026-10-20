@@ -261,17 +261,21 @@ export const WORKERS_RUNTIME_METHOD_CATALOG = {
   },
   durableObjectService: {
     signature:
-      "durableObjectService(query: string, objectKey?: string | null): DurableObjectServiceClient",
+      "durableObjectService<M extends RpcMethodMap>(query: string, methods: M, objectKey?: string | null): DurableObjectServiceClient<M>",
     description:
-      "Create a lazy client that resolves a manifest-declared Durable Object service and calls it through unified RPC.",
-    argumentNames: ["query", "objectKey"],
+      "Create a lazy client that resolves a manifest-declared Durable Object service (query = service name or protocol, e.g. \"example.notes.v1\") and calls it through unified RPC. `methods` is the receiver's exported contract table (the createReceiverRpcMethods result), not a string; objectKey selects a partition of the object. Call with client.call(\"method\", ...args).",
+    argumentNames: ["query", "methods", "objectKey"],
     argsSchema: {
       type: "array",
-      prefixItems: [{ type: "string" }, { type: ["string", "null"] }],
-      minItems: 1,
-      maxItems: 2,
+      prefixItems: [
+        { type: "string", description: "Service name or protocol." },
+        { type: "object", description: "Receiver contract table exported by the worker package." },
+        { type: ["string", "null"], description: "Object key override for a partitioned service." },
+      ],
+      minItems: 2,
+      maxItems: 3,
     },
-    examples: [{ args: ["example.notes.v1", "main"] }],
+    examples: [{ args: ["example.notes.v1", "<notesRpcMethods contract table>", "main"] }],
   },
 } satisfies Record<string, import("@vibestudio/shared/runtimeSurface").RuntimeSurfaceMethodDoc>;
 

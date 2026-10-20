@@ -1,20 +1,28 @@
 /** Own external live-test resources independently of the Playwright worker.
- * IPC is the lifetime lease: even SIGKILL of the worker closes it. */
-import { spawn } from "node:child_process";
-import { tsImport } from "tsx/esm/api";
-const { createDevelopmentClientLifetime } = await tsImport("../../scripts/development-client-lifecycle.ts", import.meta.url);
-import { captureOwnedProcessIdentity } from "../../scripts/owned-process-identity.mjs";
-import { terminateOwnedProcessTree } from "../../scripts/owned-process-tree.mjs";
+ * IPC is the lifetime lease: even SIGKILL of the worker closes it, and this
+ * process's own reaper then retires every child and the directory. */
+import { getProfileDataPath } from "@vibestudio/env-paths";
+import { Ownership, watchLease } from "@vibestudio/shared/ownership";
+import { ledgerDirOf, readLedger } from "@vibestudio/shared/ownershipLedger";
 import { startEphemeralLinuxSecretService } from "../../scripts/lib/linux-secret-service.mjs";
+
+const [instance, directory] = process.argv.slice(2);
+if (!instance || !directory || !process.send)
+  throw new Error("Managed server owner requires an IPC lease");
+const profileDir = getProfileDataPath();
+const ownership = await Ownership.open({ profileDir, lifetime: "leased" });
+// The coordinator allocated this directory; it is removed after every group retires.
+await ownership.own(directory, "managed-server-directory");
 
 let startupCommand;
 const execute = async (file, args, options, startup = true) => {
   const { maxBuffer, ...rest } = options;
-  const child = spawn(file, args, {
+  const owned = ownership.spawn(file, args, {
     ...rest,
-    detached: process.platform !== "win32",
+    kill: "immediate",
     stdio: ["ignore", "pipe", "pipe"],
   });
+  const { child } = owned;
   let stdout = "";
   let stderr = "";
   let outputError;
@@ -26,11 +34,10 @@ const execute = async (file, args, options, startup = true) => {
     });
   });
   void command.catch(() => {});
-  const owned = { pid: child.pid, identity: captureOwnedProcessIdentity(child.pid) };
   if (startup) startupCommand = owned;
   let termination;
   const terminate = () => {
-    termination ??= terminateOwnedProcessTree(owned.pid, { identity: owned.identity });
+    termination ??= owned.retire();
     void termination.catch(() => {});
   };
   for (const [stream, append] of [
@@ -60,18 +67,11 @@ const execute = async (file, args, options, startup = true) => {
   try {
     return await command;
   } finally {
-    if (termination) {
-      const result = await termination;
-      if (!result.gone) throw new Error("Terminated command tree did not finish");
-    }
-    if (startupCommand?.pid === owned.pid) startupCommand = undefined;
+    if (termination) await termination;
+    await owned.join();
+    if (startupCommand === owned) startupCommand = undefined;
   }
 };
-const [instance, directory] = process.argv.slice(2);
-if (!instance || !directory || !process.send)
-  throw new Error("Managed server owner requires an IPC lease");
-const lifetime = createDevelopmentClientLifetime(directory);
-const children = [];
 const startupController = new AbortController();
 let secretService;
 let closing = false;
@@ -113,37 +113,26 @@ const start = async () => {
   );
   if (closing) return;
   const pairingLink = JSON.parse(stdout.trim().split("\n").at(-1)).pairing.deepLink;
-  secretService = await startEphemeralLinuxSecretService(
-    directory,
-    (startChild) => {
-      const child = lifetime.acquire(startChild);
-      children.push(child);
-      return child;
-    },
-    lifetime.retireChild,
-    { signal: startupController.signal }
-  );
+  secretService = await startEphemeralLinuxSecretService(ownership, directory, {
+    signal: startupController.signal,
+  });
   if (closing) return;
   send({
     kind: "ready",
     pairingLink,
     secrets: { env: secretService.env, electronArgs: secretService.electronArgs },
-    helperPids: children.map((child) => child.pid),
+    helperPids: readLedger(ledgerDirOf(profileDir), ownership.id).groups.map((group) => group.pid),
   });
 };
 let startup;
 function stop() {
   closing = true;
   startupController.abort(new Error("Managed server owner is stopping"));
-  lifetime.requestStop();
   return (shutdown ??= (async () => {
     let failed = false;
     if (startupCommand) {
       try {
-        const result = await terminateOwnedProcessTree(startupCommand.pid, {
-          identity: startupCommand.identity,
-        });
-        if (!result.gone) throw new Error("Startup command tree did not terminate");
+        await startupCommand.retire();
       } catch (error) {
         failed = true;
         console.error(error);
@@ -163,7 +152,7 @@ function stop() {
       console.error(error);
     }
     try {
-      await lifetime.close();
+      await ownership.release();
     } catch (error) {
       failed = true;
       console.error(error);
@@ -173,9 +162,10 @@ function stop() {
     process.exitCode = failed ? 1 : 0;
   })());
 }
-process.on("disconnect", () => {
-  void stop();
-});
+// The caller's lease: its end-of-file means the caller is gone, even by SIGKILL.
+watchLease().addEventListener("abort", () => void stop(), { once: true });
+// Losing the reaper is losing ownership: wind down and fail.
+ownership.signal.addEventListener("abort", () => void stop(), { once: true });
 process.on("message", (message) => {
   if (message?.kind === "stop") void stop();
 });

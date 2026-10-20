@@ -1,18 +1,26 @@
-import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import { ServiceError } from "@vibestudio/shared/serviceDispatcher";
-import type { UserSubject } from "@vibestudio/identity/types";
 import type { ClientPrincipalGrantResponse } from "@vibestudio/service-schemas/clients";
-import type { ClientPrincipal } from "../../clients/clientPrincipals.js";
+import type {
+  WorkspaceChildClientPrincipalAttestation,
+  WorkspaceChildHubPort,
+} from "../../workspaceChildHubPort.js";
+
+/**
+ * Vets the exact client build `deviceId` runs and returns the facts the hub
+ * attests about it (principal id, sealed authority, effective capabilities).
+ * Provided by the System workspace's ClientHost; it rejects when the build is
+ * not the one the client runs. Absent in every other workspace.
+ */
+export type ClientPrincipalAttester = (
+  deviceId: string,
+  expected: { source: string; buildKey: string; executionDigest: string }
+) => Promise<WorkspaceChildClientPrincipalAttestation>;
 
 export interface PrincipalGrantDeps {
   getServerId: () => string;
   getServerBootId: () => string;
-  getWorkspaceId: () => string;
-  connectionGrants?: Pick<ConnectionGrantService, "grant">;
-  grantClientPrincipal?: (
-    deviceId: string,
-    expected: { source: string; buildKey: string; executionDigest: string }
-  ) => Promise<ClientPrincipal>;
+  attestClientPrincipal?: ClientPrincipalAttester;
+  hub?: Pick<WorkspaceChildHubPort, "attestClientPrincipal" | "mintClientCredential">;
 }
 
 export interface PrincipalGrantRequest {
@@ -21,40 +29,39 @@ export interface PrincipalGrantRequest {
   executionDigest: string;
   /** Authenticated device whose client principal is requested. */
   deviceId: string;
-  subject: UserSubject;
-  /** Runtime id of the authenticated connection that requested the grant. */
-  issuedBy: string;
   /** Device key the requesting Iroh connection is bound to; absent for loopback callers. */
   remoteDeviceKey?: string;
 }
 
 /**
- * Exchange an authenticated device for the principal of the exact client build
- * it verified and runs itself, and mint a one-use connection grant for it.
+ * Exchange an authenticated device for a hub-attested principal of the exact
+ * client build it verified and runs itself, and a reusable credential for it.
  *
- * The grant is bound to the requesting connection's device key, so only a session
- * the same device opens (over any of its connections) can redeem it, and the
- * principal to the exact build (`buildKey`, `executionDigest`) the host checked.
+ * The hub is the trust root: it accepts the attestation only from the System
+ * workspace of the device's user. The credential is bound to the principal's
+ * execution digest (a rebuilt client invalidates it) and, over Iroh, to the
+ * requesting connection's device key. Any workspace server redeems it.
  */
 export async function grantClientPrincipal(
   deps: PrincipalGrantDeps,
   request: PrincipalGrantRequest
 ): Promise<ClientPrincipalGrantResponse> {
-  if (!deps.connectionGrants || !deps.grantClientPrincipal) {
+  if (!deps.attestClientPrincipal || !deps.hub) {
     throw new ServiceError(
       "auth",
       "grantClientPrincipal",
-      "Client principals are not configured on this server",
+      "Client principals are attested only by the System workspace",
       "PRINCIPAL_GRANTS_UNAVAILABLE"
     );
   }
-  let principal: ClientPrincipal;
+  let attestation: WorkspaceChildClientPrincipalAttestation;
   try {
-    principal = await deps.grantClientPrincipal(request.deviceId, {
+    attestation = await deps.attestClientPrincipal(request.deviceId, {
       source: request.source,
       buildKey: request.buildKey,
       executionDigest: request.executionDigest,
     });
+    await deps.hub.attestClientPrincipal(attestation);
   } catch (error) {
     throw new ServiceError(
       "auth",
@@ -63,17 +70,15 @@ export async function grantClientPrincipal(
       "PRINCIPAL_UNAVAILABLE"
     );
   }
-  const granted = deps.connectionGrants.grant(principal.principalId, request.issuedBy, {
-    subject: request.subject,
-    ...(request.remoteDeviceKey ? { remoteDeviceKey: request.remoteDeviceKey } : {}),
+  const { token } = await deps.hub.mintClientCredential({
+    principalId: attestation.principalId,
+    ...(request.remoteDeviceKey ? { deviceKey: request.remoteDeviceKey } : {}),
   });
   return {
-    connectionGrant: granted.token,
-    expiresAt: granted.expiresAt,
-    principalId: principal.principalId,
+    credential: token,
+    principalId: attestation.principalId,
     deviceId: request.deviceId,
     serverId: deps.getServerId(),
     serverBootId: deps.getServerBootId(),
-    workspaceId: deps.getWorkspaceId(),
   };
 }

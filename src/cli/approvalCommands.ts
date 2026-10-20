@@ -1,3 +1,4 @@
+import { formatRpcFailure } from "@vibestudio/rpc";
 import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { randomUUID } from "node:crypto";
@@ -25,6 +26,25 @@ function approvalClient(rpc: RpcClient) {
   return typedClient("shellApproval", shellApprovalMethods, rpc);
 }
 
+/** A queue that could not be consulted, and why. */
+interface SurfaceFailure {
+  source: ApprovalSource;
+  error: unknown;
+}
+
+/** The queues reachable now, the ones that were not, and whether an answer omits the latter. */
+interface SurfaceSet {
+  surfaces: Surface[];
+  unavailable: SurfaceFailure[];
+  incomplete: boolean;
+}
+
+function unavailableError(failure: SurfaceFailure): Error {
+  return new Error(`${failure.source} approvals unavailable: ${formatRpcFailure(failure.error)}`, {
+    cause: failure.error,
+  });
+}
+
 interface Surface {
   source: ApprovalSource;
   rpc: RpcClient;
@@ -37,7 +57,7 @@ interface Surface {
  * selected workspace's; an agent profile reaches only its workspace. Both
  * queues speak `shellApproval`, so one surface serves both, labelled by source.
  */
-async function openSurfaces(): Promise<Surface[]> {
+async function openSurfaces(): Promise<SurfaceSet> {
   const identity = loadCliIdentity();
   if (!identity) {
     throw new AuthError('not paired — run `vibestudio remote pair "<pair-link>"` first');
@@ -46,21 +66,23 @@ async function openSurfaces(): Promise<Surface[]> {
     identity.kind === "agent" || identity.phase === "workspace"
       ? (identity as CliCredentials)
       : undefined;
-  const surfaces: Surface[] = [];
-  try {
-    if (workspace) {
-      const rpc = new RpcClient(workspace);
-      surfaces.push({ source: "workspace", rpc, client: approvalClient(rpc) });
-    }
-    if (identity.kind === "device") {
-      const rpc = await openHubControlRpc(identity);
-      surfaces.push({ source: "hub", rpc, client: approvalClient(rpc) });
-    }
-  } catch (error) {
-    await closeSurfaces(surfaces).catch(() => undefined);
-    throw error;
+  const set: SurfaceSet = { surfaces: [], unavailable: [], incomplete: false };
+  if (workspace) {
+    const rpc = new RpcClient(workspace);
+    set.surfaces.push({ source: "workspace", rpc, client: approvalClient(rpc) });
   }
-  return surfaces;
+  if (identity.kind === "device") {
+    // One queue being unreachable must not discard the other's answers: it is
+    // recorded against its source and reported with them.
+    try {
+      const rpc = await openHubControlRpc(identity);
+      set.surfaces.push({ source: "hub", rpc, client: approvalClient(rpc) });
+    } catch (error) {
+      set.unavailable.push({ source: "hub", error });
+    }
+  }
+  if (set.surfaces.length === 0 && set.unavailable[0]) throw set.unavailable[0].error;
+  return set;
 }
 
 async function closeSurfaces(surfaces: Surface[]): Promise<void> {
@@ -70,15 +92,22 @@ async function closeSurfaces(surfaces: Surface[]): Promise<void> {
   if (errors.length > 1) throw new AggregateError(errors, "Failed to close approval connections");
 }
 
-async function listAll(surfaces: Surface[]): Promise<LabelledApproval[]> {
-  const lists = await Promise.all(
-    surfaces.map(async (surface) =>
+async function listAll(set: SurfaceSet): Promise<LabelledApproval[]> {
+  const settled = await Promise.allSettled(
+    set.surfaces.map(async (surface) =>
       (await surface.client.listPending()).map(
         (approval): LabelledApproval => ({ ...approval, source: surface.source })
       )
     )
   );
-  return lists.flat();
+  const approvals: LabelledApproval[] = [];
+  settled.forEach((result, index) => {
+    if (result.status === "fulfilled") approvals.push(...result.value);
+    else set.unavailable.push({ source: set.surfaces[index]!.source, error: result.reason });
+  });
+  // The list is what the reachable queues hold; the caller is told it is not everything.
+  set.incomplete = set.unavailable.length > 0;
+  return approvals;
 }
 
 function positionals(inv: ParsedInvocation, count: number, usage: string): void {
@@ -128,15 +157,24 @@ function renderPending(pending: Array<PendingApproval & { source?: ApprovalSourc
 
 /** The approval and the queue that owns it, so a decision reaches the right server. */
 async function pendingApproval(
-  surfaces: Surface[],
+  set: SurfaceSet,
   id: string
 ): Promise<{ approval: LabelledApproval; client: ApprovalsClient }> {
-  for (const surface of surfaces) {
-    const approval = (await surface.client.listPending()).find((p) => p.approvalId === id);
-    if (approval) {
-      return { approval: { ...approval, source: surface.source }, client: surface.client };
+  const failures = [...set.unavailable];
+  for (const surface of set.surfaces) {
+    try {
+      const approval = (await surface.client.listPending()).find((p) => p.approvalId === id);
+      if (approval) {
+        return { approval: { ...approval, source: surface.source }, client: surface.client };
+      }
+    } catch (error) {
+      failures.push({ source: surface.source, error });
     }
   }
+  // Not found in the queues that answered: if another could not be consulted,
+  // the approval may live there, so say that instead of claiming it is absent.
+  const first = failures[0];
+  if (first) throw unavailableError(first);
   throw new Error(`No pending approval found: ${id}`);
 }
 
@@ -144,7 +182,7 @@ function command(
   name: string,
   summary: string,
   usage: string,
-  action: (inv: ParsedInvocation, surfaces: Surface[]) => Promise<unknown>,
+  action: (inv: ParsedInvocation, set: SurfaceSet) => Promise<unknown>,
   options: { input?: boolean; render?: (result: unknown) => void } = {}
 ): CliCommand {
   return {
@@ -160,11 +198,11 @@ function command(
     ],
     run: async (inv) => {
       const json = jsonMode(inv.flags["json"] === true);
-      let surfaces: Surface[] = [];
+      let set: SurfaceSet = { surfaces: [], unavailable: [], incomplete: false };
       let exitCode = 0;
       try {
-        surfaces = await openSurfaces();
-        const result = await action(inv, surfaces);
+        set = await openSurfaces();
+        const result = await action(inv, set);
         printResult(result, {
           json,
           human: () => {
@@ -172,11 +210,15 @@ function command(
             else printResult(result, { json: false });
           },
         });
+        for (const failure of set.unavailable) {
+          const code = printError(unavailableError(failure), { json });
+          if (set.incomplete) exitCode ||= code;
+        }
       } catch (error) {
         exitCode = printError(error, { json });
       } finally {
         try {
-          await closeSurfaces(surfaces);
+          await closeSurfaces(set.surfaces);
         } catch (error) {
           const cleanupExitCode = printError(error, { json });
           if (exitCode === 0) exitCode = cleanupExitCode;
@@ -241,19 +283,23 @@ async function watch(inv: ParsedInvocation): Promise<number> {
   process.on("SIGTERM", stop);
   try {
     positionals(inv, 0, "watch");
-    surfaces = await openSurfaces();
-    // Either queue ending ends the watch: the first failure aborts its peers,
-    // and every watcher is joined before that original failure propagates.
-    let failure: { error: unknown } | undefined;
+    const opened = await openSurfaces();
+    surfaces = opened.surfaces;
+    // Each queue is followed independently: one failing (at open or mid-stream)
+    // is reported against its source and does not end its peers. The watch ends
+    // when every queue has, and exits non-zero if any of them failed.
+    const report = (failure: SurfaceFailure) => {
+      const code = printError(unavailableError(failure), { json });
+      exitCode ||= code;
+    };
+    opened.unavailable.forEach(report);
     await Promise.all(
       surfaces.map((surface) =>
         watchSurface(surface, controller.signal, json, surfaces.length > 1).catch((error) => {
-          failure ??= { error };
-          controller.abort();
+          if (!userStopped) report({ source: surface.source, error });
         })
       )
     );
-    if (failure && !userStopped) throw failure.error;
   } catch (error) {
     if (!userStopped) exitCode = printError(error, { json });
   } finally {
@@ -275,9 +321,9 @@ export const approvalCommands: CliCommand[] = [
     "list",
     "List all visible pending hub and workspace approvals, labelled by source",
     "list",
-    async (inv, surfaces) => {
+    async (inv, set) => {
       positionals(inv, 0, "list");
-      return listAll(surfaces);
+      return listAll(set);
     },
     { render: (result) => renderPending(result as LabelledApproval[]) }
   ),
@@ -285,9 +331,9 @@ export const approvalCommands: CliCommand[] = [
     "show",
     "Show the complete pending approval and its offered choices",
     "show ID",
-    async (inv, surfaces) => {
+    async (inv, set) => {
       positionals(inv, 1, "show ID");
-      return (await pendingApproval(surfaces, inv.positionals[0]!)).approval;
+      return (await pendingApproval(set, inv.positionals[0]!)).approval;
     }
   ),
   {
@@ -302,10 +348,10 @@ export const approvalCommands: CliCommand[] = [
     "resolve",
     "Answer an approval with one of its offered decisions",
     "resolve ID DECISION",
-    async (inv, surfaces) => {
+    async (inv, set) => {
       positionals(inv, 2, "resolve ID DECISION");
       const [id, decision] = validate(shellApprovalMethods.resolve.args, inv.positionals);
-      await (await pendingApproval(surfaces, id)).client.resolve(id, decision);
+      await (await pendingApproval(set, id)).client.resolve(id, decision);
       return { approvalId: id, decision };
     }
   ),
@@ -313,12 +359,12 @@ export const approvalCommands: CliCommand[] = [
     "review",
     "Accept or cancel an install/update review with exact permission selections",
     "review ID [RESPONSE_JSON | --input]",
-    async (inv, surfaces) => {
+    async (inv, set) => {
       const resolution = validate(
         templateInstallResolutionSchema,
         await jsonInput(inv, "review ID [RESPONSE_JSON | --input]")
       );
-      const { client } = await pendingApproval(surfaces, inv.positionals[0]!);
+      const { client } = await pendingApproval(set, inv.positionals[0]!);
       return client.resolveInstallReview(inv.positionals[0]!, resolution);
     },
     { input: true }
@@ -327,13 +373,13 @@ export const approvalCommands: CliCommand[] = [
     "rules",
     "Accept selected chat permission rows or cancel the review",
     "rules ID [RESPONSE_JSON | --input]",
-    async (inv, surfaces) => {
+    async (inv, set) => {
       const response = await jsonInput(inv, "rules ID [RESPONSE_JSON | --input]");
       const [id, resolution] = validate(shellApprovalMethods.resolveTaskRules.args, [
         inv.positionals[0],
         response,
       ]);
-      await (await pendingApproval(surfaces, id)).client.resolveTaskRules(id, resolution);
+      await (await pendingApproval(set, id)).client.resolveTaskRules(id, resolution);
       return { approvalId: id, decision: resolution.decision };
     },
     { input: true }
@@ -342,13 +388,13 @@ export const approvalCommands: CliCommand[] = [
     "submit",
     "Submit fields for a secret, credential, or provider configuration prompt",
     "submit ID [VALUES_JSON | --input]",
-    async (inv, surfaces) => {
+    async (inv, set) => {
       const values = validate(
         shellApprovalValuesSchema,
         await jsonInput(inv, "submit ID [VALUES_JSON | --input]")
       );
       const id = inv.positionals[0]!;
-      const { approval, client } = await pendingApproval(surfaces, id);
+      const { approval, client } = await pendingApproval(set, id);
       switch (approval.kind) {
         case "client-config":
           await client.submitClientConfig(id, values);

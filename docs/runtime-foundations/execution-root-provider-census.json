@@ -14,10 +14,12 @@
       "id": "client-generation",
       "backingSources": ["src/server/clients/clientRegistry.ts", "packages/unit-host/src/index.ts"],
       "reviewedReaders": [
+        "src/server/executionRootProviders.ts",
         "packages/unit-host/src/supervisionChange.ts",
         "src/server/services/clientUnitDriver.ts",
         "src/server/services/buildUnitCatalog.ts",
-        "src/server/clients/clientPrincipals.ts"
+        "src/server/clients/clientPrincipals.ts",
+        "packages/identity/src/identityDb.ts"
       ]
     },
     {

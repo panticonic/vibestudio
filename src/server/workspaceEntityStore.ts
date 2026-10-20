@@ -378,6 +378,18 @@ export class WorkspaceEntityStore {
     return cached != null ? cached : this.receiver.entityResolveContext(id);
   }
 
+  /**
+   * The semantic workspace a caller's work belongs to, which entities it creates
+   * inherit. A client principal's own context is a routed-state partition that
+   * is never materialized as a semantic workspace, so a client creates work in
+   * fresh contexts like any other host caller.
+   */
+  async resolveWorkContext(id: string): Promise<string | null> {
+    return this.deps.entityCache.resolveActive(id)?.kind === "client"
+      ? null
+      : this.resolveContext(id);
+  }
+
   /** Resolve a (possibly retired) record by its canonical id from the WorkspaceDO. */
   resolveRecord(canonicalId: string): Promise<EntityRecord | null> {
     return this.receiver.entityResolve(canonicalId);

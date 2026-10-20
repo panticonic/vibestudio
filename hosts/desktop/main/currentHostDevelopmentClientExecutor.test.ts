@@ -5,8 +5,9 @@ import path from "node:path";
 import { once } from "node:events";
 import { PassThrough } from "node:stream";
 import { createHash } from "node:crypto";
-import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { Ownership, type OwnedProcess } from "@vibestudio/shared/ownership";
 import { CurrentHostDevelopmentClientExecutor } from "./currentHostDevelopmentClientExecutor.js";
 import {
   captureOwnedProcessIdentity,
@@ -15,6 +16,41 @@ import {
 
 const roots: string[] = [];
 const executors: CurrentHostDevelopmentClientExecutor[] = [];
+
+/** The executor's ownership: a real reaper over a private profile, observable at spawn. */
+async function realOwnership(
+  onSpawn?: (owned: OwnedProcess, args: readonly string[], options: SpawnOptions) => void
+) {
+  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-executor-ownership-"));
+  roots.push(profileDir);
+  const ownership = await Ownership.open({ profileDir, lifetime: "leased" });
+  return {
+    get: vi.fn(async () => ({
+      spawn: (command: string, args: readonly string[], options: never) => {
+        const owned = ownership.spawn(command, args, options);
+        onSpawn?.(owned, args, options);
+        return owned;
+      },
+    })),
+    close: () => ownership.close(),
+  };
+}
+
+/**
+ * A stand-in "Electron": an executable that ignores its arguments and runs a
+ * script, so a real client group exists without launching a browser.
+ */
+function fixtureExecutable(dir: string, script: string): string {
+  const js = path.join(dir, "client-fixture.cjs");
+  fs.writeFileSync(js, script);
+  const executable = path.join(dir, "electron-fixture");
+  fs.writeFileSync(
+    executable,
+    `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(js)}\n`,
+    { mode: 0o755 }
+  );
+  return executable;
+}
 
 /** This controlled fixture supplies only the ReadStream readable contract
  * consumed by hashing; it deliberately has no file descriptor or file path. */
@@ -126,7 +162,11 @@ describe("diagnostic executor startup ownership", () => {
 
 function materializationFixture(
   readArtifact: (input: { offset: number }) => Promise<unknown>,
-  onCall?: (method: string, args: unknown[]) => void | Promise<void>
+  onCall?: (method: string, args: unknown[]) => void | Promise<void>,
+  launch?: {
+    executable: (root: string) => string;
+    ownership: Awaited<ReturnType<typeof realOwnership>>;
+  }
 ) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-client-executor-"));
   roots.push(root);
@@ -135,14 +175,17 @@ function materializationFixture(
   const main = Buffer.from("module.exports = {};\n");
   const integrity = `sha256-${createHash("sha256").update(main).digest("hex")}`;
   const calls: Array<{ method: string; args: unknown[] }> = [];
-  const spawnProcess = vi.fn(() => {
-    throw new Error("An unmaterialized client must never launch");
-  });
+  const ownership = {
+    get: vi.fn(async () => {
+      throw new Error("An unmaterialized client must never launch");
+    }),
+    close: async () => undefined,
+  };
   const executor = new CurrentHostDevelopmentClientExecutor({
     stateRoot,
-    electronExecutable: process.execPath,
+    electronExecutable: launch ? launch.executable(root) : process.execPath,
     nativeModulesRoot: null,
-    spawnProcess: spawnProcess as never,
+    ownership: (launch ? launch.ownership : ownership) as never,
     client: {
       async call(_service: string, method: string, args: unknown[]) {
         calls.push({ method, args });
@@ -171,7 +214,7 @@ function materializationFixture(
     ownedRoot: path.join(stateRoot, requestId),
     main,
     calls,
-    spawnProcess,
+    ownership,
   };
 }
 
@@ -195,7 +238,7 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
       throw Object.assign(new Error("Artifact transport disconnected"), { code: "ECONNRESET" });
     });
     await fixture.executor.handleLaunchRequest({ requestId: fixture.requestId });
-    expect(fixture.spawnProcess).not.toHaveBeenCalled();
+    expect(fixture.ownership.get).not.toHaveBeenCalled();
     expect(fs.existsSync(fixture.ownedRoot)).toBe(false);
     expect(fixture.calls.find((call) => call.method === "fail")?.args[0]).toMatchObject({
       failure: {
@@ -238,23 +281,32 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
   });
 
   it("joins native spawn failure before removing the materialized root or reporting failure", async () => {
-    const fixture = materializationFixture(async () => ({
-      base64: fixture.main.toString("base64"),
-      nextOffset: fixture.main.byteLength,
-      eof: true,
-    }));
     let childClosed = false;
-    fixture.spawnProcess.mockImplementation(() => {
-      const child = spawn(path.join(fixture.ownedRoot, "missing-executable"), [], {
-        stdio: ["ignore", "ignore", "ignore", "ipc"],
-      });
-      child.once("close", () => {
+    // Present but not executable: the kernel refuses the exec, so the failed
+    // launch still owns an IPC handle until the child's `close`.
+    const ownership = await realOwnership((owned) => {
+      owned.child.once("close", () => {
         expect(fs.existsSync(fixture.ownedRoot)).toBe(true);
         expect(fixture.calls.some((call) => call.method === "fail")).toBe(false);
         childClosed = true;
       });
-      return child as never;
     });
+    const fixture = materializationFixture(
+      async () => ({
+        base64: fixture.main.toString("base64"),
+        nextOffset: fixture.main.byteLength,
+        eof: true,
+      }),
+      undefined,
+      {
+        ownership,
+        executable: (root) => {
+          const executable = path.join(root, "not-executable");
+          fs.writeFileSync(executable, "#!/bin/sh\n", { mode: 0o644 });
+          return executable;
+        },
+      }
+    );
 
     await fixture.executor.handleLaunchRequest({ requestId: fixture.requestId });
 
@@ -262,10 +314,17 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
     expect(fs.existsSync(fixture.ownedRoot)).toBe(false);
     expect(fixture.calls.find((call) => call.method === "fail")?.args[0]).toMatchObject({
       failure: {
-        code: "ENOENT",
+        code: "EACCES",
       },
     });
     expect(fixture.calls.some((call) => call.method === "launched")).toBe(false);
+    // The ownership scope keeps the spawn failure too (the library reports a
+    // group that never registered), so closing carries the original error.
+    executors.splice(executors.indexOf(fixture.executor), 1);
+    const closed = await fixture.executor.close().catch((error: unknown) => error);
+    const originals = (error: unknown): unknown[] =>
+      error instanceof AggregateError ? error.errors.flatMap(originals) : [error];
+    expect(originals(closed)).toEqual([expect.objectContaining({ code: "EACCES" })]);
   });
 
   it.each(["launch-failure", "native-exit"] as const)(
@@ -283,6 +342,10 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
       const terminalEntered = new Promise<void>((resolve) => {
         retired = resolve;
       });
+      let child!: ChildProcess;
+      const ownership = await realOwnership((owned) => {
+        child = owned.child;
+      });
       const fixture = materializationFixture(
         async () => ({
           base64: fixture.main.toString("base64"),
@@ -298,16 +361,16 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
             expect(fs.existsSync(fixture.ownedRoot)).toBe(false);
             retired();
           }
+        },
+        {
+          ownership,
+          executable: (root) =>
+            fixtureExecutable(
+              root,
+              "process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000)"
+            ),
         }
       );
-      let child!: ChildProcess;
-      fixture.spawnProcess.mockImplementation(() => {
-        child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], {
-          detached: true,
-          stdio: ["ignore", "ignore", "ignore", "ipc"],
-        });
-        return child as never;
-      });
       const launching = fixture.executor.handleLaunchRequest({ requestId: fixture.requestId });
       await publicationEntered;
       if (winner === "native-exit") {
@@ -356,7 +419,7 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
       eof: true,
     });
     await Promise.all([launch, closing]);
-    expect(fixture.spawnProcess).not.toHaveBeenCalled();
+    expect(fixture.ownership.get).not.toHaveBeenCalled();
     expect(fs.existsSync(fixture.ownedRoot)).toBe(false);
     expect(fixture.calls.find((call) => call.method === "fail")?.args[0]).toMatchObject({
       failure: {
@@ -378,7 +441,7 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
     const sentinel = path.join(fixture.ownedRoot, "existing-owner");
     fs.writeFileSync(sentinel, "retained generation");
     await fixture.executor.handleLaunchRequest({ requestId: fixture.requestId });
-    expect(fixture.spawnProcess).not.toHaveBeenCalled();
+    expect(fixture.ownership.get).not.toHaveBeenCalled();
     expect(fs.readFileSync(sentinel, "utf8")).toBe("retained generation");
     expect(fixture.calls.some((call) => call.method === "readArtifact")).toBe(false);
     expect(fixture.calls.find((call) => call.method === "fail")?.args[0]).toMatchObject({
@@ -408,31 +471,27 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
       reported = resolve;
     });
     let identity: ReturnType<typeof captureOwnedProcessIdentity>;
+    const ownership = await realOwnership((owned) => {
+      child = owned.child;
+      child.on("message", (message) => {
+        if ((message as { type?: string }).type === "fixture:descendant-ready") ready();
+      });
+    });
     const executor = new CurrentHostDevelopmentClientExecutor({
       stateRoot,
-      electronExecutable: process.execPath,
-      nativeModulesRoot: null,
-      spawnProcess: ((_command: string, _args: readonly string[], options: SpawnOptions) => {
-        child = spawn(
-          process.execPath,
-          [
-            "-e",
-            `
+      electronExecutable: fixtureExecutable(
+        root,
+        `
           const { spawn } = require('node:child_process');
           const descendant = spawn(process.execPath, ['-e',
             "process.on('SIGTERM',()=>process.exit(0)); console.log('ready'); setInterval(()=>{},1000)"
           ], { stdio: ['ignore','pipe','ignore'] });
           descendant.stdout.once('data', () => process.send({ type: 'fixture:descendant-ready' }));
           setInterval(()=>{},1000);
-        `,
-          ],
-          options
-        );
-        child.on("message", (message) => {
-          if ((message as { type?: string }).type === "fixture:descendant-ready") ready();
-        });
-        return child;
-      }) as never,
+        `
+      ),
+      nativeModulesRoot: null,
+      ownership: ownership as never,
       client: {
         async call(_service: string, method: string) {
           if (method === "claim")
@@ -510,16 +569,21 @@ describe.skipIf(process.platform === "win32")("CurrentHostDevelopmentClientExecu
     let child: ChildProcess;
     let spawnOptions: SpawnOptions | undefined;
     let spawnArgs: readonly string[] | undefined;
+    const ownership = await realOwnership((owned, args, options) => {
+      child = owned.child;
+      spawnArgs = args;
+      spawnOptions = options;
+    });
+    fs.writeFileSync(
+      executable,
+      `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} -e "setInterval(()=>{},1000)"\n`
+    );
+    fs.chmodSync(executable, 0o755);
     const executor = new CurrentHostDevelopmentClientExecutor({
       client: client as never,
       stateRoot,
       electronExecutable: executable,
-      spawnProcess: ((_command: string, args: readonly string[], options: SpawnOptions) => {
-        spawnArgs = args;
-        spawnOptions = options;
-        child = spawn(process.execPath, ["-e", "setInterval(()=>{},1000)"], options);
-        return child;
-      }) as never,
+      ownership: ownership as never,
       nativeModulesRoot: nativeModules,
       processArgv: ["electron", "--password-store=gnome-libsecret", "--no-sandbox", "/app"],
     });

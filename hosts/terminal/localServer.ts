@@ -1,6 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawn } from "node:child_process";
+import { getProfileDataPath } from "@vibestudio/env-paths";
+import { Ownership, sweep } from "@vibestudio/shared/ownership";
+import { ledgerDirOf } from "@vibestudio/shared/ownershipLedger";
 import { DevInstanceSupervisor, waitForReady } from "../../src/dev/devInstanceSupervisor.js";
 import { cliConfigRoot } from "../../src/cli/configPaths.js";
 import { CliError } from "../../src/cli/output.js";
@@ -35,6 +38,8 @@ export interface LocalServerOptions {
    */
   retain: boolean;
   stateRoot?: string;
+  /** Profile whose ownership ledgers hold this launcher's claim (default: the user profile). */
+  profileDir?: string;
   /** The startup owner's explicit cancellation; retention begins only after readiness. */
   signal?: AbortSignal;
 }
@@ -103,14 +108,24 @@ async function startOwned(
   readyFile: string
 ): Promise<LocalServer> {
   let ready: unknown;
+  // This CLI is a launcher: it retires what a dead predecessor left, then owns
+  // the server it starts. The server's group is registered with this claim's
+  // reaper, so it is retired gracefully however this CLI ends.
+  const profileDir = options.profileDir ?? getProfileDataPath();
+  await sweep(ledgerDirOf(profileDir));
+  const ownership = await Ownership.open({
+    profileDir,
+    lifetime: "leased",
+    meta: { role: "terminal-local-server" },
+  });
   const supervisor = new DevInstanceSupervisor({
+    ownership,
+    label: "local-server",
     sourceRoot: options.appRoot,
     command: process.execPath,
     args,
     env: options.env,
     stdio: ["ignore", log, log],
-    // A terminal hang-up or SIGTERM to the CLI stops and joins the server.
-    forwardParentSignals: !options.signal,
     readiness: {
       file: readyFile,
       async onReady(value) {
@@ -118,13 +133,42 @@ async function startOwned(
       },
     },
   });
-  const stop = () => void supervisor.stop().catch(() => {});
+  // Stop the server, then join its reaper even if the stop failed: the reaper
+  // is what retires whatever a failed stop left, and its failures count too.
+  let retirement: Promise<void> | undefined;
+  const retire = (): Promise<void> =>
+    (retirement ??= (async () => {
+      const failures: unknown[] = [];
+      try {
+        await supervisor.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await ownership.close();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) throw new AggregateError(failures, "Local server retirement failed");
+    })());
+  // A terminal hang-up or SIGTERM to the CLI stops and joins the server; the
+  // CLI then ends when the server's exit reaches it. An explicit startup
+  // signal owns cancellation instead.
+  const forwarded = ["SIGINT", "SIGTERM", "SIGHUP"] as const;
+  const forward = () => void retire().catch(() => undefined);
+  if (!options.signal) for (const signal of forwarded) process.on(signal, forward);
+  const unforward = () => {
+    for (const signal of forwarded) process.off(signal, forward);
+  };
+  const stop = () => void retire().catch(() => undefined);
   options.signal?.addEventListener("abort", stop, { once: true });
   if (options.signal?.aborted) stop();
   try {
     await supervisor.start();
     options.signal?.throwIfAborted();
   } catch (error) {
+    unforward();
     return runWithOwnedCleanup(
       async () => {
         throw new LocalServerStartError(
@@ -133,7 +177,7 @@ async function startOwned(
           error
         );
       },
-      () => supervisor.close(),
+      () => retire(),
       "Local server startup and retirement failed"
     );
   } finally {
@@ -152,7 +196,8 @@ async function startOwned(
     retained: false,
     exited,
     stop: async () => {
-      await supervisor.close();
+      unforward();
+      await retire();
     },
   };
 }
@@ -168,7 +213,13 @@ async function startRetained(
     cwd: options.appRoot,
     env: options.env,
     stdio: ["ignore", log, log],
-    // Its own process group, so the terminal's Ctrl-C never reaches it.
+    // A retained server is a deliberate survivor: the user asked for it to keep
+    // running after this CLI exits (`until-stop` lifetime), so it is NOT
+    // registered with this CLI's reaper, which would retire it with the CLI.
+    // The server is its own owner: it opens its own ownership for the groups
+    // it starts, so killing it still reaps them. Its own process group also
+    // keeps the terminal's Ctrl-C from reaching it.
+    // ownership-exempt(until-stop-survivor): see the comment above.
     detached: process.platform !== "win32",
   });
   const exited = new Promise<string>((resolve) => {
@@ -197,12 +248,7 @@ async function startRetained(
   options.signal?.addEventListener("abort", cancel, { once: true });
   if (options.signal?.aborted) cancel();
   try {
-    ready = await waitForReady(
-      readyFile,
-      child,
-      undefined,
-      options.signal ?? new AbortController().signal
-    );
+    ready = await waitForReady(readyFile, child, options.signal ?? new AbortController().signal);
     options.signal?.throwIfAborted();
   } catch (error) {
     return runWithOwnedCleanup(

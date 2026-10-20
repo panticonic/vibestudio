@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChildProcess } from "node:child_process";
 import type { DevelopmentRun } from "@vibestudio/service-schemas/development";
+import { OwnershipClaimedError, type Ownership } from "@vibestudio/shared/ownership";
 import { developmentRecipeFixture } from "./developmentRecipeFixture.test-helper.js";
 import {
   IsolatedDevelopmentHostExecutor,
@@ -11,6 +12,7 @@ import {
 } from "./isolatedDevelopmentHostExecutor.js";
 import type { PreparedDevelopmentBuild } from "./developmentExecutor.js";
 import type { DevInstanceSupervisorOptions } from "../../dev/devInstanceSupervisor.js";
+import type { DevInstanceRecord } from "../../dev/instanceRegistry.js";
 
 const roots: string[] = [];
 const digest = (character: string) => character.repeat(64);
@@ -33,6 +35,15 @@ function fixture() {
     }),
   };
   const unregister = vi.fn();
+  // The instance's claim: the real library is exercised in packages/shared.
+  const claims: Array<{ id: string; close: ReturnType<typeof vi.fn> }> = [];
+  let claimedBy: object | null = null;
+  const openOwnership = vi.fn(async ({ id }: { id: string; meta: Record<string, unknown> }) => {
+    if (claimedBy) throw new OwnershipClaimedError(claimedBy as never);
+    const claim = { id, close: vi.fn(async () => undefined) };
+    claims.push(claim);
+    return claim as unknown as Ownership;
+  });
   let resolveExit: ((code: number) => void) | null = null;
   const exit = new Promise<number>((resolve) => {
     resolveExit = resolve;
@@ -60,14 +71,31 @@ function fixture() {
         workspaceSources: [],
       })),
     },
+    openOwnership,
     register(input) {
       return {
         schemaVersion: 1,
         ...input,
         generationId,
+        ledgerToken: "claim-token",
       };
     },
     unregister,
+    readInstance: vi.fn(
+      (): DevInstanceRecord => ({
+        schemaVersion: 1,
+        id: "recorded",
+        root,
+        repoRoot: root,
+        supervisorPid: 1,
+        kind: "server" as const,
+        lifecycle: "ephemeral" as const,
+        generationId,
+        startedAt: 1,
+        ledgerId: "dead-claim",
+        ledgerToken: "dead-token",
+      })
+    ),
     // A device creates the account's private workspaces as it pairs, so the
     // route it reports is not in the startup catalog snapshot below.
     bootstrap: vi.fn(async () => ({
@@ -86,13 +114,6 @@ function fixture() {
       return {
         process: childProcess,
         async start() {
-          await options.onSpawn?.({
-            version: 1,
-            platform: globalThis.process.platform === "darwin" ? "darwin" : "linux",
-            pid: 4242,
-            processGroupId: 4242,
-            startCoordinate: "test-start",
-          });
           await options.readiness!.onReady({
             mode: "hub",
             gatewayUrl: "http://127.0.0.1:4243",
@@ -127,6 +148,11 @@ function fixture() {
     executor,
     manager,
     unregister,
+    openOwnership,
+    claims,
+    holdClaim: () => {
+      claimedBy = { id: "held" };
+    },
     generationId,
     sourceRoot,
     options: () => supervisorOptions,
@@ -379,5 +405,84 @@ describe("IsolatedDevelopmentHostExecutor", () => {
     await expect(unstarted.executor.mintClientInvite(run)).rejects.toMatchObject({
       code: "EOWNERSHIP",
     });
+  });
+
+  it("claims the instance before registering it, and hands the supervisor the same claim", async () => {
+    const f = fixture();
+    const { run, plan } = runAndPlan();
+    await f.executor.start(run, plan, {
+      onRegistered: vi.fn(),
+      onReady: vi.fn(),
+      onExit: vi.fn(),
+    });
+
+    const claim = f.claims[0]!;
+    expect(f.openOwnership).toHaveBeenCalledOnce();
+    expect(claim.id).toMatch(/^instance-.*-development-/);
+    // The supervisor spawns the host through this ownership, and the registry
+    // record names the same claim.
+    expect(f.options()?.ownership).toBe(claim);
+    expect(f.options()?.label).toBe(`isolated-host:${run.runId}`);
+  });
+
+  it("joins the instance's reaper when the host is stopped", async () => {
+    const f = fixture();
+    const { run, plan } = runAndPlan();
+    let registered: DevelopmentRun["instance"] = null;
+    await f.executor.start(run, plan, {
+      onRegistered(value) {
+        registered = value;
+      },
+      onReady: vi.fn(),
+      onExit: vi.fn(),
+    });
+    await f.executor.stop({ ...run, state: "ready", instance: registered, hostReadiness: "ready" });
+
+    expect(f.claims[0]!.close).toHaveBeenCalledOnce();
+  });
+
+  it("does not start a host whose instance claim another owner holds", async () => {
+    const f = fixture();
+    f.holdClaim();
+    const { run, plan } = runAndPlan();
+
+    await expect(
+      f.executor.start(run, plan, { onRegistered: vi.fn(), onReady: vi.fn(), onExit: vi.fn() })
+    ).rejects.toBeInstanceOf(OwnershipClaimedError);
+    expect(f.options()).toBeNull();
+    expect(f.unregister).not.toHaveBeenCalled();
+  });
+
+  it("finds no surviving host to adopt: a stale claim is retired as it is retaken", async () => {
+    const f = fixture();
+    const { run } = runAndPlan();
+    const recorded = {
+      instanceId: "recorded",
+      generationId: f.generationId,
+      lifecycle: "ephemeral" as const,
+      state: "ready" as const,
+      executionDigest: run.artifact!.executionDigest,
+      serverBuildId: digest("a"),
+      serverId: "server",
+      serverBootId: "boot",
+      workspaceId: "workspace",
+      workspaceName: "main",
+      gatewayUrl: "http://127.0.0.1:4999",
+      registeredAt: 1,
+      readyAt: 2,
+      stoppedAt: null,
+    };
+
+    await expect(f.executor.recover({ ...run, instance: recorded }, vi.fn())).resolves.toBe(
+      "absent"
+    );
+    expect(f.unregister).toHaveBeenCalledWith(expect.any(String), "recorded");
+    expect(f.claims[0]!.close).toHaveBeenCalledOnce();
+
+    // A live holder's instance is not ours to touch.
+    f.holdClaim();
+    await expect(f.executor.recover({ ...run, instance: recorded }, vi.fn())).resolves.toBe(
+      "unknown"
+    );
   });
 });

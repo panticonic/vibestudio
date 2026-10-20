@@ -296,7 +296,6 @@ async function runOnce(
         device,
         workspaceDevice,
         launched,
-        grants: delivery.grants,
         module,
         system,
         workspace,

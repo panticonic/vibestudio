@@ -6,6 +6,7 @@ import {
   NATIVE_WORKSPACE_ENTRIES,
   SOURCE_SERVER_PREREQUISITE_ARTIFACTS,
 } from "./server-runtime-artifacts.mjs";
+import { OWNERSHIP_REAPER_ARTIFACTS } from "./lib/ownership-reaper-assets.mjs";
 
 const NON_COMPILER_ENTRIES = new Set([
   "node",
@@ -29,6 +30,7 @@ const REQUIRED = {
     ...Object.values(NATIVE_WORKSPACE_ENTRIES),
     "dependency-content-maintenance.cjs",
     "internal-do-programs.json",
+    ...OWNERSHIP_REAPER_ARTIFACTS.map((entry) => entry.slice("dist/".length)),
     "host-build-fingerprint.json",
     "headless-host",
     "workerd-programs",

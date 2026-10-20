@@ -4,11 +4,8 @@ import {
 } from "@vibestudio/service-schemas/clients/phoneSetupStream";
 import fs from "node:fs";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { finished } from "node:stream/promises";
-import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
-import { captureOwnedProcessIdentity } from "@vibestudio/shared/ownedProcessIdentity";
-import { terminateOwnedProcessTree } from "../../../../scripts/owned-process-tree.mjs";
+import type { Ownership } from "@vibestudio/shared/ownership";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import {
   PhoneDeviceSchema,
@@ -46,6 +43,8 @@ export interface PhoneProvisioningServiceDeps {
   /** Exact workspace selected by the desktop session hosting this provider. */
   workspaceName: string;
   resolveScriptPath: (name: string) => string;
+  /** Owns each provisioning command's process group for the duration of the command. */
+  ownership: () => Promise<Pick<Ownership, "spawn">>;
   hostPlatform?: NodeJS.Platform;
   runScript?: (
     name: string,
@@ -94,13 +93,21 @@ function defaultRunner(deps: PhoneProvisioningServiceDeps) {
   ): Promise<ScriptResult> => {
     options.signal?.throwIfAborted();
     const script = deps.resolveScriptPath(name);
-    const child = spawn(process.execPath, [script, ...args], {
+    const ownership = await deps.ownership();
+    options.signal?.throwIfAborted();
+    // A provisioning command (adb, gradle, xcodebuild) holds nothing worth a
+    // graceful drain: cancelling it kills its whole group at once. The group
+    // is recorded with the reaper before spawn() returns, so a killed desktop
+    // cannot leave a build running.
+    const owned = ownership.spawn(process.execPath, [script, ...args], {
+      kill: "immediate",
+      label: `phone-provisioning:${name}`,
       cwd: deps.appRoot,
       env: mobileCliEnvironment(deps.appRoot, deps.appVersion),
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true,
     });
+    const child = owned.child;
     // Install listeners before observing ownership, including a refused spawn.
     const completion = new Promise<ScriptResult>((resolve, reject) => {
       let stdout = "";
@@ -118,34 +125,22 @@ function defaultRunner(deps: PhoneProvisioningServiceDeps) {
         }
       });
     });
-    // Join the actual process exit and captured output independently. Node's
-    // aggregate `close` can remain pending after an explicit IPC revocation,
-    // even when the process was reaped and both output streams ended.
+    // Join the actual process exit and captured output independently.
     const settled = Promise.all([
       completion,
       finished(child.stdout!, { cleanup: true }),
       finished(child.stderr!, { cleanup: true }),
     ]);
-    // Capture the root while it is alive. Cancellation must snapshot and join
-    // the complete ancestry before the kernel reparents detached descendants.
-    const identity = child.pid === undefined ? null : captureOwnedProcessIdentity(child.pid);
-    const owner = identity ? OwnedProcessGroup.adopt(identity) : null;
-    // Start retirement from the abort edge itself: `settled` cannot complete
-    // until the child exits, and waiting until `finally` would deadlock.
-    let abortRetirement: Promise<void> | null = null;
+    // One idempotent retirement: started from the abort edge itself (`settled`
+    // cannot complete until the child exits, so waiting until `finally` would
+    // deadlock) and otherwise after a normal exit to retire what the command
+    // left in its group. Its error is returned through the command boundary.
+    let retirement: Promise<void> | null = null;
+    const retire = () => (retirement ??= owned.retire());
     const retireOnAbort = () => {
-      if (child.pid === undefined || !identity) return;
-      abortRetirement ??= terminateOwnedProcessTree(child.pid, {
-        identity,
-        termTimeoutMs: 5_000,
-        killTimeoutMs: 5_000,
-      }).then((result) => {
-        if (!result.gone) throw new Error(result.detail ?? "Owned command tree did not retire");
-      });
-      void abortRetirement.catch(() => {
-        // The same idempotent retirement is awaited below, where its error is
-        // returned through the command boundary rather than as an unhandled
-        // abort-listener rejection.
+      void retire().catch(() => {
+        // Awaited below, where its error is returned through the command
+        // boundary rather than as an unhandled abort-listener rejection.
       });
     };
     options.signal?.addEventListener("abort", retireOnAbort, { once: true });
@@ -159,8 +154,7 @@ function defaultRunner(deps: PhoneProvisioningServiceDeps) {
       throw error;
     } finally {
       options.signal?.removeEventListener("abort", retireOnAbort);
-      if (abortRetirement) await abortRetirement;
-      else await owner?.retire();
+      await retire();
     }
   };
 }

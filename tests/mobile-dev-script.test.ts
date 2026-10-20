@@ -26,12 +26,14 @@ describe("mobile dev process composition", () => {
       "--ready-file",
       "/private/ready.json",
       "--ephemeral",
+      "--lifetime",
+      "leased",
     ]);
     expect(args).not.toContain("--bootstrap-workspace");
     expect(args).not.toContain("src/server/index.ts");
   });
 
-  it("keeps native tooling in Host while Metro reads workspace UI from System", () => {
+  it("keeps native tooling and Metro host-only", () => {
     const android = mobileDevInstallArgs({
       platform: "android",
       device: "emulator-5554",
@@ -49,14 +51,8 @@ describe("mobile dev process composition", () => {
     );
     expect(android).not.toContain("--app-root");
 
-    const metro = mobileDevMetroEnvironment("/checkouts/System", { HOST_ONLY: "retained" });
-    expect(metro).toMatchObject({
-      HOST_ONLY: "retained",
-      REACT_NATIVE_PACKAGER_HOSTNAME: "127.0.0.1",
-      VIBESTUDIO_USERLAND_ROOT: "/checkouts/System",
-      VIBESTUDIO_WORKSPACE_APP_ROOT: path.join("/checkouts/System", "apps", "mobile"),
-      VIBESTUDIO_WORKSPACE_NODE_MODULES: path.resolve("node_modules"),
-    });
+    const metro = mobileDevMetroEnvironment({ HOST_ONLY: "retained" });
+    expect(metro).toEqual({ HOST_ONLY: "retained", REACT_NATIVE_PACKAGER_HOSTNAME: "127.0.0.1" });
 
     const ios = mobileDevInstallArgs({
       platform: "ios",

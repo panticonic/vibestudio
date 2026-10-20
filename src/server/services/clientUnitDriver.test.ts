@@ -120,11 +120,15 @@ describe("client unit supervision", () => {
     });
   });
 
-  it("is unavailable outside the System workspace", () => {
+  it("holds no clients outside the System workspace", () => {
     const driver = createClientUnitDriver({
       getHost: () => null,
       diagnostics: { history: vi.fn() },
     });
-    expect(() => driver.list()).toThrow("Clients run only from the System workspace");
+    expect(driver.list()).toEqual([]);
+    expect(driver.describe("chat")).toBeNull();
+    expect(() => driver.releases!.versions("chat")).toThrow(
+      "Clients run only from the System workspace"
+    );
   });
 });

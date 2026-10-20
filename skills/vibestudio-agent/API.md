@@ -48,7 +48,7 @@ Authority principals: `host`, `user`
 |--------|-------------|
 | `auth.grantConnection` | Mint a short-lived connection token for a panel/app caller (requires the panel-hosting capability), granting it access to the gateway. |
 | `auth.getConnectionInfo` | Report how clients should reach this gateway: server/connect URLs, protocol, server identity, and current workspace. |
-| `auth.grantClientPrincipal` | Activate the calling device's principal for the exact admitted client build it verified (`client:<id>:<runtime>:<deviceId>`) and mint a one-use connection grant for it, bound to the caller's transport endpoint. |
+| `auth.grantClientPrincipal` | Activate the calling device's principal for the exact admitted client build it verified (`client:<id>:<runtime>:<deviceId>`) and mint a hub-validated client credential for it, bound to the caller's transport endpoint and valid in any workspace. |
 
 ## `authority`
 

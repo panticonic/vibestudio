@@ -23,12 +23,13 @@ export function createClientUnitDriver(input: {
     if (!value) throw new Error("Clients run only from the System workspace");
     return value;
   };
+  // A workspace without a ClientHost holds no clients: nothing to list or describe.
   const describe = (entityId: string): RuntimeSupervisionDescription | null => {
-    const row = host()
-      .listWorkspaceUnits()
-      .find((candidate) => candidate.name === entityId);
+    const clients = input.getHost();
+    if (!clients) return null;
+    const row = clients.listWorkspaceUnits().find((candidate) => candidate.name === entityId);
     if (!row || !isCapabilityActiveStatus(row.status) || !row.activeBundleKey) return null;
-    const entry = host().registry.get(entityId);
+    const entry = clients.registry.get(entityId);
     return {
       identity: { kind: "client", entityId },
       release: { kind: "client", releaseId: entityId },
@@ -73,8 +74,7 @@ export function createClientUnitDriver(input: {
   return {
     kind: "client",
     list: () =>
-      host()
-        .listWorkspaceUnits()
+      (input.getHost()?.listWorkspaceUnits() ?? [])
         .map((row) => describe(row.name))
         .filter((entry): entry is RuntimeSupervisionDescription => entry !== null),
     describe,

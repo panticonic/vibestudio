@@ -186,6 +186,8 @@ export const ClientIntegrationSnapshotSchema = z
           icon: z.string().optional(),
           intents: z.array(ClientIntentDeclSchema),
           terminalCommand: z.string().optional(),
+          /** Why this client's dynamic entries could not be read; its other fields still project. */
+          error: z.string().optional(),
           entries: z.record(
             z.string(),
             z.array(
@@ -214,15 +216,13 @@ export const ClientPrincipalGrantRequestSchema = z
 
 export const ClientPrincipalGrantResponseSchema = z
   .object({
-    /** One-use connection grant; redeem it as the auth token of a new RPC session. */
-    connectionGrant: z.string().min(1),
-    expiresAt: z.number().int(),
+    /** Hub-minted `clientcred:<id>:<secret>`; presented as the auth token of a new RPC session in any workspace. */
+    credential: z.string().min(1),
     /** `client:<id>:<runtime>:<deviceId>` */
     principalId: z.string().min(1),
     deviceId: z.string().min(1),
     serverId: z.string().min(1),
     serverBootId: z.string().min(1),
-    workspaceId: z.string().min(1),
   })
   .strict();
 export type ClientPrincipalGrantResponse = z.infer<typeof ClientPrincipalGrantResponseSchema>;

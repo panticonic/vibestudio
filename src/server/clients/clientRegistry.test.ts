@@ -9,8 +9,6 @@ import {
   buildHostBuildUnitInventory,
   hostBuildUnitInventoryPath,
 } from "@vibestudio/shared/hostBuildUnits";
-import { EntityCache } from "@vibestudio/shared/runtime/entityCache";
-import { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { WORKSPACE_SYSTEM_EPOCH } from "@vibestudio/shared/vcs/systemEpoch";
@@ -21,7 +19,12 @@ import type {
   HostDescriptor,
   HostKind,
 } from "@vibestudio/workspace-contracts/clients";
-import { ClientHost, type ClientHostDeps, type RuntimePreparation } from "./clientRegistry.js";
+import {
+  ClientHost,
+  type ClientHostDeps,
+  type ClientPrincipalAttestation,
+  type RuntimePreparation,
+} from "./clientRegistry.js";
 import { RuntimeDiagnosticsStore } from "../runtimeDiagnosticsStore.js";
 import { UnitInstallReviewCoordinator } from "../unitInstallReviewCoordinator.js";
 import type { BuildArtifactManifestEntry, BuildMetadata } from "../buildV2/buildStore.js";
@@ -302,7 +305,6 @@ async function makeHarness(
     useApprovalCoordinator?: boolean;
     readWorkspaceFileAtState?: (stateHash: string, filePath: string) => Promise<string | null>;
     affectedBuildUnits?: string[];
-    isSystemWorkspace?: () => boolean;
     trusted?: string[];
     prepareRuntime?: ClientHostDeps["prepareRuntime"];
     block?: ClientManifestBlock;
@@ -412,7 +414,6 @@ async function makeHarness(
     })),
   };
   const notificationService = { show: vi.fn(() => "notification-id") };
-  const entityCache = new EntityCache();
   const approvalCoordinator = opts.useApprovalCoordinator
     ? new UnitInstallReviewCoordinator({ approvalQueue, delayMs: 10_000 })
     : undefined;
@@ -424,13 +425,12 @@ async function makeHarness(
     "clients/terminal-browser",
   ];
   const prepareRuntime = vi.fn(opts.prepareRuntime ?? (async () => ({ state: "ready" as const })));
-  const revokePrincipalSessions = vi.fn<NonNullable<ClientHostDeps["revokePrincipalSessions"]>>();
+  const principalHub = createPrincipalHub();
   const host = new ClientHost({
     statePath,
     workspacePath,
     workspaceId: "ws",
     diagnostics,
-    isSystemWorkspace: opts.isSystemWorkspace ?? (() => true),
     getTrustedClients: () => trusted,
     getClientDefault: (hostKind) => CLIENT_DEFAULTS[hostKind],
     prepareRuntime,
@@ -442,8 +442,7 @@ async function makeHarness(
     approvalQueue,
     approvalCoordinator,
     notificationService,
-    entityCache,
-    revokePrincipalSessions,
+    principalHub,
     readWorkspaceFileAtState: async (stateHash, filePath) =>
       (await opts.readWorkspaceFileAtState?.(stateHash, filePath)) ??
       (filePath === `${WEB_SOURCE}/package.json`
@@ -485,12 +484,46 @@ async function makeHarness(
     appPath,
     root,
     workspacePath,
-    entityCache,
+    principalHub,
     trusted,
     prepareRuntime,
-    revokePrincipalSessions,
     providerChangeCallbacks,
     defaultBuild,
+  };
+}
+
+/** An in-memory hub ledger: attested rows, listed while not retired. */
+function createPrincipalHub() {
+  const rows = new Map<string, ClientPrincipalAttestation & { retiredFor?: string }>();
+  return {
+    rows,
+    attestClientPrincipal: vi.fn(async (attestation: ClientPrincipalAttestation) => {
+      rows.set(attestation.principalId, attestation);
+    }),
+    listClientPrincipals: vi.fn(
+      async () => [...rows.values()].filter((row) => row.retiredFor === undefined) as never[]
+    ),
+    retireClientPrincipals: vi.fn(
+      async (
+        filter: { principalId?: string; clientId?: string; runtime?: string; deviceId?: string },
+        reason: string
+      ) => {
+        const retired: string[] = [];
+        for (const row of rows.values()) {
+          if (row.retiredFor !== undefined) continue;
+          if (
+            (filter.principalId ?? row.principalId) === row.principalId &&
+            (filter.clientId ?? row.clientId) === row.clientId &&
+            (filter.runtime ?? row.runtime) === row.runtime &&
+            (filter.deviceId ?? row.deviceId) === row.deviceId
+          ) {
+            row.retiredFor = reason;
+            retired.push(row.principalId);
+          }
+        }
+        return retired;
+      }
+    ),
   };
 }
 
@@ -776,38 +809,17 @@ describe("ClientHost declarations and review", () => {
     ]);
   });
 
-  it("keeps client source authorable outside System without staging launch reviews or runtimes", async () => {
-    const { host, buildSystem, approvalQueue, graphNode, workspacePath } = await makeHarness({
-      isSystemWorkspace: () => false,
-      seeded: true,
+  it("lists a declared client whose manifest cannot be found as unavailable, never omitted", async () => {
+    const { host, buildSystem } = await makeHarness();
+    host.setDeclared([{ source: WEB_SOURCE, ref: "main" }]);
+    buildSystem.getGraph.mockReturnValue({ allNodes: () => [] } as never);
+    const listings = await host.listClients(desktopHost());
+    expect(listings).toHaveLength(1);
+    expect(listings[0]).toMatchObject({
+      source: WEB_SOURCE,
+      unavailableReason: expect.stringContaining("declared but its client manifest cannot be read"),
     });
-    const mobile = createClientNode(workspacePath, "clients/mobile-browser", {
-      name: "@workspace-clients/mobile-browser",
-      block: reactNativeBlock(),
-    });
-    const terminal = createClientNode(workspacePath, "clients/terminal-browser", {
-      name: "@workspace-clients/terminal-browser",
-      block: terminalBlock(),
-    });
-    const nodes = [graphNode, mobile, terminal];
-    buildSystem.getGraph.mockReturnValue({ allNodes: () => nodes } as never);
-    const declared = nodes.map((node) => ({ source: node.relativePath, ref: "main" }));
-    host.setDeclared(declared);
-    expect(await host.reviewDeclared(declared)).toEqual({ units: [], identityKeys: [] });
-    expect(await host.seedTrustedDeclared(declared)).toEqual([]);
-    await host.reconcileDeclared(declared);
-    await host.whenSettled();
-    expect((await host.unitChangeApprovalForCommit(`state:${"a".repeat(64)}`)).units).toEqual([]);
-    expect(await host.trustDeltaForCommit(`state:${"a".repeat(64)}`)).toEqual([]);
-    expect(await host.listClients(desktopHost())).toEqual([]);
-    await expect(host.launch({ host: desktopHost(), select: { default: true } })).resolves.toEqual({
-      state: "unavailable",
-      reason: "Clients run only from the System workspace",
-    });
-    expect(approvalQueue.request).not.toHaveBeenCalled();
-    expect(buildSystem.getStoredBuild).not.toHaveBeenCalled();
-    expect(host.registry.list()).toEqual([]);
-    expect(buildSystem.getGraph().allNodes()).toEqual(nodes);
+    expect((await host.integrationSnapshot(desktopHost())).clients).toEqual([]);
   });
 
   it("computes meta-change approvals from committed workspace config", async () => {
@@ -1447,7 +1459,7 @@ describe("ClientHost releases", () => {
       expect.objectContaining({ change: "adopted" })
     );
     await expect(
-      host.grantPrincipal("device-1", {
+      host.attest("device-1", {
         source: graphNode.relativePath,
         buildKey: "client-key-new",
         executionDigest: DIGEST,
@@ -1763,14 +1775,6 @@ describe("ClientHost.listClients", () => {
 describe("ClientHost.launch", () => {
   const baseRequest = () => ({ host: desktopHost(), select: { default: true as const } });
 
-  it("is unavailable outside the System workspace", async () => {
-    const { host } = await makeHarness({ isSystemWorkspace: () => false });
-    await expect(host.launch(baseRequest())).resolves.toEqual({
-      state: "unavailable",
-      reason: "Clients run only from the System workspace",
-    });
-  });
-
   it("is unavailable for a selection that is not declared", async () => {
     const { host } = await makeHarness();
     host.setDeclared([{ source: WEB_SOURCE, ref: "main" }]);
@@ -2028,7 +2032,7 @@ describe("ClientHost.prepareDefault", () => {
     host.setDeclared([{ source: WEB_SOURCE, ref: "main" }]);
 
     await expect(host.prepareDefault("desktop")).resolves.toEqual({
-      ready: true,
+      state: "ready",
       source: WEB_SOURCE,
       buildKey: "client-key",
     });
@@ -2046,18 +2050,18 @@ describe("ClientHost.prepareDefault", () => {
     host.setDeclared([{ source: WEB_SOURCE, ref: "main" }]);
     // No declared terminal default.
     await expect(host.prepareDefault("terminal")).resolves.toEqual({
-      ready: false,
+      state: "failed",
       source: "clients/terminal-browser",
       reason: "clients/terminal-browser is not declared under clients:",
     });
     // A default of the wrong runtime for the host.
-    await expect(host.prepareDefault("android")).resolves.toMatchObject({ ready: false });
+    await expect(host.prepareDefault("android")).resolves.toMatchObject({ state: "failed" });
     // A violated build contract.
     buildSystem.getStoredBuild.mockResolvedValueOnce(
       clientBuild(tempRoot(), { key: "bad", ev: "ev-bad", hostAbi: "web-host-2" })
     );
     await expect(host.prepareDefault("desktop")).resolves.toMatchObject({
-      ready: false,
+      state: "failed",
       source: WEB_SOURCE,
       reason: expect.stringContaining("produced for web-host-2"),
     });
@@ -2073,13 +2077,13 @@ describe("ClientHost.prepareDefault", () => {
     buildSystem.getGraph.mockReturnValue({ allNodes: () => [misdeclared] } as never);
     host.setDeclared([{ source: "clients/mobile-browser", ref: "main" }]);
     await expect(host.prepareDefault("android")).resolves.toEqual({
-      ready: false,
+      state: "failed",
       source: "clients/mobile-browser",
       reason: "clients/mobile-browser is a web client; android hosts run react-native clients",
     });
   });
 
-  it("waits on the runtime's extension review, not the host", async () => {
+  it("reports a runtime awaiting review as such, not as a failure", async () => {
     const { host } = await makeHarness({
       prepareRuntime: async () => ({
         state: "approval-required",
@@ -2088,9 +2092,9 @@ describe("ClientHost.prepareDefault", () => {
     });
     host.setDeclared([{ source: WEB_SOURCE, ref: "main" }]);
     await expect(host.prepareDefault("desktop")).resolves.toEqual({
-      ready: false,
+      state: "awaiting-review",
       source: WEB_SOURCE,
-      reason: "Waiting for review of extensions/react-native",
+      reviewing: ["extensions/react-native"],
     });
   });
 });
@@ -2105,118 +2109,132 @@ describe("ClientHost principals", () => {
   }
   const exact = { source: WEB_SOURCE, buildKey: "client-key", executionDigest: DIGEST };
 
-  it("binds a principal to the exact build the host verified", async () => {
-    const { host, entityCache } = await runningClient();
+  it("attests the exact build the host verified, without side effects", async () => {
+    const { host, principalHub } = await runningClient();
 
-    const principal = await host.grantPrincipal("device-1", exact);
+    const attestation = await host.attest("device-1", exact);
 
-    expect(principal).toEqual({
+    expect(attestation).toEqual({
       principalId: "client:browser:web:device-1",
-      id: "browser",
+      deviceId: "device-1",
+      clientId: "browser",
       runtime: "web",
       source: WEB_SOURCE,
       buildKey: "client-key",
       effectiveVersion: "ev-client",
+      executionDigest: DIGEST,
+      authority: expect.any(Object),
+      capabilities: ["notifications", "panel-hosting"],
     });
-    expect(entityCache.resolveActive(principal.principalId)).toMatchObject({
-      kind: "client",
-      source: { repoPath: WEB_SOURCE, effectiveVersion: "ev-client" },
-      activeBuildKey: "client-key",
-      activeExecutionDigest: DIGEST,
-      status: "active",
-    });
-    const connectionGrants = new ConnectionGrantService({ entityCache });
-    try {
-      expect(() => connectionGrants.grant(principal.principalId, "shell:device-1")).not.toThrow();
-    } finally {
-      connectionGrants.stop();
-    }
+    expect(principalHub.attestClientPrincipal).not.toHaveBeenCalled();
+    expect(principalHub.retireClientPrincipals).not.toHaveBeenCalled();
   });
 
-  it("refuses a principal for any other build, digest or client", async () => {
-    const { host, entityCache } = await runningClient();
-    await expect(
-      host.grantPrincipal("device-1", { ...exact, buildKey: "client-key-old" })
-    ).rejects.toThrow("is not the build it runs");
-    await expect(
-      host.grantPrincipal("device-1", { ...exact, executionDigest: "9".repeat(64) })
-    ).rejects.toThrow("is not the build it runs");
-    await expect(
-      host.grantPrincipal("device-1", { ...exact, source: "clients/other" })
-    ).rejects.toThrow("is not running");
-    expect(entityCache.listActive()).toEqual([]);
+  it("attests device-level capabilities only for a client listed in trust.clients", async () => {
+    const trusted = await runningClient({ trusted: [WEB_SOURCE] });
+    const untrusted = await runningClient({ trusted: [] });
+    await expect(trusted.host.attest("device-1", exact)).resolves.toMatchObject({
+      capabilities: ["notifications", "panel-hosting"],
+    });
+    await expect(untrusted.host.attest("device-1", exact)).resolves.toMatchObject({
+      capabilities: ["notifications"],
+    });
   });
 
-  it("refuses a principal for a client that is not running", async () => {
+  it("refuses to attest any other build, digest or client", async () => {
+    const { host, principalHub } = await runningClient();
+    await expect(host.attest("device-1", { ...exact, buildKey: "client-key-old" })).rejects.toThrow(
+      "is not the build it runs"
+    );
+    await expect(
+      host.attest("device-1", { ...exact, executionDigest: "9".repeat(64) })
+    ).rejects.toThrow("is not the build it runs");
+    await expect(host.attest("device-1", { ...exact, source: "clients/other" })).rejects.toThrow(
+      "is not running"
+    );
+    expect(principalHub.attestClientPrincipal).not.toHaveBeenCalled();
+  });
+
+  it("refuses to attest a client that is not running", async () => {
     const { host, graphNode } = await makeHarness();
     installClient(host, graphNode, { status: "available" });
     host.registry.patch(WEB_NAME, { status: "stopped" });
-    await expect(host.grantPrincipal("device-1", exact)).rejects.toThrow("is not running");
+    await expect(host.attest("device-1", exact)).rejects.toThrow("is not running");
   });
 
-  it("registers a distinct principal per device and retires a device's principals together", async () => {
-    const { host, entityCache } = await runningClient();
-    await host.grantPrincipal("device-1", exact);
-    await host.grantPrincipal("device-2", exact);
-    expect(
-      entityCache
-        .listActive()
-        .map((record) => record.id)
-        .sort()
-    ).toEqual(["client:browser:web:device-1", "client:browser:web:device-2"]);
-    expect(host.retireDevice("device-1")).toBe(1);
-    expect(entityCache.resolveActive("client:browser:web:device-1")).toBeNull();
-    expect(entityCache.resolveActive("client:browser:web:device-2")).not.toBeNull();
-  });
-
-  it("rejects stale authority when the protected System designation is absent", async () => {
-    let system = true;
-    const { host, entityCache } = await runningClient({ isSystemWorkspace: () => system });
-    const principal = await host.grantPrincipal("device-1", exact);
-    expect(host.hasClientCapability(principal.principalId, "notifications")).toBe(true);
-    system = false;
-    expect(host.hasClientCapability(principal.principalId, "notifications")).toBe(false);
-    await expect(host.activateRelease(WEB_NAME)).rejects.toThrow("designated System workspace");
-    await expect(host.grantPrincipal("device-2", exact)).rejects.toThrow(
-      "designated System workspace"
-    );
-    expect(entityCache.listActive().map((record) => record.id)).toEqual([principal.principalId]);
-  });
-
-  it("runs a background intent as the device's principal of the current build", async () => {
-    const { host } = await runningClient();
+  it("attests a background intent's principal into the hub for the current build", async () => {
+    const { host, principalHub } = await runningClient();
     await expect(host.intentPrincipal("device-1", WEB_SOURCE)).resolves.toMatchObject({
       principalId: "client:browser:web:device-1",
       buildKey: "client-key",
     });
+    expect(principalHub.attestClientPrincipal).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ principalId: "client:browser:web:device-1" })
+    );
     await expect(host.intentPrincipal("device-1", "clients/ghost")).rejects.toThrow(
       "has no running build to act for"
     );
   });
+
+  describe("reconcilePrincipals", () => {
+    async function attestedClient(overrides: Partial<Parameters<typeof makeHarness>[0]> = {}) {
+      const harness = await runningClient(overrides);
+      await harness.host.intentPrincipal("device-1", WEB_SOURCE);
+      await harness.host.intentPrincipal("device-2", WEB_SOURCE);
+      harness.principalHub.retireClientPrincipals.mockClear();
+      return harness;
+    }
+
+    it("keeps every principal that attesting again would reproduce", async () => {
+      const { host, principalHub } = await attestedClient();
+      await host.reconcilePrincipals();
+      expect(principalHub.listClientPrincipals).toHaveBeenCalledWith({ attesterWorkspaceId: "ws" });
+      expect(principalHub.retireClientPrincipals).not.toHaveBeenCalled();
+    });
+
+    it("retires principals whose build digest is no longer the client's", async () => {
+      const { host, principalHub } = await attestedClient();
+      host.registry.patch(WEB_NAME, { activeExecutionDigest: "8".repeat(64) });
+      await host.reconcilePrincipals();
+      expect(principalHub.retireClientPrincipals.mock.calls).toEqual([
+        [{ principalId: "client:browser:web:device-1" }, "retired"],
+        [{ principalId: "client:browser:web:device-2" }, "retired"],
+      ]);
+    });
+
+    it("retires principals of a client that is no longer running", async () => {
+      const { host, principalHub } = await attestedClient();
+      host.registry.patch(WEB_NAME, { status: "stopped" });
+      await host.reconcilePrincipals();
+      expect(principalHub.retireClientPrincipals).toHaveBeenCalledTimes(2);
+    });
+
+    it("retires principals of a client that is no longer present", async () => {
+      const { host, principalHub } = await attestedClient();
+      host.registry.delete(WEB_NAME);
+      await host.reconcilePrincipals();
+      expect(principalHub.retireClientPrincipals).toHaveBeenCalledTimes(2);
+    });
+
+    it("retires principals whose attested capabilities trust no longer supports", async () => {
+      const { host, principalHub, trusted } = await attestedClient({ trusted: [WEB_SOURCE] });
+      trusted.splice(0, trusted.length);
+      await host.reconcilePrincipals();
+      expect(principalHub.retireClientPrincipals).toHaveBeenCalledWith(
+        { principalId: "client:browser:web:device-1" },
+        "trust-revoked"
+      );
+    });
+
+    it("propagates a hub failure", async () => {
+      const { host, principalHub } = await attestedClient();
+      principalHub.listClientPrincipals.mockRejectedValueOnce(new Error("hub unreachable"));
+      await expect(host.reconcilePrincipals()).rejects.toThrow("hub unreachable");
+    });
+  });
 });
 
 describe("ClientHost capabilities and trust", () => {
-  it("grants a device-level capability only to a client listed in trust.clients", async () => {
-    const trusted = await makeHarness({ trusted: [WEB_SOURCE] });
-    const untrusted = await makeHarness({ trusted: [] });
-    for (const owner of [trusted, untrusted]) {
-      installClient(owner.host, owner.graphNode, {
-        capabilities: ["notifications", "panel-hosting"],
-      });
-    }
-    const principal = "client:browser:web:device-1";
-    expect(trusted.host.hasClientCapability(principal, "panel-hosting")).toBe(true);
-    expect(trusted.host.hasClientCapability(principal, "notifications")).toBe(true);
-    expect(untrusted.host.hasClientCapability(principal, "panel-hosting")).toBe(false);
-    expect(untrusted.host.hasClientCapability(principal, "notifications")).toBe(true);
-    expect(untrusted.host.hasClientCapability(principal, "tray")).toBe(false);
-    expect(trusted.host.hasClientCapability("client:other:web:device-1", "notifications")).toBe(
-      false
-    );
-    expect(trusted.host.hasClientCapability("not-a-principal", "notifications")).toBe(false);
-    expect(untrusted.host.capabilityAuthorizer()).toBeDefined();
-  });
-
   it("strips device-level capabilities from the adoption of an untrusted client", async () => {
     const { host, eventService, graphNode } = await makeHarness({
       trusted: [],
@@ -2248,27 +2266,23 @@ describe("ClientHost capabilities and trust", () => {
         capabilities: ["notifications", "panel-hosting"],
       });
       await harness.host.initialize();
-      const principal = await harness.host.grantPrincipal("device-1", {
-        source: WEB_SOURCE,
-        buildKey: "client-key",
-        executionDigest: DIGEST,
-      });
+      const principal = await harness.host.intentPrincipal("device-1", WEB_SOURCE);
       harness.eventService.emit.mockClear();
+      harness.principalHub.attestClientPrincipal.mockClear();
       return { ...harness, principal };
     }
 
-    it("revokes principals, grants and sessions of a client whose device-level capability was withdrawn", async () => {
-      const { host, trusted, entityCache, revokePrincipalSessions, eventService, principal } =
-        await trustedWithPrincipal();
+    it("retires, in the hub, the principals of a client whose device-level capability was withdrawn", async () => {
+      const { host, trusted, principalHub, eventService, principal } = await trustedWithPrincipal();
 
       trusted.splice(0, trusted.length);
-      host.applyTrust();
+      await host.applyTrust();
 
-      expect(revokePrincipalSessions).toHaveBeenCalledExactlyOnceWith(
-        principal.principalId,
+      expect(principalHub.retireClientPrincipals).toHaveBeenCalledExactlyOnceWith(
+        { principalId: expect.stringContaining("client:browser:web:") },
         "trust-revoked"
       );
-      expect(entityCache.resolveActive(principal.principalId)).toBeNull();
+      expect(principalHub.rows.get(principal.principalId)?.retiredFor).toBe("trust-revoked");
       expect(eventService.emit).toHaveBeenCalledWith("clients:changed", { reason: "trust" });
       expect(eventService.emit).toHaveBeenCalledWith(
         "supervision:changed",
@@ -2279,49 +2293,42 @@ describe("ClientHost capabilities and trust", () => {
       );
     });
 
-    it("revokes a session granted a device-level capability by a trust change that reached the client through supervision", async () => {
+    it("retires a principal granted a device-level capability by a trust change that reached the client through supervision", async () => {
       const harness = await makeHarness({
         trusted: [],
         block: webBlock({
           capabilities: { required: [], optional: ["notifications", "panel-hosting"] },
         }),
       });
-      const { host, trusted, revokePrincipalSessions } = harness;
+      const { host, trusted, principalHub } = harness;
       installClient(host, harness.graphNode, { capabilities: ["notifications", "panel-hosting"] });
       await host.initialize();
-      const principal = await host.grantPrincipal("device-1", {
-        source: WEB_SOURCE,
-        buildKey: "client-key",
-        executionDigest: DIGEST,
-      });
       // Trust is published and the client's hosts hear of the widened set
       // through supervision, not through a prior applyTrust of this exact set.
       trusted.push(WEB_SOURCE);
       host.registry.patch(WEB_NAME, { lastError: "rebuilt" });
-      expect(host.hasClientCapability(principal.principalId, "panel-hosting")).toBe(true);
+      await host.intentPrincipal("device-1", WEB_SOURCE);
 
       trusted.splice(0, trusted.length);
-      host.applyTrust();
+      await host.applyTrust();
 
-      expect(revokePrincipalSessions).toHaveBeenCalledExactlyOnceWith(
-        principal.principalId,
+      expect(principalHub.retireClientPrincipals).toHaveBeenCalledExactlyOnceWith(
+        { principalId: expect.stringContaining("client:browser:web:") },
         "trust-revoked"
       );
     });
 
-    it("applies a grant at once without revoking any session", async () => {
-      const { host, trusted, revokePrincipalSessions, eventService, principal } =
-        await trustedWithPrincipal();
+    it("applies a grant at once without retiring any principal", async () => {
+      const { host, trusted, principalHub, eventService } = await trustedWithPrincipal();
       trusted.splice(0, trusted.length);
-      host.applyTrust();
-      revokePrincipalSessions.mockClear();
+      await host.applyTrust();
+      principalHub.retireClientPrincipals.mockClear();
       eventService.emit.mockClear();
 
       trusted.push(WEB_SOURCE);
-      host.applyTrust();
+      await host.applyTrust();
 
-      expect(revokePrincipalSessions).not.toHaveBeenCalled();
-      expect(host.hasClientCapability(principal.principalId, "panel-hosting")).toBe(true);
+      expect(principalHub.retireClientPrincipals).not.toHaveBeenCalled();
       expect(eventService.emit).toHaveBeenCalledWith("clients:changed", { reason: "trust" });
       expect(eventService.emit).toHaveBeenCalledWith(
         "supervision:changed",
@@ -2334,28 +2341,28 @@ describe("ClientHost capabilities and trust", () => {
     });
 
     it("does nothing when trust did not change", async () => {
-      const { host, revokePrincipalSessions, eventService } = await trustedWithPrincipal();
-      host.applyTrust();
-      expect(revokePrincipalSessions).not.toHaveBeenCalled();
+      const { host, principalHub, eventService } = await trustedWithPrincipal();
+      await host.applyTrust();
+      expect(principalHub.retireClientPrincipals).not.toHaveBeenCalled();
       expect(eventService.emit).not.toHaveBeenCalled();
     });
 
-    it("closes sessions of every device's principal of a retired client", async () => {
-      const { host, revokePrincipalSessions } = await trustedWithPrincipal();
-      await host.grantPrincipal("device-2", {
-        source: WEB_SOURCE,
-        buildKey: "client-key",
-        executionDigest: DIGEST,
-      });
+    it("retires every device's principal of a retired client", async () => {
+      const { host, principalHub } = await trustedWithPrincipal();
+      await host.intentPrincipal("device-2", WEB_SOURCE);
       await host.retire(WEB_NAME);
-      expect(
-        revokePrincipalSessions.mock.calls
-          .map(([id, reason]) => [id, reason])
-          .sort(([a], [b]) => String(a).localeCompare(String(b)))
-      ).toEqual([
-        ["client:browser:web:device-1", "retired"],
-        ["client:browser:web:device-2", "retired"],
+      expect(principalHub.retireClientPrincipals).toHaveBeenCalledTimes(2);
+      expect([...principalHub.rows.values()].map((row) => row.retiredFor)).toEqual([
+        "retired",
+        "retired",
       ]);
+    });
+
+    it("propagates a hub failure to the caller", async () => {
+      const { host, trusted, principalHub } = await trustedWithPrincipal();
+      principalHub.retireClientPrincipals.mockRejectedValueOnce(new Error("hub unreachable"));
+      trusted.splice(0, trusted.length);
+      await expect(host.applyTrust()).rejects.toThrow("hub unreachable");
     });
   });
 
@@ -2512,12 +2519,34 @@ describe("ClientHost capabilities and trust", () => {
       ).toEqual([["clients/chat-desktop", ["approval-surface"]]]);
     });
 
-    it("refuses a candidate whose client manifest is invalid", async () => {
-      const { host } = await deltaHarness({
+    it("treats a trusted client's invalid candidate manifest as holding nothing, and reports it", async () => {
+      const { host, diagnostics } = await deltaHarness({
         trust: [WEB_SOURCE],
         manifests: { [WEB_SOURCE]: { ...deviceBlock(), preload: "x" } as ClientManifestBlock },
       });
-      await expect(host.trustDeltaForCommit(COMMIT)).rejects.toThrow('unknown field "preload"');
+      const delta = await host.trustDeltaForCommit(COMMIT);
+      expect(delta).toEqual([
+        expect.objectContaining({
+          source: WEB_SOURCE,
+          gained: [],
+          lost: [expect.objectContaining({ capability: "panel-hosting" })],
+          effectiveVersion: null,
+        }),
+      ]);
+      expect(
+        diagnostics.history(WEB_SOURCE).entries.some((entry) => entry.message.includes("preload"))
+      ).toBe(true);
+    });
+
+    it("does not examine the manifest of a client trusted neither now nor in the candidate", async () => {
+      const { host } = await deltaHarness(
+        {
+          trust: [],
+          manifests: { [WEB_SOURCE]: { ...deviceBlock(), preload: "x" } as ClientManifestBlock },
+        },
+        { trusted: [] }
+      );
+      await expect(host.trustDeltaForCommit(COMMIT)).resolves.toEqual([]);
     });
   });
 });
@@ -2527,8 +2556,16 @@ describe("ClientHost runtimes", () => {
     // A terminal client is built, admitted and activated like any other: no
     // server process exists. The terminal host imports the exact module through
     // a device-scoped principal bound to the active build.
-    const { host, buildSystem, eventService, approvalQueue, entityCache, graphNode, builds, root } =
-      await makeHarness({ isAdmitted: () => true, block: terminalBlock() });
+    const {
+      host,
+      buildSystem,
+      eventService,
+      approvalQueue,
+      principalHub,
+      graphNode,
+      builds,
+      root,
+    } = await makeHarness({ isAdmitted: () => true, block: terminalBlock() });
     const terminalBuild = clientBuild(root, {
       key: "terminal-key",
       ev: "ev-client",
@@ -2574,28 +2611,22 @@ describe("ClientHost runtimes", () => {
       })
     );
 
-    const principal = await host.grantPrincipal("device-1", {
+    const attestation = await host.attest("device-1", {
       source: graphNode.relativePath,
       buildKey: "terminal-key",
       executionDigest: DIGEST,
     });
-    expect(principal).toEqual({
+    expect(attestation).toMatchObject({
       principalId: "client:browser:terminal:device-1",
-      id: "browser",
+      clientId: "browser",
       runtime: "terminal",
       source: graphNode.relativePath,
       buildKey: "terminal-key",
       effectiveVersion: "ev-client",
+      executionDigest: DIGEST,
+      capabilities: expect.arrayContaining(["clipboard"]),
     });
-    expect(entityCache.resolveActive(principal.principalId)).toMatchObject({
-      kind: "client",
-      activeBuildKey: "terminal-key",
-      activeExecutionDigest: DIGEST,
-      status: "active",
-    });
-    expect(host.hasClientCapability(principal.principalId, "clipboard")).toBe(true);
-    expect(host.principals.retireDevice("device-1")).toBe(1);
-    expect(entityCache.resolveActive(principal.principalId)).toBeNull();
+    expect(principalHub.attestClientPrincipal).not.toHaveBeenCalled();
   });
 
   ledgerTest("execution.client-react-native", async () => {

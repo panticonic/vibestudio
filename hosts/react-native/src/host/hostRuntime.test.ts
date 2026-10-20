@@ -95,6 +95,8 @@ async function setup(options: {
   snapshot?: unknown;
   invoked?: { text: string } | Error;
   acknowledge?: Error;
+  /** The stored credential cannot be used: what `isPaired` throws. */
+  credentialError?: Error;
 }) {
   const launches = [...options.launches];
   const served: Record<string, string> = { ...options.served };
@@ -112,13 +114,11 @@ async function setup(options: {
       case "auth.grantClientPrincipal":
         grants += 1;
         return {
-          connectionGrant: `grant-${grants}`,
-          expiresAt: 1,
+          credential: `grant-${grants}`,
           principalId: TAG,
           deviceId: "dev1",
           serverId: "srv",
           serverBootId: "boot",
-          workspaceId: "ws-system",
         };
       case "shellApproval.resolveBootstrap":
         return [];
@@ -218,7 +218,10 @@ async function setup(options: {
       return () => undefined;
     },
     device: {
-      isPaired: async () => true,
+      isPaired: async () => {
+        if (options.credentialError) throw options.credentialError;
+        return true;
+      },
       connect: async () => connection,
       pair: async () => undefined,
       forget,
@@ -400,6 +403,21 @@ describe("launching a client", () => {
   });
 });
 
+describe("closing the last client", () => {
+  it("leaves a paired, connected device idle rather than asking it to pair", async () => {
+    const build = { buildKey: "bk-1", bundle: "client bundle 1" };
+    const t = await setup({
+      launches: [await readyOf(build)],
+      served: { [route("bk-1")]: build.bundle, "/_a/bk-1/ios/index.bundle": build.bundle },
+    });
+    await t.runtime.start();
+
+    t.nativeEvent({ type: "client-lifecycle", tag: TAG, state: "closed" } as never);
+
+    await vi.waitFor(() => expect(t.runtime.ui.get().phase).toBe("idle"));
+  });
+});
+
 describe("updates", () => {
   async function running(development = false) {
     const first = { buildKey: "bk-1", bundle: "client bundle 1" };
@@ -496,6 +514,55 @@ describe("a client that loses its standing", () => {
     await t.runtime.start();
     const { rejected } = await t.request("state.get", ["k"]);
     expect(rejected?.[2]).toBe("CLIENT_STOPPED");
+  });
+});
+
+describe("several launches", () => {
+  it("keeps every client's reviews and answers each against its own launch", async () => {
+    const build = { buildKey: "bk-1", bundle: "client bundle 1" };
+    const t = await setup({
+      launches: [
+        {
+          state: "approval-required",
+          approvals: [{ kind: "unit-install-review", approvalId: "ap1", parts: [] }],
+        },
+        {
+          state: "approval-required",
+          approvals: [{ kind: "unit-install-review", approvalId: "ap2", parts: [] }],
+        },
+        await readyOf(build),
+        await readyOf(build),
+      ],
+      served: { [route("bk-1")]: build.bundle, "/_a/bk-1/ios/index.bundle": build.bundle },
+    });
+    await t.runtime.start();
+    await t.runtime.launch({ id: "other" }, null);
+
+    expect(t.runtime.ui.get().approvals.map((a) => a.approvalId)).toEqual(["ap1", "ap2"]);
+
+    await t.runtime.resolveApprovals("once");
+
+    const answered = t.rpcCalls
+      .filter((call) => call.name === "shellApproval.resolveBootstrap")
+      .map((call) => call.args[0]);
+    expect(answered).toEqual([["ap1"], ["ap2"]]);
+    expect(t.runtime.ui.get().approvals).toEqual([]);
+  });
+});
+
+describe("a stored credential from an older build", () => {
+  it("is forgotten, and the person is told to pair again", async () => {
+    const error = Object.assign(new Error("older build"), {
+      code: "STORED_CONNECTION_UNSUPPORTED",
+    });
+    const t = await setup({ launches: [], credentialError: error });
+    await t.runtime.start();
+
+    expect(t.forget).toHaveBeenCalledTimes(1);
+    expect(t.runtime.ui.get()).toMatchObject({
+      phase: "needs-pairing",
+      message: expect.stringMatching(/older Vibestudio build.*pair/i),
+    });
   });
 });
 
@@ -846,6 +913,28 @@ describe("notifications reach the host's clients and conversations", () => {
       clientId: "chat",
       title: "Chat",
     });
+  });
+
+  it("waits for a cold device to come up before resolving a conversation", async () => {
+    const t = await setup({
+      launches: [{ state: "unavailable", reason: "x" }],
+      listing: [
+        chatListing({
+          intents: [
+            { name: "open-conversation", kind: "foreground", params: { conversation: "string" } },
+          ],
+        }),
+      ],
+    });
+    expect((await t.runtime.conversationLaunch("ch-1"))?.clientId).toBe("chat");
+  });
+
+  it("reports why when a cold device cannot be brought up", async () => {
+    const t = await setup({
+      launches: [],
+      credentialError: new Error("secure store unavailable"),
+    });
+    await expect(t.runtime.conversationLaunch("ch-1")).rejects.toThrow(/secure store unavailable/);
   });
 
   it("finds no conversation launch when no client declares one", async () => {

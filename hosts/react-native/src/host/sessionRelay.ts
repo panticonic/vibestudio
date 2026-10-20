@@ -54,7 +54,7 @@ export interface OpenedSession {
 
 /** What the host's connections can open for a client. */
 export interface SessionOpeners {
-  /** The client's own principal session, authenticating with `getToken` (one-use grants). */
+  /** The client's own principal session, authenticating with `getToken` (the client's reusable credential). */
   principal(
     label: string,
     getToken: (signal?: AbortSignal) => Promise<string>,
@@ -107,17 +107,25 @@ export class ClientSessionRelay {
 
   constructor(private readonly options: ClientSessionRelayOptions) {}
 
-  openPrincipal(sessionId: string, getToken: (signal?: AbortSignal) => Promise<string>): SessionOpened {
-    return this.adopt(
-      sessionId,
-      "principal",
-      (handlers) => this.options.openers.principal(`principal:${this.options.tag}`, getToken, handlers)
+  openPrincipal(
+    sessionId: string,
+    getToken: (signal?: AbortSignal) => Promise<string>
+  ): SessionOpened {
+    return this.adopt(sessionId, "principal", (handlers) =>
+      this.options.openers.principal(
+        `principal:${this.options.tag}:${sessionId}`,
+        getToken,
+        handlers
+      )
     );
   }
 
   openAccountControl(sessionId: string): SessionOpened {
     return this.adopt(sessionId, "shell", (handlers) =>
-      this.options.openers.accountControl(`account-control:${this.options.tag}`, handlers)
+      this.options.openers.accountControl(
+        `account-control:${this.options.tag}:${sessionId}`,
+        handlers
+      )
     );
   }
 
@@ -126,7 +134,7 @@ export class ClientSessionRelay {
     try {
       const opened = await this.options.openers.workspace(
         workspaceId,
-        `workspace:${this.options.tag}`,
+        `workspace:${this.options.tag}:${sessionId}`,
         this.handlersFor(sessionId)
       );
       return this.register(sessionId, "shell", opened);
@@ -154,7 +162,8 @@ export class ClientSessionRelay {
   provideToken(sessionId: string, outcome: { token: string } | { error: string }): void {
     const entry = this.require(sessionId);
     const waiter = entry.tokenWaiter;
-    if (!waiter) throw new BrokerError("NO_TOKEN_REQUEST", "No token was requested for this session.");
+    if (!waiter)
+      throw new BrokerError("NO_TOKEN_REQUEST", "No token was requested for this session.");
     entry.tokenWaiter = null;
     if ("token" in outcome) waiter.resolve(outcome.token);
     else waiter.reject(new Error(outcome.error));
@@ -358,7 +367,8 @@ export class ClientSessionRelay {
 
   private stamp(entry: Entry, envelope: RpcEnvelope): RpcEnvelope {
     const callerId = entry.opened.session.callerId();
-    if (!callerId) throw new BrokerError("SESSION_NOT_READY", "The session is not authenticated yet.");
+    if (!callerId)
+      throw new BrokerError("SESSION_NOT_READY", "The session is not authenticated yet.");
     return stampEnvelopeCaller(envelope, { callerId, callerKind: entry.opened.callerKind });
   }
 }

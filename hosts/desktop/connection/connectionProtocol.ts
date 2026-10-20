@@ -99,6 +99,8 @@ export interface MainToConnection {
   "launch.clients-changed": { launchId: number };
   "launch.resolve-approvals": { launchId: number; decision: "once" | "deny" };
   "launch.end": { launchId: number };
+  /** Re-register a running build with this process; resolves to its principal id. */
+  "launch.adopt": { build: ClientBuildIdentity };
   "launch.retain": { retained: RetainedClientBuild[] };
   "artifacts.read": { integrity: string };
   "ports.bind": { binding: NativeIpcCaller & PortBindingState };
@@ -112,9 +114,16 @@ export interface MainToConnection {
   "catalog.invalidate": { workspaceId: string };
 }
 
+/** The exact verified build a client principal is admitted for. */
+export interface ClientBuildIdentity {
+  source: string;
+  buildKey: string;
+  executionDigest: string;
+}
+
 /**
- * What the launcher reports to main. The one-use connection grant stays in the
- * connection process, which is the only place a grant is redeemed.
+ * What the launcher reports to main. The principal's credential stays in the
+ * connection process, which is the only place it is presented.
  */
 export type LaunchedClientWire = Omit<LaunchedClient, "grant"> & { principalId: string };
 export type LaunchStateWire =
@@ -202,8 +211,8 @@ export interface ConnectionEvents {
   "client.status": ClientState;
   "client.event": { handle: number; event: string; payload: unknown };
   "launch.state": { launchId: number; state: LaunchStateWire };
-  /** A hosted client principal's session ended for good (`trust-revoked`, `retired`, ...). */
-  "clients.session-ended": { caller: ScopedServerCaller; reason: string };
+  /** A hosted client principal's session in `workspaceId` ended for good (`trust-revoked`, `retired`, ...). */
+  "clients.session-ended": { caller: ScopedServerCaller; workspaceId: string; reason: string };
   "cdp-token": { workspaceId: string; token: string };
   "host.observe-failure": {
     workspaceId: string;

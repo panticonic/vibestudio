@@ -38,6 +38,7 @@ Environment:
   VIBESTUDIO_IOS_APS_ENV=development|production      Add APNs entitlement.
   VIBESTUDIO_IOS_PAIR_HOST=vibestudio.app             Add applinks/webcredentials domains.
   VIBESTUDIO_IOS_ASSOCIATED_DOMAINS=domain[,domain]   Add exact associated-domain entries.
+  VIBESTUDIO_IOS_APP_GROUP=1                          Add the App Group shared with the widget and share extension.
 `);
 }
 
@@ -58,11 +59,13 @@ function renderEntitlements({ configuration }) {
   const domainBlock = domains.length
     ? `\n\t<key>com.apple.developer.associated-domains</key>\n\t<array>\n${domains.map((domain) => `\t\t<string>${plistString(domain)}</string>`).join("\n")}\n\t</array>`
     : "";
-  // The app shares one App Group with its widget and share extension (launch
-  // snapshot, shared-content inbox). Xcode expands the build setting, so a
+  // Opt-in, like the other gated capabilities (it needs the App Groups
+  // capability registered for the identifier). The app shares one App Group
+  // with its widget and share extension (launch snapshot, shared-content inbox). Xcode expands the build setting, so a
   // locally overridden bundle id keeps app and extensions on the same group.
-  const appGroupBlock =
-    "\n\t<key>com.apple.security.application-groups</key>\n\t<array>\n\t\t<string>group.$(VIBESTUDIO_IOS_BUNDLE_ID)</string>\n\t</array>";
+  const appGroupBlock = process.env.VIBESTUDIO_IOS_APP_GROUP
+    ? "\n\t<key>com.apple.security.application-groups</key>\n\t<array>\n\t\t<string>group.$(VIBESTUDIO_IOS_BUNDLE_ID)</string>\n\t</array>"
+    : "";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">

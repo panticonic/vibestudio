@@ -68,13 +68,11 @@ function launched(buildKey = "build-1"): LaunchedClient {
       },
     ],
     grant: {
-      connectionGrant: "grant-token",
-      expiresAt: 1_000_000,
+      credential: "grant-token",
       principalId: `client:browser:terminal:${credentials.deviceId}`,
       deviceId: credentials.deviceId,
       serverId: credentials.serverId,
       serverBootId: `boot_${"B".repeat(24)}`,
-      workspaceId: "ws_system",
     },
   };
 }
@@ -143,7 +141,6 @@ function harness(results: RunResult[], listings: ClientListing[] = []) {
         ({
           launcher: {},
           cache,
-          grants: { acquire: vi.fn() },
           descriptor: { host: "terminal", hostVersion: "1", runtimes: {}, capabilities: [] },
         }) as never
     ),

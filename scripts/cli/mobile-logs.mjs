@@ -2,7 +2,7 @@
 // Tail adb logcat for the Vibestudio Android app process.
 
 import { spawn } from "node:child_process";
-import { terminateOwnedProcessTree } from "../owned-process-tree.mjs";
+import { ownedEntry, retireOnAbort } from "../lib/owned-entry.mjs";
 import { bootedIosSimulator } from "./lib/mobile-ios.mjs";
 import { flagValue } from "./lib/args.mjs";
 
@@ -79,40 +79,28 @@ function runCapture(command, args) {
   });
 }
 
-async function streamOwned(command, args) {
-  const child = spawn(command, args, {
+async function streamOwned(ownership, ownerSignal, command, args) {
+  // The stream belongs to this script's ownership: a stop request, or the
+  // script's own death, retires it.
+  const owned = ownership.spawn(command, args, {
+    kill: "immediate",
+    label: command,
     stdio: "inherit",
-    detached: process.platform !== "win32",
   });
-  if (!child.pid) throw new Error(`Could not start ${command}`);
-
-  let requestedSignal = null;
-  let termination = null;
-  const requestTermination = (signal) => {
-    if (requestedSignal) return;
-    requestedSignal = signal;
-    termination = terminateOwnedProcessTree(child.pid);
-    void termination.catch(() => {});
-  };
-  const onSigint = () => requestTermination("SIGINT");
-  const onSigterm = () => requestTermination("SIGTERM");
-  process.once("SIGINT", onSigint);
-  process.once("SIGTERM", onSigterm);
-
-  try {
-    const exit = await new Promise((resolve, reject) => {
-      child.once("error", reject);
-      child.once("exit", (code, signal) => resolve({ code, signal }));
-    });
-    const retired = await (termination ?? terminateOwnedProcessTree(child.pid));
-    if (!retired.gone) {
-      throw new Error(retired.detail ?? `${command} process tree did not retire`);
-    }
-    return { code: exit.code, signal: requestedSignal ?? exit.signal };
-  } finally {
-    process.off("SIGINT", onSigint);
-    process.off("SIGTERM", onSigterm);
+  const { child } = owned;
+  if (!child.pid) {
+    await owned.registered.catch(() => undefined);
+    throw new Error(`Could not start ${command}`);
   }
+  retireOnAbort(ownership, ownerSignal, owned);
+  const exit = await new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("exit", (code, signal) => resolve({ code, signal }));
+  });
+  await owned.join();
+  const stop =
+    ownerSignal.aborted && ownerSignal.reason?.code === "ESTOP" ? ownerSignal.reason : null;
+  return { code: exit.code, signal: stop?.signal ?? exit.signal };
 }
 
 function finishStream(result) {
@@ -120,7 +108,7 @@ function finishStream(result) {
   else process.exitCode = result.code ?? 0;
 }
 
-async function main() {
+async function main({ signal, ownership }) {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     printHelp();
@@ -132,21 +120,21 @@ async function main() {
     }
     const devices = await runCapture("xcrun", ["simctl", "list", "devices", "available", "--json"]);
     const simulatorId = bootedIosSimulator(devices.stdout, options.device);
-    console.log(`[mobile-logs] Streaming Vibestudio logs from simulator ${simulatorId}. Press Ctrl-C to stop.`);
-    finishStream(
-      await streamOwned("xcrun", [
-        "simctl",
-        "spawn",
-        simulatorId,
-        "log",
-        "stream",
-        "--style",
-        "compact",
-        "--predicate",
-        'process == "Vibestudio"',
-      ])
+    console.log(
+      `[mobile-logs] Streaming Vibestudio logs from simulator ${simulatorId}. Press Ctrl-C to stop.`
     );
-    return;
+    signal.throwIfAborted();
+    return await streamOwned(ownership, signal, "xcrun", [
+      "simctl",
+      "spawn",
+      simulatorId,
+      "log",
+      "stream",
+      "--style",
+      "compact",
+      "--predicate",
+      'process == "Vibestudio"',
+    ]);
   }
 
   const pidResult = await runCapture(
@@ -161,13 +149,20 @@ async function main() {
   }
 
   console.log(`[mobile-logs] Tailing ${options.packageName} pid ${pid}. Press Ctrl-C to stop.`);
-  finishStream(
-    await streamOwned("adb", adbArgs(options.device, ["logcat", "--pid", pid, "-v", "time"]))
+  signal.throwIfAborted();
+  return await streamOwned(
+    ownership,
+    signal,
+    "adb",
+    adbArgs(options.device, ["logcat", "--pid", pid, "-v", "time"])
   );
 }
 
 try {
-  await main();
+  // Released before the stream's status is reported: a stop request ends this
+  // process by the signal that asked for it.
+  const result = await ownedEntry(main);
+  if (result) finishStream(result);
 } catch (error) {
   console.error(`[mobile-logs] ${error instanceof Error ? error.message : String(error)}`);
   process.exit(1);

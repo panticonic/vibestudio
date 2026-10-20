@@ -1,13 +1,13 @@
 import * as fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { deserializeRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
 import { parseHubReadyPayload, rootBootstrapPairingInvite } from "./cli/lib/hub-ready.mjs";
 
 import { joinChildProcess } from "./lib/join-child-process.mjs";
+import { withOwnership } from "./lib/owned-entry.mjs";
 import { resolveMacAppExecutable } from "./lib/mac-app-executable.mjs";
 import {
   hasOwnershipFailure,
@@ -250,7 +250,7 @@ function assertNativeReleaseRunner(context) {
     );
 }
 
-export async function withInstalledReleaseSession(context, operation) {
+export async function withInstalledReleaseSession(context, ownership, operation) {
   assertNativeReleaseRunner(context);
   const resources = context.packager.getResourcesDir(context.appOutDir);
   const product = context.packager.appInfo.productFilename;
@@ -265,7 +265,7 @@ export async function withInstalledReleaseSession(context, operation) {
       appRoot,
       resources,
       executable,
-      scratchParent: path.dirname(context.appOutDir),
+      ownership,
       serverEntry: path.join(unpacked, "dist/server-electron.cjs"),
       cliEntry: path.join(unpacked, "dist/cli/client.mjs"),
       environment: { ELECTRON_RUN_AS_NODE: "1" },
@@ -274,13 +274,13 @@ export async function withInstalledReleaseSession(context, operation) {
   );
 }
 
-export async function withStandaloneReleaseSession(appRoot, executable, scratchParent, operation) {
+export async function withStandaloneReleaseSession(appRoot, executable, ownership, operation) {
   return withReleaseConsumerSession(
     {
       appRoot,
       resources: appRoot,
       executable,
-      scratchParent,
+      ownership,
       serverEntry: path.join(appRoot, "dist/server.mjs"),
       cliEntry: path.join(appRoot, "dist/cli/client.mjs"),
       environment: {},
@@ -290,62 +290,22 @@ export async function withStandaloneReleaseSession(appRoot, executable, scratchP
 }
 
 async function withReleaseConsumerSession(
-  { appRoot, resources, executable, scratchParent, serverEntry, cliEntry, environment },
+  { appRoot, resources, executable, ownership, serverEntry, cliEntry, environment },
   operation
 ) {
-  // The publisher owns this disk-backed staging directory and joins the consumer.
-  const scratch = await fsp.mkdtemp(path.join(scratchParent, ".userland-build-"));
+  // Disk-backed reaper scratch, removed once the consumer's group has retired.
+  const scratch = await ownership.scratch("userland-build-");
   let server;
+  let ownedServer;
   let closed;
   let serverError;
   let stopping = false;
-  let stopFailure;
-  let stopDelivery;
-  let ownerRevocationRequested = false;
   let tail = "";
-  let operationFailure;
   const cancellation = new AbortController();
-  const revokeAfterStopDeliveryFailure = (error) => {
-    stopFailure ??= error;
-    if (!server?.connected) return;
-    try {
-      server.disconnect();
-      ownerRevocationRequested = true;
-    } catch (disconnectError) {
-      stopFailure = new AggregateError(
-        [stopFailure, disconnectError],
-        "Could not deliver parent-owned stop or revoke its process lease",
-        { cause: stopFailure }
-      );
-    }
-  };
+  // Ordered shutdown: SIGTERM to the server, then whatever its group still holds.
   const stop = () => {
     stopping = true;
-    if (
-      server &&
-      server.exitCode === null &&
-      server.signalCode === null &&
-      server.connected &&
-      !stopDelivery
-    ) {
-      // The existing parent-owned stop message asks the service owner to run
-      // its ordered shutdown while the IPC ownership lease remains connected.
-      stopDelivery = new Promise((resolve) => {
-        const failed = (error) => {
-          revokeAfterStopDeliveryFailure(error);
-          resolve();
-        };
-        try {
-          server.send({ type: "vibestudio:parent-owned-stop" }, (error) => {
-            if (error) failed(error);
-            else resolve();
-          });
-        } catch (error) {
-          failed(error);
-        }
-      });
-    }
-    return stopDelivery ?? Promise.resolve();
+    return ownedServer ? ownership.scope.track(ownedServer.retire()) : Promise.resolve();
   };
   const interrupt = (signal) => {
     cancellation.abort(new Error(`Release operation cancelled by ${signal}`));
@@ -404,16 +364,18 @@ async function withReleaseConsumerSession(
           await fsp.mkdir(dir, { recursive: true, mode: 0o700 });
         const readyFile = path.join(scratch, "ready.json");
         cancellation.signal.throwIfAborted();
-        server = spawn(
+        ownedServer = ownership.spawn(
           executable,
           [serverEntry, "--app-root", appRoot, "--ready-file", readyFile],
           {
+            kill: "graceful",
+            label: "release-build-server",
             env,
             cwd: scratch,
-            detached: process.platform !== "win32",
-            stdio: ["ignore", "pipe", "pipe", "ipc"],
+            stdio: ["ignore", "pipe", "pipe"],
           }
         );
+        server = ownedServer.child;
         server.on("error", (error) => {
           serverError ??= error;
           if (!stopping) cancellation.abort(serverError);
@@ -443,12 +405,15 @@ async function withReleaseConsumerSession(
           let output = "",
             errorOutput = "";
           try {
-            const child = spawn(executable, [cliEntry, ...args, "--json"], {
+            const ownedCli = ownership.spawn(executable, [cliEntry, ...args, "--json"], {
+              kill: "immediate",
+              label: "release-build-cli",
               env,
               cwd: scratch,
               signal: controller.signal,
               stdio: ["ignore", "pipe", "pipe"],
             });
+            const child = ownedCli.child;
             const joined = joinChildProcess(child);
             let failure;
             child.on("error", (error) => {
@@ -461,6 +426,7 @@ async function withReleaseConsumerSession(
               errorOutput = (errorOutput + chunk).slice(-8192);
             });
             const { code } = await joined;
+            await ownedCli.join();
             if (serverError) throw serverError;
             if (cancellation.signal.aborted) throw cancellation.signal.reason;
             if (failure || code !== 0)
@@ -482,6 +448,7 @@ async function withReleaseConsumerSession(
           env,
           runBuildBatch: (sources, schemaEvidence) =>
             runInstalledRpcBatch({
+              ownership,
               executable,
               runnerEntry: path.join(path.dirname(cliEntry), "releaseVerifierRunner.mjs"),
               cliEntry,
@@ -497,7 +464,6 @@ async function withReleaseConsumerSession(
         if (serverError) throw serverError;
         return result;
       } catch (error) {
-        operationFailure = error;
         throw new Error(`Installed release operation failed: ${error.message}\n${tail}`, {
           cause: error,
         });
@@ -507,15 +473,13 @@ async function withReleaseConsumerSession(
       const failures = [];
       await runOwnedCleanupSteps(
         [
-          async () => {
-            await stop();
-            if (stopFailure) throw stopFailure;
-          },
+          () => stop(),
           async () => {
             if (!closed) return;
             const result = await closed;
+            await ownedServer.join();
             if (result.error) throw result.error;
-            if (result.signal && !(ownerRevocationRequested && result.signal === "SIGKILL"))
+            if (result.signal)
               throw new Error(`Release build server was terminated by ${result.signal}: ${tail}`);
             if (result.code !== 0)
               throw new Error(`Release build server exited (${result.code}): ${tail}`);
@@ -523,15 +487,6 @@ async function withReleaseConsumerSession(
         ],
         "Installed release process retirement failed"
       ).catch((error) => failures.push(error));
-      if (
-        !hasOwnershipFailure(operationFailure) &&
-        !failures.some((error) => hasOwnershipFailure(error))
-      ) {
-        await runOwnedCleanupSteps(
-          [() => fsp.rm(scratch, { recursive: true, force: true })],
-          "Installed release scratch retirement failed"
-        ).catch((error) => failures.push(error));
-      }
       await runOwnedCleanupSteps(
         [() => process.off("SIGINT", onInterrupt), () => process.off("SIGTERM", onTerminate)],
         "Installed release signal listener retirement failed"
@@ -567,14 +522,16 @@ export async function prepareInstalledWorkspaceTemplates(context) {
   });
 }
 
-export async function prepareInstalledTemplateRelease({
-  appRoot,
-  resources,
-  executable,
-  entry,
-  scratchParent,
-  electron = false,
-}) {
+/** `signal` is the caller's stop request: it cancels the producer, which is joined
+ * before its private scratch is retired. */
+export function prepareInstalledTemplateRelease(input) {
+  return withOwnership((ownership) => prepareInstalledTemplateReleaseOwned(ownership, input));
+}
+
+async function prepareInstalledTemplateReleaseOwned(
+  ownership,
+  { appRoot, resources, executable, entry, scratchParent, signal, electron = false }
+) {
   const scratch = await fsp.mkdtemp(path.join(scratchParent, ".template-release-"));
   const env = {
     ...process.env,
@@ -608,6 +565,7 @@ export async function prepareInstalledTemplateRelease({
   try {
     await fsp.mkdir(env.TMPDIR, { recursive: true });
     preparation = prepareWorkspaceRelease({
+      ownership,
       appRoot,
       output: resources,
       scratch: path.join(scratch, "producer"),
@@ -615,6 +573,9 @@ export async function prepareInstalledTemplateRelease({
       executable,
       entry,
     });
+    const stop = () => void preparation.stop().catch(() => {});
+    signal?.addEventListener("abort", stop, { once: true });
+    if (signal?.aborted) stop();
     await preparation.completed;
   } catch (error) {
     retainFailure(error);
@@ -648,15 +609,19 @@ export async function prebuildReleaseUserland(context) {
 
 /** A clean consumer must reuse the producer's exact immutable records. */
 export async function verifyReleaseUserland(context) {
+  // The session's ownership is released before evidence is published: failed
+  // retirement never publishes.
   await verifyAndPublishSchemaEvidence((operation) =>
-    withInstalledReleaseSession(context, operation)
+    withOwnership((ownership) => withInstalledReleaseSession(context, ownership, operation))
   );
 }
 
 /** npm and Electron share the genuine serving verifier and final evidence gate. */
-export async function verifyStandaloneReleaseUserland(appRoot, executable, scratchParent) {
+export async function verifyStandaloneReleaseUserland(appRoot, executable) {
   await verifyAndPublishSchemaEvidence((operation) =>
-    withStandaloneReleaseSession(appRoot, executable, scratchParent, operation)
+    withOwnership((ownership) =>
+      withStandaloneReleaseSession(appRoot, executable, ownership, operation)
+    )
   );
 }
 
@@ -670,7 +635,8 @@ export async function verifyAndPublishSchemaEvidence(openSession) {
         staged = schemaProbeStagingPath(resources);
         await verifyPreparedReleaseUserland(session, { resources, stagingPath: staged });
       });
-      // openSession joins server/probe retirement and private scratch removal.
+      // openSession joins server/probe retirement and releases its ownership,
+      // which removes the private scratch.
       // Failed retirement never publishes an installed evidence component.
       await publishSchemaProbeComponent(staged, resources);
     },
@@ -769,6 +735,7 @@ export async function verifyPreparedReleaseUserland(
 }
 
 export async function runInstalledRpcBatch({
+  ownership,
   executable,
   runnerEntry,
   cliEntry,
@@ -785,11 +752,16 @@ export async function runInstalledRpcBatch({
   let result;
   let primaryFailure;
   try {
-    const child = spawn(executable, [runnerEntry, inputPath], {
+    // Cancellation reaches the runner over IPC; the group is killed at once if
+    // this process is lost.
+    const owned = ownership.spawn(executable, [runnerEntry, inputPath], {
+      kill: "immediate",
+      label: "release-verifier-runner",
       env,
       cwd: scratch,
       stdio: ["ignore", "pipe", "pipe", "ipc"],
     });
+    const child = owned.child;
     const joined = joinChildProcess(child);
     let stdout = "";
     let stderr = "";
@@ -851,6 +823,7 @@ export async function runInstalledRpcBatch({
     signal?.addEventListener("abort", onAbort, { once: true });
     if (signal?.aborted) deliverCancellation();
     const terminal = await joined;
+    await owned.join();
     signal?.removeEventListener("abort", onAbort);
     await cancelDelivery;
     const resultLine = stdout

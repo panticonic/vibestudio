@@ -325,7 +325,15 @@ function fixture(
     app: { shellSurfaces: () => ["settings", "about"], onOpenShellSurface: openShellSurface },
     events,
     window: window as unknown as PanelHostWindow,
-    clientWindows: { byCaller: () => null },
+    clientWindows: {
+      byCaller: (id: string) =>
+        (({
+          "native-system-shell": { spec: { capabilities: ["approval-surface"] } },
+          // A window that does not host panels still fronts a human.
+          "chat-window": { spec: { capabilities: ["approval-surface"] } },
+          "plain-window": { spec: { capabilities: ["notifications"] } },
+        })[id] as never) ?? null,
+    },
     menus: { popup: vi.fn() } as never,
     authorize: async () => {
       throw new Error("No service call expected in lifecycle test");
@@ -484,6 +492,22 @@ describe("workspace runtime ownership", () => {
       });
       expect(owner.serverClient.call).toHaveBeenCalledWith("problemReports", "decide", [0, "on"]);
       expect(await definition.handler!(human, "consent", [])).toMatchObject({ state: "undecided" });
+      const chat = {
+        caller: createVerifiedCaller("chat-window", "client", null, null, {
+          userId: "alice",
+          handle: "alice",
+        }),
+      };
+      expect(await definition.handler!(chat, "serverConsent", [])).toEqual(undecided);
+      const plain = {
+        caller: createVerifiedCaller("plain-window", "client", null, null, {
+          userId: "alice",
+          handle: "alice",
+        }),
+      };
+      await expect(definition.handler!(plain, "decideServer", [1, "off"])).rejects.toThrow(
+        "trusted reporting UI"
+      );
       const agent = {
         caller: createVerifiedCaller("agent", "do", null, null, {
           userId: "alice",

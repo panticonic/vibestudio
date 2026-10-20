@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import { joinChildProcess } from "./lib/join-child-process.mjs";
+import { ownedEntry, retireOnAbort } from "./lib/owned-entry.mjs";
 import {
   prepareInstalledTemplateRelease,
   verifyStandaloneReleaseUserland,
 } from "./prebuild-release-userland.mjs";
-import spawn from "cross-spawn";
 // Stage the one publishable npm package from a completed `pnpm build`:
 //
 //   dist-packages/server  → @panticonic/vibestudio-server  (slim headless server, no electron)
@@ -78,20 +78,20 @@ export const SERVER_RUNTIME_ARTIFACTS = STANDALONE_SERVER_RUNTIME_ARTIFACTS;
 // not when imported (e.g. by the drift-guard test) — importing must be free of
 // side effects beyond the cheap top-level reads above.
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  main().catch((err) => {
+  ownedEntry(main).catch((err) => {
     console.error(formatRpcFailure(err));
     process.exitCode = 1;
   });
 }
 
-async function main() {
+async function main({ signal, ownership }) {
   console.log(`Staging ${PUBLIC_SERVER_PACKAGE_NAME} @ v${VERSION}`);
   assertBuilt();
   const nativeArtifacts = assertNativeIsolationArtifacts(repoRoot);
   buildSelfContainedExtensionHost();
   rmrf(outRoot);
   await stageServer(nativeArtifacts);
-  await prepareServerTemplateRelease(path.join(outRoot, "server"));
+  await prepareServerTemplateRelease(path.join(outRoot, "server"), ownership, signal);
   assertNoBundledUserlandSource(path.join(outRoot, "server"), "staged server npm package");
   console.log("\n✔ Staged dist-packages/server. Validate with:");
   console.log("    pnpm npm:authenticated publish dist-packages/server --dry-run");
@@ -100,75 +100,38 @@ async function main() {
 /** Compile against a real installation of the staged package. Publication
  * ships the resulting source and artifacts, rather than making its first user
  * install development dependencies and compile the default workspaces. */
-async function prepareServerTemplateRelease(root) {
+async function prepareServerTemplateRelease(root, ownership, signal) {
   const run = async (executable, args) => {
-    const child = spawn(executable, args, {
+    const owned = ownership.spawn(executable, args, {
+      kill: "immediate",
+      label: "staged-install",
       cwd: root,
-      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
+      // npm is npm.cmd on Windows, which Node only starts through a shell.
+      ...(process.platform === "win32" ? { shell: true } : {}),
     });
-    let cancellation, stopping;
-    const stop = () => {
-      cancellation ??= new Error("Staged dependency installation cancelled");
-      stopping ??= new Promise((resolve, reject) => {
-        if (!child.pid) return resolve();
-        if (process.platform === "win32") {
-          const killer = spawn("taskkill", ["/T", "/F", "/PID", String(child.pid)], {
-            stdio: "ignore",
-          });
-          killer.once("error", reject);
-          killer.once("close", (code) =>
-            code === 0
-              ? resolve()
-              : reject(new Error(`Dependency guest retirement failed (${code})`))
-          );
-        } else {
-          try {
-            process.kill(-child.pid, "SIGKILL");
-            resolve();
-          } catch (error) {
-            if (error.code === "ESRCH") resolve();
-            else reject(error);
-          }
-        }
-      });
-      void stopping.catch(() => {});
-    };
-    process.on("SIGINT", stop);
-    process.on("SIGTERM", stop);
-    const joined = joinChildProcess(child);
+    const { child } = owned;
+    retireOnAbort(ownership, signal, owned);
     for (const stream of [child.stdout, child.stderr])
       stream.on("data", (chunk) => process.stdout.write(chunk));
-    try {
-      const result = await joined;
-      const failures = [];
-      if (result.error) {
-        failures.push(
-          new Error(`Staged dependency installation failed (${result.signal ?? result.code})`, {
-            cause: result.error,
-          })
-        );
-      }
-      if (cancellation) failures.push(cancellation);
-      const expectedOwnedKill =
-        cancellation && process.platform !== "win32" && result.signal === "SIGKILL";
-      if (!expectedOwnedKill && (result.code !== 0 || result.signal)) {
-        failures.push(
-          new Error(`Staged dependency installation failed (${result.signal ?? result.code})`)
-        );
-      }
-      if (stopping) {
-        try {
-          await stopping;
-        } catch (stopError) {
-          failures.push(stopError);
-        }
-      }
-      throwFailures(failures, "Staged dependency installation did not complete cleanly");
-    } finally {
-      process.off("SIGINT", stop);
-      process.off("SIGTERM", stop);
+    const result = await joinChildProcess(child);
+    await owned.join();
+    // A requested stop killed the installation; the request is the outcome.
+    signal.throwIfAborted();
+    const failures = [];
+    if (result.error) {
+      failures.push(
+        new Error(`Staged dependency installation failed (${result.signal ?? result.code})`, {
+          cause: result.error,
+        })
+      );
     }
+    if (result.code !== 0 || result.signal) {
+      failures.push(
+        new Error(`Staged dependency installation failed (${result.signal ?? result.code})`)
+      );
+    }
+    throwFailures(failures, "Staged dependency installation did not complete cleanly");
   };
   return withOwnedCleanup(
     async () => {
@@ -202,8 +165,9 @@ async function prepareServerTemplateRelease(root) {
         executable: process.execPath,
         entry: path.join(root, "dist/prepare-workspace-templates.mjs"),
         scratchParent: outRoot,
+        signal,
       });
-      await verifyStandaloneReleaseUserland(root, process.execPath, outRoot);
+      await verifyStandaloneReleaseUserland(root, process.execPath);
     },
     [
       () => rmrf(path.join(root, "node_modules")),

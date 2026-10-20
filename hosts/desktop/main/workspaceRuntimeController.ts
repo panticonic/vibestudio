@@ -20,6 +20,7 @@ import {
 } from "./services/browserEnvironmentService.js";
 import path from "node:path";
 import { EventService } from "@vibestudio/shared/eventsService";
+import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import { ServiceContainer } from "@vibestudio/shared/serviceContainer";
 import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient";
@@ -161,6 +162,14 @@ export function createDesktopWorkspaceRuntime(deps: {
       createHash("sha256").update(connection.nativeStorageScope).digest("hex")
     )
   );
+  // A human is in front of this when the caller is a client window the server
+  // admitted as an approval surface, whether or not it hosts panels.
+  const callerIsHuman = (ctx: ServiceContext) =>
+    ctx.caller.runtime.kind === "client" &&
+    (deps.clientWindows
+      .byCaller(ctx.caller.runtime.id)
+      ?.spec.capabilities.includes("approval-surface") ??
+      false);
   const reportingRemote = createTypedServiceClient(
     "problemReports",
     problemReportsMethods,
@@ -306,9 +315,7 @@ export function createDesktopWorkspaceRuntime(deps: {
       transport: (_ctx, input) => reportingRemote.transport(input),
       collect: (_ctx, selection) => {
         if (selection.source === "startup") {
-          const contents = window.viewManager?.getWebContents(_ctx.caller.runtime.id);
-          const shell = window.viewManager?.getHostedShellWebContents();
-          if (!contents || contents.id !== shell?.id)
+          if (!callerIsHuman(_ctx))
             throw Object.assign(new Error("Select device diagnostics in trusted reporting UI"), {
               errorKind: "access",
             });
@@ -356,10 +363,7 @@ export function createDesktopWorkspaceRuntime(deps: {
           throw new Error("Only selected manual reports can be imported for review");
         return bundle;
       },
-      isHuman: (ctx) =>
-        ctx.caller.runtime.kind === "client" &&
-        window.viewManager?.getWebContents(ctx.caller.runtime.id)?.id ===
-          window.viewManager?.getHostedShellWebContents()?.id,
+      isHuman: callerIsHuman,
     })
   );
   reportingDelivery.wake();

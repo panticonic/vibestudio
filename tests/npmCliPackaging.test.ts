@@ -14,6 +14,7 @@ import {
   stagePassthroughScriptClosure,
 } from "../scripts/build-server-npm-package.mjs";
 import { createRequire } from "node:module";
+import { OWNERSHIP_REAPER_FILES } from "../packages/shared/src/ownershipFiles.mjs";
 
 describe("npm CLI packaging", () => {
   it("stages the declared published files and assets without development source", () => {
@@ -132,6 +133,7 @@ describe("npm CLI packaging", () => {
       "dist/dependency-content-maintenance.cjs",
       "dist/internal-do-programs.json",
       "dist/sql-wasm.wasm",
+      ...OWNERSHIP_REAPER_FILES.map((filename) => `dist/${filename}`),
       "dist/host-build-fingerprint.json",
       "dist/host-preparation-recipes.json",
     ]);
@@ -166,8 +168,6 @@ describe("npm CLI packaging", () => {
       "scripts/cli/lib/mobile-native-android.mjs",
       "scripts/host-build-generations.mjs",
       "scripts/server-runtime-artifacts.mjs",
-      "scripts/owned-process-tree.mjs",
-      "scripts/owned-process-identity.mjs",
     ]) {
       const target = path.join(root, relative);
       mkdirSync(path.dirname(target), { recursive: true });

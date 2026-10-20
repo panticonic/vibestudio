@@ -1,38 +1,57 @@
-import { fork } from "node:child_process";
 import fs from "node:fs";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
-import {
-  captureOwnedProcessIdentity,
-  observeOwnedProcess,
-} from "../../scripts/owned-process-identity.mjs";
+import { getProfileDataPath } from "@vibestudio/env-paths";
+import { Ownership } from "@vibestudio/shared/ownership";
+import { awaitRetirement, ledgerDirOf, listLedgers } from "@vibestudio/shared/ownershipLedger";
 
 export interface ManagedServerReady {
   kind: "ready";
   pairingLink: string;
   secrets: { env: Record<string, string>; electronArgs: string[] };
+  /** Process-group leaders of the owner's live helpers (from its ledger). */
   helperPids: number[];
 }
 
-export function launchManagedServerOwner(
+/**
+ * Start the resource owner for one live test. The owner is a lessee of the
+ * caller's ownership: when the caller dies, however abruptly, the lease ends,
+ * the owner stops the server it provisioned in order, and the caller's reaper
+ * retires whatever the owner leaves behind. The ledger records `runRoot` so
+ * the run coordinator can join every owner before deleting the run's files.
+ */
+export async function launchManagedServerOwner(
   instance: string,
   directory: string,
   runRoot: string,
   logPath: string,
   environment: Record<string, string> = {}
 ) {
+  const ownership = await Ownership.open({
+    profileDir: getProfileDataPath(),
+    lifetime: "leased",
+    meta: { role: "managed-server-owner", runRoot },
+  });
   const log = fs.openSync(logPath, "a", 0o600);
-  const child = fork(
-    fileURLToPath(new URL("./managedServerOwner.mjs", import.meta.url)),
-    [instance, directory],
-    {
-      detached: process.platform !== "win32",
-      stdio: ["ignore", log, log, "ipc"],
-      execArgv: [],
-      env: { ...process.env, ...environment },
-    }
-  );
-  fs.closeSync(log);
+  let owned;
+  try {
+    owned = ownership.spawn(
+      process.execPath,
+      [fileURLToPath(new URL("./managedServerOwner.mjs", import.meta.url)), instance, directory],
+      {
+        stdio: ["ignore", log, log, "ipc"],
+        env: { ...process.env, ...environment },
+        kill: "graceful",
+        lease: true,
+        label: "managed-server-owner",
+      }
+    );
+  } catch (error) {
+    await ownership.release().catch(() => undefined);
+    throw error;
+  } finally {
+    fs.closeSync(log);
+  }
+  const { child } = owned;
   const exited = new Promise<void>((resolve, reject) => {
     child.once("error", reject);
     child.once("exit", (code) =>
@@ -43,12 +62,6 @@ export function launchManagedServerOwner(
   });
   // Mark failures handled even when they precede a caller awaiting cleanup.
   void exited.catch(() => {});
-  const identity = captureOwnedProcessIdentity(child.pid!);
-  const ownerDirectory = path.join(runRoot, "resource-owners");
-  fs.mkdirSync(ownerDirectory, { recursive: true });
-  fs.writeFileSync(path.join(ownerDirectory, `${child.pid}.json`), JSON.stringify(identity), {
-    mode: 0o600,
-  });
   const ready = new Promise<ManagedServerReady>((resolve, reject) => {
     child.on("message", (message: ManagedServerReady | { kind: "error"; message: string }) => {
       if (message.kind === "ready") resolve(message);
@@ -64,27 +77,39 @@ export function launchManagedServerOwner(
     ready,
     async stop() {
       if (child.connected) child.send({ kind: "stop" });
-      await exited;
+      const failures: unknown[] = [];
+      try {
+        await exited;
+      } catch (error) {
+        failures.push(error);
+      }
+      try {
+        await ownership.release();
+      } catch (error) {
+        failures.push(error);
+      }
+      if (failures.length === 1) throw failures[0];
+      if (failures.length) throw new AggregateError(failures, "Managed resource owner stop failed");
     },
   };
 }
 
-/** Coordinator backstop: finish resource cleanup before deleting run files. */
+/**
+ * Coordinator backstop: join the retirement of every ownership recorded for this
+ * run (the owners and desktops of a killed worker are retired by its reaper)
+ * before deleting run files.
+ */
 export async function stopRunResourceOwners(runRoot: string): Promise<void> {
-  const directory = path.join(runRoot, "resource-owners");
-  if (!fs.existsSync(directory)) return;
-  for (const file of fs.readdirSync(directory)) {
-    const identity = JSON.parse(fs.readFileSync(path.join(directory, file), "utf8"));
-    if (observeOwnedProcess(identity) === "absent") continue;
-    if (observeOwnedProcess(identity) !== "owned")
-      throw new Error(`Cannot verify resource owner ${identity.pid}`);
-    process.kill(identity.pid, "SIGTERM");
-    const deadline = Date.now() + 300_000;
-    while (observeOwnedProcess(identity) === "owned" && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    if (observeOwnedProcess(identity) !== "absent") {
-      throw new Error(`Managed resource owner ${identity.pid} has not finished cleanup`);
+  const dir = ledgerDirOf(getProfileDataPath());
+  const failures: unknown[] = [];
+  for (const { ledger } of listLedgers(dir)) {
+    if (ledger.meta["runRoot"] !== runRoot) continue;
+    try {
+      await awaitRetirement(dir, ledger.id, { token: ledger.token });
+    } catch (error) {
+      failures.push(error);
     }
   }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length) throw new AggregateError(failures, "Managed resource owners did not retire");
 }

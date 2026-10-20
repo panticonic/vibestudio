@@ -250,10 +250,8 @@ export async function createIrohServerClient(
       connectionId: randomUUID(),
       clientPlatform: "desktop",
       oauthCallbackMode: "client-loopback",
-      // Re-grant on EVERY (re)open: connection grants are one-shot, so pinning the
-      // first grant's token would fail the redeem on reconnect. The host that
-      // verified the client build mints each one for that exact build.
-      getToken: () => sessions.connectionGrant(caller.callerId),
+      // Every (re)open presents the credential of the build the host verified.
+      getToken: () => sessions.credential(caller.callerId),
       // The server's close reason (`trust-revoked`, `retired`) is the one
       // authoritative signal the host acts on.
       onTerminalClose: (error) => sessions.sessionEnded(caller, error.message),

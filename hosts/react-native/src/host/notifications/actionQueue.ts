@@ -13,7 +13,6 @@ import type { NotificationOpen } from "@vibestudio/rn-client-api/notificationsPr
  * port; nothing here touches a device.
  */
 
-export const BACKGROUND_ACTION_QUEUE_TTL_MS = 24 * 60 * 60 * 1000;
 export type BackgroundApprovalDecision = Exclude<ApprovalDecisionId, "dismiss">;
 export interface QueuedBackgroundAction extends WorkspaceApprovalTarget {
   decision: BackgroundApprovalDecision;
@@ -38,29 +37,20 @@ export function isBackgroundDecision(value: unknown): value is BackgroundApprova
   return value === "once" || value === "session" || value === "version" || value === "deny";
 }
 
-export function pruneStaleActions(
-  actions: QueuedBackgroundAction[],
-  now: number
-): QueuedBackgroundAction[] {
-  return actions.filter((entry) => now - entry.queuedAt <= BACKGROUND_ACTION_QUEUE_TTL_MS);
-}
-
-export function loadPendingActions(
-  raw: string | null | undefined,
-  now: number
-): QueuedBackgroundAction[] {
+/**
+ * A queued decision has no expiry: it leaves the queue when the server accepts
+ * it, or answers that the approval no longer exists (`hostNotifications.drain`).
+ */
+export function loadPendingActions(raw: string | null | undefined): QueuedBackgroundAction[] {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw) as { actions?: unknown };
     if (!Array.isArray(parsed.actions)) return [];
-    return pruneStaleActions(
-      parsed.actions.filter(
-        (value): value is QueuedBackgroundAction =>
-          readApprovalTarget(value) !== null &&
-          isBackgroundDecision(value.decision) &&
-          Number.isFinite(value.queuedAt)
-      ),
-      now
+    return parsed.actions.filter(
+      (value): value is QueuedBackgroundAction =>
+        readApprovalTarget(value) !== null &&
+        isBackgroundDecision(value.decision) &&
+        Number.isFinite(value.queuedAt)
     );
   } catch {
     return [];
@@ -74,13 +64,9 @@ export function serializePendingActions(actions: QueuedBackgroundAction[]): stri
 /** A later decision on the same approval replaces the earlier one. */
 export function enqueueAction(
   actions: QueuedBackgroundAction[],
-  action: QueuedBackgroundAction,
-  now: number
+  action: QueuedBackgroundAction
 ): QueuedBackgroundAction[] {
-  return [
-    ...pruneStaleActions(actions, now).filter((entry) => !sameApprovalTarget(entry, action)),
-    action,
-  ];
+  return [...actions.filter((entry) => !sameApprovalTarget(entry, action)), action];
 }
 
 export function sameQueuedAction(

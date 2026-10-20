@@ -28,7 +28,6 @@ import { WorkspaceSessionDirectory } from "./workspaceSessionDirectory.js";
 import type { DeviceCredentialEntry } from "./services/deviceCredentialStore.js";
 import type { PanelAssetDiagnostics } from "@vibestudio/shared/panelInterfaces";
 import type { ServerInfo } from "./serverInfo.js";
-import type { ProcessTreeTerminationResult } from "../../../scripts/owned-process-tree.mjs";
 
 const log = createDevLogger("ConnectionLink");
 
@@ -106,7 +105,7 @@ export class ConnectionLink {
   private establishArgs: EstablishArgs | null = null;
   private reestablishing = false;
   private readonly sessionEndedListeners = new Set<
-    (caller: ScopedServerCaller, reason: string) => void
+    (caller: ScopedServerCaller, workspaceId: string, reason: string) => void
   >();
 
   constructor(channel: ControlChannel) {
@@ -125,7 +124,9 @@ export class ConnectionLink {
   }
 
   /** A hosted client principal's session ended for good (`trust-revoked`, `retired`, ...). */
-  onClientSessionEnded(listener: (caller: ScopedServerCaller, reason: string) => void): () => void {
+  onClientSessionEnded(
+    listener: (caller: ScopedServerCaller, workspaceId: string, reason: string) => void
+  ): () => void {
     this.sessionEndedListeners.add(listener);
     return () => this.sessionEndedListeners.delete(listener);
   }
@@ -135,7 +136,8 @@ export class ConnectionLink {
       this.cdpTokens.set(workspaceId, token);
     });
     channel.on("clients.session-ended", (event: ConnectionEvents["clients.session-ended"]) => {
-      for (const listener of [...this.sessionEndedListeners]) listener(event.caller, event.reason);
+      for (const listener of [...this.sessionEndedListeners])
+        listener(event.caller, event.workspaceId, event.reason);
     });
   }
 
@@ -227,7 +229,7 @@ export class ConnectionLink {
       ? {
           detach: () => this.channel.request<void>("hub.detach", {}),
           beginShutdown: () => this.channel.request<void>("hub.begin-shutdown", {}),
-          stopTree: () => this.channel.request<ProcessTreeTerminationResult>("hub.stop-tree", {}),
+          stopTree: () => this.channel.request<void>("hub.stop-tree", {}),
         }
       : null;
     return {

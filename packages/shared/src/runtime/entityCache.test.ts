@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { EntityCache, callerRuntimeContextId } from "./entityCache.js";
+import { EntityCache, callerBuildContextId, callerRuntimeContextId } from "./entityCache.js";
 import type { EntityRecord } from "./entitySpec.js";
 
 function makeRecord(overrides: Partial<EntityRecord> = {}): EntityRecord {
@@ -199,6 +199,36 @@ describe("EntityCache", () => {
       cache._onActivate(b);
       expect(cache.listActive().map((r) => r.id)).toEqual(["panel:a"]);
     });
+  });
+});
+
+describe("listExecutionOwners", () => {
+  it("does not root a client principal's build, which belongs to the System client registry", () => {
+    const cache = new EntityCache();
+    const sealed = {
+      activeBuildKey: "b".repeat(64),
+      activeExecutionDigest: "e".repeat(64),
+      activeAuthority: { requests: [] } as never,
+    };
+    cache._onActivate({ ...makeRecord({ id: "panel:a" }), ...sealed });
+    cache._onActivate({
+      ...makeRecord({ id: "client:chat:web:dev", kind: "client" }),
+      ...sealed,
+    });
+    expect(cache.listExecutionOwners().map((r) => r.id)).toEqual(["panel:a"]);
+  });
+});
+
+describe("callerBuildContextId", () => {
+  it("gives a panel its own context and a client principal none, since its context is never materialized", () => {
+    const cache = new EntityCache();
+    cache._onActivate(makeRecord({ id: "panel:own", contextId: "ctx-own" }));
+    cache._onActivate(
+      makeRecord({ id: "client:chat:desktop:d", kind: "client", contextId: "ctx-derived" })
+    );
+    expect(callerBuildContextId(cache, "panel:own")).toBe("ctx-own");
+    expect(callerRuntimeContextId(cache, "client:chat:desktop:d")).toBe("ctx-derived");
+    expect(callerBuildContextId(cache, "client:chat:desktop:d")).toBeNull();
   });
 });
 

@@ -15,7 +15,7 @@ export interface ShellCredential {
 }
 
 interface StoredMobileConnectionBase {
-  schemaVersion: 5;
+  schemaVersion: 6;
   transport: "iroh";
   deviceIdentityId: string;
   credential: ShellCredential;
@@ -77,7 +77,7 @@ export function createPairedMobileConnection(
     throw new Error("Cannot persist invalid Iroh mobile identity state");
   }
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     transport: "iroh",
     phase: "paired",
     deviceIdentityId,
@@ -121,7 +121,7 @@ export function parseStoredMobileConnection(
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
-    if (value["schemaVersion"] !== 5 || value["transport"] !== "iroh") return null;
+    if (value["schemaVersion"] !== 6 || value["transport"] !== "iroh") return null;
     if (value["phase"] !== "paired" && value["phase"] !== "routed") return null;
     const currentCredential = credential(value["credential"]);
     const controlPairing = reach(value["controlPairing"]);
@@ -138,7 +138,7 @@ export function parseStoredMobileConnection(
       return null;
     const pairedAt = value["pairedAt"] as number;
     const base = {
-      schemaVersion: 5 as const,
+      schemaVersion: 6 as const,
       transport: "iroh" as const,
       deviceIdentityId: value["deviceIdentityId"],
       credential: currentCredential,
@@ -151,5 +151,26 @@ export function parseStoredMobileConnection(
       : { ...base, phase: "paired" };
   } catch {
     return null;
+  }
+}
+
+/**
+ * A stored connection written by an older build (an earlier schema version) is
+ * not convertible. Returns its identity id (null when it has none) so the
+ * caller can discard the orphaned identity with the credential, or undefined
+ * when the payload is not an older connection at all.
+ */
+export function unsupportedStoredMobileConnection(
+  raw: string | null | undefined
+): { identityId: string | null } | undefined {
+  if (!raw) return undefined;
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    const version = value["schemaVersion"];
+    if (typeof version !== "number" || version >= 6) return undefined;
+    const id = value["endpointIdentityId"] ?? value["deviceIdentityId"];
+    return { identityId: validText(id, 256) ? id : null };
+  } catch {
+    return undefined;
   }
 }

@@ -1,52 +1,52 @@
-import { spawn } from "node:child_process";
 import * as path from "node:path";
+import { retireOnAbort } from "./owned-entry.mjs";
 
 /**
  * Mint one device invite from a running instance through its own CLI.
- * `acquire` registers the child with the caller's owned process lifetime.
+ * The CLI child belongs to the caller's `ownership` and is retired if `signal` aborts.
  */
-export function mintDevicePairingLink(repoRoot, instanceId, ttlMs, acquire) {
-  return new Promise((resolve, reject) => {
-    const child = acquire(() =>
-      spawn(
-        process.execPath,
-        [
-          path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs"),
-          "src/dev/runCli.ts",
-          "--instance",
-          instanceId,
-          "remote",
-          "pair-device",
-          "--ttl-ms",
-          String(ttlMs),
-          "--json",
-        ],
-        {
-          cwd: repoRoot,
-          env: process.env,
-          stdio: ["ignore", "pipe", "pipe"],
-          detached: process.platform !== "win32",
-        }
-      )
-    );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => (stdout += chunk));
-    child.stderr.on("data", (chunk) => (stderr += chunk));
+export async function mintDevicePairingLink(repoRoot, instanceId, ttlMs, ownership, signal) {
+  const owned = ownership.spawn(
+    process.execPath,
+    [
+      path.join(repoRoot, "node_modules", "tsx", "dist", "cli.mjs"),
+      "src/dev/runCli.ts",
+      "--instance",
+      instanceId,
+      "remote",
+      "pair-device",
+      "--ttl-ms",
+      String(ttlMs),
+      "--json",
+    ],
+    {
+      kill: "immediate",
+      label: "pair-device",
+      cwd: repoRoot,
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    }
+  );
+  const { child } = owned;
+  if (signal) retireOnAbort(ownership, signal, owned);
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk) => (stdout += chunk));
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  const code = await new Promise((resolve, reject) => {
     child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code !== 0) {
-        reject(new Error(`Could not mint a device invite for ${instanceId}: ${stderr || stdout}`));
-        return;
-      }
-      const line = stdout.trim().split("\n").at(-1) ?? "";
-      try {
-        const deepLink = JSON.parse(line)?.pairing?.deepLink;
-        if (typeof deepLink !== "string") throw new Error("no deep link in the invite");
-        resolve(deepLink);
-      } catch (error) {
-        reject(new Error(`Device invite was not readable: ${error.message}: ${line.slice(0, 200)}`));
-      }
-    });
+    child.once("exit", resolve);
   });
+  await owned.join();
+  if (code !== 0) {
+    throw new Error(`Could not mint a device invite for ${instanceId}: ${stderr || stdout}`);
+  }
+  const line = stdout.trim().split("\n").at(-1) ?? "";
+  try {
+    const deepLink = JSON.parse(line)?.pairing?.deepLink;
+    if (typeof deepLink !== "string") throw new Error("no deep link in the invite");
+    return deepLink;
+  } catch (error) {
+    throw new Error(`Device invite was not readable: ${error.message}: ${line.slice(0, 200)}`);
+  }
 }

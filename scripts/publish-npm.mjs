@@ -4,7 +4,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import process from "node:process";
 import { Readable } from "node:stream";
@@ -13,8 +12,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { createGunzip } from "node:zlib";
 import { formatRpcFailure } from "@vibestudio/rpc";
 import { compare as compareSemver, valid as validSemver } from "semver";
-import { tsImport } from "tsx/esm/api";
 import { runWithOwnedCleanup } from "./lib/owned-cleanup.mjs";
+import { ownedEntry, withOwnership } from "./lib/owned-entry.mjs";
 import { spawnResultFailure } from "./lib/spawn-result-failure.mjs";
 import { createNpmAuth, npmTokenFilePath } from "./lib/npm-auth.mjs";
 import {
@@ -27,28 +26,22 @@ export { validateNpmPackageManifest };
 
 export { runWithOwnedCleanup } from "./lib/owned-cleanup.mjs";
 
-const { createDevelopmentClientLifetime } = await tsImport(
-  "./development-client-lifecycle.ts",
-  import.meta.url
-);
-
 const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const rootPkg = readJson(path.join(repoRoot, "package.json"));
 let announcedTokenEnv = false;
 let npmAuth;
-let candidateScratchDirectory = null;
 const publicationStagingTag = "vibestudio-publication-candidate";
 const serverPackage = {
   name: "@panticonic/vibestudio-server",
   dir: path.join(repoRoot, "dist-packages", "server"),
-  smokePrefix: path.join(os.tmpdir(), "vibestudio-npm-server-check"),
+  smokePrefix: "vibestudio-npm-server-check-",
 };
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
   try {
     await runWithOwnedCleanup(
-      () => main(),
-      cleanupPublisherScratch,
+      () => ownedEntry(({ ownership, signal }) => main(ownership, signal)),
+      closePublisherAuth,
       "npm publish operation and auth-config cleanup failed"
     );
   } catch (error) {
@@ -67,7 +60,7 @@ function formatSafeRpcFailure(error) {
   return redactAuthToken(formatRpcFailure(error));
 }
 
-async function main() {
+async function main(ownership, signal) {
   const options = parseArgs(process.argv.slice(2));
   if (options.help) {
     printUsage();
@@ -114,12 +107,10 @@ async function main() {
       packageVersion: entry.version,
     });
   } else {
-    candidateScratchDirectory = options.candidateOutput
-      ? null
-      : fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-npm-candidate-"));
     candidate = await packNpmPackageCandidate({
       packageRoot: entry.pkg.dir,
-      outputDirectory: options.candidateOutput ?? candidateScratchDirectory,
+      outputDirectory:
+        options.candidateOutput ?? (await ownership.scratch("vibestudio-npm-candidate-")),
       sourceSha,
     });
   }
@@ -159,7 +150,7 @@ async function main() {
   }
 
   for (const entry of manifests) {
-    await runInstallSmoke(entry, candidate.tarballPath, "Candidate install smoke");
+    await runInstallSmoke(entry, candidate.tarballPath, "Candidate install smoke", signal);
   }
 
   if (options.dryRunOnly) {
@@ -220,7 +211,12 @@ async function main() {
   }
 
   for (const entry of manifests) {
-    await runInstallSmoke(entry, `${entry.pkg.name}@${entry.version}`, "Registry install smoke");
+    await runInstallSmoke(
+      entry,
+      `${entry.pkg.name}@${entry.version}`,
+      "Registry install smoke",
+      signal
+    );
   }
 
   for (const entry of manifests) {
@@ -301,28 +297,9 @@ function currentSourceSha() {
   return sourceSha;
 }
 
-function cleanupPublisherScratch() {
-  const failures = [];
-  for (const ownedPath of [candidateScratchDirectory]) {
-    if (!ownedPath) continue;
-    try {
-      fs.rmSync(ownedPath, { recursive: true, force: true });
-    } catch (error) {
-      failures.push(error);
-    }
-  }
-  candidateScratchDirectory = null;
-  try {
-    npmAuth?.close();
-  } catch (error) {
-    failures.push(error);
-  }
-  if (failures.length === 1) throw failures[0];
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Could not retire npm publisher scratch paths", {
-      cause: failures[0],
-    });
-  }
+/** The npm auth configuration is the publisher's only state outside its ownership. */
+function closePublisherAuth() {
+  npmAuth?.close();
 }
 
 function printUsage() {
@@ -565,56 +542,51 @@ function ensureTokenAuth() {
   return whoami.stdout.trim();
 }
 
-async function runInstallSmoke(entry, packageSpec, label) {
-  const root = fs.mkdtempSync(`${entry.pkg.smokePrefix}-`);
-  let lifetime;
-  return runWithOwnedCleanup(
-    async () => {
-      lifetime = createDevelopmentClientLifetime(root);
-      const prefix = path.join(root, "install");
-      const launchDirectory = path.join(root, "launch");
-      fs.mkdirSync(launchDirectory);
-      console.log(`\n[publish-npm] ${label} ${entry.pkg.name}@${entry.version}`);
-      run("npm", ["install", "-g", "--prefix", prefix, packageSpec], {
-        cwd: launchDirectory,
-      });
-      const packageDirectory = path.join(
-        prefix,
-        ...(process.platform === "win32" ? [] : ["lib"]),
-        "node_modules",
-        ...entry.pkg.name.split("/")
-      );
-      validateNpmPackageManifest(
-        readJson(path.join(packageDirectory, "package.json")),
-        { name: entry.pkg.name, version: entry.version },
-        "Installed candidate package"
-      );
-      run(path.join(prefix, "bin", "vibestudio"), ["--version"], { cwd: launchDirectory });
-      run(path.join(prefix, "bin", "vibestudio"), ["--help"], { cwd: launchDirectory });
-      run(path.join(prefix, "bin", "vibestudio"), ["remote", "serve", "--help"], {
-        cwd: launchDirectory,
-      });
-      run(path.join(prefix, "bin", "vibestudio"), ["remote", "doctor", "--json"], {
-        cwd: launchDirectory,
-      });
-      run(path.join(prefix, "bin", "vibestudio-server"), ["--help"], {
-        cwd: launchDirectory,
-      });
-      await runServerStartupSmoke(
-        path.join(prefix, "bin", "vibestudio-server"),
-        launchDirectory,
-        lifetime.acquire
-      );
-    },
-    () => {
-      if (lifetime) return lifetime.close();
-      return fs.promises.rm(root, { recursive: true, force: true });
-    },
-    "npm install smoke and owned process cleanup failed"
+/** One smoke owns its install, its server and their storage: all retire when it ends. */
+function runInstallSmoke(entry, packageSpec, label, signal) {
+  return withOwnership((ownership) => installSmoke(entry, packageSpec, label, ownership, signal));
+}
+
+async function installSmoke(entry, packageSpec, label, ownership, signal) {
+  const root = await ownership.scratch(entry.pkg.smokePrefix);
+  const prefix = path.join(root, "install");
+  const launchDirectory = path.join(root, "launch");
+  fs.mkdirSync(launchDirectory);
+  console.log(`\n[publish-npm] ${label} ${entry.pkg.name}@${entry.version}`);
+  run("npm", ["install", "-g", "--prefix", prefix, packageSpec], {
+    cwd: launchDirectory,
+  });
+  const packageDirectory = path.join(
+    prefix,
+    ...(process.platform === "win32" ? [] : ["lib"]),
+    "node_modules",
+    ...entry.pkg.name.split("/")
+  );
+  validateNpmPackageManifest(
+    readJson(path.join(packageDirectory, "package.json")),
+    { name: entry.pkg.name, version: entry.version },
+    "Installed candidate package"
+  );
+  run(path.join(prefix, "bin", "vibestudio"), ["--version"], { cwd: launchDirectory });
+  run(path.join(prefix, "bin", "vibestudio"), ["--help"], { cwd: launchDirectory });
+  run(path.join(prefix, "bin", "vibestudio"), ["remote", "serve", "--help"], {
+    cwd: launchDirectory,
+  });
+  run(path.join(prefix, "bin", "vibestudio"), ["remote", "doctor", "--json"], {
+    cwd: launchDirectory,
+  });
+  run(path.join(prefix, "bin", "vibestudio-server"), ["--help"], {
+    cwd: launchDirectory,
+  });
+  await runServerStartupSmoke(
+    path.join(prefix, "bin", "vibestudio-server"),
+    launchDirectory,
+    ownership,
+    signal
   );
 }
 
-async function runServerStartupSmoke(serverBinary, launchDirectory, acquire) {
+async function runServerStartupSmoke(serverBinary, launchDirectory, ownership, signal) {
   const readyFile = path.join(launchDirectory, "hub-ready.json");
   const env = { ...process.env };
   for (const key of [
@@ -626,13 +598,18 @@ async function runServerStartupSmoke(serverBinary, launchDirectory, acquire) {
     delete env[key];
   }
   env.XDG_CONFIG_HOME = path.join(launchDirectory, "config");
-  const child = acquire(() =>
-    spawn(serverBinary, ["--bootstrap-workspace", "npm-install-smoke", "--ready-file", readyFile], {
+  // Retired with the smoke's ownership once readiness is proven: stopped
+  // gracefully, before the installed package and its state are removed.
+  const { child } = ownership.spawn(
+    serverBinary,
+    ["--bootstrap-workspace", "npm-install-smoke", "--ready-file", readyFile],
+    {
+      kill: "graceful",
+      label: "npm-install-smoke-server",
       cwd: launchDirectory,
       stdio: "inherit",
       env,
-      detached: process.platform !== "win32",
-    })
+    }
   );
   let startupError;
   child.once("error", (error) => {
@@ -643,22 +620,18 @@ async function runServerStartupSmoke(serverBinary, launchDirectory, acquire) {
     exit = { code, signal };
   });
 
-  const deadline = Date.now() + 60_000;
+  // Readiness is observed against the server's own lifecycle: its exit or an
+  // operator's stop request ends the wait. No clock decides.
   while (!fs.existsSync(readyFile)) {
+    signal.throwIfAborted();
     if (startupError) throw startupError;
     if (exit) {
       throw new Error(
         `Installed server exited before readiness (code ${exit.code ?? "null"}, signal ${exit.signal ?? "none"})`
       );
     }
-    if (Date.now() >= deadline) {
-      throw new Error("Installed server did not become ready within 60 seconds");
-    }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-
-  // The caller's finally joins retirement of the entire acquired group before
-  // deleting the installed package or its server state, on success or failure.
 }
 
 function run(command, args, options) {

@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { clientsMethods } from "@vibestudio/service-schemas/clients";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import {
-  ApprovalFeed,
+  ApprovalSurfaces,
   serveDeviceDriver,
   type DeviceDriverTransport,
 } from "@vibestudio/shared/deviceDriver";
@@ -69,7 +69,7 @@ export async function runTerminalDevice(options: {
     const approvals = createTypedServiceClient("shellApproval", shellApprovalMethods, call);
 
     const changes = new ChangeSignal();
-    const feed = new ApprovalFeed(() => approvals.listPending());
+    const surfaces = new ApprovalSurfaces(() => approvals.listPending());
     events = await openServerEvents(device);
     // What changes a client's readiness is announced by `clients:changed` (the
     // declarations) and by `supervision:changed` (a build adopted or failed): a
@@ -82,7 +82,7 @@ export async function runTerminalDevice(options: {
     ];
     events.events.on("clients:changed", () => changes.bump());
     events.events.on("supervision:changed", () => changes.bump());
-    events.events.on("shell-approval:pending-changed", () => feed.notify());
+    events.events.on("shell-approval:pending-changed", () => surfaces.notify());
     await events.events.subscribeAll(watched);
 
     terminal = createTerminalDevice(
@@ -101,7 +101,7 @@ export async function runTerminalDevice(options: {
         },
         changes,
         approvals: {
-          feed,
+          surfaces,
           resolve: async (approvalId, decision) => {
             if (decision !== "accept-review") {
               await approvals.resolve(approvalId, decision);

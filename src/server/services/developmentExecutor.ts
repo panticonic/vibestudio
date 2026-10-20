@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
@@ -11,6 +11,7 @@ import {
   type DevelopmentPairSelection,
 } from "@vibestudio/service-schemas/development";
 import { canonicalJson } from "@vibestudio/content-addressing";
+import type { OwnedProcess, Ownership } from "@vibestudio/shared/ownership";
 import { domainHash } from "@vibestudio/shared/execution/identity";
 import type { ExecutionArtifactRefV1 } from "@vibestudio/shared/execution/retention";
 import type { ExactRepositorySnapshotPlan } from "../vcsHost/workspaceVcs.js";
@@ -82,6 +83,7 @@ export interface DevelopmentClientArtifactSource {
 
 interface OwnedChild {
   child: ChildProcess;
+  owned: OwnedProcess;
   exit: Promise<void>;
   attempt: number;
   runRoot: string;
@@ -110,6 +112,8 @@ export class DevelopmentExecutor {
         "getBuildByKey" | "putStoredBuild" | "readBuildArtifactBytes"
       >;
       runRoots: DevelopmentRunRoots;
+      /** The server's ownership: each build command is a registered, immediately-killed group. */
+      ownership(): Promise<Ownership>;
       planSource(input: {
         contextId: string;
         repositoryId: string;
@@ -368,18 +372,12 @@ export class DevelopmentExecutor {
     if (attempt !== undefined) this.stopping.set(runId, attempt);
     const owned = this.children.get(runId);
     if (!owned) return;
-    this.signalOwned(owned.child, "SIGTERM");
-    const stopped = owned.exit.catch((error: unknown) => {
+    // A reviewed build holds no state worth a graceful drain: the whole group
+    // is killed at once and the library returns once it is absent.
+    await owned.owned.retire("immediate");
+    await owned.exit.catch((error: unknown) => {
       if ((error as { code?: unknown })?.code !== "ECANCELLED") throw error;
     });
-    const graceful = await Promise.race([
-      stopped.then(() => true),
-      new Promise<false>((resolve) => setTimeout(() => resolve(false), 5_000)),
-    ]);
-    if (!graceful) {
-      this.signalOwned(owned.child, "SIGKILL");
-      await stopped;
-    }
   }
 
   async retire(run: DevelopmentRun): Promise<void> {
@@ -551,7 +549,7 @@ export class DevelopmentExecutor {
     return artifact;
   }
 
-  private runCommand(
+  private async runCommand(
     run: DevelopmentRun,
     plan: PreparedDevelopmentBuild,
     commandId: string,
@@ -560,6 +558,9 @@ export class DevelopmentExecutor {
     cwd: string,
     env: NodeJS.ProcessEnv
   ): Promise<void> {
+    // Opened before the checks below so nothing can interleave between them
+    // and the synchronous spawn that records the group.
+    const ownership = await this.deps.ownership();
     if (this.children.has(run.runId)) {
       throw Object.assign(new Error(`Development run ${run.runId} already owns a process`), {
         code: "EALREADY",
@@ -576,14 +577,16 @@ export class DevelopmentExecutor {
         code: "ECANCELLED",
       });
     }
-    const child = spawn(executable, [...args], {
+    const owned = ownership.spawn(executable, [...args], {
+      kill: "immediate",
+      label: `development:${run.runId}:${commandId}`,
       cwd,
       env,
       stdio: ["ignore", "pipe", "pipe"],
       shell: false,
       windowsHide: true,
-      detached: process.platform !== "win32",
     });
+    const child = owned.child;
     const emit = (stream: "stdout" | "stderr", chunk: Buffer) => {
       for (const rawLine of chunk.toString("utf8").split(/\r?\n/u)) {
         if (!rawLine) continue;
@@ -621,25 +624,13 @@ export class DevelopmentExecutor {
     });
     this.children.set(run.runId, {
       child,
+      owned,
       exit,
       attempt,
       runRoot: this.runRoot(run.runId),
       snapshotDigest: plan.snapshot.snapshotDigest,
     });
     return exit;
-  }
-
-  private signalOwned(child: ChildProcess, signal: NodeJS.Signals): void {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    if (process.platform !== "win32" && child.pid) {
-      try {
-        process.kill(-child.pid, signal);
-        return;
-      } catch {
-        // Fall through to the exact ChildProcess handle.
-      }
-    }
-    child.kill(signal);
   }
 
   private executionEnvironment(

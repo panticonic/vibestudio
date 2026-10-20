@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import { decodeRpcJson, encodeRpcJson, envelopeFromMessage, type RpcEnvelope } from "@vibestudio/rpc";
+import {
+  decodeRpcJson,
+  encodeRpcJson,
+  envelopeFromMessage,
+  type RpcEnvelope,
+} from "@vibestudio/rpc";
 import { createRnClientApi } from "@vibestudio/rn-client-api";
 import { createMemoryBroker } from "@vibestudio/rn-client-api/testing";
 import type { ClientHostEvent, ClientHostMethod } from "@vibestudio/rn-client-api/protocol";
@@ -40,13 +45,11 @@ function launched(granted: ClientCapability[]): LaunchedClient {
     },
     artifacts: [],
     grant: {
-      connectionGrant: "grant-1",
-      expiresAt: 1,
+      credential: "clientcred:launch",
       principalId: PRINCIPAL,
       deviceId: "dev1",
       serverId: "srv",
       serverBootId: "boot",
-      workspaceId: "ws-system",
     },
   };
 }
@@ -55,16 +58,6 @@ function setup(granted: ClientCapability[] = ["device-session", "hub-control", "
   const { openers, opened } = fakeOpeners((kind) =>
     kind === "principal" ? PRINCIPAL : "shell:dev1"
   );
-  let issued = 1; // the launch's own grant is grant-1
-  const acquire = vi.fn(async (_build: unknown) => ({
-    connectionGrant: `grant-${(issued += 1)}`,
-    expiresAt: 1,
-    principalId: PRINCIPAL,
-    deviceId: "dev1",
-    serverId: "srv",
-    serverBootId: "boot",
-    workspaceId: "ws-system",
-  }));
   const hooks = {
     restart: vi.fn(async () => undefined),
     rollback: vi.fn(async () => undefined),
@@ -78,7 +71,6 @@ function setup(granted: ClientCapability[] = ["device-session", "hub-control", "
     launched: launched(granted),
     platform: "android",
     openers,
-    grants: { acquire },
     state,
     device: {
       setClipboard: vi.fn(async () => undefined),
@@ -99,7 +91,7 @@ function setup(granted: ClientCapability[] = ["device-session", "hub-control", "
     return decodeRpcJson(outcome.resultJson);
   });
   emit = host.emit;
-  return { instance, channel, opened, acquire, hooks, events, state };
+  return { instance, channel, opened, hooks, events, state };
 }
 
 const request = (from: string): RpcEnvelope =>
@@ -123,26 +115,15 @@ describe("a client's principal session", () => {
     expect(t.hooks.trustRevoked).toHaveBeenCalledTimes(1);
   });
 
-  it("spends the launch's grant once, then redeems a fresh grant for the exact build at each re-authentication", async () => {
+  it("presents the launch's reusable credential at every authentication", async () => {
     const t = setup();
     const api = await createRnClientApi(t.channel);
     await api.session.openPrincipal();
     const principal = t.opened[0]!;
     expect(principal.kind).toBe("principal");
 
-    expect(await principal.getToken!()).toBe("grant-1");
-    expect(t.acquire).not.toHaveBeenCalled();
-
-    expect(await principal.getToken!()).toBe("grant-2");
-    expect(await principal.getToken!()).toBe("grant-3");
-    expect(t.acquire).toHaveBeenCalledTimes(2);
-    for (const [build] of t.acquire.mock.calls) {
-      expect(build).toEqual({
-        source: "clients/mobile-browser",
-        buildKey: "bk-1",
-        executionDigest: DIGEST,
-      });
-    }
+    expect(await principal.getToken!()).toBe("clientcred:launch");
+    expect(await principal.getToken!()).toBe("clientcred:launch");
   });
 
   it("is the client's principal on the server, whatever identity the client's envelopes claim", async () => {
@@ -191,7 +172,9 @@ describe("capability enforcement on sessions", () => {
     const t = setup([]);
     const api = await createRnClientApi(t.channel);
 
-    await expect(api.session.openAccount()).rejects.toMatchObject({ code: "CAPABILITY_NOT_GRANTED" });
+    await expect(api.session.openAccount()).rejects.toMatchObject({
+      code: "CAPABILITY_NOT_GRANTED",
+    });
     expect(t.opened).toHaveLength(0);
     // The principal session needs no capability: every client has its own.
     await api.session.openPrincipal();
@@ -287,7 +270,12 @@ describe("streams over a session", () => {
       from: PRINCIPAL,
       target: "main",
       callerKind: "client",
-      message: { type: "stream-request", requestId: "s1", method: "gateway.fetch", args: [] } as never,
+      message: {
+        type: "stream-request",
+        requestId: "s1",
+        method: "gateway.fetch",
+        args: [],
+      } as never,
     });
 
     const response = await connection.session.streamReadable!(streamEnvelope, null, null);

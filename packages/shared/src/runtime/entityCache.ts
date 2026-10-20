@@ -131,6 +131,10 @@ export class EntityCache {
     return [...this.records.values()].filter(
       (record) =>
         record.status !== "retired" &&
+        // A client principal is a hub-attested mirror: its build lives in the
+        // System workspace's store and is retained there by `client-generation`.
+        // Elsewhere there is no such artifact to root.
+        record.kind !== "client" &&
         Boolean(record.activeBuildKey && record.activeExecutionDigest && record.activeAuthority)
     );
   }
@@ -230,4 +234,20 @@ export function callerRuntimeContextId(
   return (
     cache.resolveContext(callerId) ?? cache.resolveActive(callerId)?.agentBinding?.contextId ?? null
   );
+}
+
+/**
+ * The context whose source tree a caller's build lookups default to.
+ *
+ * A client principal's context only names its routed callbacks: it is derived
+ * from the principal and never materialized, so `ctx:<id>` is not a ref that
+ * resolves. A client's lookups use the workspace default instead.
+ */
+export function callerBuildContextId(
+  cache: Pick<EntityCache, "resolveContext" | "resolveActive">,
+  callerId: string
+): string | null {
+  return cache.resolveActive(callerId)?.kind === "client"
+    ? null
+    : callerRuntimeContextId(cache, callerId);
 }

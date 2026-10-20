@@ -66,7 +66,7 @@ describe("Iroh product E2E entry points", () => {
     expect(desktop).toContain(
       "Object.assign(serverEnv, developmentTemplateSetEnv(developmentTemplates));"
     );
-    expect(desktop).toContain("processLifetime.requestStop();");
+    expect(desktop).toContain("retireOnAbort(own.ownership, own.signal, owned);");
     expect(desktop).toContain("requestWorkspacePreparationStop();");
     expect(desktop).toContain("ownerSignal.aborted && isCancellationOnly(original)");
     expect(desktop).toContain("composeDesktopSmokeFailure(");
@@ -112,7 +112,7 @@ describe("Iroh product E2E entry points", () => {
       "embedded-pairing-failed"
     );
 
-    const installIndex = mobile.indexOf("await runMobileInstall(options, lifetime)");
+    const installIndex = mobile.indexOf("await runMobileInstall(options, own)");
     const templatesIndex = mobile.indexOf("await resolveDevelopmentTemplates({");
     const sourceBuildIndex = mobile.indexOf('"--source-server-prereqs"');
     const workspaceReleaseIndex = mobile.indexOf(
@@ -129,11 +129,9 @@ describe("Iroh product E2E entry points", () => {
     expect(workspaceReleaseJoinIndex).toBeGreaterThan(workspaceReleaseIndex);
     expect(serverBudgetIndex).toBeGreaterThan(workspaceReleaseJoinIndex);
     expect(mobile).not.toContain("Math.max(1_000, deadlineMs - Date.now())");
-    expect(mobile).toContain(
-      "const child = spawnManaged(lifetime.acquire, command, args, options);"
-    );
-    expect(mobile).toContain("await runOwnedCommand(lifetime, process.execPath, args");
-    expect(mobile).toContain("releaseHostBuildGeneration(hostGenerationRoot)");
+    expect(mobile).toContain("const owned = spawnManaged(own, command, args, options);");
+    expect(mobile).toContain("await runOwnedCommand(own, process.execPath, args");
+    expect(mobile).toContain("releaseHostBuildGeneration(generation.root)");
   });
 
   it("keeps the Android emulator preflight compatible with the action's POSIX shell", () => {

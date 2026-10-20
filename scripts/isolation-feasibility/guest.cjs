@@ -65,6 +65,7 @@ async function main() {
   check('broker mediated network', (await broker('network')).value === 'mediated-network-value');
   check('broker wrong resource denied', (await broker('other')).denied === true);
   // A detached descendant keeps writing until the containing PID namespace dies.
+  // ownership-exempt(sandbox-guest): guest code under test; the sandbox, not an owner, must contain it.
   const daemon = spawn(process.execPath, ['-e', "const fs=require('fs');setInterval(()=>fs.appendFileSync('/state/heartbeat','x'),30)"], { detached: true, stdio: 'ignore' });
   daemon.unref();
   const commands = readline.createInterface({ input: process.stdin });

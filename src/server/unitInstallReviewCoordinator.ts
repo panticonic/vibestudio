@@ -28,6 +28,8 @@ export interface UnitApprovalQueueLike {
     identityKeys?: ReadonlyMap<string, string>;
     reportsLanding?: boolean;
     configWrite?: PendingUnitInstallReviewApproval["configWrite"];
+    /** Withdraws the question when the coordinator retires. */
+    signal?: AbortSignal;
   }): { approvalId: string; decision: Promise<ApprovalQueueDecision> };
   listPending(): PendingApproval[];
   holdForUnitReview: ApprovalQueue["holdForUnitReview"];
@@ -69,6 +71,21 @@ interface ActiveRequest {
 
 type UnitApprovalEntrySelector = (entry: ReviewedUnit) => boolean;
 
+/**
+ * The coordinator was retired (server shutdown) while a review was still
+ * waiting on a human. The review is withdrawn, not denied: nothing is recorded
+ * as a decision, and every waiter receives this error.
+ */
+export class UnitReviewRetiredError extends Error {
+  constructor(reason?: unknown) {
+    super(
+      `Unit install review withdrawn: ${reason instanceof Error ? reason.message : String(reason ?? "coordinator retired")}`,
+      reason === undefined ? undefined : { cause: reason }
+    );
+    this.name = "UnitReviewRetiredError";
+  }
+}
+
 export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<ReviewedUnit> {
   private pending = new Map<string, PendingBatch>();
   private active = new Map<string, Set<ActiveRequest>>();
@@ -91,6 +108,7 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
     }>
   >();
   private readonly unitApplicationObservers = new Map<string, Set<() => void>>();
+  private readonly lifetime = new AbortController();
   private startupReviewsStaged = false;
   private reviewStagingFailure: { error: unknown } | undefined;
 
@@ -116,6 +134,27 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
     for (const request of batch.requests) {
       request.reject(error);
       request.failReview(error);
+    }
+  }
+
+  /**
+   * The owner is shutting down. A review waiting on a human has no one left to
+   * answer it, and everything joined to it (client and extension activation,
+   * launches) would otherwise wait on that answer forever. Withdraw every open
+   * question from the queue and fail every waiter, staged or published, with
+   * {@link UnitReviewRetiredError}. A decision already accepted keeps applying.
+   */
+  retire(reason?: unknown): void {
+    if (this.lifetime.signal.aborted) return;
+    const error = new UnitReviewRetiredError(reason);
+    this.lifetime.abort(error);
+    for (const [key, batch] of [...this.pending]) {
+      this.pending.delete(key);
+      if (batch.timer) clearTimeout(batch.timer);
+      for (const request of batch.requests) {
+        request.reject(error);
+        request.failReview(error);
+      }
     }
   }
 
@@ -217,6 +256,7 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
     applyApproved(): Promise<void>;
     applyDenied(): void;
   }): Promise<void> {
+    if (this.lifetime.signal.aborted) return Promise.reject(this.lifetime.signal.reason);
     if (request.entries.length === 0) {
       request.opened?.(false);
       return request.applyApproved();
@@ -372,6 +412,7 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
           ...(identityKeys.size > 0 ? { identityKeys } : {}),
           ...(this.canReportLanding() ? { reportsLanding: true } : {}),
           configWrite: null,
+          signal: this.lifetime.signal,
         });
         decision = handle.decision;
         approvalId = handle.approvalId;
@@ -396,6 +437,11 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
         entries: request.entries,
         settlement: Promise.resolve(decision)
           .then(async (resolvedDecision) => {
+            // Withdrawing the question settles it as a denial in the queue;
+            // that is not the person's answer and must not be recorded as one.
+            if (resolvedDecision !== "accepted" && this.lifetime.signal.aborted) {
+              throw this.lifetime.signal.reason;
+            }
             if (resolvedDecision === "deny" || resolvedDecision === "dismiss") {
               request.applyDenied();
               request.settleReview(resolvedDecision);

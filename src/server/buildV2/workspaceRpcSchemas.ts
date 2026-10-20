@@ -64,6 +64,7 @@ export function workspaceRpcSchemaMetadata(
           ...(method.tier ? { tier: method.tier } : {}),
           ...(method.access ? { access: method.access } : {}),
           ...(method.directEffect ? { directEffect: method.directEffect } : {}),
+          ...(method.capability ? { capability: method.capability } : {}),
           ...(method.execution ? { execution: method.execution } : {}),
           ...(method.crossWorkspace === true ? { crossWorkspace: true } : {}),
         },

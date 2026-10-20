@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   assertCliProfileIsUnpaired,
+  clearCliCredentials,
   credentialPath,
   loadCliCredentials,
   loadCliIdentity,
@@ -187,6 +188,15 @@ describe("CLI persisted device credential", () => {
     fs.mkdirSync(credentialPath(), { recursive: true });
     expect(loadCliCredentials()).toBeNull();
     expect(warning).toHaveBeenCalled();
+  });
+
+  it("reports a credential paired by an older build as needing re-pair, and logout clears it", () => {
+    write({ ...CURRENT, deviceSecret: undefined, endpointSecret: "x".repeat(43) });
+
+    expect(() => loadCliCredentials()).toThrow(/older Vibestudio build.*pair this device again/su);
+    expect(() => assertCliProfileIsUnpaired()).toThrow(/older Vibestudio build/u);
+    clearCliCredentials();
+    expect(loadCliCredentials()).toBeNull();
   });
 
   it("diagnoses every non-canonical JSON shape generically", () => {

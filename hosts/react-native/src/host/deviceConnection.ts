@@ -115,7 +115,7 @@ export function createDevicePorts(options: {
                 onPaired: async (nextCredential) => {
                   workspaceTokens.setCredential(nextCredential);
                   const current = await loadShellCredential();
-                  if (!current || current.schemaVersion !== 5 || current.phase !== "routed") {
+                  if (!current || current.schemaVersion !== 6 || current.phase !== "routed") {
                     throw new Error(
                       "Routed mobile connection disappeared during workspace authentication"
                     );

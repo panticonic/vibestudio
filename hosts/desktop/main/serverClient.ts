@@ -45,12 +45,13 @@ export interface ScopedServerCaller {
 
 /**
  * How a client principal's sessions are admitted and observed. The host that
- * verified the client build owns it: a grant is one-use and bound to that exact
- * build, so every (re)connection asks for a fresh one.
+ * verified the client build owns it: the credential is bound to that exact
+ * build and reusable at every workspace server the device reaches, so every
+ * session open and reconnect presents the same one.
  */
 export interface ClientPrincipalSessions {
-  /** A fresh one-use connection grant for the client principal's exact verified build. */
-  connectionGrant(principalId: string): Promise<string>;
+  /** The client principal's credential for its exact verified build. */
+  credential(principalId: string): Promise<string>;
   /** A client session ended for good; `reason` is the server's close reason (e.g. `trust-revoked`). */
   sessionEnded(caller: ScopedServerCaller, reason: string): void;
 }
@@ -427,9 +428,9 @@ export async function createServerClient(
     if (caller.callerKind !== "client" || !sessions) {
       throw new Error(`Scoped server RPC is not available for ${caller.callerKind} callers`);
     }
-    // Connection grants are one-use and bound to the verified build, so every
-    // connection attempt, including each reconnect, asks the host for a fresh one.
-    const grant = (): Promise<string> => sessions.connectionGrant(caller.callerId);
+    // The credential is reusable and bound to the verified build: every
+    // connection attempt, including each reconnect, presents the host's one.
+    const credential = (): Promise<string> => sessions.credential(caller.callerId);
     const scopedTransport = wsClientTransport({
       selfId: caller.callerId,
       getWsUrl,
@@ -440,10 +441,10 @@ export async function createServerClient(
       logPrefix: `ServerClient:${caller.callerId}`,
       adapter: {
         now: () => Date.now(),
-        getAuthToken: grant,
+        getAuthToken: credential,
         refreshAuthToken: async () => {
           try {
-            return await grant();
+            return await credential();
           } catch (error) {
             // The transport stops reconnecting once a refresh fails, so this
             // session is finished for good. Drop it from the cache now: a

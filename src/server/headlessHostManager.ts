@@ -7,14 +7,17 @@
  *
  * The shell token is delivered over the fork IPC channel (never via
  * env/argv). Idle shutdown: when the spawned host holds zero leases for
- * idleShutdownMs, it gets SIGTERM (the host also self-exits via its own
- * idle-exit backstop). Crash backoff: respawn only on next demand, with
+ * idleShutdownMs, it is retired gracefully (SIGTERM, then whatever its group
+ * still holds once the host has exited; the host also self-exits via its own
+ * idle-exit backstop). The host and the Chromium it starts form one group owned
+ * by the server's ownership, so even a killed server has them reaped. Crash backoff: respawn only on next demand, with
  * exponential delay; hard-disable after repeated failures.
  */
-import { fork, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createDevLogger } from "@vibestudio/dev-log";
+import type { OwnedProcess, Ownership } from "@vibestudio/shared/ownership";
 import type { ClientSession } from "@vibestudio/shared/panel/panelLease";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
@@ -75,10 +78,8 @@ export interface HeadlessHostManagerDeps {
   isHostAvailable: (hostConnectionId: string) => boolean;
   getServerUrl: () => string;
   config: HeadlessHostManagerConfig;
-  /** Test seam. */
-  spawnFn?: (entryPath: string) => ChildProcess;
-  /** Test seam for POSIX process-group signaling. */
-  signalProcessGroup?: (pid: number, signal: NodeJS.Signals) => void;
+  /** The server's ownership; opened on first spawn. */
+  ownership: () => Promise<Pick<Ownership, "spawn" | "scope">>;
 }
 
 export function resolveHeadlessHostEntryPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -146,6 +147,11 @@ export function formatBridgeDiagnostic(
 
 export class HeadlessHostManager {
   private child: ChildProcess | null = null;
+  private owned: OwnedProcess | null = null;
+  /** The server's ownership scope: every retirement is tracked there, so a failure surfaces when the server closes its ownership. */
+  private scope: Pick<Ownership["scope"], "track"> | null = null;
+  /** Retirements in flight; `stop()` joins them. */
+  private readonly retirements = new Set<Promise<void>>();
   private spawnInFlight: Promise<ClientSession | null> | null = null;
   private idleTimer: {
     handle: ReturnType<typeof setTimeout>;
@@ -250,14 +256,17 @@ export class HeadlessHostManager {
     this.clearIdleTimer();
     if (this.respawnTimer) clearTimeout(this.respawnTimer);
     this.respawnTimer = null;
-    this.terminateChild("manager stopping");
+    void this.retireChild("manager stopping").catch(() => undefined);
+    // Join every retirement. A failure is reported once, by the server's
+    // ownership scope when it closes, with the original error.
+    await Promise.allSettled([...this.retirements]);
   }
 
   // ── internals ────────────────────────────────────────────────────────────
 
   private async spawnAndWait(timeoutMs?: number): Promise<ClientSession | null> {
     const entryPath = this.config.entryPath ?? resolveHeadlessHostEntryPath();
-    if (!fs.existsSync(entryPath) && !this.deps.spawnFn) {
+    if (!fs.existsSync(entryPath)) {
       log.warn(
         `headless host entry not found at ${entryPath} — build packages/headless-renderer first`
       );
@@ -267,17 +276,21 @@ export class HeadlessHostManager {
     const registrationTimeout = timeoutMs ?? this.config.spawnTimeoutMs ?? 45_000;
     log.info(`spawning headless host (${entryPath})`);
 
+    const ownership = await this.deps.ownership();
+    this.scope = ownership.scope;
+    let owned: OwnedProcess;
     let child: ChildProcess;
     try {
-      child =
-        this.deps.spawnFn?.(entryPath) ??
-        fork(entryPath, [], {
-          stdio: ["ignore", "pipe", "pipe", "ipc"],
-          // Give the host and the Chromium it spawns their own process group.
-          // The manager can then terminate the whole renderer tree on shutdown
-          // instead of orphaning Chromium under the user service manager.
-          detached: process.platform !== "win32",
-        });
+      // The host and the Chromium it spawns form one group, registered with
+      // the server's reaper before this call returns, so the whole renderer
+      // tree is retired on shutdown (or server death) instead of orphaned.
+      // The host closes its browser profile on SIGTERM: graceful.
+      owned = ownership.spawn(process.execPath, [...process.execArgv, entryPath], {
+        kill: "graceful",
+        label: "headless-host",
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
+      });
+      child = owned.child;
     } catch (error) {
       log.warn(`headless host spawn failed: ${String(error)}`);
       this.recordFailure();
@@ -288,6 +301,7 @@ export class HeadlessHostManager {
     // retire that generation's timer before publishing the new child.
     this.clearIdleTimer();
     this.child = child;
+    this.owned = owned;
     let childReportedRegistered = false;
     let childReportedReady = false;
     let reportedClientSessionId: string | null = null;
@@ -304,18 +318,24 @@ export class HeadlessHostManager {
       if (this.child === child) {
         this.clearIdleTimer(child);
         this.child = null;
+        this.owned = null;
         this.spawnedClientSessionId = null;
       }
       log.info(`headless host exited (code ${code})`);
-      // Chromium is a descendant of the detached host process group. The
-      // host can exit without taking Chromium with it (for example after a
-      // crash), so drain the exact group here before any keep-alive respawn.
+      // Chromium is a descendant of the host's group. The host can exit
+      // without taking Chromium with it (for example after a crash), so join
+      // the group here and respawn a keep-alive host only once it is drained.
       // Explicit stop() already performs this operation; this covers the
       // unexpected-leader-exit path that otherwise leaves Chrome orphaned.
-      if (typeof child.pid === "number") this.signalChildTree(child, "SIGTERM");
-      // Keep-alive: a host we intend to always run just died — bring it back
-      // (unless the manager is stopping). Backoff-respecting via scheduleEnsure.
-      if (this.keepAlive && !this.stopped) this.scheduleEnsure(250);
+      const drained = this.track(owned.join());
+      void drained.then(
+        () => {
+          // Keep-alive: a host we intend to always run just died — bring it
+          // back (unless the manager is stopping). Backoff-respecting.
+          if (this.keepAlive && !this.stopped) this.scheduleEnsure(250);
+        },
+        () => undefined
+      );
     });
     child.on("message", (message: HeadlessHostChildMessage) => {
       if (
@@ -377,7 +397,7 @@ export class HeadlessHostManager {
     const readinessDeadline = Date.now() + registrationTimeout;
     while (child.exitCode === null) {
       if (startupError) {
-        this.terminateChild("startup failed");
+        await this.retireChild("startup failed");
         this.recordFailure();
         return null;
       }
@@ -396,7 +416,7 @@ export class HeadlessHostManager {
             }`
           : "did not register with the server";
         log.warn(`headless host ${readiness} in time`);
-        this.terminateChild("readiness timeout");
+        await this.retireChild("readiness timeout");
         this.recordFailure();
         return null;
       }
@@ -480,24 +500,34 @@ export class HeadlessHostManager {
       const stillIdle = !this.deps.coordinator
         .getSnapshot()
         .leases.some((lease) => lease.clientSessionId === sessionId);
-      if (stillIdle) this.terminateChild("idle shutdown");
+      if (stillIdle) void this.retireChild("idle shutdown").catch(() => undefined);
     }, idleMs);
     this.idleTimer = { handle, child, sessionId };
     handle.unref?.();
   }
 
-  private terminateChild(reason: string): void {
-    if (!this.child) return;
+  /** Record a retirement with the server's scope (which owns its failure) and with `stop()`. */
+  private track(retirement: Promise<void>): Promise<void> {
+    this.retirements.add(retirement);
+    const tracked = this.scope ? this.scope.track(retirement) : retirement;
+    void retirement.then(
+      () => this.retirements.delete(retirement),
+      () => this.retirements.delete(retirement)
+    );
+    return tracked;
+  }
+
+  private retireChild(reason: string): Promise<void> {
+    const owned = this.owned;
+    if (!owned || !this.child) return Promise.resolve();
     log.info(`terminating headless host: ${reason}`);
-    const child = this.child;
-    this.clearIdleTimer(child);
+    this.clearIdleTimer(this.child);
     this.child = null;
+    this.owned = null;
     this.spawnedClientSessionId = null;
-    this.signalChildTree(child, "SIGTERM");
-    const killTimer = setTimeout(() => {
-      if (child.exitCode === null) this.signalChildTree(child, "SIGKILL");
-    }, 5_000);
-    killTimer.unref?.();
+    // Graceful: SIGTERM to the host, then whatever its group still holds once
+    // the host has exited. No deadline: the host's exit is the event.
+    return this.track(owned.retire());
   }
 
   private clearIdleTimer(expectedChild?: ChildProcess): void {
@@ -505,27 +535,5 @@ export class HeadlessHostManager {
     if (!owner || (expectedChild && owner.child !== expectedChild)) return;
     clearTimeout(owner.handle);
     this.idleTimer = null;
-  }
-
-  private signalChildTree(child: ChildProcess, signal: NodeJS.Signals): void {
-    if (typeof child.pid === "number" && this.deps.signalProcessGroup) {
-      try {
-        this.deps.signalProcessGroup(child.pid, signal);
-        return;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
-        log.warn(`failed to signal headless host process group ${child.pid}: ${String(error)}`);
-      }
-    }
-    if (process.platform !== "win32" && typeof child.pid === "number") {
-      try {
-        process.kill(-child.pid, signal);
-        return;
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
-        log.warn(`failed to signal headless host process group ${child.pid}: ${String(error)}`);
-      }
-    }
-    child.kill(signal);
   }
 }

@@ -14,12 +14,14 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
-import {
-  OwnedProcessGroup,
-  type OwnedProcessGroupHandle,
-} from "@vibestudio/shared/ownedProcessGroup";
+import type { ChildProcess } from "node:child_process";
+import { Ownership, sweep, type OwnedProcess } from "@vibestudio/shared/ownership";
+import { ledgerDirOf } from "@vibestudio/shared/ownershipLedger";
 import { createHash, randomBytes } from "node:crypto";
+import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
+import { clientPrincipalId, parseClientPrincipalId } from "@vibestudio/workspace-contracts/clients";
+import type { ClientPrincipalFilter } from "@vibestudio/identity/identityDb";
+import { CLOSE_CLIENT_PRINCIPALS_ROUTE } from "./clientPrincipalRoutes.js";
 import type { Duplex } from "node:stream";
 import type { Socket } from "node:net";
 import { z } from "zod";
@@ -38,7 +40,7 @@ import type {
 } from "@vibestudio/workspace-contracts/types";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { getPhysicalAppPath, getEsbuildBinaryPath } from "@vibestudio/shared/runtimePaths";
-import { getCentralDataPath, getWorkspaceDir } from "@vibestudio/env-paths";
+import { getCentralDataPath, getProfileDataPath, getWorkspaceDir } from "@vibestudio/env-paths";
 import { readWorkspaceHostLaunchRecord } from "@vibestudio/workspace/hostLaunchRecord";
 import { WORKSPACE_SYSTEM_EPOCH, WORKSPACE_APP_VERSION } from "@vibestudio/shared/vcs/systemEpoch";
 import {
@@ -105,6 +107,10 @@ import { workspaceCreationAuthorityPreparation } from "./services/workspaceCreat
 import {
   WorkspaceChildAgentCredentialMintInputSchema,
   WorkspaceChildAgentCredentialRevokeEntityInputSchema,
+  WorkspaceChildClientCredentialMintInputSchema,
+  WorkspaceChildClientPrincipalAttestSchema,
+  WorkspaceChildClientPrincipalListInputSchema,
+  WorkspaceChildClientPrincipalRetireInputSchema,
   WorkspaceChildAgentCredentialRevokeInputSchema,
   WorkspaceChildDeviceTouchInputSchema,
   WorkspaceChildDeviceInviteInputSchema,
@@ -230,8 +236,13 @@ export interface HubRuntimeState {
   /** Latest live-session projection reported by each workspace child (WP8 §4.4). */
   workspacePresence: Map<string, HubWorkspacePresenceSnapshot>;
   runtimes: Map<string, WorkspaceRuntime | PendingWorkspaceRuntime>;
+  /**
+   * The hub's own ownership: its reaper retires every workspace child (and,
+   * with it, workerd and the sandboxes the child started) if the hub dies.
+   */
+  ownership: Ownership;
   /** Process ownership survives removal from the routable runtime registry. */
-  workspaceChildren: Set<ChildProcess>;
+  workspaceChildren: Map<ChildProcess, OwnedProcess>;
   /** Exact local acquisition sources admitted by this hub's trusted native host. */
   workspaceSources: WorkspaceSource[];
   /** Stable machine-level control/pairing ingress; never owned by a workspace child. */
@@ -254,6 +265,8 @@ export async function shutdownHubRuntime(operations: {
   quiesceAuthority: HubShutdownStep;
   closeGrants: HubShutdownStep;
   stopChildren: () => readonly HubShutdownStep[];
+  /** Joins the reaper after every child it owned has been retired. */
+  closeProcessOwnership: HubShutdownStep;
   closeGateway: HubShutdownStep;
   joinMaintenance: HubShutdownStep;
   closeGovernance: HubShutdownStep;
@@ -278,6 +291,7 @@ export async function shutdownHubRuntime(operations: {
       operations.joinMaintenance,
       operations.closeGrants,
       () => join(operations.stopChildren()),
+      operations.closeProcessOwnership,
       operations.closeGateway,
       operations.closeGovernance,
       operations.releaseOwnership,
@@ -723,6 +737,71 @@ async function closeDeviceSessionsAcrossChildren(
     }
   }
   return closed;
+}
+
+/** Revoke matching client principals in identity.db and end their live sessions in every running workspace child. */
+async function revokeClientPrincipalsAcrossChildren(
+  state: HubRuntimeState,
+  filter: ClientPrincipalFilter,
+  reason: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<string[]> {
+  const principalIds = state.identityDb.revokeClientPrincipals(filter, reason);
+  if (principalIds.length === 0) return principalIds;
+  const failures: string[] = [];
+  for (const entry of state.runtimes.values()) {
+    if ("promise" in entry || entry.child.exitCode !== null) continue;
+    const adminToken =
+      typeof entry.ready["adminToken"] === "string" ? entry.ready["adminToken"] : null;
+    if (!adminToken) continue;
+    try {
+      const response = await fetchWithTimeout(
+        fetchImpl,
+        `http://127.0.0.1:${entry.port}${CLOSE_CLIENT_PRINCIPALS_ROUTE}`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${adminToken}` },
+          body: JSON.stringify({ principalIds, reason }),
+        }
+      );
+      if (!response.ok) failures.push(`workspace "${entry.name}" answered ${response.status}`);
+    } catch (error) {
+      failures.push(
+        `workspace "${entry.name}": ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+  // The credentials are already revoked in identity.db; a workspace that could
+  // not be told keeps its sessions until their next liveness check. The caller
+  // learns that, rather than believing every session was closed.
+  if (failures.length > 0) {
+    throw new Error(
+      `Revoked ${principalIds.length} client principal(s), but could not end their sessions: ${failures.join("; ")}`
+    );
+  }
+  return principalIds;
+}
+
+/**
+ * Hub policy: only the System-role private workspace of a principal's user (or
+ * the hermetic bootstrap workspace) may attest or mint client principals.
+ */
+function assertMayAttestClientsFor(
+  state: HubRuntimeState,
+  workspaceId: string,
+  userId: string
+): void {
+  if (workspaceId === state.bootstrapWorkspaceId) return;
+  const owner = state.identityDb.getPrivateWorkspaceOwner(workspaceId);
+  if (owner?.role === "system" && owner.userId === userId) return;
+  throw authError("EACCES", "Workspace may not attest client principals for this user", 403);
+}
+
+/** Retire and list are not user-scoped: the caller must be a System-role workspace (or the bootstrap workspace). */
+function assertIsClientAttester(state: HubRuntimeState, workspaceId: string): void {
+  if (workspaceId === state.bootstrapWorkspaceId) return;
+  if (state.identityDb.getPrivateWorkspaceOwner(workspaceId)?.role === "system") return;
+  throw authError("EACCES", "Workspace may not manage client principals", 403);
 }
 
 const DEVICE_SESSION_CLOSE_TIMEOUT_MS = 5_000;
@@ -1573,6 +1652,61 @@ async function handleInternalRoute(
       sendJson(res, 200, result);
       return;
     }
+    if (route === "client-principal/attest") {
+      const body = WorkspaceChildClientPrincipalAttestSchema.parse(rawBody);
+      const userId = state.identityDb.userForDevice(body.deviceId);
+      if (!userId) throw authError("DEVICE_NOT_PAIRED", "Device is not paired", 401);
+      assertMayAttestClientsFor(state, boundWorkspaceId, userId);
+      const parsedId = parseClientPrincipalId(body.principalId);
+      if (
+        !parsedId ||
+        body.principalId !== clientPrincipalId(body.clientId, parsedId.runtime, body.deviceId) ||
+        parsedId.runtime !== body.runtime
+      ) {
+        throw new Error("Client principal id does not match its client, runtime, and device");
+      }
+      state.identityDb.upsertClientPrincipal({
+        ...body,
+        authority: parseUnitAuthorityManifest(body.authority, "client principal authority"),
+        userId,
+        attesterWorkspaceId: boundWorkspaceId,
+        attestedAt: Date.now(),
+      });
+      sendJson(res, 200, { attested: true });
+      return;
+    }
+    if (route === "client-principal/mint") {
+      const body = WorkspaceChildClientCredentialMintInputSchema.parse(rawBody);
+      const principal = state.identityDb.getClientPrincipal(body.principalId);
+      if (!principal || principal.revokedAt !== undefined) {
+        throw authError("EACCES", "Client principal is not attested", 403);
+      }
+      assertMayAttestClientsFor(state, boundWorkspaceId, principal.userId);
+      sendJson(res, 200, state.identityDb.mintClientCredential(body));
+      return;
+    }
+    if (route === "client-principal/list") {
+      const body = WorkspaceChildClientPrincipalListInputSchema.parse(rawBody);
+      assertIsClientAttester(state, boundWorkspaceId);
+      if (body.attesterWorkspaceId !== boundWorkspaceId) {
+        throw authError("EACCES", "A workspace may list only its own attestations", 403);
+      }
+      sendJson(res, 200, {
+        principals: state.identityDb.listClientPrincipals(boundWorkspaceId),
+      });
+      return;
+    }
+    if (route === "client-principal/retire") {
+      const body = WorkspaceChildClientPrincipalRetireInputSchema.parse(rawBody);
+      assertIsClientAttester(state, boundWorkspaceId);
+      const retiredPrincipalIds = await revokeClientPrincipalsAcrossChildren(
+        state,
+        { ...body.filter, attesterWorkspaceId: boundWorkspaceId },
+        body.reason
+      );
+      sendJson(res, 200, { retiredPrincipalIds });
+      return;
+    }
     if (route === "device/touch") {
       const body = WorkspaceChildDeviceTouchInputSchema.parse(rawBody);
       const device = state.identityDb.getDevice(body.deviceId);
@@ -1793,6 +1927,7 @@ export async function revokeHubUser(
   for (const deviceId of deviceIds) {
     state.tokenManager.revokeToken(shellCallerId(deviceId));
     retireDeviceControlReach(state, deviceId);
+    await revokeClientPrincipalsAcrossChildren(state, { deviceId }, "user revoked");
   }
   await ensureRevocationGovernance(state, {
     actor: subject,
@@ -1822,6 +1957,7 @@ export async function revokeHubDevice(
     notifyDeviceObservers(state);
     state.tokenManager.revokeToken(shellCallerId(deviceId));
     retireDeviceControlReach(state, deviceId);
+    await revokeClientPrincipalsAcrossChildren(state, { deviceId }, "device revoked");
   }
   const closedSessions = revoked ? await closeDeviceSessionsAcrossChildren(state, deviceId) : 0;
   return { revoked, closedSessions };
@@ -2008,7 +2144,9 @@ export async function executeHubControl(
       if (state.runtimes.get(name) === active || state.runtimes.get(name) === runtime) {
         state.runtimes.delete(name);
       }
-      await terminateWorkspaceChild(runtime.child);
+      // Absent once the exit handler has already reaped the child's tree.
+      const owned = state.workspaceChildren.get(runtime.child);
+      if (owned) await terminateWorkspaceChild(owned);
       state.workspacePresence.delete(workspaceId);
     }
     const removedWorkspaceId = deleteAndUnregisterWorkspace(
@@ -3000,22 +3138,23 @@ async function startWorkspaceRuntime(
   if (!runtimeToken) throw new Error("Workspace child environment has no runtime identity token");
   state.workspaceChildTokens.set(runtimeToken, workspaceId);
 
-  const child = spawn(
+  // A workspace server holds SQLite state, so its retirement is graceful:
+  // SIGTERM runs its ordered shutdown and the hub waits for the leader's exit
+  // before anything left in its group (workerd, sandboxes) is killed.
+  const owned = state.ownership.spawn(
     launchSet.executable,
     [...(launchSet.historical ? [] : process.execArgv), ...childArgs],
     {
+      kill: "graceful",
+      label: `workspace:${workspaceName}`,
       cwd: getPhysicalAppPath(launchSet.appRoot, ""),
       env: childEnv,
-      stdio: ["ignore", "pipe", "pipe", "ipc"],
-      // The hub owns this complete runtime tree. A distinct POSIX process group
-      // lets graceful shutdown reach the child first and lets an explicit
-      // repeated signal stop workerd/extension-host descendants as one unit.
-      detached: process.platform !== "win32",
+      stdio: ["ignore", "pipe", "pipe"],
     }
   );
-  workspaceChildOwners.set(child, OwnedProcessGroup.create(child));
+  const child = owned.child;
   onSpawn(child);
-  state.workspaceChildren.add(child);
+  state.workspaceChildren.set(child, owned);
 
   // A supervising CLI/PTY may close stdout while several workspace children
   // are still draining final shutdown output. Node emits EPIPE both to the
@@ -3098,7 +3237,12 @@ async function startWorkspaceRuntime(
     port = ready["gatewayPort"] as number;
     state.centralData.touchWorkspace(workspaceName);
   } catch (error) {
-    await terminateWorkspaceChild(child);
+    await terminateWorkspaceChild(owned).catch((cleanupError: unknown) => {
+      throw new AggregateError(
+        [error, cleanupError],
+        `Workspace "${workspaceName}" startup failed and its process tree could not be retired`
+      );
+    });
     state.workspaceChildTokens.delete(runtimeToken);
     throw error;
   } finally {
@@ -3116,8 +3260,6 @@ async function startWorkspaceRuntime(
     runtimeToken,
   };
 }
-
-const workspaceChildOwners = new WeakMap<ChildProcess, OwnedProcessGroupHandle>();
 
 function workspaceChildExited(child: ChildProcess): boolean {
   return (
@@ -3137,7 +3279,7 @@ type WorkspaceChildExitInput = {
 
 type WorkspaceChildExitDeps = {
   shouldRestart?: (state: HubRuntimeState, workspaceName: string) => boolean;
-  reap?: (child: ChildProcess) => Promise<void>;
+  reap?: (owned: OwnedProcess) => Promise<void>;
   restart?: (
     state: HubRuntimeState,
     input: WorkspaceChildExitInput,
@@ -3186,9 +3328,10 @@ export async function handleWorkspaceChildExit(
   deps: WorkspaceChildExitDeps = {}
 ): Promise<void> {
   const current = state.runtimes.get(input.workspaceName);
-  if (!state.workspaceChildren.has(input.child)) return;
+  const owned = state.workspaceChildren.get(input.child);
+  if (!owned) return;
   state.workspaceChildTokens.delete(input.runtimeToken);
-  const reaped = (deps.reap ?? reapWorkspaceChildProcessGroup)(input.child).then(() => {
+  const reaped = (deps.reap ?? reapWorkspaceChild)(owned).then(() => {
     state.workspaceChildren.delete(input.child);
   });
   if (!current || current.child !== input.child) {
@@ -3240,40 +3383,30 @@ export async function handleWorkspaceChildExit(
   }
 }
 
-/** The exited group leader is not proof that its runtime was retired. */
-export async function reapWorkspaceChildProcessGroup(
-  child: ChildProcess,
-  owner = workspaceChildOwners.get(child)
-): Promise<void> {
-  if (!owner) throw new Error("Workspace child has no retained process creation receipt");
+/**
+ * The exited group leader is not proof that its runtime was retired: join the
+ * creation owner, which retires whatever the leader left in its group.
+ */
+export async function reapWorkspaceChild(owned: OwnedProcess): Promise<void> {
   try {
-    // One creation owner observes leader exit, retires orphaned executors, and
-    // joins output producer close. A numeric PID alone grants none of these.
-    await owner.join();
+    await owned.join();
   } catch (cause) {
-    throw new Error(`Workspace child ${child.pid} descendant retirement failed`, { cause });
+    throw new Error(`Workspace child ${owned.child.pid} descendant retirement failed`, { cause });
   }
 }
 
 /**
- * Request ordered workspace shutdown and wait for the OS exit event. The first
- * signal goes only to the workspace server because it owns workerd and service
- * drain ordering. The process supervisor owns escalation and joins every
- * registered descendant before removing instance state.
+ * Retire a workspace child gracefully: SIGTERM goes to the workspace server
+ * alone because it owns workerd and service drain ordering; the library waits
+ * for the server's exit (no deadline), then retires what its group still
+ * holds. A retirement failure propagates with its original cause.
  */
-export async function terminateWorkspaceChild(
-  child: ChildProcess,
-  deps: { reap?: (child: ChildProcess) => Promise<void> } = {}
-): Promise<void> {
-  if (!workspaceChildExited(child)) {
-    const exited = new Promise<void>((resolve) => child.once("exit", () => resolve()));
-    const delivered = child.kill("SIGTERM");
-    if (!delivered && !workspaceChildExited(child)) {
-      throw new Error(`Could not signal workspace child ${child.pid ?? "unknown"}`);
-    }
-    await exited;
+export async function terminateWorkspaceChild(owned: OwnedProcess): Promise<void> {
+  try {
+    await owned.retire();
+  } catch (cause) {
+    throw new Error(`Workspace child ${owned.child.pid} retirement failed`, { cause });
   }
-  await (deps.reap ?? reapWorkspaceChildProcessGroup)(child);
 }
 
 export async function waitForWorkspaceReadyFile(
@@ -3505,11 +3638,7 @@ async function startHubGateway(input: {
   return { close: gateway.close, port };
 }
 
-export async function runHubServer(input: {
-  args: HubServerArgs;
-  appRoot: string;
-  registerShutdown?: (handler: () => void) => boolean;
-}): Promise<void> {
+export async function runHubServer(input: { args: HubServerArgs; appRoot: string }): Promise<void> {
   const args = input.args;
   const appRoot = input.appRoot;
   const requestedGatewayPort = args.gatewayPort ?? parseEnvPort("VIBESTUDIO_GATEWAY_PORT");
@@ -3598,6 +3727,16 @@ export async function runHubServer(input: {
   // No public ingress: the hub is loopback HTTP only. connectUrl is the loopback
   // gateway URL; remote reach is the per-workspace Iroh endpoint.
   const connectUrl = gatewayHttpUrl(gatewayPort);
+  // The hub is a launcher of workspace children: retire whatever a previous,
+  // dead hub of this profile left behind, then own this hub's own children.
+  // Its reaper retires them (gracefully) even if the hub is killed outright.
+  const profileDir = getProfileDataPath();
+  await sweep(ledgerDirOf(profileDir));
+  const ownership = await Ownership.open({
+    profileDir,
+    lifetime: "leased",
+    meta: { role: "hub", serverBootId, pid: process.pid },
+  });
   state = {
     appRoot,
     args,
@@ -3620,7 +3759,8 @@ export async function runHubServer(input: {
     workspaceChildTokens: new Map(),
     workspacePresence: new Map(),
     runtimes: new Map(),
-    workspaceChildren: new Set(),
+    ownership,
+    workspaceChildren: new Map(),
     workspaceSources: readWorkspaceSources(),
     shuttingDown: false,
   };
@@ -3730,7 +3870,9 @@ export async function runHubServer(input: {
     });
   }, 10_000);
   revocationCleanupTimer.unref();
-  const workspaceChildren = (): ChildProcess[] => [...activeState.workspaceChildren];
+  const workspaceChildren = (): Array<[ChildProcess, OwnedProcess]> => [
+    ...activeState.workspaceChildren,
+  ];
 
   async function shutdown(): Promise<void> {
     if (!state || state.shuttingDown) return;
@@ -3766,10 +3908,11 @@ export async function runHubServer(input: {
         transport?.grantStore.close();
       },
       stopChildren: () =>
-        workspaceChildren().map((child) => async () => {
-          await terminateWorkspaceChild(child);
+        workspaceChildren().map(([child, owned]) => async () => {
+          await terminateWorkspaceChild(owned);
           ownedState.workspaceChildren.delete(child);
         }),
+      closeProcessOwnership: () => ownedState.ownership.close(),
       closeGateway,
       joinMaintenance: async () => {
         await revocationCleanupDrain;
@@ -3800,12 +3943,8 @@ export async function runHubServer(input: {
   };
   process.on("SIGTERM", () => onShutdownSignal("SIGTERM"));
   process.on("SIGINT", () => onShutdownSignal("SIGINT"));
-  const stoppedBeforeReady = input.registerShutdown?.(() => onShutdownSignal("SIGTERM"));
-  if (stoppedBeforeReady || state.shuttingDown) return;
+  if (state.shuttingDown) return;
 
-  // The parent-owned stop handler is live before readiness is published. A
-  // stop requested during bootstrap is delivered as soon as ordered cleanup
-  // exists, and consumers never observe a ready server without that owner.
   console.log("vibestudio-server hub ready:");
   console.log(`  Gateway:     ${connectUrl} (loopback)`);
   console.log(`  Token file:  ${getAdminTokenPath()}${tokenSource === "env" ? " (env)" : ""}`);

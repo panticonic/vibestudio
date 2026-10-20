@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { ApprovalFeed, type DeviceOperations } from "@vibestudio/shared/deviceDriver";
+import { ApprovalSurfaces, type DeviceOperations } from "@vibestudio/shared/deviceDriver";
 import type { ClientLaunchResult, ClientListing } from "@vibestudio/workspace-contracts/clients";
 import { ChangeSignal } from "../../../hosts/terminal/clientLaunchGate.js";
 import {
@@ -51,7 +51,7 @@ function fixture(overrides: Partial<TerminalDevicePorts["clients"]> = {}) {
     shims: {} as Record<string, { clientId: string; command: string }>,
   };
   const changes = new ChangeSignal();
-  const feed = new ApprovalFeed(async () => []);
+  const surfaces = new ApprovalSurfaces(async () => []);
   const ports: TerminalDevicePorts = {
     clients: {
       list: async () => state.listings,
@@ -80,7 +80,7 @@ function fixture(overrides: Partial<TerminalDevicePorts["clients"]> = {}) {
     },
     bootId: async () => "boot-1",
     changes,
-    approvals: { feed, resolve: async () => undefined },
+    approvals: { surfaces, resolve: async () => undefined },
     hostState: {
       read: () => ({
         schemaVersion: 1,
@@ -329,7 +329,7 @@ describe("terminal device", () => {
 
 describe("terminal device cancellation", () => {
   it("settles a pending approval wait when its call is cancelled", async () => {
-    const feed = new ApprovalFeed(async () => []);
+    const surfaces = new ApprovalSurfaces(async () => []);
     const device = createTerminalDevice(
       {
         clients: {
@@ -339,7 +339,7 @@ describe("terminal device cancellation", () => {
         },
         bootId: async () => "boot-1",
         changes: new ChangeSignal(),
-        approvals: { feed, resolve: async () => undefined },
+        approvals: { surfaces, resolve: async () => undefined },
         hostState: {
           read: () => ({ schemaVersion: 1, shims: {}, develop: {}, commands: {}, clients: {} }),
         },
@@ -347,10 +347,38 @@ describe("terminal device cancellation", () => {
       { home, env: { HOME: home } }
     );
     const abort = new AbortController();
-    const pending = device.ops.nextApproval!({}, abort.signal);
+    const { surfaceToken } = (await device.ops.openApprovals!({}, abort.signal)) as {
+      surfaceToken: string;
+    };
+    const pending = device.ops.nextApproval!({ surfaceToken }, abort.signal);
     const reason = new Error("test cancelled");
     abort.abort(reason);
     await expect(pending).rejects.toBe(reason);
+    await device.close();
+  });
+});
+
+describe("terminal device approval surfaces", () => {
+  it("keeps a second surface live after the first was released", async () => {
+    const approval = { approvalId: "a2", kind: "capability" };
+    const surfaces = new ApprovalSurfaces(async () => [approval] as never);
+    const device = createTerminalDevice(
+      {
+        clients: { list: async () => [], launch: async () => ({}), invokeIntent: async () => ({}) },
+        bootId: async () => "boot-1",
+        changes: new ChangeSignal(),
+        approvals: { surfaces, resolve: async () => undefined },
+        hostState: {
+          read: () => ({ schemaVersion: 1, shims: {}, develop: {}, commands: {}, clients: {} }),
+        },
+      } as unknown as TerminalDevicePorts,
+      { home, env: { HOME: home } }
+    );
+    const signal = new AbortController().signal;
+    const first = (await device.ops.openApprovals!({}, signal)) as { surfaceToken: string };
+    await device.ops.releaseApprovals!(first, signal);
+    const second = (await device.ops.openApprovals!({}, signal)) as { surfaceToken: string };
+    expect(await device.ops.nextApproval!(second, signal)).toMatchObject({ approvalId: "a2" });
     await device.close();
   });
 });

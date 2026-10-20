@@ -1,18 +1,25 @@
 import * as fs from "node:fs";
 import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
 import * as path from "node:path";
-import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
-import type { OwnedProcessIdentity } from "./ownedProcessIdentity.js";
-import { OwnedProcessGroup } from "@vibestudio/shared/ownedProcessGroup";
-import { createOwnedProcessGroupReceiver } from "@vibestudio/shared/ownedProcessRegistration";
+import type { ChildProcess, StdioOptions } from "node:child_process";
+import type { OwnedProcessIdentity } from "@vibestudio/shared/ownedProcessIdentity";
+import type { OwnedProcess, Ownership } from "@vibestudio/shared/ownership";
 
 export interface DevInstanceSupervisorOptions {
+  /**
+   * The caller's ownership. The child's process group is registered with its
+   * reaper in the spawn's own turn, so a caller that dies at any point still
+   * has the child retired.
+   */
+  ownership: Ownership;
   /** Exact materialized source/execution root. Never inferred from process.cwd(). */
   sourceRoot: string;
   command: string;
   args: readonly string[];
   env: NodeJS.ProcessEnv;
   stdio?: StdioOptions;
+  /** Name in the ownership ledger; defaults to the command's basename. */
+  label?: string;
   /**
    * When present, readiness belongs to this exact child generation. The file
    * is observation only; callers publish their durable instance-ready record
@@ -20,11 +27,8 @@ export interface DevInstanceSupervisorOptions {
    */
   readiness?: {
     file: string;
-    timeoutMs?: number;
     onReady(value: unknown): Promise<void>;
   };
-  /** CLI adapter behavior. Call close() after owned state cleanup to release it. */
-  forwardParentSignals?: boolean;
   /** Durable, PID-reuse-resistant identity is available before readiness. */
   onSpawn?(identity: OwnedProcessIdentity): void | Promise<void>;
 }
@@ -44,16 +48,14 @@ function waitForExit(child: ChildProcess): Promise<number> {
 
 /**
  * Observe a server's ready-file handoff for one exact child generation. The
- * child's exit before readiness is the authoritative failure; there is no
- * deadline unless a caller passes one.
+ * child's exit before readiness, or the caller's abort, is the authoritative
+ * terminal event; there is no deadline.
  */
 export async function waitForReady(
   file: string,
   child: ChildProcess,
-  timeoutMs: number | undefined,
   signal: AbortSignal
 ): Promise<unknown> {
-  const startedAt = Date.now();
   for (;;) {
     signal.throwIfAborted();
     try {
@@ -68,30 +70,8 @@ export async function waitForReady(
           : `with code ${child.exitCode ?? 1}`;
       throw new Error(`Vibestudio server exited ${outcome} before publishing readiness`);
     }
-    if (timeoutMs !== undefined && Date.now() - startedAt >= timeoutMs) {
-      throw new Error(`Timed out waiting for Vibestudio readiness at ${file}`);
-    }
     await new Promise((resolve) => setTimeout(resolve, 200));
   }
-}
-
-function forwardSignals(requestStop: (signal: NodeJS.Signals) => Promise<number>): () => void {
-  const handlers = new Map<NodeJS.Signals, () => void>();
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
-    const handler = () => {
-      // Every cancellation request joins the same owned retirement. Package
-      // runners may forward a terminal signal more than once; those deliveries
-      // must not create competing force-stop operations inside the child.
-      void requestStop(signal).catch((error: unknown) => {
-        console.error("[DevInstanceSupervisor] requested shutdown failed", error);
-      });
-    };
-    handlers.set(signal, handler);
-    process.on(signal, handler);
-  }
-  return () => {
-    for (const [signal, handler] of handlers) process.off(signal, handler);
-  };
 }
 
 /**
@@ -103,14 +83,10 @@ function forwardSignals(requestStop: (signal: NodeJS.Signals) => Promise<number>
  * process, readiness barrier, signal forwarding, and ordered stop/wait only.
  */
 export class DevInstanceSupervisor {
-  private child: ChildProcess | null = null;
+  private owned: OwnedProcess | null = null;
   private readonly lifetime = new AbortController();
   private readinessWait: Promise<unknown> | null = null;
-  private stopForwarding: (() => void) | null = null;
   private exit: Promise<number> | null = null;
-  private ownedIdentity: OwnedProcessIdentity | null = null;
-  private ownedGroup: OwnedProcessGroup | null = null;
-  private registeredGroups: ReturnType<typeof createOwnedProcessGroupReceiver> | null = null;
   private stopRequested = false;
   private retirement: Promise<number> | null = null;
 
@@ -127,60 +103,42 @@ export class DevInstanceSupervisor {
   }
 
   get process(): ChildProcess | null {
-    return this.child;
+    return this.owned?.child ?? null;
   }
 
   get processIdentity(): OwnedProcessIdentity | null {
-    return this.ownedIdentity ? { ...this.ownedIdentity } : null;
+    return this.owned?.identity ? { ...this.owned.identity } : null;
   }
 
   async start(): Promise<void> {
-    if (this.child) throw new Error("DevInstanceSupervisor has already started");
+    if (this.owned) throw new Error("DevInstanceSupervisor has already started");
     const sourceRoot = fs.realpathSync(this.options.sourceRoot);
-    const configuredStdio = this.options.stdio ?? "inherit";
-    const stdio: Exclude<StdioOptions, string> =
-      typeof configuredStdio === "string"
-        ? [configuredStdio, configuredStdio, configuredStdio]
-        : [...configuredStdio];
-    while (stdio.length < 3) stdio.push("ignore");
-    if (!stdio.includes("ipc")) stdio.push("ipc");
-    const child = spawn(this.options.command, [...this.options.args], {
+    // Graceful: a stop is the leader's own ordered shutdown, and only what it
+    // leaves behind is killed. The owner's reaper runs the same retirement if
+    // this process dies, so no lifetime channel is needed between them.
+    const owned = this.options.ownership.spawn(this.options.command, [...this.options.args], {
       cwd: sourceRoot,
       env: this.options.env,
-      // The child owns a detached group, but its lifetime still belongs to
-      // this supervisor. Native IPC revokes it even if this owner is killed.
-      stdio,
-      // The owner is the terminal/server process. Keeping the child out of the
-      // terminal process group prevents one Ctrl-C from reaching it twice.
-      detached: process.platform !== "win32",
+      stdio: this.options.stdio ?? "inherit",
+      kill: "graceful",
+      label: this.options.label ?? path.basename(this.options.command),
     });
-    this.child = child;
+    this.owned = owned;
+    const child = owned.child;
     this.exit = waitForExit(child);
+    // The leader's exit is observed through `this.exit`; a failure to start or
+    // to register must surface from start() with its original error.
+    this.exit.catch(() => undefined);
     const spawnFailure = new Promise<never>((_resolve, reject) => {
       child.once("error", reject);
     });
+    spawnFailure.catch(() => undefined);
     try {
       if (child.pid === undefined) await spawnFailure;
-      this.ownedGroup = OwnedProcessGroup.create(child);
-      this.ownedIdentity = this.ownedGroup.identity;
-      if (this.options.forwardParentSignals) {
-        this.stopForwarding = forwardSignals((signal) => this.stop(signal));
-      }
-      if (this.ownedIdentity) {
-        this.registeredGroups = createOwnedProcessGroupReceiver(
-          child,
-          this.ownedIdentity,
-          (identity) => OwnedProcessGroup.adopt(identity)
-        );
-      }
-      if (this.ownedIdentity) await this.options.onSpawn?.(this.ownedIdentity);
+      await owned.registered;
+      if (owned.identity) await this.options.onSpawn?.(owned.identity);
       if (this.options.readiness) {
-        this.readinessWait = waitForReady(
-          this.options.readiness.file,
-          child,
-          this.options.readiness.timeoutMs,
-          this.lifetime.signal
-        );
+        this.readinessWait = waitForReady(this.options.readiness.file, child, this.lifetime.signal);
         const ready = await Promise.race([this.readinessWait, spawnFailure]);
         await this.options.readiness.onReady(ready);
       }
@@ -197,27 +155,30 @@ export class DevInstanceSupervisor {
           ),
           { code: "EOWNERSHIP" }
         );
-      } finally {
-        this.releaseSignalForwarding();
       }
       throw error;
     }
   }
 
+  /**
+   * The leader's exit status, once the leader exited and everything it left in
+   * its process group was retired. Event-driven: the exit and the reaper's
+   * retirement are the only things it waits for.
+   */
   wait(): Promise<number> {
-    if (!this.exit) throw new Error("DevInstanceSupervisor has not started");
+    if (!this.exit || !this.owned) throw new Error("DevInstanceSupervisor has not started");
+    const owned = this.owned;
     this.retirement ??= (async () => {
       const [leader] = await Promise.allSettled([this.exit!]);
-      // Join the exact original group and every acknowledged detached group
-      // after authoritative leader exit. Remaining executors are orphaned,
-      // so force retirement is warranted without a graceful time budget.
-      const results = await Promise.allSettled([
-        this.ownedGroup?.retire("SIGKILL"),
-        this.registeredGroups?.close(),
-      ]);
+      // After the leader's authoritative exit, remaining members are orphaned
+      // and are retired by identity.
+      const [joined] = await Promise.allSettled([owned.join()]);
+      // One failure may surface through both the leader and its registration.
       const failures = [
-        ...(leader!.status === "rejected" ? [leader!.reason] : []),
-        ...results.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+        ...new Set([
+          ...(leader!.status === "rejected" ? [leader!.reason] : []),
+          ...(joined!.status === "rejected" ? [joined!.reason] : []),
+        ]),
       ];
       if (failures.length === 1 && leader!.status === "rejected") throw leader!.reason;
       if (failures.length)
@@ -234,38 +195,31 @@ export class DevInstanceSupervisor {
 
   async stop(signal: NodeJS.Signals = "SIGTERM"): Promise<number> {
     this.lifetime.abort(new Error("Developer instance stopped"));
-    if (!this.child || !this.exit) return 0;
+    const owned = this.owned;
+    if (!owned || !this.exit) return 0;
+    const child = owned.child;
     if (signal === "SIGKILL") {
       // An explicit force request can preempt an existing graceful stop. The
-      // retained group receipt fences PID reuse and joins physical retirement.
-      await this.ownedGroup?.retire("SIGKILL");
+      // retained group identity fences PID reuse and joins physical retirement.
+      await owned.retire("immediate");
     } else if (
       !this.stopRequested &&
-      this.child.pid !== undefined &&
-      this.child.exitCode === null &&
-      this.child.signalCode === null
+      child.pid !== undefined &&
+      child.exitCode === null &&
+      child.signalCode === null
     ) {
       this.stopRequested = true;
-      const delivered = this.child.kill(signal);
-      if (!delivered && this.child.exitCode === null && this.child.signalCode === null) {
-        throw new Error(`Could not signal developer instance child ${this.child.pid ?? "unknown"}`);
+      const delivered = child.kill(signal);
+      if (!delivered && child.exitCode === null && child.signalCode === null) {
+        throw new Error(`Could not signal developer instance child ${child.pid ?? "unknown"}`);
       }
     }
     await Promise.allSettled([this.readinessWait]);
     return this.wait();
   }
 
-  /** End the CLI ownership scope after its process and persistent state retire. */
+  /** End this supervisor's scope after its process and persistent state retire. */
   async close(): Promise<void> {
-    try {
-      await this.stop();
-    } finally {
-      this.releaseSignalForwarding();
-    }
-  }
-
-  private releaseSignalForwarding(): void {
-    this.stopForwarding?.();
-    this.stopForwarding = null;
+    await this.stop();
   }
 }

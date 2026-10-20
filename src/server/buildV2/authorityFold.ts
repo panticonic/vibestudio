@@ -345,7 +345,11 @@ export async function authorityDiagnosticsForProgram(input: {
     if (!queries) {
       addDiagnostic(
         fact,
-        "Authority analysis cannot bound this workspace service query. Use a literal or finite literal union so the build can determine which provider authority the installed code may exercise."
+        `Authority analysis cannot bound this workspace service query${
+          fact.queryExpression === undefined
+            ? ""
+            : ` (query expression: \`${fact.queryExpression}\`; the query is the first string parameter of the callee: \`workers.durableObjectService(query, methods)\` and the runtime \`createDurableObjectServiceClient(query, methods)\` take it first, the service-schemas helper \`createDurableObjectServiceClient(rpc, query, methods)\` takes it second)`
+        }. Use a literal or finite literal union so the build can determine which provider authority the installed code may exercise, e.g. \`workers.durableObjectService("x.v1", methods)\` or \`createDurableObjectServiceClient(rpc, "x.v1", methods)\`.`
       );
       return [];
     }
@@ -437,7 +441,11 @@ export async function authorityDiagnosticsForProgram(input: {
           }
           addDiagnostic(
             fact,
-            `Authority analysis cannot bound the RPC method called on workspace service '${service.binding.name}'. Use a literal or finite literal union so the build can verify the provider method and its authority.`
+            `Authority analysis cannot bound the RPC method called on workspace service '${service.binding.name}'${
+              fact.methodExpression === undefined
+                ? ""
+                : ` (method expression: \`${fact.methodExpression}\`)`
+            }. Use a literal or finite literal union so the build can verify the provider method and its authority, e.g. \`client.call("listMissions", ...args)\`; a generic \`K extends keyof typeof methods & string\` is accepted, a plain \`string\` is not.`
           );
         }
       } else {
