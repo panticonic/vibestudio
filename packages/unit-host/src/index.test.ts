@@ -656,6 +656,47 @@ describe("UnitHost", () => {
     expect(declined.denied).toEqual([declined.node.name]);
   });
 
+  it("reports a requested review once it opens, and none when it was accepted without asking", async () => {
+    const fakeCoordinator = () => {
+      const enqueued: Array<{
+        opened?(asked: boolean): void;
+        accept(): Promise<void>;
+      }> = [];
+      const coordinator: UnitApprovalCoordinator<TestApproval> = {
+        enqueue: (request) =>
+          new Promise<void>((resolve, reject) => {
+            enqueued.push({
+              ...(request.opened ? { opened: request.opened } : {}),
+              accept: () => request.applyApproved().then(resolve, reject),
+            });
+          }),
+      };
+      return { coordinator, enqueued };
+    };
+    const first = fakeCoordinator();
+    const asked = makeHarness({ approvalCoordinator: first.coordinator });
+    const decl = { source: asked.node.relativePath, ref: "main" };
+    const reviewing = asked.host.requestReview(asked.node, decl);
+    const settled = vi.fn();
+    void reviewing.then(settled);
+    await vi.waitFor(() => expect(first.enqueued).toHaveLength(1));
+    expect(settled).not.toHaveBeenCalled();
+    first.enqueued[0]!.opened?.(true);
+    await expect(reviewing).resolves.toBe("reviewing");
+    // A second request joins the same open review.
+    await expect(asked.host.requestReview(asked.node, decl)).resolves.toBe("reviewing");
+    expect(first.enqueued).toHaveLength(1);
+
+    const second = fakeCoordinator();
+    const unasked = makeHarness({ approvalCoordinator: second.coordinator });
+    const reviewed = unasked.host.requestReview(unasked.node, decl);
+    await vi.waitFor(() => expect(second.enqueued).toHaveLength(1));
+    second.enqueued[0]!.opened?.(false);
+    await second.enqueued[0]!.accept();
+    await expect(reviewed).resolves.toBe("reviewed");
+    expect(unasked.applied).toEqual([unasked.node.name]);
+  });
+
   it("does not inspect seed authority again for an admitted version", async () => {
     const isSeedTrusted = vi.fn(() => true);
     const { host } = makeHarness({ isAdmitted: () => true, isSeedTrusted });

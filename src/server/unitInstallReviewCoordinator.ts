@@ -39,6 +39,7 @@ interface PendingRequest {
   origins?: ReadonlyMap<string, InstallReviewOrigin>;
   identityKeys?: ReadonlyMap<string, string>;
   presentation?: ReviewPresentation;
+  opened?(asked: boolean): void;
   applyApproved(): Promise<void>;
   applyDenied(): void;
   resolve(): void;
@@ -100,6 +101,26 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
     if (error !== undefined) this.reviewStagingFailure = { error };
     for (const observers of this.unitApplicationObservers.values())
       for (const observer of [...observers]) observer();
+  }
+
+  /**
+   * Startup staging failed and its review will never be published. Everything
+   * that joined it (a launch among them) receives that failure instead of
+   * waiting on a barrier nobody will release; later reviews publish on their own.
+   */
+  abandonStartupReview(error: unknown): void {
+    this.released.add("startup");
+    const batch = this.pending.get(batchKey("startup"));
+    if (!batch) return;
+    this.pending.delete(batchKey("startup"));
+    for (const request of batch.requests) {
+      request.reject(error);
+      request.failReview(error);
+    }
+  }
+
+  private isStagingStartup(): boolean {
+    return this.deps.autoPublishStartup === false && !this.released.has("startup");
   }
 
   /** Join this exact unit's review and committed application. An observer may
@@ -173,8 +194,16 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
     private readonly deps: {
       approvalQueue: UnitApprovalQueueLike;
       delayMs?: number;
-      /** Startup has an explicit staging barrier so every unit shares one prompt. */
+      /**
+       * Startup has an explicit staging barrier so every unit shares one
+       * prompt: until it is released, every review joins the startup one.
+       */
       autoPublishStartup?: boolean;
+      /**
+       * Whether a unit ships in the host build. Installing Vibestudio already
+       * decided about those, so a startup review of nothing else asks nobody.
+       */
+      isHostBuildUnit?(repoPath: string): boolean;
     }
   ) {}
 
@@ -184,10 +213,12 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
     origins?: ReadonlyMap<string, InstallReviewOrigin>;
     identityKeys?: ReadonlyMap<string, string>;
     presentation?: ReviewPresentation;
+    opened?(asked: boolean): void;
     applyApproved(): Promise<void>;
     applyDenied(): void;
   }): Promise<void> {
     if (request.entries.length === 0) {
+      request.opened?.(false);
       return request.applyApproved();
     }
     const versionless = request.entries.find((entry) => !entry.ev);
@@ -196,18 +227,15 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
         `Cannot offer install review for ${versionless.source.repo} without an effective version`
       );
     }
-    const key = batchKey(request.trigger);
+    const trigger = this.isStagingStartup() ? "startup" : request.trigger;
+    const key = batchKey(trigger);
     let batch = this.pending.get(key);
     if (!batch) {
-      batch = { trigger: request.trigger, requests: [], timer: null };
+      batch = { trigger, requests: [], timer: null };
       this.pending.set(key, batch);
-      if (
-        request.trigger !== "startup" ||
-        this.deps.autoPublishStartup !== false ||
-        this.released.has(request.trigger)
-      ) {
+      if (trigger !== "startup" || !this.isStagingStartup()) {
         batch.timer = setTimeout(() => {
-          void this.publishPending(request.trigger).catch(() => {
+          void this.publishPending(trigger).catch(() => {
             // Every enqueued request receives the same error through its own
             // promise. Avoid a second unhandled rejection from the timer-owned
             // publication promise.
@@ -264,6 +292,8 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
     // distinguish a human decision from unattended activation. The returned
     // promise represents only matching unit applications, not unrelated work
     // which happened to share the same startup trigger.
+    // The barrier is released whether or not anything was staged behind it.
+    if (trigger) this.released.add(trigger);
     for (const candidate of keys) {
       this.released.add(triggerForBatchKey(candidate));
       this.startPendingBatch(candidate);
@@ -314,35 +344,47 @@ export class UnitInstallReviewCoordinator implements UnitApprovalCoordinator<Rev
         new Map(units.map((entry) => [entryKey(entry), reason]))
       );
     };
+    const isHostBuildUnit = this.deps.isHostBuildUnit;
     try {
-      const handle = this.deps.approvalQueue.requestWithHandle({
-        kind: "unit-install-review",
-        callerId: presentation?.callerId ?? "system:units",
-        callerKind: "system",
-        repoPath: "meta",
-        effectiveVersion: "",
-        ...(presentation?.dedupKey ? { dedupKey: presentation.dedupKey } : {}),
-        // Reconciling declared units is an arrival of code like any other; the
-        // heading and rows come from the parts themselves, not from a trigger.
-        mode: trigger === "startup" ? "adopt-root" : "install",
-        title: presentation?.title ?? reviewTitle(units),
-        description: presentation?.description ?? reviewDescription(units),
-        units,
-        ...(origins.size > 0 ? { origins } : {}),
-        ...(identityKeys.size > 0 ? { identityKeys } : {}),
-        ...(this.canReportLanding() ? { reportsLanding: true } : {}),
-        configWrite: null,
-      });
-      decision = handle.decision;
-      approvalId = handle.approvalId;
-      const pending = this.deps.approvalQueue
-        .listPending()
-        .find((entry) => entry.approvalId === approvalId);
-      if (pending?.kind === "unit-install-review") approvalParts = pending.parts;
-      presentation?.onPublished?.({
-        approvalId: handle.approvalId,
-        partCount: pending?.kind === "unit-install-review" ? pending.parts.length : units.length,
-      });
+      if (
+        trigger === "startup" &&
+        isHostBuildUnit &&
+        units.every((unit) => isHostBuildUnit(unit.source.repo))
+      ) {
+        // Accepted exactly as an approval would be, with nothing to show.
+        decision = Promise.resolve("accepted");
+        for (const request of requests) request.opened?.(false);
+      } else {
+        const handle = this.deps.approvalQueue.requestWithHandle({
+          kind: "unit-install-review",
+          callerId: presentation?.callerId ?? "system:units",
+          callerKind: "system",
+          repoPath: "meta",
+          effectiveVersion: "",
+          ...(presentation?.dedupKey ? { dedupKey: presentation.dedupKey } : {}),
+          // Reconciling declared units is an arrival of code like any other; the
+          // heading and rows come from the parts themselves, not from a trigger.
+          mode: trigger === "startup" ? "adopt-root" : "install",
+          title: presentation?.title ?? reviewTitle(units),
+          description: presentation?.description ?? reviewDescription(units),
+          units,
+          ...(origins.size > 0 ? { origins } : {}),
+          ...(identityKeys.size > 0 ? { identityKeys } : {}),
+          ...(this.canReportLanding() ? { reportsLanding: true } : {}),
+          configWrite: null,
+        });
+        decision = handle.decision;
+        approvalId = handle.approvalId;
+        const pending = this.deps.approvalQueue
+          .listPending()
+          .find((entry) => entry.approvalId === approvalId);
+        if (pending?.kind === "unit-install-review") approvalParts = pending.parts;
+        presentation?.onPublished?.({
+          approvalId: handle.approvalId,
+          partCount: pending?.kind === "unit-install-review" ? pending.parts.length : units.length,
+        });
+        for (const request of requests) request.opened?.(true);
+      }
     } catch (error) {
       decision = Promise.reject(error);
     }

@@ -842,4 +842,136 @@ describe("UnitInstallReviewCoordinator", () => {
     expect(publishedResult).toEqual({ status: "rejected", reason: failure });
     expect(enqueuedResult).toEqual({ status: "rejected", reason: failure });
   });
+
+  it("accepts a startup review of only host-build units without asking, as an approval would", async () => {
+    const queue = { request: vi.fn(async () => "deny" as const) };
+    const coordinator = new UnitInstallReviewCoordinator({
+      approvalQueue: exactApprovalQueue(queue),
+      autoPublishStartup: false,
+      isHostBuildUnit: (repoPath) => repoPath !== "workers/custom",
+    });
+    const opened: boolean[] = [];
+    const applied: string[] = [];
+    const participant = (entry: ReviewedUnit) =>
+      coordinator.enqueue({
+        entries: [entry],
+        trigger: "startup",
+        opened: (asked) => opened.push(asked),
+        applyApproved: async () => void applied.push(entry.source.repo),
+        applyDenied: vi.fn(),
+      });
+    const shell = participant(unit("client", "shell"));
+    const runtime = participant(unit("extension", "runtime"));
+    await coordinator.publishPending("startup");
+    await Promise.all([shell, runtime]);
+    expect(queue.request).not.toHaveBeenCalled();
+    expect(opened).toEqual([false, false]);
+    expect(applied.sort()).toEqual(["clients/shell", "extensions/runtime"]);
+
+    // Anything else in the review puts all of it in front of the person.
+    const mixed = new UnitInstallReviewCoordinator({
+      approvalQueue: exactApprovalQueue(queue),
+      autoPublishStartup: false,
+      isHostBuildUnit: (repoPath) => repoPath !== "workers/custom",
+    });
+    const asked: boolean[] = [];
+    const denied = vi.fn();
+    const enqueued = mixed.enqueue({
+      entries: [unit("client", "shell"), unit("worker", "custom")],
+      trigger: "startup",
+      opened: (value) => asked.push(value),
+      applyApproved: vi.fn(async () => {}),
+      applyDenied: denied,
+    });
+    await mixed.publishPending("startup");
+    await enqueued;
+    expect(queue.request).toHaveBeenCalledOnce();
+    expect(asked).toEqual([true]);
+    expect(denied).toHaveBeenCalledOnce();
+  });
+
+  it("asks only about startup this way: a later review of host-build units still asks", async () => {
+    const queue = { request: vi.fn(async () => "accepted" as const) };
+    const coordinator = new UnitInstallReviewCoordinator({
+      approvalQueue: exactApprovalQueue(queue),
+      autoPublishStartup: false,
+      isHostBuildUnit: () => true,
+    });
+    await coordinator.publishPending("startup");
+    const asked: boolean[] = [];
+    const enqueued = coordinator.enqueue({
+      entries: [unit("client", "shell")],
+      trigger: "meta-change",
+      opened: (value) => asked.push(value),
+      applyApproved: vi.fn(async () => {}),
+      applyDenied: vi.fn(),
+    });
+    await coordinator.publishPending("meta-change");
+    await enqueued;
+    expect(queue.request).toHaveBeenCalledWith(expect.objectContaining({ mode: "install" }));
+    expect(asked).toEqual([true]);
+  });
+
+  it("folds a review raised while startup stages into the one startup review", async () => {
+    const queue = { request: vi.fn(async () => "accepted" as const) };
+    const coordinator = new UnitInstallReviewCoordinator({
+      approvalQueue: exactApprovalQueue(queue),
+      autoPublishStartup: false,
+    });
+    const opened = vi.fn();
+    const launch = coordinator.enqueue({
+      entries: [unit("client", "shell")],
+      trigger: "meta-change",
+      opened,
+      applyApproved: vi.fn(async () => {}),
+      applyDenied: vi.fn(),
+    });
+    await coordinator.publishPending("meta-change");
+    expect(queue.request).not.toHaveBeenCalled();
+    expect(opened).not.toHaveBeenCalled();
+
+    const participant = coordinator.enqueue({
+      entries: [unit("client", "shell"), unit("extension", "runtime")],
+      trigger: "startup",
+      applyApproved: vi.fn(async () => {}),
+      applyDenied: vi.fn(),
+    });
+    await coordinator.publishPending("startup");
+    await Promise.all([launch, participant]);
+    expect(queue.request).toHaveBeenCalledOnce();
+    expect(queue.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "adopt-root",
+        units: [unit("client", "shell"), unit("extension", "runtime")],
+      })
+    );
+    expect(opened).toHaveBeenCalledWith(true);
+  });
+
+  it("fails what joined the startup review when staging fails, and publishes later reviews alone", async () => {
+    const queue = { request: vi.fn(async () => "accepted" as const) };
+    const coordinator = new UnitInstallReviewCoordinator({
+      approvalQueue: exactApprovalQueue(queue),
+      autoPublishStartup: false,
+      delayMs: 0,
+    });
+    const launch = coordinator.enqueue({
+      entries: [unit("client", "shell")],
+      trigger: "meta-change",
+      applyApproved: vi.fn(async () => {}),
+      applyDenied: vi.fn(),
+    });
+    const failure = new Error("startup reconcile failed");
+    coordinator.abandonStartupReview(failure);
+    await expect(launch).rejects.toBe(failure);
+    expect(queue.request).not.toHaveBeenCalled();
+
+    await coordinator.enqueue({
+      entries: [unit("client", "shell")],
+      trigger: "startup",
+      applyApproved: vi.fn(async () => {}),
+      applyDenied: vi.fn(),
+    });
+    expect(queue.request).toHaveBeenCalledOnce();
+  });
 });

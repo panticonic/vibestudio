@@ -2,10 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  isEntirelyHostBundledCreationReview,
-  WorkspaceCreationReviewStore,
-} from "./workspaceCreationReview.js";
+import { WorkspaceCreationReviewStore } from "./workspaceCreationReview.js";
 
 let root: string;
 
@@ -65,22 +62,5 @@ describe("WorkspaceCreationReviewStore", () => {
       new WorkspaceCreationReviewStore({ statePath: root }).prepareReview(discover)
     ).resolves.toBeUndefined();
     expect(discover).toHaveBeenCalledTimes(1);
-  });
-});
-
-describe("isEntirelyHostBundledCreationReview", () => {
-  it("accepts only a nonempty set whose every unit the host-build gate vouches for", () => {
-    const shipped = new Set(["clients/desktop-browser"]);
-    const isHostBuildUnit = (repoPath: string) => shipped.has(repoPath);
-    const units = [{ source: { repo: "clients/desktop-browser" } }];
-    expect(isEntirelyHostBundledCreationReview(units, isHostBuildUnit)).toBe(true);
-    expect(
-      isEntirelyHostBundledCreationReview(
-        [...units, { source: { repo: "extensions/custom" } }],
-        isHostBuildUnit
-      )
-    ).toBe(false);
-    expect(isEntirelyHostBundledCreationReview(units, () => false)).toBe(false);
-    expect(isEntirelyHostBundledCreationReview([], () => true)).toBe(false);
   });
 });

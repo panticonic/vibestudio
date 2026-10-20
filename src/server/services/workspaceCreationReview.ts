@@ -36,20 +36,6 @@ interface CreationReviewFile {
   markedAt: number;
 }
 
-/**
- * A newly created workspace needs an interactive review only when it contains
- * code that did not ship in the verified host bundle. `isHostBuildUnit` is the
- * host-build unit gate: it answers from the host-owned inventory recorded when
- * the designated template was materialized, so workspace metadata cannot claim
- * this exemption for itself.
- */
-export function isEntirelyHostBundledCreationReview(
-  units: readonly { source: { repo: string } }[],
-  isHostBuildUnit: (repoPath: string) => boolean
-): boolean {
-  return units.length > 0 && units.every((unit) => isHostBuildUnit(unit.source.repo));
-}
-
 export class WorkspaceCreationReviewStore {
   private readonly filePath: string;
   private state: CreationReviewFile | null = null;

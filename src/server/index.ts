@@ -1134,8 +1134,7 @@ async function main() {
     statePath,
     resolveSourceOrigin: (repoPath) => unitOriginResolver?.recordedOriginFor(repoPath) ?? null,
   });
-  const { isEntirelyHostBundledCreationReview, WorkspaceCreationReviewStore } =
-    await import("./services/workspaceCreationReview.js");
+  const { WorkspaceCreationReviewStore } = await import("./services/workspaceCreationReview.js");
   const workspaceCreationReview = new WorkspaceCreationReviewStore({ statePath });
   const { prepareUnitInstallReview } = await import("./services/unitInstallAcceptance.js");
   type ReviewedUnit = import("@vibestudio/shared/approvals").ReviewedUnit;
@@ -1330,6 +1329,7 @@ async function main() {
     approvalQueue,
     delayMs: 250,
     autoPublishStartup: false,
+    isHostBuildUnit: createHostBuildUnitGate({ statePath, workspacePath }),
   });
   const requireClientsReady = new Set<HostKind>([
     ...(args.requireClientsReady ?? []),
@@ -8078,25 +8078,6 @@ async function main() {
         const origins = await resolveUnitOrigins(
           creationReview.units.map((unit) => unit.source.repo)
         );
-        const isHostBuildUnit = createHostBuildUnitGate({ statePath, workspacePath });
-        if (isEntirelyHostBundledCreationReview(creationReview.units, isHostBuildUnit)) {
-          // Installing Vibestudio already authorized its own verified bundle.
-          // Record that admission at creation so the bundled client can start
-          // without asking it to review itself. Later workspace changes still
-          // go through the ordinary install-review path.
-          buildUnitChangeApprovalProvider.acceptPreapprovedTrust(
-            creationReview.identityKeys,
-            "workspace-creation",
-            undefined,
-            origins
-          );
-          creationReviewUnits = new Set();
-          creationReviewOwed = false;
-          workspaceCreationReview.resolve();
-          workspaceCreationReviewState = { status: "not-required" };
-          console.info("[Units] Admitted the verified host bundle without a first-start review.");
-          return;
-        }
         // From here on U6 answers from the exact set under review, so no unit
         // outside it can be told to wait on a question nobody asked about it.
         creationReviewUnits = new Set(
@@ -8223,6 +8204,7 @@ async function main() {
     .catch((error: unknown) => {
       rejectInitialExtensionDeclarations(error);
       unitInstallReviewCoordinator.finishStartupReviewStaging(error);
+      unitInstallReviewCoordinator.abandonStartupReview(error);
       throw error;
     });
   const startupWorkerArtifactPreparation = Promise.resolve().then(async () => {

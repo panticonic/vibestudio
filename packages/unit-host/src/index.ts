@@ -402,6 +402,11 @@ export interface UnitHostOptions<
 
 /** How a review was answered. */
 export type UnitReviewOutcome = "accepted" | "declined";
+/** One review in flight: when it opened (and whether it asked anyone), and how it ended. */
+interface UnitReview {
+  opened: Promise<boolean>;
+  outcome: Promise<UnitReviewOutcome>;
+}
 export type UnitReconcileTrigger = "startup" | "meta-change";
 /** A unit review reports whether its exact parts were accepted, not a grant scope. */
 export type UnitApprovalDecision = "accepted" | "deny" | "dismiss";
@@ -434,6 +439,12 @@ export interface UnitApprovalCoordinator<ApprovalEntry> {
       dedupKey?: string;
       onPublished?(review: { approvalId: string; partCount: number }): void;
     };
+    /**
+     * The review carrying this request opened: in front of the person
+     * (`asked`), or accepted without a question because it holds only code
+     * the host build ships.
+     */
+    opened?(asked: boolean): void;
     applyApproved(): Promise<void>;
     applyDenied(): void;
   }): Promise<void>;
@@ -596,7 +607,7 @@ export class UnitHost<
   private preapprovedTrustRevision = 0;
   private readonly preapprovedTrustRevisions = new Map<string, number>();
   /** Reviews in flight, by the exact build identity each one decides. */
-  private reviewFlows = new Map<string, Promise<UnitReviewOutcome>>();
+  private reviewFlows = new Map<string, UnitReview>();
   private readonly trustResolver: UnitTrustResolver<Entry>;
 
   constructor(private readonly opts: UnitHostOptions<Entry, Decl, Node, ApprovalEntry>) {
@@ -1153,25 +1164,26 @@ export class UnitHost<
     trigger: UnitReconcileTrigger,
     maxConcurrentApplies?: number,
     publishNow = false
-  ): { staged: Promise<void>; outcome: Promise<UnitReviewOutcome> } {
-    let staged!: { resolve(): void; reject(error: unknown): void };
-    const whenStaged = new Promise<void>((resolve, reject) => {
-      staged = { resolve, reject };
+  ): UnitReview {
+    let opened!: { resolve(asked: boolean): void; reject(error: unknown): void };
+    const whenOpened = new Promise<boolean>((resolve, reject) => {
+      opened = { resolve, reject };
     });
+    // A caller that never waits for the review to open must not see its failure twice.
+    void whenOpened.catch(() => undefined);
     const startApproval = () =>
-      this.promptAndApply(items, trigger, maxConcurrentApplies, () => {
-        if (publishNow) {
-          void this.opts.approvalCoordinator?.publishPending?.(trigger).catch(() => undefined);
-        }
-        staged.resolve();
+      this.promptAndApply(items, trigger, maxConcurrentApplies, {
+        publishNow,
+        opened: (asked) => opened.resolve(asked),
       });
     const flow = this.backgroundFlow ? this.backgroundFlow.then(startApproval) : startApproval();
-    for (const item of items) this.reviewFlows.set(item.identityKey, flow);
+    const review = { opened: whenOpened, outcome: flow };
+    for (const item of items) this.reviewFlows.set(item.identityKey, review);
     const tracked: Promise<void> = flow
       .then(
         () => undefined,
         (err: unknown) => {
-          staged.reject(err);
+          opened.reject(err);
           this.opts.onBackgroundError(err);
         }
       )
@@ -1182,7 +1194,7 @@ export class UnitHost<
         }
       });
     this.backgroundFlow = tracked;
-    return { staged: whenStaged, outcome: flow };
+    return review;
   }
 
   /**
@@ -1195,20 +1207,24 @@ export class UnitHost<
   async requestReview(node: Node, decl: Decl): Promise<"reviewing" | "reviewed"> {
     const trust = this.trustForCandidate(node, decl, this.opts.registry.get(node.name));
     if (trust.decision !== "needs-approval") return "reviewed";
-    if (!this.reviewFlows.has(trust.identityKey)) {
+    let review = this.reviewFlows.get(trust.identityKey);
+    if (!review) {
       if (!this.opts.registry.has(node.name)) {
         this.opts.registry.upsert(this.opts.makePendingEntry(node, decl));
       }
-      // Returns once the review is in front of the person, so the caller can
-      // report it as open rather than racing its publication.
-      await this.beginReview(
+      review = this.beginReview(
         [{ node, decl, identityKey: trust.identityKey }],
         "meta-change",
         undefined,
         true
-      ).staged;
+      );
     }
-    return "reviewing";
+    // Returns once the review is in front of the person, so the caller can
+    // report it as open rather than racing its publication. A review accepted
+    // without a question leaves nothing to report: its application is the answer.
+    if (await review.opened) return "reviewing";
+    await review.outcome;
+    return "reviewed";
   }
 
   /**
@@ -1225,36 +1241,36 @@ export class UnitHost<
       return "accepted";
     }
     const open = this.reviewFlows.get(trust.identityKey);
-    if (open) return open;
+    if (open) return open.outcome;
     if (!this.opts.registry.has(node.name)) {
       this.opts.registry.upsert(this.opts.makePendingEntry(node, decl));
     }
-    const review = this.beginReview(
+    return this.beginReview(
       [{ node, decl, identityKey: trust.identityKey }],
       "meta-change",
       undefined,
       true
-    );
-    await review.staged;
-    return review.outcome;
+    ).outcome;
   }
 
   private async promptAndApply(
     items: Array<ResolvedUnitDeclaration<Decl, Node>>,
     trigger: UnitReconcileTrigger,
     maxConcurrentApplies?: number,
-    onStaged?: () => void
+    review?: { publishNow: boolean; opened(asked: boolean): void }
   ): Promise<UnitReviewOutcome> {
     if (this.opts.approvalCoordinator) {
+      const coordinator = this.opts.approvalCoordinator;
       let outcome: UnitReviewOutcome = "declined";
       const entries = await Promise.all(
         items.map(({ node, decl }) => this.opts.approvalEntry(node, decl))
       );
       const origins = await this.opts.approvalOrigins?.(entries);
-      const resolved = this.opts.approvalCoordinator.enqueue({
+      const resolved = coordinator.enqueue({
         entries,
         trigger,
         ...(origins ? { origins } : {}),
+        ...(review ? { opened: review.opened } : {}),
         applyApproved: async () => {
           outcome = "accepted";
           this.opts.recordApprovedReview?.({ entries, ...(origins ? { origins } : {}) });
@@ -1267,11 +1283,11 @@ export class UnitHost<
         },
         applyDenied: () => this.opts.onApprovalDenied?.(items),
       });
-      onStaged?.();
+      if (review?.publishNow) void coordinator.publishPending?.(trigger).catch(() => undefined);
       await resolved;
       return outcome;
     }
-    onStaged?.();
+    review?.opened(true);
     const entries = await Promise.all(
       items.map(({ node, decl }) => this.opts.approvalEntry(node, decl))
     );
