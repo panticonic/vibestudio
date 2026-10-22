@@ -319,6 +319,7 @@ mode concurrently with other native-input work.
 ```bash
 pnpm bootstrap        # install the complete host and userland workspace graph
 pnpm dev:templates setup # clone and remember the Base, Personal and System templates
+pnpm build:product   # prepare the complete workspace release (all template runtimes) ahead of start
 pnpm start           # build + start Electron with normal desktop semantics
 pnpm start:terminal  # build + open the terminal browser with normal product semantics
 pnpm dev             # launch a fresh disposable development workspace
@@ -426,7 +427,11 @@ See [docs/cli.md](docs/cli.md). (The published npm packages above replace the ol
 and launches it against the ordinary desktop profile. It reopens the most
 recently used registered workspace, creating `default` from the selected Base
 template only when the profile has no workspace yet. It does not expose
-developer instances. `pnpm start:terminal` is the same launch with the terminal
+developer instances. Like the packager, it first prepares the complete workspace
+release (every template's runtimes, built and sealed) from the canonical template
+checkouts instead of the published tags; the result is cached by host build and
+template sources, so `pnpm build:product` can pay that cost ahead of time and
+`pnpm start` then starts without building anything. `pnpm start:terminal` is the same launch with the terminal
 browser in place of the desktop app: it runs the product's `vibestudio terminal`,
 which starts (or reuses) the profile's local server. `pnpm dev` and
 `pnpm dev:terminal` launch into a disposable

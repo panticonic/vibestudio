@@ -1,38 +1,17 @@
 #!/usr/bin/env node
-import {
-  prepareWorkspaceRelease,
-  type WorkspaceReleasePreparation,
-} from "../../scripts/prepare-workspace-release.mjs";
-import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
+import type { WorkspaceReleasePreparation } from "../../scripts/prepare-workspace-release.mjs";
 import * as fs from "node:fs";
-import * as path from "node:path";
-import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { getProfileDataPath } from "@vibestudio/env-paths";
 import { Ownership, sweep } from "@vibestudio/shared/ownership";
 import { ledgerDirOf } from "@vibestudio/shared/ownershipLedger";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
-import { LaunchTermination, joinProducer, runOwnedChild } from "./launchTermination.js";
+import { LaunchTermination, joinProducer } from "./launchTermination.js";
 import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
 import { hasOwnershipFailure } from "../../scripts/lib/owned-cleanup.mjs";
-import { resolveDevelopmentTemplateSet } from "./developmentTemplateSet.js";
-import { assertProductLaunchArguments, productLaunchEnvironment } from "./productLaunch.js";
+import { assertProductLaunchArguments } from "./productLaunch.js";
+import { prepareProductRelease } from "./productRelease.js";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
-import {
-  inspectWorkspaceSources,
-  workspaceSourceFromCheckout,
-} from "../workspaceTemplateSource.js";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
-
-function profileHasWorkspace(): boolean {
-  const centralData = new CentralDataManager({
-    databasePath: path.join(getProfileDataPath(), "server-auth", "identity.db"),
-  });
-  try {
-    return centralData.listWorkspaces().length > 0;
-  } finally {
-    centralData.close();
-  }
-}
 
 /**
  * Build this checkout and run it with installed-product semantics: the
@@ -72,54 +51,18 @@ async function main(): Promise<void> {
   let retirementFailure: unknown;
   try {
     const temporaryRoot = await ownership.scratch("source-launch-");
-    const needsInitialWorkspace = !profileHasWorkspace();
-    const defaultTemplates =
-      (await resolveDevelopmentTemplateSet({
-        repoRoot,
-        checkpointRoot: path.join(temporaryRoot, "default-template-checkpoints"),
-      })) ?? undefined;
-    if (!defaultTemplates) {
-      throw new Error(
-        "A source product launch needs the canonical template checkouts. Run `pnpm dev:templates setup`."
-      );
-    }
-    const developmentTemplates = await inspectWorkspaceSources({
-      sources: templateOptions.checkouts.map(workspaceSourceFromCheckout),
-      checkpointRoot: path.join(temporaryRoot, "template-checkpoints"),
-    });
-
-    const env = productLaunchEnvironment({
-      parent: process.env,
-      repoRoot,
-      defaultTemplates,
-      bootstrapSystem: needsInitialWorkspace,
-      ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
-    });
-    await runOwnedChild(
+    const { env, developmentTemplates } = await prepareProductRelease({
       ownership,
-      process.execPath,
-      ["scripts/native-host-dependencies.mjs", "--repair"],
-      { env, termination }
-    );
-    await runOwnedChild(ownership, process.execPath, ["scripts/ensure-host-build.mjs"], {
-      env,
       termination,
+      repoRoot,
+      temporaryRoot,
+      templateCheckouts: templateOptions.checkouts,
+      register: (owned) => {
+        preparation = owned;
+        // The cleanup below joins the same stop and reports its failure.
+        termination.onRequest(() => void owned.stop().catch(() => {}));
+      },
     });
-    env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(repoRoot, "desktop");
-    termination.signal.throwIfAborted();
-    const owned = prepareWorkspaceRelease({
-      ownership,
-      executable: process.execPath,
-      entry: path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "prepare-workspace-templates.mjs"),
-      appRoot: repoRoot,
-      output: path.join(temporaryRoot, "workspace-release"),
-      scratch: path.join(temporaryRoot, "template-preparation"),
-      env,
-    });
-    preparation = owned;
-    // The cleanup below joins the same stop and reports its failure.
-    termination.onRequest(() => void owned.stop().catch(() => {}));
-    await owned.completed;
     termination.signal.throwIfAborted();
     if (surface === "terminal") {
       process.exitCode = await runProductTerminal(env, forwarded);

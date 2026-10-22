@@ -27,6 +27,7 @@
     "relay:fixture": "node scripts/iroh-relay-fixture.mjs",
     "test:iroh-relay-fixture": "tsx scripts/test-iroh-relay-fixture.ts",
     "cli": "VIBESTUDIO_SERVER_ENTRY=live node --import tsx src/dev/runCli.ts",
+    "build:product": "node --import tsx src/dev/buildProduct.ts",
     "start": "node --import tsx src/dev/runProduct.ts desktop",
     "start:terminal": "node --import tsx src/dev/runProduct.ts terminal",
     "headless-host": "VIBESTUDIO_HEADLESS_HOST=1 node scripts/run-electron.mjs --headless-host",
