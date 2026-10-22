@@ -40,6 +40,14 @@ jobs:
       # reads profile paths from the compiled env-paths package.
       - name: Build the infrastructure packages the harness imports
         run: pnpm build:infrastructure
+      # On macOS the harness's process ownership finds its native observer under dist/.
+      - name: Download source-attested Darwin process observers
+        if: startsWith(inputs.target, 'darwin')
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: darwin-process-observers-ci-${{ github.sha }}
+          path: dist/native-process-observer
+          if-no-artifact-found: error
       - name: Download application built in another job
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
