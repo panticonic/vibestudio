@@ -106,16 +106,28 @@ describe("pair-server runner", () => {
     const child = new FakeChild();
     const prepareSourceServer = vi.fn();
     let preparationRoot = "";
-    const prepareRelease = vi.fn(({ output, env }: { output: string; env: NodeJS.ProcessEnv }) => {
-      preparationRoot = output;
-      mkdirSync(output, { recursive: true });
-      return {
-        completed: Promise.resolve().then(() => {
-          env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"] = output;
-        }),
-        stop: vi.fn(async () => {}),
-      };
-    });
+    let producerOwnership: unknown;
+    const prepareRelease = vi.fn(
+      ({
+        output,
+        env,
+        ownership,
+      }: {
+        output: string;
+        env: NodeJS.ProcessEnv;
+        ownership?: unknown;
+      }) => {
+        producerOwnership = ownership;
+        preparationRoot = output;
+        mkdirSync(output, { recursive: true });
+        return {
+          completed: Promise.resolve().then(() => {
+            env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"] = output;
+          }),
+          stop: vi.fn(async () => {}),
+        };
+      }
+    );
     await runPairServer(config, [], {
       prepareSourceServer,
       prepareWorkspaceRelease: prepareRelease,
@@ -123,6 +135,8 @@ describe("pair-server runner", () => {
       spawnServer({ env }: { env: NodeJS.ProcessEnv }) {
         expect(prepareSourceServer).toHaveBeenCalledOnce();
         expect(prepareRelease).toHaveBeenCalledOnce();
+        // The producer is a member of the runner's ownership, so its reaper retires it.
+        expect(producerOwnership).toBeTruthy();
         expect(env["VIBESTUDIO_WORKSPACE_RELEASE_ROOT"]).toBe(preparationRoot);
         expect(fs.existsSync(preparationRoot)).toBe(true);
         expect(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]).toBe("/isolated/host-generation");

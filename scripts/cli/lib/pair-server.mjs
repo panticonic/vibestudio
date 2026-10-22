@@ -600,6 +600,7 @@ async function serve(ownership, config, options, hooks) {
     try {
       const preparationRoot = checkpointRoot;
       preparation = (hooks.prepareWorkspaceRelease ?? prepareWorkspaceRelease)({
+        ownership,
         executable: process.execPath,
         entry: path.join(env.VIBESTUDIO_HOST_ARTIFACT_ROOT, "prepare-workspace-templates.mjs"),
         appRoot: options.appRoot ?? repoRoot,

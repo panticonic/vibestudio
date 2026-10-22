@@ -1,11 +1,23 @@
 import { statSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getProfileDataPath } from "@vibestudio/env-paths";
 import { Ownership, watchLease } from "@vibestudio/shared/ownership";
 import { runWithOwnedCleanup } from "./owned-cleanup.mjs";
 
 const STOP_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
+
+/** The application root these scripts ship in: the repository checkout, or the
+ * staged package, whose `scripts/lib` this file is in. */
+const SCRIPTS_APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/** Ownership needs the application root on Darwin, where the native process
+ * observer is found beneath it. A script's owner is the application these
+ * scripts belong to unless the caller or its environment names another. */
+function defaultAppRoot() {
+  process.env["VIBESTUDIO_APP_ROOT"] ||= SCRIPTS_APP_ROOT;
+}
 
 /** The abort reason of an operator's stop request. It is the one abort that is
  * not a failure: `main` may let it propagate out of `throwIfAborted()`. */
@@ -32,7 +44,8 @@ function stopRequested(signal) {
  *   (disk-backed, never `/tmp`) when `scratchPrefix` is given.
  *
  * With `appRoot`, `VIBESTUDIO_APP_ROOT` is set to it for this process and its
- * children.
+ * children. Without it, an already-set `VIBESTUDIO_APP_ROOT` stands, and
+ * otherwise the application these scripts belong to is the root.
  *
  * The ownership is released, and every failure of `main` and of retirement
  * reported together, before this resolves with `main`'s value. A stop request
@@ -54,6 +67,7 @@ export async function ownedEntry(
     }
     process.env["VIBESTUDIO_APP_ROOT"] = appRoot;
   }
+  defaultAppRoot();
 
   const controller = new AbortController();
   let ownership;
@@ -121,6 +135,7 @@ export function retireOnAbort(ownership, signal, owned) {
  * library code that is not a script entry but starts owned work. A failure of
  * the operation and of retirement are reported together. */
 export async function withOwnership(operation, { profileDir = getProfileDataPath() } = {}) {
+  defaultAppRoot();
   const ownership = await Ownership.open({ profileDir, lifetime: "leased" });
   return runWithOwnedCleanup(
     () => operation(ownership),

@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { OWNERSHIP_REAPER_FILES } from "../../packages/shared/src/ownershipFiles.mjs";
+import { OWNERSHIP_REAPER_FILES } from "@vibestudio/shared/ownershipFiles";
 
 /** Artifact paths (relative to the repository root) of the staged reaper files. */
 export const OWNERSHIP_REAPER_ARTIFACTS = Object.freeze(

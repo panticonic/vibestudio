@@ -171,6 +171,9 @@ export async function startEphemeralLinuxSecretService(ownership, tempRoot, { si
     keyring.stdin?.end(randomUUID());
     await waitForSecretService(children.waiter.child, children.bus.child, keyring, signal);
     signal?.throwIfAborted();
+    // Started means owned: the reaper has recorded every group before the
+    // caller is told, so killing the caller from here on retires them.
+    await Promise.all([children.bus, children.waiter, children.keyring].map((c) => c.registered));
     if (children.bus.child.exitCode !== null || keyring.exitCode !== null) {
       throw new Error("The isolated desktop secret service exited during readiness");
     }
