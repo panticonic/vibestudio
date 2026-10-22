@@ -103,7 +103,7 @@ describe("DevInstanceSupervisor", () => {
             "const child=spawn(process.execPath,['-e',",
             "  'process.on(\"SIGTERM\",()=>{});setInterval(()=>{},1000)'",
             "],{stdio:'ignore'});",
-            "fs.writeFileSync(process.argv[1],JSON.stringify({pid:child.pid}));",
+            "fs.writeFileSync(process.argv[1]+'.tmp',JSON.stringify({pid:child.pid}));fs.renameSync(process.argv[1]+'.tmp',process.argv[1]);",
             "setInterval(()=>{},1000);",
           ].join(""),
           readyFile,
@@ -138,7 +138,7 @@ describe("DevInstanceSupervisor", () => {
       import { spawn } from 'node:child_process';
       import fs from 'node:fs';
       const worker = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {stdio:'ignore'});
-      fs.writeFileSync(process.argv[2], JSON.stringify({service:process.pid, worker:worker.pid}));
+      fs.writeFileSync(process.argv[2] + '.tmp', JSON.stringify({service:process.pid, worker:worker.pid})); fs.renameSync(process.argv[2] + '.tmp', process.argv[2]);
       setInterval(() => {}, 1000);
     `
       );
@@ -204,7 +204,8 @@ describe("DevInstanceSupervisor", () => {
       `
       import fs from 'node:fs';
       const stopped: string = process.argv[3]!;
-      fs.writeFileSync(process.argv[2]!, JSON.stringify({pid:process.pid}));
+      fs.writeFileSync(process.argv[2]! + '.tmp', JSON.stringify({pid:process.pid}));
+      fs.renameSync(process.argv[2]! + '.tmp', process.argv[2]!);
       process.on('SIGTERM', () => setTimeout(() => {
         fs.writeFileSync(stopped, 'drained');
         process.exit(0);
@@ -272,7 +273,7 @@ describe("DevInstanceSupervisor", () => {
       command: process.execPath,
       args: [
         "-e",
-        "require('node:fs').writeFileSync(process.argv[1], JSON.stringify({generation:'g1'}))",
+        "const fs=require('node:fs');fs.writeFileSync(process.argv[1]+'.tmp', JSON.stringify({generation:'g1'}));fs.renameSync(process.argv[1]+'.tmp', process.argv[1])",
         readyFile,
       ],
       env: process.env,
@@ -347,7 +348,7 @@ describe("DevInstanceSupervisor", () => {
             "const child=spawn(process.execPath,['-e',",
             "  'process.on(\"SIGTERM\",()=>{});setInterval(()=>{},1000)'",
             "],{stdio:'ignore'});",
-            "fs.writeFileSync(process.argv[1],JSON.stringify({pid:child.pid}));",
+            "fs.writeFileSync(process.argv[1]+'.tmp',JSON.stringify({pid:child.pid}));fs.renameSync(process.argv[1]+'.tmp',process.argv[1]);",
             "setTimeout(()=>process.exit(0),20);",
           ].join(""),
           readyFile,
@@ -387,7 +388,7 @@ describe("DevInstanceSupervisor", () => {
             "  'process.on(\"SIGTERM\",()=>{});setInterval(()=>{},1000)'",
             "],{stdio:'ignore'});",
             "process.on('SIGTERM',()=>fs.writeFileSync(process.argv[1]+'.stopping','owned'));",
-            "fs.writeFileSync(process.argv[1],JSON.stringify({pid:child.pid}));",
+            "fs.writeFileSync(process.argv[1]+'.tmp',JSON.stringify({pid:child.pid}));fs.renameSync(process.argv[1]+'.tmp',process.argv[1]);",
             "setInterval(()=>{},1000);",
           ].join(""),
           readyFile,
