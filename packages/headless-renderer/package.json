@@ -7,15 +7,11 @@
     "buildProfile": "custom-bundle"
   },
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
   "bin": {
     "vibestudio-headless-host": "./dist/main.js"
   },
   "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
+    ".": "./dist/index.js"
   },
   "scripts": {
     "build": "node build.mjs",

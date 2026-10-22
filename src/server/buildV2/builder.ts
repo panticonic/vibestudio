@@ -1409,7 +1409,11 @@ async function runtimeExportNames(entry: string): Promise<string[]> {
       {
         name: "client-runtime-exports-external",
         setup(build) {
-          build.onResolve({ filter: /^[^./]/ }, (args) => ({ path: args.path, external: true }));
+          // Packages stay out of the graph. The entry is a path, which on
+          // Windows starts with a drive letter just as a package name does.
+          build.onResolve({ filter: /^[^./]/ }, (args) =>
+            args.kind === "entry-point" ? undefined : { path: args.path, external: true }
+          );
         },
       },
     ],
