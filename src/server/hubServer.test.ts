@@ -6,7 +6,7 @@ import { internalDoProgramsForFixture } from "../../tests/fixtures/internalDoPro
 import * as os from "node:os";
 import * as path from "node:path";
 import { EventEmitter } from "node:events";
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { Ownership, type OwnedProcess } from "@vibestudio/shared/ownership";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -457,15 +457,17 @@ describe("workspace child process-tree ownership", () => {
     await Promise.allSettled(ownerships.splice(0).map((ownership) => ownership.close()));
     for (const profile of profiles.splice(0)) fs.rmSync(profile, { recursive: true, force: true });
   });
-  const groupAlive = (pid: number): boolean => {
-    try {
-      process.kill(-pid, 0);
-      return true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") return false;
-      throw error;
-    }
-  };
+  // A killed member whose parent is gone stays a zombie until init reaps it: dead,
+  // though signalling it still succeeds. Liveness reads the process table.
+  const processTable = (): string[][] =>
+    execFileSync("ps", ["-A", "-o", "pid=,pgid=,stat="], { encoding: "utf8" })
+      .split("\n")
+      .map((line) => line.trim().split(/\s+/))
+      .filter((fields) => fields.length >= 3);
+  const groupAlive = (pgid: number): boolean =>
+    processTable().some(([, group, stat]) => Number(group) === pgid && !stat!.startsWith("Z"));
+  const processRunning = (pid: number): boolean =>
+    processTable().some(([id, , stat]) => Number(id) === pid && !stat!.startsWith("Z"));
   it.runIf(process.platform !== "win32")(
     "confirms the runtime group is gone after its leader exits first",
     async () => {
@@ -525,7 +527,7 @@ describe("workspace child process-tree ownership", () => {
       const { workerd } = JSON.parse(fs.readFileSync(receipt, "utf8")) as { workerd: number };
       // The server finished its drain, and the group's survivor was then retired.
       expect(groupAlive(owned.child.pid!)).toBe(false);
-      expect(() => process.kill(workerd, 0)).toThrow(/ESRCH/);
+      expect(processRunning(workerd)).toBe(false);
     }
   );
 
