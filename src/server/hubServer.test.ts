@@ -464,8 +464,11 @@ describe("workspace child process-tree ownership", () => {
       .split("\n")
       .map((line) => line.trim().split(/\s+/))
       .filter((fields) => fields.length >= 3);
-  const groupAlive = (pgid: number): boolean =>
-    processTable().some(([, group, stat]) => Number(group) === pgid && !stat!.startsWith("Z"));
+  const liveGroupMembers = (pgid: number): string[] =>
+    processTable()
+      .filter(([, group, stat]) => Number(group) === pgid && !stat!.startsWith("Z"))
+      .map(([id, , stat]) => `${id}:${stat}`);
+  const groupAlive = (pgid: number): boolean => liveGroupMembers(pgid).length > 0;
   const processRunning = (pid: number): boolean =>
     processTable().some(([id, , stat]) => Number(id) === pid && !stat!.startsWith("Z"));
   it.runIf(process.platform !== "win32")(
@@ -526,7 +529,7 @@ describe("workspace child process-tree ownership", () => {
 
       const { workerd } = JSON.parse(fs.readFileSync(receipt, "utf8")) as { workerd: number };
       // The server finished its drain, and the group's survivor was then retired.
-      expect(groupAlive(owned.child.pid!)).toBe(false);
+      expect(liveGroupMembers(owned.child.pid!)).toEqual([]);
       expect(processRunning(workerd)).toBe(false);
     }
   );

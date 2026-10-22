@@ -1082,9 +1082,10 @@ async function verifySettingsEvent(app, timeoutMs) {
   do {
     menuState = await evaluateElectron(
       app,
-      ({ app: electronApp, BrowserWindow, Menu }) => {
+      ({ app: electronApp, BaseWindow, Menu }) => {
+        // Client windows are BaseWindows (views attached), not BrowserWindows.
         electronApp.focus({ steal: true });
-        const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+        const window = BaseWindow.getFocusedWindow() ?? BaseWindow.getAllWindows()[0];
         window?.focus();
         const findItem = (items) => {
           for (const item of items) {
@@ -1103,7 +1104,7 @@ async function verifySettingsEvent(app, timeoutMs) {
         return {
           invoked: false,
           menus: (menu?.items ?? []).map((entry) => entry.label),
-          windows: BrowserWindow.getAllWindows().length,
+          windows: BaseWindow.getAllWindows().length,
           focused: window?.isFocused() ?? null,
         };
       },
