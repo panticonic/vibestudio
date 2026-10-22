@@ -38,7 +38,7 @@ import type { EntityRecord } from "../../packages/shared/src/runtime/entitySpec.
 
 function verifiedTestCaller(
   callerId: string,
-  callerKind: "app" | "panel" | "worker" | "do" | "shell"
+  callerKind: "client" | "panel" | "worker" | "do" | "shell"
 ) {
   if (callerKind !== "panel" && callerKind !== "worker") {
     if (callerKind !== "do") {
@@ -2086,7 +2086,7 @@ describe("credentialService", () => {
           },
           handoffTarget: {
             callerId: "@workspace-apps/shell",
-            callerKind: "app",
+            callerKind: "client",
           },
         },
       ]
@@ -2596,7 +2596,7 @@ describe("credentialService", () => {
     );
 
     const pending = service.handler(
-      { caller: verifiedTestCaller("@workspace-apps/mobile", "app") },
+      { caller: verifiedTestCaller("@workspace-apps/mobile", "client") },
       "connect",
       [
         {
@@ -2626,7 +2626,7 @@ describe("credentialService", () => {
         "external-open:open",
         expect.objectContaining({
           callerId: "@workspace-apps/mobile",
-          callerKind: "app",
+          callerKind: "client",
           oauthAppScheme: expect.objectContaining({
             redirectUri: "vibestudio://oauth/callback/openai-codex",
             callbackScheme: "vibestudio",
@@ -2657,7 +2657,7 @@ describe("credentialService", () => {
     ).rejects.toMatchObject({ code: "client_not_authorized" });
 
     await service.handler(
-      { caller: verifiedTestCaller("@workspace-apps/mobile", "app") },
+      { caller: verifiedTestCaller("@workspace-apps/mobile", "client") },
       "forwardOAuthCallback",
       [
         {

@@ -71,7 +71,6 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), ".."
 let desktopGeneration = null;
 let sourceGeneration = null;
 const screenshotDir = path.join(repoRoot, "test-results", "desktop-pairing-smoke");
-const HOSTED_SHELL_APP = "@workspace-apps/shell";
 const desktopObservationOwners = new WeakMap();
 /** The ownership handle of each Playwright-launched desktop: its group is
  * adopted so the smoke's reaper retires it even if the smoke is killed. */
@@ -2170,7 +2169,8 @@ async function verifyNativePageTitleProjection(app, panelId, timeoutMs) {
           .find(
             (contents) =>
               !contents.isDestroyed() &&
-              contents.getTitle() === "@workspace-apps/shell" &&
+              // The desktop browser client's shell is served from the client cache.
+              contents.getURL().startsWith("vs-client:") &&
               !contents.getURL().includes("#overlaySurface=")
           );
         if (!shell) return { treeTitle: "", breadcrumbTitle: "" };
@@ -2734,7 +2734,7 @@ async function main({ signal: parentOwnerSignal, ownership, scratchRoot }) {
     const hostView = overlay.hostView;
     const hostedShellUrl = String(
       hostView?.hostedShellUrl ??
-        result.snapshots.find((snapshot) => snapshot.title === HOSTED_SHELL_APP)?.url ??
+        result.snapshots.find((snapshot) => snapshot.url?.startsWith("vs-client:"))?.url ??
         ""
     );
     const pairedChrome = await chromePage(electronApp, deadlineMs);

@@ -32,6 +32,14 @@ describe("React Native standard cancellation platform", () => {
     fs.mkdirSync(parent, { recursive: true });
     const root = fs.mkdtempSync(path.join(parent, "native-abort-types-"));
     try {
+      // The program depends on this package as an installed dependent does,
+      // not through whatever the repository root happens to have linked.
+      fs.mkdirSync(path.join(root, "node_modules", "@vibestudio"), { recursive: true });
+      fs.symlinkSync(
+        path.resolve("packages/rn-client-api"),
+        path.join(root, "node_modules", "@vibestudio", "rn-client-api"),
+        "dir"
+      );
       fs.writeFileSync(
         path.join(root, "input.ts"),
         `

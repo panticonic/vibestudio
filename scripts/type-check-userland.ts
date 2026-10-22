@@ -106,20 +106,22 @@ await runWithOwnedCleanup(
     temporaryRoot = fs.mkdtempSync(path.join(temporaryParent, "checkout-typecheck-"));
 
     projectCheckoutSource(temporaryRoot, preparedProjection.units);
+    const nativeHost = preparedProjection.units.some((unit) =>
+      requiresNativeHost(unit, preparedProjection.graph)
+    );
     projectNodeModules(temporaryRoot, [
       preparedProjection.nodeModulesDir,
       path.join(appRoot, "node_modules"),
+      // A native client runs inside the React Native host, which provides the
+      // modules it imports (`@vibestudio/rn-client-api`, the host packages).
+      ...(nativeHost ? [path.join(appRoot, "hosts/react-native/node_modules")] : []),
     ]);
 
     // Host integration tests validate the configured Base pair. An explicit
     // workspace target validates only the units it actually contains.
     const configs = ["tsconfig.json"];
     if (process.argv.includes("--host-integration")) configs.push("tsconfig.integration.json");
-    if (
-      preparedProjection.units.some((unit) => requiresNativeHost(unit, preparedProjection.graph))
-    ) {
-      configs.push("tsconfig.mobile.json", "tsconfig.integration.mobile.json");
-    }
+    if (nativeHost) configs.push("tsconfig.mobile.json", "tsconfig.integration.mobile.json");
     const typeRoots = [
       path.join(preparedProjection.nodeModulesDir, "@types"),
       path.join(appRoot, "node_modules/@types"),
@@ -172,9 +174,11 @@ function projectCheckoutSource(
     const target = path.join(projectedWorkspace, name);
     fs.copyFileSync(path.join(appRoot, "scripts/config/userland", name), target);
     if (name.endsWith(".json")) {
+      // The update prompt integration test exercises `client-kit-native`, so it
+      // belongs to whichever composition contains that package.
       if (
         name === "tsconfig.integration.mobile.json" &&
-        process.argv.includes("--host-integration")
+        fs.existsSync(path.join(projectedWorkspace, "packages/client-kit-native"))
       ) {
         const config = JSON.parse(fs.readFileSync(target, "utf8"));
         config.include.unshift("../tests/workspace-integration/mobile-appUpdatePrompt.test.ts");

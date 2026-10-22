@@ -32,6 +32,9 @@
     "clients/mobile-browser/**/*",
     "clients/chat-mobile/**/*",
     "packages/client-kit-native/**/*",
-    "packages/mobile-navigation/**/*"
+    "packages/mobile-navigation/**/*",
+    "packages/agentic-chat-native/src/index.ts",
+    "packages/agentic-chat-native/src/native/**/*",
+    "hermesPlatform.ts"
   ]
 }

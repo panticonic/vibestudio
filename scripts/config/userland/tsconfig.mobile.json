@@ -15,7 +15,11 @@
     "clients/chat-mobile/**/*.tsx",
     "packages/client-kit-native/**/*.ts",
     "packages/client-kit-native/**/*.tsx",
-    "packages/mobile-navigation/**/*.ts"
+    "packages/mobile-navigation/**/*.ts",
+    "packages/agentic-chat-native/src/index.ts",
+    "packages/agentic-chat-native/src/native/**/*.ts",
+    "packages/agentic-chat-native/src/native/**/*.tsx",
+    "hermesPlatform.ts"
   ],
   "exclude": [
     "node_modules",

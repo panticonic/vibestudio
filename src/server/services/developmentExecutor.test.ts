@@ -585,10 +585,13 @@ describe("DevelopmentExecutor exact private execution", () => {
     const plan = await manualPlan("run-stop", pnpmCli);
     await executor.materialize(plan);
     const executing = executor.execute(runFor(plan), plan, vi.fn());
+    // The run settles while stop() is still retiring its group, so its outcome
+    // is observed before the stop is requested.
+    const cancelled = expect(executing).rejects.toMatchObject({ code: "ECANCELLED" });
     await vi.waitFor(() => expect(lines).toContain("owned-process-ready"));
 
     await expect(executor.stop(plan.runId)).resolves.toBeUndefined();
-    await expect(executing).rejects.toMatchObject({ code: "ECANCELLED" });
+    await cancelled;
 
     await executor.materialize(plan);
     await expect(executor.execute(runFor(plan), plan, vi.fn())).resolves.toMatchObject({

@@ -22,7 +22,8 @@ export async function chromePage(app, deadline) {
   return until(
     async () => {
       for (const page of app.context().pages()) {
-        if (page.isClosed() || !page.url().includes("/_a/")) continue;
+        // A desktop client page is served from the verified cache as `vs-client://<id>/…`.
+        if (page.isClosed() || !page.url().startsWith("vs-client:")) continue;
         if (await page.locator('[aria-label="Open Personal"]').count()) return page;
       }
       return null;
@@ -74,7 +75,7 @@ export async function nativeRpc(page, destination, method, args) {
         });
         const caller = {
           callerId: bridge.identity.runtimeId,
-          callerKind: "app",
+          callerKind: "client",
           workspaceId: bridge.identity.workspaceId,
         };
         void bridge

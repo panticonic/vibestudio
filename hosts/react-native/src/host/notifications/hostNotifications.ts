@@ -17,7 +17,6 @@ import {
   readWorkspacePushScope,
   workspaceNotificationKey,
   type WorkspaceApprovalTarget,
-  type WorkspacePushScope,
 } from "@vibestudio/shared/workspacePushScope";
 import {
   isPushUserInboxDataPayload,

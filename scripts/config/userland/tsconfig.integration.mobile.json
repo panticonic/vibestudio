@@ -1,9 +1,10 @@
 {
-  "//": "The Jest harness runs in Node with native component mocks and browser-compatible web APIs. The separate mandatory tsconfig.mobile.json validates the actual Hermes client without these globals.",
+  "//": "The Jest harness runs in Node with native component mocks and browser-compatible web APIs. The separate mandatory tsconfig.mobile.json validates the actual Hermes client without these globals. Test renderers expose element props as an index signature, which tests read with property access.",
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": ["node", "jest"],
+    "noPropertyAccessFromIndexSignature": false,
     "allowImportingTsExtensions": true,
     "isolatedModules": true
   },
@@ -14,7 +15,10 @@
     "clients/chat-mobile/**/*.tsx",
     "packages/client-kit-native/**/*.ts",
     "packages/client-kit-native/**/*.tsx",
-    "packages/mobile-navigation/**/*.ts"
+    "packages/mobile-navigation/**/*.ts",
+    "packages/agentic-chat-native/src/index.ts",
+    "packages/agentic-chat-native/src/native/**/*.ts",
+    "packages/agentic-chat-native/src/native/**/*.tsx"
   ],
   "exclude": ["node_modules", "../node_modules", "**/dist", "**/node_modules", "**/*.native.d.ts"]
 }
