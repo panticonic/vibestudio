@@ -562,6 +562,12 @@ test("installed session joins its server and listeners after operation and shutd
   assert.equal(process.listenerCount("SIGTERM"), baselineSigterm);
   await ownership.release();
   assert.deepEqual(await fs.readdir(scratchDirOf(profileDir)), []);
+  // The consumer's state lived beside the application, not in the (deep) profile
+  // scratch, and the owner retired it.
+  assert.deepEqual(
+    (await fs.readdir(root)).filter((name) => name.startsWith(".userland-build-")),
+    []
+  );
 });
 
 test("installed verification keeps fresh state isolated while carrying the build budget", async () => {

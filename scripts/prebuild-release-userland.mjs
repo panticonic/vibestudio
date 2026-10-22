@@ -266,6 +266,9 @@ export async function withInstalledReleaseSession(context, ownership, operation)
       resources,
       executable,
       ownership,
+      // Outside the application being verified, and short: the consumer's
+      // workspace state nests deep, and Windows paths are bounded.
+      scratchParent: path.dirname(context.appOutDir),
       serverEntry: path.join(unpacked, "dist/server-electron.cjs"),
       cliEntry: path.join(unpacked, "dist/cli/client.mjs"),
       environment: { ELECTRON_RUN_AS_NODE: "1" },
@@ -281,6 +284,7 @@ export async function withStandaloneReleaseSession(appRoot, executable, ownershi
       resources: appRoot,
       executable,
       ownership,
+      scratchParent: path.dirname(appRoot),
       serverEntry: path.join(appRoot, "dist/server.mjs"),
       cliEntry: path.join(appRoot, "dist/cli/client.mjs"),
       environment: {},
@@ -290,11 +294,14 @@ export async function withStandaloneReleaseSession(appRoot, executable, ownershi
 }
 
 async function withReleaseConsumerSession(
-  { appRoot, resources, executable, ownership, serverEntry, cliEntry, environment },
+  { appRoot, resources, executable, ownership, scratchParent, serverEntry, cliEntry, environment },
   operation
 ) {
-  // Disk-backed reaper scratch, removed once the consumer's group has retired.
-  const scratch = await ownership.scratch("userland-build-");
+  // The consumer's whole instance lives here, in a parent the caller keeps short
+  // (the profile's scratch is too deep for Windows paths). The owner retires it
+  // with the consumer's group, even if this process is killed.
+  const scratch = await fsp.mkdtemp(path.join(scratchParent, ".userland-build-"));
+  await ownership.own(scratch, "userland-build");
   let server;
   let ownedServer;
   let closed;
