@@ -74,7 +74,11 @@ function findDependencyCycle(manifests: WorkspaceManifest[]): string[] | null {
 describe("workspace package graph", () => {
   it("keeps runtime workspace-package dependencies acyclic", () => {
     const manifests: WorkspaceManifest[] = [];
-    for (const root of [path.resolve("packages"), path.resolve("apps"), exactUserlandRoot]) {
+    // The workspace packages pnpm-workspace.yaml declares, and the userland.
+    const roots = ["packages", "hosts/core", "hosts/react-native", "services"].map((root) =>
+      path.resolve(root)
+    );
+    for (const root of [...roots, exactUserlandRoot]) {
       collectManifests(root, manifests);
     }
     const duplicateNames = manifests
