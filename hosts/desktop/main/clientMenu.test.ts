@@ -34,6 +34,7 @@ const model: ClientMenuModel = {
     },
   ],
   popup: [{ id: "settings", label: "Settings…" }],
+  app: [{ id: "settings", label: "Settings…" }],
 };
 
 type Template = Array<{ label?: string; role?: string; submenu?: Template; click?: () => void }>;
@@ -138,6 +139,31 @@ describe("application menu template", () => {
     panel.submenu![0]!.click!();
     panel.submenu![2]!.submenu![0]!.click!();
     expect(dispatch.mock.calls).toEqual([["reload"], ["zoom-in"]]);
+  });
+
+  it("places a client's application-menu entries after About on macOS only", () => {
+    const options = { appName: "Vibestudio", dispatch: vi.fn() };
+    const mac = buildApplicationMenuTemplate(model, { ...options, platform: "darwin" }) as Template;
+    expect(mac[0]!.submenu!.map((entry) => entry.label ?? entry.role)).toEqual([
+      "about",
+      undefined,
+      "Settings…",
+      undefined,
+      "services",
+      undefined,
+      "hide",
+      "hideOthers",
+      "unhide",
+      undefined,
+      "quit",
+    ]);
+    mac[0]!.submenu![2]!.click!();
+    expect(options.dispatch).toHaveBeenCalledWith("settings");
+    const linux = buildApplicationMenuTemplate(model, {
+      ...options,
+      platform: "linux",
+    }) as Template;
+    expect(JSON.stringify(linux)).not.toContain("Settings…");
   });
 
   it("contributes nothing when no client contributed anything", () => {

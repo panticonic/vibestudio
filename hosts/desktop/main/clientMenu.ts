@@ -58,6 +58,8 @@ export interface ClientMenuModel {
   menus: Array<{ label: string; items: ClientMenuItem[] }>;
   /** The popup opened from the client's own menu button. */
   popup?: ClientMenuItem[];
+  /** macOS only: entries of the application menu, after About. Other platforms ignore them. */
+  app?: ClientMenuItem[];
 }
 
 const MAX_ITEMS = 400;
@@ -104,6 +106,7 @@ export const ClientMenuModelSchema: z.ZodType<ClientMenuModel> = z
       )
       .max(12),
     popup: z.array(ItemSchema).max(200).optional(),
+    app: z.array(ItemSchema).max(20).optional(),
   })
   .strict()
   .superRefine((model, ctx) => {
@@ -116,6 +119,7 @@ export const ClientMenuModelSchema: z.ZodType<ClientMenuModel> = z
     };
     for (const menu of model.menus) visit(menu.items);
     visit(model.popup ?? []);
+    visit(model.app ?? []);
     if (count > MAX_ITEMS) {
       ctx.addIssue({ code: "custom", message: `A client menu has at most ${MAX_ITEMS} entries` });
     }
@@ -302,6 +306,9 @@ export function buildApplicationMenuTemplate(
             label: options.appName,
             submenu: [
               { role: "about" },
+              ...(model?.app?.length
+                ? [SEPARATOR, ...toElectron(model.app, options.dispatch)]
+                : []),
               SEPARATOR,
               { role: "services" },
               SEPARATOR,
