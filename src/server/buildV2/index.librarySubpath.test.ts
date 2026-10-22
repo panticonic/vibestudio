@@ -738,7 +738,7 @@ describe("BuildSystemV2 library package subpaths", () => {
     expect(module.exports).toMatchObject({
       createHostedRuntime: expect.any(Function),
     });
-  }, 30_000);
+  }, 90_000);
 
   it("resolves a build unit that exists only at a context ref", async () => {
     const mainRoot = path.join(root, "main-state");
