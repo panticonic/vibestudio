@@ -293,6 +293,16 @@ export async function withStandaloneReleaseSession(appRoot, executable, ownershi
   );
 }
 
+/**
+ * Whether the exit code of a server this process asked to stop is a clean one.
+ * An owned process is stopped by SIGTERM, which a server answers with its ordered
+ * shutdown and a zero exit. Windows has no signals: the same request terminates the
+ * process, so there its exit code carries no verdict on shutdown.
+ */
+export function requestedStopExitedCleanly(code, platform = process.platform) {
+  return code === 0 || platform === "win32";
+}
+
 async function withReleaseConsumerSession(
   { appRoot, resources, executable, ownership, scratchParent, serverEntry, cliEntry, environment },
   operation
@@ -488,7 +498,7 @@ async function withReleaseConsumerSession(
             if (result.error) throw result.error;
             if (result.signal)
               throw new Error(`Release build server was terminated by ${result.signal}: ${tail}`);
-            if (result.code !== 0)
+            if (!requestedStopExitedCleanly(result.code))
               throw new Error(`Release build server exited (${result.code}): ${tail}`);
           },
         ],

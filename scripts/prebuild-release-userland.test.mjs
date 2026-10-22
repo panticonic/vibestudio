@@ -15,6 +15,7 @@ import {
   prepareInstalledTemplateRelease,
   runInstalledRpcBatch,
   verifyPreparedReleaseUserland,
+  requestedStopExitedCleanly,
   withStandaloneReleaseSession,
   verifyAndPublishSchemaEvidence,
 } from "./prebuild-release-userland.mjs";
@@ -1196,4 +1197,12 @@ test("nested template ownership failures retain the state anchor", async () => {
   const retained = (await fs.readdir(root)).filter((name) => name.startsWith(".template-release-"));
   assert.equal(retained.length, 1);
   assert.equal((await fs.stat(path.join(root, retained[0], "tmp"))).isDirectory(), true);
+});
+
+test("a requested stop is judged by its exit code except where stopping terminates", () => {
+  assert.equal(requestedStopExitedCleanly(0, "linux"), true);
+  assert.equal(requestedStopExitedCleanly(1, "linux"), false);
+  assert.equal(requestedStopExitedCleanly(7, "darwin"), false);
+  // Windows has no SIGTERM: a stop request is a termination there.
+  assert.equal(requestedStopExitedCleanly(1, "win32"), true);
 });
