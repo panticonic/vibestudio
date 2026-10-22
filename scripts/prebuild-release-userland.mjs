@@ -537,7 +537,6 @@ async function prepareInstalledTemplateReleaseOwned(
     ...process.env,
     NODE_ENV: "production",
     ...(electron ? { ELECTRON_RUN_AS_NODE: "1" } : {}),
-    VIBESTUDIO_APP_ROOT: appRoot,
     VIBESTUDIO_HOST_ARTIFACT_ROOT: path.join(appRoot, "dist"),
     VIBESTUDIO_INSTANCE_ROOT: path.join(scratch, "instance"),
     TMPDIR: path.join(scratch, "tmp"),

@@ -50,6 +50,21 @@ async function withProducer(
   }
 }
 
+void test("gives the producer the application root it was asked to build for", async () => {
+  await withProducer(
+    `const fs=require("fs"); fs.writeFileSync("seen-app-root",process.env.VIBESTUDIO_APP_ROOT??"unset"); process.send({kind:"sources-ready",root:process.cwd()},()=>process.send({kind:"completed"},()=>process.disconnect()));`,
+    async (owner, root) => {
+      await owner.completed;
+      // The caller's environment named no root, or another one.
+      assert.equal(await fs.readFile(path.join(root, "seen-app-root"), "utf8"), root);
+    },
+    undefined,
+    async (env) => {
+      env.VIBESTUDIO_APP_ROOT = "/somewhere/else";
+    }
+  );
+});
+
 void test("validates a declared release through the producer and preserves borrowed output", async () => {
   await withProducer(
     `const fs=require("fs"); const output=process.argv[process.argv.indexOf("--output")+1]; fs.writeFileSync("selected-output",output); process.send({kind:"sources-ready",root:output},()=>process.send({kind:"completed"},()=>process.disconnect()));`,

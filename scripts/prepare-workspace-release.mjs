@@ -117,6 +117,9 @@ export function prepareWorkspaceRelease(input) {
       cwd: path.dirname(input.entry),
       env: {
         ...input.env,
+        // The producer opens its own ownership, which on Darwin finds its
+        // process observer beneath the application root it was given.
+        VIBESTUDIO_APP_ROOT: input.appRoot,
         VIBESTUDIO_WORKSPACE_RELEASE_ROOT: output,
         // Interactive source launches share the canonical host admission
         // budget with live workspaces. A standalone packager owns its batch
