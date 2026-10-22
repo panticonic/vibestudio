@@ -1074,30 +1074,49 @@ async function dismissConnectionDialog(app) {
 }
 
 async function verifySettingsEvent(app, timeoutMs) {
-  const invoked = await evaluateElectron(
-    app,
-    ({ BrowserWindow, Menu }) => {
-      const findItem = (items) => {
-        for (const item of items) {
-          if (item.label === "Settings…") return item;
-          const nested = item.submenu ? findItem(item.submenu.items) : null;
-          if (nested) return nested;
+  // The application menu follows the focused window, and a headless runner
+  // does not focus one on its own: bring the app forward, then wait for the
+  // menu its client contributed.
+  const menuDeadline = Date.now() + Math.min(timeoutMs, 30_000);
+  let menuState;
+  do {
+    menuState = await evaluateElectron(
+      app,
+      ({ app: electronApp, BrowserWindow, Menu }) => {
+        electronApp.focus({ steal: true });
+        const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+        window?.focus();
+        const findItem = (items) => {
+          for (const item of items) {
+            if (item.label === "Settings…") return item;
+            const nested = item.submenu ? findItem(item.submenu.items) : null;
+            if (nested) return nested;
+          }
+          return null;
+        };
+        const menu = Menu.getApplicationMenu();
+        const item = menu ? findItem(menu.items) : null;
+        if (item?.click) {
+          item.click(item, window ?? undefined, { triggeredByAccelerator: false });
+          return { invoked: true };
         }
-        return null;
-      };
-      const menu = Menu.getApplicationMenu();
-      const item = menu ? findItem(menu.items) : null;
-      if (!item?.click) return false;
-      item.click(item, BrowserWindow.getFocusedWindow() ?? undefined, {
-        triggeredByAccelerator: false,
-      });
-      return true;
-    },
-    undefined,
-    "emitting open-settings through the application menu"
-  );
-  if (!invoked) {
-    throw new Error("Desktop application menu did not expose Settings…");
+        return {
+          invoked: false,
+          menus: (menu?.items ?? []).map((entry) => entry.label),
+          windows: BrowserWindow.getAllWindows().length,
+          focused: window?.isFocused() ?? null,
+        };
+      },
+      undefined,
+      "emitting open-settings through the application menu"
+    );
+    if (menuState.invoked) break;
+    await sleep(250);
+  } while (Date.now() < menuDeadline);
+  if (!menuState.invoked) {
+    throw new Error(
+      `Desktop application menu did not expose Settings…: ${JSON.stringify(menuState)}`
+    );
   }
 
   const deadline = Date.now() + timeoutMs;
