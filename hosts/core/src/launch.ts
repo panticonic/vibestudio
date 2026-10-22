@@ -14,9 +14,13 @@ import type {
   ReadyClient,
 } from "@vibestudio/workspace-contracts/clients";
 import { clientArtifactRoute, type ClientArtifactCache } from "./artifactCache.js";
+import { mapBounded } from "./boundedMap.js";
 import { ClientLaunchError } from "./errors.js";
 
 /** One RPC call on the host's device shell session. */
+/** How many of a build's files are fetched at once. */
+const ARTIFACT_FETCH_CONCURRENCY = 8;
+
 export type Call = (service: string, method: string, args: unknown[]) => Promise<unknown>;
 
 export interface PrincipalGrants {
@@ -214,16 +218,18 @@ export class ClientLauncher {
       (artifact) =>
         artifact.platform === undefined || artifact.platform === this.options.descriptor.host
     );
-    const artifacts = await Promise.all(
-      platformArtifacts.map(
-        async (artifact): Promise<VerifiedArtifact> => ({
-          ...artifact,
-          handle: await this.options.cache.ensure({
-            integrity: artifact.integrity,
-            path: clientArtifactRoute(client.buildKey, artifact.path),
-          }),
-        })
-      )
+    // A build is dozens of files, each its own connection to a gateway that is
+    // busy starting workspaces; fetch a few at a time, not all at once.
+    const artifacts = await mapBounded(
+      platformArtifacts,
+      ARTIFACT_FETCH_CONCURRENCY,
+      async (artifact): Promise<VerifiedArtifact> => ({
+        ...artifact,
+        handle: await this.options.cache.ensure({
+          integrity: artifact.integrity,
+          path: clientArtifactRoute(client.buildKey, artifact.path),
+        }),
+      })
     );
     const grant = await this.options.grants.acquire({
       source: client.source,
