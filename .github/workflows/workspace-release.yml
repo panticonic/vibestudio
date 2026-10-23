@@ -1,0 +1,59 @@
+name: Build the workspace release once
+
+# A workspace release (the prepared Base, Personal and System templates and their
+# runtime builds) is the same on every platform: the dependency fingerprint that
+# keys it ignores platform-gated packages. It is therefore built once, here, from
+# the Linux x64 application, and every application candidate imports it instead of
+# rebuilding it. Each candidate still verifies the imported release in a fresh
+# installation of its own native application.
+
+on:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  release:
+    name: Build the workspace release on Linux x64
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build the Linux application and its installed workspace release
+        uses: ./.github/actions/prepare-linux-application
+        with:
+          arch: x64
+
+      # One archive: thousands of small files upload and extract far faster as one.
+      - name: Archive the workspace release
+        run: >-
+          tar -cf workspace-release.tar
+          -C release/linux-unpacked/resources
+          workspace-templates userland-builds
+
+      - name: Upload the workspace release
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: workspace-release-${{ github.sha }}
+          path: workspace-release.tar
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 2

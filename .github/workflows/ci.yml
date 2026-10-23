@@ -233,11 +233,20 @@ jobs:
     permissions:
       contents: read
 
+  # A workspace release is the same on every platform, so it is built once and
+  # every application candidate below imports it rather than rebuilding it.
+  workspace-release:
+    name: Build the workspace release once
+    needs: native-input-linux-x64
+    uses: ./.github/workflows/workspace-release.yml
+    permissions:
+      contents: read
+
   linux-installer-x64:
     name: Build Linux x64 installer candidate
     # Release candidates need only their matching native input. These jobs run
     # Protected-main CI produces the canonical pre-tag candidate once.
-    needs: [native-input-linux-x64, release-metadata]
+    needs: [native-input-linux-x64, release-metadata, workspace-release]
     if: ${{ vars.RELEASE_LINUX == 'true' && needs.release-metadata.outputs.candidate-needed == 'true' }}
     uses: ./.github/workflows/linux-installer.yml
     with:
@@ -249,7 +258,7 @@ jobs:
 
   linux-installer-arm64:
     name: Build Linux arm64 installer candidate
-    needs: [native-input-linux-arm64, release-metadata]
+    needs: [native-input-linux-arm64, release-metadata, workspace-release]
     if: ${{ vars.RELEASE_LINUX == 'true' && needs.release-metadata.outputs.candidate-needed == 'true' }}
     uses: ./.github/workflows/linux-installer.yml
     with:
@@ -302,8 +311,8 @@ jobs:
 
   application-candidate-mac:
     name: Package macOS application candidate from tested host inputs
-    needs: [darwin-production-host, release-metadata]
-    if: ${{ !cancelled() && needs.darwin-production-host.result == 'success' }}
+    needs: [darwin-production-host, release-metadata, workspace-release]
+    if: ${{ !cancelled() && needs.darwin-production-host.result == 'success' && needs.workspace-release.result == 'success' }}
     uses: ./.github/workflows/application-candidate.yml
     with:
       runner: macos-14
@@ -340,6 +349,7 @@ jobs:
 
   application-candidate-windows:
     name: Package Windows application candidate and verify native execution
+    needs: workspace-release
     uses: ./.github/workflows/application-candidate.yml
     with:
       runner: ${{ inputs.windows-runner || 'windows-2025' }}

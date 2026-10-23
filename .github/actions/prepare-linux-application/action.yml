@@ -1,0 +1,56 @@
+name: Prepare Linux application
+description: Build the production Linux application directory and verify its installed workspace release
+inputs:
+  arch:
+    description: Linux architecture of the runner (x64 or arm64)
+    required: true
+  prebuilt-release:
+    description: >-
+      Directory holding a workspace release built elsewhere (its workspace-templates
+      and userland-builds); empty builds the release in this application
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - name: Download this architecture's tested MXC payload
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: native-isolation-linux-${{ inputs.arch }}-${{ github.sha }}
+        path: native/isolation/artifacts/native-isolation-linux-${{ inputs.arch }}
+
+    - name: Install Linux application runtime
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install --no-install-recommends -y bubblewrap
+
+    - name: Resolve electron-builder's application directory for this architecture
+      shell: bash
+      env:
+        ARCH: ${{ inputs.arch }}
+      run: |
+        app_directory=$(node scripts/package-desktop.mjs linux app-path "$ARCH")
+        echo "LINUX_APP_DIRECTORY=$app_directory" >> "$GITHUB_ENV"
+
+    - name: Allow packaged MXC user namespaces for application preparation
+      shell: bash
+      env:
+        ARCH: ${{ inputs.arch }}
+      run: |
+        profile="$RUNNER_TEMP/vibestudio-release-mxc.apparmor"
+        cat > "$profile" <<PROFILE
+        abi <abi/4.0>,
+        include <tunables/global>
+
+        profile vibestudio_release_mxc "$GITHUB_WORKSPACE/release/.package-linux-$ARCH-*/$LINUX_APP_DIRECTORY/resources/app.asar.unpacked/dist/mxc/linux-$ARCH/lxc-exec" flags=(unconfined) {
+          userns,
+        }
+        PROFILE
+        sudo install -m 0644 "$profile" /etc/apparmor.d/vibestudio-release-mxc
+        sudo apparmor_parser -r /etc/apparmor.d/vibestudio-release-mxc
+
+    - name: Build exact Linux application and prepare its installed workspace release
+      shell: bash
+      env:
+        ARCH: ${{ inputs.arch }}
+        VIBESTUDIO_PREBUILT_WORKSPACE_RELEASE: ${{ inputs.prebuilt-release }}
+      run: pnpm generate:workspace-template-release && pnpm build && node scripts/package-desktop.mjs linux app "$ARCH"
