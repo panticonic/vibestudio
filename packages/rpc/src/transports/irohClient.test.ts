@@ -450,6 +450,10 @@ describe("Iroh RPC client over real local QUIC", () => {
           }),
           MAX_CONTROL_FRAME_BYTES
         );
+        // The server's end must outlive the assertions: once its native handles
+        // are unreachable they may be finalized, which stops the control stream
+        // and fails the client's close notification with `Stopped(0)`.
+        return { server, control };
       })();
       const pipe = createIrohClientPipe(new NodePhysicalConnection(clientNative), TEST_DELEGATION);
       let releaseToken!: (value: string) => void;
