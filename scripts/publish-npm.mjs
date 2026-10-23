@@ -136,7 +136,10 @@ async function main(ownership, signal) {
     (entry) => registryVersions.get(entry.pkg.name) !== entry.version
   );
 
-  for (const entry of manifests) {
+  // Only a version still to be published can be dry-run: the registry rejects
+  // publishing over an existing version, even as a dry run, so resuming after
+  // the publish itself succeeded must not repeat it.
+  for (const entry of publishQueue) {
     console.log(`\n[publish-npm] Dry-run ${entry.pkg.name}@${entry.version}`);
     run(
       "npm",
