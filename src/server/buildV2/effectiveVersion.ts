@@ -318,7 +318,7 @@ export interface RootDependencyFingerprintInfo {
 
 export const rootDependencyFingerprintCaptureSchema = z
   .object({
-    encoding: z.literal("root-deps-v8"),
+    encoding: z.literal("root-deps-v9"),
     policy: z.enum(["shared-host", "prepared"]),
     value: z.string().regex(/^[0-9a-f]{64}$/),
     files: z.array(
@@ -353,13 +353,13 @@ export type RootDependencyFingerprintCapture = z.infer<
   typeof rootDependencyFingerprintCaptureSchema
 >;
 
-/** The same canonical v8 fold owns fresh capture and persisted input traces. */
+/** The same canonical v9 fold owns fresh capture and persisted input traces. */
 function rootDependencyFingerprintValue(
   files: readonly Pick<RootDependencyFingerprintFile, "file" | "present" | "contentHash">[],
   policy: ReturnType<typeof dependencyInstallationPolicy>
 ): string {
   const hash = crypto.createHash("sha256");
-  hash.update("root-deps-v8\0");
+  hash.update("root-deps-v9\0");
   hash.update(`dependency-installation:${policy}\0`);
   for (const input of files) {
     hash.update(input.file);
@@ -393,7 +393,7 @@ export function captureRootDependencyFingerprint(
     throw new Error("Dependency fingerprint trace does not reproduce its value");
   const physicalRoot = getPhysicalAppPath(info.root, "");
   return rootDependencyFingerprintCaptureSchema.parse({
-    encoding: "root-deps-v8",
+    encoding: "root-deps-v9",
     policy,
     value: info.value,
     files: info.files.map((file) => {
@@ -424,7 +424,7 @@ export function validateRootDependencyFingerprintCapture(
   return capture;
 }
 
-/** Capture the workspace component afresh and fold it at its original v8
+/** Capture the workspace component afresh and fold it at its original v9
  * position in the sealed host trace. Producer and consumer use this same fold. */
 export async function composeWorkspaceDependencyFingerprint(
   capture: RootDependencyFingerprintCapture,
@@ -599,6 +599,30 @@ async function localPackageFingerprintInputs(
   return presentFiles;
 }
 
+/**
+ * Whether a manifest declares the platforms it installs on (`os`, `cpu`, `libc`).
+ * npm installs such a package on matching platforms only: the esbuild, workerd,
+ * iroh and sharp binaries. Which of them an installation holds is a property of
+ * the machine, not of the code being built.
+ */
+function isPlatformGatedManifest(manifest: Buffer): boolean {
+  try {
+    const parsed = JSON.parse(manifest.toString("utf8")) as Record<string, unknown>;
+    return [parsed["os"], parsed["cpu"], parsed["libc"]].some(
+      (field) => (Array.isArray(field) && field.length > 0) || (typeof field === "string" && field)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Fold the identity of every installed package that is the same on every
+ * platform. Platform-gated packages are left out, so the fold, and every build
+ * key derived from it, is the same on every platform for the same code; the
+ * wrapper package that selects a platform binary still pins its exact version in
+ * its own manifest (`optionalDependencies`), which is folded.
+ */
 async function installedPackageManifestsHash(nodeModulesRoot: string): Promise<string> {
   const records: string[] = [];
   const visited = new Set<string>();
@@ -648,9 +672,9 @@ async function installedPackageManifestsHash(nodeModulesRoot: string): Promise<s
           if (!entry.isDirectory() && !entry.isSymbolicLink()) return null;
           let manifestHash: string;
           try {
-            manifestHash = await fullHash(
-              await fs.promises.readFile(path.join(root, "package.json"))
-            );
+            const manifest = await fs.promises.readFile(path.join(root, "package.json"));
+            if (isPlatformGatedManifest(manifest)) return null;
+            manifestHash = await fullHash(manifest);
           } catch {
             return null;
           }
@@ -710,7 +734,7 @@ function dependencyFingerprintInputs(
       inputs.push({
         // The workspace is a semantic input scope even when packaging owns
         // its scratch beneath the host. Physical placement is diagnostics,
-        // never an input to the existing v8 fold or runtime build identity.
+        // never an input to the existing v9 fold or runtime build identity.
         file: `workspace:${file}`,
         path: path.join(workspaceRoot, file),
       });
@@ -728,7 +752,7 @@ async function readDependencyFingerprintFiles(
       try {
         contentHash = await fullHash(await fs.promises.readFile(input.path));
       } catch {
-        /* Absent/unreadable remains the existing v8 input policy. */
+        /* Absent/unreadable remains the existing v9 input policy. */
       }
       return { ...input, present: contentHash !== null, contentHash };
     })
