@@ -110,13 +110,20 @@ export class GcEpochCoordinator {
         commitArtifactDeletion: (buildKey, commit) =>
           this.deps.publicationJournal.commitArtifactDeletion(epoch, buildKey, commit),
       });
-      if (
-        !committedRetention.complete ||
-        committedRetention.unresolvedAuthoritativeRootBuildKeys.length > 0 ||
-        committedRetention.notReconstructible > 0 ||
+      const unclean = [
+        committedRetention.complete ? null : "its root snapshot is incomplete",
+        committedRetention.unresolvedAuthoritativeRootBuildKeys.length > 0
+          ? `${committedRetention.unresolvedAuthoritativeRootBuildKeys.length} authoritative roots are unresolved`
+          : null,
+        committedRetention.notReconstructible > 0
+          ? `${committedRetention.notReconstructible} builds are not reconstructible`
+          : null,
         committedRetention.cleanupFailures.length > 0
-      ) {
-        throw new Error("build retention commit did not complete cleanly");
+          ? `${committedRetention.cleanupFailures.length} cleanups failed`
+          : null,
+      ].filter((reason) => reason !== null);
+      if (unclean.length > 0) {
+        throw new Error(`build retention commit did not complete cleanly: ${unclean.join("; ")}`);
       }
       const preparedSourceRoots = new Set(
         executionSourceRoots.map((root) => `${root.repoPath ?? ""}\0${root.stateHash}`)

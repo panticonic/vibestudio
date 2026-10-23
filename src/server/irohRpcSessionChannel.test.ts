@@ -298,6 +298,70 @@ describe("IrohRpcSessionChannel shutdown lifecycle", () => {
     await expect(retirement).resolves.toBeUndefined();
   });
 
+  it.each([
+    ["a request the peer cancelled", "Stopped(514)"],
+    ["a session the peer closed", "Stopped(513)"],
+  ])("does not fail retirement for a response to %s", async (_label, native) => {
+    const log = vi.fn();
+    const channel = new IrohRpcSessionChannel({
+      sid: "shell",
+      deviceKey: "d".repeat(64),
+      connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
+      writeControl: vi.fn(async () => undefined),
+      onClosed: vi.fn(),
+      log,
+    });
+    const stream = fakeStream();
+    vi.mocked(stream.send.writeAll).mockRejectedValueOnce(
+      Object.assign(new Error(native), { code: "GenericFailure" })
+    );
+    const original = requestEnvelope("shell:device");
+    channel.deliverEnvelope(original, stream);
+    channel.sendMessage({
+      type: "ws:rpc",
+      envelope: {
+        ...original,
+        from: "main",
+        target: "shell:device",
+        message: { type: "response", requestId: "request-1", result: "late" },
+      },
+    });
+    await vi.waitFor(() => expect(stream.send.writeAll).toHaveBeenCalledOnce());
+
+    await expect(channel.remoteClosed(1006, "physical connection closed")).resolves.toBeUndefined();
+    expect(log).not.toHaveBeenCalled();
+  });
+
+  it("still fails retirement for a response the peer stopped with a code that is not the protocol's", async () => {
+    const channel = new IrohRpcSessionChannel({
+      sid: "shell",
+      deviceKey: "d".repeat(64),
+      connection: { peerEndpointId: "peer" } as IrohPhysicalConnection,
+      writeControl: vi.fn(async () => undefined),
+      onClosed: vi.fn(),
+    });
+    const stream = fakeStream();
+    const stopped = Object.assign(new Error("Stopped(7)"), { code: "GenericFailure" });
+    vi.mocked(stream.send.writeAll).mockRejectedValueOnce(stopped);
+    const original = requestEnvelope("shell:device");
+    channel.deliverEnvelope(original, stream);
+    channel.sendMessage({
+      type: "ws:rpc",
+      envelope: {
+        ...original,
+        from: "main",
+        target: "shell:device",
+        message: { type: "response", requestId: "request-1", result: "late" },
+      },
+    });
+    await vi.waitFor(() => expect(stream.send.writeAll).toHaveBeenCalledOnce());
+
+    const failure = await channel
+      .remoteClosed(1006, "physical connection closed")
+      .catch((error: unknown) => error);
+    expect((failure as AggregateError).errors).toEqual([stopped]);
+  });
+
   it("preserves a non-closure failure nested beside connection retirement", async () => {
     const channel = new IrohRpcSessionChannel({
       sid: "shell",

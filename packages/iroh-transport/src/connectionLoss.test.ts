@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   IROH_CONNECTION_LOST_CODE,
+  irohStreamStopCode,
   isIrohConnectionLost,
   withIrohConnectionLossTag,
 } from "./connectionLoss.js";
@@ -92,5 +93,18 @@ describe("withIrohConnectionLossTag", () => {
       )
     ).catch((thrown: unknown) => thrown);
     expect(error).toMatchObject({ code: IROH_CONNECTION_LOST_CODE, errorKind: "transport" });
+  });
+});
+
+describe("irohStreamStopCode", () => {
+  it("reads the code a peer stopped a stream with", () => {
+    expect(irohStreamStopCode(new Error("Stopped(514)"))).toBe(514n);
+    expect(irohStreamStopCode("Stopped(0)")).toBe(0n);
+  });
+
+  it("answers null for anything else", () => {
+    expect(irohStreamStopCode(new Error("ReadError(Reset(514))"))).toBeNull();
+    expect(irohStreamStopCode(new Error("Stopped(514) while writing"))).toBeNull();
+    expect(irohStreamStopCode(undefined)).toBeNull();
   });
 });

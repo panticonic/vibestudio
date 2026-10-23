@@ -93,3 +93,17 @@ export async function withIrohConnectionLossTag<T>(operation: () => Promise<T>):
     throw error;
   }
 }
+
+/**
+ * The application code a peer stopped one of our writes with, or null.
+ *
+ * Writing to a stream the peer has stopped fails with the Rust error's Debug
+ * form, `Stopped(<code>)`: the peer chose to end that one stream and named why.
+ * That is neither a lost connection nor an unexplained fault; whether it is
+ * routine depends on the code, which only the protocol that chose it knows.
+ */
+export function irohStreamStopCode(error: unknown): bigint | null {
+  const message = error instanceof Error ? error.message : typeof error === "string" ? error : null;
+  const match = message === null ? null : /^Stopped\((\d+)\)$/u.exec(message);
+  return match ? BigInt(match[1]!) : null;
+}

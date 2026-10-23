@@ -3,6 +3,7 @@ import {
   IROH_CATASTROPHIC_ACTIVE_REQUEST_CEILING,
   MAX_ENVELOPE_FRAME_BYTES,
   MAX_STREAM_CHUNK_BYTES,
+  irohStreamStopCode,
   readToEnd,
   writeChunked,
   writeIrohStreamPreamble,
@@ -38,6 +39,19 @@ import type { StreamFrame } from "./services/egressProxy.js";
 const OPEN = 1;
 const CLOSED = 3;
 const STREAM_CANCEL_CODE = 0x202n;
+/** The codes this protocol stops or resets a stream with on purpose. */
+const PEER_STOP_CODES: ReadonlySet<bigint> = new Set([0x201n, STREAM_CANCEL_CODE]);
+
+/**
+ * A write failed because the peer stopped that stream with a code of the
+ * protocol's own: it cancelled the request, or closed its session. Delivering
+ * to a peer that no longer wants the stream is the cancellation working, so
+ * it is neither an outbound failure nor a failure of the session's retirement.
+ */
+function peerStoppedStream(error: unknown): boolean {
+  const code = irohStreamStopCode(error);
+  return code !== null && PEER_STOP_CODES.has(code);
+}
 
 interface RequestRoute {
   stream: IrohPhysicalBiStream;
@@ -558,6 +572,7 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
     let owned!: Promise<void>;
     owned = operation
       .catch((error) => {
+        if (peerStoppedStream(error)) return;
         const connectionRetirement = isRpcConnectionLost(error);
         if (!connectionRetirement) this.ownedFailures.push(error);
         // An operation that observes connection loss before the session's
