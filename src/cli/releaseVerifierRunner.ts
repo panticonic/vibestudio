@@ -213,8 +213,8 @@ export async function stageReleaseSchemaEvidence(
       compilerProtocol: manifest.compilerProtocol,
       appDependencyFingerprint: manifest.appDependencyFingerprint,
     },
-    platform: manifest.platform,
-    arch: manifest.arch,
+    platform: process.platform,
+    arch: process.arch,
     artifacts,
     signal,
   });

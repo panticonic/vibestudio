@@ -152,11 +152,6 @@ export function installedSmokeTarget(appDirectory, expectedReleasePath) {
       }
     }
   }
-  if (manifest.platform !== process.platform || manifest.arch !== process.arch) {
-    throw new Error(
-      `Installed release targets ${manifest.platform}-${manifest.arch}, not ${process.platform}-${process.arch}`
-    );
-  }
   const executable = path.join(path.resolve(appDirectory), "vibestudio");
   const launcher = path.join(resources, "vibestudio-cli");
   const appRoot = path.join(resources, "app.asar");

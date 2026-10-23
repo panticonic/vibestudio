@@ -458,10 +458,9 @@ function validPreparedWorkspaceRelease(arch) {
     commit,
   });
   return {
-    format: "vibestudio-workspace-runtime-release/3",
-    version: 3,
-    platform: "linux",
-    arch,
+    format: "vibestudio-workspace-runtime-release/4",
+    version: 4,
+    producedOn: { platform: "linux", arch },
     appDependencyFingerprint: "a".repeat(64),
     hostBuild: {
       version: 1,
