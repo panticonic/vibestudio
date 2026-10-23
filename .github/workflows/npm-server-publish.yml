@@ -60,7 +60,9 @@ jobs:
     runs-on: ubuntu-24.04
     permissions:
       actions: read
-      contents: read
+      # Reading a draft release by id needs write access: GitHub hides drafts from
+      # read-only tokens. The job only reads, and runs this repository's own tooling.
+      contents: write
     outputs:
       candidate-attempt: ${{ steps.candidate.outputs.candidate-attempt }}
       npm-id: ${{ steps.candidate.outputs.npm-id }}

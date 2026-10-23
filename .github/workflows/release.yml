@@ -376,7 +376,8 @@ jobs:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     permissions:
       actions: read
-      contents: read
+      # The called validation reads the draft release by id, which needs write access.
+      contents: write
 
   publish-release:
     name: Publish the verified release

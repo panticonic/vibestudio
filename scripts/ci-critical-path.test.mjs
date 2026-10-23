@@ -130,7 +130,8 @@ test("npm publication resumes from the exact protected-main CI artifact", async 
   assert.equal(workflow.concurrency.group, "npm-server-publish-vibestudio-server");
   assert.equal(workflow.concurrency["cancel-in-progress"], false);
   assert.deepEqual(dependenciesOf(workflow.jobs.publish), ["validate"]);
-  assert.deepEqual(workflow.jobs.validate.permissions, { actions: "read", contents: "read" });
+  // Reading the draft release by id needs write access; GitHub hides drafts from read-only tokens.
+  assert.deepEqual(workflow.jobs.validate.permissions, { actions: "read", contents: "write" });
   assert.deepEqual(workflow.jobs.publish.permissions, { actions: "read", contents: "read" });
   const validation = workflow.jobs.validate.steps.find(
     (step) => step.name === "Validate protected-main candidate and exact artifact"
@@ -1095,7 +1096,8 @@ test("native artifact consumers wait for their exact producers without unrelated
     "source-sha": "${{ inputs.source-sha }}",
     "candidate-run-id": "${{ inputs.candidate-run-id }}",
   });
-  assert.deepEqual(npmPublisher.permissions, { actions: "read", contents: "read" });
+  // The called validation reads the draft release, so the caller grants the same access.
+  assert.deepEqual(npmPublisher.permissions, { actions: "read", contents: "write" });
   assert.equal(npmPublisher.secrets.NPM_TOKEN, "${{ secrets.NPM_TOKEN }}");
   for (const platformPublisher of ["publish-linux", "publish-windows", "publish-macos"]) {
     assert.ok(
