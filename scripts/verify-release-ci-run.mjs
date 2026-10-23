@@ -5,6 +5,23 @@ import os from "node:os";
 import path from "node:path";
 import { assertArtifactIdentity, downloadReleaseArtifact } from "./download-release-artifact.mjs";
 
+/**
+ * The npm candidate's artifact name carries the attempt of the job that produced it.
+ * A run re-run in part (failed jobs only) keeps the artifact of the earlier attempt
+ * in which that job succeeded, so the candidate is the newest attempt's artifact.
+ * It is still bound to this run and commit, and the release downloads it by id and
+ * digest.
+ */
+export function candidateNpmArtifactName(artifacts, sourceSha, latestAttempt) {
+  for (let attempt = latestAttempt; attempt >= 1; attempt -= 1) {
+    const name = `vibestudio-server-npm-${sourceSha}-${attempt}`;
+    if (artifacts.artifacts?.some((artifact) => artifact.name === name && !artifact.expired)) {
+      return name;
+    }
+  }
+  return `vibestudio-server-npm-${sourceSha}-${latestAttempt}`;
+}
+
 export function validateReleaseCiRun({
   run,
   workflow,
@@ -35,7 +52,7 @@ export function validateReleaseCiRun({
   }
   const required = [
     `vibestudio-release-gate-${sourceSha}`,
-    `vibestudio-server-npm-${sourceSha}-${run.run_attempt}`,
+    candidateNpmArtifactName(artifacts, sourceSha, run.run_attempt),
   ];
   if (includePlatformArtifacts) {
     if (enabled.linux) required.push(`vibestudio-linux-release-${sourceSha}`);
@@ -135,7 +152,9 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
     if (!Number.isSafeInteger(latestRun.run_attempt) || latestRun.run_attempt < 1) {
       throw new Error("Candidate CI run has no valid attempt number");
     }
-    const run = ghJson(`repos/${repository}/actions/runs/${runId}/attempts/${latestRun.run_attempt}`);
+    const run = ghJson(
+      `repos/${repository}/actions/runs/${runId}/attempts/${latestRun.run_attempt}`
+    );
     const artifacts = ghJson(`repos/${repository}/actions/runs/${runId}/artifacts?per_page=100`);
     const selected = validateReleaseCiRun({
       run,
@@ -176,7 +195,7 @@ if (process.argv[1] === new URL(import.meta.url).pathname) {
     }
     const outputNames = {
       gate: `vibestudio-release-gate-${sourceSha}`,
-      npm: `vibestudio-server-npm-${sourceSha}-${run.run_attempt}`,
+      npm: candidateNpmArtifactName(artifacts, sourceSha, run.run_attempt),
       linux: `vibestudio-linux-release-${sourceSha}`,
       mac: `vibestudio-macos-${sourceSha}`,
       observers: `darwin-process-observers-release-${sourceSha}`,

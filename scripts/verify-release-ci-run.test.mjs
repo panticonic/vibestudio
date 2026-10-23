@@ -5,7 +5,11 @@ import {
   validateCandidateGate,
   validateQualityInputs,
 } from "./release-ci-gate.mjs";
-import { validateGateReceipt, validateReleaseCiRun } from "./verify-release-ci-run.mjs";
+import {
+  candidateNpmArtifactName,
+  validateGateReceipt,
+  validateReleaseCiRun,
+} from "./verify-release-ci-run.mjs";
 import { assertArtifactIdentity, assertCandidateAttempt } from "./download-release-artifact.mjs";
 
 const sourceSha = "a".repeat(40);
@@ -32,6 +36,39 @@ test("candidate gate requires every quality result and each enabled release acce
   needs["accept-macos-release-candidate"] = { result: "skipped" };
   assert.doesNotThrow(() => validateCandidateGate(needs, { ...enabled, mac: false }));
   assert.throws(() => validateCandidateGate(needs, enabled), /accept-macos/u);
+});
+
+test("a run re-run in part keeps the npm candidate of the attempt that produced it", () => {
+  const sha = "a".repeat(40);
+  const artifact = (name, expired = false) => ({
+    name,
+    id: 1,
+    digest: `sha256:${"d".repeat(64)}`,
+    expired,
+  });
+  const attempt1 = `vibestudio-server-npm-${sha}-1`;
+  const attempt2 = `vibestudio-server-npm-${sha}-2`;
+  // Attempt 2 re-ran only other jobs: the candidate is still attempt 1's.
+  assert.equal(candidateNpmArtifactName({ artifacts: [artifact(attempt1)] }, sha, 2), attempt1);
+  // When the npm job ran again, the newest attempt's artifact is the candidate.
+  assert.equal(
+    candidateNpmArtifactName({ artifacts: [artifact(attempt1), artifact(attempt2)] }, sha, 2),
+    attempt2
+  );
+  // An expired artifact is not a candidate; with none, the newest attempt's name is reported.
+  assert.equal(
+    candidateNpmArtifactName({ artifacts: [artifact(attempt1, true)] }, sha, 2),
+    attempt2
+  );
+  // Another commit's artifact is never taken.
+  assert.equal(
+    candidateNpmArtifactName(
+      { artifacts: [artifact(`vibestudio-server-npm-${"b".repeat(40)}-1`)] },
+      sha,
+      1
+    ),
+    attempt1
+  );
 });
 
 test("release dispatch accepts only a completed protected-main candidate and its exact artifacts", () => {
