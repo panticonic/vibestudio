@@ -15,6 +15,7 @@ import {
   verifyReleaseExecutableSources,
   verifyReleaseBuildDirectory,
   prepareInstalledTemplateRelease,
+  importPrebuiltWorkspaceRelease,
   runInstalledRpcBatch,
   verifyPreparedReleaseUserland,
   requestedStopExitedCleanly,
@@ -1084,6 +1085,58 @@ test("installed producer ignores an inherited borrowed release root", async () =
     if (previous === undefined) delete process.env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT;
     else process.env.VIBESTUDIO_WORKSPACE_RELEASE_ROOT = previous;
   }
+});
+
+async function prebuiltRelease(root) {
+  const source = path.join(root, "prebuilt");
+  await fs.mkdir(path.join(source, "workspace-templates/t-1/use"), { recursive: true });
+  await fs.mkdir(path.join(source, "userland-builds/abc"), { recursive: true });
+  await fs.writeFile(path.join(source, "workspace-templates/t-1/use/template.json"), "{}");
+  await fs.writeFile(path.join(source, "userland-builds/abc/metadata.json"), "{}");
+  await fs.writeFile(path.join(source, "userland-builds/release.json"), "{}");
+  return source;
+}
+
+test("a prebuilt workspace release is imported whole, its completion marker last", async () => {
+  const root = await fixture();
+  const source = await prebuiltRelease(root);
+  const resources = path.join(root, "resources");
+  await fs.mkdir(resources);
+  await fs.writeFile(path.join(resources, "app.asar"), "host-owned");
+  const copied = [];
+  const copyFile = mock.method(fs, "copyFile");
+  try {
+    await importPrebuiltWorkspaceRelease(source, resources);
+    copied.push(...copyFile.mock.calls.map((call) => call.arguments[1]));
+  } finally {
+    copyFile.mock.restore();
+  }
+  assert.equal(copied.at(-1), path.join(resources, "userland-builds/release.json"));
+  for (const file of [
+    "workspace-templates/t-1/use/template.json",
+    "userland-builds/abc/metadata.json",
+    "userland-builds/release.json",
+    "app.asar",
+  ])
+    assert.ok(await fs.stat(path.join(resources, file)), file);
+});
+
+test("a prebuilt workspace release without its completion marker is not imported", async () => {
+  const root = await fixture();
+  const source = await prebuiltRelease(root);
+  await fs.rm(path.join(source, "userland-builds/release.json"));
+  const resources = path.join(root, "resources");
+  await fs.mkdir(resources);
+  await assert.rejects(importPrebuiltWorkspaceRelease(source, resources), /incomplete/);
+  assert.deepEqual(await fs.readdir(resources), []);
+});
+
+test("a prebuilt workspace release is never imported over existing release resources", async () => {
+  const root = await fixture();
+  const source = await prebuiltRelease(root);
+  const resources = path.join(root, "resources");
+  await fs.mkdir(path.join(resources, "userland-builds"), { recursive: true });
+  await assert.rejects(importPrebuiltWorkspaceRelease(source, resources), /over userland-builds/);
 });
 
 for (const configured of [true, false])
