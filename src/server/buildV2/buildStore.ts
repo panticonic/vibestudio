@@ -13,6 +13,12 @@ import { ByteBudgetCache } from "@vibestudio/shared/byteBudgetCache";
  *   ├── executable-modules.json.gz (optional sealed source inventory)
  *   └── metadata.json
  *
+ * A release's build directory holds executable-module-refs.json.gz instead: the
+ * same inventory without sources, which live once in the release's
+ * executable-sources/ pool beside the build directories (see
+ * scripts/lib/release-executable-sources.mjs). Hydration expands it back to the
+ * full inventory.
+ *
  * Same key = same content. Online deletion is owned exclusively by the
  * publication-interlocked mark/quarantine/sweep collector below.
  */
@@ -50,6 +56,7 @@ import {
 import {
   buildArtifactManifestSchema,
   buildMetadataSchema,
+  executableModuleSchema,
   executableModulesSchema,
   type BuildArtifactManifestEntryWire,
   type BuildArtifactWire,
@@ -59,6 +66,11 @@ import {
   type ExecutableModuleWire,
   type StoredBuildResult,
 } from "@vibestudio/service-schemas/build";
+import {
+  EXECUTABLE_MODULE_REFS_FILE,
+  EXECUTABLE_SOURCES_DIR,
+  expandExecutableModules,
+} from "../../../scripts/lib/release-executable-sources.mjs";
 export { contentTypeForPath } from "@vibestudio/shared/contentType";
 
 // ---------------------------------------------------------------------------
@@ -352,6 +364,49 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     return compact;
   }
 
+  /**
+   * A release build's inventory, given its sources from the release's pool: the
+   * pool sits beside the build directories and each source is proved against the
+   * digest that names it.
+   */
+  async function readReferencedExecutableModules(
+    dir: string,
+    referencesPath: string
+  ): Promise<ExecutableModuleInput[]> {
+    let references: unknown;
+    try {
+      references = JSON.parse(
+        (await gunzipAsync(await fs.promises.readFile(referencesPath))).toString("utf-8")
+      );
+    } catch (error) {
+      if (
+        error instanceof SyntaxError ||
+        ["Z_DATA_ERROR", "Z_BUF_ERROR"].includes((error as NodeJS.ErrnoException).code ?? "")
+      ) {
+        invalidStoredBuildMetadata("Stored executable module references are corrupt", error);
+      }
+      throw error;
+    }
+    const parsed = executableModuleSchema.omit({ source: true }).array().safeParse(references);
+    if (!parsed.success) {
+      invalidStoredBuildMetadata("Stored executable module references are invalid", parsed.error);
+    }
+    let modules: unknown;
+    try {
+      modules = await expandExecutableModules(
+        parsed.data,
+        path.join(path.dirname(dir), EXECUTABLE_SOURCES_DIR)
+      );
+    } catch (error) {
+      invalidStoredBuildMetadata("Stored executable module sources are unavailable", error);
+    }
+    const result = executableModulesSchema.safeParse(modules);
+    if (!result.success) {
+      invalidStoredBuildMetadata("Stored executable module inventory is invalid", result.error);
+    }
+    return result.data;
+  }
+
   /** Read source evidence only at the compiler/diagnostic consumer that needs it. */
   async function readExecutableModules(dir: string): Promise<ExecutableModuleInput[] | undefined> {
     const content = await fs.promises.readFile(path.join(dir, "metadata.json"), "utf8");
@@ -361,8 +416,15 @@ export function createBuildStore(config: BuildStoreConfig, processOwner: BuildSt
     try {
       await fs.promises.access(modulesPath);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-      throw error;
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      const referencesPath = path.join(dir, EXECUTABLE_MODULE_REFS_FILE);
+      try {
+        await fs.promises.access(referencesPath);
+      } catch (referencesError) {
+        if ((referencesError as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+        throw referencesError;
+      }
+      return readReferencedExecutableModules(dir, referencesPath);
     }
     let modulesJson: string;
     try {

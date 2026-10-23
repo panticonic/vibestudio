@@ -26,3 +26,7 @@ export function assertExactReleaseBuildFiles(
   directory: string,
   expectedFiles: ReadonlySet<string>
 ): Promise<void>;
+export function verifyReleaseExecutableSources(
+  buildsDirectory: string,
+  buildKeys: Iterable<string>
+): Promise<void>;

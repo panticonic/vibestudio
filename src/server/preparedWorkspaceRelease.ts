@@ -20,7 +20,12 @@ import {
   readReleaseBuildDescriptor,
   assertExactReleaseBuildFiles,
   verifyReleaseBuildDirectory,
+  verifyReleaseExecutableSources,
 } from "../../scripts/prebuild-release-userland.mjs";
+import {
+  EXECUTABLE_MODULE_REFS_FILE,
+  EXECUTABLE_SOURCES_DIR,
+} from "../../scripts/lib/release-executable-sources.mjs";
 import { readHostBuildFingerprint, resolveRequiredHostArtifactRoot } from "./appRoot.js";
 import { forEachOwnedConcurrent } from "../../scripts/lib/owned-concurrency.mjs";
 import { runWithOwnedCleanup } from "../../scripts/lib/owned-cleanup.mjs";
@@ -200,7 +205,7 @@ export async function validateExistingPreparedWorkspaceRelease(
   const inventory = await inspectPreparedWorkspaceRelease(input, manifest, resolvedIdentity);
   await verifyExactDirectoryEntries(
     path.join(input.output, "userland-builds"),
-    new Set(["release.json", ...inventory.artifactKeys])
+    new Set(["release.json", ...releaseBuildEntries(inventory)])
   );
   return true;
 }
@@ -318,7 +323,19 @@ async function inspectPreparedWorkspaceRelease(
     )
       throw new Error(`Prepared ${workspace} runtime metadata does not match its source record`);
   }
-  return { artifactKeys, preparedTemplates };
+  // Builds whose inventories name pooled sources need the pool beside them.
+  const pooledSources = [...descriptors.values()].some((descriptor) =>
+    descriptor.files.has(EXECUTABLE_MODULE_REFS_FILE)
+  );
+  return { artifactKeys, preparedTemplates, pooledSources };
+}
+
+/** What `userland-builds` holds besides the manifest: each build, and the source pool. */
+function releaseBuildEntries(inventory: {
+  artifactKeys: ReadonlySet<string>;
+  pooledSources: boolean;
+}): string[] {
+  return [...inventory.artifactKeys, ...(inventory.pooledSources ? [EXECUTABLE_SOURCES_DIR] : [])];
 }
 
 export async function publishPreparedWorkspaceRelease(
@@ -336,7 +353,7 @@ export async function publishPreparedWorkspaceRelease(
   const inventory = await inspectPreparedWorkspaceRelease(input, manifest, resolvedIdentity);
   await verifyExactDirectoryEntries(
     path.join(input.output, "userland-builds"),
-    inventory.artifactKeys
+    new Set(releaseBuildEntries(inventory))
   );
   for (const { directory, record } of inventory.preparedTemplates) {
     await provePreparedTemplateFiles(directory, record);
@@ -348,6 +365,10 @@ export async function publishPreparedWorkspaceRelease(
       true
     );
   });
+  await verifyReleaseExecutableSources(
+    path.join(input.output, "userland-builds"),
+    inventory.artifactKeys
+  );
   const bytes = `${JSON.stringify(manifest)}\n`;
   let ownsTemporary = false;
   await runWithOwnedCleanup(

@@ -12,6 +12,8 @@ import { scratchDirOf } from "@vibestudio/shared/ownershipLedger";
 import {
   awaitHubReady,
   exportReleaseBuild,
+  verifyReleaseExecutableSources,
+  verifyReleaseBuildDirectory,
   prepareInstalledTemplateRelease,
   runInstalledRpcBatch,
   verifyPreparedReleaseUserland,
@@ -837,6 +839,80 @@ test("exports only immutable records and verifies every payload before publicati
     exportReleaseBuild(source, path.join(root, "other"), "b".repeat(64)),
     /key mismatch/
   );
+});
+
+test("releases ship each executable module source once, as pooled references", async () => {
+  const { gzipSync, gunzipSync } = await import("node:zlib");
+  const sourceOf = (text) => ({
+    contentDigest: createHash("sha256").update(text, "utf8").digest("hex"),
+    source: text,
+  });
+  const entry = (moduleId, text) => ({
+    moduleId,
+    ...sourceOf(text),
+    package: { kind: "first-party" },
+    format: "ts",
+  });
+  const shared = "export const shared = 1;\n";
+  const builds = [
+    {
+      key: "a".repeat(64),
+      modules: [entry("a.ts", "export const a = 1;\n"), entry("shared.ts", shared)],
+    },
+    {
+      key: "b".repeat(64),
+      modules: [entry("b.ts", "export const b = 1;\n"), entry("shared.ts", shared)],
+    },
+  ];
+  const root = await fixture();
+  const release = path.join(root, "userland-builds");
+  const keys = [];
+  for (const { key, modules } of builds) {
+    const buildRoot = path.join(root, `work-${key[0]}`);
+    await fs.mkdir(buildRoot);
+    const { source } = await releaseBuildFixture(buildRoot, key);
+    await fs.writeFile(
+      path.join(source, "executable-modules.json.gz"),
+      gzipSync(Buffer.from(JSON.stringify(modules)))
+    );
+    await exportReleaseBuild(source, path.join(release, key), key);
+    keys.push(key);
+  }
+  // Each build ships references only; three distinct sources are pooled once.
+  for (const { key, modules } of builds) {
+    const files = (await fs.readdir(path.join(release, key))).sort();
+    assert.deepEqual(files, [
+      "artifacts.json",
+      "bundle.js",
+      "executable-module-refs.json.gz",
+      "metadata.json",
+    ]);
+    const references = JSON.parse(
+      gunzipSync(await fs.readFile(path.join(release, key, "executable-module-refs.json.gz")))
+    );
+    assert.deepEqual(
+      references.map(({ moduleId, contentDigest }) => [moduleId, contentDigest]),
+      modules.map(({ moduleId, contentDigest }) => [moduleId, contentDigest])
+    );
+    assert.ok(references.every((reference) => !("source" in reference)));
+    await verifyReleaseBuildDirectory(path.join(release, key), key, true);
+  }
+  assert.equal((await fs.readdir(path.join(release, "executable-sources"))).length, 3);
+  await verifyReleaseExecutableSources(release, keys);
+
+  // An unreferenced pooled file, a missing one and a forged one are each refused.
+  const pool = path.join(release, "executable-sources");
+  const [first] = await fs.readdir(pool);
+  await fs.writeFile(path.join(pool, `${"c".repeat(64)}.gz`), gzipSync(Buffer.from("stray")));
+  await assert.rejects(verifyReleaseExecutableSources(release, keys), /unreferenced/u);
+  await fs.rm(path.join(pool, `${"c".repeat(64)}.gz`));
+  const original = await fs.readFile(path.join(pool, first));
+  await fs.writeFile(path.join(pool, first), gzipSync(Buffer.from("forged source")));
+  await assert.rejects(verifyReleaseExecutableSources(release, keys), /does not match its digest/u);
+  await fs.rm(path.join(pool, first));
+  await assert.rejects(verifyReleaseExecutableSources(release, keys), /lacks/u);
+  await fs.writeFile(path.join(pool, first), original);
+  await verifyReleaseExecutableSources(release, keys);
 });
 
 test("accepts a Windows EPERM rename collision only after verifying the incumbent", async () => {

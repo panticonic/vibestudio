@@ -16,6 +16,16 @@ import {
 } from "./lib/owned-cleanup.mjs";
 import { prepareWorkspaceRelease } from "./prepare-workspace-release.mjs";
 import {
+  EXECUTABLE_MODULES_FILE,
+  EXECUTABLE_MODULE_REFS_FILE,
+  EXECUTABLE_SOURCES_DIR,
+  compactExecutableModules,
+  encodeExecutableModuleReferences,
+  parseExecutableModulesFile,
+  verifyExecutableSourcePool,
+  writeExecutableSources,
+} from "./lib/release-executable-sources.mjs";
+import {
   schemaProbeStagingPath,
   publishSchemaProbeComponent,
   retireSchemaProbeStaging,
@@ -79,6 +89,26 @@ export async function exportReleaseBuild(source, destination, expectedKey) {
     for (const file of files) {
       const from = path.join(source, file);
       const to = path.join(staging, file);
+      if (file === EXECUTABLE_MODULE_REFS_FILE) {
+        throw new Error("A release build is exported from a working store's full inventory");
+      }
+      if (file === EXECUTABLE_MODULES_FILE) {
+        // The inventory ships as references; each distinct source is pooled once,
+        // before this build is published, so a published build never names a
+        // source the pool lacks.
+        const { references, sources } = compactExecutableModules(
+          parseExecutableModulesFile(await fsp.readFile(from))
+        );
+        await writeExecutableSources(
+          path.join(path.dirname(destination), EXECUTABLE_SOURCES_DIR),
+          sources
+        );
+        await fsp.writeFile(
+          path.join(staging, EXECUTABLE_MODULE_REFS_FILE),
+          encodeExecutableModuleReferences(references)
+        );
+        continue;
+      }
       await fsp.mkdir(path.dirname(to), { recursive: true });
       await fsp.copyFile(from, to);
     }
@@ -168,7 +198,8 @@ export async function readReleaseBuildDescriptor(directory, expectedKey) {
       path.win32.isAbsolute(artifactPath) ||
       artifactPath.split("/").some((part) => !part || part === "." || part === "..") ||
       files.has(artifactPath) ||
-      artifactPath === "executable-modules.json.gz"
+      artifactPath === EXECUTABLE_MODULES_FILE ||
+      artifactPath === EXECUTABLE_MODULE_REFS_FILE
     ) {
       throw new Error(`Invalid release artifact path: ${String(artifactPath)}`);
     }
@@ -186,15 +217,18 @@ export async function readReleaseBuildDescriptor(directory, expectedKey) {
     files.add(artifactPath);
   }
 
-  try {
-    const modulesPath = path.join(directory, "executable-modules.json.gz");
-    const stat = await fsp.lstat(modulesPath);
-    if (!stat.isFile() || stat.isSymbolicLink())
-      throw new Error("Executable module inventory is not a regular file");
-    files.add("executable-modules.json.gz");
-  } catch (error) {
-    if (error.code !== "ENOENT") throw error;
+  for (const inventory of [EXECUTABLE_MODULES_FILE, EXECUTABLE_MODULE_REFS_FILE]) {
+    try {
+      const stat = await fsp.lstat(path.join(directory, inventory));
+      if (!stat.isFile() || stat.isSymbolicLink())
+        throw new Error("Executable module inventory is not a regular file");
+      files.add(inventory);
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
   }
+  if (files.has(EXECUTABLE_MODULES_FILE) && files.has(EXECUTABLE_MODULE_REFS_FILE))
+    throw new Error("Release build carries two executable module inventories");
 
   return { metadata, artifacts, files };
 }
@@ -209,16 +243,54 @@ export async function verifyReleaseBuildDirectory(directory, expectedKey, exactC
     )
       throw new Error(`Release artifact integrity mismatch: ${artifact.path}`);
   }
-  if (files.has("executable-modules.json.gz")) {
+  if (files.has(EXECUTABLE_MODULES_FILE)) {
     const modules = JSON.parse(
-      gunzipSync(await fsp.readFile(path.join(directory, "executable-modules.json.gz"))).toString(
-        "utf8"
-      )
+      gunzipSync(await fsp.readFile(path.join(directory, EXECUTABLE_MODULES_FILE))).toString("utf8")
     );
     if (!Array.isArray(modules)) throw new Error("Invalid executable module inventory");
   }
+  if (files.has(EXECUTABLE_MODULE_REFS_FILE)) await readExecutableModuleReferences(directory);
   if (exactContents) await assertExactReleaseBuildFiles(directory, files);
   return [...files];
+}
+
+/** A release build's inventory references, each naming a pooled source by its digest. */
+async function readExecutableModuleReferences(directory) {
+  const references = parseExecutableModulesFile(
+    await fsp.readFile(path.join(directory, EXECUTABLE_MODULE_REFS_FILE))
+  );
+  for (const reference of references) {
+    if (
+      !reference ||
+      typeof reference !== "object" ||
+      "source" in reference ||
+      typeof reference.moduleId !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(reference.contentDigest)
+    )
+      throw new Error("Invalid executable module reference");
+  }
+  return references;
+}
+
+/**
+ * Prove that a release's pooled sources are exactly the ones its builds name:
+ * every referenced source present and matching its digest, and no other. Payload
+ * proof belongs to publication and to the fresh install that verifies the release.
+ */
+export async function verifyReleaseExecutableSources(buildsDirectory, buildKeys) {
+  const digests = new Set();
+  for (const key of buildKeys) {
+    const directory = path.join(buildsDirectory, key);
+    try {
+      await fsp.lstat(path.join(directory, EXECUTABLE_MODULE_REFS_FILE));
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    for (const reference of await readExecutableModuleReferences(directory))
+      digests.add(reference.contentDigest);
+  }
+  await verifyExecutableSourcePool(path.join(buildsDirectory, EXECUTABLE_SOURCES_DIR), digests);
 }
 
 export async function assertExactReleaseBuildFiles(directory, expectedFiles) {

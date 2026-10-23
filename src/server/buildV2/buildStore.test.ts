@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createHash, webcrypto } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -12,6 +13,12 @@ import {
   type BuildStoreConfig,
   type BuildResult,
 } from "./buildStore.js";
+import {
+  compactExecutableModules,
+  encodeExecutableModuleReferences,
+  executableSourceFile,
+  writeExecutableSources,
+} from "../../../scripts/lib/release-executable-sources.mjs";
 import { ExecutionPublicationJournal } from "../executionPublicationJournal.js";
 import { executionArtifactRefFromBuild } from "../executionRootProviders.js";
 import { RuntimeImageStore } from "../runtimeImageStore.js";
@@ -569,6 +576,68 @@ describe("build artifact helpers", () => {
       fs.writeFileSync(path.join(installed, "worker.js"), "truncated");
       setStateRoot(path.join(root, "second-consumer"));
       await expect(store.getOrHydrate(key, consumerState)).resolves.toBeNull();
+    } finally {
+      setReleaseBuildRoot(path.join(testRoot, "installed", "userland-builds"));
+      await cleanupRoot(root);
+    }
+  });
+
+  it("reads a release build's inventory through the pooled sources and hydrates it in full", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-release-pool-"));
+    const key = "d".repeat(64);
+    const digest = (source: string) => createHash("sha256").update(source, "utf8").digest("hex");
+    const sourceOf = (moduleId: string, source: string) => ({
+      moduleId,
+      contentDigest: digest(source),
+      package: { kind: "first-party" as const },
+      format: "ts" as const,
+      source,
+    });
+    const modules = [
+      sourceOf("workers/a/index.ts", "export default {};"),
+      sourceOf("workers/a/shared.ts", "export const shared = 1;"),
+    ];
+    try {
+      setStateRoot(path.join(root, "producer"));
+      const produced = await store.put(
+        key,
+        { entries: build().artifacts },
+        { ...build().metadata, buildKey: key, sourcePath: "workers/a", executableModules: modules }
+      );
+      // The release form: references beside the build, sources once in the pool.
+      const releaseRoot = path.join(root, "installation", "userland-builds");
+      const installed = path.join(releaseRoot, key);
+      fs.mkdirSync(releaseRoot, { recursive: true });
+      fs.cpSync(produced.dir, installed, { recursive: true });
+      const { references, sources } = compactExecutableModules(modules);
+      fs.rmSync(path.join(installed, "executable-modules.json.gz"));
+      fs.writeFileSync(
+        path.join(installed, "executable-module-refs.json.gz"),
+        encodeExecutableModuleReferences(references)
+      );
+      await writeExecutableSources(path.join(releaseRoot, "executable-sources"), sources);
+
+      setStateRoot(path.join(root, "consumer"));
+      setReleaseBuildRoot(releaseRoot);
+      expect(await store.readExecutableModules(installed)).toEqual(modules);
+      const hydrated = await store.getOrHydrate(key, `state:${"b".repeat(64)}`);
+      expect(hydrated).not.toBeNull();
+      // The working store holds the full inventory, not references.
+      expect(fs.existsSync(path.join(hydrated!.dir, "executable-modules.json.gz"))).toBe(true);
+      expect(fs.existsSync(path.join(hydrated!.dir, "executable-module-refs.json.gz"))).toBe(false);
+      expect(await store.readExecutableModules(hydrated!.dir)).toEqual(modules);
+
+      // A pooled source that is not the one its digest names is refused.
+      fs.writeFileSync(
+        executableSourceFile(
+          path.join(releaseRoot, "executable-sources"),
+          modules[0]!.contentDigest
+        ),
+        gzipSync(Buffer.from("export default { forged: true };"))
+      );
+      await expect(store.readExecutableModules(installed)).rejects.toThrow(
+        /sources are unavailable/u
+      );
     } finally {
       setReleaseBuildRoot(path.join(testRoot, "installed", "userland-builds"));
       await cleanupRoot(root);
