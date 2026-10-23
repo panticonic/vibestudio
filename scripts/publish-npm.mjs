@@ -223,7 +223,7 @@ async function main(ownership, signal) {
   }
 
   for (const entry of manifests) {
-    reconcileDistTag(entry, options.tag);
+    await reconcileDistTag(entry, options.tag);
     retirePublicationStagingTag(entry);
   }
 }
@@ -354,6 +354,19 @@ export function distTagPromotionDecision({ candidateVersion, currentVersion, tag
   return compareSemver(candidateVersion, currentVersion) > 0 ? "promote" : "preserve-newer";
 }
 
+/**
+ * Judge a dist-tag read after it was written. The registry acknowledges the
+ * write before every read reflects it, so a read that still shows what the tag
+ * held before the write is pending; any other value is a real divergence.
+ * `previous` is that prior value (`null` for an absent tag), or `undefined` when
+ * nothing was written and no read can be pending.
+ */
+export function distTagReadback({ observed, expected, previous }) {
+  if (observed === expected) return "settled";
+  if (previous !== undefined && (observed ?? null) === previous) return "pending";
+  return "unexpected";
+}
+
 export function validateStagedPackage(pkg) {
   const manifestPath = path.join(pkg.dir, "package.json");
   if (!fs.existsSync(manifestPath)) {
@@ -414,7 +427,7 @@ function npmDistTags(name) {
   }
 }
 
-function reconcileDistTag(entry, tag) {
+async function reconcileDistTag(entry, tag) {
   const before = npmDistTags(entry.pkg.name);
   const currentVersion = typeof before[tag] === "string" ? before[tag] : null;
   const decision = distTagPromotionDecision({
@@ -438,11 +451,21 @@ function reconcileDistTag(entry, tag) {
   }
 
   const expectedVersion = decision === "preserve-newer" ? currentVersion : entry.version;
-  const after = npmDistTags(entry.pkg.name);
-  if (after[tag] !== expectedVersion) {
-    throw new Error(
-      `npm dist-tag ${tag} points to ${String(after[tag])}; expected ${expectedVersion}`
-    );
+  for (;;) {
+    const observed = npmDistTags(entry.pkg.name)[tag];
+    const readback = distTagReadback({
+      observed,
+      expected: expectedVersion,
+      previous: decision === "promote" ? currentVersion : undefined,
+    });
+    if (readback === "settled") return;
+    if (readback === "unexpected") {
+      throw new Error(
+        `npm dist-tag ${tag} points to ${String(observed)}; expected ${expectedVersion}`
+      );
+    }
+    console.log(`[publish-npm] Waiting for npm dist-tag ${tag} to reflect ${expectedVersion}...`);
+    await delay(5000);
   }
 }
 
@@ -591,15 +614,7 @@ async function installSmoke(entry, packageSpec, label, ownership, signal) {
 
 async function runServerStartupSmoke(serverBinary, launchDirectory, ownership, signal) {
   const readyFile = path.join(launchDirectory, "hub-ready.json");
-  const env = { ...process.env };
-  for (const key of [
-    "NPM_TOKEN",
-    "NODE_AUTH_TOKEN",
-    "NPM_CONFIG_USERCONFIG",
-    "npm_config_userconfig",
-  ]) {
-    delete env[key];
-  }
+  const env = publicNpmEnvironment(process.env);
   env.XDG_CONFIG_HOME = path.join(launchDirectory, "config");
   // Retired with the smoke's ownership once readiness is proven: stopped
   // gracefully, before the installed package and its state are removed.
@@ -679,6 +694,11 @@ export function publicNpmEnvironment(env) {
   ]) {
     delete clean[key];
   }
+  // Everything run here is the published package or the registry, never this
+  // checkout. The script owner defaults the application root to the checkout; an
+  // installed server that inherited it would resolve its prepared workspace
+  // release from the checkout instead of from the package it is testing.
+  delete clean.VIBESTUDIO_APP_ROOT;
   clean.NPM_CONFIG_REGISTRY = "https://registry.npmjs.org/";
   clean.npm_config_registry = "https://registry.npmjs.org/";
   return clean;

@@ -10,12 +10,19 @@ import {
   npmArchivePayloadSha256,
   publishArgs,
   parseArgs,
+  distTagReadback,
   publicNpmEnvironment,
   runWithOwnedCleanup,
   spawnResultFailure,
   validateNpmPackageManifest,
   validateStagedPackage,
 } from "./publish-npm.mjs";
+
+void test("the installed package never inherits this checkout as its application root", () => {
+  const clean = publicNpmEnvironment({ PATH: "/bin", VIBESTUDIO_APP_ROOT: "/runner/checkout" });
+  assert.equal(clean.PATH, "/bin");
+  assert.equal(clean.VIBESTUDIO_APP_ROOT, undefined);
+});
 
 void test("candidate validation and smoke commands cannot inherit the npm publish token", () => {
   const clean = publicNpmEnvironment({
@@ -288,4 +295,19 @@ void test("spawn failure retains both signal and exit status when both are repor
   assert.ok(failure instanceof AggregateError);
   assert.match(failure.errors[0].message, /SIGTERM/);
   assert.match(failure.errors[1].message, /status 1/);
+});
+
+void test("a dist-tag read that still shows the pre-write value is pending, not a divergence", () => {
+  const promoted = { expected: "0.1.106", previous: "0.1.105" };
+  assert.equal(distTagReadback({ observed: "0.1.106", ...promoted }), "settled");
+  assert.equal(distTagReadback({ observed: "0.1.105", ...promoted }), "pending");
+  assert.equal(distTagReadback({ observed: "0.1.107", ...promoted }), "unexpected");
+  // A tag that did not exist before the write reads as absent until it lands.
+  const created = { expected: "0.1.106", previous: null };
+  assert.equal(distTagReadback({ observed: undefined, ...created }), "pending");
+  // Nothing was written, so nothing can be pending.
+  assert.equal(
+    distTagReadback({ observed: "0.1.105", expected: "0.1.106", previous: undefined }),
+    "unexpected"
+  );
 });
