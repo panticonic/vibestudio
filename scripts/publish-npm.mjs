@@ -30,6 +30,10 @@ const repoRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const rootPkg = readJson(path.join(repoRoot, "package.json"));
 let announcedTokenEnv = false;
 let npmAuth;
+// A publication is staged under this tag so that `latest` moves only after the
+// published package is verified. The tag is not retired afterwards: the next
+// publication moves it, and the registry answered the publish token's attempt
+// to delete it with 403 (v0.1.106).
 const publicationStagingTag = "vibestudio-publication-candidate";
 const serverPackage = {
   name: "@panticonic/vibestudio-server",
@@ -224,7 +228,6 @@ async function main(ownership, signal) {
 
   for (const entry of manifests) {
     await reconcileDistTag(entry, options.tag);
-    retirePublicationStagingTag(entry);
   }
 }
 
@@ -466,24 +469,6 @@ async function reconcileDistTag(entry, tag) {
     }
     console.log(`[publish-npm] Waiting for npm dist-tag ${tag} to reflect ${expectedVersion}...`);
     await delay(5000);
-  }
-}
-
-function retirePublicationStagingTag(entry) {
-  const tags = npmDistTags(entry.pkg.name);
-  if (tags[publicationStagingTag] !== entry.version) return;
-  console.log(
-    `[publish-npm] Removing ${publicationStagingTag} from ${entry.pkg.name}@${entry.version}.`
-  );
-  run("npm", ["dist-tag", "rm", entry.pkg.name, publicationStagingTag], {
-    cwd: repoRoot,
-    authenticated: true,
-  });
-  const after = npmDistTags(entry.pkg.name);
-  if (after[publicationStagingTag] === entry.version) {
-    throw new Error(
-      `npm dist-tag ${publicationStagingTag} still points to ${entry.pkg.name}@${entry.version}`
-    );
   }
 }
 
