@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { LocalServerStartError, localServerPaths, startLocalServer } from "./localServer.js";
+import { processIsRunning } from "../../tests/fixtures/processLiveness.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -73,7 +74,7 @@ describe("startLocalServer", () => {
         const { pid } = JSON.parse(fs.readFileSync(preparing, "utf8")) as { pid: number };
         controller.abort(new Error("user cancelled startup"));
         await expect(starting).rejects.toThrow(/before it was ready/);
-        expect(() => process.kill(pid, 0)).toThrow();
+        expect(processIsRunning(pid)).toBe(false);
       } finally {
         watcher!.close();
         controller.abort(new Error("test finished"));
@@ -100,7 +101,7 @@ describe("startLocalServer", () => {
     expect(log).toContain("fake hub starting");
     expect(log).toContain("fake hub diagnostics");
     expect(log).toContain("fake hub stopping");
-    expect(() => process.kill(server.pid, 0)).toThrow();
+    expect(processIsRunning(server.pid)).toBe(false);
   });
 
   it("reports a server that exits before readiness with its log path", async () => {
@@ -133,7 +134,7 @@ describe("startLocalServer", () => {
     try {
       expect(server.retained).toBe(true);
       await server.stop();
-      expect(() => process.kill(server.pid, 0)).not.toThrow();
+      expect(processIsRunning(server.pid)).toBe(true);
     } finally {
       process.kill(server.pid, "SIGTERM");
       await server.exited;

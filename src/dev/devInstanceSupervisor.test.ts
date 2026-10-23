@@ -6,6 +6,7 @@ import { spawn } from "node:child_process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DevInstanceSupervisor } from "./devInstanceSupervisor.js";
 import { Ownership } from "@vibestudio/shared/ownership";
+import { processIsRunning } from "../../tests/fixtures/processLiveness.js";
 
 const roots: string[] = [];
 const ownerships: Ownership[] = [];
@@ -436,12 +437,7 @@ describe("DevInstanceSupervisor", () => {
 
 async function expectProcessToDisappear(pid: number): Promise<void> {
   for (let attempt = 0; attempt < 200; attempt += 1) {
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ESRCH") return;
-      throw error;
-    }
+    if (!processIsRunning(pid)) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
   throw new Error(`Process ${pid} remained alive after its owned group was stopped`);

@@ -9,6 +9,7 @@ import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { createDevelopmentNativeService } from "./developmentNativeService.js";
 import type { PreparedDevelopmentBuild } from "./developmentExecutor.js";
 import { developmentRecipeFixture } from "./developmentRecipeFixture.test-helper.js";
+import { processIsRunning } from "../../../tests/fixtures/processLiveness.js";
 
 const digest = "a".repeat(64);
 const caller = (id: string) => ({ caller: { runtime: { id, kind: "do" } } }) as ServiceContext;
@@ -238,12 +239,12 @@ describe("native development build ownership", () => {
         await f.service.handler(caller("do:development"), "beginBuild", [{ run: f.run }]);
         await vi.waitFor(() => expect(f.attached.attach).toHaveBeenCalledTimes(1));
         expect(grandchildPid).toBeGreaterThan(0);
-        process.kill(grandchildPid, 0);
+        expect(processIsRunning(grandchildPid)).toBe(true);
         const childPid = supervisor.process!.pid!;
         await f.close();
         await vi.waitFor(() => {
           for (const pid of [childPid, grandchildPid]) {
-            expect(() => process.kill(pid, 0)).toThrow();
+            expect(processIsRunning(pid)).toBe(false);
           }
         });
         expect(f.attached.close).toHaveBeenCalledTimes(1);

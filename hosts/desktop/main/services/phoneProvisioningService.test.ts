@@ -7,6 +7,7 @@ import { Ownership } from "@vibestudio/shared/ownership";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ServiceDispatcher } from "@vibestudio/shared/serviceDispatcher";
 import { createPhoneProvisioningService } from "./phoneProvisioningService.js";
+import { liveGroupMembers } from "../../../../tests/fixtures/processLiveness.js";
 
 async function provision(
   definition: ReturnType<typeof createPhoneProvisioningService>,
@@ -138,15 +139,8 @@ describe("desktop phone provisioning service", () => {
       const response = (await definition.handler({} as never, "provision", [
         { platform: "android", mode: "release" },
       ])) as Response;
-      const groupAbsent = (pid: number) => {
-        // The leader and the native tool each lead their own group.
-        try {
-          process.kill(-pid, 0);
-          return false;
-        } catch (error) {
-          return (error as NodeJS.ErrnoException).code === "ESRCH";
-        }
-      };
+      // The leader and the native tool each lead their own group.
+      const groupAbsent = (pid: number) => liveGroupMembers(pid).length === 0;
       let owned: { leader: number; descendant: number } | undefined;
       try {
         await ready;

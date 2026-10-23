@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Ownership } from "@vibestudio/shared/ownership";
+import { processIsRunning } from "../../tests/fixtures/processLiveness.js";
 import {
   LaunchTerminated,
   LaunchTermination,
@@ -115,7 +116,7 @@ describe("runOwnedChild", () => {
       { env: process.env }
     );
     const leftover = Number(fs.readFileSync(pidFile, "utf8"));
-    expect(() => process.kill(leftover, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
+    expect(processIsRunning(leftover)).toBe(false);
   });
 });
 
