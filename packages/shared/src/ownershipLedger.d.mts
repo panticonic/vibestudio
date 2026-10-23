@@ -82,6 +82,24 @@ export function failureError(result: LedgerResult): AggregateError & OwnershipEr
 /** Liveness of the ledger's REAPER (R) identity: pid + start coordinate + boot id. */
 export function ledgerLiveness(ledger: Ledger): ProcessLiveness;
 
+/**
+ * Retire a Windows group by its leader (`taskkill /T /F`). Windows has no group
+ * identity: success is the leader being gone, whatever `taskkill` reported while
+ * the tree was exiting. The options exist for tests.
+ */
+export function retireWindowsLeader(
+  group: Pick<LedgerGroup, "pid">,
+  options?: {
+    platform?: NodeJS.Platform;
+    run?: (
+      command: string,
+      args: string[],
+      options: object
+    ) => { status: number | null; stderr?: string | null };
+    exists?: (pid: number) => boolean;
+  }
+): Promise<void>;
+
 export type ClaimResult = { claimed: true } | { claimed: false; holder: Ledger };
 /**
  * Claim `ledger.id` by exclusive creation of its ledger file. A holder whose
@@ -139,7 +157,11 @@ export function sweep(dir: string): Promise<SweepReport>;
  * claim: if the id has been reused by a successor, the wait resolves instead of
  * waiting on the successor.
  */
-export function awaitRetirement(dir: string, id: string, options?: { token?: string }): Promise<void>;
+export function awaitRetirement(
+  dir: string,
+  id: string,
+  options?: { token?: string }
+): Promise<void>;
 /** Resolve once the holder marks the ledger ready; reject if its reaper dies first. */
 export function awaitReady(dir: string, id: string): Promise<Ledger>;
 

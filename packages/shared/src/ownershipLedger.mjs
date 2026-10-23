@@ -341,19 +341,34 @@ export async function retireGroup(group, { escalated = () => false } = {}) {
  * unreachable (documented gap), and a ledger found by a later sweep carries no
  * identity to prove, so it is never signalled.
  */
-function retireWindowsLeader(group) {
-  if (process.platform !== "win32") return Promise.resolve();
-  const result = spawnSync("taskkill", ["/pid", String(group.pid), "/T", "/F"], {
+export function retireWindowsLeader(
+  group,
+  { platform = process.platform, run = spawnSync, exists = processExists } = {}
+) {
+  if (platform !== "win32") return Promise.resolve();
+  const result = run("taskkill", ["/pid", String(group.pid), "/T", "/F"], {
     windowsHide: true,
     encoding: "utf8",
   });
-  // 128: the process was already gone.
-  if (result.status !== 0 && result.status !== 128) {
-    return Promise.reject(
-      ownedProcessFailure(ownershipError(`taskkill failed: ${result.stderr?.trim()}`), null)
-    );
+  // 128: the process was already gone. Another failure is a race with the tree's
+  // own exit (a child ended while taskkill walked it); retirement asks that the
+  // leader is gone, and it is.
+  if (result.status === 0 || result.status === 128 || !exists(group.pid)) return Promise.resolve();
+  return Promise.reject(
+    ownedProcessFailure(
+      ownershipError(`taskkill failed (${result.status}): ${result.stderr?.trim()}`),
+      null
+    )
+  );
+}
+
+function processExists(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return error.code === "EPERM";
   }
-  return Promise.resolve();
 }
 
 function ownsFile(file, ledger) {
