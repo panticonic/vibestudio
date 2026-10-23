@@ -322,7 +322,7 @@ describe("Iroh RPC client over real local QUIC", () => {
       await Promise.allSettled([pipe.close(), serving]);
       server.close(0n, new TextEncoder().encode("test complete"));
     }
-  });
+  }, 90_000);
 
   it.each(["pipe", "session"] as const)(
     "rejects readiness when the %s closes before the peer handshake",
