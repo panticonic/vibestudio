@@ -8,8 +8,8 @@ const option = (name: string) => {
   return path.resolve(value);
 };
 const scope = process.argv[process.argv.indexOf("--scope") + 1];
-if (scope !== "sources" && scope !== "release")
-  throw new Error(`--scope must be "sources" or "release", not ${scope}`);
+if (scope !== "sources" && scope !== "release" && scope !== "existing")
+  throw new Error(`--scope must be "sources", "release", or "existing", not ${scope}`);
 const optionalOption = (name: string) => {
   if (!process.argv.includes(name)) return undefined;
   const value = process.argv[process.argv.indexOf(name) + 1];

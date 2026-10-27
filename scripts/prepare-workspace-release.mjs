@@ -74,7 +74,7 @@ export function resolveReleaseBuildConcurrency({
  * owner's reaper, which retires it however the owner ends. A stop request
  * signals the producer to cancel itself; what it leaves behind is retired by
  * the join.
- * @param {{ ownership: import("@vibestudio/shared/ownership").Ownership, appRoot: string, output: string, sourceOutput?: string, scratch: string, env: NodeJS.ProcessEnv, executable: string, entry: string, scope?: "sources" | "release", onProgress?: (progress: object) => void }} input
+ * @param {{ ownership: import("@vibestudio/shared/ownership").Ownership, appRoot: string, output: string, sourceOutput?: string, scratch: string, env: NodeJS.ProcessEnv, executable: string, entry: string, scope?: "sources" | "release" | "existing", onProgress?: (progress: object) => void }} input
  */
 export function prepareWorkspaceRelease(input) {
   if (!input.ownership) {

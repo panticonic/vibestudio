@@ -18,8 +18,8 @@ export function prepareWorkspaceRelease(input: {
   env: NodeJS.ProcessEnv;
   executable: string;
   entry: string;
-  /** "sources" publishes only template sources; the default is the complete release. */
-  scope?: "sources" | "release";
+  /** "sources" publishes only template sources; "existing" only consumes a completed release; the default builds the complete release. */
+  scope?: "sources" | "release" | "existing";
   /**
    * Receives the producer's own progress as it happens: template sources
    * prepared (`done` of `total`), then runtimes built.

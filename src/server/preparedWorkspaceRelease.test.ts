@@ -237,6 +237,59 @@ describe("prepared workspace release admission", () => {
     expect(await fs.readdir(warm)).toEqual(["userland-builds", "workspace-templates"]);
   });
 
+  it("requires a complete exact release for consumers without preparing sources", async () => {
+    const { root, output } = await fixture();
+    vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));
+    const { prepareCachedWorkspaceRelease, consumeCachedWorkspaceRelease } =
+      await import("./preparedWorkspaceReleaseCache.js");
+    const consumer = path.join(root, "consumer");
+    const prepareSources = vi.fn();
+    const input = { appRoot: root, output: consumer, templates, layers, prepareSources };
+    await expect(consumeCachedWorkspaceRelease(input)).rejects.toThrow(/Run pnpm build:product/);
+    expect(prepareSources).not.toHaveBeenCalled();
+    expect(fsNative.existsSync(consumer)).toBe(false);
+
+    // The ordinary producer publishes once; the consumer uses the same inventory validation.
+    const produced = path.join(root, "produced");
+    const producer = vi.fn(async () => {
+      await fs.cp(output, produced, { recursive: true });
+    });
+    await prepareCachedWorkspaceRelease({ ...input, output: produced }, producer);
+    await consumeCachedWorkspaceRelease(input);
+    expect(producer).toHaveBeenCalledTimes(1);
+    expect(await fs.readFile(path.join(consumer, "userland-builds/release.json"), "utf8")).toBe(
+      await fs.readFile(path.join(output, "userland-builds/release.json"), "utf8")
+    );
+
+    const changedTemplates = {
+      ...templates,
+      system: { ...templates.system, commit: "f".repeat(40) },
+    };
+    await expect(
+      consumeCachedWorkspaceRelease({
+        ...input,
+        output: path.join(root, "changed"),
+        templates: changedTemplates,
+      })
+    ).rejects.toThrow(/Run pnpm build:product/);
+    const operation = await import("./preparedWorkspaceRelease.js").then((m) =>
+      m.workspaceReleaseIdentity(root)
+    );
+    await expect(
+      consumeCachedWorkspaceRelease({
+        ...input,
+        output: path.join(root, "changed-host"),
+        operation: {
+          ...operation,
+          identity: {
+            ...operation.identity,
+            hostBuild: { ...operation.identity.hostBuild, fingerprint: "0".repeat(64) },
+          },
+        },
+      })
+    ).rejects.toThrow(/Run pnpm build:product/);
+  });
+
   it("captures one identity per cold publication or trusted warm admission", async () => {
     const { root, output, builds, rootFingerprint } = await fixture();
     vi.stubEnv("VIBESTUDIO_SHARED_DERIVED_CACHE_DIR", path.join(root, "derived"));

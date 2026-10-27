@@ -64,14 +64,28 @@ async function projectRelease(source: string, destination: string): Promise<void
   });
 }
 
-export async function prepareCachedWorkspaceRelease(
-  input: PreparedWorkspaceReleaseInput & {
-    signal?: AbortSignal;
-    onSourcesPrepared?: (root: string) => void | Promise<void>;
-    operation?: WorkspaceReleaseOperation;
-    prepareSources?: (operation: WorkspaceReleaseOperation) => Promise<void>;
-  },
+type CachedReleaseInput = PreparedWorkspaceReleaseInput & {
+  signal?: AbortSignal;
+  onSourcesPrepared?: (root: string) => void | Promise<void>;
+  operation?: WorkspaceReleaseOperation;
+  prepareSources?: (operation: WorkspaceReleaseOperation) => Promise<void>;
+};
+
+/** A consumer has no producer capability: a cache miss is a build prerequisite. */
+export function consumeCachedWorkspaceRelease(input: CachedReleaseInput): Promise<void> {
+  return accessCachedWorkspaceRelease(input);
+}
+
+export function prepareCachedWorkspaceRelease(
+  input: CachedReleaseInput,
   produce: (operation: WorkspaceReleaseOperation) => Promise<void>
+): Promise<void> {
+  return accessCachedWorkspaceRelease(input, produce);
+}
+
+async function accessCachedWorkspaceRelease(
+  input: CachedReleaseInput,
+  produce?: (operation: WorkspaceReleaseOperation) => Promise<void>
 ): Promise<void> {
   input.signal?.throwIfAborted();
   // The exact host/dependency inputs belong to this operation, not to each
@@ -135,6 +149,11 @@ export async function prepareCachedWorkspaceRelease(
       if (await validateExistingPreparedWorkspaceRelease(cachedInput, identity)) {
         await reuse();
         return;
+      }
+      if (!produce) {
+        throw new Error(
+          "No complete workspace release matches the current host and template inputs. Run pnpm build:product before starting."
+        );
       }
       if (input.prepareSources) {
         await input.prepareSources(operation);

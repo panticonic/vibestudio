@@ -9,12 +9,12 @@ import { LaunchTermination, joinProducer } from "./launchTermination.js";
 import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
 import { hasOwnershipFailure } from "../../scripts/lib/owned-cleanup.mjs";
 import { assertProductLaunchArguments } from "./productLaunch.js";
-import { prepareProductRelease } from "./productRelease.js";
+import { loadProductRelease } from "./productRelease.js";
 import { extractDevelopmentTemplateCheckoutArguments } from "./developmentTemplateOptions.js";
 import { createShellSurfaceLink } from "@vibestudio/shared/shellSurface";
 
 /**
- * Build this checkout and run it with installed-product semantics: the
+ * Run this checkout's prebuilt release with installed-product semantics: the
  * ordinary profile, production runtime behavior and the canonical templates.
  * `desktop` opens the desktop app (`pnpm start`); `terminal` opens the
  * product's own `vibestudio terminal` (`pnpm start:terminal`), which starts or
@@ -51,7 +51,7 @@ async function main(): Promise<void> {
   let retirementFailure: unknown;
   try {
     const temporaryRoot = await ownership.scratch("source-launch-");
-    const { env, developmentTemplates } = await prepareProductRelease({
+    const { env, developmentTemplates } = await loadProductRelease({
       ownership,
       termination,
       repoRoot,

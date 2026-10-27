@@ -69,13 +69,16 @@ import {
   type PreparedWorkspaceReleaseBuild,
   type PreparedWorkspaceReleaseInput,
 } from "./preparedWorkspaceRelease.js";
-import { prepareCachedWorkspaceRelease } from "./preparedWorkspaceReleaseCache.js";
+import {
+  consumeCachedWorkspaceRelease,
+  prepareCachedWorkspaceRelease,
+} from "./preparedWorkspaceReleaseCache.js";
 import { acquirePreparedWorkspaceSources } from "./preparedWorkspaceSourceCache.js";
 import { readHostPreparationRecipe } from "../../scripts/host-build-generations.mjs";
 import { resolveRequiredHostArtifactRoot } from "./appRoot.js";
 
-/** Source supervisors need immutable source only; packagers also seal runtimes. */
-export type WorkspacePreparationScope = "sources" | "release";
+/** Source supervisors publish sources; builders seal runtimes; product launchers consume existing releases. */
+export type WorkspacePreparationScope = "sources" | "release" | "existing";
 
 /** Facts emitted only after the corresponding owned work completes. */
 export type WorkspacePreparationProgress =
@@ -233,6 +236,18 @@ export async function prepareWorkspaceTemplates(input: PreparationInput): Promis
         const layers = Object.fromEntries(
           roles.map((role) => [role, plans[role].layers.map(({ pin }) => pin)])
         ) as Record<WorkspaceRole, WorkspaceTemplatePin[]>;
+        if (input.scope === "existing") {
+          await consumeCachedWorkspaceRelease({
+            appRoot: input.appRoot,
+            output: input.output,
+            templates: pins,
+            layers,
+            operation,
+            signal: input.signal,
+            onSourcesPrepared: input.onSourcesPrepared,
+          });
+          return;
+        }
         const snapshots = new Map<
           string,
           { pending: ReturnType<typeof materializeExactGitSnapshot>; blobsDir: string }

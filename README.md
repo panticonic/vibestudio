@@ -320,8 +320,8 @@ mode concurrently with other native-input work.
 pnpm bootstrap        # install the complete host and userland workspace graph
 pnpm dev:templates setup # clone and remember the Base, Personal and System templates
 pnpm build:product   # prepare the complete workspace release (all template runtimes) ahead of start
-pnpm start           # build + start Electron with normal desktop semantics
-pnpm start:terminal  # build + open the terminal browser with normal product semantics
+pnpm start           # start prebuilt Electron with normal desktop semantics
+pnpm start:terminal  # open the prebuilt terminal browser with normal product semantics
 pnpm dev             # launch a fresh disposable development workspace
 pnpm dev:terminal    # the same disposable instance, in the terminal browser
 pnpm dev:production  # fresh disposable instance using the pinned production templates
@@ -423,15 +423,16 @@ together. Private checkpoints are removed when the owning launcher exits.
 See [docs/cli.md](docs/cli.md). (The published npm packages above replace the old
 `pnpm link --global` flow; `pnpm dev` / `pnpm cli` remain the dev workflow.)
 
-`pnpm start` builds the unpublished checkout with production runtime semantics
+`pnpm start` runs the prebuilt checkout with production runtime semantics
 and launches it against the ordinary desktop profile. It reopens the most
 recently used registered workspace, creating `default` from the selected Base
 template only when the profile has no workspace yet. It does not expose
-developer instances. Like the packager, it first prepares the complete workspace
-release (every template's runtimes, built and sealed) from the canonical template
-checkouts instead of the published tags; the result is cached by host build and
-template sources, so `pnpm build:product` can pay that cost ahead of time and
-`pnpm start` then starts without building anything. `pnpm start:terminal` is the same launch with the terminal
+developer instances. First run `pnpm build:product` to build the host and seal the
+complete workspace release (every template's runtimes) from the canonical
+checkouts. Startup validates and consumes that exact release without compiling.
+If host or template inputs change, or the derived release cache has been
+collected, startup fails with an instruction to run `pnpm build:product` again.
+`pnpm start:terminal` is the same launch with the terminal
 browser in place of the desktop app: it runs the product's `vibestudio terminal`,
 which starts (or reuses) the profile's local server. `pnpm dev` and
 `pnpm dev:terminal` launch into a disposable
@@ -502,8 +503,8 @@ Windows builds include MXC's `wxc-host-prep.exe` alongside the executor so its O
 - `pnpm type-check:cloudflare` - Type-check the callback/apex Cloudflare Worker
 - `pnpm deploy:cloudflare` - Deploy the callback/apex Worker
 - `pnpm smoke:cloudflare` - Smoke the deployed callback/apex Worker
-- `pnpm start` - Build unpublished code and launch it with normal desktop semantics
-- `pnpm start:terminal` - Build unpublished code and open the terminal browser with normal product semantics (the ordinary profile and its local server, like `vibestudio terminal`)
+- `pnpm start` - Launch prebuilt unpublished code with normal desktop semantics
+- `pnpm start:terminal` - Open the prebuilt terminal browser with normal product semantics (the ordinary profile and its local server, like `vibestudio terminal`)
 - `pnpm dev:terminal` - Build and open the terminal browser on a fresh disposable developer instance, like `pnpm dev` (output in `<instanceRoot>/logs/server.log`); quitting removes the instance
 - `pnpm lint` - Run ESLint with strict rules
 - `pnpm format` - Format code with Prettier

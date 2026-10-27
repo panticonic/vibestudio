@@ -15,7 +15,7 @@ import { prepareProductRelease } from "./productRelease.js";
  * way the packager does for an installed product: the host build, then every
  * template runtime, built and sealed in the shared derived cache. A later
  * `pnpm start` over the same host and template sources projects that release
- * and builds nothing, so it starts as cold as an installation does.
+ * and builds nothing. Missing or stale artifacts are a launch prerequisite failure.
  */
 async function main(): Promise<void> {
   const templateOptions = extractDevelopmentTemplateCheckoutArguments(process.argv.slice(2));

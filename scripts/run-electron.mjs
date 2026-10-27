@@ -5,7 +5,9 @@ import { readCurrentHostBuildGeneration } from "./host-build-generations.mjs";
 import { ownedEntry } from "./lib/owned-entry.mjs";
 
 const electronBinary = resolveElectronExecutableForVibestudio();
-const hostGeneration = readCurrentHostBuildGeneration(process.cwd(), "desktop");
+const hostGeneration =
+  process.env.VIBESTUDIO_HOST_ARTIFACT_ROOT ??
+  readCurrentHostBuildGeneration(process.cwd(), "desktop");
 
 const extraArgs = process.argv.slice(2);
 
@@ -65,7 +67,8 @@ await ownedEntry(
     };
 
     function startTypeCheck() {
-      if (typeCheckStarted || shutdown.requestedSignal()) return;
+      if (process.env.NODE_ENV !== "development" || typeCheckStarted || shutdown.requestedSignal())
+        return;
       typeCheckStarted = true;
       const pnpmCommand = process.platform === "win32" ? "pnpm.cmd" : "pnpm";
       const owned = ownership.spawn(pnpmCommand, ["type-check"], {

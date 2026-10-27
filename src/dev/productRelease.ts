@@ -4,6 +4,11 @@ import {
 } from "../../scripts/prepare-workspace-release.mjs";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import * as path from "node:path";
+import {
+  computeHostBuildFingerprint,
+  readHostBuildFingerprint,
+  sameHostBuildFingerprint,
+} from "../../scripts/host-build-fingerprint.mjs";
 import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { getProfileDataPath } from "@vibestudio/env-paths";
 import type { Ownership } from "@vibestudio/shared/ownership";
@@ -33,30 +38,74 @@ export interface ProductRelease {
   developmentTemplates: Awaited<ReturnType<typeof inspectWorkspaceSources>>;
 }
 
-/**
- * Prepare, exactly as the packager does for an installed product, the complete
- * workspace release: every template's source phase and every runtime it
- * declares, built and sealed before any workspace boots. The only difference
- * from an installed product is where the template pins come from: the
- * canonical checkouts as they are now, instead of the published tags.
- *
- * The release lands in the shared derived cache keyed by the host build and
- * the exact template sources, so a launch whose inputs did not change projects
- * the finished release and builds nothing. `pnpm build:product` runs this
- * ahead of time; `pnpm start` runs it again and normally finds it done.
- *
- * The producer is handed to `register` the moment it exists, even if it later
- * fails: the caller stops and joins it (`joinProducer`) before retiring
- * `temporaryRoot`, and a termination request can stop it while it runs.
- */
-export async function prepareProductRelease(input: {
+interface ProductReleaseInput {
   ownership: Ownership;
   termination: LaunchTermination;
   repoRoot: string;
   temporaryRoot: string;
   templateCheckouts: readonly string[];
   register: (preparation: WorkspaceReleasePreparation) => void;
-}): Promise<ProductRelease> {
+}
+
+/** Build and seal the complete release ahead of a product launch. */
+export function prepareProductRelease(input: ProductReleaseInput): Promise<ProductRelease> {
+  return resolveProductRelease(input, buildProductHost, "release");
+}
+
+/** Launch consumes exact completed artifacts and has no compilation fallback. */
+export function loadProductRelease(input: ProductReleaseInput): Promise<ProductRelease> {
+  return resolveProductRelease(input, verifyProductHost, "existing");
+}
+
+async function buildProductHost(
+  input: ProductReleaseInput,
+  env: NodeJS.ProcessEnv
+): Promise<string> {
+  await runOwnedChild(
+    input.ownership,
+    process.execPath,
+    ["scripts/native-host-dependencies.mjs", "--repair"],
+    { env, termination: input.termination }
+  );
+  await runOwnedChild(input.ownership, process.execPath, ["scripts/ensure-host-build.mjs"], {
+    env,
+    termination: input.termination,
+  });
+  return readCurrentHostBuildGeneration(input.repoRoot, "desktop");
+}
+
+async function verifyProductHost(
+  input: ProductReleaseInput,
+  env: NodeJS.ProcessEnv
+): Promise<string> {
+  let root: string;
+  try {
+    root = readCurrentHostBuildGeneration(input.repoRoot, "desktop");
+    const expected = computeHostBuildFingerprint({ cwd: input.repoRoot, mode: "production" });
+    const actual = readHostBuildFingerprint(root, "host-build-fingerprint.json");
+    if (!sameHostBuildFingerprint(actual, expected) || actual?.inputCount !== expected.inputCount) {
+      throw new Error("Host artifacts do not match the current source snapshot.");
+    }
+  } catch (cause) {
+    throw new Error(
+      "Product host build is missing or stale. Run pnpm build:product before starting.",
+      {
+        cause,
+      }
+    );
+  }
+  await runOwnedChild(input.ownership, process.execPath, ["scripts/native-host-dependencies.mjs"], {
+    env,
+    termination: input.termination,
+  });
+  return root;
+}
+
+async function resolveProductRelease(
+  input: ProductReleaseInput,
+  prepareHost: (input: ProductReleaseInput, env: NodeJS.ProcessEnv) => Promise<string>,
+  scope: "release" | "existing"
+): Promise<ProductRelease> {
   const { ownership, termination, repoRoot, temporaryRoot } = input;
   const defaultTemplates =
     (await resolveDevelopmentTemplateSet({
@@ -80,20 +129,11 @@ export async function prepareProductRelease(input: {
     bootstrapSystem: !profileHasWorkspace(),
     ...(developmentTemplates.length ? { templates: developmentTemplates } : {}),
   });
-  await runOwnedChild(
-    ownership,
-    process.execPath,
-    ["scripts/native-host-dependencies.mjs", "--repair"],
-    { env, termination }
-  );
-  await runOwnedChild(ownership, process.execPath, ["scripts/ensure-host-build.mjs"], {
-    env,
-    termination,
-  });
-  env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = readCurrentHostBuildGeneration(repoRoot, "desktop");
+  env["VIBESTUDIO_HOST_ARTIFACT_ROOT"] = await prepareHost(input, env);
   termination.signal.throwIfAborted();
   const preparation = prepareWorkspaceRelease({
     ownership,
+    scope,
     executable: process.execPath,
     entry: path.join(env["VIBESTUDIO_HOST_ARTIFACT_ROOT"]!, "prepare-workspace-templates.mjs"),
     appRoot: repoRoot,

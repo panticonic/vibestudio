@@ -41,8 +41,8 @@ The two terminal launchers mirror the desktop ones:
   terminal (a hang-up), SIGTERM, or Ctrl-C during startup stops and joins what
   it started and removes the instance.
 - `pnpm start:terminal [--workspace <name>] [--yes]` is the terminal
-  counterpart of `pnpm start`. It builds this checkout with production
-  semantics and runs the product's own `vibestudio terminal` against the
+  counterpart of `pnpm start`. After `pnpm build:product`, it validates the
+  prebuilt release and runs the product's own `vibestudio terminal` against the
   ordinary profile, which starts the profile's local server (or reuses a
   running one) and stops a server it started when you quit. Developer-instance
   options and `--keep-server` are refused: the server runs this launch's build.
