@@ -239,7 +239,7 @@ it("cancels and joins native alarm work through its correlated RPC owner", async
       import { DurableObjectBase } from ${JSON.stringify(join(base, "packages/runtime/src/worker/durable-base.ts"))};
       import { createNativeModelScopeRpc } from ${JSON.stringify(join(process.cwd(), "tests/helpers/nativeModelScopeRpc.ts"))};
       import { Harness, createRegistry } from '@panticonic/pi-durable';
-      import { NativeDatabase, SqliteStorage } from '@panticonic/pi-durable/storage/sqlite';
+      import { applySqliteMigrations, NativeDatabase, SqliteStorage } from '@panticonic/pi-durable/storage/sqlite';
       import { BACKGROUND_CONTEXT } from '@panticonic/pi-chord/context';
       import { createModels } from '@panticonic/pi-ai';
       import { openaiCodexProvider } from '@panticonic/pi-ai/providers/openai-codex';
@@ -251,7 +251,7 @@ it("cancels and joins native alarm work through its correlated RPC owner", async
           await this.initializeSchema();
           const models=createModels(); const provider=openaiCodexProvider();
           models.setProvider({...provider,auth:{apiKey:{name:'fixture host auth',resolve:async({credential})=>({auth:{apiKey:credential.key},source:'fixture host auth'})}}});
-          const storage=await SqliteStorage.open(new NativeDatabase(this.ctx.storage));
+          const database = new NativeDatabase(this.ctx.storage); await applySqliteMigrations(database); const storage = await SqliteStorage.open(database);
           const harness=await Harness.open(storage,{registry:createRegistry(),models,publishWake:async()=>{},modelRequests:async(request,api,context)=>createCredentialedModelConnection({model:request.model,credential:{id:'fixture',label:'fixture',accountIdentity:{providerUserId:'fixture'},audience:[{url:request.model.baseUrl,match:'path-prefix'}],injection:{type:'header',name:'authorization',valueTemplate:'Bearer {token}'},scopes:[],lifecycle:{state:'active',canRefresh:false}},rpc:{call:async()=>{throw Error('No unary transport');},stream:async()=>{throw Error('No SSE fallback');}},cleanupRpc:this.scopeHost.rpc,egressFetch:(url,init)=>fetch('http://127.0.0.1:${address.port}/upgrade',init),onDiagnostic:event=>this.observations.push(event)},context)},BACKGROUND_CONTEXT);
           const conversation=await harness.root(BACKGROUND_CONTEXT,{agent:{model:{provider:'openai-codex',modelId:'gpt-6.1-sol'},stream:{transport:'websocket',cacheRetention:'none'}}});
           await conversation.submit({type:'input',content:'fixture'},BACKGROUND_CONTEXT); return harness;

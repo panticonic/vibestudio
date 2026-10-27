@@ -27,12 +27,12 @@ it("retains large native transcript and document payloads across process replace
   onTestFinished(cleanup);
   try {
     const source = `
-      import {NativeDatabase,SqliteStorage} from '@panticonic/pi-durable/storage/sqlite';
+      import { applySqliteMigrations, NativeDatabase, SqliteStorage } from '@panticonic/pi-durable/storage/sqlite';
       const large = '🙂漢\\ud800'.repeat(500000);
       export class Probe {
         constructor(ctx) { this.ctx = ctx; }
         async fetch(request) {
-          const storage = await SqliteStorage.open(new NativeDatabase(this.ctx.storage));
+          const database = new NativeDatabase(this.ctx.storage); await applySqliteMigrations(database); const storage = await SqliteStorage.open(database);
           try {
             if (new URL(request.url).pathname === '/write') {
               const value = {id:2,conversationId:1,kind:'image',model:[{role:'user',content:[{type:'image',mimeType:'image/png',data:large}],timestamp:1}],data:{large}};
@@ -40,8 +40,8 @@ it("retains large native transcript and document payloads across process replace
                 {type:'conversation',value:{id:1}}, {type:'entry',value},
                 {type:'task',value:{id:3,conversationId:1,kind:'large',version:1,input:large,state:{status:'pending',checkpoint:null},abortRequested:false,background:false}},
                 {type:'document.create',record:{id:4,kind:'large',scope:{kind:'conversation',conversationId:1},history:'rewindable',fork:'asOf'},content:{kind:'base',version:1,value:{large}}}
-              ], {});
-              await storage.commit([{type:'document.change',id:4,content:{kind:'delta',version:1,ops:[['s',['large'],large+'changed']]}}], {});
+              ], () => {}, {});
+              await storage.commit([{type:'document.change',id:4,content:{kind:'delta',version:1,ops:[['s',['large'],large+'changed']]}}], () => {}, {});
               return Response.json({written:true,seq,recordBytes:new TextEncoder().encode(JSON.stringify(value)).length});
             }
             const entry = await storage.entry(2,{});
@@ -50,7 +50,7 @@ it("retains large native transcript and document payloads across process replace
             const old = await storage.document(4,1,{});
             const current = await storage.document(4,'current',{});
             if (entry?.entry.data.large !== large || entry.entry.model[0].content[0].data !== large || scan.items[0].data.large !== large || task.input !== large || old.value.large !== large || current.value.large !== large+'changed') throw new Error('Reopened payload mismatch');
-            await storage.commit([{type:'task',value:{...task,input:'small'}}],{});
+            await storage.commit([{type:'task',value:{...task,input:'small'}}],() => {},{});
             if ((await storage.task(3,{})).input !== 'small') throw new Error('Owner cannot continue');
             return Response.json({reopened:true,continued:true});
           } finally { await storage.close({}); }

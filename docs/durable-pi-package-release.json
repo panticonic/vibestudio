@@ -1,48 +1,49 @@
 {
-  "scope": "Compatible upstream Pi provider, model and runtime updates",
-  "version": "1.2.0-vibestudio.2",
+  "scope": "Full upstream Pi merge with Durable deferred progress",
+  "version": "1.2.0-vibestudio.3",
   "repository": "https://github.com/werg/pi-harness",
-  "sourceCommit": "67e10159bd50c2d23f0f31f73ccbf9b1e016e2b1",
-  "sourceTag": "vibestudio-pi-1.2.0-vibestudio.2",
+  "sourceCommit": "c7c02b890fddcb8de373c9ba5751857c46d52379",
+  "sourceTag": "vibestudio-pi-1.2.0-vibestudio.3",
   "reviewedUpstreamRelease": "4a080252f06caf63a525d7873c5d94d3c23887e0",
   "reviewedUpstreamMain": "db14038bd847c5bad57de217e0ac0c5ad1ae60ba",
-  "upstreamIntegration": "Selective upstream integration on the 1.2.0 fork; reviewed main is not a fully merged ancestor",
-  "sourceInputDigest": "529e746f2274c305ca32c1e33557a0d40bf6c7a8d65ee5544ec810923c33179b",
+  "upstreamIntegration": "Full merge: reviewed upstream main is the source commit's second parent",
+  "sourceInputDigest": "93ca71f2c0e27688d416fbaa97d86553524122921cc4a487621b8b094f4b2da0",
   "packages": [
     {
       "name": "@panticonic/pi-telemetry",
-      "version": "1.2.0-vibestudio.2",
-      "integrity": "sha512-41WO9VEjzVeUIzdCQ+aawWqDICnc9yVVkOSz4MZxq1h7/IewM4uBcLUwDhRQrspJvyKC2LydB2Pnbyo0Fs4Z9w==",
-      "sha256": "7ffd4963f01989b509fc65b9fe2022b61192c7a3a18f4cd3ffc59d0ec1b9c1bc",
+      "version": "1.2.0-vibestudio.3",
+      "integrity": "sha512-5mGKkIQarQ3D+X+QcrUJwCfItR1AUGwffeZkFmR/TgJiv8FTNP7iLzDDUCTnDus0uho8aUjv8jprDOXS69w++g==",
+      "sha256": "a7536e44d73304f8de304c891fb23169bf5f90f609977a91f6bf14a3d82e171c",
       "dependencies": {}
     },
     {
       "name": "@panticonic/pi-chord",
-      "version": "1.2.0-vibestudio.2",
-      "integrity": "sha512-ZO7c6KIDnjTgwr/bqIYKkTE/TMTKDuL3XmajABiAlGAQYXVK+7UssGHYZ5DHc3pfrntDXzghT8alqsEQXymr/w==",
-      "sha256": "fb8489ba86ea38e1e6e989b00fd22eca44caf57ccc703a2000ae83e95d099e8e",
+      "version": "1.2.0-vibestudio.3",
+      "integrity": "sha512-C92e2oWNZ+d180J4OGS9O7j/KDFBN9WgxTV1Fia6PQN+BJSYquQe3vUBSOM2iL7+JWpBGjE6poPy/S0H6qRuqQ==",
+      "sha256": "b772b7d2c5fb5ca4dccb353c3d4e78e8fd0426feeeb724bc3e267532ee3220ce",
       "dependencies": {
+        "@panticonic/pi-telemetry": "1.2.0-vibestudio.3",
         "typebox": "1.3.27"
       }
     },
     {
       "name": "@panticonic/pi-codemode",
-      "version": "1.2.0-vibestudio.2",
-      "integrity": "sha512-Wd0ArQnAYvZGzMA8UaRsxWZ9SB6v1ETEuBMQAdaqj+D8lHfetS5acq/sM0W39Sglahxttyx//7w+zPli55Tpuw==",
-      "sha256": "7bea0a718d864b699d597b2bacb21ba37311e26deba6755b24cbb61a41e4fec8",
+      "version": "1.2.0-vibestudio.3",
+      "integrity": "sha512-xDF0OW89/3fRH3hEcgWPb53+Y0GQoaMHgQA18TFru9IK1K4aJoX81u51tp7XX8FOJKMteY2RoWor8c7dCt2xoQ==",
+      "sha256": "ced42697321c474f14b3ccf4ad928c49131cd0a1a928161edec5acc28edcad1c",
       "dependencies": {
         "quickjs-wasi": "3.6.2"
       }
     },
     {
       "name": "@panticonic/pi-ai",
-      "version": "1.2.0-vibestudio.2",
-      "integrity": "sha512-RxrWSUdIlvrVt7nb1NJ00J/L1Yp+N9yrHigqAvBSDddco0IIF+4JibfTN5Gah935++KZy5EfpCDk5NqRJSiDpg==",
-      "sha256": "17bdeb2ba35d6516fe9e19f9638f8cea5cdb4cb33e0e55330c6ae641b26702d7",
+      "version": "1.2.0-vibestudio.3",
+      "integrity": "sha512-QJUCit/sjwfP550xhbhtLedW29FzGuDlKyBtBAQo3HxxXDVPcZMnP8D7PJIMcAYndzdoUooGwWzowCyFJ6Jj1Q==",
+      "sha256": "1b9b41c701e902bd3f0e8b4256a1fe74a8df46bc337d51d88301348a866a6d0b",
       "dependencies": {
         "@anthropic-ai/sdk": "0.129.0",
         "@aws-sdk/client-bedrock-runtime": "3.1127.0",
-        "@panticonic/pi-telemetry": "1.2.0-vibestudio.2",
+        "@panticonic/pi-telemetry": "1.2.0-vibestudio.3",
         "@google/genai": "2.21.0",
         "@smithy/node-http-handler": "4.12.1",
         "http-proxy-agent": "9.1.0",
@@ -54,13 +55,14 @@
     },
     {
       "name": "@panticonic/pi-durable",
-      "version": "1.2.0-vibestudio.2",
-      "integrity": "sha512-mS7TDAzXGLJJXaLXRWhhrUut2WubZI6CuERVVN8tnKL1e28B1Re039iU4R7fOX9mX2DSoOEb6kj4mF3uG22Yrg==",
-      "sha256": "43cd5cd4f5746eca902ffa05d0e93baffb5ee856a3b44fba0a2b700cd706140e",
+      "version": "1.2.0-vibestudio.3",
+      "integrity": "sha512-AfPNnNeqjrP4PmsmpIt8EoI1Gw/W4PrCokWHvZIpagtHK5cWld5rjPKjBA74n8+tjRxzk6gqL3SHBMThlWCIkw==",
+      "sha256": "0398c2deb93dd0ca16244809ee04ac8d36459446005de00d8a65f29ed121ab5c",
       "dependencies": {
-        "@panticonic/pi-chord": "1.2.0-vibestudio.2",
-        "@panticonic/pi-ai": "1.2.0-vibestudio.2",
-        "@panticonic/pi-codemode": "1.2.0-vibestudio.2",
+        "@panticonic/pi-chord": "1.2.0-vibestudio.3",
+        "@panticonic/pi-ai": "1.2.0-vibestudio.3",
+        "@panticonic/pi-codemode": "1.2.0-vibestudio.3",
+        "@panticonic/pi-telemetry": "1.2.0-vibestudio.3",
         "@silvia-odwyer/photon": "0.3.3",
         "diff": "8.0.4",
         "typebox": "1.3.27"
@@ -71,12 +73,16 @@
     "registryMetadataAndBytes": true,
     "ordinaryRegistryInstall": true,
     "forkCheck": true,
-    "codingAgentToolTests": 85,
-    "sqliteFacadeTests": 12,
-    "baseModelCatalogMatchesPackages": true,
-    "baseModelPickerTests": 12,
-    "baseAndSystemCompositionTypechecks": true,
-    "hostProviderTests": 26
+    "forkNonE2eSuites": "all pass except environment-only coding-agent/env failures (rg/fd download, unbuilt tui dist and env daemon)",
+    "userlandTypecheckAllTemplates": true,
+    "baseUserlandTests": 1329,
+    "googleWorkspaceGmailAgentTests": 115,
+    "newsAgentTests": 47,
+    "systemUserlandTests": 144,
+    "personalUserlandTests": 12,
+    "examplesUserlandTests": 23,
+    "userlandDependencyGraphs": 840,
+    "hostNativeWorkerdTests": 4
   },
-  "stateContract": "Native execution owns interruption, waiting and automation settlement; channel publication follows the actual lifecycle"
+  "stateContract": "Deferred progress is published in memory before storage within settings.progress.persistWithinMs; watch updates fold; task progress and the conversation live document persist atomically"
 }

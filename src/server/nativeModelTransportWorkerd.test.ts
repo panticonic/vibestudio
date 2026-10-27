@@ -139,7 +139,7 @@ it.each(["complete", "cancel"] as const)(
       const source = `
       import { createNativeModelScopeRpc } from ${JSON.stringify(resolve("tests/helpers/nativeModelScopeRpc.ts"))};
       import { Harness, createRegistry } from '@panticonic/pi-durable';
-      import { NativeDatabase, SqliteStorage } from '@panticonic/pi-durable/storage/sqlite';
+      import { applySqliteMigrations, NativeDatabase, SqliteStorage } from '@panticonic/pi-durable/storage/sqlite';
       import { BACKGROUND_CONTEXT } from '@panticonic/pi-chord/context';
       import { createModels } from '@panticonic/pi-ai';
       import { openaiCodexProvider } from '@panticonic/pi-ai/providers/openai-codex';
@@ -153,7 +153,7 @@ it.each(["complete", "cancel"] as const)(
             const provider = openaiCodexProvider();
             // Only the host protected credential boundary differs; retain the installed native API/model descriptors.
             models.setProvider({ ...provider, auth: { apiKey: { name: 'fixture host auth', resolve: async ({credential}) => ({auth:{apiKey:credential.key}, source:'fixture host auth'}) } } });
-            const storage = await SqliteStorage.open(new NativeDatabase(this.ctx.storage));
+            const database = new NativeDatabase(this.ctx.storage); await applySqliteMigrations(database); const storage = await SqliteStorage.open(database);
             return Harness.open(storage, { models, registry: createRegistry(), publishWake: async () => {}, modelRequests: async (request, api, context) => {
               return createCredentialedModelConnection({ model: request.model, credential: { id: 'fixture-credential', label: 'fixture', accountIdentity: {providerUserId:'fixture-account'}, audience:[{url:request.model.baseUrl,match:'path-prefix'}], injection:{type:'header',name:'authorization',valueTemplate:'Bearer {token}'}, scopes:[], lifecycle:{state:'active',canRefresh:false} }, rpc:{call:async()=>{throw new Error('No unary transport');}, stream:async()=>{throw new Error('No SSE fallback expected');}}, cleanupRpc:this.scopeHost.rpc, egressFetch: (url, init) => fetch(providerRoot + '/upgrade', init), onDiagnostic: (event) => { this.diagnostics.push(event); console.info("[NativeProbeTransport] " + JSON.stringify(event)); } }, context);
             } }, BACKGROUND_CONTEXT);
