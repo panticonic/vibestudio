@@ -26,10 +26,9 @@ function fixture() {
   );
   const release = { format: "vibestudio-template-release/1", workspaceTemplates: pins };
   const manifest = {
-    format: "vibestudio-workspace-runtime-release/3",
-    version: 3,
-    platform: process.platform,
-    arch: process.arch,
+    format: "vibestudio-workspace-runtime-release/4",
+    version: 4,
+    producedOn: { platform: process.platform, arch: process.arch },
     appDependencyFingerprint: "b".repeat(64),
     hostBuild: { version: 1, mode: "production", fingerprint: "c".repeat(64), inputCount: 1 },
     compilerProtocol: { cacheVersion: "test", panelEntryProtocolFingerprint: "d".repeat(64) },
@@ -95,10 +94,13 @@ test("rejects stale published pins and a mismatching sealed manifest", () => {
   assert.throws(f.resolve, /system template commit does not match/);
 });
 
-test("rejects a prepared release for another platform", () => {
+test("accepts a prepared release produced on another platform", () => {
   const f = fixture();
-  f.write("resources/userland-builds/release.json", { ...f.manifest, platform: "other" });
-  assert.throws(f.resolve, /not /);
+  f.write("resources/userland-builds/release.json", {
+    ...f.manifest,
+    producedOn: { platform: "other", arch: "other" },
+  });
+  assert.doesNotThrow(f.resolve);
 });
 
 function terminal() {

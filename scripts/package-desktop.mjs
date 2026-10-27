@@ -61,7 +61,7 @@ export function linuxAppDirectoryNameFromRoot(appRoot, arch) {
 }
 
 /** Reject a dir target unless its canonical prepared-release seal validates. */
-export async function assertCompleteLinuxApplication(appDirectory, arch) {
+export async function assertCompleteLinuxApplication(appDirectory) {
   const manifestPath = path.join(appDirectory, "resources/userland-builds/release.json");
   const unregisterTsx = (await import("tsx/esm/api")).register();
   let manifest;
@@ -81,8 +81,6 @@ export async function assertCompleteLinuxApplication(appDirectory, arch) {
   } finally {
     unregisterTsx();
   }
-  if (manifest.platform !== "linux" || manifest.arch !== arch)
-    throw new Error(`Prepared workspace release target does not match linux-${arch}`);
   for (const workspace of ["base", "personal", "system"]) {
     if (!manifest.builds.some((buildRecord) => buildRecord.workspace === workspace))
       throw new Error(`Prepared workspace release contains no ${workspace} runtime builds`);
@@ -184,7 +182,7 @@ export async function packageDesktop(
       const appStat = fs.lstatSync(appDirectory);
       if (!appStat.isDirectory() || appStat.isSymbolicLink())
         throw new Error(`Linux application target did not produce ${appDirectory}`);
-      await assertCompleteLinuxApplication(appDirectory, arch);
+      await assertCompleteLinuxApplication(appDirectory);
       const destination = path.join(output, "linux-unpacked");
       if (fs.existsSync(destination))
         throw new Error(`Refusing to replace an existing Linux application: ${destination}`);

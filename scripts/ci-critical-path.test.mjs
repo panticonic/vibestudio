@@ -176,6 +176,14 @@ test("Windows reusable workflows declare the shell for multi-line or environment
   }
 });
 
+async function readAction(name) {
+  const source = await fs.readFile(
+    path.join(repositoryRoot, ".github/actions", name, "action.yml"),
+    "utf8"
+  );
+  return parse(source, { uniqueKeys: true });
+}
+
 async function readWorkflow(fileName) {
   const source = await fs.readFile(
     path.join(repositoryRoot, ".github/workflows", fileName),
@@ -337,9 +345,17 @@ test("diagnostic workflow runs the exact reusable package jobs and only their pr
     "native-input-linux-arm64",
     "native-input-darwin-arm64",
   ]);
-  assert.deepEqual(dependenciesOf(jobs["linux-installer-x64"]), ["native-input-linux-x64"]);
-  assert.deepEqual(dependenciesOf(jobs["linux-installer-arm64"]), ["native-input-linux-arm64"]);
-  assert.deepEqual(dependenciesOf(jobs["application-candidate-windows"]), []);
+  assert.deepEqual(dependenciesOf(jobs["workspace-release"]), ["native-input-linux-x64"]);
+  assert.equal(jobs["workspace-release"].uses, ci["workspace-release"].uses);
+  assert.deepEqual(dependenciesOf(jobs["linux-installer-x64"]), [
+    "native-input-linux-x64",
+    "workspace-release",
+  ]);
+  assert.deepEqual(dependenciesOf(jobs["linux-installer-arm64"]), [
+    "native-input-linux-arm64",
+    "workspace-release",
+  ]);
+  assert.deepEqual(dependenciesOf(jobs["application-candidate-windows"]), ["workspace-release"]);
   assert.deepEqual(dependenciesOf(jobs["windows-installer-candidate"]), [
     "application-candidate-windows",
   ]);
@@ -347,7 +363,10 @@ test("diagnostic workflow runs the exact reusable package jobs and only their pr
   assert.deepEqual(dependenciesOf(jobs["quality-linux"]), ["quality-inputs"]);
   assert.deepEqual(dependenciesOf(jobs["android-iroh-smoke"]), []);
   assert.deepEqual(dependenciesOf(jobs["darwin-production-host"]), ["native-input-darwin-arm64"]);
-  assert.deepEqual(dependenciesOf(jobs["application-candidate-mac"]), ["darwin-production-host"]);
+  assert.deepEqual(dependenciesOf(jobs["application-candidate-mac"]), [
+    "darwin-production-host",
+    "workspace-release",
+  ]);
   for (const [name, runner] of [
     ["packaged-acceptance-macos-14", "macos-14"],
     ["packaged-acceptance-macos-26", "macos-26"],
@@ -468,7 +487,7 @@ test("native artifact consumers wait for their exact producers without unrelated
     ],
   ]) {
     const job = jobs[candidate];
-    assert.deepEqual(dependenciesOf(job), [producer, "release-metadata"]);
+    assert.deepEqual(dependenciesOf(job), [producer, "release-metadata", "workspace-release"]);
     assert.equal(
       job.if,
       "\${{ vars.RELEASE_LINUX == 'true' && needs.release-metadata.outputs.candidate-needed == 'true' }}"
@@ -505,8 +524,11 @@ test("native artifact consumers wait for their exact producers without unrelated
   });
   assert.deepEqual(candidateJob.needs, "format");
 
-  const appSteps = appJob.steps;
-  const linuxDownload = appSteps.find(
+  // The application is prepared by one action shared with the workspace release
+  // producer, so the two cannot drift apart.
+  const prepareAction = await readAction("prepare-linux-application");
+  const actionSteps = prepareAction.runs.steps;
+  const linuxDownload = actionSteps.find(
     (step) => step.name === "Download this architecture's tested MXC payload"
   );
   assert.equal(
@@ -517,7 +539,7 @@ test("native artifact consumers wait for their exact producers without unrelated
     linuxDownload.with.path,
     "native/isolation/artifacts/native-isolation-linux-\${{ inputs.arch }}"
   );
-  const appDirectoryStep = appSteps.find(
+  const appDirectoryStep = actionSteps.find(
     (step) => step.name === "Resolve electron-builder's application directory for this architecture"
   );
   assert.equal(
@@ -526,12 +548,12 @@ test("native artifact consumers wait for their exact producers without unrelated
   );
   assert.equal(appDirectoryStep.env.ARCH, "\${{ inputs.arch }}");
   assert.match(
-    appSteps.find(
+    actionSteps.find(
       (step) => step.name === "Allow packaged MXC user namespaces for application preparation"
     ).run,
     /\$LINUX_APP_DIRECTORY\/resources/u
   );
-  const buildAppStep = appSteps.find(
+  const buildAppStep = actionSteps.find(
     (step) =>
       step.name === "Build exact Linux application and prepare its installed workspace release"
   );
@@ -539,6 +561,23 @@ test("native artifact consumers wait for their exact producers without unrelated
     buildAppStep.run,
     'pnpm generate:workspace-template-release && pnpm build && node scripts/package-desktop.mjs linux app "$ARCH"'
   );
+  assert.equal(
+    buildAppStep.env.VIBESTUDIO_PREBUILT_WORKSPACE_RELEASE,
+    "\${{ inputs.prebuilt-release }}"
+  );
+
+  // Every installer's application imports the release built once for the commit.
+  const appSteps = appJob.steps;
+  const releaseDownload = appSteps.find(
+    (step) => step.name === "Download the workspace release built once for this commit"
+  );
+  assert.equal(releaseDownload.with.name, "workspace-release-\${{ github.sha }}");
+  const prepareStep = appSteps.find((step) => step.uses === "./.github/actions/prepare-linux-application");
+  assert.deepEqual(prepareStep.with, {
+    arch: "\${{ inputs.arch }}",
+    "prebuilt-release": "\${{ github.workspace }}/.cache/workspace-release",
+  });
+  assert.ok(appSteps.indexOf(releaseDownload) < appSteps.indexOf(prepareStep));
   const appUpload = appSteps.find(
     (step) => step.name === "Upload exact Linux application for independent format packaging"
   );
@@ -613,6 +652,7 @@ test("native artifact consumers wait for their exact producers without unrelated
   assert.deepEqual(dependenciesOf(jobs["application-candidate-mac"]), [
     "darwin-production-host",
     "release-metadata",
+    "workspace-release",
   ]);
   assert.equal(
     jobs["application-candidate-mac"].uses,
@@ -646,7 +686,7 @@ test("native artifact consumers wait for their exact producers without unrelated
     !transitiveDependencies(jobs, "packaged-acceptance-macos-14").has("darwin-development-inputs"),
     "installed-app acceptance must not wait for unrelated development source integration"
   );
-  assert.deepEqual(dependenciesOf(jobs["application-candidate-windows"]), []);
+  assert.deepEqual(dependenciesOf(jobs["application-candidate-windows"]), ["workspace-release"]);
   assert.equal(
     jobs["application-candidate-windows"].uses,
     "./.github/workflows/application-candidate.yml"
@@ -1313,5 +1353,40 @@ test("Darwin production and development host inputs are immutable producer artif
         `${workflowFile} must consume the prepared host artifact rather than recompiling it`
       );
     }
+  }
+});
+
+test("the workspace release is built once and imported by every application candidate", async () => {
+  const producer = (await readWorkflow("workspace-release.yml")).jobs.release;
+  assert.equal(producer["runs-on"], "ubuntu-24.04");
+  assert.equal(producer.needs, undefined);
+  const prepare = producer.steps.find(
+    (step) => step.uses === "./.github/actions/prepare-linux-application"
+  );
+  assert.deepEqual(prepare.with, { arch: "x64" });
+  const upload = producer.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+  assert.equal(upload.with.name, "workspace-release-\${{ github.sha }}");
+  const archive = producer.steps.find((step) => step.name === "Archive the workspace release");
+  assert.match(archive.run, /workspace-templates userland-builds/u);
+
+  const candidate = (await readWorkflow("application-candidate.yml")).jobs.candidate.steps;
+  const download = candidate.find(
+    (step) => step.name === "Download the workspace release built once for this commit"
+  );
+  assert.equal(download.with.name, "workspace-release-\${{ github.sha }}");
+  const packageStep = candidate.find((step) => step.id === "package");
+  assert.equal(
+    packageStep.env.VIBESTUDIO_PREBUILT_WORKSPACE_RELEASE,
+    "\${{ github.workspace }}/.cache/workspace-release"
+  );
+  assert.ok(candidate.indexOf(download) < candidate.indexOf(packageStep));
+
+  // Only the producer builds a release; the other Linux architecture imports it.
+  for (const arch of ["x64", "arm64"]) {
+    const jobs = await readCiJobs();
+    assert.ok(
+      dependenciesOf(jobs[`linux-installer-${arch}`]).includes("workspace-release"),
+      `linux-installer-${arch} must wait for the shared workspace release`
+    );
   }
 });

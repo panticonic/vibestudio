@@ -85,9 +85,7 @@ export async function prepareCachedWorkspaceRelease(
   const key = createHash("sha256")
     .update(
       canonicalJson({
-        format: "vibestudio-workspace-runtime-release/3",
-        platform: process.platform,
-        arch: process.arch,
+        format: "vibestudio-workspace-runtime-release/4",
         ...identity,
         templates: input.templates,
         layers: input.layers,

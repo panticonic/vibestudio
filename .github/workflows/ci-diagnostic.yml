@@ -47,7 +47,7 @@ jobs:
 
   native-input-linux-x64:
     name: Prepare native release input (linux-x64)
-    if: ${{ inputs.target == 'npm-server-preflight' || inputs.target == 'linux-installer-x64' }}
+    if: ${{ inputs.target == 'npm-server-preflight' || inputs.target == 'linux-installer-x64' || inputs.target == 'linux-installer-arm64' || inputs.target == 'windows-installer-candidate' || inputs.target == 'application-candidate-mac' }}
     uses: ./.github/workflows/native-input.yml
     with:
       runner: ubuntu-22.04
@@ -72,6 +72,14 @@ jobs:
     with:
       runner: macos-14
       target: darwin-arm64
+    permissions:
+      contents: read
+
+  workspace-release:
+    name: Build the workspace release once
+    if: ${{ inputs.target == 'linux-installer-x64' || inputs.target == 'linux-installer-arm64' || inputs.target == 'windows-installer-candidate' || inputs.target == 'application-candidate-mac' }}
+    needs: native-input-linux-x64
+    uses: ./.github/workflows/workspace-release.yml
     permissions:
       contents: read
 
@@ -123,7 +131,7 @@ jobs:
   application-candidate-mac:
     name: Package macOS application candidate from tested host inputs
     if: ${{ inputs.target == 'application-candidate-mac' }}
-    needs: darwin-production-host
+    needs: [darwin-production-host, workspace-release]
     uses: ./.github/workflows/application-candidate.yml
     with:
       runner: macos-14
@@ -186,7 +194,7 @@ jobs:
   linux-installer-x64:
     name: Build Linux x64 installer candidate
     if: ${{ inputs.target == 'linux-installer-x64' }}
-    needs: native-input-linux-x64
+    needs: [native-input-linux-x64, workspace-release]
     uses: ./.github/workflows/linux-installer.yml
     with:
       runner: ubuntu-24.04
@@ -197,7 +205,7 @@ jobs:
   linux-installer-arm64:
     name: Build Linux arm64 installer candidate
     if: ${{ inputs.target == 'linux-installer-arm64' }}
-    needs: native-input-linux-arm64
+    needs: [native-input-linux-arm64, workspace-release]
     uses: ./.github/workflows/linux-installer.yml
     with:
       runner: ubuntu-24.04-arm
@@ -208,6 +216,7 @@ jobs:
   application-candidate-windows:
     name: Package Windows application candidate and verify native execution
     if: ${{ inputs.target == 'windows-installer-candidate' }}
+    needs: workspace-release
     uses: ./.github/workflows/application-candidate.yml
     with:
       runner: ${{ inputs.windows-runner }}

@@ -50,10 +50,11 @@ const runtimeBuildSchema = z
 
 export const preparedWorkspaceReleaseManifestSchema = z
   .object({
-    format: z.literal("vibestudio-workspace-runtime-release/3"),
-    version: z.literal(3),
-    platform: z.string().min(1),
-    arch: z.string().min(1),
+    format: z.literal("vibestudio-workspace-runtime-release/4"),
+    version: z.literal(4),
+    // Where the release was built. Informational: a release is the same on every
+    // platform, because its dependency fingerprint ignores platform-gated packages.
+    producedOn: z.object({ platform: z.string().min(1), arch: z.string().min(1) }).strict(),
     appDependencyFingerprint: digestSchema,
     hostBuild: hostBuildFingerprintSchema,
     compilerProtocol: z
@@ -140,10 +141,9 @@ export async function createPreparedWorkspaceReleaseManifest(
     });
   }
   return preparedWorkspaceReleaseManifestSchema.parse({
-    format: "vibestudio-workspace-runtime-release/3",
-    version: 3,
-    platform: process.platform,
-    arch: process.arch,
+    format: "vibestudio-workspace-runtime-release/4",
+    version: 4,
+    producedOn: { platform: process.platform, arch: process.arch },
     ...resolvedIdentity,
     templates: input.templates,
     layers: input.layers,
@@ -217,8 +217,6 @@ async function inspectPreparedWorkspaceRelease(
   resolvedIdentity: WorkspaceReleaseIdentity
 ) {
   if (
-    manifest.platform !== process.platform ||
-    manifest.arch !== process.arch ||
     manifest.appDependencyFingerprint !== resolvedIdentity.appDependencyFingerprint ||
     canonicalJson(manifest.hostBuild) !== canonicalJson(resolvedIdentity.hostBuild) ||
     canonicalJson(manifest.compilerProtocol) !== canonicalJson(resolvedIdentity.compilerProtocol) ||

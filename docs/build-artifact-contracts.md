@@ -182,10 +182,11 @@ dependency installation once, independently of the sealed host payload.
 The shared derived cache has two distinct immutable publication phases:
 
 - `workspace-releases` stores the complete
-  `vibestudio-workspace-runtime-release/3` publication. Its key binds platform,
-  architecture, host generation, host dependency fingerprint, compiler protocol,
-  the designated Base/Personal/System roots, and each role's dependency-first
-  ordered exact layer pins. The three root pins alone do not identify a
+  `vibestudio-workspace-runtime-release/4` publication. Its key binds host generation, host dependency fingerprint,
+  compiler protocol, the designated Base/Personal/System roots, and each role's
+  dependency-first ordered exact layer pins. Platform and architecture are not
+  in the key: the dependency fingerprint ignores platform-gated packages, so one
+  release serves every platform (`producedOn` records where it was built). The three root pins alone do not identify a
   composition with floating transitive dependencies.
 - `workspace-sources` stores the `vibestudio-workspace-sources/1` source phase.
   Its key binds the preparation recipe digest, host SDK/dependency fingerprint,

@@ -24,7 +24,7 @@ import {
   type ContentHashMap,
 } from "./effectiveVersion.js";
 
-describe("sealed v8 dependency input capture", () => {
+describe("sealed v9 dependency input capture", () => {
   it("keeps workspace identity independent of nested pack scratch and external placement", async () => {
     fs.mkdirSync(path.resolve(".cache"), { recursive: true });
     const root = fs.mkdtempSync(path.resolve(".cache/workspace-fingerprint-labels-"));
@@ -111,7 +111,7 @@ describe("sealed v8 dependency input capture", () => {
         "workspace:tsconfig.integration.json",
       ]);
       const legacy = createHash("sha256")
-        .update("root-deps-v8\0")
+        .update("root-deps-v9\0")
         .update(`dependency-installation:${dependencyInstallationPolicy()}\0`);
       for (const input of original.files) {
         legacy.update(input.file);
@@ -172,6 +172,66 @@ describe("sealed v8 dependency input capture", () => {
       expect(restored?.files.every(({ path: filePath }) => filePath.includes("relocated"))).toBe(
         true
       );
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("is the same for installations that differ only in platform-gated packages", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "platform-neutral-fingerprint-"));
+    const install = (name: string, packages: Record<string, object>): string => {
+      const appRoot = path.join(root, name);
+      fs.mkdirSync(appRoot, { recursive: true });
+      fs.writeFileSync(path.join(appRoot, "package.json"), '{"name":"host"}');
+      for (const [pkg, manifest] of Object.entries(packages)) {
+        const directory = path.join(appRoot, "node_modules", ...pkg.split("/"));
+        fs.mkdirSync(directory, { recursive: true });
+        fs.writeFileSync(path.join(directory, "package.json"), JSON.stringify(manifest));
+      }
+      return appRoot;
+    };
+    const wrapper = {
+      name: "esbuild",
+      version: "1.0.0",
+      optionalDependencies: { "@esbuild/linux-x64": "1.0.0" },
+    };
+    try {
+      const linux = install("linux", {
+        esbuild: wrapper,
+        "@esbuild/linux-x64": {
+          name: "@esbuild/linux-x64",
+          version: "1.0.0",
+          os: ["linux"],
+          cpu: ["x64"],
+        },
+        sharp: { name: "sharp", version: "2.0.0" },
+        "@img/sharp-linux-x64": { name: "@img/sharp-linux-x64", version: "2.0.0", libc: ["glibc"] },
+      });
+      const windows = install("windows", {
+        esbuild: wrapper,
+        "@esbuild/win32-x64": {
+          name: "@esbuild/win32-x64",
+          version: "1.0.0",
+          os: ["win32"],
+          cpu: ["x64"],
+        },
+        sharp: { name: "sharp", version: "2.0.0" },
+      });
+      const neutral = (await computeRootDependencyFingerprint(linux)).value;
+      expect((await computeRootDependencyFingerprint(windows)).value).toBe(neutral);
+
+      // Anything that is not platform-gated is still part of the identity.
+      const changed = install("changed", {
+        esbuild: { ...wrapper, version: "1.0.1" },
+        sharp: { name: "sharp", version: "2.0.0" },
+      });
+      expect((await computeRootDependencyFingerprint(changed)).value).not.toBe(neutral);
+      const added = install("added", {
+        esbuild: wrapper,
+        sharp: { name: "sharp", version: "2.0.0" },
+        extra: { name: "extra", version: "1.0.0" },
+      });
+      expect((await computeRootDependencyFingerprint(added)).value).not.toBe(neutral);
     } finally {
       fs.rmSync(root, { recursive: true, force: true });
     }

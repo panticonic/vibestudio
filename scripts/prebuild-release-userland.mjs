@@ -608,19 +608,51 @@ export async function prepareInstalledWorkspaceTemplates(context) {
     electron: true,
     entry: path.join(resources, "app.asar.unpacked", "dist/prepare-workspace-templates.cjs"),
     scratchParent: path.dirname(context.appOutDir),
+    prebuilt: process.env.VIBESTUDIO_PREBUILT_WORKSPACE_RELEASE,
   });
 }
 
+/**
+ * Place a release built on another machine into this application's resources.
+ * A release is the same on every platform, so building it once and importing it
+ * everywhere replaces building it in each packaging job. The import is only a
+ * copy: the producer that follows finds a complete release and admits it by the
+ * same identity check as any other, so a release for other host or template
+ * inputs is rejected rather than rebuilt, and the fresh installation that
+ * verifies the application proves every imported build.
+ */
+export async function importPrebuiltWorkspaceRelease(source, resources) {
+  const sealed = path.join(source, "userland-builds", "release.json");
+  if (!(await fsp.stat(sealed).catch(() => null))?.isFile())
+    throw new Error(`Prebuilt workspace release is incomplete: ${sealed}`);
+  for (const name of ["workspace-templates", "userland-builds"]) {
+    if (await fsp.lstat(path.join(resources, name)).catch(() => null))
+      throw new Error(`Cannot import a prebuilt workspace release over ${name}`);
+  }
+  for (const name of ["workspace-templates", "userland-builds"]) {
+    await fsp.cp(path.join(source, name), path.join(resources, name), {
+      recursive: true,
+      errorOnExist: true,
+      force: false,
+      // The completion marker is copied last: until then the release is partial.
+      filter: (from) => from !== sealed,
+    });
+  }
+  await fsp.copyFile(sealed, path.join(resources, "userland-builds", "release.json"));
+}
+
 /** `signal` is the caller's stop request: it cancels the producer, which is joined
- * before its private scratch is retired. */
+ * before its private scratch is retired. `prebuilt` is a release built elsewhere,
+ * imported instead of built (see `importPrebuiltWorkspaceRelease`). */
 export function prepareInstalledTemplateRelease(input) {
   return withOwnership((ownership) => prepareInstalledTemplateReleaseOwned(ownership, input));
 }
 
 async function prepareInstalledTemplateReleaseOwned(
   ownership,
-  { appRoot, resources, executable, entry, scratchParent, signal, electron = false }
+  { appRoot, resources, executable, entry, scratchParent, signal, prebuilt, electron = false }
 ) {
+  if (prebuilt) await importPrebuiltWorkspaceRelease(prebuilt, resources);
   const scratch = await fsp.mkdtemp(path.join(scratchParent, ".template-release-"));
   const env = {
     ...process.env,
