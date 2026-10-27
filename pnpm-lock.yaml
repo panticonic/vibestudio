@@ -95,14 +95,14 @@ importers:
         specifier: workspace:*
         version: link:packages/builtin
       '@panticonic/pi-ai':
-        specifier: 1.2.0-vibestudio.1
-        version: 1.2.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
+        specifier: 1.2.0-vibestudio.2
+        version: 1.2.0-vibestudio.2(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
       '@panticonic/pi-chord':
-        specifier: 1.2.0-vibestudio.1
-        version: 1.2.0-vibestudio.1
+        specifier: 1.2.0-vibestudio.2
+        version: 1.2.0-vibestudio.2
       '@panticonic/pi-durable':
-        specifier: 1.2.0-vibestudio.1
-        version: 1.2.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
+        specifier: 1.2.0-vibestudio.2
+        version: 1.2.0-vibestudio.2(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
       '@puppeteer/browsers':
         specifier: ^2.6.1
         version: 2.13.2
@@ -3369,25 +3369,25 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@panticonic/pi-ai@1.2.0-vibestudio.1':
-    resolution: {integrity: sha512-djgGR/RcKLDTba6Y6+gGhtff1noOUoY7zt1nn2OgPmeOBvrFhqkiyyiQuH8dP9U98vZLtuO7Ucto/JVro8/mjg==}
+  '@panticonic/pi-ai@1.2.0-vibestudio.2':
+    resolution: {integrity: sha512-RxrWSUdIlvrVt7nb1NJ00J/L1Yp+N9yrHigqAvBSDddco0IIF+4JibfTN5Gah935++KZy5EfpCDk5NqRJSiDpg==}
     engines: {node: '>=22.19.0'}
     hasBin: true
 
-  '@panticonic/pi-chord@1.2.0-vibestudio.1':
-    resolution: {integrity: sha512-goDrlPkd7TKG1CEOP+XuOdYRgS3/JSLNHt6qP3qrUra9mkQcJD0YuoiAsQk73cErGbhQ0sRG77YQnXT2PJfjkw==}
+  '@panticonic/pi-chord@1.2.0-vibestudio.2':
+    resolution: {integrity: sha512-ZO7c6KIDnjTgwr/bqIYKkTE/TMTKDuL3XmajABiAlGAQYXVK+7UssGHYZ5DHc3pfrntDXzghT8alqsEQXymr/w==}
     engines: {node: '>=22.19.0'}
 
-  '@panticonic/pi-codemode@1.2.0-vibestudio.1':
-    resolution: {integrity: sha512-9fKLJG/sh+ZwffSYP64SK/mB+xqDoZK5rbmQvSlRmN4nEr8RTRCthiUeUu5zfJuBpI8r//EEQnKs0zGZ7oGGFQ==}
+  '@panticonic/pi-codemode@1.2.0-vibestudio.2':
+    resolution: {integrity: sha512-Wd0ArQnAYvZGzMA8UaRsxWZ9SB6v1ETEuBMQAdaqj+D8lHfetS5acq/sM0W39Sglahxttyx//7w+zPli55Tpuw==}
     engines: {node: '>=22.19.0'}
 
-  '@panticonic/pi-durable@1.2.0-vibestudio.1':
-    resolution: {integrity: sha512-B9NROcM0WvYds7Oj8kHHXSMEf16CSS6FuvWOYno8OmVqMnB7HTeW7fT9XBsyLSiqpvQyRcq9S4nYTOyF4JXu5w==}
+  '@panticonic/pi-durable@1.2.0-vibestudio.2':
+    resolution: {integrity: sha512-mS7TDAzXGLJJXaLXRWhhrUut2WubZI6CuERVVN8tnKL1e28B1Re039iU4R7fOX9mX2DSoOEb6kj4mF3uG22Yrg==}
     engines: {node: '>=22.19.0'}
 
-  '@panticonic/pi-telemetry@1.2.0-vibestudio.1':
-    resolution: {integrity: sha512-9PosUlEW97O9Q5ZVERkuNiM5JR+uiTgmwh5EcVVnGLAeWkO8v/SHMW+K/zIUrCi/m7l0zn9mB7Kja6tSqzg9wQ==}
+  '@panticonic/pi-telemetry@1.2.0-vibestudio.2':
+    resolution: {integrity: sha512-41WO9VEjzVeUIzdCQ+aawWqDICnc9yVVkOSz4MZxq1h7/IewM4uBcLUwDhRQrspJvyKC2LydB2Pnbyo0Fs4Z9w==}
     engines: {node: '>=22.19.0'}
 
   '@peculiar/asn1-schema@2.8.0':
@@ -12062,12 +12062,12 @@ snapshots:
   '@panticonic/iroh-win32-x64-msvc@https://github.com/panticonic/vibestudio/releases/download/iroh-native-1.1.0-cancel.2/panticonic-iroh-win32-x64-msvc-1.1.0-cancel.2.tgz':
     optional: true
 
-  '@panticonic/pi-ai@1.2.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
+  '@panticonic/pi-ai@1.2.0-vibestudio.2(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
     dependencies:
       '@anthropic-ai/sdk': 0.129.0(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime': 3.1127.0
       '@google/genai': 2.21.0
-      '@panticonic/pi-telemetry': 1.2.0-vibestudio.1
+      '@panticonic/pi-telemetry': 1.2.0-vibestudio.2
       '@smithy/node-http-handler': 4.12.1
       http-proxy-agent: 9.1.0
       https-proxy-agent: 9.1.0
@@ -12087,19 +12087,19 @@ snapshots:
       - ws
       - zod
 
-  '@panticonic/pi-chord@1.2.0-vibestudio.1':
+  '@panticonic/pi-chord@1.2.0-vibestudio.2':
     dependencies:
       typebox: 1.3.27
 
-  '@panticonic/pi-codemode@1.2.0-vibestudio.1':
+  '@panticonic/pi-codemode@1.2.0-vibestudio.2':
     dependencies:
       quickjs-wasi: 3.6.2
 
-  '@panticonic/pi-durable@1.2.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
+  '@panticonic/pi-durable@1.2.0-vibestudio.2(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)':
     dependencies:
-      '@panticonic/pi-ai': 1.2.0-vibestudio.1(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
-      '@panticonic/pi-chord': 1.2.0-vibestudio.1
-      '@panticonic/pi-codemode': 1.2.0-vibestudio.1
+      '@panticonic/pi-ai': 1.2.0-vibestudio.2(@aws-sdk/credential-provider-node@3.972.84)(@smithy/signature-v4@5.7.3)(undici@7.29.1)(ws@8.21.1)(zod@3.25.76)
+      '@panticonic/pi-chord': 1.2.0-vibestudio.2
+      '@panticonic/pi-codemode': 1.2.0-vibestudio.2
       '@silvia-odwyer/photon': 0.3.3
       diff: 8.0.4
       typebox: 1.3.27
@@ -12116,7 +12116,7 @@ snapshots:
       - ws
       - zod
 
-  '@panticonic/pi-telemetry@1.2.0-vibestudio.1': {}
+  '@panticonic/pi-telemetry@1.2.0-vibestudio.2': {}
 
   '@peculiar/asn1-schema@2.8.0':
     dependencies:

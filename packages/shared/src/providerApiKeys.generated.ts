@@ -86,9 +86,9 @@ export const PROVIDER_API_KEYS = [
     "providerId": "kimi-coding",
     "label": "Kimi API key",
     "audienceUrls": [
-      "https://api.kimi.com/coding"
+      "https://api.kimi.com/coding/v1"
     ],
-    "header": "x-api-key"
+    "header": "Authorization"
   },
   {
     "providerId": "meta",
@@ -158,8 +158,9 @@ export const PROVIDER_API_KEYS = [
     "providerId": "opencode",
     "label": "OpenCode API key",
     "audienceUrls": [
-      "https://opencode.ai/zen",
-      "https://opencode.ai/zen/v1"
+      "https://opencode.ai/inference/anthropic",
+      "https://opencode.ai/inference/google/v1beta",
+      "https://opencode.ai/inference/openai/v1"
     ],
     "header": "Authorization"
   },
@@ -167,8 +168,9 @@ export const PROVIDER_API_KEYS = [
     "providerId": "opencode-go",
     "label": "OpenCode API key",
     "audienceUrls": [
-      "https://opencode.ai/zen/go",
-      "https://opencode.ai/zen/go/v1"
+      "https://opencode.ai/inference/go/anthropic",
+      "https://opencode.ai/inference/go/google/v1beta",
+      "https://opencode.ai/inference/go/openai/v1"
     ],
     "header": "Authorization"
   },
