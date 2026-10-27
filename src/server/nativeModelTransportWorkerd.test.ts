@@ -1,12 +1,13 @@
-import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { build } from "esbuild";
 import { WebSocketServer } from "ws";
 import { expect, it, onTestFinished } from "vitest";
+import { getProfileDataPath } from "@vibestudio/env-paths";
+import { Ownership, type OwnedProcess } from "@vibestudio/shared/ownership";
 
 import { requireDevelopmentTemplateCheckout } from "../dev/developmentTemplateConfig.js";
 
@@ -23,13 +24,18 @@ function deferred<T>() {
 it.each(["complete", "cancel"] as const)(
   "joins actual protected model WebSocket in native SQLite DO: %s",
   async (mode) => {
-    const root = await mkdtemp(join(homedir(), ".native-model-ws-"));
+    const ownership = await Ownership.open({
+      profileDir: getProfileDataPath(),
+      lifetime: "leased",
+    });
+    const root = await ownership.scratch("native-model-ws-");
     const server = createServer();
     const sockets = new WebSocketServer({ server });
     const sent = deferred<void>();
     const peerClosed = deferred<void>();
     let requestType: unknown;
-    let child: ReturnType<typeof spawn> | undefined;
+    let child: ChildProcess | undefined;
+    let owned: OwnedProcess | undefined;
     let exited: Promise<void> | undefined;
     let stderr = "";
     let stdout = "";
@@ -41,39 +47,31 @@ it.each(["complete", "cancel"] as const)(
     const cleanupStages: string[] = [];
     const cleanup = () =>
       (cleaning ??= (async () => {
-        if (endpoint && child?.exitCode === null && child.signalCode === null) {
-          const inspection = fetch(`http://${endpoint}/inspect`).then((response) =>
-            response.json()
-          );
-          ownedFetches.push(inspection);
-          console.log("Native Workerd retained phase", mode, await inspection);
-          const cancel = fetch(`http://${endpoint}/cancel`).then((response) => response.json());
-          ownedFetches.push(cancel);
-          console.log("Native Workerd close joined", mode, await cancel);
-        }
-        cleanupStages.push("native_close_joined");
-        requests.abort(new Error("Native WebSocket fixture retired"));
-        for (const socket of sockets.clients) socket.terminate();
-        server.closeAllConnections();
-        if (child && child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
-        await exited;
-        cleanupStages.push("workerd_exited");
-        await Promise.allSettled(ownedFetches);
-        cleanupStages.push("http_joined");
-        await new Promise<void>((yes) => sockets.close(() => yes()));
-        cleanupStages.push("provider_sockets_joined");
-        await new Promise<void>((yes) => {
-          server.close(() => yes());
+        try {
+          requests.abort(new Error("Native WebSocket fixture retired"));
+          for (const socket of sockets.clients) socket.terminate();
           server.closeAllConnections();
-        });
-        cleanupStages.push("provider_listener_joined");
-        console.log("Native Workerd probe cleanup", mode, {
-          observations,
-          stderr,
-          stdout,
-          cleanupStages,
-        });
-        await rm(root, { recursive: true, force: true });
+          await owned?.retire();
+          await exited;
+          cleanupStages.push("workerd_exited");
+          await Promise.allSettled(ownedFetches);
+          cleanupStages.push("http_joined");
+          await new Promise<void>((yes) => sockets.close(() => yes()));
+          cleanupStages.push("provider_sockets_joined");
+          await new Promise<void>((yes) => {
+            server.close(() => yes());
+            server.closeAllConnections();
+          });
+          cleanupStages.push("provider_listener_joined");
+          console.log("Native Workerd probe cleanup", mode, {
+            observations,
+            stderr,
+            stdout,
+            cleanupStages,
+          });
+        } finally {
+          await ownership.release();
+        }
       })());
     onTestFinished(cleanup);
     try {
@@ -210,7 +208,7 @@ it.each(["complete", "cancel"] as const)(
         sockets=[(name="http",address="127.0.0.1",http=(),service="main")]);`
       );
       const listening = deferred<string>();
-      child = spawn(
+      owned = ownership.spawn(
         require.resolve("@cloudflare/workerd-linux-64/bin/workerd"),
         [
           "serve",
@@ -220,8 +218,13 @@ it.each(["complete", "cancel"] as const)(
           "--control-fd=3",
           join(root, "config.capnp"),
         ],
-        { stdio: ["ignore", "pipe", "pipe", "pipe"] }
+        {
+          kill: "immediate",
+          label: "native-model-workerd",
+          stdio: ["ignore", "pipe", "pipe", "pipe"],
+        }
       );
+      child = owned.child;
       exited = new Promise<void>((yes) => child!.once("close", yes));
       child.stdout!.on("data", (chunk) => {
         stdout = (stdout + String(chunk)).slice(-32768);
@@ -249,6 +252,7 @@ it.each(["complete", "cancel"] as const)(
             listening.resolve(`127.0.0.1:${event.port}`);
         }
       });
+      await owned.registered;
       endpoint = await Promise.race([
         listening.promise,
         exited.then(() => {

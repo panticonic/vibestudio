@@ -109,6 +109,8 @@ async function setup(options: {
   const handle = async (name: string, args: unknown[]): Promise<unknown> => {
     rpcCalls.push({ name, args });
     switch (name) {
+      case "shellApproval.getWorkspaceCreationReviewState":
+        return { status: "resolved" };
       case "clients.launch":
         return launches.shift();
       case "auth.grantClientPrincipal":

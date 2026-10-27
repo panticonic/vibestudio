@@ -1,3 +1,5 @@
+import { UnitRegistry, type UnitRegistryEntryBase } from "@vibestudio/unit-host";
+import { clientGenerationBuildKeys } from "./executionRootProviders.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -145,4 +147,93 @@ describe("ExecutionPublicationJournal", () => {
     expect(journal.pendingPublicationCount()).toBe(0);
     journal.close();
   }, 10_000);
+
+  it("publishes a new client after restart while its cold previous artifact stays continuously retained", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "publication-journal-cold-owner-"));
+    roots.push(root);
+    const a = artifact("a".repeat(64));
+    const b = artifact("b".repeat(64));
+    const name = "clients/desktop-browser";
+    let available = new Map([[a.buildKey, a]]);
+    const observed: string[] = [];
+    const resolve = (buildKey: string, executionDigest: string) => {
+      observed.push(buildKey);
+      const artifact = available.get(buildKey as Sha256);
+      return artifact?.executionDigest === executionDigest ? artifact : null;
+    };
+    let journal = new ExecutionPublicationJournal(root, resolve);
+    const initial = new UnitRegistry<UnitRegistryEntryBase>({
+      statePath: root,
+      unitKind: "client",
+      publicationPort: journal,
+    });
+    initial.upsert({
+      unitKind: "client",
+      name,
+      version: "1",
+      source: { kind: "workspace-repo", repo: name, ref: "main" },
+      installedAt: 1,
+      activeEv: "old",
+      activeSourceHash: null,
+      activeBundleKey: a.buildKey,
+      activeExecutionDigest: a.executionDigest,
+      activeDependencyEvs: {},
+      activeExternalDeps: {},
+      activeRuntimeDepsKey: null,
+      previousVersions: [],
+      status: "available",
+      lastError: null,
+    });
+    journal.close();
+    // Only the new build has been verified in this process. A's already
+    // published durable owner survives, but no warm descriptor exists here.
+    available = new Map([[b.buildKey, b]]);
+    observed.length = 0;
+    journal = new ExecutionPublicationJournal(root, resolve);
+    try {
+      const restarted = new UnitRegistry<UnitRegistryEntryBase>({
+        statePath: root,
+        unitKind: "client",
+        publicationPort: journal,
+      });
+      const previous = {
+        version: "1",
+        activeEv: "old",
+        activeSourceHash: null,
+        activeBundleKey: a.buildKey,
+        executionDigest: a.executionDigest,
+        activeDependencyEvs: {},
+        activeExternalDeps: {},
+        activeRuntimeDepsKey: null,
+        activatedAt: 1,
+      };
+      restarted.patch(name, {
+        version: "2",
+        activeEv: "new",
+        activeBundleKey: b.buildKey,
+        activeExecutionDigest: b.executionDigest,
+        previousVersions: [previous],
+      });
+      expect(observed).toEqual([b.buildKey]);
+      expect(clientGenerationBuildKeys(restarted)).toEqual([
+        { ownerId: name, buildKey: b.buildKey, reason: "active" },
+        { ownerId: name, buildKey: a.buildKey, reason: "rollback" },
+      ]);
+      restarted.patch(name, { previousVersions: [] });
+      // Once A actually leaves this owner, putting it back is a new
+      // publication and still requires authoritative artifact verification.
+      expect(() => restarted.patch(name, { previousVersions: [previous] })).toThrow(
+        `Cannot publish missing execution artifact ${a.buildKey}`
+      );
+      expect(restarted.get(name)?.previousVersions).toEqual([]);
+      const persisted = new UnitRegistry<UnitRegistryEntryBase>({
+        statePath: root,
+        unitKind: "client",
+      });
+      expect(persisted.get(name)?.activeBundleKey).toBe(b.buildKey);
+      expect(persisted.get(name)?.previousVersions).toEqual([]);
+    } finally {
+      journal.close();
+    }
+  });
 });

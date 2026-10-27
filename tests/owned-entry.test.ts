@@ -92,6 +92,26 @@ const READY_BODY = `
 `;
 
 describe.skipIf(!linux)("ownedEntry as a script entry", () => {
+  it("keeps repeated stop signals actionable throughout release", async () => {
+    const entry = await launchEntry(`
+      const work = ownership.spawn(process.execPath, ["-e", \
+        "process.on('SIGTERM', () => console.log('stopping')); console.log('ready'); setInterval(() => {}, 1000)"],
+        { kill: "graceful", stdio: ["ignore", "pipe", "inherit"] });
+      await once(work.child.stdout, "data");
+      work.child.stdout.on("data", () => console.log("retirement-started"));
+      console.log(JSON.stringify({ ready: true, workPid: work.child.pid, scratchRoot }));
+      await new Promise((done) => signal.addEventListener("abort", done, { once: true }));
+    `);
+    const ready = await entry.ready;
+    const exited = once(entry.run.child, "exit");
+    entry.run.child.kill("SIGTERM");
+    await until(() => entry.output().includes("retirement-started"));
+    entry.run.child.kill("SIGINT");
+    expect(await exited).toEqual([143, null]);
+    expect(running(ready.workPid)).toBe(false);
+    expect(fs.existsSync(ready.scratchRoot)).toBe(false);
+  });
+
   it("turns SIGTERM into an abort, then retires children and scratch before exiting 143", async () => {
     const entry = await launchEntry(`${READY_BODY}
       await new Promise((done) => signal.addEventListener("abort", done, { once: true }));

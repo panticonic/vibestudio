@@ -897,9 +897,11 @@ export class PanelView implements PanelViewLike {
       this.openLinkFromPanel(panelId, contents, details.url, {
         translateManagedLinks,
         disposition: details.disposition,
-        // A page that asked for a window has to pass the popup gate; a person
-        // who chose "open in a new panel" from the menu has already decided.
-        requirePopupPermission: true,
+        // Chromium classifies middle/modifier clicks as tab opens. Those are
+        // explicit navigation, just like "Open Link in New Panel" in the menu.
+        // Window requests still go through the site's popup permission.
+        requirePopupPermission:
+          details.disposition !== "background-tab" && details.disposition !== "foreground-tab",
       });
       return { action: "deny" as const };
     });

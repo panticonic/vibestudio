@@ -20,6 +20,7 @@ import * as crypto from "crypto";
 import { fileURLToPath } from "url";
 import { createRequire } from "module";
 import { ownDesktop, type OwnedDesktop } from "./ownedDesktop.js";
+import { prepareE2eLaunchSources } from "./e2eLaunchSources.js";
 import { readCurrentHostBuildGeneration } from "../../scripts/host-build-generations.mjs";
 import {
   canonicalTemplateUrlFromCheckout,
@@ -415,25 +416,32 @@ export async function launchTestApp(options: LaunchOptions = {}): Promise<TestAp
     }
   }
 
-  // Launch the app using the electron binary
+  const launchEnv = {
+    ...process.env,
+    NODE_ENV: "development",
+    VIBESTUDIO_TEST_MODE: "1",
+    // A development Electron start requires an explicit app root — getAppRoot
+    // stopped inferring one. Without it the shell renders a startup error
+    // instead of ever exposing the test API.
+    VIBESTUDIO_APP_ROOT: projectRoot,
+    // Disable GPU acceleration for CI environments
+    ELECTRON_DISABLE_GPU: "1",
+    ELECTRON_DISABLE_SANDBOX: "1",
+    ...workspaceInfo.env,
+    ...env,
+    VIBESTUDIO_HOST_ARTIFACT_ROOT: hostGeneration,
+  };
+  await prepareE2eLaunchSources({
+    projectRoot,
+    hostGeneration,
+    testRoot: workspaceInfo.testRoot,
+    env: launchEnv,
+  });
+  // Source publication precedes runtime startup for these exact case pins.
   const app = await electron.launch({
     executablePath: electronPath,
     args,
-    env: {
-      ...process.env,
-      NODE_ENV: "development",
-      VIBESTUDIO_TEST_MODE: "1",
-      // A development Electron start requires an explicit app root — getAppRoot
-      // stopped inferring one. Without it the shell renders a startup error
-      // instead of ever exposing the test API.
-      VIBESTUDIO_APP_ROOT: projectRoot,
-      // Disable GPU acceleration for CI environments
-      ELECTRON_DISABLE_GPU: "1",
-      ELECTRON_DISABLE_SANDBOX: "1",
-      ...workspaceInfo.env,
-      ...env,
-      VIBESTUDIO_HOST_ARTIFACT_ROOT: hostGeneration,
-    },
+    env: launchEnv,
     timeout: launchTimeout,
   });
   app.once("close", () => closedElectronApplications.add(app));

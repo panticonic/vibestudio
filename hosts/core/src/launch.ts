@@ -81,6 +81,11 @@ export interface ClientLauncherOptions {
    * creation reviews join the launch gate so a person is asked once.
    */
   companions?: readonly Call[];
+  /**
+   * Reconcile launch-owned workspace source after ordinary workspace review
+   * and admission succeed, before resolving or building the client source.
+   */
+  prepare?: () => Promise<void>;
 }
 
 type ShellApprovalClient = ReturnType<typeof createTypedServiceClient<typeof shellApprovalMethods>>;
@@ -146,8 +151,10 @@ export class ClientLauncher {
    * that is waiting on the server (`preparing`); resolves null otherwise.
    */
   onClientsChanged(): Promise<LaunchState | null> {
-    if (!this.last || this.lastState?.state !== "preparing") return Promise.resolve(null);
-    return this.attempt();
+    if (!this.last) return Promise.resolve(null);
+    // An event can arrive while a launch RPC still holds an older preparation
+    // snapshot. Decide after that attempt settles so the event is not lost.
+    return this.enqueue(async () => (this.lastState?.state === "preparing" ? this.run() : null));
   }
 
   /**
@@ -169,18 +176,28 @@ export class ClientLauncher {
   }
 
   private attempt(): Promise<LaunchState> {
-    const run = this.tail.then(() => this.run());
+    return this.enqueue(() => this.run());
+  }
+
+  private enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.tail.then(work);
     this.tail = run.catch(() => undefined);
     return run;
   }
 
   private async run(): Promise<LaunchState> {
     const { select, options } = this.last!;
-    const result = await this.clients.launch({
+    const request = {
       host: this.options.descriptor,
       select,
       ...(options.rollbackTo ? { rollbackTo: options.rollbackTo } : {}),
-    });
+    };
+    const admission = await this.gate([]);
+    if (admission.state !== "approval-required" || admission.approvals.length) {
+      return this.publish(admission);
+    }
+    await this.options.prepare?.();
+    const result = await this.clients.launch(request);
     let state: LaunchState;
     switch (result.state) {
       case "ready":
@@ -200,6 +217,10 @@ export class ClientLauncher {
         };
         break;
     }
+    return this.publish(state);
+  }
+
+  private publish(state: LaunchState): LaunchState {
     this.lastState = state;
     for (const listener of [...this.listeners]) listener(state);
     return state;
@@ -249,18 +270,23 @@ export class ClientLauncher {
       approvals.push(approval);
     }
     this.companionOwners.clear();
-    for (const owner of this.companions) {
+    const waiting: LaunchState = {
+      state: "preparing",
+      phase: "resolve",
+      reason: "Getting your workspaces ready",
+    };
+    for (const owner of [this.shellApproval, ...this.companions]) {
       const review = await owner.getWorkspaceCreationReviewState();
-      if (review.status === "preparing") {
-        return { state: "preparing", phase: "resolve", reason: "Getting your workspaces ready" };
-      }
+      if (review.status === "preparing" || review.status === "unresolved") return waiting;
+      if (review.status === "failed") return { state: "unavailable", reason: review.error };
       if (review.status !== "pending") continue;
       const listed = await owner.listPending();
       const found = (listed as readonly unknown[]).find(
         (a): a is PendingUnitInstallReviewApproval =>
           isUnitInstallReview(a) && a.approvalId === review.approvalId
       );
-      if (!found || approvals.some((a) => a.approvalId === found.approvalId)) continue;
+      if (!found) return waiting;
+      if (approvals.some((a) => a.approvalId === found.approvalId)) continue;
       approvals.push(found);
       this.companionOwners.set(found, owner);
     }

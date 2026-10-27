@@ -29,7 +29,11 @@ import {
 } from "./clientDelivery.js";
 import { ClientHostState } from "./clientHostState.js";
 import type { ClientLaunches, RemoteLauncher } from "./clientLaunchLink.js";
-import type { LaunchedClientWire, LaunchStateWire } from "../connection/connectionProtocol.js";
+import type {
+  ClientLaunchNotice,
+  LaunchedClientWire,
+  LaunchStateWire,
+} from "../connection/connectionProtocol.js";
 import { IntentInbox, type ClientIntent } from "./clientIntents.js";
 import type { PendingClientUpdateInfo, PendingClientUpdates } from "./clientUpdates.js";
 import type { ClientWindow, ClientWindowSpec, ClientWindows } from "./clientWindow.js";
@@ -93,6 +97,7 @@ export interface DesktopClientHostDeps {
   /** The System workspace id: the client principal is registered there. */
   workspaceId(): string;
   notify(title: string, message: string): void;
+  launchNotice?(notice: ClientLaunchNotice): void;
   /** The pending updates changed: one was offered, taken, or retired. */
   updatesChanged?(clientId: string): void;
   /** Called once a client has a window, before the gate closes. */
@@ -239,6 +244,8 @@ export class DesktopClientHost implements PendingClientUpdates {
     const session = this.gating;
     if (!session || session.state?.state !== "approval-required") return;
     if (resolved.approvalKind !== "unit-install-review") return;
+    if (!session.state.approvals.some((approval) => approval.approvalId === resolved.approvalId))
+      return;
     if (!resolved.granted) {
       this.deps.gate.present(null, {
         status: "unavailable",
@@ -281,6 +288,7 @@ export class DesktopClientHost implements PendingClientUpdates {
       switch (state.state) {
         case "ready":
           await this.activate(state.launched);
+          for (const notice of state.launched.notices ?? []) this.deps.launchNotice?.(notice);
           if (this.gating === session) this.gating = null;
           break;
         case "approval-required":

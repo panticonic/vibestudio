@@ -49,6 +49,7 @@ function harness(options: { served?: string; launch?: unknown } = {}) {
   const device = {
     call: vi.fn(async (method: string, args: unknown[] = []) => {
       calls.push({ method, args });
+      if (method === "shellApproval.getWorkspaceCreationReviewState") return { status: "resolved" };
       if (method === "clients.launch") return options.launch ?? ready();
       if (method === "auth.grantClientPrincipal") {
         return {
@@ -79,7 +80,7 @@ describe("terminal client delivery", () => {
     if (state.state !== "ready") return;
     const { launched } = state;
     // The launch asked for this host's descriptor.
-    expect(calls[0]).toMatchObject({
+    expect(calls.find((call) => call.method === "clients.launch")).toMatchObject({
       method: "clients.launch",
       args: [{ host: terminalHostDescriptor("1.2.3"), select: { default: true } }],
     });

@@ -103,11 +103,14 @@ export async function ownedEntry(
     // A requested stop is how a long-running script ends, not a failure of it.
     if (!(error === controller.signal.reason && error?.code === "ESTOP")) failures.push(error);
   } finally {
-    for (const [signal, handler] of handlers) process.off(signal, handler);
     try {
       await ownership?.release();
     } catch (error) {
       failures.push(error);
+    } finally {
+      // Keep repeated operator cancellation actionable while release joins
+      // graceful retirements; removing these first restores Node's exit action.
+      for (const [signal, handler] of handlers) process.off(signal, handler);
     }
   }
   const stop = controller.signal.reason;

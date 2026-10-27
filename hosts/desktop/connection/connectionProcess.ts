@@ -13,6 +13,7 @@ import { CentralDataManager } from "@vibestudio/shared/centralData";
 import { establishServerSession } from "../main/serverSession.js";
 import { ControlChannel, type MessagePortLike } from "./controlChannel.js";
 import { ConnectionHost } from "./connectionHost.js";
+import { createWorkspaceLaunchPreparation } from "./workspaceLaunchPreparation.js";
 
 interface ParentPort {
   once(
@@ -36,6 +37,7 @@ parentPort.once("message", (event) => {
     createCentralData: () => new CentralDataManager(),
     createArtifactStore: (userDataPath) =>
       new NodeArtifactStore(path.join(userDataPath, "client-artifacts")),
+    prepareLaunch: createWorkspaceLaunchPreparation,
   });
   // The control channel ending is the end of this process's purpose: release
   // everything the connection owns, then exit.

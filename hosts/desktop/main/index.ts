@@ -465,6 +465,21 @@ let quitIntent: QuitIntent = { kind: "ordinary", serverDecision: null };
 let releaseUpdateController: ReleaseUpdateController | null = null;
 let presentedStartupFinished = false;
 let deferredStartupWork: (() => void) | null = null;
+const pendingLaunchNotices = new Map<
+  string,
+  import("../connection/connectionProtocol.js").ClientLaunchNotice
+>();
+
+function presentLaunchNotice(
+  notice: import("../connection/connectionProtocol.js").ClientLaunchNotice
+): void {
+  if (!presentedStartupFinished) {
+    pendingLaunchNotices.set(notice.id, notice);
+    return;
+  }
+  eventService.emit("notification:show", { ...notice, type: "warning", ttl: 0 });
+  showUserNotification(notice.title, notice.message);
+}
 /**
  * Open workspaces in the order the chrome stacks their sections.
  *
@@ -515,6 +530,8 @@ function finishPresentedStartup(): void {
   }
 
   deferredStartupWork?.();
+  for (const notice of pendingLaunchNotices.values()) presentLaunchNotice(notice);
+  pendingLaunchNotices.clear();
 }
 
 /** The Homebrew upgrade for the installed cask, when brew is reachable. */
@@ -1721,6 +1738,7 @@ function createDesktopClientHost(conn: SessionConnection): DesktopClientHost {
     gate: launchGate,
     workspaceId: () => conn.workspaceId,
     notify: showUserNotification,
+    launchNotice: presentLaunchNotice,
     clientStarted: (_client, window) => {
       if (window.hostsPanels) void initializePanelTreeOnce("client-launch").catch(() => undefined);
       // A launch refreshes what the OS shows, like the server's announcement does.
@@ -2413,6 +2431,8 @@ app.on("ready", async () => {
               pending,
             });
           },
+          onApprovalResolved: (resolved) => clientHost?.approvalResolved(resolved),
+          onClientsChanged: () => clientHost?.clientsChanged(),
         },
         adBlockManager,
         ...(membership.privateRole === "personal"

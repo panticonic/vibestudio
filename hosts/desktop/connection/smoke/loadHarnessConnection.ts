@@ -108,6 +108,7 @@ parentPort.once("message", (event) => {
     channel,
     establish: async () => smokeSession(),
     createCentralData: () => ({}) as never,
+    prepareLaunch: async () => ({}),
     // The harness launches no clients, so nothing is ever written here.
     createArtifactStore: (userDataPath) =>
       new NodeArtifactStore(`${userDataPath}/client-artifacts`),

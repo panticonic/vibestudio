@@ -100,6 +100,7 @@ function createHarness(
   const openShellSurface = vi.fn();
   const openPanelLocation = vi.fn();
   const browserActivity = vi.fn();
+  const requestSiteCapability = vi.fn(async () => true);
   const panelView = new PanelView({
     openPanelLocation,
     nativeStorageScope: "test-host-device",
@@ -120,7 +121,7 @@ function createHarness(
     sendPanelEvent,
     openExternal,
     openShellSurface,
-    requestSiteCapability: vi.fn(async () => true),
+    requestSiteCapability,
     onPreloadFailure: options.onPreloadFailure,
     panelPreloadPath: "/panel-preload.js",
     clientPreloadPath: "/app-preload.js",
@@ -138,6 +139,7 @@ function createHarness(
     ...wc,
     openPanelLocation,
     browserActivity,
+    requestSiteCapability,
   };
 }
 
@@ -591,6 +593,49 @@ describe("PanelView plain panel links", () => {
       );
     });
     expect(event.preventDefault).toHaveBeenCalled();
+  });
+
+  it.each(["background-tab", "foreground-tab"] as const)(
+    "opens explicit %s links without asking for popup permission",
+    async (disposition) => {
+      const { panelId, panel, panelView, windowOpen, panelOrchestrator, requestSiteCapability } =
+        createHarness();
+      panel.snapshot.source = "browser:https://source.example/";
+      requestSiteCapability.mockResolvedValue(false);
+      await panelView.createViewForBrowser(
+        panelId,
+        "https://source.example/",
+        "ctx-current",
+        "persist:browser-test"
+      );
+      expect(windowOpen({ url: "https://target.example/", disposition })).toEqual({
+        action: "deny",
+      });
+      await vi.waitFor(() =>
+        expect(panelOrchestrator.createBrowserUrlPanel).toHaveBeenCalledWith(
+          panelId,
+          "https://target.example/",
+          { focus: disposition !== "background-tab", placement: "child" }
+        )
+      );
+      expect(requestSiteCapability).not.toHaveBeenCalled();
+    }
+  );
+
+  it("keeps unsolicited window opens behind the site's popup permission", async () => {
+    const { panelId, panel, panelView, windowOpen, panelOrchestrator, requestSiteCapability } =
+      createHarness();
+    panel.snapshot.source = "browser:https://source.example/";
+    requestSiteCapability.mockResolvedValue(false);
+    await panelView.createViewForBrowser(
+      panelId,
+      "https://source.example/",
+      "ctx-current",
+      "persist:browser-test"
+    );
+    windowOpen({ url: "https://target.example/", disposition: "new-window" });
+    await vi.waitFor(() => expect(requestSiteCapability).toHaveBeenCalled());
+    expect(panelOrchestrator.createBrowserUrlPanel).not.toHaveBeenCalled();
   });
 
   it("opens middle-clicked web links as unfocused child panels", async () => {

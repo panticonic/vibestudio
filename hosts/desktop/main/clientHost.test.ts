@@ -214,6 +214,8 @@ function harness(options: { builds?: BuildFiles[] } = {}) {
       };
     }
     if (service === "shellApproval" && method === "resolveBootstrap") return [];
+    if (service === "shellApproval" && method === "getWorkspaceCreationReviewState")
+      return { status: "resolved" };
     throw new Error(`unexpected ${service}.${method}`);
   };
   const store = new MemoryStore();
@@ -438,7 +440,11 @@ describe("DesktopClientHost launch and delivery", () => {
 
     // The server announces the answer while the gate's own continuation is still in flight.
     const answering = t.host.resolveGateApprovals("once");
-    t.host.approvalResolved({ approvalKind: "unit-install-review", granted: true } as never);
+    t.host.approvalResolved({
+      approvalId: "ap1",
+      approvalKind: "unit-install-review",
+      granted: true,
+    } as never);
     await answering;
     await vi.waitFor(() => expect(t.windowsMade).toHaveLength(1));
     expect(t.calls.filter((c) => c.method === "launch")).toHaveLength(2);
@@ -463,6 +469,22 @@ describe("DesktopClientHost launch and delivery", () => {
     expect(t.dismissed()).toBe(2);
   });
 
+  it("ignores an unrelated companion review while this launch waits for its own decision", async () => {
+    const t = harness();
+    t.launches.push({
+      state: "approval-required",
+      approvals: [{ kind: "unit-install-review", approvalId: "ap1" }],
+    });
+    await t.host.launch({ default: true });
+    t.host.approvalResolved({
+      approvalId: "different-review",
+      approvalKind: "unit-install-review",
+      granted: false,
+    } as never);
+    expect(t.gate.at(-1)?.status.status).toBe("approval-required");
+    expect(t.calls.filter((call) => call.method === "launch")).toHaveLength(1);
+  });
+
   it("continues a review that was answered elsewhere", async () => {
     const t = harness();
     t.launches.push({
@@ -472,7 +494,11 @@ describe("DesktopClientHost launch and delivery", () => {
     t.launches.push(await readyResult(BUILD1));
     await t.host.launch({ default: true });
 
-    t.host.approvalResolved({ approvalKind: "unit-install-review", granted: true } as never);
+    t.host.approvalResolved({
+      approvalId: "ap1",
+      approvalKind: "unit-install-review",
+      granted: true,
+    } as never);
     await vi.waitFor(() => expect(t.windowsMade).toHaveLength(1));
   });
 });

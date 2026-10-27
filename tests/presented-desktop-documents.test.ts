@@ -66,7 +66,13 @@ class Contents extends EventEmitter {
             selector.includes('main[data-bootstrap-mode="approval"]')
           )
             return {
-              outerHTML: this.reviewHtml,
+              outerHTML: JSON.stringify({
+                html: this.reviewHtml,
+                title: this.reviewTitle,
+                summary: this.reviewSummary,
+                action: this.button.textContent,
+                disabled: this.button.disabled,
+              }),
               querySelector: (inner: string) => {
                 if (inner === "#launch-gate-title") return { textContent: this.reviewTitle };
                 if (inner === "#launch-gate-summary") return { textContent: this.reviewSummary };
@@ -201,6 +207,49 @@ it("preserves bootstrap review priority and does not click the covered panel fir
   expect(panel.button.clicks).toBe(0);
 });
 
+it.each([
+  ["Start this workspace?", "Start"],
+  ["Review code before starting", "Start workspace"],
+  ["Create your workspace", "Create and launch"],
+])(
+  "accepts native launch review structure independently of presentation copy: %s",
+  async (title, action) => {
+    const bootstrap = new Contents(1, "file:///owned/index.html", new Button(action), "bootstrap");
+    bootstrap.reviewTitle = title;
+    const runtime = electron([window(bootstrap)]);
+    const serialized = runInNewContext(`(${inspectPresentedDesktopDocuments.toString()})`);
+    const [snapshot] = await serialized(runtime, { kind: "snapshots" });
+    expect(snapshot.launchGateReview.actionable).toBe(true);
+    expect(
+      await serialized(runtime, {
+        kind: "start-launch-gate",
+        id: snapshot.id,
+        url: snapshot.url,
+        html: snapshot.launchGateReview.html,
+      })
+    ).toBe(true);
+    expect(bootstrap.button.clicks).toBe(1);
+  }
+);
+
+it.each(["reviewTitle", "reviewSummary"] as const)(
+  "rejects native launch review with empty %s",
+  async (field) => {
+    const bootstrap = new Contents(
+      1,
+      "file:///owned/index.html",
+      new Button("Start workspace"),
+      "bootstrap"
+    );
+    bootstrap[field] = "  ";
+    const snapshots = await inspectPresentedDesktopDocuments(electron([window(bootstrap)]), {
+      kind: "snapshots",
+    });
+    if (!Array.isArray(snapshots)) throw new Error("Expected presented desktop snapshots");
+    expect(snapshots[0].launchGateReview).toBeNull();
+  }
+);
+
 it("starts only the same presented review card through the serialized current DOM action", async () => {
   const bootstrap = new Contents(1, "file:///owned/index.html", new Button("Start"), "bootstrap");
   const panel = new Contents(2, "https://panel.invalid", new Button("Start"));
@@ -295,11 +344,15 @@ it.each([
   const panel = new Contents(2, "https://panel.invalid", new Button("Start"));
   const bootstrapWindow = window(bootstrap);
   const runtime = electron([window(undefined, [view(panel)]), bootstrapWindow]);
+  const snapshots = await inspectPresentedDesktopDocuments(runtime, { kind: "snapshots" });
+  if (!Array.isArray(snapshots)) throw new Error("Expected presented desktop snapshots");
+  const snapshot = snapshots.find((entry: { id: number }) => entry.id === bootstrap.id);
+  if (!snapshot?.launchGateReview) throw new Error("Expected the presented native launch review");
   const request = {
     kind: "start-launch-gate",
     id: bootstrap.id,
     url: bootstrap.url,
-    html: bootstrap.reviewHtml,
+    html: snapshot.launchGateReview.html,
   };
   if (change === "changed card") bootstrap.reviewHtml = "different source";
   if (change === "changed URL") bootstrap.url = "file:///other/index.html";

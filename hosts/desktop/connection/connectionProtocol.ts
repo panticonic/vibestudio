@@ -125,7 +125,15 @@ export interface ClientBuildIdentity {
  * What the launcher reports to main. The principal's credential stays in the
  * connection process, which is the only place it is presented.
  */
-export type LaunchedClientWire = Omit<LaunchedClient, "grant"> & { principalId: string };
+export interface ClientLaunchNotice {
+  id: string;
+  title: string;
+  message: string;
+}
+export type LaunchedClientWire = Omit<LaunchedClient, "grant"> & {
+  principalId: string;
+  notices?: readonly ClientLaunchNotice[];
+};
 export type LaunchStateWire =
   | Exclude<LaunchState, { state: "ready" }>
   | { state: "ready"; launched: LaunchedClientWire };

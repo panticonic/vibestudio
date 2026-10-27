@@ -568,7 +568,8 @@ export class Ownership {
   }
 
   async escalate() {
-    this.#assertUsable();
+    // Escalation belongs to retirement itself, including release in flight.
+    if (this.#released) return;
     await this.#request({ t: "escalate" });
   }
 

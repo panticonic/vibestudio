@@ -104,6 +104,129 @@ describe("UnitRegistry", () => {
     expect(registry.list()).toEqual([]);
   });
 
+  it("keeps publication baselines detached from caller-owned history snapshots", () => {
+    const root = tempRoot();
+    const observed: Array<Array<{ buildKey: string; executionDigest: string }>> = [];
+    const a = "a".repeat(64),
+      b = "b".repeat(64),
+      c = "c".repeat(64);
+    const digest = "d".repeat(64);
+    let accepted = new Set([a]);
+    const registry = new UnitRegistry<UnitRegistryEntryBase>({
+      statePath: root,
+      unitKind: "extension",
+      publicationPort: {
+        reserve(publication) {
+          observed.push([...publication.artifacts]);
+          for (const artifact of publication.artifacts) {
+            if (!accepted.has(artifact.buildKey)) throw new Error(`Missing ${artifact.buildKey}`);
+          }
+          return { reservationId: String(observed.length), epoch: 0 };
+        },
+        finalize() {},
+      },
+    });
+    const seed = entry({ activeBundleKey: a, activeExecutionDigest: digest });
+    registry.upsert(seed);
+    const history = {
+      version: "1",
+      activeEv: null,
+      activeSourceHash: null,
+      activeBundleKey: b,
+      executionDigest: digest,
+      activeDependencyEvs: {},
+      activeExternalDeps: {},
+      activeRuntimeDepsKey: null,
+      activatedAt: 1,
+    };
+    seed.previousVersions.push(history);
+    expect(registry.get(seed.name)?.previousVersions).toEqual([]);
+    const draft = registry.get(seed.name)!;
+    draft.previousVersions.push(history);
+    const listed = registry.list();
+    listed[0]!.previousVersions.push(history);
+    registry.subscribe(({ current }) => {
+      current?.previousVersions.push(history);
+    });
+    registry.patch(seed.name, { status: "building" });
+    expect(registry.get(seed.name)?.previousVersions).toEqual([]);
+    accepted = new Set([c]);
+    expect(() =>
+      registry.patch(seed.name, {
+        activeBundleKey: c,
+        activeExecutionDigest: digest,
+        previousVersions: draft.previousVersions,
+      })
+    ).toThrow(`Missing ${b}`);
+    expect(observed.at(-1)).toEqual([
+      { buildKey: c, executionDigest: digest },
+      { buildKey: b, executionDigest: digest },
+    ]);
+    expect(registry.get(seed.name)?.activeBundleKey).toBe(a);
+  });
+
+  it("reserves a new execution digest even when its artifact build key is unchanged", () => {
+    const root = tempRoot();
+    const oldDigest = "a".repeat(64),
+      nextDigest = "b".repeat(64),
+      buildKey = "c".repeat(64);
+    const reserve = vi.fn(
+      (publication: { artifacts: readonly { buildKey: string; executionDigest: string }[] }) => {
+        if (publication.artifacts.some((artifact) => artifact.executionDigest === nextDigest))
+          throw new Error("New execution is missing");
+        return { reservationId: "reservation", epoch: 0 };
+      }
+    );
+    const registry = new UnitRegistry<UnitRegistryEntryBase>({
+      statePath: root,
+      unitKind: "extension",
+      publicationPort: { reserve, finalize() {} },
+    });
+    registry.upsert(entry({ activeBundleKey: buildKey, activeExecutionDigest: oldDigest }));
+    expect(() => registry.patch(entry().name, { activeExecutionDigest: nextDigest })).toThrow(
+      "New execution is missing"
+    );
+    expect(reserve.mock.calls.at(-1)?.[0].artifacts).toEqual([
+      { buildKey, executionDigest: nextDigest },
+    ]);
+    expect(registry.get(entry().name)?.activeExecutionDigest).toBe(oldDigest);
+  });
+
+  it("keeps subsequent publications based on the last persisted row when an owner write fails", () => {
+    const root = tempRoot();
+    const reserve = vi.fn(() => ({ reservationId: "reservation", epoch: 0 }));
+    const registry = new UnitRegistry<UnitRegistryEntryBase>({
+      statePath: root,
+      unitKind: "extension",
+      publicationPort: { reserve, finalize() {} },
+    });
+    const a = "a".repeat(64),
+      b = "b".repeat(64),
+      digest = "c".repeat(64);
+    registry.upsert(entry({ activeBundleKey: a, activeExecutionDigest: digest }));
+    const file = path.join(root, "units", "extension", "registry.json");
+    const saved = `${file}.saved`;
+    fs.renameSync(file, saved);
+    fs.mkdirSync(file);
+    expect(() => registry.patch(entry().name, { activeBundleKey: b })).toThrow();
+    expect(registry.get(entry().name)?.activeBundleKey).toBe(a);
+    fs.rmdirSync(file);
+    fs.renameSync(saved, file);
+    registry.patch(entry().name, { activeBundleKey: b });
+    expect(reserve).toHaveBeenCalledTimes(3);
+    expect(
+      new UnitRegistry<UnitRegistryEntryBase>({ statePath: root, unitKind: "extension" }).get(
+        entry().name
+      )?.activeBundleKey
+    ).toBe(b);
+    fs.renameSync(file, saved);
+    fs.mkdirSync(file);
+    expect(() => registry.delete(entry().name)).toThrow();
+    expect(registry.get(entry().name)?.activeBundleKey).toBe(b);
+    fs.rmdirSync(file);
+    fs.renameSync(saved, file);
+  });
+
   it("persists entries by unit kind under the shared units path", () => {
     const root = tempRoot();
     const registry = new UnitRegistry<UnitRegistryEntryBase>({

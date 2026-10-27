@@ -1659,12 +1659,12 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
   }
 
   list(): Entry[] {
-    return [...this.entries.values()].map((entry) => ({ ...entry }));
+    return [...this.entries.values()].map((entry) => structuredClone(entry));
   }
 
   get(name: string): Entry | null {
     const entry = this.entries.get(name);
-    return entry ? { ...entry } : null;
+    return entry ? structuredClone(entry) : null;
   }
 
   has(name: string): boolean {
@@ -1680,7 +1680,7 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
 
   upsert(entry: Entry): void {
     this.assertUnitKind(entry);
-    const next = this.normalizeEntry({ ...entry });
+    const next = structuredClone(this.normalizeEntry({ ...entry }));
     const previous = this.entries.get(next.name) ?? null;
     this.writeEntry(previous, next, () => this.entries.set(next.name, next));
     this.notifyChange(next.name, previous, next);
@@ -1689,29 +1689,35 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
   patch(name: string, patch: Partial<Entry>): Entry {
     const current = this.entries.get(name);
     if (!current) throw new Error(`Unit is not installed: ${name}`);
-    const next = this.normalizeEntry({ ...current, ...patch, unitKind: this.unitKind, name });
+    const next = structuredClone(
+      this.normalizeEntry({ ...current, ...patch, unitKind: this.unitKind, name })
+    );
     this.assertUnitKind(next);
     this.writeEntry(current, next, () => this.entries.set(name, next));
     this.notifyChange(name, current, next);
-    return { ...next };
+    return structuredClone(next);
   }
 
   delete(name: string): boolean {
     const previous = this.entries.get(name) ?? null;
-    const deleted = this.entries.delete(name);
-    if (deleted) {
+    if (!previous) return false;
+    this.entries.delete(name);
+    try {
       this.save();
-      this.notifyChange(name, previous, null);
+    } catch (error) {
+      this.entries.set(name, previous);
+      throw error;
     }
-    return deleted;
+    this.notifyChange(name, previous, null);
+    return true;
   }
 
   private notifyChange(name: string, previous: Entry | null, current: Entry | null): void {
     for (const listener of this.changeListeners) {
       listener({
         name,
-        previous: previous ? { ...previous } : null,
-        current: current ? { ...current } : null,
+        previous: previous ? structuredClone(previous) : null,
+        current: current ? structuredClone(current) : null,
       });
     }
   }
@@ -1725,7 +1731,9 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
         );
       }
       const entries = Array.isArray(parsed.entries)
-        ? parsed.entries.filter(this.isEntry).map(this.normalizeEntry)
+        ? parsed.entries
+            .filter(this.isEntry)
+            .map((entry) => structuredClone(this.normalizeEntry(entry)))
         : [];
       this.entries = new Map(entries.map((entry) => [entry.name, entry]));
     } catch (err) {
@@ -1750,33 +1758,47 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
   private writeEntry(previous: Entry | null, entry: Entry, mutate: () => void): void {
     // Status-only patches leave the durable pointers alone and skip artifact I/O.
     const changed = this.retainedBuilds(entry) !== (previous ? this.retainedBuilds(previous) : "");
+    const retained = new Set(
+      previous ? this.artifactReferences(previous).map((artifact) => JSON.stringify(artifact)) : []
+    );
+    // An execution that moves from active to rollback remains continuously in
+    // this durable owner. Only newly introduced identities cross a publication
+    // boundary and need a reservation; old identities may be cold after restart.
+    const introduced =
+      changed && this.publicationPort
+        ? this.publishedArtifacts(entry).filter(
+            (artifact) => !retained.has(JSON.stringify(artifact))
+          )
+        : [];
     publishExecutionOwner(
       changed ? this.publicationPort : undefined,
       {
         owner: this.unitKind === "client" ? "client-generation" : "extension-generation",
         ownerId: entry.name,
-        artifacts: changed && this.publicationPort ? this.publishedArtifacts(entry) : [],
+        artifacts: introduced,
       },
       () => {
         mutate();
-        this.save();
+        try {
+          this.save();
+        } catch (error) {
+          // Keep the next delta based on the last committed owner row.
+          if (previous) this.entries.set(entry.name, previous);
+          else this.entries.delete(entry.name);
+          throw error;
+        }
       }
     );
   }
 
   private retainedBuilds(entry: Entry): string {
-    return JSON.stringify([
-      entry.activeBundleKey,
-      entry.activeExecutionDigest,
-      ...entry.previousVersions.flatMap((version) => [
-        version.activeBundleKey,
-        version.executionDigest,
-      ]),
-    ]);
+    return JSON.stringify(this.artifactReferences(entry));
   }
 
-  private publishedArtifacts(entry: Entry): ExecutionPublication["artifacts"] {
-    const builds = [
+  private artifactReferences(
+    entry: Entry
+  ): Array<{ buildKey: string; executionDigest: string | null }> {
+    return [
       ...(entry.activeBundleKey
         ? [{ buildKey: entry.activeBundleKey, executionDigest: entry.activeExecutionDigest }]
         : []),
@@ -1785,6 +1807,10 @@ export class UnitRegistry<Entry extends UnitRegistryEntryBase> {
         executionDigest: version.executionDigest,
       })),
     ];
+  }
+
+  private publishedArtifacts(entry: Entry): ExecutionPublication["artifacts"] {
+    const builds = this.artifactReferences(entry);
     return builds.map(({ buildKey, executionDigest }) => {
       if (!executionDigest) {
         throw new Error(`${this.unitKind} ${entry.name} references unverifiable build ${buildKey}`);

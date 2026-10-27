@@ -14,6 +14,7 @@ import type { ClientPrincipalSessions, ScopedServerCaller } from "../main/server
 import type { ControlChannel } from "./controlChannel.js";
 import type {
   ClientBuildIdentity,
+  ClientLaunchNotice,
   LaunchStateWire,
   RetainedClientBuild,
 } from "./connectionProtocol.js";
@@ -25,6 +26,8 @@ export interface ClientLaunchHostDeps {
   /** Fetch one artifact route through the device session (`gateway.fetch`). */
   fetchArtifact: ClientArtifactFetch;
   store: ClientArtifactStore;
+  companions?: readonly Call[];
+  prepare?: () => Promise<{ notices: readonly ClientLaunchNotice[] }>;
 }
 
 /** The exact verified build a client principal is admitted for, and its credential. */
@@ -49,6 +52,7 @@ export class ClientLaunchHost {
   private readonly cache: ClientArtifactCache;
   private readonly grants: PrincipalGrants;
   private readonly launchers = new Map<number, ClientLauncher>();
+  private readonly notices = new Map<number, readonly ClientLaunchNotice[]>();
   /** The latest build launched for each client principal. */
   private readonly builds = new Map<string, LaunchedBuild>();
 
@@ -64,15 +68,24 @@ export class ClientLaunchHost {
           descriptor,
           cache: this.cache,
           grants: this.grants,
+          companions: deps.companions,
+          ...(deps.prepare
+            ? {
+                prepare: async () => {
+                  const result = await deps.prepare!();
+                  this.notices.set(launchId, result.notices);
+                },
+              }
+            : {}),
         });
         this.launchers.set(launchId, launcher);
         launcher.subscribe((state) => this.publish(launchId, state));
       }
-      return launcher.launch(select).then((state) => this.wire(state));
+      return launcher.launch(select).then((state) => this.wire(state, launchId));
     });
     channel.handle("launch.clients-changed", async ({ launchId }) => {
       const state = await this.launcher(launchId).onClientsChanged();
-      return state && this.wire(state);
+      return state && this.wire(state, launchId);
     });
     channel.handle("launch.resolve-approvals", async ({ launchId, decision }) => {
       const launcher = this.launcher(launchId);
@@ -81,10 +94,11 @@ export class ClientLaunchHost {
         throw new Error("There is no review waiting on this launch");
       }
       const next = await launcher.resolveApprovals(state.approvals, decision);
-      return next && this.wire(next);
+      return next && this.wire(next, launchId);
     });
     channel.handle("launch.end", ({ launchId }) => {
       this.launchers.delete(launchId);
+      this.notices.delete(launchId);
     });
     channel.handle("launch.adopt", async ({ build }) => {
       const grant = await this.grants.acquire(build);
@@ -131,7 +145,7 @@ export class ClientLaunchHost {
     return launcher;
   }
 
-  private wire(state: LaunchState): LaunchStateWire {
+  private wire(state: LaunchState, launchId: number): LaunchStateWire {
     if (state.state !== "ready") return state;
     const { grant, ...launched } = state.launched;
     this.builds.set(grant.principalId, {
@@ -142,11 +156,19 @@ export class ClientLaunchHost {
       },
       credential: grant.credential,
     });
-    return { state: "ready", launched: { ...launched, principalId: grant.principalId } };
+    const notices = this.notices.get(launchId);
+    return {
+      state: "ready",
+      launched: {
+        ...launched,
+        principalId: grant.principalId,
+        ...(notices?.length ? { notices } : {}),
+      },
+    };
   }
 
   private publish(launchId: number, state: LaunchState): void {
-    this.deps.channel.emit("launch.state", { launchId, state: this.wire(state) });
+    this.deps.channel.emit("launch.state", { launchId, state: this.wire(state, launchId) });
   }
 }
 

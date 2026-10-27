@@ -1,7 +1,14 @@
-import { describe, expect, it } from "vitest";
+import type { WorkspaceCreationReviewState } from "@vibestudio/service-schemas/shellApproval";
+import type { PendingUnitInstallReviewApproval } from "@vibestudio/shared/approvals";
+import { describe, expect, it, vi } from "vitest";
 import { ClientArtifactCache } from "./artifactCache.js";
 import { buildHostDescriptor } from "./hostDescriptor.js";
-import { ClientLauncher, type Call, type LaunchState } from "./launch.js";
+import {
+  ClientLauncher,
+  type Call,
+  type LaunchState,
+  type ClientLauncherOptions,
+} from "./launch.js";
 import { MemoryStore, integrityOf, responseOf } from "./testing.js";
 import type { ReadyClient } from "@vibestudio/workspace-contracts/clients";
 
@@ -43,14 +50,48 @@ async function readyClient(over: Record<string, unknown> = {}): Promise<ReadyCli
   };
 }
 
-function setup(results: unknown[]) {
+function creationApproval(approvalId: string): PendingUnitInstallReviewApproval {
+  return {
+    kind: "unit-install-review",
+    approvalId,
+    callerId: "system:startup",
+    callerKind: "system",
+    repoPath: "meta",
+    effectiveVersion: "",
+    requestedAt: 1,
+    mode: "adopt-root",
+    title: "Start this workspace?",
+    description: "",
+    parts: [],
+    summary: { panels: 0, agents: 0, services: 0, clients: 0, extensions: 0 },
+    unchangedPartCount: 0,
+  };
+}
+
+function setup(
+  results: unknown[] | (() => Promise<unknown>),
+  prepare?: ClientLauncherOptions["prepare"],
+  companions?: ClientLauncherOptions["companions"],
+  primaryCreation?: {
+    state: WorkspaceCreationReviewState;
+    approvals?: PendingUnitInstallReviewApproval[];
+  }
+) {
   const calls: { service: string; method: string; args: unknown[] }[] = [];
-  const queue = [...results];
+  const queue = typeof results === "function" ? [] : [...results];
   const call: Call = async (service, method, args) => {
     calls.push({ service, method, args });
-    if (service === "clients" && method === "launch") return queue.shift();
+    if (service === "clients" && method === "launch")
+      return typeof results === "function" ? results() : queue.shift();
     if (service === "auth") return grantResponse;
-    if (service === "shellApproval" && method === "resolveBootstrap") return [];
+    if (service === "shellApproval" && method === "getWorkspaceCreationReviewState")
+      return primaryCreation?.state ?? { status: "resolved" };
+    if (service === "shellApproval" && method === "listPending")
+      return primaryCreation?.approvals ?? [];
+    if (service === "shellApproval" && method === "resolveBootstrap") {
+      if (primaryCreation && args[1] === "once") primaryCreation.state = { status: "resolved" };
+      return [];
+    }
     throw new Error(`unexpected ${service}.${method}`);
   };
   const store = new MemoryStore();
@@ -64,6 +105,8 @@ function setup(results: unknown[]) {
   const grantCalls: unknown[] = [];
   const launcher = new ClientLauncher({
     call,
+    prepare,
+    companions,
     descriptor,
     cache,
     grants: {
@@ -92,7 +135,10 @@ describe("ClientLauncher", () => {
     expect(t.grantCalls).toEqual([
       { source: "clients/chat-terminal", buildKey: "bk1", executionDigest: DIGEST },
     ]);
-    expect(t.calls[0]!.args[0]).toMatchObject({ host: descriptor, select: { default: true } });
+    expect(t.calls.find((call) => call.service === "clients")!.args[0]).toMatchObject({
+      host: descriptor,
+      select: { default: true },
+    });
   });
 
   it("fetches only artifacts for this host's platform", async () => {
@@ -192,6 +238,295 @@ describe("ClientLauncher", () => {
   it("passes rollbackTo through and propagates a launch RPC failure", async () => {
     const t = setup([]);
     await t.launcher.launch({ id: "chat" }, { rollbackTo: "bk0" }).catch(() => undefined);
-    expect(t.calls[0]!.args[0]).toMatchObject({ rollbackTo: "bk0" });
+    expect(t.calls.find((call) => call.service === "clients")!.args[0]).toMatchObject({
+      rollbackTo: "bk0",
+    });
+  });
+
+  it("prepares workspace source only after its ordinary creation review is granted", async () => {
+    const prepare = vi.fn(async () => {});
+    const approval = creationApproval("ap:workspace");
+    const primary = {
+      state: {
+        status: "pending",
+        approvalId: approval.approvalId,
+        partCount: 1,
+      } as WorkspaceCreationReviewState,
+      approvals: [approval],
+    };
+    const t = setup([{ state: "ready", client: await readyClient() }], prepare, [], primary);
+    const gate = await t.launcher.launch({ default: true });
+    expect(gate).toEqual({ state: "approval-required", approvals: [approval] });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(launchCalls(t.calls)).toBe(0);
+    expect(t.fetches()).toBe(0);
+    if (gate.state !== "approval-required") throw new Error("Expected workspace review");
+    await t.launcher.resolveApprovals(gate.approvals, "deny");
+    expect(prepare).not.toHaveBeenCalled();
+    expect(launchCalls(t.calls)).toBe(0);
+    expect((await t.launcher.resolveApprovals(gate.approvals, "once"))?.state).toBe("ready");
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(t.routes).toEqual(["/_a/bk1/main.mjs"]);
+  });
+
+  it.each(["host ABI is incompatible", "source build is broken"])(
+    "prepares admitted source before attempting an old client whose %s",
+    async (reason) => {
+      let current = false;
+      const client = await readyClient({ buildKey: "bk2" });
+      const prepare = vi.fn(async () => {
+        current = true;
+      });
+      const t = setup(
+        async () => (current ? { state: "ready", client } : { state: "unavailable", reason }),
+        prepare
+      );
+      expect((await t.launcher.launch({ default: true })).state).toBe("ready");
+      expect(prepare).toHaveBeenCalledTimes(1);
+      expect(launchCalls(t.calls)).toBe(1);
+      expect(t.routes).toEqual(["/_a/bk2/main.mjs"]);
+      expect(t.grantCalls).toEqual([
+        { source: "clients/chat-terminal", buildKey: "bk2", executionDigest: DIGEST },
+      ]);
+    }
+  );
+
+  it("waits for the new source build through ordinary lifecycle events without delivering an old build", async () => {
+    const prepare = vi.fn(async () => {});
+    const t = setup(
+      [
+        { state: "preparing", phase: "build", reason: "Building updated source" },
+        { state: "ready", client: await readyClient({ buildKey: "bk2" }) },
+      ],
+      prepare
+    );
+    expect(await t.launcher.launch({ source: "clients/chat-terminal" })).toEqual({
+      state: "preparing",
+      phase: "build",
+      reason: "Building updated source",
+    });
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(launchCalls(t.calls)).toBe(1);
+    expect(t.fetches()).toBe(0);
+    expect(t.grantCalls).toEqual([]);
+    expect((await t.launcher.onClientsChanged())?.state).toBe("ready");
+    expect(prepare).toHaveBeenCalledTimes(2);
+    expect(t.routes).toEqual(["/_a/bk2/main.mjs"]);
+  });
+
+  it("uses the existing client review gate when prepared source needs a unit approval", async () => {
+    const prepare = vi.fn(async () => {});
+    const approval = { kind: "unit-install-review", approvalId: "ap:updated-build" };
+    const t = setup(
+      [
+        { state: "approval-required", approvals: [approval] },
+        { state: "ready", client: await readyClient({ buildKey: "bk2" }) },
+      ],
+      prepare
+    );
+    const state = await t.launcher.launch({ default: true });
+    expect(state).toEqual({ state: "approval-required", approvals: [approval] });
+    expect(t.fetches()).toBe(0);
+    if (state.state !== "approval-required") throw new Error("Expected updated source review");
+    expect((await t.launcher.resolveApprovals(state.approvals, "once"))?.state).toBe("ready");
+    expect(t.routes).toEqual(["/_a/bk2/main.mjs"]);
+  });
+
+  it("propagates preparation failure before resolving or delivering a client", async () => {
+    const failure = new Error("Workspace update failed");
+    const prepare = vi.fn(async () => {
+      throw failure;
+    });
+    const t = setup([{ state: "ready", client: await readyClient() }], prepare);
+    await expect(t.launcher.launch({ default: true })).rejects.toBe(failure);
+    expect(launchCalls(t.calls)).toBe(0);
+    expect(t.fetches()).toBe(0);
+    expect(t.grantCalls).toEqual([]);
+  });
+
+  it("resolves the current client once after successful admission and preparation", async () => {
+    const prepare = vi.fn(async () => {});
+    const t = setup([{ state: "ready", client: await readyClient() }], prepare);
+    expect((await t.launcher.launch({ default: true })).state).toBe("ready");
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(launchCalls(t.calls)).toBe(1);
+    expect(t.routes).toEqual(["/_a/bk1/main.mjs"]);
+  });
+
+  it("joins a pending companion creation review even when the selected client is ready", async () => {
+    const approval = creationApproval("ap:personal");
+    let approved = false;
+    const companion = vi.fn<Call>(async (service, method, args) => {
+      expect(service).toBe("shellApproval");
+      if (method === "getWorkspaceCreationReviewState")
+        return approved
+          ? { status: "resolved" }
+          : { status: "pending", approvalId: approval.approvalId, partCount: 1 };
+      if (method === "listPending") return [approval];
+      if (method === "resolveBootstrap") {
+        expect(args).toEqual([[approval.approvalId], "once"]);
+        approved = true;
+        return [];
+      }
+      throw new Error(`Unexpected companion method ${method}`);
+    });
+    const prepare = vi.fn(async () => {});
+    const t = setup(
+      [
+        { state: "ready", client: await readyClient() },
+        { state: "ready", client: await readyClient() },
+      ],
+      prepare,
+      [companion]
+    );
+    const seen: LaunchState["state"][] = [];
+    t.launcher.subscribe((state) => seen.push(state.state));
+    const gate = await t.launcher.launch({ default: true });
+    expect(gate).toEqual({ state: "approval-required", approvals: [approval] });
+    expect(t.launcher.state).toEqual(gate);
+    expect(prepare).not.toHaveBeenCalled();
+    expect(t.fetches()).toBe(0);
+    if (gate.state !== "approval-required") throw new Error("Expected companion review");
+    expect((await t.launcher.resolveApprovals(gate.approvals, "once"))?.state).toBe("ready");
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(t.routes).toEqual(["/_a/bk1/main.mjs"]);
+    expect(t.calls.filter((call) => call.method === "resolveBootstrap")).toEqual([]);
+    expect(seen).toEqual(["approval-required", "ready"]);
+  });
+
+  it("waits for a preparing companion through ordinary launch events before preparation", async () => {
+    let ready = false;
+    const companion = vi.fn<Call>(async (service, method) => {
+      expect(service).toBe("shellApproval");
+      if (method === "getWorkspaceCreationReviewState")
+        return { status: ready ? "resolved" : "preparing" };
+      throw new Error(`Unexpected companion method ${method}`);
+    });
+    const prepare = vi.fn(async () => {});
+    const t = setup(
+      [
+        { state: "ready", client: await readyClient() },
+        { state: "ready", client: await readyClient() },
+      ],
+      prepare,
+      [companion]
+    );
+    expect(await t.launcher.launch({ default: true })).toEqual({
+      state: "preparing",
+      phase: "resolve",
+      reason: "Getting your workspaces ready",
+    });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(t.fetches()).toBe(0);
+    expect(launchCalls(t.calls)).toBe(0);
+    ready = true;
+    expect((await t.launcher.onClientsChanged())?.state).toBe("ready");
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(launchCalls(t.calls)).toBe(1);
+    expect(t.routes).toEqual(["/_a/bk1/main.mjs"]);
+  });
+
+  it("reports an authoritative companion creation failure without preparing or delivering a client", async () => {
+    const reason = "Personal template acquisition failed: exact source unavailable";
+    const companion: Call = async (_service, method) => {
+      if (method === "getWorkspaceCreationReviewState") return { status: "failed", error: reason };
+      throw new Error(`Unexpected companion method ${method}`);
+    };
+    const prepare = vi.fn(async () => {});
+    const t = setup([{ state: "ready", client: await readyClient() }], prepare, [companion]);
+    expect(await t.launcher.launch({ default: true })).toEqual({ state: "unavailable", reason });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(t.fetches()).toBe(0);
+    expect(t.grantCalls).toEqual([]);
+    expect(await t.launcher.onClientsChanged()).toBeNull();
+  });
+
+  it("waits on lifecycle events when a companion's pending approval snapshot is not yet listed", async () => {
+    const approval = creationApproval("ap:personal");
+    let listed = false;
+    const companion: Call = async (_service, method) => {
+      if (method === "getWorkspaceCreationReviewState")
+        return { status: "pending", approvalId: approval.approvalId, partCount: 1 };
+      if (method === "listPending") return listed ? [approval] : [];
+      throw new Error(`Unexpected companion method ${method}`);
+    };
+    const prepare = vi.fn(async () => {});
+    const t = setup(
+      [
+        { state: "ready", client: await readyClient() },
+        { state: "ready", client: await readyClient() },
+      ],
+      prepare,
+      [companion]
+    );
+    expect((await t.launcher.launch({ default: true })).state).toBe("preparing");
+    expect(prepare).not.toHaveBeenCalled();
+    expect(t.fetches()).toBe(0);
+    expect(launchCalls(t.calls)).toBe(0);
+    listed = true;
+    expect(await t.launcher.onClientsChanged()).toEqual({
+      state: "approval-required",
+      approvals: [approval],
+    });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(t.fetches()).toBe(0);
+  });
+
+  it("keeps an unresolved companion at the existing preparation gate", async () => {
+    const companion: Call = async (_service, method) => {
+      if (method === "getWorkspaceCreationReviewState") return { status: "unresolved" };
+      throw new Error(`Unexpected companion method ${method}`);
+    };
+    const prepare = vi.fn(async () => {});
+    const t = setup([{ state: "ready", client: await readyClient() }], prepare, [companion]);
+    expect(await t.launcher.launch({ default: true })).toEqual({
+      state: "preparing",
+      phase: "resolve",
+      reason: "Getting your workspaces ready",
+    });
+    expect(prepare).not.toHaveBeenCalled();
+    expect(t.fetches()).toBe(0);
+  });
+
+  it("retains readiness events received during an older companion snapshot and drains them once ready", async () => {
+    let started!: () => void;
+    let release!: (value: { status: "preparing" }) => void;
+    const reading = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    const snapshot = new Promise<{ status: "preparing" }>((resolve) => {
+      release = resolve;
+    });
+    let reads = 0;
+    const companion: Call = async (_service, method) => {
+      if (method !== "getWorkspaceCreationReviewState") throw new Error(`Unexpected ${method}`);
+      if (reads++ === 0) {
+        started();
+        return snapshot;
+      }
+      return { status: "resolved" };
+    };
+    const prepare = vi.fn(async () => {});
+    const t = setup(
+      [
+        { state: "ready", client: await readyClient() },
+        { state: "ready", client: await readyClient() },
+      ],
+      prepare,
+      [companion]
+    );
+    const launching = t.launcher.launch({ default: true });
+    await reading;
+    // The lifecycle is now ready, but the in-flight RPC returns its preceding
+    // preparing snapshot. Both genuine events must wait behind that response.
+    const firstEvent = t.launcher.onClientsChanged();
+    const secondEvent = t.launcher.onClientsChanged();
+    release({ status: "preparing" });
+    expect((await launching).state).toBe("preparing");
+    expect((await firstEvent)?.state).toBe("ready");
+    expect(await secondEvent).toBeNull();
+    expect(launchCalls(t.calls)).toBe(1);
+    expect(prepare).toHaveBeenCalledTimes(1);
+    expect(t.routes).toEqual(["/_a/bk1/main.mjs"]);
   });
 });

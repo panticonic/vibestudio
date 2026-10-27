@@ -45,17 +45,14 @@ export async function inspectPresentedDesktopDocuments({ BaseWindow, BrowserWind
     );
     if (
       !card ||
-      card.querySelector("#launch-gate-title")?.textContent !== "Start this workspace?" ||
+      !card.querySelector("#launch-gate-title")?.textContent?.trim() ||
       !card.querySelector("#launch-gate-summary")?.textContent?.trim()
     )
       return null;
     const button = card.querySelector("button.primary");
     const review = {
       html: card.outerHTML,
-      actionable:
-        button instanceof HTMLButtonElement &&
-        !button.disabled &&
-        button.textContent?.trim() === "Start",
+      actionable: button instanceof HTMLButtonElement && !button.disabled,
     };
     if (expectedHtml !== undefined) {
       if (!review.actionable || review.html !== expectedHtml) return { ...review, clicked: false };

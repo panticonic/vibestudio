@@ -102,6 +102,7 @@ async function setup(services: string[] = []) {
     establish: async () => connected,
     createCentralData: () => ({}) as never,
     createArtifactStore: () => new MemoryStore(),
+    prepareLaunch: async () => ({}),
   });
   const link = new ConnectionLink(mainChannel);
   const dispatch = vi.fn(async (_ctx: unknown, service: string, method: string) => ({
@@ -385,8 +386,13 @@ describe("connection process", () => {
     const ended = vi.fn();
     link.onClientSessionEnded(ended);
 
-    await link.channel.request("workspace.connect", { workspaceId: "other" });
+    const [first, again] = await Promise.all([
+      link.channel.request("workspace.connect", { workspaceId: "other" }),
+      link.channel.request("workspace.connect", { workspaceId: "other" }),
+    ]);
 
+    expect(first).toEqual(again);
+    expect(connected.connectWorkspace).toHaveBeenCalledTimes(1);
     expect(second.client.setClientPrincipalSessions).toHaveBeenCalledTimes(1);
     const principals = second.client.setClientPrincipalSessions.mock.calls[0]![0] as {
       sessionEnded(caller: unknown, reason: string): void;
@@ -405,6 +411,40 @@ describe("connection process", () => {
     await tick();
     expect(doc.received.some((m) => m.t === "closed")).toBe(true);
     expect(connected.close).toHaveBeenCalled();
+  });
+
+  it("retains the local hub shutdown owner when launch preparation setup fails", async () => {
+    const [mainPort, utilityPort] = createMessagePortPair();
+    const main = new ControlChannel(mainPort, "a");
+    const utility = new ControlChannel(utilityPort, "b");
+    const connected = session(fakeClient().client as unknown as ConnectedServerClient);
+    const stopTree = vi.fn(async () => undefined);
+    connected.hubProcessManager = { stopTree } as never;
+    new ConnectionHost({
+      channel: utility,
+      establish: async () => connected,
+      createCentralData: () => ({}) as never,
+      createArtifactStore: () => new MemoryStore(),
+      prepareLaunch: async () => {
+        throw new Error("Preparation setup failed");
+      },
+    });
+    await expect(
+      main.request("connection.establish", {
+        args: {
+          mode: null,
+          prepareInitialWorkspace: false,
+          appVersion: "1",
+          userDataPath: "/u",
+        },
+      })
+    ).rejects.toThrow("Preparation setup failed");
+    await main.request("connection.close", {});
+    expect(connected.close).toHaveBeenCalledTimes(1);
+    await main.request("hub.stop-tree", {});
+    expect(stopTree).toHaveBeenCalledTimes(1);
+    main.close();
+    utility.close();
   });
 
   it("re-establishes on a replacement process: the same proxies work again, subscriptions replay, recovery runs", async () => {
@@ -431,6 +471,7 @@ describe("connection process", () => {
       establish: async () => session(second.client as unknown as ConnectedServerClient),
       createCentralData: () => ({}) as never,
       createArtifactStore: () => new MemoryStore(),
+      prepareLaunch: async () => ({}),
     });
     await link.reestablish(channel2, {
       mode: null,

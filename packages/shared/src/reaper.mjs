@@ -27,6 +27,7 @@ import {
   claimLedger,
   ledgerDirOf,
   ledgerFile,
+  readLedger,
   retireGroup,
   retireLedger,
   scratchDirOf,
@@ -74,7 +75,10 @@ function retireOne(group) {
     }).then(
       () => {
         ledger.groups = ledger.groups.filter((entry) => entry.key !== group.key);
-        if (!retiring) persist();
+        // Keep the active claim current, but never recreate a removed claim
+        // or overwrite its successor. Retirement remains valid after the
+        // claim disappears: the process observer proved this group absent.
+        if (!retiring && readLedger(dir, ledger.id)?.token === ledger.token) persist();
       },
       (error) => {
         groupRetirements.delete(group.key);
@@ -117,7 +121,13 @@ function register(message) {
   let entry;
   if (identity === null) {
     if (process.platform !== "win32") throw new Error("Process identity is required");
-    entry = { key: String(pid), pid, identity: null, kill, ...(outlives === true ? { outlives: true } : {}) };
+    entry = {
+      key: String(pid),
+      pid,
+      identity: null,
+      kill,
+      ...(outlives === true ? { outlives: true } : {}),
+    };
   } else {
     const parsed = parseOwnedProcessIdentity(identity);
     entry = {
@@ -204,7 +214,9 @@ async function onMessage(message) {
     return;
   }
   try {
-    if (retiring) throw new Error("Ownership is already being retired");
+    if (retiring && message.t !== "escalate") {
+      throw new Error("Ownership is already being retired");
+    }
     const value = await handle(message);
     await send({ t: "reply", rid: message.rid, ok: true, value });
   } catch (error) {

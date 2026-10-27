@@ -432,6 +432,31 @@ complete workspace release (every template's runtimes) from the canonical
 checkouts. Startup validates and consumes that exact release without compiling.
 If host or template inputs change, or the derived release cache has been
 collected, startup fails with an instruction to run `pnpm build:product` again.
+On a local desktop start, the existing Personal and System workspaces are
+reconciled with that built release before the desktop client opens. Clean
+template updates use the ordinary Templates merge and publication workflow;
+workspace identities, panels, and nonconflicting local edits remain intact.
+Conflicting edits stay in a separate update review and the existing workspace
+opens with a persistent review notice. Startup does not overwrite a workspace
+directory or silently resolve conflicts. Shared and remote workspaces retain
+their normal explicit update workflow.
+
+To test an upgrade against two canonical template collections, use:
+
+```bash
+xvfb-run -a node scripts/product-upgrade-smoke.mjs \
+  --before /path/to/release-a-templates \
+  --after /path/to/release-b-templates \
+  --out-dir /path/to/upgrade-evidence
+```
+
+The smoke runs the real `pnpm build:product` and `pnpm start` commands, retains
+one isolated profile across A → B → B, checks the displayed client and installed
+source pins, and verifies that workspace and panel identities and a published
+local source edit survive. The final B launch must make no further publications. Its
+profile and processes are retired after the run; bounded logs and screenshots
+remain in the evidence directory. Omit `xvfb-run -a` when using an existing display.
+
 `pnpm start:terminal` is the same launch with the terminal
 browser in place of the desktop app: it runs the product's `vibestudio terminal`,
 which starts (or reuses) the profile's local server. `pnpm dev` and

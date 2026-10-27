@@ -129,9 +129,19 @@ droppable-id encoding, and `dropTargets.ts` are gone.
 
 ## 5. Direct manipulation and keyboard
 
-The pane header grip (the same one the rail shows on hover) is now the pane's
-drag handle, and while focused it is a **move handle**: plain arrow keys place
-the pane left/right/up/down through the same `place-panel` action. That is the
+Each pane owns a permanent titlebar, replacing the shared workspace titlebar
+and hover rail. It shows that pane's ancestors, current panel, and selected
+descendant path with child choices; peers of the current panel stay in the
+tree. The focused pane highlights its current breadcrumb and hosts address
+editing. Selecting a hidden descendant from the tree or breadcrumbs opens it
+beside that pane when both fit; sibling selection reuses the chosen pane, and
+already visible panels receive focus in place. A visible close button removes the pane while leaving its panel in
+the tree, provided another logical pane survives. Native window controls
+reserve space only at the outer top corners. Placement fit calculations include
+the permanent titlebar height.
+
+The pane titlebar grip is its drag handle, and while focused it is a **move
+handle**: plain arrow keys place the pane left/right/up/down through the same `place-panel` action. That is the
 accessible equivalent of the drag, and it needs no global chord — the existing
 `Ctrl/Cmd+Alt+arrow` bindings keep meaning "move the focus ring".
 

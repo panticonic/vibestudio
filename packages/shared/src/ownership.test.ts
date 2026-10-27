@@ -161,6 +161,73 @@ describe.skipIf(!linux)("ownership library", () => {
     expect(readResult(ledgerDir(), "killed")).toBeNull();
   });
 
+  it("joins retirement after app data was removed without recreating it", async () => {
+    const ownership = await Ownership.open({ profileDir: profile, lifetime: "leased" });
+    try {
+      const proc = ownership.spawn("sleep", ["600"], { kill: "immediate", stdio: "ignore" });
+      await proc.registered;
+      fs.rmSync(ledgerDir(), { recursive: true });
+      await proc.retire();
+      expect(running(proc.child.pid!)).toBe(false);
+      expect(fs.existsSync(ledgerDir())).toBe(false);
+    } finally {
+      await ownership.release();
+    }
+    expect(fs.existsSync(ledgerDir())).toBe(false);
+  });
+
+  it("accepts explicit escalation while release is joining a graceful process", async () => {
+    const ownership = await Ownership.open({ profileDir: profile, lifetime: "leased" });
+    const proc = ownership.spawn(
+      process.execPath,
+      [
+        "-e",
+        `
+      process.on("SIGTERM", () => console.log("stopping"));
+      console.log("ready");
+      setInterval(() => {}, 1000);
+    `,
+      ],
+      { kill: "graceful", stdio: ["ignore", "pipe", "inherit"] }
+    );
+    await new Promise((resolve) => proc.child.stdout!.once("data", resolve));
+    await proc.registered;
+    const stopped = new Promise((resolve) => proc.child.stdout!.once("data", resolve));
+    const releasing = ownership.release();
+    await stopped;
+    await ownership.escalate();
+    await releasing;
+    expect(running(proc.child.pid!)).toBe(false);
+    expect(readLedger(ledgerDir(), ownership.id)).toBeNull();
+  });
+
+  it("does not overwrite a successor claim when retiring an earlier process", async () => {
+    const original = await Ownership.open({
+      profileDir: profile,
+      id: "replaced",
+      lifetime: "leased",
+    });
+    let successor: Ownership | undefined;
+    try {
+      const proc = original.spawn("sleep", ["600"], { kill: "immediate", stdio: "ignore" });
+      await proc.registered;
+      fs.rmSync(ledgerFile(ledgerDir(), original.id));
+      successor = await Ownership.open({
+        profileDir: profile,
+        id: original.id,
+        lifetime: "leased",
+      });
+      const claimed = readLedger(ledgerDir(), successor.id);
+      await proc.retire();
+      await original.release();
+      expect(running(proc.child.pid!)).toBe(false);
+      expect(readLedger(ledgerDir(), successor.id)).toEqual(claimed);
+    } finally {
+      await original.release();
+      await successor?.release();
+    }
+  });
+
   it("closes normally, reports RSS and OOM adjustment as data, and removes everything", async () => {
     const ownership = await Ownership.open({
       profileDir: profile,
@@ -688,9 +755,9 @@ describe.skipIf(!linux)("ownership library", () => {
     const workload = ownership.spawn("sleep", ["600"], { kill: "immediate", stdio: "ignore" });
     await Promise.all([handedOver.registered, workload.registered]);
     cleanups.push(() => process.kill(-handedOver.child.pid!, "SIGKILL"));
-    expect(() =>
-      ownership.spawnDetached("sleep", ["1"], { lease: true } as never)
-    ).toThrow(/lease/u);
+    expect(() => ownership.spawnDetached("sleep", ["1"], { lease: true } as never)).toThrow(
+      /lease/u
+    );
 
     await ownership.release();
 
@@ -720,7 +787,11 @@ describe.skipIf(!linux)("ownership library", () => {
   });
 
   it("adopts a running detached child so release retires its group", async () => {
-    const ownership = await Ownership.open({ profileDir: profile, id: "adopt", lifetime: "leased" });
+    const ownership = await Ownership.open({
+      profileDir: profile,
+      id: "adopt",
+      lifetime: "leased",
+    });
     const foreign = track(
       spawn("sh", ["-c", "sleep 600 & echo $!; wait"], {
         detached: true,
@@ -917,7 +988,11 @@ describe.skipIf(!linux)("ownership library", () => {
           {
             key: "foreign",
             pid: 1,
-            identity: { ...identity, platform: "darwin", pid: 1 } as unknown as OwnedProcessIdentity,
+            identity: {
+              ...identity,
+              platform: "darwin",
+              pid: 1,
+            } as unknown as OwnedProcessIdentity,
             kill: "immediate",
           },
           { key: "none", pid: 2, identity: null, kill: "immediate" },

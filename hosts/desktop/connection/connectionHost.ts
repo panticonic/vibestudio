@@ -31,7 +31,8 @@ import type {
   WorkspaceDescriptor,
 } from "./connectionProtocol.js";
 import type { HostCall, HostServiceEndpoint } from "./hostServices.js";
-import { ClientLaunchHost } from "./clientLaunchHost.js";
+import { ClientLaunchHost, type ClientLaunchHostDeps } from "./clientLaunchHost.js";
+import { WorkspaceSessionDirectory } from "../main/workspaceSessionDirectory.js";
 import { RendererPortHost } from "./rendererPortHost.js";
 import type { WorkspaceIpcRuntime } from "./uiSessions.js";
 
@@ -43,6 +44,11 @@ export interface ConnectionHostDeps {
   createCentralData(): CentralDataManager;
   /** The content-addressed store of verified client artifacts under a user-data root. */
   createArtifactStore(userDataPath: string): ClientArtifactStore;
+  /** Product preparation runs within the admitted client's ordinary launch. */
+  prepareLaunch(
+    session: ConnectedSession,
+    workspace: (workspaceId: string) => Promise<ConnectedWorkspace>
+  ): Promise<Pick<ClientLaunchHostDeps, "prepare" | "companions">>;
 }
 
 interface ClientEntry {
@@ -54,6 +60,7 @@ interface ClientEntry {
 }
 
 interface WorkspaceEntry {
+  descriptor: WorkspaceDescriptor;
   connection: ConnectedWorkspace;
   entry: ClientEntry;
   releaseCdp(): void;
@@ -81,6 +88,7 @@ export class ConnectionHost {
   private readonly workspaces = new Map<string, WorkspaceEntry>();
   private readonly runtimes = new Map<string, Promise<WorkspaceIpcRuntime>>();
   private session: ConnectedSession | null = null;
+  private workspaceSessions: WorkspaceSessionDirectory<ConnectedWorkspace> | null = null;
   /** Outlives the connection: main stops or detaches the hub after the sessions closed. */
   private hubManager: ConnectedSession["hubProcessManager"] = null;
   private ports: RendererPortHost | null = null;
@@ -229,6 +237,10 @@ export class ConnectionHost {
       onReconnectProgress: (progress) => this.emit("reconnect-progress", progress),
     });
     this.session = session;
+    this.hubManager = session.hubProcessManager;
+    this.workspaceSessions = new WorkspaceSessionDirectory(session, (id) =>
+      session.connectWorkspace(id)
+    );
     const gateway = createTypedServiceClient("gateway", gatewayMethods, (service, method, args) =>
       session.serverClient.stream(service, method, args)
     );
@@ -237,8 +249,8 @@ export class ConnectionHost {
       call: (service, method, args) => session.serverClient.call(service, method, args),
       fetchArtifact: (route) => gateway.fetch({ path: route, method: "GET" }),
       store: this.deps.createArtifactStore(args.userDataPath),
+      ...(await this.deps.prepareLaunch(session, (id) => this.workspaceSessions!.get(id))),
     });
-    this.hubManager = session.hubProcessManager;
     const workspace = this.registerWorkspace(session);
     const hub = this.registerClient(session.hubControlClient);
     this.ports = new RendererPortHost({
@@ -263,16 +275,25 @@ export class ConnectionHost {
   private async connectWorkspace(workspaceId: string): Promise<WorkspaceDescriptor> {
     const session = this.session;
     if (!session) throw new Error("The connection is not established");
-    const connection = await session.connectWorkspace(workspaceId);
+    const connection = await this.workspaceSessions!.get(workspaceId);
     try {
       return this.registerWorkspace(connection);
     } catch (error) {
-      await connection.close().catch(() => undefined);
+      try {
+        await this.workspaceSessions!.release(workspaceId);
+      } catch (cleanupError) {
+        throw new AggregateError(
+          [error, cleanupError],
+          "Workspace registration and cleanup failed"
+        );
+      }
       throw error;
     }
   }
 
   private registerWorkspace(connection: ConnectedWorkspace): WorkspaceDescriptor {
+    const existing = this.workspaces.get(connection.workspaceId);
+    if (existing) return existing.descriptor;
     // A client principal's credential is valid at every workspace the device
     // reaches: each connection presents the one the launch acquired.
     if (!this.launches) throw new Error("The connection is not established");
@@ -283,8 +304,7 @@ export class ConnectionHost {
     const releaseCdp = connection.onCdpAuthToken((token) =>
       this.emit("cdp-token", { workspaceId: connection.workspaceId, token })
     );
-    this.workspaces.set(connection.workspaceId, { connection, entry, releaseCdp });
-    return {
+    const descriptor: WorkspaceDescriptor = {
       client: this.stateOf(entry),
       nativeStorageScope: connection.nativeStorageScope,
       connectionMode: connection.connectionMode,
@@ -303,6 +323,8 @@ export class ConnectionHost {
       hasAssetFacade: connection.panelHttpServer.getAssetDiagnostics !== undefined,
       cdpAuthToken: connection.getCdpAuthToken(),
     };
+    this.workspaces.set(connection.workspaceId, { connection, entry, releaseCdp, descriptor });
+    return descriptor;
   }
 
   private async closeWorkspace(workspaceId: string): Promise<void> {
@@ -312,7 +334,7 @@ export class ConnectionHost {
     this.workspaces.delete(workspaceId);
     workspace.releaseCdp();
     try {
-      await workspace.connection.close();
+      await this.workspaceSessions?.release(workspaceId);
     } finally {
       workspace.entry.release();
     }
@@ -514,12 +536,12 @@ export class ConnectionHost {
       );
       for (const workspace of extras) {
         workspace.releaseCdp();
-        await collect(() => workspace.connection.close());
         workspace.entry.release();
       }
       this.workspaces.clear();
       this.runtimes.clear();
-      await collect(() => session?.close());
+      await collect(() => this.workspaceSessions?.close());
+      this.workspaceSessions = null;
       for (const entry of [...this.clients.values()]) entry.release();
       this.session = null;
       this.ports = null;

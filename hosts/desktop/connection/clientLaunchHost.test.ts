@@ -1,16 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
 import { sha256Integrity, type Call } from "@vibestudio/client-host-core";
 import { MemoryStore, bytesOf } from "../../core/src/testing.js";
-import { ClientLaunchHost, readVerifiedArtifact } from "./clientLaunchHost.js";
+import {
+  ClientLaunchHost,
+  readVerifiedArtifact,
+  type ClientLaunchHostDeps,
+} from "./clientLaunchHost.js";
 import { ControlChannel, createMessagePortPair } from "./controlChannel.js";
 
-async function setup() {
+async function setup(prepare?: ClientLaunchHostDeps["prepare"]) {
   const [a, b] = createMessagePortPair();
   const main = new ControlChannel(a, "a");
   const store = new MemoryStore();
   const text = "console.log(1)";
   const integrity = await sha256Integrity(bytesOf(text));
   const call: Call = async (service, method) => {
+    if (service === "shellApproval" && method === "getWorkspaceCreationReviewState")
+      return { status: "resolved" };
     if (service === "clients" && method === "launch") {
       return {
         state: "ready",
@@ -46,6 +52,7 @@ async function setup() {
     call,
     fetchArtifact,
     store,
+    prepare,
   });
   const descriptor = {
     host: "desktop",
@@ -57,6 +64,28 @@ async function setup() {
 }
 
 describe("ClientLaunchHost", () => {
+  it("delivers an unresolved update review with the usable client through the ordinary launch channel", async () => {
+    const notices = [
+      {
+        id: "workspace-update:op1",
+        title: "Workspace update needs review",
+        message: "Resume Templates update op1.",
+      },
+    ];
+    const t = await setup(async () => ({ notices }));
+    const states: unknown[] = [];
+    t.main.on("launch.state", (event) => states.push(event));
+    const result = await t.main.request<any>("launch.start", {
+      launchId: 1,
+      descriptor: t.descriptor,
+      select: { id: "chat" },
+    });
+    expect(result.state).toBe("ready");
+    expect(result.launched.notices).toEqual(notices);
+    expect(states).toEqual([{ launchId: 1, state: result }]);
+    expect(JSON.stringify(result)).not.toContain("clientcred:secret");
+  });
+
   it("launches in the connection process and tells main everything but the credential", async () => {
     const t = await setup();
     const states: unknown[] = [];

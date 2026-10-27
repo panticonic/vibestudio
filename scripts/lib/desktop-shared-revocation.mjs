@@ -46,57 +46,57 @@ export async function nativeRpc(page, destination, method, args) {
   ) {
     throw new Error(`Native RPC ${method} requires an explicit hub or workspace destination`);
   }
-  const outcome = await page.evaluate(
-    async ({ destination, method, args }) => {
-      const bridge = window.__vibestudioTransport;
-      if (!bridge) throw new Error("Native workspace transport is unavailable");
-      const requestId = `e2e-revocation-${crypto.randomUUID()}`;
-      return new Promise((resolve, reject) => {
-        // The owning acceptance run bounds and joins the app and server.
-        // A slow live request remains pending until its response, send failure,
-        // or destruction of this page settles the evaluation.
-        const off = bridge.onMessage(({ message, delivery }) => {
-          if (message.type !== "response" || message.requestId !== requestId) return;
-          off();
-          const responseWorkspaceId = delivery?.caller?.workspaceId;
-          if (
-            (destination.kind === "workspace" && responseWorkspaceId !== destination.workspaceId) ||
-            (destination.kind === "hub" && responseWorkspaceId !== undefined)
-          ) {
-            reject(new Error(`Native RPC ${method} response came from the wrong owner`));
-            return;
-          }
-          if ("error" in message) {
-            // Cross the browser evaluation boundary as structured data. A
-            // browser-thrown Error loses the RPC graph in Playwright's error
-            // transport, while stringifying the failure prints [object Object].
-            resolve({ failure: message.error });
-          } else resolve({ result: message.result });
-        });
-        const caller = {
-          callerId: bridge.identity.runtimeId,
-          callerKind: "client",
-          workspaceId: bridge.identity.workspaceId,
-        };
-        void bridge
-          .send({
-            from: caller.callerId,
-            target: "main",
-            destination,
-            delivery: { caller },
-            provenance: [caller],
-            message: { type: "request", requestId, fromId: caller.callerId, method, args },
-          })
-          .catch((error) => {
-            off();
-            reject(error);
-          });
-      });
-    },
-    { destination, method, args }
-  );
+  const outcome = await page.evaluate(nativeRpcInRenderer, { destination, method, args });
   if ("failure" in outcome) throw deserializeRpcFailure(outcome.failure);
   return outcome.result;
+}
+
+/** Shared authenticated renderer request body for browser and native Electron observers. */
+export async function nativeRpcInRenderer({ destination, method, args }) {
+  const bridge = window.__vibestudioTransport;
+  if (!bridge) throw new Error("Native workspace transport is unavailable");
+  const requestId = `e2e-revocation-${crypto.randomUUID()}`;
+  return new Promise((resolve, reject) => {
+    // The owning acceptance run bounds and joins the app and server.
+    // A slow live request remains pending until its response, send failure,
+    // or destruction of this page settles the evaluation.
+    const off = bridge.onMessage(({ message, delivery }) => {
+      if (message.type !== "response" || message.requestId !== requestId) return;
+      off();
+      const responseWorkspaceId = delivery?.caller?.workspaceId;
+      if (
+        (destination.kind === "workspace" && responseWorkspaceId !== destination.workspaceId) ||
+        (destination.kind === "hub" && responseWorkspaceId !== undefined)
+      ) {
+        reject(new Error(`Native RPC ${method} response came from the wrong owner`));
+        return;
+      }
+      if ("error" in message) {
+        // Cross the browser evaluation boundary as structured data. A
+        // browser-thrown Error loses the RPC graph in Playwright's error
+        // transport, while stringifying the failure prints [object Object].
+        resolve({ failure: message.error });
+      } else resolve({ result: message.result });
+    });
+    const caller = {
+      callerId: bridge.identity.runtimeId,
+      callerKind: "client",
+      workspaceId: bridge.identity.workspaceId,
+    };
+    void bridge
+      .send({
+        from: caller.callerId,
+        target: "main",
+        destination,
+        delivery: { caller },
+        provenance: [caller],
+        message: { type: "request", requestId, fromId: caller.callerId, method, args },
+      })
+      .catch((error) => {
+        off();
+        reject(error);
+      });
+  });
 }
 
 async function visibleCards(app, approvalId) {
