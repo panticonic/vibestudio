@@ -33,6 +33,7 @@ export const COMMAND_AGENT_MODES: readonly CommandAgentMode[] = [
 ];
 
 export const SETTINGS_SECTIONS = [
+  "browser-data",
   "problem-reporting",
   "connection",
   "devices",
@@ -44,13 +45,20 @@ export const SETTINGS_SECTIONS = [
   "workspaces",
 ] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+export const BROWSER_DATA_SECTIONS = ["passwords", "autofill", "siteData"] as const;
+export type BrowserDataSection = (typeof BROWSER_DATA_SECTIONS)[number];
 
 export type ManagementSurface = "settings" | "workspace-chooser";
 export const MANAGEMENT_SURFACES: readonly ManagementSurface[] = ["settings", "workspace-chooser"];
 
 /** The object forms; the two management surfaces may also be passed as bare strings. */
 export type ShellSurfaceDescriptor =
-  | { kind: "settings"; section?: SettingsSection; workspaceId?: string }
+  | {
+      kind: "settings";
+      section?: SettingsSection;
+      workspaceId?: string;
+      browserDataSection?: BrowserDataSection;
+    }
   | { kind: "workspace-chooser"; template?: WorkspaceTemplatePin; sourceUrl?: string }
   | {
       kind: "command-agent";
@@ -123,7 +131,7 @@ export function validateShellSurfaceTarget(target: unknown): ShellSurfaceDescrip
     throw new Error(`Unknown shell surface kind "${String(kind)}"`);
   }
   const allowed: Record<ShellSurfaceKind, readonly string[]> = {
-    settings: ["kind", "section", "workspaceId"],
+    settings: ["kind", "section", "workspaceId", "browserDataSection"],
     "workspace-chooser": ["kind", "template", "sourceUrl"],
     "command-agent": ["kind", "panelId", "mode", "prompt"],
     "problem-report": ["kind"],
@@ -139,6 +147,14 @@ export function validateShellSurfaceTarget(target: unknown): ShellSurfaceDescrip
     case "settings": {
       const section = record["section"];
       const workspaceId = record["workspaceId"];
+      const browserDataSection = record["browserDataSection"];
+      if (
+        browserDataSection !== undefined &&
+        (section !== "browser-data" ||
+          !(BROWSER_DATA_SECTIONS as readonly unknown[]).includes(browserDataSection))
+      ) {
+        throw new Error("Browser data subsection requires Browser data settings");
+      }
       if (
         workspaceId !== undefined &&
         (typeof workspaceId !== "string" || !isSafeText(workspaceId, PANEL_ID_MAX))
@@ -152,6 +168,9 @@ export function validateShellSurfaceTarget(target: unknown): ShellSurfaceDescrip
         kind: "settings",
         ...(section !== undefined ? { section: section as SettingsSection } : {}),
         ...(workspaceId !== undefined ? { workspaceId: workspaceId as string } : {}),
+        ...(browserDataSection !== undefined
+          ? { browserDataSection: browserDataSection as BrowserDataSection }
+          : {}),
       };
     }
     case "workspace-chooser": {
@@ -228,6 +247,8 @@ function encodeParams(descriptor: ShellSurfaceDescriptor): string {
       pairs.push(["kind", descriptor.kind]);
       if (descriptor.section !== undefined) pairs.push(["section", descriptor.section]);
       if (descriptor.workspaceId !== undefined) pairs.push(["workspace", descriptor.workspaceId]);
+      if (descriptor.browserDataSection !== undefined)
+        pairs.push(["browserDataSection", descriptor.browserDataSection]);
       break;
     case "workspace-chooser":
       pairs.push(["kind", descriptor.kind]);
@@ -348,6 +369,9 @@ export function parseShellSurfaceLink(raw: string): ParsedShellSurfaceLink {
         ...(decoded.has("source") ? { sourceUrl: decoded.get("source") } : {}),
         ...(decoded.has("section") ? { section: decoded.get("section") } : {}),
         ...(decoded.has("workspace") ? { workspaceId: decoded.get("workspace") } : {}),
+        ...(decoded.has("browserDataSection")
+          ? { browserDataSection: decoded.get("browserDataSection") }
+          : {}),
         ...(decoded.has("template")
           ? {
               template: (() => {
@@ -390,6 +414,7 @@ export function parseShellSurfaceLink(raw: string): ParsedShellSurfaceLink {
     "kind",
     "section",
     "workspace",
+    "browserDataSection",
     "template",
     "source",
     "panel",

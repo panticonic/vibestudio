@@ -2877,6 +2877,23 @@
         "capability": null,
         "presentation": null
       },
+      "setBrowserDataSurface": {
+        "authority": {
+          "inherits": true
+        },
+        "access": {
+          "sensitivity": "write"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "native-effect",
+          "family": "view.control",
+          "rationale": "The panel-hosting client supplies layout only; protected browser data remains in the host-owned view."
+        },
+        "capability": null,
+        "presentation": null
+      },
       "setFocusedPanelId": {
         "authority": {
           "inherits": true

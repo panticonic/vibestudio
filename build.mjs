@@ -563,7 +563,7 @@ const preloadConfigs = [
   "clientPreload",
   "browserPreload",
   "autofillOverlayPreload",
-  "browserPrivacyPreload",
+  "browserDataPreload",
   "displayCapturePreload",
   "shellOverlayPreload",
   "contentOverlayPreload",
@@ -692,7 +692,7 @@ function copyBrandAssets() {
 
 function copyAssets() {
   fs.copyFileSync("hosts/desktop/bootstrap/index.html", "dist/index.html");
-  fs.copyFileSync("hosts/desktop/main/browserPrivacy.html", "dist/browserPrivacy.html");
+  fs.copyFileSync("hosts/desktop/main/browserData.html", "dist/browserData.html");
   fs.copyFileSync("hosts/desktop/main/displayCapture.html", "dist/displayCapture.html");
   copySqlJsRuntimeAsset("dist");
   copyOwnershipReaperAssets("dist");

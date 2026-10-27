@@ -40,6 +40,11 @@ export function createViewService(
   const nativeId = (runtimeId: string) =>
     workspaceNativeViewId({ workspaceId: deps.workspaceId, runtimeId });
   const coreHandler = defineServiceHandler("view", coreViewMethods, {
+    setBrowserDataSurface: (ctx, [options]) => {
+      const vm = deps.getViewManager();
+      assertViewHost(vm, ctx.caller.runtime.id, ctx.caller.runtime.kind, "setBrowserDataSurface");
+      return vm.setBrowserDataSurface(options);
+    },
     setBounds: (ctx, [runtimeId, bounds]) => {
       const viewId = nativeId(runtimeId);
       const vm = deps.getViewManager();

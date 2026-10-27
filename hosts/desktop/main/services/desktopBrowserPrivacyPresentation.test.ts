@@ -5,16 +5,20 @@ describe("desktop browser privacy presentation", () => {
   it("opens only a validated section in the host-owned manager", async () => {
     const open = vi.fn();
     const service = createDesktopBrowserPrivacyPresentation({
-      getPrivacyManager: () => ({ open }),
+      openSettings: open,
     });
-    await expect(service.handler({} as never, "open", ["formFill"])).resolves.toBeUndefined();
-    expect(open).toHaveBeenCalledWith("formFill");
+    await expect(service.handler({} as never, "open", ["autofill"])).resolves.toBeUndefined();
+    expect(open).toHaveBeenCalledWith("autofill");
     await expect(service.handler({} as never, "open", ["evil"])).rejects.toThrow();
   });
 
   it("fails closed while the protected-data manager is unavailable", async () => {
-    const service = createDesktopBrowserPrivacyPresentation({ getPrivacyManager: () => null });
-    await expect(service.handler({} as never, "open", ["credentials"])).rejects.toThrow(
+    const service = createDesktopBrowserPrivacyPresentation({
+      openSettings: () => {
+        throw new Error("Browser data settings unavailable");
+      },
+    });
+    await expect(service.handler({} as never, "open", ["passwords"])).rejects.toThrow(
       /unavailable/i
     );
   });

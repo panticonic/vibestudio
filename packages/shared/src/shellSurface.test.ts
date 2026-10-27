@@ -26,6 +26,20 @@ describe("shell surface targets", () => {
       /workspaceId/
     );
     expect(() => validateShellSurfaceTarget("invented")).toThrow(/Unknown shell surface/);
+    expect(() =>
+      validateShellSurfaceTarget({
+        kind: "settings",
+        section: "devices",
+        browserDataSection: "passwords",
+      })
+    ).toThrow(/Browser data/);
+    expect(() =>
+      validateShellSurfaceTarget({
+        kind: "settings",
+        section: "browser-data",
+        browserDataSection: "debug",
+      })
+    ).toThrow(/Browser data/);
   });
 
   it("round-trips deep links on both carriers", () => {
@@ -48,6 +62,12 @@ describe("shell surface targets", () => {
       { kind: "panel-command", panelId: "panel:tree/x", commandId: "tour-next" },
       { kind: "settings", section: "devices" },
       { kind: "settings", section: "workspaces", workspaceId: "workspace:a/b" },
+      {
+        kind: "settings",
+        section: "browser-data",
+        workspaceId: "personal",
+        browserDataSection: "siteData",
+      },
     ] as const;
     for (const target of targets) {
       for (const carrier of ["scheme", "https"] as const) {

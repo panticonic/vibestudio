@@ -9,6 +9,7 @@ import { z } from "zod";
 import type { MethodAccessDescriptor } from "@vibestudio/shared/serviceAuthority";
 import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
 import { panelMethods } from "./panel.js";
+import { BrowserPrivacySectionSchema } from "./browserPrivacy.js";
 
 /** Electron-local shell to native WebContents projection. Cross-client runtime
  * ownership remains exclusively in panelRuntime. */
@@ -167,6 +168,24 @@ export const ViewBoundsSchema = z.object({
 });
 export type ViewBounds = z.infer<typeof ViewBoundsSchema>;
 
+export const BrowserDataSurfaceOptionsSchema = z
+  .object({
+    workspaceId: z.string().min(1),
+    section: BrowserPrivacySectionSchema,
+    dark: z.boolean(),
+    focus: z.enum(["first", "last"]).optional(),
+    bounds: z
+      .object({
+        x: z.number().finite(),
+        y: z.number().finite(),
+        width: z.number().finite().nonnegative(),
+        height: z.number().finite().nonnegative(),
+      })
+      .strict(),
+  })
+  .strict();
+export type BrowserDataSurfaceOptions = z.infer<typeof BrowserDataSurfaceOptionsSchema>;
+
 export const ViewPointSchema = z.object({
   x: z.number().describe("X coordinate in window-relative pixels."),
   y: z.number().describe("Y coordinate in window-relative pixels."),
@@ -216,6 +235,25 @@ export const ContentOverlayFocusSchema = z
 export type ContentOverlayFocus = z.infer<typeof ContentOverlayFocusSchema>;
 
 export const coreViewMethods = defineServiceMethods({
+  setBrowserDataSurface: {
+    website: {
+      kind: "closed",
+      reason: "Protected browser settings are presented only by the window's panel-hosting client.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "The panel-hosting client supplies layout only; protected browser data remains in the host-owned view.",
+    },
+    description:
+      "Present protected Browser data settings for a registered workspace, or close them with null.",
+    args: z.tuple([BrowserDataSurfaceOptionsSchema.nullable()]),
+    returns: z.void(),
+    access: VIEW_OVERLAY_SHOW_ACCESS,
+  },
   setBounds: {
     website: {
       kind: "closed",

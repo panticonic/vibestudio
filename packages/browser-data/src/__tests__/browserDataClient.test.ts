@@ -111,7 +111,7 @@ describe("createBrowserDataClient", () => {
     await client.startSensitiveImport(request);
     await client.observeSensitiveImport(request.operationId);
     await client.cancelSensitiveImport(request.operationId);
-    await client.openBrowserPrivacyManager("credentials");
+    await client.openBrowserDataSettings("passwords");
 
     expect(rpc.callService).toHaveBeenNthCalledWith(1, "extensions", "invokeProvider", [
       "browserData",
@@ -135,8 +135,8 @@ describe("createBrowserDataClient", () => {
     ]);
     expect(rpc.callService).toHaveBeenNthCalledWith(5, "extensions", "invokeProvider", [
       "browserData",
-      "openBrowserPrivacyManager",
-      ["credentials"],
+      "openBrowserDataSettings",
+      ["passwords"],
     ]);
     await client.observeSensitiveImport(request.operationId, { afterVersion: "v1" });
     expect(rpc.callService).toHaveBeenLastCalledWith("extensions", "invokeProvider", [

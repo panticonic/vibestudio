@@ -880,6 +880,7 @@ const shellSurfaceRelays: {
   settings: (target, workspaceId) =>
     eventService.emit("open-settings", {
       section: target.section ?? "connection",
+      ...(target.browserDataSection ? { browserDataSection: target.browserDataSection } : {}),
       ...((target.workspaceId ?? workspaceId)
         ? { workspaceId: target.workspaceId ?? workspaceId! }
         : {}),

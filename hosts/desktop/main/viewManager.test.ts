@@ -220,6 +220,191 @@ describe("ViewManager", () => {
     mockWindow = new BaseWindow();
   });
 
+  describe("protected Browser data settings", () => {
+    function browserDataSurface() {
+      const view = new WebContentsView();
+      let visible = false;
+      return {
+        view,
+        present: vi.fn(async () => {
+          visible = true;
+        }),
+        close: vi.fn(() => {
+          visible = false;
+        }),
+        getVisibleView: () => (visible ? view : null),
+      };
+    }
+
+    it("keeps protected settings outside the workspace view registry and inside the native layer stack", async () => {
+      const vm = new ViewManager({ window: mockWindow, ...testChromeOptions() });
+      const chrome = openChrome(vm);
+      const surface = browserDataSurface();
+      const release = vm.registerBrowserDataSurface("personal", surface);
+      try {
+        await expect(
+          vm.setBrowserDataSurface({
+            workspaceId: "other",
+            section: "passwords",
+            dark: true,
+            bounds: { x: 0, y: 0, width: 200, height: 200 },
+          })
+        ).rejects.toThrow(/unavailable for workspace/);
+        await vm.setBrowserDataSurface({
+          workspaceId: "personal",
+          section: "passwords",
+          dark: true,
+          bounds: { x: -10, y: 700, width: 1300, height: 200 },
+        });
+        expect(surface.present).toHaveBeenCalledWith({
+          section: "passwords",
+          dark: true,
+          focus: "first",
+          bounds: { x: 0, y: 700, width: 1200, height: 100 },
+        });
+        expect(vm.hasBrowserDataSurface()).toBe(true);
+        expect(mockWindow.contentView.children.at(-1)).toBe(surface.view);
+        expect(vm.getViewIds()).toEqual(["chrome-client"]);
+        expect(vm.findViewIdByWebContentsId(surface.view.webContents.id)).toBeNull();
+        expect(surface.view.webContents.focus).toHaveBeenCalledOnce();
+
+        await vm.setBrowserDataSurface({
+          workspaceId: "personal",
+          section: "autofill",
+          dark: true,
+          bounds: { x: 50, y: 100, width: 500, height: 400 },
+        });
+        expect(surface.view.webContents.focus).toHaveBeenCalledOnce();
+        expect(surface.close).not.toHaveBeenCalled();
+        expect(vm.dismissBrowserDataSurface()).toBe("personal");
+        expect(vm.hasBrowserDataSurface()).toBe(false);
+        expect(mockWindow.contentView.children).not.toContain(surface.view);
+        expect(chrome.focus).toHaveBeenCalled();
+      } finally {
+        release();
+        vm.destroy();
+      }
+    });
+
+    it("revokes pending presentations on replacement, settings closure, and workspace retirement", async () => {
+      const vm = new ViewManager({ window: mockWindow, ...testChromeOptions() });
+      openChrome(vm);
+      const first = browserDataSurface();
+      const second = browserDataSurface();
+      let finish!: () => void;
+      first.present.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          })
+      );
+      const releaseFirst = vm.registerBrowserDataSurface("first", first);
+      const releaseSecond = vm.registerBrowserDataSurface("second", second);
+      const bounds = { x: 50, y: 100, width: 500, height: 400 };
+      try {
+        const pending = vm.setBrowserDataSurface({
+          workspaceId: "first",
+          section: "passwords",
+          dark: true,
+          bounds,
+        });
+        await vm.setBrowserDataSurface({
+          workspaceId: "second",
+          section: "siteData",
+          dark: true,
+          bounds,
+        });
+        expect(first.close).toHaveBeenCalledOnce();
+        finish();
+        await pending;
+        expect(mockWindow.contentView.children).not.toContain(first.view);
+        expect(mockWindow.contentView.children.at(-1)).toBe(second.view);
+
+        vm.setShellOverlayActive(true);
+        vm.setShellOverlayActive(false);
+        expect(second.close).toHaveBeenCalledOnce();
+        expect(vm.hasBrowserDataSurface()).toBe(false);
+        await vm.setBrowserDataSurface({
+          workspaceId: "first",
+          section: "autofill",
+          dark: true,
+          bounds,
+        });
+        await expect(
+          vm.setBrowserDataSurface({
+            workspaceId: "unregistered",
+            section: "passwords",
+            dark: true,
+            bounds,
+          })
+        ).rejects.toThrow(/unavailable for workspace/);
+        expect(vm.hasBrowserDataSurface()).toBe(false);
+        expect(mockWindow.contentView.children).not.toContain(first.view);
+        await vm.setBrowserDataSurface({
+          workspaceId: "first",
+          section: "autofill",
+          dark: true,
+          bounds,
+        });
+        releaseFirst();
+        expect(vm.hasBrowserDataSurface()).toBe(false);
+        await expect(
+          vm.setBrowserDataSurface({
+            workspaceId: "first",
+            section: "autofill",
+            dark: true,
+            bounds,
+          })
+        ).rejects.toThrow(/unavailable for workspace/);
+      } finally {
+        releaseFirst();
+        releaseSecond();
+        vm.destroy();
+      }
+    });
+
+    it("retains keyboard focus intent through layout updates and propagates presentation failures", async () => {
+      const vm = new ViewManager({ window: mockWindow, ...testChromeOptions() });
+      openChrome(vm);
+      const surface = browserDataSurface();
+      let finish!: () => void;
+      surface.present.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve;
+          })
+      );
+      const release = vm.registerBrowserDataSurface("personal", surface);
+      const options = {
+        workspaceId: "personal",
+        section: "passwords" as const,
+        dark: true,
+        bounds: { x: 50, y: 100, width: 500, height: 400 },
+      };
+      try {
+        const pending = vm.setBrowserDataSurface(options);
+        await vm.setBrowserDataSurface({ ...options, bounds: { ...options.bounds, width: 600 } });
+        expect(surface.present).toHaveBeenLastCalledWith({
+          section: "passwords",
+          dark: true,
+          focus: "first",
+          bounds: { ...options.bounds, width: 600 },
+        });
+        finish();
+        await pending;
+        expect(surface.view.webContents.focus).toHaveBeenCalledOnce();
+        const unavailable = new Error("Protected view failed to load");
+        surface.present.mockRejectedValueOnce(unavailable);
+        await expect(vm.setBrowserDataSurface(options)).rejects.toBe(unavailable);
+        expect(vm.hasBrowserDataSurface()).toBe(false);
+        expect(mockWindow.contentView.children).not.toContain(surface.view);
+      } finally {
+        release();
+        vm.destroy();
+      }
+    });
+  });
+
   describe("initialization", () => {
     it("keeps a workspace's granted chrome admission independent of other loaded manifests", async () => {
       const vm = new ViewManager({

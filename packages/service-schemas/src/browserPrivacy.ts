@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { BROWSER_DATA_SECTIONS } from "@vibestudio/shared/shellSurface";
 
 export const BROWSER_PRIVACY_FORM_FILL_TYPES = [
   "name",
@@ -55,36 +56,13 @@ export const BROWSER_PRIVACY_FORM_FILL_TYPES = [
 
 const PersistableFormFillTypeSchema = z.enum(BROWSER_PRIVACY_FORM_FILL_TYPES);
 
-export const BrowserPrivacySectionSchema = z.enum([
-  "credentials",
-  "formFill",
-  "inspect",
-  "debug",
-  "export",
-]);
+export const BrowserPrivacySectionSchema = z.enum(BROWSER_DATA_SECTIONS);
 export type BrowserPrivacySection = z.infer<typeof BrowserPrivacySectionSchema>;
 
 export const BrowserPrivacyRequestSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("diagnostics") }).strict(),
   z.object({ action: z.literal("applyCookies") }).strict(),
-  z.object({ action: z.literal("snapshot"), origin: z.string().max(4_096) }).strict(),
-  z
-    .object({
-      action: z.literal("snapshotPage"),
-      collection: z.enum(["passwords", "neverSave", "formFill", "cookieOrigins"]),
-      offset: z.number().int().nonnegative(),
-      limit: z.number().int().min(1).max(100),
-      origin: z.string().max(4_096),
-    })
-    .strict(),
-  z
-    .object({
-      action: z.literal("exportChunk"),
-      exportKind: z.enum(["passwords", "cookies"]),
-      format: z.enum(["csv-chrome", "csv-firefox", "json", "netscape-txt"]),
-      offset: z.number().int().nonnegative(),
-      chunkBytes: z.number().int().min(1).max(131_072),
-    })
-    .strict(),
+  z.object({ action: z.literal("snapshot") }).strict(),
   z.object({ action: z.literal("deletePassword"), id: z.number().int().nonnegative() }).strict(),
   z.object({ action: z.literal("removeNeverSave"), origin: z.string().url() }).strict(),
   z
@@ -105,7 +83,6 @@ export const BrowserPrivacyRequestSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("deleteFormFill"), id: z.number().int().nonnegative() }).strict(),
   z.object({ action: z.literal("clearFormFill") }).strict(),
   z.object({ action: z.literal("clearOrigin"), origin: z.string().url() }).strict(),
-  z.object({ action: z.literal("endSession") }).strict(),
   z.object({ action: z.literal("clearAllCookies") }).strict(),
   z
     .object({
@@ -134,6 +111,26 @@ const FormFillRowSchema = z
     value: z.string(),
   })
   .passthrough();
+export const BrowserCookieProjectionDiagnosticsSchema = z.object({
+  revision: z.number(),
+  hostId: z.string(),
+  converged: z.boolean(),
+  mismatchCount: z.number(),
+  outboxDepth: z.number(),
+  lastError: z.string().optional(),
+  lastFailure: z
+    .object({
+      message: z.string(),
+      occurredAt: z.string(),
+      recoveredAt: z.string().optional(),
+    })
+    .optional(),
+});
+
+export type BrowserCookieProjectionDiagnostics = z.infer<
+  typeof BrowserCookieProjectionDiagnosticsSchema
+>;
+
 export const BrowserPrivacySnapshotSchema = z
   .object({
     passwords: z.array(PasswordSummarySchema),
@@ -143,21 +140,6 @@ export const BrowserPrivacySnapshotSchema = z
       revision: z.number().int().nonnegative(),
       origins: z.array(z.string()),
     }),
-    inspect: z.object({
-      origin: z.string().url().nullable(),
-      passwordCount: z.number().int().nonnegative(),
-      cookieCount: z.number().int().nonnegative(),
-    }),
-    diagnostics: z
-      .object({
-        revision: z.number(),
-        hostId: z.string(),
-        converged: z.boolean(),
-        mismatchCount: z.number(),
-        outboxDepth: z.number(),
-        lastError: z.string().optional(),
-      })
-      .nullable(),
   })
   .strict();
 export type BrowserPrivacySnapshot = z.infer<typeof BrowserPrivacySnapshotSchema>;

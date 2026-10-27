@@ -262,6 +262,123 @@ describe("canonical browser cookie projection", () => {
     await service.stop?.(undefined);
   });
 
+  it("keeps initialization failures inspectable and retryable until successful recovery", async () => {
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "cookie-initialization-diagnostics-"));
+    const unavailable = new Error("Browser vault could not be opened");
+    const getBrowserEnvironment = vi.fn().mockRejectedValue(unavailable);
+    const onDiagnostics = vi.fn();
+    const onReady = vi.fn();
+    const service = createBrowserCookieProjectionService({
+      nativeStorageScope: "scope",
+      browserDataClient: { getBrowserEnvironment } as never,
+      browserVault: { ...originScopedReads(7, []), applyCookieMutations: vi.fn() } as never,
+      serverClient: {
+        onRecovery: () => () => {},
+        onConnectionStatusChange: () => () => {},
+        streamReadable: vi.fn(),
+        call: vi.fn().mockResolvedValue(null),
+      } as never,
+      hostId: "host",
+      outboxRoot: tempRoot,
+      createCookieJar: () => fakeCookieJar().jar,
+      onDiagnostics,
+      onReady,
+    });
+    try {
+      expect(service.diagnostics()).toEqual({
+        revision: 0,
+        hostId: "host",
+        converged: false,
+        mismatchCount: 0,
+        outboxDepth: 0,
+      });
+      await service.start?.(() => undefined);
+      await expect(service.applyCookies(new AbortController().signal)).rejects.toBe(unavailable);
+      expect(onReady).not.toHaveBeenCalled();
+      const failure = service.diagnostics().lastFailure;
+      expect(failure).toEqual({
+        message: expect.stringContaining(unavailable.message),
+        occurredAt: expect.any(String),
+      });
+      expect(service.diagnostics()).toMatchObject({
+        converged: false,
+        lastError: expect.stringContaining(unavailable.message),
+      });
+
+      let ready!: (identity: unknown) => void;
+      getBrowserEnvironment.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            ready = resolve;
+          })
+      );
+      const recovered = service.recover();
+      expect(service.diagnostics()).toMatchObject({ converged: false, lastFailure: failure });
+      expect(service.diagnostics().lastError).toBeUndefined();
+      ready({ workspaceId: "workspace", ownerUserId: "user", environmentKey: "environment" });
+      await recovered;
+      expect(onReady).toHaveBeenCalledOnce();
+      expect(service.diagnostics()).toMatchObject({
+        revision: 7,
+        converged: true,
+        lastFailure: { ...failure, recoveredAt: expect.any(String) },
+      });
+      expect(onDiagnostics).toHaveBeenLastCalledWith(service.diagnostics());
+      expect(service.diagnostics().lastError).toBeUndefined();
+      const returned = service.diagnostics();
+      returned.lastFailure!.message = "mutated outside the service";
+      expect(service.diagnostics().lastFailure?.message).toBe(failure?.message);
+    } finally {
+      await service.stop?.(undefined);
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps runtime-transition initialization pending without recording a failure", async () => {
+    let fail!: (error: unknown) => void;
+    const getBrowserEnvironment = vi.fn(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = reject;
+        })
+    );
+    const onUnavailable = vi.fn();
+    const onDiagnostics = vi.fn();
+    const service = createBrowserCookieProjectionService({
+      nativeStorageScope: "scope",
+      browserDataClient: { getBrowserEnvironment } as never,
+      browserVault: {} as never,
+      serverClient: {
+        onRecovery: () => () => {},
+        onConnectionStatusChange: () => () => {},
+        streamReadable: vi.fn(),
+      } as never,
+      hostId: "host",
+      outboxRoot: "/tmp/unused-cookie-transition-diagnostics",
+      onUnavailable,
+      onDiagnostics,
+    });
+    try {
+      await service.start?.(() => undefined);
+      const initializing = service.recover();
+      fail(Object.assign(new Error("runtime_restarting"), { code: "runtime_restarting" }));
+      await initializing;
+      expect(service.diagnostics()).toEqual({
+        revision: 0,
+        hostId: "host",
+        converged: false,
+        mismatchCount: 0,
+        outboxDepth: 0,
+      });
+      expect(onUnavailable).not.toHaveBeenCalled();
+      expect(
+        onDiagnostics.mock.calls.every(([value]) => !value.lastError && !value.lastFailure)
+      ).toBe(true);
+    } finally {
+      await service.stop?.(undefined);
+    }
+  });
+
   it.each(["server-account-a", "server-account-b"])(
     "attaches to authenticated %s storage when browser-data becomes ready",
     async (nativeStorageScope) => {
@@ -624,6 +741,108 @@ describe("canonical browser cookie projection", () => {
     }
   });
 
+  it("preserves website changes across reconciliation and storage failures", async () => {
+    vi.useFakeTimers();
+    const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
+    const state = fakeCookieJar();
+    const canonical: StoredCookie[] = [];
+    let revision = 0;
+    const onReady = vi.fn();
+    const onDiagnostics = vi.fn();
+    const applyCookieMutations = vi.fn(async () => {
+      canonical.push(stored());
+      revision += 1;
+    });
+    const service = createBrowserCookieProjectionService({
+      nativeStorageScope: "scope",
+      browserDataClient: {
+        getBrowserEnvironment: vi.fn().mockResolvedValue({
+          workspaceId: "workspace",
+          ownerUserId: "user",
+          environmentKey: "environment",
+        }),
+      } as never,
+      browserVault: {
+        listCookieOrigins: vi.fn(async () => ({ revision, origins: ["https://example.test"] })),
+        getCookiesForOrigin: vi.fn(async () => [...canonical]),
+        applyCookieMutations,
+      } as never,
+      serverClient: {
+        onRecovery: () => () => {},
+        onConnectionStatusChange: () => () => {},
+        streamReadable: vi.fn(),
+        call: vi.fn().mockResolvedValue(null),
+      } as never,
+      hostId: "host",
+      outboxRoot: tempRoot,
+      createCookieJar: () => state.jar,
+      onReady,
+      onDiagnostics,
+    });
+    try {
+      await service.start?.(() => undefined);
+      await service.applyCookies(new AbortController().signal);
+      await state.set(input());
+      await vi.advanceTimersByTimeAsync(150);
+      expect(onDiagnostics).toHaveBeenLastCalledWith(expect.objectContaining({ outboxDepth: 1 }));
+      // A revision notification or periodic pass can beat the outbox debounce.
+      await onReady.mock.calls[0]![0].reconcile();
+      expect(applyCookieMutations).toHaveBeenCalledOnce();
+      expect(state.jar.remove).not.toHaveBeenCalled();
+      expect(state.current()).toEqual([input()]);
+      expect(onDiagnostics).toHaveBeenLastCalledWith(
+        expect.objectContaining({ converged: true, mismatchCount: 0, outboxDepth: 0 })
+      );
+      expect(onDiagnostics.mock.calls.every(([diagnostics]) => !diagnostics.lastError)).toBe(true);
+
+      const updated = input({ value: "updated-on-website" });
+      await state.set(updated);
+      await vi.advanceTimersByTimeAsync(150);
+      const unavailable = new Error("Vault unavailable while saving website changes");
+      applyCookieMutations.mockRejectedValueOnce(unavailable);
+      await expect(service.applyCookies(new AbortController().signal)).rejects.toBe(unavailable);
+      expect(state.current()).toEqual([updated]);
+      expect(state.jar.remove).not.toHaveBeenCalled();
+      const failure = onDiagnostics.mock.lastCall![0].lastFailure;
+      expect(failure).toEqual({
+        message: expect.stringContaining(unavailable.message),
+        occurredAt: expect.any(String),
+      });
+      expect(onDiagnostics.mock.lastCall![0]).toMatchObject({
+        converged: false,
+        outboxDepth: 1,
+        lastError: expect.stringContaining(unavailable.message),
+      });
+
+      applyCookieMutations.mockImplementation(async () => {
+        canonical.splice(0, canonical.length, stored(updated));
+        revision += 1;
+      });
+      await onReady.mock.calls[0]![0].reconcile();
+      expect(onDiagnostics.mock.lastCall![0]).toMatchObject({
+        converged: true,
+        outboxDepth: 0,
+        lastFailure: { ...failure, recoveredAt: expect.any(String) },
+      });
+      expect(onDiagnostics.mock.lastCall![0].lastError).toBeUndefined();
+
+      // A pass can also arrive before the browser-change capture debounce.
+      const newest = input({ value: "changed-again-on-website" });
+      applyCookieMutations.mockImplementation(async () => {
+        canonical.splice(0, canonical.length, stored(newest));
+        revision += 1;
+      });
+      await state.set(newest);
+      await onReady.mock.calls[0]![0].reconcile();
+      expect(state.current()).toEqual([newest]);
+      expect(state.jar.remove).not.toHaveBeenCalled();
+      expect(onDiagnostics.mock.lastCall![0]).toMatchObject({ converged: true, outboxDepth: 0 });
+    } finally {
+      await service.stop?.(undefined);
+      await rm(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("captures browser-originated partitioned cookie changes with their complete identity", async () => {
     const tempRoot = await mkdtemp(path.join(os.tmpdir(), "browser-cookie-projection-"));
     const state = fakeCookieJar();
@@ -754,6 +973,12 @@ describe("canonical browser cookie projection", () => {
     try {
       await service.start?.(() => undefined);
       await vi.waitFor(() => expect(onReady).toHaveBeenCalledOnce());
+      reads.listCookieOrigins.mockRejectedValueOnce(
+        Object.assign(new Error("runtime_restarting"), { code: "runtime_restarting" })
+      );
+      await onReady.mock.calls[0]![0].reconcile();
+      expect(onReady.mock.calls[0]![0].diagnostics()).toMatchObject({ converged: false });
+      expect(onReady.mock.calls[0]![0].diagnostics().lastError).toBeUndefined();
       const initialReads = reads.listCookieOrigins.mock.calls.length;
 
       pushHealth("restarting", 1);

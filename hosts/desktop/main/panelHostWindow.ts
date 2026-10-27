@@ -6,7 +6,7 @@ import type { ClientMenus } from "./clientMenu.js";
 import type { PanelLocation } from "@vibestudio/shared/panelLocation";
 import type { PanelRegistry } from "@vibestudio/shared/panelRegistry";
 import { createDevLogger } from "@vibestudio/dev-log";
-import { ViewManager } from "./viewManager.js";
+import { ViewManager, type BrowserDataSurface } from "./viewManager.js";
 import { WorkspaceNativeViews } from "./workspaceNativeViews.js";
 import { PanelView } from "./panelView.js";
 import type { PanelOrchestrator } from "./panelOrchestrator.js";
@@ -43,6 +43,7 @@ export interface WorkspaceWindowServices {
   eventService: EventService;
   cdpHost: CdpRegistrationAdapter;
   formFillManager: FormFillManager | null;
+  browserDataSurface?: BrowserDataSurface | null;
   recordBrowserHistory?: boolean;
   browserFaviconObserver: BrowserFaviconObserver | null;
   getBrowserPermissionController(): BrowserPermissionController | null;
@@ -107,6 +108,14 @@ export class PanelHostWindow {
     return this.currentLifetime?.viewManager ?? null;
   }
 
+  closeBrowserDataSettings(workspaceId: string): void {
+    this.deps.eventService.emit("close-settings", { workspaceId });
+  }
+
+  focusBrowserDataBoundary(workspaceId: string, backward: boolean): void {
+    this.deps.eventService.emit("browser-data:focus-boundary", { workspaceId, backward });
+  }
+
   get panelView(): PanelView | null {
     const id = this.deps.getSystemWorkspaceId();
     return id ? this.getWorkspacePanelView(id) : null;
@@ -119,6 +128,10 @@ export class PanelHostWindow {
   focusWorkspace(workspaceId: string | null): void {
     if (workspaceId !== null && !this.workspaceServices.has(workspaceId))
       throw new Error(`Workspace is not open: ${workspaceId}`);
+    if (this.focusedWorkspaceId !== workspaceId) {
+      const closed = this.viewManager?.dismissBrowserDataSurface();
+      if (closed) this.closeBrowserDataSettings(closed);
+    }
     this.focusedWorkspaceId = workspaceId;
   }
 
@@ -261,7 +274,7 @@ export class PanelHostWindow {
     viewManager.onNativeSlotFocused((payload) => {
       const identity = viewManager.getViewInfo(payload.panelId)?.workspaceIdentity;
       if (!identity) return;
-      this.focusedWorkspaceId = identity.workspaceId;
+      this.focusWorkspace(identity.workspaceId);
       this.workspaceServices
         .get(identity.workspaceId)
         ?.eventService.emit("native-slot-focused", { ...payload, panelId: identity.runtimeId });
@@ -447,18 +460,27 @@ export class PanelHostWindow {
         browserHistoryRecorder,
       });
       lifetime.panelViews.set(services.serverSession.workspaceId, panelView);
+      const releases = this.workspaceViewReleases.get(services.serverSession.workspaceId) ?? [];
+      if (services.browserDataSurface)
+        releases.push(
+          viewManager.registerBrowserDataSurface(
+            services.serverSession.workspaceId,
+            services.browserDataSurface
+          )
+        );
       const formFillManager = services.formFillManager;
       if (formFillManager) {
         formFillManager.setWindow(window);
-        this.workspaceViewReleases.set(services.serverSession.workspaceId, [
+        releases.push(
           viewManager.onViewOrderChanged(() => formFillManager.onViewOrderChanged()),
           viewManager.onViewHidden((viewId) => {
             const identity = viewManager.getViewInfo(viewId)?.workspaceIdentity;
             if (identity?.workspaceId === services.serverSession.workspaceId)
               formFillManager.onPanelHidden(identity.runtimeId);
-          }),
-        ]);
+          })
+        );
       }
+      this.workspaceViewReleases.set(services.serverSession.workspaceId, releases);
     }
   }
 

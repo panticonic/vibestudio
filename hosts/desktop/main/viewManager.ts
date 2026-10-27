@@ -51,6 +51,7 @@ import {
   type NativePanelApplyResult,
   type NativePanelDesiredSnapshot,
   type NativePanelObservedSnapshot,
+  type BrowserDataSurfaceOptions,
 } from "@vibestudio/service-schemas/view";
 
 export interface HostedCodeIdentity {
@@ -78,6 +79,13 @@ export interface ViewBounds {
   y: number;
   width: number;
   height: number;
+}
+
+/** Protected settings stay outside the workspace view/automation registry. */
+export interface BrowserDataSurface {
+  present(options: Omit<BrowserDataSurfaceOptions, "workspaceId">): Promise<void>;
+  close(): void;
+  getVisibleView(): WebContentsView | null;
 }
 
 import { workspaceNativeViewId, type WorkspaceViewIdentity } from "./workspaceNativeViews.js";
@@ -311,6 +319,13 @@ export class ViewManager {
   private contextMenuContributors = new Map<string, ViewContextMenuContributor>();
   private nativeShellOverlay: ShellOverlayView;
   private shellContentOverlay: ContentOverlayManager;
+  private readonly browserDataSurfaces = new Map<string, BrowserDataSurface>();
+  private activeBrowserDataSurface: {
+    workspaceId: string;
+    surface: BrowserDataSurface;
+    pendingFocus?: "first" | "last";
+  } | null = null;
+  private browserDataPresentationGeneration = 0;
   /** Recent typing anywhere in the window; overlays that open unbidden yield to it. */
   private readonly typing = new TypingActivity();
   private readonly chromeShortcuts: ChromeShortcuts;
@@ -561,7 +576,12 @@ export class ViewManager {
         return;
       }
       const panelId = this.getFocusedPanelId();
-      if (!panelId || this.nativeShellOverlay.isVisible() || this.shellChromeInteractiveFocus)
+      if (
+        !panelId ||
+        this.hasBrowserDataSurface() ||
+        this.nativeShellOverlay.isVisible() ||
+        this.shellChromeInteractiveFocus
+      )
         return;
       // Chrome chords belong to the chrome, not to the panel: forwarding them
       // let the panel swallow the key and the menu accelerator never ran.
@@ -1847,6 +1867,7 @@ export class ViewManager {
    * is re-shown at its previous bounds.
    */
   setShellOverlayActive(active: boolean): void {
+    if (!active) this.dismissBrowserDataSurface();
     if (this.shellOverlayActive === active) return;
     this.shellOverlayActive = active;
 
@@ -1889,6 +1910,7 @@ export class ViewManager {
   }
 
   private focusVisibleView(managed: ManagedView): void {
+    if (this.hasBrowserDataSurface()) return;
     if (this.nativeShellOverlay.isVisible()) return;
     // Visibility and keyboard focus are separate concerns. A panel can finish
     // materializing long after the creation gesture that selected it. If the
@@ -1911,6 +1933,11 @@ export class ViewManager {
     const overlay = this.shellContentOverlay.getVisibleViews().at(-1);
     if (overlay && !overlay.webContents.isDestroyed()) {
       overlay.webContents.focus();
+      return;
+    }
+    const protectedView = this.activeBrowserDataSurface?.surface.getVisibleView();
+    if (protectedView && !protectedView.webContents.isDestroyed()) {
+      protectedView.webContents.focus();
       return;
     }
     const panelId = this.getFocusedPanelId() ?? this.visiblePanelId;
@@ -1938,6 +1965,110 @@ export class ViewManager {
     const hosted = hostId ? this.views.get(hostId) : undefined;
     if (hosted && !hosted.view.webContents.isDestroyed()) return hosted.view.webContents;
     return null;
+  }
+
+  registerBrowserDataSurface(workspaceId: string, surface: BrowserDataSurface): () => void {
+    if (this.browserDataSurfaces.has(workspaceId))
+      throw new Error(`Browser data settings are already registered for workspace: ${workspaceId}`);
+    this.browserDataSurfaces.set(workspaceId, surface);
+    return () => {
+      if (this.browserDataSurfaces.get(workspaceId) !== surface) return;
+      if (this.activeBrowserDataSurface?.surface === surface) this.dismissBrowserDataSurface();
+      else surface.close();
+      this.browserDataSurfaces.delete(workspaceId);
+    };
+  }
+
+  hasBrowserDataSurface(): boolean {
+    return this.activeBrowserDataSurface !== null;
+  }
+
+  focusShellChrome(): void {
+    if (!this.window.isDestroyed() && this.window.isFocused())
+      this.getShellChromeWebContents()?.focus();
+  }
+
+  /** Revoke the presentation before closing so pending loads cannot reattach. */
+  dismissBrowserDataSurface(): string | null {
+    this.browserDataPresentationGeneration += 1;
+    const active = this.activeBrowserDataSurface;
+    this.activeBrowserDataSurface = null;
+    if (!active) return null;
+    const view = active.surface.getVisibleView();
+    if (view && !this.window.isDestroyed()) this.window.contentView.removeChildView(view);
+    active.surface.close();
+    this.focusShellChrome();
+    return active.workspaceId;
+  }
+
+  async setBrowserDataSurface(options: BrowserDataSurfaceOptions | null): Promise<void> {
+    if (!options) {
+      this.dismissBrowserDataSurface();
+      return;
+    }
+    if (this.window.isDestroyed()) throw new Error("The browser settings window has closed");
+    const surface = this.browserDataSurfaces.get(options.workspaceId);
+    if (!surface) {
+      this.dismissBrowserDataSurface();
+      throw new Error(
+        `Browser data settings are unavailable for workspace: ${options.workspaceId}`
+      );
+    }
+    if (!Object.values(options.bounds).every(Number.isFinite))
+      throw new Error("Browser data settings require finite bounds");
+    const activated = this.activeBrowserDataSurface?.surface !== surface;
+    if (activated) {
+      this.dismissBrowserDataSurface();
+      this.activeBrowserDataSurface = {
+        workspaceId: options.workspaceId,
+        surface,
+        pendingFocus: "first",
+      };
+    }
+    if (options.focus) this.activeBrowserDataSurface!.pendingFocus = options.focus;
+    const pendingFocus = this.activeBrowserDataSurface?.pendingFocus;
+    const generation = ++this.browserDataPresentationGeneration;
+    const [windowWidth = 0, windowHeight = 0] = this.window.getContentSize();
+    const x = Math.round(Math.max(0, Math.min(windowWidth, options.bounds.x)));
+    const y = Math.round(Math.max(0, Math.min(windowHeight, options.bounds.y)));
+    const bounds = {
+      x,
+      y,
+      width: Math.max(
+        0,
+        Math.round(Math.min(windowWidth, options.bounds.x + options.bounds.width)) - x
+      ),
+      height: Math.max(
+        0,
+        Math.round(Math.min(windowHeight, options.bounds.y + options.bounds.height)) - y
+      ),
+    };
+    try {
+      await surface.present({
+        section: options.section,
+        dark: options.dark,
+        bounds,
+        ...(pendingFocus ? { focus: pendingFocus } : {}),
+      });
+      if (
+        generation !== this.browserDataPresentationGeneration ||
+        this.activeBrowserDataSurface?.surface !== surface ||
+        this.window.isDestroyed()
+      )
+        return;
+      this.reconcileNativeLayerOrder();
+      if (
+        pendingFocus &&
+        this.window.isFocused() &&
+        this.shellContentOverlay.getVisibleViews().length === 0
+      ) {
+        surface.getVisibleView()?.webContents.focus();
+        this.activeBrowserDataSurface.pendingFocus = undefined;
+      }
+    } catch (error) {
+      if (generation === this.browserDataPresentationGeneration) this.dismissBrowserDataSurface();
+      throw error;
+    }
   }
 
   showNativeShellOverlay(options: ShellOverlayOptions): void {
@@ -2362,6 +2493,10 @@ export class ViewManager {
         if (managed.id !== owner.id) this.window.contentView.removeChildView(managed.view);
       }
     }
+
+    const protectedSettingsView = this.activeBrowserDataSurface?.surface.getVisibleView();
+    if (protectedSettingsView && !protectedSettingsView.webContents.isDestroyed())
+      desired.push(protectedSettingsView);
 
     // No-op check: the layer tree is already correct when (a) the desired
     // managed views appear in relative order, (b) no other visible managed
@@ -3311,6 +3446,9 @@ export class ViewManager {
    * Clean up all views.
    */
   destroy(): void {
+    this.dismissBrowserDataSurface();
+    for (const surface of this.browserDataSurfaces.values()) surface.close();
+    this.browserDataSurfaces.clear();
     this.compositorRecovery.stop();
     this.nativeShellOverlay.destroy();
     this.shellContentOverlay.destroy();

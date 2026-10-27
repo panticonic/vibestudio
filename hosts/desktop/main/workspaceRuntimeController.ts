@@ -914,6 +914,7 @@ export function createDesktopWorkspaceRuntime(deps: {
                 browserPartition: partition,
                 downloads: downloadManager,
                 hostConnectionId,
+                openShellSurface: deps.app?.onOpenShellSurface,
               })
             )
           : Promise.resolve(null);
@@ -929,6 +930,7 @@ export function createDesktopWorkspaceRuntime(deps: {
           panelOrchestrator: controller.orchestrator,
           cdpHost,
           formFillManager: personalBrowser?.formFillManager ?? null,
+          browserDataSurface: personalBrowser?.browserDataSurface ?? null,
           browserFaviconObserver: personalBrowser?.browserFaviconObserver ?? null,
           recordBrowserHistory: deps.personal,
           getBrowserPermissionController: () => browserPermissions,

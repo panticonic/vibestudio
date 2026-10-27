@@ -4,6 +4,8 @@ export {
   BrowserPrivacyRequestSchema,
   BrowserPrivacySectionSchema,
   BrowserPrivacySnapshotSchema,
+  BrowserCookieProjectionDiagnosticsSchema,
+  type BrowserCookieProjectionDiagnostics,
   type BrowserPrivacyRequest,
   type BrowserPrivacySection,
   type BrowserPrivacySnapshot,

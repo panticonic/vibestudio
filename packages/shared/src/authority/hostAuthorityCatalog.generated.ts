@@ -8206,6 +8206,18 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "view.setBrowserDataSurface": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "native-effect",
+      family: "view.control",
+      rationale:
+        "The panel-hosting client supplies layout only; protected browser data remains in the host-owned view.",
+    },
+    capability: null,
+    presentation: null,
+  },
   "view.setFocusedPanelId": {
     tier: {
       tier: "open",

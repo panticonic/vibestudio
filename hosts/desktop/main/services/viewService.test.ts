@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 
 import { createViewService } from "./viewService.js";
 
-function makeViewManager(capabilities: string[] = [], opts: { id?: string; source?: string } = {}) {
+function makeViewManager(
+  capabilities: string[] = [],
+  opts: { id?: string; source?: string; hostChrome?: boolean } = {}
+) {
   const appId = opts.id ?? "@workspace-apps/shell";
   return {
     getViewInfo: vi.fn((id: string) =>
@@ -15,6 +18,7 @@ function makeViewManager(capabilities: string[] = [], opts: { id?: string; sourc
             visible: true,
             bounds: { x: 0, y: 0, width: 800, height: 600 },
             capabilities,
+            hostChrome: opts.hostChrome ?? false,
             codeIdentity: opts.source
               ? { source: opts.source, effectiveVersion: "test" }
               : undefined,
@@ -23,10 +27,41 @@ function makeViewManager(capabilities: string[] = [], opts: { id?: string; sourc
     ),
     setThemeCss: vi.fn(),
     setViewVisible: vi.fn(),
+    setBrowserDataSurface: vi.fn(async () => {}),
   };
 }
 
 describe("view service", () => {
+  it("admits only the panel-hosting client to lay out protected browser settings", async () => {
+    const vm = makeViewManager(["panel-hosting"], { hostChrome: true });
+    const service = createViewService({
+      workspaceId: "system-workspace",
+      getViewManager: () => vm as never,
+    });
+    const options = {
+      workspaceId: "personal-workspace",
+      section: "passwords",
+      dark: true,
+      bounds: { x: 100, y: 150, width: 700, height: 500 },
+    };
+    await service.handler(
+      { caller: createVerifiedCaller("@workspace-apps/shell", "client") },
+      "setBrowserDataSurface",
+      [options]
+    );
+    expect(vm.setBrowserDataSurface).toHaveBeenCalledWith(options);
+    for (const caller of [
+      createVerifiedCaller("ordinary-panel", "panel"),
+      createVerifiedCaller("ordinary-app", "client"),
+      createHostCaller("other-host", "shell"),
+    ]) {
+      await expect(service.handler({ caller }, "setBrowserDataSurface", [null])).rejects.toThrow(
+        /cannot host workspace views/
+      );
+    }
+    expect(vm.setBrowserDataSurface).toHaveBeenCalledTimes(1);
+  });
+
   it("admits verified native chrome for panel presentation through the canonical receiver", async () => {
     const nativeId = 'workspace:["system-workspace","client:browser:web:dev"]';
     const vm = makeViewManager(["panel-hosting"], {

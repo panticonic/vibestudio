@@ -1,4 +1,5 @@
 import { schemaRpcCaller } from "@vibestudio/rpc/internal";
+import { isReviewPending } from "@vibestudio/shared/authority/reviewPending";
 import { createHash, randomUUID } from "node:crypto";
 import { promises as fs } from "node:fs";
 import path from "node:path";
@@ -65,6 +66,7 @@ async function withAbort<T>(operation: () => Promise<T>, signal: AbortSignal): P
 export interface BrowserCookieProjectionService extends ManagedService {
   applyCookies(signal: AbortSignal): Promise<{ revision: number }>;
   recover(): Promise<void>;
+  diagnostics(): BrowserCookieProjectionDiagnostics;
 }
 
 const REVISION_DEBOUNCE_MS = 150;
@@ -104,6 +106,11 @@ export interface BrowserCookieProjectionDiagnostics {
   mismatchCount: number;
   outboxDepth: number;
   lastError?: string;
+  lastFailure?: {
+    message: string;
+    occurredAt: string;
+    recoveredAt?: string;
+  };
 }
 
 export interface BrowserCookieProjectionApi {
@@ -142,6 +149,42 @@ export function createBrowserCookieProjectionService(deps: {
   let stopConnection: (() => void) | null = null;
   let stopDependencyEvents: (() => void) | null = null;
   let lastWorkerdState: unknown;
+  let latestDiagnostics: BrowserCookieProjectionDiagnostics = {
+    revision: 0,
+    hostId: deps.hostId,
+    converged: false,
+    mismatchCount: 0,
+    outboxDepth: 0,
+  };
+
+  const diagnostics = (): BrowserCookieProjectionDiagnostics => ({
+    ...latestDiagnostics,
+    ...(latestDiagnostics.lastFailure ? { lastFailure: { ...latestDiagnostics.lastFailure } } : {}),
+  });
+
+  // Attachment and reconciliation are one service lifecycle. Keep its latest
+  // failure here so a recovered attachment cannot erase why settings offered
+  // a retry, and a failed attachment remains inspectable before an API exists.
+  const publish = (next: BrowserCookieProjectionDiagnostics): void => {
+    let failure = latestDiagnostics.lastFailure;
+    if (next.lastError) {
+      if (failure?.message !== next.lastError || failure.recoveredAt)
+        failure = { message: next.lastError, occurredAt: new Date().toISOString() };
+    } else if (next.converged && failure && !failure.recoveredAt) {
+      failure = { ...failure, recoveredAt: new Date().toISOString() };
+    }
+    latestDiagnostics = { ...next, ...(failure ? { lastFailure: failure } : {}) };
+    deps.onDiagnostics?.(diagnostics());
+  };
+
+  const publishPending = (): void =>
+    publish({
+      revision: latestDiagnostics.revision,
+      hostId: deps.hostId,
+      converged: false,
+      mismatchCount: latestDiagnostics.mismatchCount,
+      outboxDepth: latestDiagnostics.outboxDepth,
+    });
 
   const events = new EventsClient(
     schemaRpcCaller({
@@ -180,7 +223,7 @@ export function createBrowserCookieProjectionService(deps: {
       const cookieJar = deps.createCookieJar?.(partition) ?? new ChromiumCookieJar(partition);
       candidate = new BrowserCookieProjection({
         browserVault: deps.browserVault,
-        onDiagnostics: deps.onDiagnostics,
+        onDiagnostics: publish,
         signal,
         cookieJar,
         identity,
@@ -276,6 +319,18 @@ export function createBrowserCookieProjectionService(deps: {
     } catch (error) {
       lastInitializationError = error;
       if (!signal.aborted) {
+        if (isRuntimeRestartingError(error) || isReviewPending(error)) publishPending();
+        else
+          publish({
+            revision: latestDiagnostics.revision,
+            hostId: deps.hostId,
+            converged: false,
+            mismatchCount: latestDiagnostics.mismatchCount,
+            outboxDepth: latestDiagnostics.outboxDepth,
+            lastError: `Browser session initialization failed: ${messageOf(error)}`,
+          });
+      }
+      if (!signal.aborted && !isRuntimeRestartingError(error)) {
         await deps.onUnavailable?.(error);
         log.error(
           `Browser environment unavailable; continuing without cookie projection: ${
@@ -304,6 +359,7 @@ export function createBrowserCookieProjectionService(deps: {
     if (!initializing) {
       initializing = true;
       lastInitializationError = undefined;
+      publishPending();
       deps.onInitializing?.();
       initializationController = new AbortController();
       initializationTask = initialize(initializationController.signal).finally(() => {
@@ -319,6 +375,7 @@ export function createBrowserCookieProjectionService(deps: {
   return {
     name: "browser-cookie-projection",
     recover,
+    diagnostics,
     async applyCookies(signal) {
       signal.throwIfAborted();
       if (!started) throw new Error("Browser environment is stopped");
@@ -397,7 +454,7 @@ class BrowserCookieProjection {
    * are changes relative to this baseline, not differences from canonical
    * storage: a cookie that Chromium rejects must remain canonical and retryable.
    */
-  private observedBrowser = new Map<string, BrowserCookieInput>();
+  private observedBrowser: Map<string, BrowserCookieInput> | null = null;
   private appliedRevision = 0;
   private mismatchCount = 0;
   private lastError: string | undefined;
@@ -444,10 +501,7 @@ class BrowserCookieProjection {
     // Subscribe before touching either side. The Electron event is only a dirty
     // signal; the partition-complete CDP snapshot determines what changed.
     await this.deps.cookieJar.start(() => this.notifyBrowserChanged());
-    await this.queueOperation(async () => {
-      await this.flushOutbox();
-      await this.reconcileNow();
-    });
+    await this.queueOperation(() => this.reconcileNow());
     this.startPeriodicReconcile();
   }
 
@@ -480,10 +534,7 @@ class BrowserCookieProjection {
     this.runtimePaused = false;
     this.startPeriodicReconcile();
     // Converge immediately on readiness rather than waiting a full interval.
-    void this.queueOperation(async () => {
-      await this.flushOutbox();
-      await this.reconcileNow();
-    });
+    void this.queueOperation(() => this.reconcileNow());
     log.info("cookie projection resumed after workerd runtime restart");
   }
 
@@ -499,10 +550,7 @@ class BrowserCookieProjection {
   }
 
   async flush(origins?: string[]): Promise<{ revision: number }> {
-    await this.queueOperation(async () => {
-      await this.flushOutbox();
-      await this.reconcileNow(origins);
-    });
+    await this.queueOperation(() => this.reconcileNow(origins));
     if (!this.converged) {
       throw this.lastFailure ?? new Error(this.lastError ?? "Cookie projection did not converge");
     }
@@ -541,6 +589,8 @@ class BrowserCookieProjection {
   }
 
   private async captureBrowserChanges(): Promise<void> {
+    // Before initial materialization there is no browser baseline to diff.
+    if (!this.observedBrowser) return;
     const browser = await this.deps.cookieJar.snapshot();
     const actual = new Map(browser.cookies.map((cookie) => [cookieKeyString(cookie), cookie]));
     for (const [key, cookie] of actual) {
@@ -567,31 +617,19 @@ class BrowserCookieProjection {
     if (this.flushTimer) clearTimeout(this.flushTimer);
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
-      void this.queueOperation(async () => {
-        await this.flushOutbox();
-        await this.reconcileNow();
-      });
+      void this.queueOperation(() => this.reconcileNow());
     }, REVISION_DEBOUNCE_MS);
   }
 
   private async flushOutbox(): Promise<void> {
     while (this.outbox.length > 0) {
       const batch = this.outbox.slice(0, 250);
-      try {
-        await this.deps.browserVault.applyCookieMutations(
-          {
-            mutations: batch.map((entry) => entry.mutation),
-          },
-          this.deps.signal
-        );
-      } catch (error) {
-        if (isRuntimeRestartingError(error)) this.pauseForRuntimeRestart();
-        this.lastFailure = error;
-        this.lastError = `Cookie outbox flush failed: ${messageOf(error)}`;
-        this.converged = false;
-        await this.persistOutbox();
-        return;
-      }
+      await this.deps.browserVault.applyCookieMutations(
+        {
+          mutations: batch.map((entry) => entry.mutation),
+        },
+        this.deps.signal
+      );
       this.outbox.splice(0, batch.length);
       await this.persistOutbox();
     }
@@ -599,6 +637,16 @@ class BrowserCookieProjection {
 
   private async reconcileNow(origins?: string[]): Promise<void> {
     try {
+      // Every entry point must observe and publish website changes before
+      // treating the vault as authoritative. Revision events and the periodic
+      // pass can beat either debounce. If saving fails, preserve the browser
+      // state and the original failure.
+      await this.captureBrowserChanges();
+      if (this.flushTimer) {
+        clearTimeout(this.flushTimer);
+        this.flushTimer = null;
+      }
+      await this.flushOutbox();
       const snapshot = await this.readCanonicalCookies(origins);
       const canonical = snapshot.cookies;
       const current = (await this.deps.cookieJar.snapshot()).cookies;
@@ -674,15 +722,20 @@ class BrowserCookieProjection {
       if (this.converged) {
         this.lastFailure = undefined;
         this.lastLoggedWarning = undefined;
-      } else if (writeErrors.length)
-        this.lastFailure = new AggregateError(writeErrors, this.lastError);
-      else this.warnOnce(this.lastError ?? "Cookie projection did not converge");
+      } else {
+        if (writeErrors.length) this.lastFailure = new AggregateError(writeErrors, this.lastError);
+        this.warnOnce(this.lastError ?? "Cookie projection did not converge");
+      }
     } catch (error) {
       // A runtime generation transition is a lifecycle state, not a fault:
       // pause the loop and let the readiness signal resume it.
-      if (isRuntimeRestartingError(error)) this.pauseForRuntimeRestart();
       this.converged = false;
       this.lastFailure = error;
+      if (isRuntimeRestartingError(error)) {
+        this.lastError = undefined;
+        this.pauseForRuntimeRestart();
+        return;
+      }
       this.lastError = `Cookie reconciliation failed: ${messageOf(error)}`;
       this.warnOnce(this.lastError);
     }

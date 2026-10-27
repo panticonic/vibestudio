@@ -28,6 +28,9 @@ interface MockViewManager {
   onViewCrashed: ReturnType<typeof vi.fn>;
   getViewIds: ReturnType<typeof vi.fn>;
   setWorkspaceProtectedViews: ReturnType<typeof vi.fn>;
+  registerBrowserDataSurface: ReturnType<typeof vi.fn>;
+  onViewOrderChanged: ReturnType<typeof vi.fn>;
+  onViewHidden: ReturnType<typeof vi.fn>;
 }
 
 const mocks = vi.hoisted(() => {
@@ -70,6 +73,9 @@ const mocks = vi.hoisted(() => {
       onViewCrashed: vi.fn(),
       getViewIds: vi.fn(() => []),
       setWorkspaceProtectedViews: vi.fn(),
+      registerBrowserDataSurface: vi.fn(() => vi.fn()),
+      onViewOrderChanged: vi.fn(() => vi.fn()),
+      onViewHidden: vi.fn(() => vi.fn()),
     } satisfies MockViewManager;
     viewManagers.push(viewManager);
     return viewManager;
@@ -294,6 +300,70 @@ describe("PanelHostWindow window lifetime", () => {
     const manager = expectPresent(mocks.viewManagers[0]);
     expect(manager.onNativeSlotFocused).toHaveBeenCalledOnce();
     expect(manager.onViewCrashed).toHaveBeenCalledOnce();
+  });
+
+  it("rebinds protected Browser data to each window generation and retires all workspace listeners", () => {
+    const harness = createHarness();
+    harness.controller.open("window:first");
+    const firstWindow = expectPresent(mocks.windows[0]);
+    const firstManager = expectPresent(mocks.viewManagers[0]);
+    const releaseBrowser = vi.fn(() => mocks.lifecycleEvents.push("browser:release"));
+    const releaseOrder = vi.fn(() => mocks.lifecycleEvents.push("order:release"));
+    const releaseHidden = vi.fn(() => mocks.lifecycleEvents.push("hidden:release"));
+    firstManager.registerBrowserDataSurface.mockReturnValueOnce(releaseBrowser);
+    firstManager.onViewOrderChanged.mockReturnValueOnce(releaseOrder);
+    firstManager.onViewHidden.mockReturnValueOnce(releaseHidden);
+    const surface = { present: vi.fn(), close: vi.fn(), getVisibleView: () => null };
+    const formFillManager = {
+      setWindow: vi.fn(),
+      onViewOrderChanged: vi.fn(),
+      onPanelHidden: vi.fn(),
+    };
+    const services = {
+      serverSession: { workspaceId: "personal" },
+      eventService: { emit: vi.fn() },
+      browserDataSurface: surface,
+      formFillManager,
+    } as unknown as WorkspaceWindowServices;
+    harness.controller.attachWorkspaceServices(services);
+    harness.controller.open("window:first");
+    expect(firstManager.registerBrowserDataSurface).toHaveBeenCalledExactlyOnceWith(
+      "personal",
+      surface
+    );
+    mocks.lifecycleEvents.length = 0;
+
+    firstWindow.emit("close");
+    expect(releaseBrowser).toHaveBeenCalledOnce();
+    expect(releaseOrder).toHaveBeenCalledOnce();
+    expect(releaseHidden).toHaveBeenCalledOnce();
+    expect(mocks.lifecycleEvents.slice(0, 4)).toEqual([
+      "browser:release",
+      "order:release",
+      "hidden:release",
+      "view:destroy",
+    ]);
+
+    harness.controller.open("window:second");
+    const secondWindow = expectPresent(mocks.windows[1]);
+    const secondManager = expectPresent(mocks.viewManagers[1]);
+    expect(secondManager.registerBrowserDataSurface).toHaveBeenCalledExactlyOnceWith(
+      "personal",
+      surface
+    );
+    expect(formFillManager.setWindow).toHaveBeenLastCalledWith(secondWindow);
+    const releaseSecondBrowser = secondManager.registerBrowserDataSurface.mock.results[0]!.value;
+    const releaseSecondOrder = secondManager.onViewOrderChanged.mock.results[0]!.value;
+    const releaseSecondHidden = secondManager.onViewHidden.mock.results[0]!.value;
+    firstWindow.emit("closed");
+    expect(releaseSecondBrowser).not.toHaveBeenCalled();
+
+    harness.controller.detachWorkspace("personal");
+    expect(releaseSecondBrowser).toHaveBeenCalledOnce();
+    expect(releaseSecondOrder).toHaveBeenCalledOnce();
+    expect(releaseSecondHidden).toHaveBeenCalledOnce();
+    secondWindow.emit("close");
+    expect(releaseSecondBrowser).toHaveBeenCalledOnce();
   });
 
   it("destroys the ViewManager exactly once before clearing owned references and globals", () => {

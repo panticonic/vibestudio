@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:8f3233c44ed51d28b3ba4521c157d08c1f9a2671fcfb057578ea0241566a5e5d",
+  "censusDigest": "sha256:61a076a13d49698fbc82db52079d4c663ecf28d1a34cf35a297b20eb67826409",
   "decisions": {
     "host:terminalApps.launch": {
       "review": "single-prepared-terminal-program-consent",
@@ -1928,6 +1928,10 @@
     "host:vcs.status#capability:filesystem.read": {
       "review": "repository-file-consent",
       "change": "Connected websites and their agents acquire read or write consent per owning workspace repository. Repository metadata shares read consent; workspace-wide discovery remains list-only and whole-state content queries require workspace read consent. Non-repository paths retain file/folder scopes. Copy and move check both endpoint effects; prepared disk execution retains exact resolved path bindings. Existing narrow grants are not widened, and membership, revocation, publication, and lifecycle checks remain in force."
+    },
+    "host:view.setBrowserDataSurface": {
+      "review": "protected-browser-data-settings-layout",
+      "change": "Allows only the authenticated panel-hosting client to place an already registered workspace Browser data view inside Settings. The receiver checks the live client capability and derives protected storage from the registered desktop owner; supplied layout, theme, and subsection carry no protected data. Ordinary panels and websites cannot present the view or read its values, and no gated browser-vault authority is widened."
     }
   },
   "version": 1

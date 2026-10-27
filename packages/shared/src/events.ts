@@ -108,6 +108,8 @@ export type EventName =
   | "workspace-focused"
   | "hub:workspace-catalog-changed"
   | "open-settings"
+  | "close-settings"
+  | "browser-data:focus-boundary"
   | "open-command-palette"
   | "open-command-agent"
   | "run-panel-command"
@@ -362,7 +364,10 @@ export interface EventPayloads {
   "open-settings": {
     section: SettingsSection;
     workspaceId?: string;
+    browserDataSection?: import("./shellSurface.js").BrowserDataSection;
   };
+  "close-settings": { workspaceId: string };
+  "browser-data:focus-boundary": { workspaceId: string; backward: boolean };
   /**
    * Open the command overlay over the focused panel. One event for one key: the
    * overlay resumes that panel's agent conversation when it has one and shows
@@ -649,6 +654,8 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "workspace-focused",
   "hub:workspace-catalog-changed",
   "open-settings",
+  "close-settings",
+  "browser-data:focus-boundary",
   "open-command-palette",
   "open-command-agent",
   "run-panel-command",

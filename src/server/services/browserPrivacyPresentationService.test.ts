@@ -46,24 +46,24 @@ describe("browser privacy presentation router", () => {
   it("opens on the exact desktop shell that issued the initiating panel grant", async () => {
     const f = fixture("desktop");
     await expect(
-      f.service.handler(providerContext() as never, "open", ["inspect"])
+      f.service.handler(providerContext() as never, "open", ["siteData"])
     ).resolves.toBeUndefined();
     expect(f.desktopCall).toHaveBeenCalledWith(
       f.shell.caller.runtime.id,
       "desktopBrowserPrivacyPresentation.open",
-      ["inspect"]
+      ["siteData"]
     );
   });
 
   it("opens the packaged manager on the exact authorizing mobile shell", async () => {
     const f = fixture("mobile");
     await expect(
-      f.service.handler(providerContext() as never, "open", ["debug"])
+      f.service.handler(providerContext() as never, "open", ["siteData"])
     ).resolves.toBeUndefined();
     expect(f.desktopCall).toHaveBeenCalledWith(
       f.shell.caller.runtime.id,
       "mobileBrowserPrivacyPresentation.open",
-      ["debug"]
+      ["siteData"]
     );
   });
 

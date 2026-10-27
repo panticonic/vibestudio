@@ -35787,6 +35787,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:view.setBrowserDataSurface",
+      "rpcPlane": "host-service",
+      "owner": "view",
+      "method": "setBrowserDataSurface",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "native-effect",
+      "mechanismFamily": "view.control",
+      "reviewRationale": "The panel-hosting client supplies layout only; protected browser data remains in the host-owned view.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:view.setBrowserDataSurface"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host",
+        "code"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:view.setBrowserDataSurface),allOf(capability(user,service:view.setBrowserDataSurface),workspace-member),allOf(capability(code,service:view.setBrowserDataSurface),workspace-member))",
+      "r3b": {
+        "review": "protected-browser-data-settings-layout",
+        "change": "Allows only the authenticated panel-hosting client to place an already registered workspace Browser data view inside Settings. The receiver checks the live client capability and derives protected storage from the registered desktop owner; supplied layout, theme, and subsection carry no protected data. Ordinary panels and websites cannot present the view or read its values, and no gated browser-vault authority is widened."
+      },
+      "capability": "service:view.setBrowserDataSurface",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:view.setFocusedPanelId",
       "rpcPlane": "host-service",
       "owner": "view",

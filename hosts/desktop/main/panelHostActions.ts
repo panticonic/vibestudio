@@ -49,6 +49,12 @@ export class PanelHostActions {
 
   async run(action: PanelHostAction): Promise<void> {
     const { viewManager: vm } = this.deps;
+    if (
+      vm.hasBrowserDataSurface() &&
+      action !== "toggle-fullscreen" &&
+      action !== "toggle-client-devtools"
+    )
+      return;
     switch (action) {
       case "zoom-in":
       case "zoom-out": {

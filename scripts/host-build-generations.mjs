@@ -24,7 +24,7 @@ const REQUIRED = {
     "adblock-engine-worker.cjs",
     "server-electron.cjs",
     "panelPreload.cjs",
-    "browserPrivacyPreload.cjs",
+    "browserDataPreload.cjs",
     "browserTransport.js",
     "fs-disk-worker.cjs",
     ...Object.values(NATIVE_WORKSPACE_ENTRIES),

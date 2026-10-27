@@ -51,7 +51,7 @@ export function createBrowserPrivacyPresentationService(
       if (!shell || shell.caller.runtime.kind !== "shell" || !userId || shell.userId !== userId) {
         throw new Error("The initiating panel has no exact live authorizing shell");
       }
-      const section = BrowserPrivacySectionSchema.parse(args[0] ?? "credentials");
+      const section = BrowserPrivacySectionSchema.parse(args[0] ?? "passwords");
       if (shell.clientPlatform === "desktop") {
         const callerId = shell.caller.runtime.id;
         const bridge = deps.getClientBridge(callerId);

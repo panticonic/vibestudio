@@ -106,7 +106,7 @@ export interface SensitiveBrowserImportPreview {
   openTabCount: number;
   localDataSetCount: number;
 }
-export type BrowserPrivacySection = "credentials" | "formFill" | "inspect" | "debug" | "export";
+export type BrowserPrivacySection = import("@vibestudio/shared/shellSurface").BrowserDataSection;
 
 export interface BrowserDataClient {
   getBrowserEnvironment(signal?: AbortSignal): Promise<BrowserEnvironmentIdentity>;
@@ -138,7 +138,7 @@ export interface BrowserDataClient {
     options?: { afterVersion?: string; signal?: AbortSignal }
   ): Promise<SensitiveBrowserImportStatus>;
   cancelSensitiveImport(operationId: string): Promise<SensitiveBrowserImportStatus>;
-  openBrowserPrivacyManager(section?: BrowserPrivacySection): Promise<void>;
+  openBrowserDataSettings(section?: BrowserPrivacySection): Promise<void>;
   cancelImport(jobId: string): Promise<void>;
   getImportJob(jobId: string): Promise<ImportJobSnapshot | null>;
   /** Wait for the next published snapshot; cancellation releases only observation. */
@@ -261,7 +261,7 @@ export const browserDataProviderRpcMethods = createReceiverRpcMethods<BrowserDat
   "startSensitiveImport",
   "observeSensitiveImport",
   "cancelSensitiveImport",
-  "openBrowserPrivacyManager",
+  "openBrowserDataSettings",
   "cancelImport",
   "getImportJob",
   "observeImportJob",
@@ -346,7 +346,7 @@ export function createBrowserDataClient(rpc: BrowserDataRpc): BrowserDataClient 
         { signal: options?.signal }
       ),
     cancelSensitiveImport: (operationId) => callNative("cancelSensitiveImport", operationId),
-    openBrowserPrivacyManager: (section) => callNative("openBrowserPrivacyManager", section),
+    openBrowserDataSettings: (section) => callNative("openBrowserDataSettings", section),
     cancelImport: (jobId) => callNative("cancelImport", jobId),
     getImportJob: (jobId) => callNative("getImportJob", jobId),
     observeImportJob: (jobId, options) =>

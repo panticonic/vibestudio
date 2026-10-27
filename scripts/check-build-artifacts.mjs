@@ -226,20 +226,20 @@ const contracts = [
     ],
   },
   {
-    path: "dist/browserPrivacyPreload.cjs",
-    runtime: "host-owned browser privacy preload",
+    path: "dist/browserDataPreload.cjs",
+    runtime: "protected Browser data settings preload",
     format: "cjs",
-    mustContain: ["vibestudio:browser-privacy:call", "contextBridge"],
+    mustContain: ["vibestudio:browser-data:call", "vibestudio:browser-data:ready"],
     forbidden: [
       {
         pattern: "nodeIntegration: true",
-        reason: "The protected-data presentation must remain a narrow context-bridge surface.",
+        reason: "Protected settings execute only the isolated sandboxed preload.",
       },
     ],
   },
   {
-    path: "dist/browserPrivacy.html",
-    runtime: "host-owned browser privacy document",
+    path: "dist/browserData.html",
+    runtime: "protected Browser data settings document",
     mustContain: ['id="content"', 'id="confirm"'],
     forbidden: [
       {

@@ -23,6 +23,9 @@ export async function registerPersonalBrowserServices(deps: {
   browserPartition: string;
   downloads: import("./services/browserDownloadManager.js").BrowserDownloadManager;
   hostConnectionId: string;
+  openShellSurface?: (
+    target: import("@vibestudio/shared/shellSurface").ShellSurfaceDescriptor
+  ) => void;
 }) {
   const {
     connection: conn,
@@ -52,12 +55,12 @@ export async function registerPersonalBrowserServices(deps: {
     ? [
         {
           id: `${projectionNoticeId}:privacy`,
-          label: "Open Browser Privacy",
+          label: "Open Browser data",
           invoke: {
             kind: "extension" as const,
             extension: browserDataBroker,
-            method: "openBrowserPrivacyManager",
-            args: ["debug"],
+            method: "openBrowserDataSettings" satisfies keyof typeof browserDataClient,
+            args: ["siteData"],
           },
         },
       ]
@@ -73,9 +76,7 @@ export async function registerPersonalBrowserServices(deps: {
   let browserImportHostProvider:
     | import("./services/browserImportHostProvider.js").BrowserImportHostProvider
     | null = null;
-  let browserPrivacyManager:
-    | import("./services/browserPrivacyManager.js").BrowserPrivacyManager
-    | null = null;
+  let browserDataView: import("./services/browserDataView.js").BrowserDataView | null = null;
 
   // Browser-data persistence lives on the server; Electron keeps only the
   // host-bound autofill adapter.
@@ -87,13 +88,23 @@ export async function registerPersonalBrowserServices(deps: {
           await import("./services/browserImportHostProvider.js");
         const { SensitiveBrowserImportLedger } =
           await import("./services/sensitiveBrowserImportLedger.js");
-        const { BrowserPrivacyManager } = await import("./services/browserPrivacyManager.js");
-        browserPrivacyManager = new BrowserPrivacyManager({
+        const { BrowserDataView } = await import("./services/browserDataView.js");
+        browserDataView = new BrowserDataView({
           vault: browserVault,
-          getProjection: () => browserCookieProjection,
+          getWindow: () => window.window,
+          workspaceName: conn.workspaceName,
+          onClose() {
+            window.viewManager?.dismissBrowserDataSurface();
+            window.closeBrowserDataSettings(conn.workspaceId);
+          },
+          onFocusBoundary(backward) {
+            window.viewManager?.focusShellChrome();
+            window.focusBrowserDataBoundary(conn.workspaceId, backward);
+          },
+          getDiagnostics: () => projectionService.diagnostics(),
           applyCookies: (signal) => projectionService.applyCookies(signal),
-          preloadPath: path.join(__dirname, "browserPrivacyPreload.cjs"),
-          htmlPath: path.join(__dirname, "browserPrivacy.html"),
+          preloadPath: path.join(__dirname, "browserDataPreload.cjs"),
+          htmlPath: path.join(__dirname, "browserData.html"),
         });
         browserImportHostProvider = new BrowserImportHostProvider(
           {
@@ -130,8 +141,8 @@ export async function registerPersonalBrowserServices(deps: {
         eventService.emit("notification:dismiss", { id: projectionNoticeId });
         await browserImportHostProvider?.stop();
         browserImportHostProvider = null;
-        browserPrivacyManager?.destroy();
-        browserPrivacyManager = null;
+        await browserDataView?.destroy();
+        browserDataView = null;
         if (formFillManager) {
           formFillManager.destroy();
           formFillManager = null;
@@ -150,6 +161,7 @@ export async function registerPersonalBrowserServices(deps: {
       outboxRoot: app.getPath("userData"),
       brokerPackageName: browserDataBroker,
       onDiagnostics(diagnostics) {
+        browserDataView?.notifyChanged();
         if (diagnostics.converged)
           eventService.emit("notification:dismiss", { id: projectionNoticeId });
         // Browser-originated cookies are briefly pending while their outbox
@@ -160,23 +172,21 @@ export async function registerPersonalBrowserServices(deps: {
             type: "error",
             ttl: 0,
             actions: projectionActions,
-            title: "Saved cookies could not be fully applied",
+            title: "Browser session synchronization encountered a problem",
             message:
-              "Your cookies are saved. Open Browser Privacy and choose Apply saved cookies to retry. Already-open pages may need a reload after application.",
+              "Your saved cookies are kept. Open Browser data settings to review the problem and retry.",
           });
       },
       onUnavailable(error) {
+        if (!isReviewPending(error)) return;
         eventService.emit("notification:show", {
           id: projectionNoticeId,
           type: "error",
           ttl: 0,
-          actions: isReviewPending(error) ? [] : projectionActions,
-          title: isReviewPending(error)
-            ? "Browser sessions need approval"
-            : "Saved browser sessions are unavailable",
-          message: isReviewPending(error)
-            ? "Complete the pending workspace review to apply your saved cookies. Your saved data has been kept."
-            : "Your saved cookies have been kept. Open Browser Privacy and choose Apply saved cookies to retry; you do not need to import again.",
+          actions: [],
+          title: "Browser sessions need approval",
+          message:
+            "Complete the pending workspace review to apply your saved cookies. Your saved data has been kept.",
         });
       },
       async onReady(api) {
@@ -223,12 +233,24 @@ export async function registerPersonalBrowserServices(deps: {
   const { createDesktopBrowserPrivacyPresentation } =
     await import("./services/desktopBrowserPrivacyPresentation.js");
   const desktopBrowserPrivacyPresentation = createDesktopBrowserPrivacyPresentation({
-    getPrivacyManager: () => browserPrivacyManager,
+    openSettings(section) {
+      if (!browserDataView || !deps.openShellSurface)
+        throw new Error("Browser data settings are unavailable");
+      deps.openShellSurface({
+        kind: "settings",
+        section: "browser-data",
+        workspaceId: conn.workspaceId,
+        browserDataSection: section,
+      });
+    },
   });
   container.registerRpc(desktopBrowserPrivacyPresentation);
   return {
     publishedServices: [desktopBrowserPrivacyPresentation, desktopBrowserEnvironment],
     browserVault,
+    get browserDataSurface() {
+      return browserDataView;
+    },
     get formFillManager() {
       return formFillManager;
     },

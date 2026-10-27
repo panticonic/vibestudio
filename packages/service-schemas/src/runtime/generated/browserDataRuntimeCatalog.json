@@ -85,12 +85,12 @@
     ],
     "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport interface SensitiveBrowserImportStatus {\n  operationId: string;\n  state: \"running\" | \"applying\" | \"application_failed\" | \"complete\" | \"cancelled\" | \"failed\";\n  counts: SensitiveBrowserImportCount[];\n  error?: string;\n  /** Opaque status version; pass it back as `afterVersion` to await the next change. */\n  version: string;\n}\n\nexport interface SensitiveBrowserImportCount {\n  dataType: SensitiveBrowserImportDataType;\n  read: number;\n  stored: number;\n  skipped: number;\n  errors: number;\n}\n\nexport type SensitiveBrowserImportDataType = Extract<\n  BrowserImportDataType,\n  \"cookies\" | \"passwords\" | \"formFill\"\n>;\n\nexport type BrowserImportDataType = (typeof BROWSER_IMPORT_DATA_TYPES)[number];\n```"
   },
-  "openBrowserPrivacyManager": {
-    "signature": "browserData.openBrowserPrivacyManager(section?: BrowserPrivacySection): Promise<void>",
+  "openBrowserDataSettings": {
+    "signature": "browserData.openBrowserDataSettings(section?: BrowserPrivacySection): Promise<void>",
     "argumentNames": [
       "section"
     ],
-    "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport type BrowserPrivacySection = \"credentials\" | \"formFill\" | \"inspect\" | \"debug\" | \"export\";\n```"
+    "description": "Public source contract from @vibestudio/browser-data/client. Referenced dependency types retain their source names and imports.\n\n```ts\nexport type BrowserPrivacySection = import(\"@vibestudio/shared/shellSurface\").BrowserDataSection;\n```"
   },
   "cancelImport": {
     "signature": "browserData.cancelImport(jobId: string): Promise<void>",
