@@ -85,7 +85,11 @@ import {
   verifyExecutionArtifactRef,
   type ExecutionArtifactRefV1,
 } from "@vibestudio/shared/execution/retention";
-import { buildOwnerBindings } from "./evalOwnerBindings.js";
+import {
+  buildOwnerBindings,
+  ownerIngestionRecorder,
+  type OwnerBindingArgs,
+} from "./evalOwnerBindings.js";
 import { ConsoleStreamer } from "./consoleStreamer.js";
 import {
   describeEvalBindingSurface,
@@ -3203,7 +3207,7 @@ export class EvalDO extends DurableObjectBase {
     // either one from replacing the other's causal edge, containment, or abort
     // signal.
     const rt = hardenBoundary(
-      this.createRunHostedRuntime(support, execution, args.gatewayToken, args.parent ?? null)
+      this.createRunHostedRuntime(support, execution, args.gatewayToken, args.parent ?? null, args)
     );
     // In path mode, load the entry file. The eval service validates exactly one of
     // `code` or `path`; this fallback remains defensive for direct/internal calls.
@@ -4375,7 +4379,8 @@ export class EvalDO extends DurableObjectBase {
     support: RuntimeSupportModule,
     execution: EvalExecutionContext,
     gatewayToken: string | undefined,
-    parent: RunArgs["parent"] | null
+    parent: RunArgs["parent"] | null,
+    owner: OwnerBindingArgs
   ): WorkspaceRuntimeLike {
     // Eval host calls must use the owner-scoped token minted for this exact
     // kernel. Falling back to the internal-DO service bearer would create a
@@ -4414,8 +4419,13 @@ export class EvalDO extends DurableObjectBase {
       parent,
       recordOperation
     );
+    // Resolved per call: this runtime can outlive the cell that built it.
+    const recordIngestion = ownerIngestionRecorder(owner, (target, method, values) =>
+      this.requireActiveEvalExecution().rpc.call(target, method, values)
+    );
     const host: Record<string, unknown> = {
       recordOperation,
+      ...(recordIngestion ? { recordIngestion } : {}),
       id: this.rpcSelfId,
       contextId: execution.contextId,
       rpc,

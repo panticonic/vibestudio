@@ -3326,7 +3326,8 @@ describe("EvalDO cancellation + forced recovery", () => {
         support: unknown,
         execution: unknown,
         gatewayToken: string,
-        parent: null
+        parent: null,
+        owner: Record<string, never>
       ) => {
         getPanelHandle(id: string): {
           cdp: { session(): Promise<unknown> };
@@ -3338,7 +3339,8 @@ describe("EvalDO cancellation + forced recovery", () => {
       support,
       executionA,
       "gateway-token",
-      null
+      null,
+      {}
     );
     const retainedHandle = runtime.getPanelHandle("panel:tree/retained");
     const receipt = {
@@ -3425,7 +3427,8 @@ describe("EvalDO cancellation + forced recovery", () => {
         support: unknown,
         execution: unknown,
         gatewayToken: string,
-        parent: null
+        parent: null,
+        owner: Record<string, never>
       ) => {
         fs: { exists(): Promise<unknown> };
         openExternal(url: string): Promise<unknown>;
@@ -3435,7 +3438,8 @@ describe("EvalDO cancellation + forced recovery", () => {
       support,
       executionA,
       "gateway-token",
-      null
+      null,
+      {}
     );
 
     await expect(runtime.fs.exists()).rejects.toThrow(/actively executing/);

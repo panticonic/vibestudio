@@ -77,14 +77,29 @@ function updateDoc(root, relativePath, replacements, checkOnly) {
   }
 }
 
+/**
+ * Contract modules owned by the Base template import `zod`, which resolves only
+ * where dependencies are installed. Load them with the host's copy.
+ */
+function tsImportUserlandContract(filePath) {
+  return tsImport(filePath, {
+    parentURL: import.meta.url,
+    tsconfig: path.join(repoRoot, "scripts/config/userland-schema-imports.tsconfig.json"),
+  });
+}
+
 async function updateRuntimeCatalog(schemaFile, exportName, catalogFile, checkOnly) {
-  const schemaPath = path.join(repoRoot, "packages/service-schemas/src", schemaFile);
+  const schemaPath = path.isAbsolute(schemaFile)
+    ? schemaFile
+    : path.join(repoRoot, "packages/service-schemas/src", schemaFile);
   const catalogPath = path.join(
     repoRoot,
     "packages/service-schemas/src/runtime/generated",
     catalogFile
   );
-  const module = await tsImport(schemaPath, import.meta.url);
+  const module = path.isAbsolute(schemaFile)
+    ? await tsImportUserlandContract(schemaPath)
+    : await tsImport(schemaPath, import.meta.url);
   const { renderBytesJsonSchema } = await tsImport(
     path.join(repoRoot, "packages/shared/src/binary.ts"),
     import.meta.url
@@ -156,6 +171,21 @@ await updateRuntimeCatalog(
   "templates.ts",
   "templatesMethods",
   "templatesRuntimeCatalog.json",
+  checkOnly
+);
+
+// Runtime-owned bindings whose zod contracts live beside their implementation in
+// the Base template (web search/fetch/read, memory recall).
+await updateRuntimeCatalog(
+  path.join(userlandRoot, "packages/web-core/src/contract.ts"),
+  "webMethods",
+  "webRuntimeCatalog.json",
+  checkOnly
+);
+await updateRuntimeCatalog(
+  path.join(userlandRoot, "packages/runtime/src/shared/memory.ts"),
+  "memoryMethods",
+  "memoryRuntimeCatalog.json",
   checkOnly
 );
 

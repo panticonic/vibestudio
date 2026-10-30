@@ -25,15 +25,24 @@ export type ServerLogLevel = z.infer<typeof ServerLogLevelSchema>;
 
 export const ServerLogRecordSchema = z.object({
   /** Monotonic per-boot sequence number — the streaming dedupe/catch-up cursor. */
-  seq: z.number().int(),
+  seq: z
+    .number()
+    .int()
+    .describe("Monotonic per-boot sequence number: the dedupe and catch-up cursor."),
   /** Epoch ms capture time. */
-  timestamp: z.number(),
+  timestamp: z.number().describe("Epoch ms capture time."),
   level: ServerLogLevelSchema,
   /** Subsystem tag parsed from the conventional `[Tag]` log prefix. */
-  tag: z.string().optional(),
+  tag: z
+    .string()
+    .optional()
+    .describe("Subsystem tag parsed from the conventional [Tag] log prefix."),
   message: z.string(),
   /** Structured trailing log args (JSON-safe). */
-  fields: z.array(z.unknown()).optional(),
+  fields: z
+    .array(z.unknown())
+    .optional()
+    .describe("Structured trailing log arguments (JSON-safe)."),
   pid: z.number().int(),
 });
 export type ServerLogRecord = z.infer<typeof ServerLogRecordSchema>;
@@ -42,31 +51,59 @@ export type ServerLogRecord = z.infer<typeof ServerLogRecordSchema>;
 const ServerLogEnvelopeSchema = z.object({
   records: z.array(ServerLogRecordSchema),
   /** Highest seq captured so far — pass as `sinceSeq` to catch up. */
-  latestSeq: z.number().int(),
+  latestSeq: z
+    .number()
+    .int()
+    .describe("Highest seq captured so far. Pass as sinceSeq to catch up."),
   workspaceId: z.string(),
-  serverBootId: z.string(),
+  serverBootId: z
+    .string()
+    .describe("Identifies this server boot. Reset any cursor when it changes."),
   pid: z.number().int(),
   /** Epoch ms when this server boot started capturing. */
-  startedAt: z.number(),
+  startedAt: z.number().describe("Epoch ms when this server boot started capturing."),
 });
 
 export const ServerLogQuerySchema = z.object({
   /** Only records with seq > sinceSeq (streaming catch-up cursor). */
-  sinceSeq: z.number().int().optional(),
+  sinceSeq: z
+    .number()
+    .int()
+    .optional()
+    .describe("Only records with seq greater than this (catch-up cursor)."),
   /** Freeze an exact per-boot upper sequence boundary. */
-  untilSeq: z.number().int().nonnegative().optional(),
+  untilSeq: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe("Freeze an exact per-boot upper sequence boundary."),
   /** Epoch-ms lower bound (inclusive). */
-  since: z.number().optional(),
+  since: z.number().optional().describe("Epoch-ms lower bound (inclusive)."),
   /** Epoch-ms upper bound (inclusive). */
-  until: z.number().optional(),
+  until: z.number().optional().describe("Epoch-ms upper bound (inclusive)."),
   /** Minimum level: verbose < info < warn < error. */
-  level: ServerLogLevelSchema.optional(),
+  level: ServerLogLevelSchema.optional().describe("Minimum level: verbose < info < warn < error."),
   /** Exact subsystem tag (see stats().byTag for the live tag list). */
-  tag: z.string().max(64).optional(),
+  tag: z
+    .string()
+    .max(64)
+    .optional()
+    .describe("Exact subsystem tag (see stats().byTag for the live tag list)."),
   /** Case-insensitive substring match on the message. */
-  contains: z.string().max(256).optional(),
+  contains: z
+    .string()
+    .max(256)
+    .optional()
+    .describe("Case-insensitive substring match on the message."),
   /** Max records (default 500, max 5000). Keeps the MOST RECENT matches. */
-  limit: z.number().int().min(1).max(5000).optional(),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(5000)
+    .optional()
+    .describe("Max records (default 500, max 5000). Keeps the MOST RECENT matches."),
 });
 
 const ServerLogStatsSchema = z.object({
