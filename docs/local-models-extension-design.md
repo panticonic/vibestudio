@@ -128,12 +128,15 @@ Codebase (paths verified 2026-07-07):
 
 llama.cpp / model ecosystem (researched 2026-07-07):
 
-- **Official prebuilt binaries** per OS/arch/backend from
-  `github.com/ggml-org/llama.cpp/releases` (tags `bNNNN`, multiple per day).
-  Systematic asset names, e.g. `llama-<build>-bin-ubuntu-x64-vulkan.tar.gz`,
-  `llama-<build>-bin-win-cuda-12.4-x64.zip` (+ separate `cudart-…` zip),
-  `llama-<build>-bin-macos-arm64.tar.gz` (Metal). Backends: CUDA 12.4/13.3, Vulkan,
-  ROCm/HIP, SYCL, OpenVINO, CPU (x64/arm64).
+- **Prebuilt binaries** per OS/arch/backend from the releases of natlang's llama.cpp
+  fork, `github.com/werg/llama.cpp-neuralese/releases` (tags `natlang-bNNNN`, built by
+  the fork's `natlang-runtime` workflow with upstream's release flags). Each release
+  carries a `natlang-runtime.json` manifest (`natlang.llama-runtime-release/2`) that
+  lists, per archive, `os`, `arch`, `backends`, `role` (`server`, or `cudart` for the
+  CUDA runtime DLLs of a Windows CUDA build), byte length and SHA-256; consumers select
+  by those fields, not by file name. Backends: CUDA 12.4/13.4 (Windows), Vulkan
+  (Linux, Windows), ROCm (Linux), Metal (macOS arm64), CPU (x64/arm64). The fork adds
+  decision scoring, guided generation and native states to upstream's server.
 - **`llama-server`** speaks OpenAI-compatible `/v1/chat/completions` (SSE streaming),
   `/v1/models`, plus native `/health`, `/props`, `/slots`. Tool calling via `--jinja`
   (chat-template autoparser + GBNF-constrained output, lazy grammars, streaming JSON
@@ -249,7 +252,7 @@ Probed once at activation, cached in extension storage, re-probed on demand
 (panel "Re-detect" button) and on OS/driver-version change:
 
 - **GPU**: NVIDIA via `nvidia-smi --query-gpu=name,memory.total,driver_version
---format=csv` (also yields the CUDA-runtime ceiling → pick the cuda-12.4 vs 13.3
+--format=csv` (also yields the CUDA-runtime ceiling → pick the cuda-12.4 vs 13.4
   build); AMD via `rocm-smi` else Vulkan; any-vendor fallback `vulkaninfo --summary`;
   Apple via `system_profiler`/Metal (unified memory). Multi-GPU: prefer the discrete
   device (e.g. RTX 4060 over an iGPU like the Radeon 760M).
@@ -267,7 +270,7 @@ interface HardwareProfile {
     vendor: "nvidia" | "amd" | "intel" | "apple";
     name: string;
     vramMB: number;
-    backend: "cuda-12.4" | "cuda-13.3" | "vulkan" | "rocm" | "metal";
+    backend: "cuda-12.4" | "cuda-13.4" | "vulkan" | "rocm" | "metal";
     discrete: boolean;
   }>;
   cpu: { cores: number; features: string[] };
@@ -284,13 +287,18 @@ offload up to ~9 B Q4_K_M, partial offload to ~14 B; a GPU-less 8 GB laptop is
 
 ### 4.2 EngineInstaller
 
-- Resolves the newest known-good llama.cpp release (a **pinned build tag** shipped
-  with the extension, e.g. `b99xx`, not "latest" — llama.cpp releases many times a
-  day and we want a tested pair; the pin is bumped with extension updates, with a
-  panel override for opt-in newer builds).
-- Downloads **two** archives from `github.com/ggml-org/llama.cpp/releases`: the
-  universal CPU recovery build and the `chosenBackend` build (+ `cudart`
-  zip on Windows CUDA). Verified against the release's published checksums.
+- Uses a **pinned release** of natlang's llama.cpp fork shipped with the extension
+  (`ENGINE_PIN` in `index.ts`: the tag, e.g. `natlang-b12068`, and the SHA-256 of the
+  release's `natlang-runtime.json` manifest; never "latest" — we want a tested pair;
+  the pin is bumped with extension updates). There is no fallback to upstream binaries.
+- Downloads the manifest (checked against the pinned digest), then **two** archives
+  chosen from it by os/arch/backend: the universal CPU recovery build and the
+  `chosenBackend` build (+ its `cudart` archive on Windows CUDA). Each archive is
+  streamed to disk and accepted only if its byte length and SHA-256 equal the
+  manifest's; nothing is extracted before that. The manifest is fetched only when an
+  archive has to be installed. A backend the release does not publish for the platform
+  (CUDA on Linux, ROCm on Windows) fails that attempt and degrades like any other
+  backend failure, so NVIDIA GPUs on Linux run the Vulkan build.
 - Extracts to `<modelsRoot>/engines/<buildTag>/<backend>/` and smoke-tests each
   binary (`llama-server --version`, then a 1-token generation against a tiny GGUF)
   before marking it active; on GPU-build smoke-test failure it **degrades the main
@@ -731,7 +739,7 @@ details are expandable.
   extension approval; explicit prompt copy in §5). Ongoing operation needs no
   per-call approvals — inference is local and egress-free.
 - **Network egress** at runtime: download URLs are pinned in code to
-  `github.com/ggml-org` (engine) and `huggingface.co` (models). Both redirect to
+  `github.com/werg/llama.cpp-neuralese` (engine) and `huggingface.co` (models). Both redirect to
   CDN hosts (`release-assets.githubusercontent.com` / `objects.githubusercontent.com`
   for GitHub assets; `cdn-lfs*.hf.co` / xet CAS hosts for HF), so enforcement pins
   the _initial_ URL and verifies every downloaded byte against the checksum regime
@@ -746,8 +754,8 @@ details are expandable.
   §4.3), reaches the servers via `--api-key-file` (never a command-line argument,
   §4.4), and is injected executor-side at call time (§6.3) — it never enters the
   catalog snapshot, the journal, panel state, or `/proc/<pid>/cmdline`.
-- **Checksums**: engine archives verified against the pinned release's published
-  checksums; curated models against hashes pinned in the extension's catalog;
+- **Checksums**: the engine release manifest is verified against the digest pinned in
+  the extension, and each engine archive against the manifest's byte length and SHA-256; curated models against hashes pinned in the extension's catalog;
   ad-hoc HF pulls against the HF-published hash captured at download start
   (trust-on-first-download, recorded in the ModelRecord — §4.3); smoke tests before
   activation.
@@ -814,7 +822,7 @@ to end** — no mocked servers.
    spawning duplicate servers (exactly one utility server machine-wide); kill the
    owner → an attached instance takes the lock, servers recover, next turn succeeds.
 
-Unit tests: asset-name resolution across a HardwareProfile matrix; fit estimator;
+Unit tests: manifest-based archive resolution across a HardwareProfile matrix; fit estimator;
 catalog merge; availability reducer; fallback-selection matrix (credentials ×
 local-ready × stored-default). Manual platform passes: fresh install → offline chat
 on Linux/macOS/Windows; 7B full-offload on the RTX 4060 reference box.

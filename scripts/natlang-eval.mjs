@@ -29,9 +29,6 @@
  *     persist.
  *
  * Suite conventions
- *   - A suite imports natlang's API from `@workspace/natlang/evaluation` (`defineEvaluationSuite`, ...) and
- *     `@workspace/natlang/model` (`executorIdentityForChoice`, `loadModelConfiguration`, ...): type-checked in the
- *     workspace against the vendored declarations, resolved here to the staged bundle.
  *   - A suite lives beside its program as `suite.ts` + `cases.jsonl` in the template's workspace tree, and `--suite` names
  *     it by path relative to the workspace root (an absolute path inside a template checkout is mapped to that).
  *   - `suite.ts` default-exports an `EvaluationSuite` (natlang `defineEvaluationSuite`'s argument), with `program.root`
@@ -230,28 +227,6 @@ export function linkProjectedModules(workspaceRoot, nodeModulesDir) {
 }
 
 /**
- * The specifiers a suite imports natlang's evaluation API and model session API from. In the workspace they are the
- * type-only exports `@workspace/natlang/evaluation` and `/model` (the vendored declarations of this same bundle); here
- * they resolve to the staged bundle that runs the suite.
- */
-export function linkSuiteSpecifiers(modulesDir, entry) {
-  const directory = path.join(modulesDir, "@workspace", "natlang");
-  fs.mkdirSync(directory, { recursive: true });
-  fs.writeFileSync(
-    path.join(directory, "package.json"),
-    JSON.stringify({
-      name: "@workspace/natlang",
-      type: "module",
-      exports: { "./evaluation": "./evaluation.js", "./model": "./evaluation.js" },
-    })
-  );
-  fs.writeFileSync(
-    path.join(directory, "evaluation.js"),
-    `export * from ${JSON.stringify(pathToFileURL(entry).href)};\n`
-  );
-}
-
-/**
  * The executor (and judge) models of a suite, resolved as natlang's CLI resolves them: the profiles `suite.models` name,
  * opened as sessions of natlang's managed local runtime (or the external provider the profile selects).
  * Returns `{ identity, driver, judge, close }`; `close` stops what the sessions started.
@@ -434,7 +409,7 @@ export async function runNatlangEval(options, context, dependencies = defaultDep
       });
       retirements.unshift(projection.release);
       signal.throwIfAborted();
-      linkSuiteSpecifiers(linkProjectedModules(composition.root, projection.nodeModulesDir), entry);
+      linkProjectedModules(composition.root, projection.nodeModulesDir);
       const suiteRelative = locateSuite(options.suite, [composition.root], checkouts);
 
       const natlang = await deps.loadEval(entry);

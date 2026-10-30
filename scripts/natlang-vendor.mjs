@@ -2,13 +2,13 @@
 /**
  * Vendor natlang into the template checkouts that consume it, and verify what is vendored.
  *
- * natlang is not published to npm. Base's `@workspace/natlang` (the workerd core with TypeScript bundled in), the natlang dashboard assets, and
+ * natlang is not published to npm. Base's `@workspace/natlang` (workerd core), the natlang dashboard assets, and
  * System's `local-models` extension (llama manager) each carry generated bundles staged by natlang's own script
  * (`ts-host/scripts/stage-vibestudio.mjs`) from one pinned natlang commit, written beside a `natlang-pin.json` that
  * names the commit and every file's sha256. Vendored output is never edited by hand: run this script again.
  *
  *   pnpm natlang:vendor [--commit REF]
- *       Stage the workerd, dashboard and llama bundles of REF (default origin/main of NATLANG_REPO, ~/natlang) into the
+ *       Stage the core, dashboard and llama bundles of REF (default origin/main of NATLANG_REPO, ~/natlang) into the
  *       vendored directories below, from a temporary git worktree.
  *   pnpm natlang:vendor --check
  *       Hermetic: every vendored directory exists, has a well-formed pin of a clean commit, and its files match the
@@ -35,8 +35,7 @@ const PIN_SCHEMA = "natlang.vendor-pin/1";
 
 /** Where each natlang target is vendored: the template that consumes it, and the directory (the pin's root) in it. */
 export const VENDORED_TARGETS = [
-  { target: "workerd", template: "base", directory: "packages/natlang/vendor" },
-  { target: "evaluation", template: "base", directory: "packages/natlang/vendor-evaluation" },
+  { target: "core", template: "base", directory: "packages/natlang/vendor" },
   { target: "dashboard", template: "base", directory: "packages/natlang/vendor-dashboard" },
   { target: "llama", template: "system", directory: "extensions/local-models/vendor" },
 ];
