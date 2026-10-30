@@ -308,6 +308,13 @@ function recordStateArgs(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+export interface DoCodeExecutable {
+  readonly source: string;
+  readonly effectiveVersion: string;
+  readonly buildKey: string;
+  readonly executionDigest: string;
+}
+
 function runtimeExecutableVersion(
   image: Pick<RuntimeImageRecord, "artifact" | "authority">
 ): string {
@@ -732,7 +739,13 @@ export class WorkerdManager {
   >();
   private readonly doCodeEgressCallers = new Map<
     string,
-    { source: string; className: string; version: string }
+    {
+      source: string;
+      className: string;
+      version: string;
+      /** The sealed image this identity was registered for. */
+      executable: DoCodeExecutable;
+    }
   >();
   private dynamicIsolateCompactionFlight: Promise<void> | null = null;
 
@@ -909,6 +922,15 @@ export class WorkerdManager {
 
   getStage(): WorkerdStage {
     return this.workspaceProvider ? "workspace" : "control-plane";
+  }
+
+  /**
+   * The sealed executable a plain Durable Object's egress identity (`do-code:…`)
+   * was registered for, so request-time admission can judge the exact image
+   * rather than look for an entity the identity does not name.
+   */
+  resolveDoCodeExecutable(identity: string): DoCodeExecutable | null {
+    return this.doCodeEgressCallers.get(identity)?.executable ?? null;
   }
 
   /** Persisted mutable selectors whose immutable artifacts must remain resolvable. */
@@ -2455,6 +2477,12 @@ export class WorkerdManager {
       source,
       className,
       version: runtimeExecutableVersion(image),
+      executable: {
+        source,
+        effectiveVersion: image.artifact.sourceState.effectiveVersion,
+        buildKey: image.artifact.buildKey,
+        executionDigest: image.artifact.executionDigest,
+      },
     });
     return identity;
   }

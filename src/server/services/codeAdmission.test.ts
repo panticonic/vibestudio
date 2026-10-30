@@ -6,7 +6,7 @@ import { parseUnitAuthorityManifest } from "@vibestudio/shared/authorityManifest
 import type { BuildUnitIdentityResolution } from "../buildV2/index.js";
 import { UnitAdmissionStore, serviceAuthorityDigest } from "./unitAdmissionStore.js";
 import { prepareUnitInstallReview } from "./unitInstallAcceptance.js";
-import { isSealedCodeAdmitted } from "./codeAdmission.js";
+import { isDoCodeAdmitted, isSealedCodeAdmitted } from "./codeAdmission.js";
 
 const roots: string[] = [];
 afterEach(() => {
@@ -132,5 +132,63 @@ describe("sealed executable admission", () => {
     ]) {
       expect(isSealedCodeAdmitted({ ...input, image })).toBe(false);
     }
+  });
+});
+
+describe("Durable Object egress identity admission", () => {
+  const executable = (input: ReturnType<typeof fixture>["input"]) => ({
+    source: input.code.repoPath,
+    effectiveVersion: input.code.effectiveVersion,
+    buildKey: "k".repeat(64),
+    executionDigest: input.code.executionDigest,
+  });
+
+  it("admits the sealed executable its identity was registered for", async () => {
+    const { input } = fixture();
+    const getBuild = async (buildKey: string, digest: string) => {
+      expect(buildKey).toBe("k".repeat(64));
+      expect(digest).toBe(input.code.executionDigest);
+      return { metadata: input.image };
+    };
+    await expect(
+      isDoCodeAdmitted({
+        code: input.code,
+        executable: executable(input),
+        getBuild,
+        admissionStore: input.admissionStore,
+      })
+    ).resolves.toBe(true);
+  });
+
+  it("refuses an unregistered identity, a different image, or an unadmitted version", async () => {
+    const { input } = fixture();
+    const base = {
+      code: input.code,
+      getBuild: async () => ({ metadata: input.image }),
+      admissionStore: input.admissionStore,
+    };
+    await expect(isDoCodeAdmitted({ ...base, executable: null })).resolves.toBe(false);
+    for (const changed of [
+      { source: "workers/other" },
+      { effectiveVersion: "other-ev" },
+      { executionDigest: "b".repeat(64) },
+    ])
+      await expect(
+        isDoCodeAdmitted({ ...base, executable: { ...executable(input), ...changed } })
+      ).resolves.toBe(false);
+    await expect(
+      isDoCodeAdmitted({
+        ...base,
+        executable: executable(input),
+        getBuild: async () => null,
+      })
+    ).resolves.toBe(false);
+    await expect(
+      isDoCodeAdmitted({
+        ...base,
+        executable: executable(input),
+        admissionStore: { has: () => false },
+      })
+    ).resolves.toBe(false);
   });
 });

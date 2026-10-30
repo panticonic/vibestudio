@@ -2009,6 +2009,15 @@ describe("WorkerdManager", () => {
         "second"
       );
       expect(first?.egressIdentity).toMatch(/^do-code:/);
+      // Request-time admission resolves the exact sealed image the identity names.
+      const artifact = runtimeArtifact("workers/agent-worker", "main");
+      expect(manager.resolveDoCodeExecutable(first!.egressIdentity!)).toEqual({
+        source: "workers/agent-worker",
+        effectiveVersion: artifact.sourceState.effectiveVersion,
+        buildKey: artifact.buildKey,
+        executionDigest: artifact.executionDigest,
+      });
+      expect(manager.resolveDoCodeExecutable("do-code:unregistered")).toBeNull();
       expect(first?.egressIdentity).toBe(second?.egressIdentity);
       expect(first?.version).toBe(second?.version);
       const units = manager as unknown as {

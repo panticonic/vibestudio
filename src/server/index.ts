@@ -1292,12 +1292,24 @@ async function main() {
     admission.committed();
   };
   let buildSystemInstance: import("./buildV2/index.js").BuildSystemV2 | null = null;
-  const { isSealedCodeAdmitted } = await import("./services/codeAdmission.js");
+  const { isSealedCodeAdmitted, isDoCodeAdmitted } = await import("./services/codeAdmission.js");
   const isCodeApproved = async (code: VerifiedCodeIdentity): Promise<boolean> => {
     if (code.repoPath === "vibestudio/internal") return true;
     if (code.callerKind === "extension") {
       const image = (await extensionHostForGateway?.resolveActiveAdmissionImage(code)) ?? null;
       return isSealedCodeAdmitted({ code, image, admissionStore: unitAdmissionStore });
+    }
+    if (code.callerId.startsWith("do-code:")) {
+      // A plain Durable Object's raw egress is attributed to its sealed executable,
+      // not to an entity.
+      const manager = container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
+      return isDoCodeAdmitted({
+        code,
+        executable: manager?.resolveDoCodeExecutable(code.callerId) ?? null,
+        getBuild: async (buildKey, executionDigest) =>
+          (await buildSystemInstance?.getBuildByExecution(buildKey, executionDigest)) ?? null,
+        admissionStore: unitAdmissionStore,
+      });
     }
     const entity = entityCache.resolveActive(code.evalOrigin?.ownerId ?? code.callerId);
     if (
