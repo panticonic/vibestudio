@@ -148,7 +148,8 @@ look updated while existing isolates still use old bindings.
 
 Current restart-bound examples:
 
-- `providers.evalEngine`, `providers.evalRuntime`, and `providers.cdpClient`:
+- `providers.evalEngine`, `providers.evalRuntime`, `providers.cdpClient`, and
+  `providers.natlang`:
   injected into `EvalDO` as env bindings when workerd config is generated.
 - `providers.browserData`: injected into `BrowserDataDO` as the broker
   identity.

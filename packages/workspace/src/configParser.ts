@@ -573,6 +573,9 @@ function validateProviders(config: WorkspaceConfig): void {
   if (providers.cdpClient !== undefined) {
     requireProviderSource(providers.cdpClient, "providers.cdpClient");
   }
+  if (providers.natlang !== undefined) {
+    requireProviderSource(providers.natlang, "providers.natlang");
+  }
   for (const provider of WORKSPACE_EXTENSION_PROVIDERS) {
     const decl = providers[provider as WorkspaceExtensionProviderName];
     if (decl === undefined) continue;

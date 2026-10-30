@@ -73,6 +73,8 @@ providers:
     source: "@workspace/runtime"
   cdpClient:
     source: "@workspace/cdp-client"
+  natlang:
+    source: "@workspace/natlang"
   browserData:
     extension: extensions/browser-data
   gitInterop:
@@ -147,6 +149,7 @@ describe("manifest declarations: providers / trust / client defaults", () => {
     const config = parse(FULL_MANIFEST);
     expect(config.providers?.evalEngine?.source).toBe("@workspace/eval");
     expect(config.providers?.cdpClient?.source).toBe("@workspace/cdp-client");
+    expect(config.providers?.natlang?.source).toBe("@workspace/natlang");
     expect(config.trust?.clients).toHaveLength(2);
   });
 
@@ -236,6 +239,7 @@ describe("manifest declarations: providers / trust / client defaults", () => {
     expect(() => parse('providers:\n  evalRuntime:\n    source: ""\n')).toThrow(
       /providers\.evalRuntime\.source/
     );
+    expect(() => parse("providers:\n  natlang: {}\n")).toThrow(/providers\.natlang\.source/);
   });
 
   it("rejects an extension provider that is not a declared extension", () => {

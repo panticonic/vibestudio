@@ -30,6 +30,10 @@ export const EVAL_AMBIENT_ONLY = [
   "chat",
   "agent",
   "automations",
+  // Provided by the manifest-declared natlang provider, and only in a cell that
+  // references them (see EvalDO natlang attachment).
+  "nl",
+  "natlang",
 ] as const;
 
 export type EvalAmbientOnlyName = (typeof EVAL_AMBIENT_ONLY)[number];

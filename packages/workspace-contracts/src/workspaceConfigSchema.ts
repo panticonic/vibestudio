@@ -478,6 +478,7 @@ export const WorkspaceConfigSchema = z
         evalEngine: z.object({ source: z.string() }).strict().optional(),
         evalRuntime: z.object({ source: z.string() }).strict().optional(),
         cdpClient: z.object({ source: z.string() }).strict().optional(),
+        natlang: z.object({ source: z.string() }).strict().optional(),
         browserData: z.object({ extension: z.string() }).strict().optional(),
         gitInterop: z.object({ extension: z.string() }).strict().optional(),
       })

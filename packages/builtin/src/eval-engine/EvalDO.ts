@@ -46,6 +46,8 @@ import {
 import { ExecutionJournal } from "./executionJournal.js";
 import {
   evalOwnerCallbackRpcMethods,
+  type EvalNatlangCallSummary,
+  type EvalNatlangResult,
   type EvalOperationJournal,
   type EvalResultReceipt,
 } from "@vibestudio/service-schemas/eval";
@@ -62,6 +64,7 @@ import {
   EVAL_ENGINE_HOST_CONTRACT_VERSION,
   evalEngineMethods,
 } from "@vibestudio/service-schemas/evalEngine";
+import type { EvalNatlang } from "@vibestudio/service-schemas/evalNatlang";
 import { evalEventIngressMethods } from "@vibestudio/service-schemas/evalEventIngress";
 import { evalExecutionRootsMethods } from "@vibestudio/service-schemas/evalExecutionRoots";
 import { fsMethods } from "@vibestudio/service-schemas/fs";
@@ -93,6 +96,15 @@ import {
   createEvalHelp,
 } from "./evalSurfaceHelp.js";
 import { createEvalNodeCompat } from "./evalNodeCompat.js";
+import {
+  cellMayReferenceNatlang,
+  isNatlangAmbientName,
+  lowerNatlangCell,
+  natlangHelp,
+  natlangResult,
+  OwnerNatlang,
+  requireNatlangProviderModule,
+} from "./evalNatlangProvider.js";
 import { freezeModuleNamespace } from "./moduleNamespace.js";
 import {
   createTypedServiceClient,
@@ -489,6 +501,7 @@ interface RunResult {
   panelResources?: {
     open: Array<{ id: string; source: string; kind: "workspace" | "browser" }>;
   };
+  natlang?: EvalNatlangResult;
   kernel?: KernelRunStatus;
 }
 
@@ -623,6 +636,8 @@ export class EvalDO extends DurableObjectBase {
   /** Stateless provider/runtime modules shared by EvalDO instances in this isolate.
    * The map and compiler remain host-closure state and are never guest globals. */
   private readonly isolateModuleMap: Record<string, unknown> = { ...STATELESS_ISOLATE_MODULES };
+  /** This owner's natlang instance, bound to the notebook heap it was created for. */
+  private readonly ownerNatlang = new OwnerNatlang();
 
   /**
    * Per-OBJECT module registry passed to the engine on every run. Many owners' EvalDOs share
@@ -2637,6 +2652,7 @@ export class EvalDO extends DurableObjectBase {
     this.runtimeUnitIdentity = null;
     this.portableHelpers = null;
     this.hostedRuntimeIdentity = null;
+    this.ownerNatlang.close();
     this.moduleMap = {};
     for (const key of Object.keys(this.isolateModuleMap)) {
       if (!Object.hasOwn(STATELESS_ISOLATE_MODULES, key)) {
@@ -3076,6 +3092,8 @@ export class EvalDO extends DurableObjectBase {
     this.sql.exec(`DROP TABLE IF EXISTS repl_scopes`);
     this.scopeManager = null; // force fresh hydrate (empty) on next run
     this.scopeRecovery = null;
+    // Its natlang scope and live calls belong to the notebook just discarded.
+    this.ownerNatlang.close();
     return { ok: true };
   }
 
@@ -3187,6 +3205,23 @@ export class EvalDO extends DurableObjectBase {
     const rt = hardenBoundary(
       this.createRunHostedRuntime(support, execution, args.gatewayToken, args.parent ?? null)
     );
+    // In path mode, load the entry file. The eval service validates exactly one of
+    // `code` or `path`; this fallback remains defensive for direct/internal calls.
+    const entryCode =
+      args.code !== undefined
+        ? args.code
+        : args.path
+          ? await this.readSourceFile(args.path, execution)
+          : "";
+    const sourcePath = args.sourcePath ?? args.path;
+    // The provider is attached before bindings exist so a cell that mentions
+    // `nl`/`natlang` sees them as ordinary ambient names (and the owner's
+    // natlang instance sees the runtime it will be handed to).
+    const natlang = await this.ensureNatlang(entryCode, args, execution, rt);
+    const natlangSource = natlang
+      ? this.requireDeclaredProviderSource("EVAL_NATLANG_SOURCE", "natlang")
+      : null;
+
     // `services` is the raw service namespace (createServicesProxy): `services.<name>.<method>(...)`
     // is always `callMain("<name>.<method>", …)` on the server service, even when a rich runtime
     // binding shares the name (`services.workers` is the raw `workers` service, not `workers`).
@@ -3209,6 +3244,7 @@ export class EvalDO extends DurableObjectBase {
       );
     }
     const runtimeUnit = runtimeIdentity.unit;
+    const natlangDeclared = this.declaredProviderSource("EVAL_NATLANG_SOURCE") !== null;
     const describeHelpOverview = async () => ({
       // Names only — keeps the eval scope lean. For a service's methods +
       // typed schemas, call help('<name>') (rich bindings show the ergonomic
@@ -3217,7 +3253,9 @@ export class EvalDO extends DurableObjectBase {
       importable: [
         ...new Set([...Object.keys(rt), ...Object.keys(this.portableHelpers ?? {})]),
       ].sort(),
-      ambient: [...EVAL_AMBIENT_ONLY],
+      // `nl`/`natlang` exist only where a provider is declared, and are injected
+      // into a cell that mentions them.
+      ambient: EVAL_AMBIENT_ONLY.filter((name) => !isNatlangAmbientName(name) || natlangDeclared),
       guidance:
         "Use rich runtime bindings directly (`workers`, `vcs`, `fs`, ...), or import them from " +
         `\`${runtimeModuleName}\`. For raw service catalog methods, use ` +
@@ -3234,6 +3272,7 @@ export class EvalDO extends DurableObjectBase {
     });
     const bindings: Record<string, unknown> = {
       ...rt,
+      ...(natlang ? natlang.ambient : {}),
       ctx: hardenBoundary({
         contextId: args.contextId ?? null,
         objectKey: this.objectKey,
@@ -3271,6 +3310,7 @@ export class EvalDO extends DurableObjectBase {
             return describeEvalHelpName(serviceName, {
               bindings,
               runtimeModuleName,
+              providerHelp: (name) => natlangHelp(natlang, name),
               docs: execution.docs,
               describeBinding: (name, binding) =>
                 this.describeInjectedSurface(name, binding, execution.docs),
@@ -3303,16 +3343,6 @@ export class EvalDO extends DurableObjectBase {
       )
     );
     hardenBoundary(bindings["help"]);
-
-    // In path mode, load the entry file. The eval service validates exactly one of
-    // `code` or `path`; this fallback remains defensive for direct/internal calls.
-    const entryCode =
-      args.code !== undefined
-        ? args.code
-        : args.path
-          ? await this.readSourceFile(args.path, execution)
-          : "";
-    const sourcePath = args.sourcePath ?? args.path;
 
     // Eval-only helpers are ambient for terse REPL use, but importing them is a
     // reasonable TypeScript habit. Mirror the same live references onto this
@@ -3364,6 +3394,8 @@ export class EvalDO extends DurableObjectBase {
       ...this.moduleMap,
       ...runLocalModules,
       [runtimeModuleName]: runtimeNamespace,
+      // Workspace code importing the provider shares the instance behind `nl`.
+      ...(natlangSource ? { [natlangSource]: this.isolateModuleMap[natlangSource] } : {}),
       ...Object.fromEntries(
         providerAliases
           .filter((specifier) => !retainedExplicitAliases.has(specifier))
@@ -3432,39 +3464,67 @@ export class EvalDO extends DurableObjectBase {
     };
     scopeManager.enterEval();
     try {
-      const result = await this.activeEvalExecution.run(execution, () =>
-        engine.executeSandbox(entryCode, {
-          operationJournal: execution.operationJournal,
-          syntax: args.syntax ?? "tsx",
-          imports: args.imports,
-          sourcePath,
-          loadImport,
-          loadSourceFile: sourcePath
-            ? (path: string) => this.readSourceFile(path, execution)
-            : undefined,
-          bindings,
-          // Per-object map/require so this owner's loaded imports never leak to other owners
-          // sharing the isolate (the engine's global module map is the multi-tenant leak).
-          moduleMap: runModuleMap,
-          require: (id: string): unknown => {
-            const value = runModuleMap[id];
-            if (value !== undefined) return value;
-            throw new Error(`Module "${id}" not available in EvalDO; use the imports parameter.`);
-          },
-          compileFunction: this.compileInIsolate,
-          confinement: "private-global",
-          freezeModuleNamespace,
-          publishLazyLoaderToGlobal: false,
-          // Opt-in deadline (timeoutMs) → AbortSignal. Best-effort: the engine may not honor it
-          // inside native code; authored loops/functions also receive cooperative
-          // checkpoints so ordinary synchronous code settles inside this EvalDO.
-          signal,
-          ...(deadlineAt !== null && deadlineAt !== undefined && args.timeoutMs !== undefined
-            ? { deadline: { atMs: deadlineAt, timeoutMs: args.timeoutMs } }
-            : {}),
-          onConsole: emitConsole,
-        })
-      );
+      // Lowering runs inside the entered eval so its scope view is the one the
+      // cell executes against. An error diagnostic ends the cell unexecuted.
+      let code = entryCode;
+      let loweringFailure: SandboxResult | null = null;
+      if (natlang) {
+        const syntax = args.syntax ?? "tsx";
+        const lowering = lowerNatlangCell(natlang, entryCode, {
+          fileName: sourcePath ?? `cell.${syntax === "javascript" ? "js" : syntax}`,
+          jsx: syntax === "jsx" || syntax === "tsx",
+          ambientNames: Object.keys(bindings),
+          scopeValues: scopeManager.current,
+        });
+        if (lowering.ok) {
+          code = lowering.code;
+          if (lowering.warnings) emitConsole(lowering.warnings);
+        } else {
+          loweringFailure = { success: false, consoleOutput: "", ...lowering.failure };
+        }
+      }
+      const execute = () =>
+        this.activeEvalExecution.run(execution, () =>
+          engine.executeSandbox(code, {
+            operationJournal: execution.operationJournal,
+            syntax: args.syntax ?? "tsx",
+            imports: args.imports,
+            sourcePath,
+            loadImport,
+            loadSourceFile: sourcePath
+              ? (path: string) => this.readSourceFile(path, execution)
+              : undefined,
+            bindings,
+            // Per-object map/require so this owner's loaded imports never leak to other owners
+            // sharing the isolate (the engine's global module map is the multi-tenant leak).
+            moduleMap: runModuleMap,
+            require: (id: string): unknown => {
+              const value = runModuleMap[id];
+              if (value !== undefined) return value;
+              throw new Error(`Module "${id}" not available in EvalDO; use the imports parameter.`);
+            },
+            compileFunction: this.compileInIsolate,
+            confinement: "private-global",
+            freezeModuleNamespace,
+            publishLazyLoaderToGlobal: false,
+            // Opt-in deadline (timeoutMs) → AbortSignal. Best-effort: the engine may not honor it
+            // inside native code; authored loops/functions also receive cooperative
+            // checkpoints so ordinary synchronous code settles inside this EvalDO.
+            signal,
+            ...(deadlineAt !== null && deadlineAt !== undefined && args.timeoutMs !== undefined
+              ? { deadline: { atMs: deadlineAt, timeoutMs: args.timeoutMs } }
+              : {}),
+            onConsole: emitConsole,
+          })
+        );
+      // The run's own signal (cancel, force reset, guest-callback failure) is
+      // the natlang task's signal: aborting the run stops its natlang calls.
+      const settled: { value: SandboxResult; calls: EvalNatlangCallSummary[] } = loweringFailure
+        ? { value: loweringFailure, calls: [] }
+        : natlang
+          ? await natlang.runCell(execute, { runId: runId ?? crypto.randomUUID(), signal })
+          : { value: await execute(), calls: [] };
+      const result = settled.value;
       // Live progress is incidental. The terminal result below is canonical and
       // includes the complete console, so a stalled progress receiver must not
       // hold this durable run open.
@@ -3475,6 +3535,7 @@ export class EvalDO extends DurableObjectBase {
       // the model, losing the tail. Keep one bounded spill per output kind in
       // stable slots that small follow-up inspectors do not overwrite.
       this.spillLargeOutput(scopeManager.current, consoleText, result.returnValue);
+      const natlangSummary = natlangResult(settled.calls);
       return {
         success: result.success,
         console: consoleText,
@@ -3491,6 +3552,7 @@ export class EvalDO extends DurableObjectBase {
               },
             }
           : {}),
+        ...(natlangSummary ? { natlang: natlangSummary } : {}),
       };
     } finally {
       execution.operationJournal.close();
@@ -3563,6 +3625,7 @@ export class EvalDO extends DurableObjectBase {
       ...(result.failureCode ? { failureCode: result.failureCode } : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 500) } : {}),
       ...(result.panelResources ? { panelResources: result.panelResources } : {}),
+      ...(result.natlang ? { natlang: result.natlang } : {}),
       ...(result.operationJournal ? { operationJournal: result.operationJournal } : {}),
       ...(result.kernel ? { kernel: result.kernel } : {}),
     };
@@ -3582,6 +3645,7 @@ export class EvalDO extends DurableObjectBase {
       ...(compact.returnValue !== undefined ? { returnValue: compact.returnValue } : {}),
       ...(compact.scopeKeys ? { scopeKeys: compact.scopeKeys.slice(0, 200) } : {}),
       ...(compact.panelResources ? { panelResources: compact.panelResources } : {}),
+      ...(compact.natlang ? { natlang: compact.natlang } : {}),
       ...(compact.operationJournal ? { operationJournal: compact.operationJournal } : {}),
       ...(compact.kernel ? { kernel: compact.kernel } : {}),
     };
@@ -3597,6 +3661,7 @@ export class EvalDO extends DurableObjectBase {
       ...(result.failureCode ? { failureCode: result.failureCode } : {}),
       ...(result.scopeKeys ? { scopeKeys: result.scopeKeys.slice(0, 100) } : {}),
       ...(result.panelResources ? { panelResources: result.panelResources } : {}),
+      ...(result.natlang ? { natlang: result.natlang } : {}),
       ...(result.operationJournal ? { operationJournal: result.operationJournal } : {}),
       ...(result.kernel ? { kernel: result.kernel } : {}),
     };
@@ -3709,10 +3774,14 @@ export class EvalDO extends DurableObjectBase {
     return source;
   }
 
-  private compileFunction(argNames: string[], body: string): (...args: unknown[]) => unknown {
+  private compileFunction(
+    argNames: string[],
+    body: string,
+    name = "eval"
+  ): (...args: unknown[]) => unknown {
     const unsafeEval = this.env["UNSAFE_EVAL"] as UnsafeEvalBinding | undefined;
     if (!unsafeEval) throw new Error("EvalDO: UNSAFE_EVAL binding not configured");
-    return unsafeEval.newFunction(body, "eval", ...argNames);
+    return unsafeEval.newFunction(body, name, ...argNames);
   }
 
   private requireIsolateModule = (id: string): unknown => {
@@ -3799,6 +3868,46 @@ export class EvalDO extends DurableObjectBase {
     }
     this.engine = loaded as EvalEngine;
     return this.engine;
+  }
+
+  /**
+   * Attach the manifest-declared natlang provider (`providers.natlang` ->
+   * `EVAL_NATLANG_SOURCE`) when this run's code can reference it. Returns null
+   * when no provider is declared or the code cannot mention `nl`/`natlang`; in
+   * that case the ambient names are absent. The provider module is built once
+   * and shared through the isolate module map under its source specifier, so
+   * workspace code importing it gets the same instance the cell's `nl` uses.
+   */
+  private async ensureNatlang(
+    code: string,
+    args: RunArgs,
+    execution: EvalExecutionContext,
+    bindings: Readonly<Record<string, unknown>>
+  ): Promise<EvalNatlang | null> {
+    const source = this.declaredProviderSource("EVAL_NATLANG_SOURCE");
+    if (!source || !cellMayReferenceNatlang(code)) return null;
+    const module = requireNatlangProviderModule(
+      source,
+      await this.loadLibraryModule(source, execution, {
+        externals: Object.keys(this.isolateModuleMap),
+      })
+    );
+    return this.ownerNatlang.ensure(module, {
+      newFunction: (body, name, ...argNames) => this.compileFunction(argNames, body, name),
+      bindings,
+      owner: {
+        kind: args.agentRef
+          ? "agent"
+          : args.parent?.parentKind === "panel"
+            ? "panel"
+            : args.parent
+              ? "headless"
+              : "user",
+        objectKey: this.objectKey,
+        ...(args.agentRef ? { agentRef: args.agentRef } : {}),
+        ...(args.channelId ? { channelId: args.channelId } : {}),
+      },
+    });
   }
 
   /**

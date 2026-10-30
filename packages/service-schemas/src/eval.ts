@@ -488,6 +488,34 @@ export const evalKernelStatusSchema = z
   })
   .strict();
 
+/** One natlang call made by an eval cell (provider-reported, bounded by the provider). */
+export const evalNatlangCallSummarySchema = z
+  .object({
+    callId: z.string(),
+    name: z.string(),
+    outcome: z.string(),
+    detail: z.string().optional(),
+    model: z.string().optional(),
+    turns: z.number(),
+    promptTokens: z.number(),
+    completionTokens: z.number(),
+    durationMs: z.number(),
+    recordId: z.string().optional(),
+  })
+  .strict();
+export type EvalNatlangCallSummary = z.infer<typeof evalNatlangCallSummarySchema>;
+
+/** Most calls one result carries; `omitted` counts the rest. */
+export const EVAL_NATLANG_RESULT_MAX_CALLS = 200;
+
+export const evalNatlangResultSchema = z
+  .object({
+    calls: z.array(evalNatlangCallSummarySchema).max(EVAL_NATLANG_RESULT_MAX_CALLS),
+    omitted: z.number().int().positive().optional(),
+  })
+  .strict();
+export type EvalNatlangResult = z.infer<typeof evalNatlangResultSchema>;
+
 export const evalRunResultSchema = z
   .object({
     success: z.boolean(),
@@ -529,6 +557,8 @@ export const evalRunResultSchema = z
       })
       .strict()
       .optional(),
+    /** Natlang calls this cell made (omitted when it made none). */
+    natlang: evalNatlangResultSchema.optional(),
     /** Notebook incarnation, residency, and exact cold-recovery diagnostics. */
     kernel: evalKernelStatusSchema.optional(),
   })

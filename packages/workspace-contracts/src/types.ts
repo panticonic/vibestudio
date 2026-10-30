@@ -426,6 +426,12 @@ export interface WorkspaceProvidersDecl {
   evalRuntime?: WorkspaceUnitProviderDecl;
   /** The CDP client library seeded into eval runs that reference CDP. */
   cdpClient?: WorkspaceUnitProviderDecl;
+  /**
+   * The natlang library that provides ambient `nl`/`natlang` to eval cells that
+   * reference them. Contract: `NATLANG_PROVIDER_HOST_CONTRACT_VERSION` and
+   * `createEvalNatlang` (see `@vibestudio/service-schemas/evalNatlang`).
+   */
+  natlang?: WorkspaceUnitProviderDecl;
   /** The browser-data broker extension. */
   browserData?: WorkspaceExtensionProviderDecl;
   /** Extension-backed external Git upstream engine used by gitInterop. */
