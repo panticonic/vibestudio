@@ -11,7 +11,6 @@ import {
   exitCodeFor,
   layoutEvalBundle,
   linkProjectedModules,
-  linkSuiteSpecifiers,
   locateSuite,
   openNatlangModels,
   parseArguments,
@@ -229,24 +228,6 @@ test("the composed workspace resolves the projected npm packages, scoped ones in
   assert.equal(fs.existsSync(path.join(modules, ".bin")), false);
 });
 
-test("a suite's workspace specifiers for natlang resolve to the staged bundle", async (t) => {
-  const root = temporary(t);
-  const bundle = path.join(root, "bundle.mjs");
-  write(
-    bundle,
-    "export const defineEvaluationSuite = (suite) => suite;\nexport const executorIdentityForChoice = () => 'id';\n"
-  );
-  const workspace = path.join(root, "workspace");
-  fs.mkdirSync(workspace);
-  linkSuiteSpecifiers(linkProjectedModules(workspace, undefined), bundle);
-  write(
-    path.join(workspace, "suite.mjs"),
-    "import { defineEvaluationSuite } from '@workspace/natlang/evaluation';\nimport { executorIdentityForChoice } from '@workspace/natlang/model';\nexport default defineEvaluationSuite({ identity: executorIdentityForChoice() });\n"
-  );
-  const loaded = await import(path.join(workspace, "suite.mjs"));
-  assert.deepEqual(loaded.default, { identity: "id" });
-});
-
 test("a staged bundle without the model session API is refused with the missing export named", async () => {
   await assert.rejects(
     openNatlangModels({ loadModelConfiguration() {} }, { models: {} }),
@@ -260,13 +241,8 @@ test("model sessions are opened per suite profile and every one is closed", asyn
     loadModelConfiguration: (profile) => ({ choice: { kind: "external", profile } }),
     localModelPrerequisites: () => ({ available: true }),
     executorIdentityForChoice: (choice) => ({ id: choice.profile }),
-    sessionDriver: (session) =>
-      Object.assign((request) => session.turn(request), {
-        decide: (request) => session.decide(request),
-      }),
     createResolvedModelSession: (choice) => ({
       turn: async () => ({ text: choice.profile }),
-      decide: async (request) => ({ scored: choice.profile, request }),
       close: async () => {
         closed.push(choice.profile);
       },
@@ -276,9 +252,6 @@ test("model sessions are opened per suite profile and every one is closed", asyn
   assert.deepEqual(models.identity, { id: "exec" });
   assert.equal((await models.driver({})).text, "exec");
   assert.equal((await models.judge({})).text, "jdg");
-  // The decision readout travels on the driver, for the executor and for the judge.
-  assert.deepEqual(await models.driver.decide("replies"), { scored: "exec", request: "replies" });
-  assert.deepEqual(await models.judge.decide("replies"), { scored: "jdg", request: "replies" });
   await models.close();
   assert.deepEqual(closed.toSorted(), ["exec", "jdg"]);
 

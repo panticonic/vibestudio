@@ -413,8 +413,16 @@ by `pnpm natlang:vendor --check`). The supervisor still starts every process; th
 - **Placement.** LFM3 is a library model on the main router, not a third server and not the utility server's model.
   Warm prompt openings work through the router as long as each request names the model: the router takes the model of a
   POST from its JSON body (`model`), not from the query, and of a read from `?model=`. The package's `fetch` is
-  therefore the supervised host's routed, authenticated fetch. The cost of router mode is `--models-max 1`: loading
-  another library model evicts LFM3 (and the reverse), so a local 27B agent and the LFM3 executor take turns.
+  therefore the supervised host's routed, authenticated fetch.
+- **Residency.** The executor stays loaded beside the main model, so a local agent's natlang calls never reload it. The
+  router runs with `--models-max 2` and the supervisor, not the router's LRU eviction, decides who leaves: loading a main
+  model unloads the previous one and keeps the executor. The two have to fit together: `executor-residency.ts` applies
+  the library's weights-against-memory rule (`estimateFit`) to the main model's weights plus the executor's weights and
+  planned KV, and requires one engine build for both (one router process serves them). When they do not fit, loading
+  that main model unloads the executor, loading the executor beside it is refused, and `listModels` reports the
+  executor's entry as `error` with the reason. model-settings maps that to an unusable availability, so the `executor`
+  role (`resolveModelRole`) resolves to the lowest-priced hosted model and says why, instead of the two models evicting
+  each other on every call. Once a fitting main model is loaded (or none is), the entry is ready again.
 - **Slots.** A model whose SHA-256 is in natlang's stock list is served in the slots natlang plans for it: each request
   gets a slot of the model's measured context (32,768 tokens), and the slot count follows from one fixed memory budget
   for model and KV (4 GiB, natlang's cap for a default server; fixed so the recipe does not depend on free memory).

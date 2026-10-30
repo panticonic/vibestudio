@@ -2,13 +2,13 @@
 /**
  * Vendor natlang into the template checkouts that consume it, and verify what is vendored.
  *
- * natlang is not published to npm. Base's `@workspace/natlang` (the workerd core with TypeScript bundled in), the natlang dashboard assets, and
+ * natlang is not published to npm. Base's `@workspace/natlang` (workerd core), the natlang dashboard assets, and
  * System's `local-models` extension (llama manager) each carry generated bundles staged by natlang's own script
  * (`ts-host/scripts/stage-vibestudio.mjs`) from one pinned natlang commit, written beside a `natlang-pin.json` that
  * names the commit and every file's sha256. Vendored output is never edited by hand: run this script again.
  *
  *   pnpm natlang:vendor [--commit REF]
- *       Stage the workerd, dashboard and llama bundles of REF (default origin/main of NATLANG_REPO, ~/natlang) into the
+ *       Stage the core, dashboard and llama bundles of REF (default origin/main of NATLANG_REPO, ~/natlang) into the
  *       vendored directories below, from a temporary git worktree.
  *   pnpm natlang:vendor --check
  *       Hermetic: every vendored directory exists, has a well-formed pin of a clean commit, and its files match the
@@ -35,9 +35,7 @@ const PIN_SCHEMA = "natlang.vendor-pin/1";
 
 /** Where each natlang target is vendored: the template that consumes it, and the directory (the pin's root) in it. */
 export const VENDORED_TARGETS = [
-  { target: "workerd", template: "base", directory: "packages/natlang/vendor" },
-  { target: "pi", template: "base", directory: "packages/natlang-pi/vendor" },
-  { target: "evaluation", template: "base", directory: "packages/natlang/vendor-evaluation" },
+  { target: "core", template: "base", directory: "packages/natlang/vendor" },
   { target: "dashboard", template: "base", directory: "packages/natlang/vendor-dashboard" },
   { target: "llama", template: "system", directory: "extensions/local-models/vendor" },
 ];
@@ -77,16 +75,13 @@ export function integrityProblems(directory, target) {
   if (!fs.existsSync(pinPath)) return [`${pinPath} does not exist; run pnpm natlang:vendor`];
   const pin = JSON.parse(fs.readFileSync(pinPath, "utf8"));
   const problems = [];
-  if (pin.schema !== PIN_SCHEMA)
-    problems.push(`${PIN} has schema ${pin.schema}; expected ${PIN_SCHEMA}`);
+  if (pin.schema !== PIN_SCHEMA) problems.push(`${PIN} has schema ${pin.schema}; expected ${PIN_SCHEMA}`);
   if (pin.dirty !== false) problems.push(`${PIN} records a dirty natlang tree`);
   if (typeof pin.commit !== "string" || !/^[0-9a-f]{40}$/.test(pin.commit)) {
     problems.push(`${PIN} names no commit`);
   }
   if (!Array.isArray(pin.targets) || pin.targets.length !== 1 || pin.targets[0] !== target) {
-    problems.push(
-      `${PIN} is for targets ${JSON.stringify(pin.targets)}; expected [${JSON.stringify(target)}]`
-    );
+    problems.push(`${PIN} is for targets ${JSON.stringify(pin.targets)}; expected [${JSON.stringify(target)}]`);
   }
   const listed = Object.keys(pin.files ?? {});
   for (const file of listed) {
@@ -121,9 +116,7 @@ async function check({ reproduce }) {
     for (const problem of problems) failures.push(`${label}: ${problem}`);
   }
   if (failures.length > 0) {
-    console.error(
-      `vendored natlang is not fresh:\n${failures.map((line) => `  ${line}`).join("\n")}`
-    );
+    console.error(`vendored natlang is not fresh:\n${failures.map((line) => `  ${line}`).join("\n")}`);
     process.exit(1);
   }
   console.log(
@@ -155,10 +148,7 @@ function parseArguments(argv) {
       const value = argv[(index += 1)];
       if (!value || value.startsWith("--")) throw new Error("--commit requires a ref");
       options.commit = value;
-    } else
-      throw new Error(
-        `Unknown option ${JSON.stringify(argument)}; use --check, --reproduce or --commit`
-      );
+    } else throw new Error(`Unknown option ${JSON.stringify(argument)}; use --check, --reproduce or --commit`);
   }
   if (options.reproduce && !options.check) throw new Error("--reproduce is a mode of --check");
   return options;
