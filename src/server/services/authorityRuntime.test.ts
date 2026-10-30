@@ -78,6 +78,19 @@ describe("authority runtime", () => {
         }),
       });
       expect(inspect(codeProbe)).toMatchObject({ code: "EACCES" });
+      // The host calls the release and native-invocation methods on every lifecycle
+      // target; a service-backed owner's catalog does not list them, and its
+      // application binding does not govern them.
+      for (const method of [
+        "prepareDurableWorkRelease",
+        "waitDurableWorkRelease",
+        "inspectNativeInvocationSource",
+        "onAuthorityChanged",
+      ]) {
+        const framework = attestWorkspaceDoRpc({ ...facts, method });
+        expect(framework.targetRequirement).toBeUndefined();
+        expect(framework.capability).toBe(`rpc:${method}`);
+      }
       const product = attestWorkspaceDoRpc({ ...facts, method: "readGreeting" });
       expect(product.targetRequirement).toEqual(
         requirementForPrincipals(["code"], "workspace-service:cross-workspace.receiver")

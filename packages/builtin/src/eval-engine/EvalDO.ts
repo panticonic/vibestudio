@@ -1180,8 +1180,22 @@ export class EvalDO extends DurableObjectBase {
     if (!lease.holderAttached) {
       throw new Error(`eval kernel lease ${leaseId} has no attached holder`);
     }
+    // The host's leg is a transport for residency. When the host cancels it (an
+    // ordered shutdown, or a failed lifecycle preparation that will never reach
+    // this object's release), the request must end rather than wait for a release
+    // that may not come; the kernel itself stays leased for the next holder.
+    const cancelled = this.rpcAbortSignal;
     try {
-      const terminal = await lease.settled;
+      const terminal = await (cancelled
+        ? new Promise<Awaited<typeof lease.settled>>((resolve, reject) => {
+            const abort = () => reject(cancelled.reason);
+            if (cancelled.aborted) return abort();
+            cancelled.addEventListener("abort", abort, { once: true });
+            lease.settled.then(resolve, reject).finally(() => {
+              cancelled.removeEventListener("abort", abort);
+            });
+          })
+        : lease.settled);
       return { leaseId, ...terminal };
     } finally {
       lease.holderAttached = false;
