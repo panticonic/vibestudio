@@ -28,6 +28,25 @@ describe("native permission fallback", () => {
     expect(nativeViewMayUsePermission(manager, noWindows, 42, "midiSysex")).toBe(false);
   });
 
+  it("lets a website lock the pointer the way a browser does, but not read MIDI devices", () => {
+    const manager = {
+      isContentOverlayWebContentsId: () => false,
+      findViewIdByWebContentsId: () => "browser",
+      getViewInfo: (): NonNullable<ReturnType<ViewManager["getViewInfo"]>> => ({
+        type: "panel",
+        browser: true,
+        capabilities: [],
+        visible: true,
+        hostChrome: false,
+        bounds: { x: 0, y: 0, width: 800, height: 600 },
+      }),
+      canFullscreenView: () => false,
+    };
+    expect(nativeViewMayUsePermission(manager, noWindows, 42, "pointerLock")).toBe(true);
+    expect(nativeViewMayUsePermission(manager, noWindows, 42, "midi")).toBe(false);
+    expect(nativeViewMayUsePermission(manager, noWindows, 42, "openExternal")).toBe(false);
+  });
+
   it("maps pointer lock to the window-appearance capability", () => {
     expect(nativeViewMayUsePermission(null, windowsHolding("theme"), 7, "pointerLock")).toBe(true);
     expect(nativeViewMayUsePermission(null, windowsHolding("clipboard"), 7, "pointerLock")).toBe(

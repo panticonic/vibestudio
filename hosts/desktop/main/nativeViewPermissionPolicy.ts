@@ -21,6 +21,9 @@ export function nativeViewMayUsePermission(
     return permission === "clipboard-sanitized-write";
   }
   const viewId = views?.findViewIdByWebContentsId(webContentsId);
+  // A website gets the browser's own pointer-lock behaviour: Chromium grants
+  // it only on a user gesture and the person always leaves it with Esc.
+  if (permission === "pointerLock" && viewId && views?.getViewInfo(viewId)?.browser) return true;
   if (permission === "fullscreen") {
     // A view the panel host composes is presented by its ViewManager. A
     // standalone client window owns its whole frame, so its own page may

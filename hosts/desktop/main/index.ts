@@ -2139,7 +2139,12 @@ app.on("ready", async () => {
         callback(false);
         return;
       }
-      // Permissive default for non-sensitive permissions (clipboard read/etc.)
+      // Everything outside the sensitive set is granted without a prompt so
+      // ordinary sites keep working: file-system access still follows the
+      // person's own pick in a native dialog, and keyboard lock applies only in
+      // fullscreen. A permission joins the sensitive set only together with a
+      // site prompt or capability that can grant it; otherwise it is simply
+      // unavailable to every website.
       callback(true);
     });
     targetSession.setPermissionCheckHandler((contents, permission, requestingOrigin, details) => {
