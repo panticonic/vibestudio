@@ -86,6 +86,11 @@ import {
   type ExecutionArtifactRefV1,
 } from "@vibestudio/shared/execution/retention";
 import {
+  guardOutsideContentCall,
+  guardOutsideContentStream,
+  type OutsideContentRecorder,
+} from "./outsideContent.js";
+import {
   buildOwnerBindings,
   ownerIngestionRecorder,
   type OwnerBindingArgs,
@@ -3356,7 +3361,7 @@ export class EvalDO extends DurableObjectBase {
         buildOwnerBindings(
           args,
           (target, method, values) => execution.rpc.call(target, method, values),
-          this.createActiveRuntimeRpc()
+          this.createActiveRuntimeRpc(this.ownerOutsideContentRecorder(args))
         )
       )
     );
@@ -4120,14 +4125,35 @@ export class EvalDO extends DurableObjectBase {
   }
 
   /**
+   * Reports outside content to the agent that owns this eval, which drops its
+   * standing task authority exactly as when its own tools ingest such content.
+   * Undefined for an eval no agent owns (it holds no standing task grants). The
+   * report goes over the unguarded execution transport, resolved per call
+   * because runtime clients can outlive the cell that built them.
+   */
+  private ownerOutsideContentRecorder(owner: OwnerBindingArgs): OutsideContentRecorder | undefined {
+    return ownerIngestionRecorder(owner, (target, method, values) =>
+      this.requireActiveEvalExecution().rpc.call(target, method, values)
+    );
+  }
+
+  /**
    * Stable RPC facade for runtime objects retained by imported modules or
    * notebook scope. Each operation borrows the invoking cell's immutable RPC
    * context at call time; no retained object can keep an earlier cell's abort
    * signal, execution-session nonce, causal parent, or authority attenuation.
    */
-  private createActiveRuntimeRpc(): import("@vibestudio/rpc").RpcClient & ResidentSessionRegistrar {
-    const call = (targetId: string, method: string, args: unknown[], options?: RpcCallOptions) =>
-      this.requireActiveEvalExecution().rpc.call(targetId, method, args, options);
+  private createActiveRuntimeRpc(
+    outsideContent?: OutsideContentRecorder
+  ): import("@vibestudio/rpc").RpcClient & ResidentSessionRegistrar {
+    // Every binding, the raw service proxy, and `rpc` itself reach the host
+    // through this transport, so it is the one place that sees all the egress
+    // that brings outside content into an agent's task.
+    const call = guardOutsideContentCall(
+      (targetId: string, method: string, args: unknown[], options?: RpcCallOptions) =>
+        this.requireActiveEvalExecution().rpc.call(targetId, method, args, options),
+      outsideContent
+    );
     const emit = (targetId: string, event: string, payload: unknown, options?: RpcCallOptions) =>
       this.requireActiveEvalExecution().rpc.emit(targetId, event, payload, options);
 
@@ -4207,14 +4233,16 @@ export class EvalDO extends DurableObjectBase {
         exposeAll: this.rpc.exposeAll.bind(this.rpc),
         exposeStreaming: this.rpc.exposeStreaming.bind(this.rpc),
         call,
-        stream: (targetId: string, method: string, args: unknown[], options?: RpcStreamOptions) =>
-          this.requireActiveEvalExecution().rpc.stream(targetId, method, args, options),
-        streamReadable: (
-          targetId: string,
-          method: string,
-          args: unknown[],
-          options?: RpcStreamOptions
-        ) => this.requireActiveEvalExecution().rpc.streamReadable(targetId, method, args, options),
+        stream: guardOutsideContentStream(
+          (targetId: string, method: string, args: unknown[], options?: RpcStreamOptions) =>
+            this.requireActiveEvalExecution().rpc.stream(targetId, method, args, options),
+          outsideContent
+        ),
+        streamReadable: guardOutsideContentStream(
+          (targetId: string, method: string, args: unknown[], options?: RpcStreamOptions) =>
+            this.requireActiveEvalExecution().rpc.streamReadable(targetId, method, args, options),
+          outsideContent
+        ),
         emit,
         on: this.rpc.on.bind(this.rpc),
         peer: (targetId: string, options?: RpcTargetOptions) =>
@@ -4297,9 +4325,11 @@ export class EvalDO extends DurableObjectBase {
     support: RuntimeSupportModule,
     contextId: string,
     parent: RunArgs["parent"] | null,
-    recordOperation: (entry: Record<string, unknown>) => void
+    recordOperation: (entry: Record<string, unknown>) => void,
+    outsideContent?: OutsideContentRecorder
   ): PanelRuntimeApiLike {
-    const rpc = this.createActiveRuntimeRpc();
+    // Panel handles read live browser pages (CDP) through this transport.
+    const rpc = this.createActiveRuntimeRpc(outsideContent);
     return support.createPanelRuntime({
       rpc,
       operationSignal: () => this.requireActiveEvalExecution().signal,
@@ -4418,7 +4448,8 @@ export class EvalDO extends DurableObjectBase {
       contextId: execution.contextId,
       gatewayToken: token,
     };
-    const rpc = this.createActiveRuntimeRpc();
+    const outsideContent = this.ownerOutsideContentRecorder(owner);
+    const rpc = this.createActiveRuntimeRpc(outsideContent);
     const gatewayConfig = {
       serverUrl: String(this.env["GATEWAY_URL"] ?? ""),
       token,
@@ -4431,15 +4462,11 @@ export class EvalDO extends DurableObjectBase {
       support,
       execution.contextId,
       parent,
-      recordOperation
-    );
-    // Resolved per call: this runtime can outlive the cell that built it.
-    const recordIngestion = ownerIngestionRecorder(owner, (target, method, values) =>
-      this.requireActiveEvalExecution().rpc.call(target, method, values)
+      recordOperation,
+      outsideContent
     );
     const host: Record<string, unknown> = {
       recordOperation,
-      ...(recordIngestion ? { recordIngestion } : {}),
       id: this.rpcSelfId,
       contextId: execution.contextId,
       rpc,
