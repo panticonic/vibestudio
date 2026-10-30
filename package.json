@@ -119,6 +119,7 @@
     "test:userland:base": "pnpm test:userland -- --template base",
     "test:mobile": "pnpm --dir hosts/react-native test --runInBand",
     "test:extension-smoke": "NODE_ENV=development node scripts/ensure-host-build.mjs && VIBESTUDIO_RUN_SERVER_INTEGRATION=1 vitest run tests/extension-image-service.integration.test.ts",
+    "natlang:eval": "node --import tsx scripts/natlang-eval.mjs",
     "test:headless-panel-integration": "NODE_ENV=development node scripts/ensure-host-build.mjs && VIBESTUDIO_RUN_HEADLESS_PANEL_INTEGRATION=1 vitest run tests/headless-panel.integration.test.ts",
     "iroh:install-android": "node packages/iroh-transport/native/install-android-maven.mjs",
     "test:iroh": "NODE_ENV=development node scripts/ensure-host-build.mjs && vitest run packages/iroh-transport/src packages/mobile-iroh/src packages/rpc/src/protocol/irohSession.test.ts packages/rpc/src/transports/irohClient.test.ts packages/rpc/src/transports/reconnectingIrohClient.test.ts src/server/irohIngress.test.ts src/server/rpcServer.iroh.test.ts",
