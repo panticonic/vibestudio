@@ -142,6 +142,22 @@ describe("desktop workspace session ownership", () => {
     await directory.close();
   });
 
+  it("closes a connection that the bootstrap catalog excludes while it was opening", async () => {
+    const opening = deferred<ReturnType<typeof session>>();
+    const opened = session("project");
+    const connect = vi.fn().mockReturnValueOnce(opening.promise);
+    const directory = new WorkspaceSessionDirectory(session("personal"), connect);
+    const pending = directory.get("project");
+    await Promise.resolve();
+
+    directory.initializeCatalog(new Set(["personal"]));
+    opening.resolve(opened);
+    await expect(pending).rejects.toThrow("access was removed during connection");
+    expect(opened.close).toHaveBeenCalledTimes(1);
+    await directory.close();
+    expect(opened.close).toHaveBeenCalledTimes(1);
+  });
+
   it("establishes retirement ownership before running cleanup callbacks", async () => {
     const project = session("project");
     const directory = new WorkspaceSessionDirectory(session("personal"), async () => project);

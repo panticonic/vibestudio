@@ -60,6 +60,9 @@ export class WorkspaceSessionDirectory<T extends OwnedWorkspaceSession> {
         throw new Error("Workspace connection returned a different workspace identity");
       }
       if (this.admittedWorkspaceIds && !this.admittedWorkspaceIds.has(workspaceId)) {
+        // A catalog snapshot retires what it removes, but the bootstrap
+        // admission does not; either way nobody may keep this connection.
+        await this.release(workspaceId);
         throw new RpcBoundaryError(
           "Workspace access was removed during connection",
           "transport",
