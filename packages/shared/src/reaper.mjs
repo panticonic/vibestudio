@@ -27,7 +27,7 @@ import {
   claimLedger,
   ledgerDirOf,
   ledgerFile,
-  readLedger,
+  ownsFile,
   retireGroup,
   retireLedger,
   scratchDirOf,
@@ -72,20 +72,17 @@ function retireOne(group) {
   if (!retirement) {
     retirement = retireGroup(group, {
       escalated: () => escalated || escalatedKeys.has(group.key),
-    }).then(
-      () => {
-        ledger.groups = ledger.groups.filter((entry) => entry.key !== group.key);
-        // Keep the active claim current, but never recreate a removed claim
-        // or overwrite its successor. Retirement remains valid after the
-        // claim disappears: the process observer proved this group absent.
-        if (!retiring && readLedger(dir, ledger.id)?.token === ledger.token) persist();
-      },
-      (error) => {
-        groupRetirements.delete(group.key);
-        throw error;
-      }
-    );
+    }).then(() => {
+      ledger.groups = ledger.groups.filter((entry) => entry.key !== group.key);
+      // Keep the active claim current, but never recreate a removed claim
+      // or overwrite its successor. Retirement remains valid after the
+      // claim disappears: the process observer proved this group absent.
+      if (!retiring && ownsFile(file, ledger)) persist();
+    });
     groupRetirements.set(group.key, retirement);
+    // A failed attempt is never the answer for later ones: the next request
+    // observes the group again and retries whatever did not complete.
+    retirement.catch(() => groupRetirements.delete(group.key));
   }
   return retirement;
 }

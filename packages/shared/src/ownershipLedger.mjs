@@ -371,7 +371,8 @@ function processExists(pid) {
   }
 }
 
-function ownsFile(file, ledger) {
+/** Whether `file` still holds this claim; an unreadable file is not proof that it does. */
+export function ownsFile(file, ledger) {
   try {
     return readLedgerFile(file)?.token === ledger.token;
   } catch {

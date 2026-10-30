@@ -76,6 +76,8 @@ export function readLedger(dir: string, id: string): Ledger | null;
 export function listLedgers(dir: string): Array<{ file: string; ledger: Ledger }>;
 /** Atomic replace: temp file + rename. */
 export function writeLedger(file: string, ledger: Ledger): void;
+/** Whether `file` still holds this claim; an unreadable file is not proof that it does. */
+export function ownsFile(file: string, ledger: Ledger): boolean;
 export function readResult(dir: string, id: string): LedgerResult | null;
 export function failureError(result: LedgerResult): AggregateError & OwnershipError;
 

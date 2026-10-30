@@ -363,6 +363,26 @@ describe.skipIf(!linux)("ownership library", () => {
     expect(proc.child.signalCode).toBe("SIGKILL");
   });
 
+  it("retires a group whose ledger became unreadable, without rewriting that file", async () => {
+    const ownership = await Ownership.open({
+      profileDir: profile,
+      id: "unreadable",
+      lifetime: "leased",
+    });
+    try {
+      const proc = ownership.spawn("sleep", ["600"], { kill: "immediate", stdio: "ignore" });
+      await proc.registered;
+      const file = ledgerFile(ledgerDir(), ownership.id);
+      fs.writeFileSync(file, "{ torn");
+      await proc.retire();
+      await proc.retire();
+      expect(running(proc.child.pid!)).toBe(false);
+      expect(fs.readFileSync(file, "utf8")).toBe("{ torn");
+    } finally {
+      await ownership.release();
+    }
+  });
+
   it("retires one resource early with retire() and join()", async () => {
     const ownership = await Ownership.open({
       profileDir: profile,
