@@ -95,10 +95,46 @@ describe("WorkspaceEntityStore", () => {
     const result = await store.activate(input);
     expect(dispatch).toHaveBeenCalledExactlyOnceWith(expect.anything(), "entityActivate", {
       ...input,
+      // No agent channel: the native owner is its own invocation trajectory.
+      agentBinding: { entityId: RECORD.id, contextId: RECORD.contextId, channelId: RECORD.id },
       nativeOwner: incarnation,
       durableWorkQueues: [],
     });
     expect(result.nativeOwner).toEqual(incarnation);
+  });
+
+  it("keeps an agent's own channel as its invocation trajectory", async () => {
+    const incarnation = { incarnation: "native-storage", generation: 1 };
+    const dispatch = vi.fn(async (_ref, _method, input) => ({
+      ...RECORD,
+      nativeOwner: input.nativeOwner,
+    }));
+    const store = new WorkspaceEntityStore({
+      doDispatch: { dispatch } as unknown as DODispatch,
+      workspaceId: "ws_1",
+      entityCache: new EntityCache(),
+      resolveNativeOwner: () => incarnation,
+      resolveDurableWorkQueues: () => [],
+      materializeExecution: async () => undefined,
+    });
+    const agentBinding = {
+      entityId: RECORD.id,
+      contextId: RECORD.contextId,
+      channelId: "channel:alpha",
+    };
+    await store.activate({
+      kind: "do",
+      source: RECORD.source,
+      contextId: RECORD.contextId,
+      className: "EvalDO",
+      key: RECORD.key,
+      agentBinding,
+    });
+    expect(dispatch).toHaveBeenCalledExactlyOnceWith(
+      expect.anything(),
+      "entityActivate",
+      expect.objectContaining({ agentBinding })
+    );
   });
 
   it("commits cleanup against the exact captured retired authority lifetime", async () => {
