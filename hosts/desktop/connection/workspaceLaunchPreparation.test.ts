@@ -91,14 +91,33 @@ describe("product workspace launch preparation", () => {
     expect(t.get.mock.calls.every(([id]) => id !== ("shared" as string))).toBe(true);
   });
 
-  it("joins independent workspace failures and preserves their original errors", async () => {
+  it("keeps a failed workspace on its installed version without hiding another's review", async () => {
     const t = fixture();
-    const first = new Error("System original failure"),
-      second = new Error("Personal original failure");
+    const failure = new Error("Templates service unavailable");
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.mocked(reconcileWorkspaceLaunchUpdates)
-      .mockRejectedValueOnce(first)
-      .mockRejectedValueOnce(second);
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce([{ status: "conflicts", operationId: "op:personal" }] as Awaited<
+        ReturnType<typeof reconcileWorkspaceLaunchUpdates>
+      >);
     const preparation = await createWorkspaceLaunchPreparation(t.session, t.get as never, env);
-    await expect(preparation.prepare!()).rejects.toMatchObject({ errors: [first, second] });
+    expect(await preparation.prepare!()).toEqual({
+      notices: [
+        {
+          id: "workspace-update-failed:system",
+          title: "Workspace update didn't finish",
+          message:
+            "System is staying on its installed version for now. Templates service unavailable",
+        },
+        {
+          id: "workspace-update:op:personal",
+          title: "Workspace update needs review",
+          message:
+            "Local changes need review before Personal can update. Resume Templates update op:personal.",
+        },
+      ],
+    });
+    expect(error).toHaveBeenCalledWith(expect.stringContaining("system"), failure);
+    error.mockRestore();
   });
 });

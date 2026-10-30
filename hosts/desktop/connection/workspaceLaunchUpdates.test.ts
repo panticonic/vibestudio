@@ -250,6 +250,27 @@ describe("retained workspace updates during product launch", () => {
     }
   );
 
+  it("records a publication before a later source's failure propagates", async () => {
+    const t = harness([installed(systemA, "direct"), installed(baseA, "direct")]);
+    const failure = new Error("Base prepare failed");
+    const prepare = t.prepareUpdate.getMockImplementation()!;
+    t.prepareUpdate.mockImplementation(async (request) =>
+      request.sourceUrl === normalizeTemplateGitUrl(baseA.url)
+        ? Promise.reject(failure)
+        : prepare(request)
+    );
+    await expect(t.reconcile([systemB, baseB])).rejects.toBe(failure);
+    expect(t.inventory().map((source) => source.pin)).toEqual([systemB, baseA]);
+    expect(t.receipts).toEqual([
+      expect.objectContaining({
+        status: "published",
+        sourceUrl: normalizeTemplateGitUrl(systemA.url),
+        fromCommit: systemA.commit,
+        toCommit: systemB.commit,
+      }),
+    ]);
+  });
+
   it("verifies installed provenance instead of trusting a published response", async () => {
     const t = harness();
     t.publishUpdate.mockImplementation(async ({ operationId }) => ({

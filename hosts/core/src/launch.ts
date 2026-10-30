@@ -84,6 +84,8 @@ export interface ClientLauncherOptions {
   /**
    * Reconcile launch-owned workspace source after ordinary workspace review
    * and admission succeed, before resolving or building the client source.
+   * A rejection fails the launch attempt, so work whose failure leaves the
+   * installed source usable reports it instead of rejecting.
    */
   prepare?: () => Promise<void>;
 }

@@ -7,6 +7,7 @@ import { readWorkspaceSources } from "@vibestudio/workspace/workspaceSources";
 import type { Call } from "@vibestudio/client-host-core";
 import type { ConnectedSession, ConnectedWorkspace } from "../main/serverSession.js";
 import type { ClientLaunchHostDeps } from "./clientLaunchHost.js";
+import type { ClientLaunchNotice } from "./connectionProtocol.js";
 import { reconcileWorkspaceLaunchUpdates } from "./workspaceLaunchUpdates.js";
 
 /** Local product updates are part of the ordinary admitted client launch. */
@@ -42,9 +43,12 @@ export async function createWorkspaceLaunchPreparation(
     const run = async (): Promise<Preparation> => {
       // Each workspace owns a protected main; all independent publications are
       // joined before resolving the client build. Templates orders its own roots.
+      // An update is an improvement to source the workspace already has, so a
+      // failed one leaves that workspace on its installed version and is
+      // reported to the person; it never keeps the client from launching.
       const results = await Promise.allSettled(
-        owners.map(async (owner, index) => {
-          const outcomes = await reconcileWorkspaceLaunchUpdates({
+        owners.map((owner, index) =>
+          reconcileWorkspaceLaunchUpdates({
             client: createTemplatesClient(calls[index]!),
             mainState: () => createTypedServiceClient("vcs", vcsMethods, calls[index]!).mainState(),
             targets,
@@ -52,30 +56,38 @@ export async function createWorkspaceLaunchPreparation(
               console.info(
                 `[WorkspaceUpdates] ${JSON.stringify({ workspaceId: owner.workspaceId, ...receipt })}`
               ),
-          });
-          return {
-            notices: outcomes
-              .filter((outcome) => outcome.status === "conflicts")
-              .map((outcome) => ({
-                id: `workspace-update:${outcome.operationId}`,
-                title: "Workspace update needs review",
-                message:
-                  `Local changes need review before ${owner.displayName ?? owner.name} can update. ` +
-                  `Resume Templates update ${outcome.operationId}.`,
-              })),
-          };
-        })
-      );
-      const failures = results.flatMap((result) =>
-        result.status === "rejected" ? [result.reason] : []
-      );
-      if (failures.length === 1) throw failures[0];
-      if (failures.length) throw new AggregateError(failures, "Workspace launch updates failed");
-      const completed = results.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value] : []
+          })
+        )
       );
       return {
-        notices: completed.flatMap((result) => result.notices),
+        notices: results.flatMap((result, index): ClientLaunchNotice[] => {
+          const owner = owners[index]!;
+          const name = owner.displayName ?? owner.name;
+          if (result.status === "rejected") {
+            console.error(
+              `[WorkspaceUpdates] ${owner.workspaceId} stays on its installed version:`,
+              result.reason
+            );
+            return [
+              {
+                id: `workspace-update-failed:${owner.workspaceId}`,
+                title: "Workspace update didn't finish",
+                message:
+                  `${name} is staying on its installed version for now. ` +
+                  (result.reason instanceof Error ? result.reason.message : String(result.reason)),
+              },
+            ];
+          }
+          return result.value
+            .filter((outcome) => outcome.status === "conflicts")
+            .map((outcome) => ({
+              id: `workspace-update:${outcome.operationId}`,
+              title: "Workspace update needs review",
+              message:
+                `Local changes need review before ${name} can update. ` +
+                `Resume Templates update ${outcome.operationId}.`,
+            }));
+        }),
       };
     };
     const operation = run();
