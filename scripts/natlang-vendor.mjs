@@ -36,6 +36,7 @@ const PIN_SCHEMA = "natlang.vendor-pin/1";
 /** Where each natlang target is vendored: the template that consumes it, and the directory (the pin's root) in it. */
 export const VENDORED_TARGETS = [
   { target: "workerd", template: "base", directory: "packages/natlang/vendor" },
+  { target: "evaluation", template: "base", directory: "packages/natlang/vendor-evaluation" },
   { target: "dashboard", template: "base", directory: "packages/natlang/vendor-dashboard" },
   { target: "llama", template: "system", directory: "extensions/local-models/vendor" },
 ];
