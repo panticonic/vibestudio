@@ -537,6 +537,7 @@ describe("service schema contracts", () => {
           file !== "usageAnalytics.ts" &&
           file !== "nativeInvocation.ts" &&
           file !== "agenticMessageTypes.ts" &&
+          file !== "evalNatlang.ts" &&
           file !== "rpcCausality.ts" &&
           file !== "rpcFailure.ts" &&
           file !== "governanceQuery.ts" &&

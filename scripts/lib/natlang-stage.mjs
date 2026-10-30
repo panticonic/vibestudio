@@ -60,7 +60,10 @@ export async function withNatlangWorktree(repository, commit, body, scratchRoot 
     async () => {
       git(repository, "worktree", "add", "--detach", worktree, resolved);
       const tsHost = path.join(worktree, "ts-host");
-      fs.symlinkSync(path.join(repository, "ts-host/node_modules"), path.join(tsHost, "node_modules"));
+      fs.symlinkSync(
+        path.join(repository, "ts-host/node_modules"),
+        path.join(tsHost, "node_modules")
+      );
       if (fs.existsSync(path.join(repository, "node_modules"))) {
         fs.symlinkSync(path.join(repository, "node_modules"), path.join(worktree, "node_modules"));
       }
