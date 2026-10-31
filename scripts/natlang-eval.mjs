@@ -3,7 +3,7 @@
  * Run a natlang evaluation suite from the host against a host-owned projection of a template's workspace sources.
  *
  *   pnpm natlang:eval -- --template T --suite PATH [--split train|validation|test] [--artifact FILE]
- *                        [--preflight] [--out DIR] [--natlang-commit REV]
+ *                        [--preflight] [--out DIR] [--natlang-commit REV] [--case-deadline-ms N]
  *
  * Natlang's evaluation system (`defineEvaluationSuite`: train/validation/locked-test splits, scorers, judges, budgets,
  * GEPA/reflection adaptation) is Node-only, because every rollout runs in a fresh worker. It therefore cannot run inside a
@@ -65,6 +65,8 @@ const SPLITS = ["train", "validation", "test"];
 const SUITE_EXTENSION = /\.m?[jt]s$/u;
 const STAGE_PIN = "natlang-pin.json";
 const EVAL_BUNDLE = "eval/natlang-eval.js";
+/** The longest delay a timer takes (a larger one fires at once). */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /** A failure of the command's input: reported with exit status 2. */
 export class UsageError extends Error {
@@ -83,6 +85,7 @@ export function parseArguments(argv) {
   };
   const options = { split: "validation", preflight: false };
   const seen = new Set();
+    "--case-deadline-ms": "caseDeadlineMs",
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--") continue;
@@ -109,6 +112,12 @@ export function parseArguments(argv) {
   return options;
 }
 
+  if (options.caseDeadlineMs !== undefined) {
+    options.caseDeadlineMs = Number(options.caseDeadlineMs);
+    if (!Number.isInteger(options.caseDeadlineMs) || options.caseDeadlineMs < 1 || options.caseDeadlineMs > MAX_TIMER_MS) {
+      throw new UsageError(`--case-deadline-ms must be a whole number of milliseconds between 1 and ${MAX_TIMER_MS}`);
+    }
+  }
 /** The suite's path relative to the workspace root; it must exist beneath one of the `roots` (checkouts or the composition). */
 export function locateSuite(suite, roots, checkouts = roots) {
   if (!SUITE_EXTENSION.test(suite)) {
@@ -527,6 +536,9 @@ export async function main(argv = process.argv.slice(2)) {
         : (error?.message ?? error)
     );
     process.exitCode ||= exitCodeFor(error);
+    // A case runs until it ends: slow local inference is not a failure. `--case-deadline-ms` is an explicit bound for an
+    // investigation; without it the worker's watchdog is set to the longest timer the platform allows.
+    timeoutMs: options.caseDeadlineMs ?? MAX_TIMER_MS,
     return;
   }
   // A stop request settles `ownedEntry` without a value and has set the exit status itself.

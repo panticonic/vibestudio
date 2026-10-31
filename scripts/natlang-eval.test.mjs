@@ -52,7 +52,12 @@ test("arguments parse as natlang's CLI parses them", () => {
     { template: "base", suite: "s.ts", split: "test", preflight: true, out: "o" }
   );
   for (const [argv, message] of [
+  assert.equal(
+    parseArguments(["--template", "base", "--suite", "s.ts", "--case-deadline-ms", "600000"]).caseDeadlineMs,
+    600000
+  );
     [["--suite", "s.ts"], /--template is required/],
+    [["--template", "base", "--suite", "s.ts", "--case-deadline-ms", "soon"], /--case-deadline-ms must be/],
     [["--template", "base"], /--suite is required/],
     [["--template", "base", "--suite", "s.ts", "--split", "dev"], /--split must be one of/],
     [["--template", "base", "--suite", "s.ts", "--bogus"], /unknown option: --bogus/],
