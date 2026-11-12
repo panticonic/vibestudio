@@ -29,6 +29,9 @@
  *     persist.
  *
  * Suite conventions
+ *   - A suite imports natlang's API from `@workspace/natlang/evaluation` (`defineEvaluationSuite`, ...) and
+ *     `@workspace/natlang/model` (`executorIdentityForChoice`, `loadModelConfiguration`, ...): type-checked in the
+ *     workspace against the vendored declarations, resolved here to the staged bundle.
  *   - A suite lives beside its program as `suite.ts` + `cases.jsonl` in the template's workspace tree, and `--suite` names
  *     it by path relative to the workspace root (an absolute path inside a template checkout is mapped to that).
  *   - `suite.ts` default-exports an `EvaluationSuite` (natlang `defineEvaluationSuite`'s argument), with `program.root`
@@ -62,11 +65,11 @@ import { natlangRepository, stageNatlang } from "./lib/natlang-stage.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SPLITS = ["train", "validation", "test"];
+/** The longest delay a timer takes (a larger one fires at once). */
+const MAX_TIMER_MS = 2 ** 31 - 1;
 const SUITE_EXTENSION = /\.m?[jt]s$/u;
 const STAGE_PIN = "natlang-pin.json";
 const EVAL_BUNDLE = "eval/natlang-eval.js";
-/** The longest delay a timer takes (a larger one fires at once). */
-const MAX_TIMER_MS = 2 ** 31 - 1;
 
 /** A failure of the command's input: reported with exit status 2. */
 export class UsageError extends Error {
@@ -82,10 +85,10 @@ export function parseArguments(argv) {
     "--artifact": "artifact",
     "--out": "out",
     "--natlang-commit": "natlangCommit",
+    "--case-deadline-ms": "caseDeadlineMs",
   };
   const options = { split: "validation", preflight: false };
   const seen = new Set();
-    "--case-deadline-ms": "caseDeadlineMs",
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--") continue;
@@ -109,15 +112,15 @@ export function parseArguments(argv) {
   if (!SPLITS.includes(options.split)) {
     throw new UsageError(`--split must be one of ${SPLITS.join(", ")}`);
   }
-  return options;
-}
-
   if (options.caseDeadlineMs !== undefined) {
     options.caseDeadlineMs = Number(options.caseDeadlineMs);
     if (!Number.isInteger(options.caseDeadlineMs) || options.caseDeadlineMs < 1 || options.caseDeadlineMs > MAX_TIMER_MS) {
       throw new UsageError(`--case-deadline-ms must be a whole number of milliseconds between 1 and ${MAX_TIMER_MS}`);
     }
   }
+  return options;
+}
+
 /** The suite's path relative to the workspace root; it must exist beneath one of the `roots` (checkouts or the composition). */
 export function locateSuite(suite, roots, checkouts = roots) {
   if (!SUITE_EXTENSION.test(suite)) {
@@ -213,12 +216,23 @@ export function layoutEvalBundle({ stagedDir, repository, runRoot }) {
   const tsHost = path.join(runRoot, "ts-host");
   fs.mkdirSync(tsHost, { recursive: true });
   fs.cpSync(path.join(stagedDir, "eval"), path.join(tsHost, "eval"), { recursive: true });
+  // The bundle is ES module code. Natlang's own tree says so in `ts-host/package.json`; without it the bundle is loaded
+  // through tsx's CommonJS resolver, which cannot read the `import`-only exports of its npm packages (pi-ai).
+  fs.writeFileSync(path.join(tsHost, "package.json"), '{ "type": "module" }\n');
   for (const [from, to] of [
     [path.join(repository, "ts-host/node_modules"), path.join(tsHost, "node_modules")],
     [path.join(repository, "node_modules"), path.join(runRoot, "node_modules")],
   ]) {
     if (fs.existsSync(from)) fs.symlinkSync(from, to);
   }
+  // natlang compiles a suite's program against `new URL("../index.js", import.meta.url)` of the bundle (its package
+  // root); the bundle exports the same runtime API from its own entry.
+  fs.writeFileSync(path.join(tsHost, "index.js"), 'export * from "./eval/natlang-eval.js";\n');
+  fs.writeFileSync(path.join(tsHost, "index.d.ts"), 'export * from "./eval/natlang-eval.js";\n');
+  // The bundle finds model chat templates at `../../../models/templates` from its own file, as the source tree does
+  // from `ts-host/src/llama`; without them the managed model reports itself unavailable.
+  const models = path.join(repository, "models");
+  if (fs.existsSync(models)) fs.symlinkSync(models, path.join(path.dirname(runRoot), "models"));
   return path.join(tsHost, EVAL_BUNDLE);
 }
 
@@ -236,6 +250,36 @@ export function linkProjectedModules(workspaceRoot, nodeModulesDir) {
 }
 
 /**
+ * The specifiers a suite imports natlang's evaluation API and model session API from. In the workspace they are the
+ * type-only exports `@workspace/natlang/evaluation` and `/model` (the vendored declarations of this same bundle); here
+ * they resolve to the staged bundle that runs the suite.
+ */
+export function linkSuiteSpecifiers(modulesDir, entry) {
+  const directory = path.join(modulesDir, "@workspace", "natlang");
+  fs.mkdirSync(directory, { recursive: true });
+  fs.writeFileSync(
+    path.join(directory, "package.json"),
+    JSON.stringify({
+      name: "@workspace/natlang",
+      type: "module",
+      exports: {
+        "./evaluation": { types: "./evaluation.d.ts", default: "./evaluation.js" },
+        "./model": { types: "./evaluation.d.ts", default: "./evaluation.js" },
+      },
+    })
+  );
+  fs.writeFileSync(
+    path.join(directory, "evaluation.js"),
+    `export * from ${JSON.stringify(pathToFileURL(entry).href)};\n`
+  );
+  // The suite is type-checked as natlang builds it (strict): its imports need the bundle's declarations.
+  fs.writeFileSync(
+    path.join(directory, "evaluation.d.ts"),
+    `export * from ${JSON.stringify(entry)};\n`
+  );
+}
+
+/**
  * The executor (and judge) models of a suite, resolved as natlang's CLI resolves them: the profiles `suite.models` name,
  * opened as sessions of natlang's managed local runtime (or the external provider the profile selects).
  * Returns `{ identity, driver, judge, close }`; `close` stops what the sessions started.
@@ -249,6 +293,7 @@ export async function openNatlangModels(
     "loadModelConfiguration",
     "createResolvedModelSession",
     "localModelPrerequisites",
+    "sessionDriver",
   ]) {
     if (typeof natlang[name] !== "function") {
       throw new Error(
@@ -272,7 +317,9 @@ export async function openNatlangModels(
   const open = (configuration) => {
     const session = natlang.createResolvedModelSession(configuration.choice, environment, error);
     sessions.push(session);
-    return (request, signal, options) => session.turn(request, signal, options);
+    // The session as a runtime driver, with the capabilities the runtime reads off the driver itself (the decision
+    // readout, the Neuralese runtime), so no wrapper of ours can drop one.
+    return natlang.sessionDriver(session);
   };
   try {
     return {
@@ -418,7 +465,7 @@ export async function runNatlangEval(options, context, dependencies = defaultDep
       });
       retirements.unshift(projection.release);
       signal.throwIfAborted();
-      linkProjectedModules(composition.root, projection.nodeModulesDir);
+      linkSuiteSpecifiers(linkProjectedModules(composition.root, projection.nodeModulesDir), entry);
       const suiteRelative = locateSuite(options.suite, [composition.root], checkouts);
 
       const natlang = await deps.loadEval(entry);
@@ -489,6 +536,9 @@ async function evaluateSuite({
     judge: models.judge,
     gateway,
     signal,
+    // A case runs until it ends: slow local inference is not a failure. `--case-deadline-ms` is an explicit bound for an
+    // investigation; without it the worker's watchdog is set to the longest timer the platform allows.
+    timeoutMs: options.caseDeadlineMs ?? MAX_TIMER_MS,
   });
   const cases = {};
   for (const testCase of prepared.cases) cases[testCase.split] = (cases[testCase.split] ?? 0) + 1;
@@ -536,9 +586,6 @@ export async function main(argv = process.argv.slice(2)) {
         : (error?.message ?? error)
     );
     process.exitCode ||= exitCodeFor(error);
-    // A case runs until it ends: slow local inference is not a failure. `--case-deadline-ms` is an explicit bound for an
-    // investigation; without it the worker's watchdog is set to the longest timer the platform allows.
-    timeoutMs: options.caseDeadlineMs ?? MAX_TIMER_MS,
     return;
   }
   // A stop request settles `ownedEntry` without a value and has set the exit status itself.

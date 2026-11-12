@@ -11,6 +11,7 @@ import {
   exitCodeFor,
   layoutEvalBundle,
   linkProjectedModules,
+  linkSuiteSpecifiers,
   locateSuite,
   openNatlangModels,
   parseArguments,
@@ -51,13 +52,13 @@ test("arguments parse as natlang's CLI parses them", () => {
     ]),
     { template: "base", suite: "s.ts", split: "test", preflight: true, out: "o" }
   );
-  for (const [argv, message] of [
   assert.equal(
     parseArguments(["--template", "base", "--suite", "s.ts", "--case-deadline-ms", "600000"]).caseDeadlineMs,
     600000
   );
-    [["--suite", "s.ts"], /--template is required/],
+  for (const [argv, message] of [
     [["--template", "base", "--suite", "s.ts", "--case-deadline-ms", "soon"], /--case-deadline-ms must be/],
+    [["--suite", "s.ts"], /--template is required/],
     [["--template", "base"], /--suite is required/],
     [["--template", "base", "--suite", "s.ts", "--split", "dev"], /--split must be one of/],
     [["--template", "base", "--suite", "s.ts", "--bogus"], /unknown option: --bogus/],
@@ -218,6 +219,24 @@ test("the bundle is laid out beside the natlang checkout's installed packages", 
   assert.ok(fs.existsSync(path.join(root, "run/node_modules/just-bash/package.json")));
 });
 
+test("the laid-out bundle is ES module code, is its own package root, and finds the chat templates", (t) => {
+  const root = temporary(t);
+  const repository = path.join(root, "natlang");
+  write(path.join(repository, "models/templates/LFM3-1.7B.jinja"), "{{ messages }}");
+  const stagedDir = path.join(root, "staged");
+  write(path.join(stagedDir, "eval/natlang-eval.js"), "export {}");
+  const runRoot = path.join(root, "scratch/run");
+  layoutEvalBundle({ stagedDir, repository, runRoot });
+  // Without a module package the bundle loads through a CommonJS resolver that cannot read import-only exports.
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(runRoot, "ts-host/package.json"), "utf8")), {
+    type: "module",
+  });
+  // A program compiled for a suite imports the runtime from `../index.js` of the bundle.
+  assert.match(fs.readFileSync(path.join(runRoot, "ts-host/index.js"), "utf8"), /natlang-eval\.js/);
+  // The bundle looks for templates at `../../../models/templates` of its own file.
+  assert.ok(fs.existsSync(path.join(root, "scratch/models/templates/LFM3-1.7B.jinja")));
+});
+
 test("the composed workspace resolves the projected npm packages, scoped ones included", (t) => {
   const root = temporary(t);
   const nodeModulesDir = path.join(root, "projected");
@@ -233,6 +252,27 @@ test("the composed workspace resolves the projected npm packages, scoped ones in
   assert.equal(fs.existsSync(path.join(modules, ".bin")), false);
 });
 
+test("a suite's workspace specifiers for natlang resolve to the staged bundle", async (t) => {
+  const root = temporary(t);
+  const bundle = path.join(root, "bundle.mjs");
+  write(
+    bundle,
+    "export const defineEvaluationSuite = (suite) => suite;\nexport const executorIdentityForChoice = () => 'id';\n"
+  );
+  const workspace = path.join(root, "workspace");
+  fs.mkdirSync(workspace);
+  linkSuiteSpecifiers(linkProjectedModules(workspace, undefined), bundle);
+  write(
+    path.join(workspace, "suite.mjs"),
+    "import { defineEvaluationSuite } from '@workspace/natlang/evaluation';\nimport { executorIdentityForChoice } from '@workspace/natlang/model';\nexport default defineEvaluationSuite({ identity: executorIdentityForChoice() });\n"
+  );
+  const loaded = await import(path.join(workspace, "suite.mjs"));
+  assert.deepEqual(loaded.default, { identity: "id" });
+  // The suite is type-checked as natlang builds it: the specifiers carry the bundle's declarations.
+  const declaration = fs.readFileSync(path.join(workspace, "node_modules/@workspace/natlang/evaluation.d.ts"), "utf8");
+  assert.ok(declaration.includes(JSON.stringify(bundle)));
+});
+
 test("a staged bundle without the model session API is refused with the missing export named", async () => {
   await assert.rejects(
     openNatlangModels({ loadModelConfiguration() {} }, { models: {} }),
@@ -246,8 +286,13 @@ test("model sessions are opened per suite profile and every one is closed", asyn
     loadModelConfiguration: (profile) => ({ choice: { kind: "external", profile } }),
     localModelPrerequisites: () => ({ available: true }),
     executorIdentityForChoice: (choice) => ({ id: choice.profile }),
+    sessionDriver: (session) =>
+      Object.assign((request) => session.turn(request), {
+        decide: (request) => session.decide(request),
+      }),
     createResolvedModelSession: (choice) => ({
       turn: async () => ({ text: choice.profile }),
+      decide: async (request) => ({ scored: choice.profile, request }),
       close: async () => {
         closed.push(choice.profile);
       },
@@ -257,6 +302,9 @@ test("model sessions are opened per suite profile and every one is closed", asyn
   assert.deepEqual(models.identity, { id: "exec" });
   assert.equal((await models.driver({})).text, "exec");
   assert.equal((await models.judge({})).text, "jdg");
+  // The decision readout travels on the driver, for the executor and for the judge.
+  assert.deepEqual(await models.driver.decide("replies"), { scored: "exec", request: "replies" });
+  assert.deepEqual(await models.judge.decide("replies"), { scored: "jdg", request: "replies" });
   await models.close();
   assert.deepEqual(closed.toSorted(), ["exec", "jdg"]);
 
