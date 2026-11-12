@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getProfileDataPath } from "@vibestudio/env-paths";
 import type { RpcClient } from "@vibestudio/rpc";
+import type { PanelShellSession } from "./panelShellBridge.js";
 import type { CdpHostBridgeDiagnostic, CdpHostBridgeSocket } from "./hostBridge.js";
 
 export interface IpcTokenAuth {
@@ -39,6 +40,12 @@ export interface HeadlessHostConfig {
   leanBrowser?: boolean;
   /** Inject a non-WS management-plane connection, e.g. CLI Iroh. */
   connectionFactory?: () => Promise<HeadlessHostServerConnection>;
+  /**
+   * Open the panel's own logical session on the server (its principal, on its lease connection). A host whose server is
+   * reachable only over a non-HTTP transport (Iroh) supplies it: panels there have no WebSocket to the server, so the
+   * host relays their shell bridge on this session (panelShellBridge.ts).
+   */
+  openPanelSession?: (runtimeEntityId: string, connectionId: string) => Promise<PanelShellSession>;
   /** Override the CDP host-provider bridge transport, e.g. RPC stream over Iroh. */
   bridgeSocketFactory?: (url: string) => CdpHostBridgeSocket;
   lifecycle?: {
@@ -63,6 +70,7 @@ export interface ConfigOverrides {
   leanBrowser?: boolean;
   connectionFactory?: () => Promise<HeadlessHostServerConnection>;
   bridgeSocketFactory?: (url: string) => CdpHostBridgeSocket;
+  openPanelSession?: HeadlessHostConfig["openPanelSession"];
   lifecycle?: HeadlessHostConfig["lifecycle"];
 }
 
@@ -114,6 +122,7 @@ export function resolveConfig(
     leanBrowser: overrides.leanBrowser ?? false,
     connectionFactory: overrides.connectionFactory,
     bridgeSocketFactory: overrides.bridgeSocketFactory,
+    openPanelSession: overrides.openPanelSession,
     lifecycle: overrides.lifecycle,
   };
 }

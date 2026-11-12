@@ -1,4 +1,5 @@
 import { formatRpcFailure, type RpcMethod } from "@vibestudio/rpc";
+import { mainRpcMethods } from "@vibestudio/service-schemas/mainRpc";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -145,6 +146,19 @@ async function createIrohHeadlessHostOverrides(
           await client.close();
         },
       }),
+      // Panels here have no WebSocket to the server (it is reachable only over Iroh): the host relays each panel's
+      // shell bridge on that panel's own session, authenticated by a grant for its entity on its lease connection.
+      openPanelSession: async (runtimeEntityId: string, connectionId: string) =>
+        client.openSession({
+          connectionId,
+          clientPlatform: "headless",
+          getToken: async () =>
+            (
+              (await rpc.call("main", mainRpcMethods["auth.grantConnection"], [
+                runtimeEntityId,
+              ])) as { token: string }
+            ).token,
+        }),
       bridgeSocketFactory: () =>
         new RemoteCdpHostBridgeSocket({
           rpc,
