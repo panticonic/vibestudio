@@ -3,7 +3,7 @@
  * Run a natlang evaluation suite from the host against a host-owned projection of a template's workspace sources.
  *
  *   pnpm natlang:eval -- --template T --suite PATH [--split train|validation|test] [--artifact FILE]
- *                        [--preflight] [--out DIR] [--natlang-commit REV] [--case-deadline-ms N]
+ *                        [--preflight] [--out DIR] [--natlang-commit REV] [--case-deadline-ms N] [--instance ID]
  *
  * Natlang's evaluation system (`defineEvaluationSuite`: train/validation/locked-test splits, scorers, judges, budgets,
  * GEPA/reflection adaptation) is Node-only, because every rollout runs in a fresh worker. It therefore cannot run inside a
@@ -45,6 +45,13 @@
  *   - The executor is natlang's resolved model: on this host its managed local runtime with the stock LFM3 model.
  *     Quality runs are explicit and budgeted: the suite's `budget` is enforced by natlang's usage gateway.
  *
+ * Recording
+ *   `--instance ID` also posts the result's summary (suite, split, executor, quality, per-case scores, gates) to the managed
+ *   instance's natlang records service through its paired CLI (`pnpm cli --instance ID`, scripts/lib/natlang-instance-
+ *   records.mjs), so the natlang panel's Evaluations page shows the latest result per program with its gates. The instance
+ *   is resolved before anything runs; the result file is written first, and a failure to record is reported (exit 4)
+ *   with the file's path.
+ *
  * Contract
  *   exit 0  every case scored and every gate passed        exit 3  cases ran; a gate failed or a case was not scored
  *   exit 2  usage, configuration or suite error            exit 4  evaluation infrastructure failure (worker, model)
@@ -62,6 +69,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { runWithOwnedCleanup, runOwnedCleanupSteps } from "./lib/owned-cleanup.mjs";
 import { ownedEntry } from "./lib/owned-entry.mjs";
 import { natlangRepository, stageNatlang } from "./lib/natlang-stage.mjs";
+import { RecordingError, openInstanceRecorder } from "./lib/natlang-instance-records.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SPLITS = ["train", "validation", "test"];
@@ -86,6 +94,7 @@ export function parseArguments(argv) {
     "--out": "out",
     "--natlang-commit": "natlangCommit",
     "--case-deadline-ms": "caseDeadlineMs",
+    "--instance": "instance",
   };
   const options = { split: "validation", preflight: false };
   const seen = new Set();
@@ -404,6 +413,7 @@ export const defaultDependencies = {
   },
   loadEval: (entry) => import(pathToFileURL(entry).href),
   openModels: openNatlangModels,
+  openInstanceRecorder,
   stdout: (text) => process.stdout.write(`${text}\n`),
   cacheRoot: path.join(appRoot, ".cache/natlang-eval"),
 };
@@ -434,6 +444,8 @@ export async function runNatlangEval(options, context, dependencies = defaultDep
   }
   const repository = deps.natlangRepository();
   const commit = deps.resolveNatlangCommit(repository, options.natlangCommit);
+  // A stopped or mistyped instance fails now, not after the evaluation has run.
+  const recorder = options.instance ? await deps.openInstanceRecorder(options.instance) : undefined;
 
   const retirements = [];
   const projectionTools = await deps.projection();
@@ -484,6 +496,7 @@ export async function runNatlangEval(options, context, dependencies = defaultDep
             deps,
             commit,
             suiteRelative,
+            recorder,
           }),
         () => models.close(),
         "Model session cleanup failed"
@@ -506,6 +519,7 @@ async function evaluateSuite({
   deps,
   commit,
   suiteRelative,
+  recorder,
 }) {
   const { suite } = prepared;
   // The artifact is bound to the executor identity, so the identity must be the one the suite declares.
@@ -561,13 +575,23 @@ async function evaluateSuite({
   const resultPath = path.join(directory, `${options.split}-${stamp()}.json`);
   fs.writeFileSync(resultPath, `${JSON.stringify(record, null, 2)}\n`);
   deps.stdout(`${formatSummary(record)}\nresults ${resultPath}`);
+  if (recorder) {
+    try {
+      const evaluationId = await recorder.record(record);
+      deps.stdout(`recorded on instance ${options.instance}: ${evaluationId}`);
+    } catch (error) {
+      throw new RecordingError(
+        `the evaluation ran and its result is in ${resultPath}, but instance ${options.instance} did not record it: ${error?.message ?? error}`
+      );
+    }
+  }
   return { exitCode: batch.gatesPassed ? 0 : 3, record, resultPath };
 }
 
 /** The exit status of a failed run. */
 export function exitCodeFor(error) {
   const failures = error instanceof AggregateError ? error.errors : [error];
-  if (failures.some((failure) => failure?.name === "EvaluationInfrastructureError")) return 4;
+  if (failures.some((failure) => ["EvaluationInfrastructureError", "RecordingError"].includes(failure?.name))) return 4;
   return 2;
 }
 

@@ -19,6 +19,11 @@ import {
   runNatlangEval,
 } from "./natlang-eval.mjs";
 import { natlangRepository } from "./lib/natlang-stage.mjs";
+import {
+  RecordingError,
+  evaluationSummary,
+  openInstanceRecorder,
+} from "./lib/natlang-instance-records.mjs";
 
 function temporary(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), "natlang-eval-test-"));
@@ -475,6 +480,157 @@ test("a run stages, projects, evaluates, writes results, and retires everything 
   assert.match(output[0], /suite fixture\/suite +\(h+\) +template personal +split validation/);
   assert.match(output[0], /budget spent: rollouts 2\/8, model calls 0\/16/);
   assert.ok(output[0].endsWith(`results ${outcome.resultPath}`));
+});
+
+test("--instance parses and a recorded run posts its summary after the result file is written", async (t) => {
+  assert.equal(
+    parseArguments(["--template", "base", "--suite", "s.ts", "--instance", "natlang-panel"])
+      .instance,
+    "natlang-panel"
+  );
+  const { root, events, output, dependencies, context } = harness(t);
+  const posted = [];
+  dependencies.openInstanceRecorder = async (instance) => {
+    events.push(`open ${instance}`);
+    return {
+      record: async (result) => {
+        assert.equal(
+          fs.readdirSync(path.join(root, "out")).length,
+          1,
+          "the result file exists before recording"
+        );
+        posted.push(evaluationSummary(result));
+        return "evaluation-1";
+      },
+    };
+  };
+  const outcome = await runNatlangEval(
+    {
+      template: "personal",
+      suite: "packages/p/suite.ts",
+      split: "validation",
+      preflight: false,
+      out: path.join(root, "out"),
+      instance: "natlang-panel",
+    },
+    context,
+    dependencies
+  );
+  assert.equal(outcome.exitCode, 0);
+  // The instance is resolved before anything is staged: a stopped instance fails fast.
+  assert.deepEqual(events.slice(0, 2), ["hygiene", "open natlang-panel"]);
+  assert.equal(posted.length, 1);
+  assert.deepEqual(posted[0].suite.id, "fixture/suite");
+  assert.deepEqual(posted[0].cases, [{ caseId: "a", status: "scored", quality: 1 }]);
+  assert.deepEqual(posted[0].summary, {
+    quality: 1,
+    cases: 1,
+    gatesPassed: true,
+    modelCalls: 0,
+    meanLatencyMs: 3,
+  });
+  assert.match(output.at(-1), /recorded on instance natlang-panel: evaluation-1/);
+});
+
+test("a result the instance does not keep is reported with its file, and an unreachable instance fails before the run", async (t) => {
+  const { root, events, dependencies, context } = harness(t);
+  dependencies.openInstanceRecorder = async () => ({
+    record: async () => {
+      throw new RecordingError("the service refused");
+    },
+  });
+  const options = {
+    template: "personal",
+    suite: "packages/p/suite.ts",
+    split: "validation",
+    preflight: false,
+    out: path.join(root, "out"),
+    instance: "x",
+  };
+  await assert.rejects(runNatlangEval(options, context, dependencies), (error) =>
+    (error.errors ?? [error]).some(
+      (item) =>
+        item.name === "RecordingError" &&
+        /result is in .*validation-.*did not record it: the service refused/.test(item.message)
+    )
+  );
+  assert.equal(exitCodeFor(new RecordingError("x")), 4);
+  assert.ok(events.includes("release composition"), "everything the run owned is retired");
+
+  const unreachable = harness(t);
+  unreachable.dependencies.openInstanceRecorder = async () => {
+    throw new RecordingError("instance x is not running");
+  };
+  await assert.rejects(
+    runNatlangEval(
+      { ...options, out: path.join(unreachable.root, "out") },
+      unreachable.context,
+      unreachable.dependencies
+    ),
+    /not running/
+  );
+  assert.equal(unreachable.events.includes("stage"), false);
+});
+
+test("the instance recorder resolves the records service, then posts the summary to it", async () => {
+  const calls = [];
+  const execute = (_node, args, _options, done) => {
+    const words = args.slice(args.indexOf("--instance") + 2);
+    calls.push(words);
+    done(
+      null,
+      JSON.stringify(
+        words[2] === "workers.resolveService" ? { targetId: "do:records" } : { evaluationId: "e-1" }
+      ),
+      ""
+    );
+  };
+  const record = {
+    template: "base",
+    suite: { id: "s", path: "skills/x/suite.ts", hash: "h", cases: { validation: 1 } },
+    split: "validation",
+    artifact: null,
+    natlang: { commit: "c" },
+    executorIdentity: { id: "gateway:local" },
+    summary: {
+      quality: 0.5,
+      cases: 1,
+      gatesPassed: false,
+      modelCalls: 3,
+      meanLatencyMs: null,
+      extra: 1,
+    },
+    budget: { limits: {}, ledger: {} },
+    batch: {
+      results: [{ caseId: "a", status: "scored", quality: 0.5, outcome: { big: "rollout" } }],
+    },
+  };
+  const recorder = await openInstanceRecorder("natlang-panel", { execute });
+  assert.equal(await recorder.record(record), "e-1");
+  assert.deepEqual(calls[0].slice(1, 4), [
+    "call",
+    "workers.resolveService",
+    '["vibestudio.natlang.v1"]',
+  ]);
+  assert.deepEqual(calls[1].slice(1, 2), ["call"]);
+  assert.equal(calls[1][2], "recordEvaluation");
+  assert.deepEqual(calls[1].slice(-3, -1), ["--target", "do:records"]);
+  const sent = JSON.parse(calls[1][3])[0].evaluation;
+  assert.equal(JSON.stringify(sent).includes("rollout"), false, "rollouts stay in the result file");
+  assert.deepEqual(sent.summary, {
+    quality: 0.5,
+    cases: 1,
+    gatesPassed: false,
+    modelCalls: 3,
+    meanLatencyMs: null,
+  });
+
+  const failing = (_node, _args, _options, done) =>
+    done(new Error("exit 1"), "", "no such instance");
+  await assert.rejects(
+    openInstanceRecorder("nope", { execute: failing }),
+    (error) => error instanceof RecordingError && /no such instance/.test(error.message)
+  );
 });
 
 test("failed gates exit 3 and a preflight exits 0 without evaluating", async (t) => {

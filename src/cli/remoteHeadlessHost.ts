@@ -1,4 +1,4 @@
-import { formatRpcFailure } from "@vibestudio/rpc";
+import { formatRpcFailure, type RpcMethod } from "@vibestudio/rpc";
 import { randomUUID } from "node:crypto";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -24,6 +24,48 @@ export function resolveRemoteHeadlessHostEntryPath(env: NodeJS.ProcessEnv = proc
   if (override) return path.resolve(override);
   const appRoot = env["VIBESTUDIO_APP_ROOT"] || repositoryRoot;
   return path.join(appRoot, "dist", "headless-host", "index.js");
+}
+
+type StreamOptions = Parameters<import("../node/iroh/irohRpcClient.js").IrohRpcClient["stream"]>[3];
+type HostRpcClient = Pick<
+  import("../node/iroh/irohRpcClient.js").IrohRpcClient,
+  "callTarget" | "stream" | "streamReadable"
+>;
+
+/**
+ * The RPC surface the headless host's typed clients call: they pass receiver method descriptors (`RpcMethod`), and the
+ * Iroh transport takes their wire names. It carries all three call shapes the host's `RpcCaller` has.
+ */
+export function headlessHostRpc(client: HostRpcClient) {
+  const wireName = (method: string | RpcMethod<never, unknown>): string =>
+    typeof method === "string" ? method : method.name;
+  return {
+    call(
+      targetId: string,
+      method: string | RpcMethod<never, unknown>,
+      args: unknown[] = [],
+      options?: unknown
+    ): Promise<unknown> {
+      void options;
+      return client.callTarget(targetId, wireName(method), args);
+    },
+    stream(
+      targetId: string,
+      method: string | RpcMethod<never, unknown>,
+      args: unknown[] = [],
+      options?: StreamOptions
+    ): Promise<Response> {
+      return client.stream(targetId, wireName(method), args, options);
+    },
+    streamReadable(
+      targetId: string,
+      method: string | RpcMethod<never, unknown>,
+      args: unknown[] = [],
+      options?: StreamOptions
+    ) {
+      return client.streamReadable(targetId, wireName(method), args, options);
+    },
+  };
 }
 
 async function createIrohHeadlessHostOverrides(
@@ -62,25 +104,7 @@ async function createIrohHeadlessHostOverrides(
   };
   try {
     await client.ready();
-    const rpc = {
-      call(
-        targetId: string,
-        method: string,
-        args: unknown[] = [],
-        options?: unknown
-      ): Promise<unknown> {
-        void options;
-        return client.callTarget(targetId, method, args);
-      },
-      stream(
-        targetId: string,
-        method: string,
-        args: unknown[] = [],
-        options?: Parameters<import("../node/iroh/irohRpcClient.js").IrohRpcClient["stream"]>[3]
-      ): Promise<Response> {
-        return client.stream(targetId, method, args, options);
-      },
-    };
+    const rpc = headlessHostRpc(client);
     facade = await startPanelAssetFacade(
       {
         stream(service, method, args, options) {
