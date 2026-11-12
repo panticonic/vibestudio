@@ -57,6 +57,8 @@
  *   exit 2  usage, configuration or suite error            exit 4  evaluation infrastructure failure (worker, model)
  *   exit 128+N  stopped by signal N (workers cancelled, scratch retired)
  *   stdout: a human summary (suite, executor, per-case lines, quality, budget spent, result path).
+ *   stderr: progress while it runs, one line per case start and per model request start or finish (`watchProgress`), so a
+ *   slow run on the shared local model is told from a stalled one.
  *   Results: JSON at `<out>/<split>-<UTC stamp>.json`, `--out` defaulting to
  *   `.cache/natlang-eval/results/<template>/<suite id>`; the path is printed.
  */
@@ -383,6 +385,31 @@ function formatSummary(record) {
   return lines.join("\n");
 }
 
+/**
+ * Report the evaluation's progress on `write` as the gateway meters it: one line when a case starts and each time a model
+ * request starts or finishes, with how many are in flight. The evaluation says nothing else until it ends, and on the shared
+ * local model a validation run takes hours, so without these lines a slow run cannot be told from a stalled one: a run
+ * that is moving prints a line per request, and silence with a request in flight means the model server owes an answer.
+ */
+export function watchProgress(gateway, write, now = Date.now) {
+  const started = now();
+  let previous = "";
+  gateway.onUpdate = (ledger) => {
+    const inFlight = ledger.reserved?.modelCalls ?? 0;
+    const key = `${ledger.rollouts}|${ledger.usage.modelCalls}|${inFlight}`;
+    if (key === previous) return;
+    previous = key;
+    const seconds = Math.round((now() - started) / 1000);
+    const clock = [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60]
+      .map((part) => String(part).padStart(2, "0"))
+      .join(":");
+    write(
+      `[+${clock}] case ${ledger.rollouts}  model requests ${ledger.usage.modelCalls} started, ${inFlight} in flight` +
+        `  tokens in ${ledger.usage.inputTokens ?? "unknown"} out ${ledger.usage.outputTokens ?? "unknown"}`
+    );
+  };
+}
+
 /** The collaborators a run uses; the defaults are the real ones. Tests substitute the heavy ones. */
 export const defaultDependencies = {
   natlangRepository,
@@ -415,6 +442,7 @@ export const defaultDependencies = {
   openModels: openNatlangModels,
   openInstanceRecorder,
   stdout: (text) => process.stdout.write(`${text}\n`),
+  progress: (text) => process.stderr.write(`${text}\n`),
   cacheRoot: path.join(appRoot, ".cache/natlang-eval"),
 };
 
@@ -543,6 +571,7 @@ async function evaluateSuite({
       ).candidate
     : undefined;
   const gateway = new natlang.UsageGateway(suite.budget);
+  watchProgress(gateway, deps.progress);
   const batch = await natlang.evaluate(prepared, {
     split: options.split,
     candidate,

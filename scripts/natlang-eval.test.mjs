@@ -17,6 +17,7 @@ import {
   parseArguments,
   resolveNatlangCommit,
   runNatlangEval,
+  watchProgress,
 } from "./natlang-eval.mjs";
 import { natlangRepository } from "./lib/natlang-stage.mjs";
 import {
@@ -790,4 +791,27 @@ test("a mismatched executor identity is refused and the models are still closed"
     events.some((event) => event.startsWith("evaluate")),
     false
   );
+});
+
+test("progress prints a line when a case starts and when a model request starts or finishes, never the same state twice", () => {
+  const gateway = {};
+  const lines = [];
+  let clock = 1_000_000;
+  watchProgress(gateway, (line) => lines.push(line), () => clock);
+  const ledger = (rollouts, modelCalls, inFlight) => ({
+    rollouts,
+    usage: { modelCalls, inputTokens: modelCalls * 100, outputTokens: null },
+    reserved: { modelCalls: inFlight },
+  });
+  gateway.onUpdate(ledger(1, 0, 0));
+  gateway.onUpdate(ledger(1, 0, 0));
+  clock += 61_000;
+  gateway.onUpdate(ledger(1, 1, 1));
+  clock += 3_600_000;
+  gateway.onUpdate(ledger(1, 1, 0));
+  assert.deepEqual(lines, [
+    "[+00:00:00] case 1  model requests 0 started, 0 in flight  tokens in 0 out unknown",
+    "[+00:01:01] case 1  model requests 1 started, 1 in flight  tokens in 100 out unknown",
+    "[+01:01:01] case 1  model requests 1 started, 0 in flight  tokens in 100 out unknown",
+  ]);
 });
