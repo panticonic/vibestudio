@@ -8,6 +8,7 @@ import {
 } from "@vibestudio/credential-client/clientConfigStore";
 import { CredentialStore } from "@vibestudio/credential-client/store";
 import { credentialLifecycle as summarizeCredentialLifecycle } from "@vibestudio/credential-client/credentialStatus";
+import { credentialActorRefusesCaller } from "@vibestudio/credential-client/credentialActor";
 import type {
   AccountIdentity,
   AuditEntry,
@@ -85,6 +86,7 @@ import {
 import type { CredentialUseGrantStoreLike } from "./credentialUseGrantStore.js";
 import {
   assertCredentialApprovalDecision,
+  credentialActorMismatchError,
   credentialApprovalDeniedError,
   credentialApprovalDecisions,
 } from "./credentialApprovalDecisions.js";
@@ -354,6 +356,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const credential: Credential = {
       id,
       label: request.label,
+      ...(request.actor ? { actor: request.actor } : {}),
       owner,
       bindings,
       // Re-authentication changes secret material, not the semantic credential
@@ -1446,6 +1449,9 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     usage: CredentialUseContext,
     signal?: AbortSignal
   ): Promise<void> {
+    if (credentialActorRefusesCaller(credential, resolveApprovalIdentity(ctx).agentId)) {
+      throw credentialActorMismatchError(credential);
+    }
     if (canCallerUseStoredCredential(ctx, credential, usage)) {
       return;
     }
@@ -1587,6 +1593,10 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     now: number
   ): Promise<void> {
     const identity = resolveApprovalIdentity(ctx);
+    // Preapproval covers the uses this caller is permitted to make. An agent
+    // may connect a human-attributed credential for its user, but it is never
+    // permitted to use one, so the connection preapproves nothing for it.
+    if (credentialActorRefusesCaller(credential, identity.agentId)) return;
     const usageContexts = bindings.flatMap(preapprovedUseContextsForBinding);
     if (decision === "once") {
       throw new Error("A connection approval that preapproves later use cannot be allow-once");
@@ -1648,6 +1658,9 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     grant: CredentialUseGrant,
     now: number
   ): Promise<void> {
+    if (grant.scope === "agent" && credentialActorRefusesCaller(credential, grant.agentId)) {
+      throw credentialActorMismatchError(credential);
+    }
     if (credentialUseGrantStore) {
       await credentialUseGrantStore.upsert(credential.id, grant);
       return;
@@ -1910,6 +1923,7 @@ function summarizeUrlBoundCredential(credential: Credential): StoredCredentialSu
   return {
     id: credential.id,
     label: credential.label,
+    ...(credential.actor ? { actor: credential.actor } : {}),
     accountIdentity: credential.accountIdentity,
     audience: primaryBinding.audience,
     injection: primaryBinding.injection,

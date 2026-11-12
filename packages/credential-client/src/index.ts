@@ -23,6 +23,7 @@ export type {
   ConfigureClientRequest,
   ConnectCredentialRequest,
   CredentialAccessGrantSummary,
+  CredentialActor,
   CredentialAccessSubjectSummary,
   CredentialBinding,
   CredentialBindingUse,

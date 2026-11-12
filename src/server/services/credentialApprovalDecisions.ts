@@ -1,6 +1,7 @@
 import type { ApprovalDecision } from "@vibestudio/shared/approvals";
 import { authorityFailureForDecision } from "@vibestudio/shared/authorization";
 import { RpcBoundaryError } from "@vibestudio/rpc";
+import type { Credential } from "@vibestudio/credential-client/types";
 
 export function credentialApprovalDeniedError(credentialId: string): RpcBoundaryError {
   const capability = "credentials.use";
@@ -59,4 +60,19 @@ export function assertCredentialApprovalDecision(
       `Credential approval decision '${decision}' cannot be represented for this requester`
     );
   }
+}
+
+/**
+ * A human-attributed credential (`actor: "human"`) is never usable from an
+ * agent execution session. This is not a decision the user can grant, so it is
+ * refused before any approval is requested.
+ */
+export function credentialActorMismatchError(
+  credential: Pick<Credential, "id" | "label">
+): RpcBoundaryError {
+  return new RpcBoundaryError(
+    `credential-actor-mismatch: ${credential.label ?? credential.id ?? "credential"} acts as the user personally and cannot be used by an agent`,
+    "access",
+    "EACCES"
+  );
 }

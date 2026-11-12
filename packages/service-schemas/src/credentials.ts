@@ -369,9 +369,14 @@ export const OAuthAccountValidationSchema = z
   })
   .strict();
 
+export const CredentialActorSchema = z.enum(["human", "agent"]);
+
 export const StoreUrlBoundCredentialParamsSchema = z
   .object({
     label: z.string().min(1).max(256).describe("Display label for the stored credential."),
+    actor: CredentialActorSchema.optional().describe(
+      "Which actor the provider attributes this credential's uses to. 'human' credentials are never injected for agent execution sessions."
+    ),
     audience: z
       .array(UrlAudienceSchema)
       .min(1)
@@ -427,6 +432,9 @@ export const StoreUrlBoundCredentialParamsSchema = z
 const ConnectCredentialDetailsSchema = z
   .object({
     label: z.string().min(1).max(256).describe("Display label for the credential that results."),
+    actor: CredentialActorSchema.optional().describe(
+      "Which actor the provider attributes this credential's uses to. 'human' credentials are never injected for agent execution sessions."
+    ),
     audience: z
       .array(UrlAudienceSchema)
       .min(1)
@@ -1061,6 +1069,7 @@ const StoredCredentialSummarySchema = z
   .object({
     id: z.string(),
     label: z.string(),
+    actor: CredentialActorSchema.optional(),
     accountIdentity: AccountIdentitySchema.optional(),
     audience: z.array(UrlAudienceOutputSchema),
     injection: CredentialInjectionSchema,

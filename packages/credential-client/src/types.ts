@@ -24,9 +24,20 @@ export interface OAuthRefreshRecipe {
   };
 }
 
+/**
+ * The kind of actor the external provider attributes requests made with a
+ * credential to. `human` means the provider treats every use as the user acting
+ * personally, so the host never injects it for an agent execution session.
+ * `agent` means the provider marks uses as an agent acting for the user; any
+ * caller may use it, because over-attributing to an agent is safe.
+ */
+export type CredentialActor = "human" | "agent";
+
 export interface Credential {
   id?: string;
   label?: string;
+  /** Provider attribution of this credential's uses; see {@link CredentialActor}. */
+  actor?: CredentialActor;
   owner?: CredentialOwner;
   bindings?: CredentialBinding[];
   grants?: CredentialUseGrant[];
@@ -207,6 +218,7 @@ export interface AccountIdentity {
 
 export interface StoreUrlBoundCredentialRequest {
   label: string;
+  actor?: CredentialActor;
   audience: UrlAudience[];
   injection: CredentialInjection;
   bindings?: CredentialBinding[];
@@ -458,6 +470,7 @@ export interface ConnectCredentialRequest {
   flow: CredentialFlowSpec;
   credential: {
     label: string;
+    actor?: CredentialActor;
     audience: UrlAudience[];
     injection: CredentialInjection;
     bindings?: CredentialBinding[];
@@ -528,6 +541,7 @@ export interface RequestCredentialInputRequest {
   description?: string;
   credential: {
     label: string;
+    actor?: CredentialActor;
     audience: UrlAudience[];
     injection: CredentialInjection;
     bindings?: CredentialBinding[];
@@ -625,6 +639,7 @@ export interface ProxyGitHttpRequest {
 export interface StoredCredentialSummary {
   id: string;
   label: string;
+  actor?: CredentialActor;
   accountIdentity?: AccountIdentity;
   audience: UrlAudience[];
   injection: CredentialInjection;

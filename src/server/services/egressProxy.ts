@@ -23,6 +23,7 @@ import type {
   UrlAudience,
 } from "@vibestudio/credential-client/types";
 import { credentialLifecycle as credentialLifecycleStatus } from "@vibestudio/credential-client/credentialStatus";
+import { credentialActorRefusesCaller } from "@vibestudio/credential-client/credentialActor";
 import {
   credentialCarrierStripHeaders,
   findMatchingUrlAudience,
@@ -1675,6 +1676,9 @@ export class EgressProxy {
     if (!credential || !credential.bindings?.length || credential.revokedAt) {
       throw new ForwardRejection(403, "credential-unavailable", "credential-unavailable");
     }
+    if (credentialActorRefusesCaller(credential, codeAttribution?.agentId)) {
+      throw new ForwardRejection(403, "credential-actor-mismatch", "credential-actor-mismatch");
+    }
     credential = await this.upgradeBindingCatalog(credential);
     credential = await this.refreshCredentialForUse(credential);
     if (credential.expiresAt && credential.expiresAt <= Date.now()) {
@@ -1829,12 +1833,20 @@ export class EgressProxy {
       )
     );
     signal.throwIfAborted();
-    const matchingCredentials = credentials.filter(
+    const audienceMatches = credentials.filter(
       (credential) =>
         !credential.revokedAt &&
         (label === undefined || credential.label === label) &&
         !!this.findCredentialBinding(credential, targetUrl, use)
     );
+    // A credential this caller can never use is not a selection candidate.
+    // When it was the only candidate, say so instead of reporting no match.
+    const matchingCredentials = audienceMatches.filter(
+      (credential) => !credentialActorRefusesCaller(credential, attribution.agentId)
+    );
+    if (matchingCredentials.length === 0 && audienceMatches.length > 0) {
+      throw new ForwardRejection(403, "credential-actor-mismatch", "credential-actor-mismatch");
+    }
     if (matchingCredentials.length === 1) {
       const credential = matchingCredentials[0] ?? null;
       if (credential) {
@@ -2133,6 +2145,9 @@ export class EgressProxy {
     grant: CredentialUseGrant,
     now: number
   ): Promise<void> {
+    if (grant.scope === "agent" && credentialActorRefusesCaller(credential, grant.agentId)) {
+      throw new ForwardRejection(403, "credential-actor-mismatch", "credential-actor-mismatch");
+    }
     if (this.credentialUseGrantStore) {
       await this.credentialUseGrantStore.upsert(credential.id, grant);
       return;

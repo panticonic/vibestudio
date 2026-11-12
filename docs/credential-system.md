@@ -43,6 +43,31 @@ const stored = await credentials.store({
 `credentials.store()` is the userland runtime wrapper. Direct service/RPC
 callers must use the exact wire method `credentials.storeCredential`.
 
+## Actor Attribution
+
+Some providers record _who acted_: a human personally, or an agent acting for
+that human. A credential may declare which one its provider attributes uses to
+with `actor: "human" | "agent"` (on `credentials.store()`, `credentials.connect()`
+`credential`, and credential-input requests; reported in secret-free
+summaries).
+
+- `actor: "human"` — the provider treats every use as the user acting
+  personally. The host never injects such a credential into egress from an
+  agent execution session (the same host-verified agent identity that scopes
+  agent credential grants, `credentialGrantAgentId`). The refusal
+  (`credential-actor-mismatch`) happens before any approval is raised, because
+  no user decision can permit it: no agent-scoped grant can be stored for the
+  credential, and an agent that connects one preapproves nothing for itself.
+  Automatic credential selection skips human-attributed candidates for agents.
+- `actor: "agent"` — the provider marks uses as an agent's. Any caller may use
+  it; attributing a human-driven request to an agent over-reports agency, which
+  is safe.
+- Absent — the provider makes no actor distinction; no caller rule applies.
+
+A provider that distinguishes the two (for example a backend that stamps
+agent-vs-human provenance into data) connects one credential per actor kind;
+agent code then can only act through the agent-attributed one.
+
 ## Host-Owned OAuth Connection
 
 Use this for OAuth providers. Userland declares provider metadata; the host
