@@ -51,22 +51,88 @@ with `actor: "human" | "agent"` (on `credentials.store()`, `credentials.connect(
 `credential`, and credential-input requests; reported in secret-free
 summaries).
 
-- `actor: "human"` — the provider treats every use as the user acting
-  personally. The host never injects such a credential into egress from an
-  agent execution session (the same host-verified agent identity that scopes
-  agent credential grants, `credentialGrantAgentId`). The refusal
-  (`credential-actor-mismatch`) happens before any approval is raised, because
-  no user decision can permit it: no agent-scoped grant can be stored for the
-  credential, and an agent that connects one preapproves nothing for itself.
-  Automatic credential selection skips human-attributed candidates for agents.
 - `actor: "agent"` — the provider marks uses as an agent's. Any caller may use
   it; attributing a human-driven request to an agent over-reports agency, which
   is safe.
-- Absent — the provider makes no actor distinction; no caller rule applies.
+- Absent — the provider makes no actor distinction; no caller rule applies and
+  the credential stays shared across the hub's members as before.
+- `actor: "human"` — the provider treats every use as one member acting
+  personally. Two rules follow, both host-enforced before any approval is
+  raised (no user decision can permit what they refuse):
 
-A provider that distinguishes the two (for example a backend that stamps
-agent-vs-human provenance into data) connects one credential per actor kind;
-agent code then can only act through the agent-attributed one.
+### Each member acts with their own human credential
+
+Every credential records the member who connected or stored it
+(`owner.userId`), stamped by the host from the verified caller's WP0 subject,
+never from the request. Among mutually trusted members this is attribution
+correctness, not inter-user hardening: the provider would otherwise record
+Bob's action as Dara's. A human-attributed credential is used only for its
+owner's actions. The acting member is the verified caller's account
+(`callerAccountUserId` / `verifiedInitiatingUserId`): a device's user, and for
+agents, workers and other deputies the member whose lineage launched them
+(WP0 §6).
+
+- Members may each hold a human credential under the same label (e.g. every
+  member's "Namlu"); selection by URL or label picks the acting member's own.
+- A member with none gets `credential-owner-required` (userland turns it into
+  "connect your own"); another member's credential is never a fallback.
+- Naming another member's human credential explicitly is
+  `credential-owner-mismatch`; so is re-authenticating over it.
+- With no account behind the request at all, the answer is
+  `credential-owner-required`.
+
+### Agents act for the member, never as them
+
+An agent execution session (the host-verified `credentialGrantAgentId`)
+never receives a human credential's token. If the credential declares no agent
+exchange, the agent is refused (`credential-actor-mismatch`), no agent-scoped
+grant can be stored for it, and an agent that connects one preapproves nothing
+for itself.
+
+A human credential may instead declare an RFC 8693 agent exchange:
+
+```ts
+credential: {
+  label: "Namlu",
+  actor: "human",
+  agentExchange: {
+    tokenUrl: "https://namlu.example/oauth/token", // same origin as the credential's token endpoint
+    clientId: "vibestudio",
+    scope: "space:rw", // optional
+  },
+  // audience, injection, ...
+}
+```
+
+When an agent of the credential's owner uses it, the host — which alone holds
+the member's delegation authority — exchanges the member's current access
+token for an agent-attributed one and injects that with the credential's
+normal injection template:
+
+```
+POST tokenUrl  (application/x-www-form-urlencoded)
+grant_type=urn:ietf:params:oauth:grant-type:token-exchange
+client_id=<clientId>
+subject_token=<member's access token, refreshed first if needed>
+subject_token_type=urn:ietf:params:oauth:token-type:access_token
+actor_token={"v":1,"chain":[{"definition","instance","label"}, ...]}   (root agent first)
+actor_token_type=urn:vibestudio:params:oauth:token-type:agent-lineage
+scope=<scope>   (when configured)
+```
+
+The lineage is attested by the host from the entity graph: the agent entities
+(self-bound agent vessels) on the caller's launch-parent chain, root first, so
+a subagent's chain mirrors the real spawn tree. `definition` is the agent's
+version-agnostic program (`repoPath#className`) and `instance` the agent
+entity — a provider can key a durable agent identity on the program and a
+delegation on each running agent. The exchanged token is cached per
+(credential, agent entity) until 30 s before the provider's `expires_in` (never
+cached without one). A failed exchange fails the request with
+`agent-exchange-failed` (the provider's error code in the message); a provider
+401 on the agent token triggers one re-exchange. Neither ever falls back to
+the member's own token. Consent is the ordinary agent-scoped use grant on the
+credential. The exchange's `tokenUrl` must share its origin with the
+credential's own OAuth token endpoint, since it spends the member's token.
 
 ## Host-Owned OAuth Connection
 

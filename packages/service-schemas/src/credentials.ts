@@ -371,12 +371,25 @@ export const OAuthAccountValidationSchema = z
 
 export const CredentialActorSchema = z.enum(["human", "agent"]);
 
+export const CredentialAgentExchangeSchema = z
+  .object({
+    tokenUrl: z.string().url(),
+    clientId: z.string().min(1).max(512),
+    scope: z.string().min(1).max(1024).optional(),
+    extraParams: z.record(z.string().max(1024)).optional(),
+  })
+  .strict()
+  .describe(
+    "RFC 8693 exchange through which the host obtains an agent-attributed token from this human-attributed credential for an agent acting for its owner. tokenUrl must share the credential's OAuth token endpoint origin."
+  );
+
 export const StoreUrlBoundCredentialParamsSchema = z
   .object({
     label: z.string().min(1).max(256).describe("Display label for the stored credential."),
     actor: CredentialActorSchema.optional().describe(
       "Which actor the provider attributes this credential's uses to. 'human' credentials are never injected for agent execution sessions."
     ),
+    agentExchange: CredentialAgentExchangeSchema.optional(),
     audience: z
       .array(UrlAudienceSchema)
       .min(1)
@@ -435,6 +448,7 @@ const ConnectCredentialDetailsSchema = z
     actor: CredentialActorSchema.optional().describe(
       "Which actor the provider attributes this credential's uses to. 'human' credentials are never injected for agent execution sessions."
     ),
+    agentExchange: CredentialAgentExchangeSchema.optional(),
     audience: z
       .array(UrlAudienceSchema)
       .min(1)
@@ -1057,6 +1071,7 @@ export const AuditParamsSchema = z
 const CredentialOwnerSchema = z
   .object({
     userProfileId: z.string().optional(),
+    userId: z.string().optional(),
     sourceId: z.string(),
     sourceKind: z.enum(["workspace", "package", "plugin", "user"]),
     label: z.string(),
@@ -1070,6 +1085,7 @@ const StoredCredentialSummarySchema = z
     id: z.string(),
     label: z.string(),
     actor: CredentialActorSchema.optional(),
+    agentExchange: CredentialAgentExchangeSchema.optional(),
     accountIdentity: AccountIdentitySchema.optional(),
     audience: z.array(UrlAudienceOutputSchema),
     injection: CredentialInjectionSchema,

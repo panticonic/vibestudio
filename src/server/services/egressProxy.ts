@@ -19,11 +19,18 @@ import type {
   CredentialBinding,
   CredentialBindingUse,
   CredentialGrantAction,
+  CredentialAgentLineageLink,
   CredentialUseGrant,
   UrlAudience,
 } from "@vibestudio/credential-client/types";
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { credentialLifecycle as credentialLifecycleStatus } from "@vibestudio/credential-client/credentialStatus";
-import { credentialActorRefusesCaller } from "@vibestudio/credential-client/credentialActor";
+import {
+  credentialCallerUse,
+  credentialRefusesAgentGrant,
+  credentialSelectionRefusal,
+  type CredentialCallerFacts,
+} from "@vibestudio/credential-client/credentialActor";
 import {
   credentialCarrierStripHeaders,
   findMatchingUrlAudience,
@@ -48,6 +55,7 @@ import type {
   ServiceContext,
   VerifiedCaller,
 } from "@vibestudio/shared/serviceDispatcher";
+import { callerAccountUserId } from "@vibestudio/shared/serviceDispatcher";
 import { requirementForPrincipals } from "@vibestudio/shared/authorization";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import { describeCapability } from "@vibestudio/shared/authorityPresentation";
@@ -180,7 +188,13 @@ export interface EgressProxyDeps {
   authorizeEffect?(ctx: ServiceContext, effect: HostAuthorityEffect): Promise<void>;
   sessionGrantStore?: CredentialSessionGrantStore;
   credentialUseGrantStore?: CredentialUseGrantStoreLike;
-  credentialLifecycle?: Pick<CredentialLifecycle, "refreshIfNeeded" | "refreshCredential">;
+  credentialLifecycle?: Pick<CredentialLifecycle, "refreshIfNeeded" | "refreshCredential"> &
+    Partial<Pick<CredentialLifecycle, "exchangeForAgent" | "forgetAgentToken">>;
+  /**
+   * Host entity graph, used to attest an agent's lineage (root agent first) for
+   * a credential's agent exchange. Never derived from the request.
+   */
+  entityGraph?: { resolve(id: string): EntityRecord | null };
   recordExternalIngestion?: (caller: VerifiedCaller, url: URL, via: string) => void | Promise<void>;
   /**
    * Structural mission egress gate. A true result requires redirect:manual so
@@ -221,9 +235,17 @@ interface HostRequestAttribution {
 
 type RequestAttribution = CodeRequestAttribution | HostRequestAttribution;
 
+/** The human credential and attested lineage behind an agent-exchanged injection. */
+interface AgentExchangeAuthorization {
+  source: Credential & { id: string };
+  lineage: CredentialAgentLineageLink[];
+}
+
 interface Authorization {
   attribution: RequestAttribution | null;
+  /** The credential whose material is injected (an agent view when exchanged). */
   credential: Credential | null;
+  agentExchange?: AgentExchangeAuthorization;
   binding: CredentialBinding | null;
   connectionId: string | null;
   scopes: string[];
@@ -781,7 +803,7 @@ export class EgressProxy {
             },
           };
         }
-        if (upstream.status === 401 && this.canForceRefreshCredential(authorization.credential)) {
+        if (upstream.status === 401 && this.canForceRefreshAuthorization(authorization)) {
           const responseBody = new Uint8Array(await upstream.arrayBuffer());
           return {
             statusCode: upstream.status,
@@ -1325,7 +1347,7 @@ export class EgressProxy {
           if (
             statusCode === 401 &&
             !refreshedAfterAuthFailure &&
-            this.canForceRefreshCredential(authorization.credential)
+            this.canForceRefreshAuthorization(authorization)
           ) {
             await result.provisional?.discard();
             result = undefined;
@@ -1589,10 +1611,14 @@ export class EgressProxy {
                 params.credentialUse,
                 params.method,
                 params.gitIntent,
-                caller.subject?.userId,
+                callerAccountUserId(caller),
                 testPolicyApproved
               )
-            : await this.resolveHostCredentialForRequest(params.targetUrl, params.credentialUse)
+            : await this.resolveHostCredentialForRequest(
+                params.targetUrl,
+                params.credentialUse,
+                callerAccountUserId(caller)
+              )
           : params.credential.kind === "named"
             ? codeAttribution
               ? await this.resolveCredentialForRequest(
@@ -1602,13 +1628,14 @@ export class EgressProxy {
                   params.credentialUse,
                   params.method,
                   params.gitIntent,
-                  caller.subject?.userId,
+                  callerAccountUserId(caller),
                   testPolicyApproved,
                   params.credential.label
                 )
               : await this.resolveHostCredentialForRequest(
                   params.targetUrl,
                   params.credentialUse,
+                  callerAccountUserId(caller),
                   params.credential.label
                 )
             : null;
@@ -1657,9 +1684,13 @@ export class EgressProxy {
           credential?.id ?? null
         );
       }
+      const injected =
+        credential && codeAttribution
+          ? await this.injectedCredentialFor(credential, codeAttribution, caller)
+          : { credential };
       return {
         attribution,
-        credential,
+        ...injected,
         binding: credential
           ? this.findCredentialBinding(credential, params.targetUrl, params.credentialUse)
           : null,
@@ -1676,8 +1707,12 @@ export class EgressProxy {
     if (!credential || !credential.bindings?.length || credential.revokedAt) {
       throw new ForwardRejection(403, "credential-unavailable", "credential-unavailable");
     }
-    if (credentialActorRefusesCaller(credential, codeAttribution?.agentId)) {
-      throw new ForwardRejection(403, "credential-actor-mismatch", "credential-actor-mismatch");
+    const callerUse = credentialCallerUse(credential, {
+      ...(codeAttribution?.agentId ? { agentId: codeAttribution.agentId } : {}),
+      ...(callerAccountUserId(caller) ? { userId: callerAccountUserId(caller) } : {}),
+    });
+    if (callerUse.kind === "refused") {
+      throw new ForwardRejection(403, callerUse.code, callerUse.code);
     }
     credential = await this.upgradeBindingCatalog(credential);
     credential = await this.refreshCredentialForUse(credential);
@@ -1730,9 +1765,12 @@ export class EgressProxy {
       );
     }
 
+    const injected = codeAttribution
+      ? await this.injectedCredentialFor(credential, codeAttribution, caller)
+      : { credential };
     return {
       attribution,
-      credential,
+      ...injected,
       binding,
       connectionId: credential.id ?? credential.connectionId,
       scopes: credential.scopes,
@@ -1839,13 +1877,20 @@ export class EgressProxy {
         (label === undefined || credential.label === label) &&
         !!this.findCredentialBinding(credential, targetUrl, use)
     );
-    // A credential this caller can never use is not a selection candidate.
-    // When it was the only candidate, say so instead of reporting no match.
+    // A credential this caller can never use is not a selection candidate:
+    // another member's personal credential, or a personal credential an agent
+    // could only reach without an agent exchange. When nothing usable is left,
+    // say why instead of reporting no match — never fall back to someone else's.
+    const facts: CredentialCallerFacts = {
+      ...(attribution.agentId ? { agentId: attribution.agentId } : {}),
+      ...(requestedByUserId ? { userId: requestedByUserId } : {}),
+    };
     const matchingCredentials = audienceMatches.filter(
-      (credential) => !credentialActorRefusesCaller(credential, attribution.agentId)
+      (credential) => credentialCallerUse(credential, facts).kind !== "refused"
     );
-    if (matchingCredentials.length === 0 && audienceMatches.length > 0) {
-      throw new ForwardRejection(403, "credential-actor-mismatch", "credential-actor-mismatch");
+    const refusal = credentialSelectionRefusal(audienceMatches, facts);
+    if (matchingCredentials.length === 0 && refusal) {
+      throw new ForwardRejection(403, refusal, refusal);
     }
     if (matchingCredentials.length === 1) {
       const credential = matchingCredentials[0] ?? null;
@@ -1894,14 +1939,16 @@ export class EgressProxy {
   private async resolveHostCredentialForRequest(
     targetUrl: URL,
     use: CredentialBindingUse,
+    actingUserId: string | undefined,
     label?: string
   ): Promise<Credential | null> {
     const listUrlBound = this.deps.credentialStore.listUrlBound;
     if (!listUrlBound) return null;
+    const facts: CredentialCallerFacts = actingUserId ? { userId: actingUserId } : {};
     if (label !== undefined) {
       const selected = await resolveCredentialByLabel(
         { listUrlBound: () => listUrlBound.call(this.deps.credentialStore) },
-        { label, url: targetUrl, use }
+        { label, url: targetUrl, use, caller: facts }
       );
       return selected ? this.refreshCredentialForUse(selected) : null;
     }
@@ -1910,10 +1957,17 @@ export class EgressProxy {
         this.upgradeBindingCatalog(credential)
       )
     );
-    const matching = credentials.filter(
+    const audienceMatches = credentials.filter(
       (credential) =>
         !credential.revokedAt && !!this.findCredentialBinding(credential, targetUrl, use)
     );
+    const matching = audienceMatches.filter(
+      (credential) => credentialCallerUse(credential, facts).kind === "direct"
+    );
+    const refusal = credentialSelectionRefusal(audienceMatches, facts);
+    if (matching.length === 0 && refusal) {
+      throw new ForwardRejection(403, refusal, refusal);
+    }
     if (matching.length > 1) {
       throw new ForwardRejection(
         409,
@@ -1954,9 +2008,123 @@ export class EgressProxy {
     );
   }
 
+  /**
+   * What to inject for a code caller that is permitted to use `credential`:
+   * the credential itself, or — for an agent acting for the owner of a
+   * human-attributed credential — an agent token from its agent exchange.
+   */
+  private async injectedCredentialFor(
+    credential: Credential,
+    attribution: CodeRequestAttribution,
+    caller: VerifiedCaller
+  ): Promise<Pick<Authorization, "credential" | "agentExchange">> {
+    const userId = callerAccountUserId(caller);
+    const use = credentialCallerUse(credential, {
+      ...(attribution.agentId ? { agentId: attribution.agentId } : {}),
+      ...(userId ? { userId } : {}),
+    });
+    if (use.kind === "refused") throw new ForwardRejection(403, use.code, use.code);
+    if (use.kind === "direct") return { credential };
+    if (!credential.id || !attribution.agentId) {
+      throw new ForwardRejection(403, "agent-exchange-failed", "agent-exchange-failed");
+    }
+    const source = credential as Credential & { id: string };
+    return await this.exchangeAgentCredential(source, this.agentLineage(attribution.agentId));
+  }
+
+  private async exchangeAgentCredential(
+    source: Credential & { id: string },
+    lineage: CredentialAgentLineageLink[]
+  ): Promise<{ credential: Credential; agentExchange: AgentExchangeAuthorization }> {
+    const exchangeForAgent = this.deps.credentialLifecycle?.exchangeForAgent;
+    if (!exchangeForAgent) {
+      throw new ForwardRejection(403, "agent-exchange-failed", "agent-exchange-failed");
+    }
+    let token: Awaited<ReturnType<NonNullable<typeof exchangeForAgent>>>;
+    try {
+      token = await exchangeForAgent.call(this.deps.credentialLifecycle, source, lineage);
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new ForwardRejection(
+        403,
+        `agent-exchange-failed: ${detail}`,
+        "agent-exchange-failed",
+        "agent-exchange-failed",
+        undefined,
+        "access",
+        error
+      );
+    }
+    // An agent-attributed view: the exchanged token with no refresh material,
+    // so nothing downstream can renew it back into the human's token.
+    const {
+      refreshToken: _refreshToken,
+      oauthRefresh: _oauthRefresh,
+      modelProviderSession: _modelProviderSession,
+      agentExchange: _agentExchange,
+      expiresAt: _expiresAt,
+      ...rest
+    } = source;
+    const credential: Credential = {
+      ...rest,
+      actor: "agent",
+      accessToken: token.accessToken,
+      ...(token.expiresAt !== undefined ? { expiresAt: token.expiresAt } : {}),
+    };
+    return { credential, agentExchange: { source, lineage } };
+  }
+
+  /**
+   * Host-attested lineage of the agent `agentId`, root agent first: the agent
+   * entities (self-bound agent vessels) on its launch-parent chain. An agent is
+   * a delegation of its program, so `definition` is the version-agnostic code
+   * identity and `instance` the entity; a subagent's chain therefore mirrors
+   * the real spawn tree.
+   */
+  private agentLineage(agentId: string): CredentialAgentLineageLink[] {
+    const graph = this.deps.entityGraph;
+    const chain: CredentialAgentLineageLink[] = [];
+    const seen = new Set<string>();
+    let id: string | undefined = agentId;
+    while (graph && id !== undefined && !seen.has(id)) {
+      seen.add(id);
+      const record = graph.resolve(id);
+      if (!record) break;
+      if (record.agentBinding?.entityId === record.id) chain.unshift(agentLineageLink(record));
+      id = record.parentId;
+    }
+    if (chain.at(-1)?.instance !== agentId) {
+      throw new ForwardRejection(
+        403,
+        "agent-exchange-failed: agent lineage is unavailable",
+        "agent-exchange-failed"
+      );
+    }
+    return chain;
+  }
+
+  private canForceRefreshAuthorization(authorization: Authorization): boolean {
+    return (
+      authorization.agentExchange !== undefined ||
+      this.canForceRefreshCredential(authorization.credential)
+    );
+  }
+
   private async forceRefreshAuthorizationCredential(
     authorization: Authorization
   ): Promise<boolean> {
+    const exchanged = authorization.agentExchange;
+    if (exchanged) {
+      // The provider rejected the agent token: exchange again (refreshing the
+      // subject first if needed). Never fall back to the human token.
+      const leaf = exchanged.lineage.at(-1);
+      if (leaf)
+        this.deps.credentialLifecycle?.forgetAgentToken?.(exchanged.source.id, leaf.instance);
+      authorization.credential = (
+        await this.exchangeAgentCredential(exchanged.source, exchanged.lineage)
+      ).credential;
+      return true;
+    }
     const credential = authorization.credential;
     if (!this.canForceRefreshCredential(credential)) return false;
     const lifecycle = this.deps.credentialLifecycle;
@@ -2145,7 +2313,7 @@ export class EgressProxy {
     grant: CredentialUseGrant,
     now: number
   ): Promise<void> {
-    if (grant.scope === "agent" && credentialActorRefusesCaller(credential, grant.agentId)) {
+    if (grant.scope === "agent" && credentialRefusesAgentGrant(credential)) {
       throw new ForwardRejection(403, "credential-actor-mismatch", "credential-actor-mismatch");
     }
     if (this.credentialUseGrantStore) {
@@ -3017,6 +3185,17 @@ function isCallerAllowed(
         : grant.repoPath === attribution.repoPath &&
           grant.effectiveVersion === attribution.effectiveVersion)
   );
+}
+
+function agentLineageLink(record: EntityRecord): CredentialAgentLineageLink {
+  const program = record.className
+    ? `${record.source.repoPath}#${record.className}`
+    : record.source.repoPath;
+  return {
+    definition: program,
+    instance: record.id,
+    label: record.className ?? record.source.repoPath,
+  };
 }
 
 function auditUrlFor(originalTargetUrl: URL, binding: CredentialBinding | null): string {

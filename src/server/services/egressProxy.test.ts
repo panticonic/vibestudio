@@ -50,7 +50,7 @@ import {
   shouldRetryWebSocketUpgradeError,
 } from "./egressProxy.js";
 import { CredentialSessionGrantStore } from "./credentialSessionGrants.js";
-import { CredentialLifecycleError } from "./credentialLifecycle.js";
+import { CredentialLifecycle, CredentialLifecycleError } from "./credentialLifecycle.js";
 import { RpcBoundaryError, attachRpcDiagnosticId } from "@vibestudio/rpc";
 
 const PUBLIC_REFRESH_RECIPE = {
@@ -63,6 +63,7 @@ import { createApprovalQueue, type ApprovalQueue } from "./approvalQueue.js";
 import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import { authorizeVerifiedCaller } from "./authorityRuntime.js";
 import { createTestExecutionSession } from "@vibestudio/shared/serviceDispatcherTestUtils";
+import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { authorityFailureForDecision } from "@vibestudio/shared/authorization";
 
 class MemoryCredentialStore {
@@ -3509,19 +3510,30 @@ describe("EgressProxy credential actor attribution", () => {
     vi.unstubAllGlobals();
   });
 
-  const agentId = "do:workers/agent-worker:AiChatWorker:conversation-1";
+  const DARA = "usr_dara";
+  const BOB = "usr_bob";
+  const agentId = "agent-child";
+  const EXCHANGE_URL = "https://auth.example.test/oauth/token";
+
+  function asUser<T extends ReturnType<typeof createVerifiedCaller>>(caller: T, userId: string): T {
+    return { ...caller, subject: { userId, handle: userId.slice(4) } };
+  }
 
   function humanCredential(overrides: Partial<Credential> = {}): Credential {
     return createCredential({
       id: "cred-human",
       connectionId: "cred-human",
-      label: "Provider (you)",
+      label: "Provider",
       actor: "human",
+      owner: { sourceId: "/repo", sourceKind: "workspace", label: "/repo", userId: DARA },
       accessToken: "human-token",
+      expiresAt: Date.now() + 3_600_000,
       grants: [],
       ...overrides,
     });
   }
+
+  const exchange = { tokenUrl: EXCHANGE_URL, clientId: "vibestudio", scope: "space:rw" };
 
   function agentCredential(overrides: Partial<Credential> = {}): Credential {
     return createCredential({
@@ -3535,30 +3547,112 @@ describe("EgressProxy credential actor attribution", () => {
     });
   }
 
-  function proxyWith(credentials: Credential[], approvalQueue: ApprovalQueue) {
+  // Root agent -> worker it launched -> subagent (the caller's agent).
+  const graph = new Map<string, EntityRecord>(
+    [
+      {
+        id: "agent-root",
+        kind: "do" as const,
+        source: { repoPath: "workers/agent-worker", effectiveVersion: "v1" },
+        className: "AiChatWorker",
+        agentBinding: { entityId: "agent-root", contextId: "ctx", channelId: "chan-root" },
+        parentId: "panel:chat",
+      },
+      {
+        id: "worker-fork",
+        kind: "worker" as const,
+        source: { repoPath: "workers/fork", effectiveVersion: "v1" },
+        parentId: "agent-root",
+      },
+      {
+        id: agentId,
+        kind: "do" as const,
+        source: { repoPath: "workers/agent-worker", effectiveVersion: "v2" },
+        className: "AiChatWorker",
+        agentBinding: { entityId: agentId, contextId: "ctx", channelId: "chan-child" },
+        parentId: "worker-fork",
+      },
+    ].map((record) => [
+      record.id,
+      {
+        contextId: "ctx",
+        key: record.id,
+        createdAt: 1,
+        status: "active",
+        cleanupComplete: false,
+        ...record,
+      } as EntityRecord,
+    ])
+  );
+
+  function proxyWith(
+    credentials: Credential[],
+    approvalQueue: ApprovalQueue,
+    options: { lifecycle?: boolean } = {}
+  ) {
+    const store = new MemoryCredentialStore(
+      new Map(credentials.map((credential) => [credential.id!, credential]))
+    );
     return new EgressProxy({
-      credentialStore: new MemoryCredentialStore(
-        new Map(credentials.map((credential) => [credential.id!, credential]))
-      ),
+      credentialStore: store,
       auditLog: new MemoryAuditLog() as never,
       approvalQueue,
       credentialUseGrantStore: new MemoryCredentialUseGrantStore(),
+      ...(options.lifecycle
+        ? {
+            credentialLifecycle: new CredentialLifecycle({
+              credentialStore: store as never,
+              clientConfigStore: { loadVersion: vi.fn() } as never,
+            }),
+            entityGraph: { resolve: (id: string) => graph.get(id) ?? null },
+          }
+        : {}),
     });
   }
 
-  function injectedAuthorization(): unknown {
-    const [, init] = vi.mocked(fetch).mock.calls[0] as [unknown, RequestInit | undefined];
+  function targetCalls(): Array<[unknown, RequestInit | undefined]> {
+    return (vi.mocked(fetch).mock.calls as Array<[unknown, RequestInit | undefined]>).filter(
+      ([url]) => String(url) !== EXCHANGE_URL
+    );
+  }
+
+  function exchangeCalls(): URLSearchParams[] {
+    return (vi.mocked(fetch).mock.calls as Array<[unknown, RequestInit | undefined]>)
+      .filter(([url]) => String(url) === EXCHANGE_URL)
+      .map(([, init]) => init?.body as URLSearchParams);
+  }
+
+  function injectedAuthorization(index = 0): unknown {
+    const [, init] = targetCalls()[index]!;
     return new Headers(init?.headers).get("authorization");
   }
 
-  it("refuses an agent session a human-attributed credential before asking for approval", async () => {
+  function stubFetch(
+    exchangeResponse: () => Response = () =>
+      Response.json({
+        access_token: `agent-exchanged-${exchangeCalls().length}`,
+        issued_token_type: "urn:ietf:params:oauth:token-type:access_token",
+        token_type: "Bearer",
+        expires_in: 300,
+      }),
+    targetResponse: () => Response = () => new Response("ok", { status: 200, statusText: "OK" })
+  ) {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: unknown) =>
+        String(url) === EXCHANGE_URL ? exchangeResponse() : targetResponse()
+      )
+    );
+  }
+
+  it("refuses an agent a human-attributed credential without an agent exchange, before asking", async () => {
     const approvalQueue = createApprovalQueueMock("agent");
     const proxy = proxyWith([humanCredential()], approvalQueue);
     vi.stubGlobal("fetch", vi.fn());
 
     await expect(
       proxy.forwardProxyFetch({
-        caller: evalCaller(agentId),
+        caller: asUser(evalCaller(agentId), DARA),
         credentialId: "cred-human",
         url: "https://api.example.test/v1/items",
         method: "GET",
@@ -3569,7 +3663,7 @@ describe("EgressProxy credential actor attribution", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("does not let an existing agent grant reopen a human-attributed credential", async () => {
+  it("does not let an existing agent grant reopen a credential without an agent exchange", async () => {
     const approvalQueue = createApprovalQueueMock("agent");
     const proxy = proxyWith(
       [
@@ -3594,7 +3688,7 @@ describe("EgressProxy credential actor attribution", () => {
 
     await expect(
       proxy.forwardProxyFetch({
-        caller: evalCaller(agentId),
+        caller: asUser(evalCaller(agentId), DARA),
         credentialId: "cred-human",
         url: "https://api.example.test/v1/items",
         method: "GET",
@@ -3603,16 +3697,13 @@ describe("EgressProxy credential actor attribution", () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it("lets non-agent code use a human-attributed credential through the ordinary grant path", async () => {
+  it("lets the owner's non-agent code use their human credential through the ordinary grant path", async () => {
     const approvalQueue = createApprovalQueueMock("version");
     const proxy = proxyWith([humanCredential()], approvalQueue);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("ok", { status: 200, statusText: "OK" }))
-    );
+    stubFetch();
 
     await proxy.forwardProxyFetch({
-      caller: workerCaller("worker:test"),
+      caller: asUser(workerCaller("worker:test"), DARA),
       credentialId: "cred-human",
       url: "https://api.example.test/v1/items",
       method: "GET",
@@ -3625,13 +3716,10 @@ describe("EgressProxy credential actor attribution", () => {
   it("lets an agent session use an agent-attributed credential", async () => {
     const approvalQueue = createApprovalQueueMock("agent");
     const proxy = proxyWith([agentCredential()], approvalQueue);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("ok", { status: 200, statusText: "OK" }))
-    );
+    stubFetch();
 
     await proxy.forwardProxyFetch({
-      caller: evalCaller(agentId),
+      caller: asUser(evalCaller(agentId), DARA),
       credentialId: "cred-agent",
       url: "https://api.example.test/v1/items",
       method: "GET",
@@ -3641,16 +3729,13 @@ describe("EgressProxy credential actor attribution", () => {
     expect(injectedAuthorization()).toBe("Bearer agent-token");
   });
 
-  it("selects the agent-attributed credential automatically when both match an agent's request", async () => {
+  it("selects the agent-attributed credential automatically when the human one has no exchange", async () => {
     const approvalQueue = createApprovalQueueMock("agent");
     const proxy = proxyWith([humanCredential(), agentCredential()], approvalQueue);
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => new Response("ok", { status: 200, statusText: "OK" }))
-    );
+    stubFetch();
 
     await proxy.forwardProxyFetch({
-      caller: evalCaller(agentId),
+      caller: asUser(evalCaller(agentId), DARA),
       url: "https://api.example.test/v1/items",
       method: "GET",
     });
@@ -3658,18 +3743,210 @@ describe("EgressProxy credential actor attribution", () => {
     expect(injectedAuthorization()).toBe("Bearer agent-token");
   });
 
-  it("names the actor rule when the only automatic candidate is human-attributed", async () => {
+  it("names the actor rule when the only automatic candidate is the agent's user's human credential", async () => {
     const approvalQueue = createApprovalQueueMock("agent");
     const proxy = proxyWith([humanCredential()], approvalQueue);
     vi.stubGlobal("fetch", vi.fn());
 
     await expect(
       proxy.forwardProxyFetch({
-        caller: evalCaller(agentId),
+        caller: asUser(evalCaller(agentId), DARA),
         url: "https://api.example.test/v1/items",
         method: "GET",
       })
     ).rejects.toThrow(/credential-actor-mismatch/);
     expect(approvalQueue.request).not.toHaveBeenCalled();
+  });
+
+  describe("per-member human credentials", () => {
+    const daras = () => humanCredential();
+    const bobs = () =>
+      humanCredential({
+        id: "cred-human-bob",
+        connectionId: "cred-human-bob",
+        owner: { sourceId: "/repo", sourceKind: "workspace", label: "/repo", userId: BOB },
+        accessToken: "bob-token",
+      });
+
+    it("selects each acting member's own credential under the same label", async () => {
+      const proxy = proxyWith([daras(), bobs()], createApprovalQueueMock("version"));
+      stubFetch();
+
+      await proxy.forwardProxyFetch({
+        caller: asUser(workerCaller("worker:test"), BOB),
+        url: "https://api.example.test/v1/items",
+        method: "GET",
+      });
+      await proxy.forwardProxyFetch({
+        caller: asUser(workerCaller("worker:test"), DARA),
+        url: "https://api.example.test/v1/items",
+        method: "GET",
+      });
+
+      expect(injectedAuthorization(0)).toBe("Bearer bob-token");
+      expect(injectedAuthorization(1)).toBe("Bearer human-token");
+    });
+
+    it("asks a member without their own connection to connect one, never using another member's", async () => {
+      const approvalQueue = createApprovalQueueMock("version");
+      const proxy = proxyWith([daras()], approvalQueue);
+      vi.stubGlobal("fetch", vi.fn());
+
+      await expect(
+        proxy.forwardProxyFetch({
+          caller: asUser(workerCaller("worker:test"), BOB),
+          url: "https://api.example.test/v1/items",
+          method: "GET",
+        })
+      ).rejects.toThrow(/credential-owner-required/);
+      expect(approvalQueue.request).not.toHaveBeenCalled();
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it("refuses an explicit credential id that acts as another member", async () => {
+      const proxy = proxyWith([daras(), bobs()], createApprovalQueueMock("version"));
+      vi.stubGlobal("fetch", vi.fn());
+
+      await expect(
+        proxy.forwardProxyFetch({
+          caller: asUser(workerCaller("worker:test"), BOB),
+          credentialId: "cred-human",
+          url: "https://api.example.test/v1/items",
+          method: "GET",
+        })
+      ).rejects.toThrow(/credential-owner-mismatch/);
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it("refuses a human credential when no member stands behind the request", async () => {
+      const proxy = proxyWith([daras()], createApprovalQueueMock("version"));
+      vi.stubGlobal("fetch", vi.fn());
+
+      await expect(
+        proxy.forwardProxyFetch({
+          caller: workerCaller("worker:test"),
+          credentialId: "cred-human",
+          url: "https://api.example.test/v1/items",
+          method: "GET",
+        })
+      ).rejects.toThrow(/credential-owner-required/);
+    });
+  });
+
+  describe("agent exchange", () => {
+    it("exchanges the owner's token for an agent token with the root-first lineage, injecting only that", async () => {
+      const approvalQueue = createApprovalQueueMock("agent");
+      const proxy = proxyWith(
+        [humanCredential({ agentExchange: exchange }), bobsWithExchange()],
+        approvalQueue,
+        { lifecycle: true }
+      );
+      stubFetch();
+
+      // The agent inherits its spawner's user (Dara) and gets Dara's credential.
+      await proxy.forwardProxyFetch({
+        caller: asUser(evalCaller(agentId), DARA),
+        url: "https://api.example.test/v1/items",
+        method: "GET",
+      });
+
+      const [body] = exchangeCalls();
+      expect(Object.fromEntries(body!)).toEqual({
+        grant_type: "urn:ietf:params:oauth:grant-type:token-exchange",
+        client_id: "vibestudio",
+        subject_token: "human-token",
+        subject_token_type: "urn:ietf:params:oauth:token-type:access_token",
+        actor_token: JSON.stringify({
+          v: 1,
+          chain: [
+            {
+              definition: "workers/agent-worker#AiChatWorker",
+              instance: "agent-root",
+              label: "AiChatWorker",
+            },
+            {
+              definition: "workers/agent-worker#AiChatWorker",
+              instance: agentId,
+              label: "AiChatWorker",
+            },
+          ],
+        }),
+        actor_token_type: "urn:vibestudio:params:oauth:token-type:agent-lineage",
+        scope: "space:rw",
+      });
+      expect(injectedAuthorization()).toBe("Bearer agent-exchanged-1");
+      // Consent is the ordinary agent-scoped use grant.
+      expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    });
+
+    it("reuses the exchanged token until shortly before it expires", async () => {
+      const proxy = proxyWith(
+        [humanCredential({ agentExchange: exchange })],
+        createApprovalQueueMock("agent"),
+        { lifecycle: true }
+      );
+      stubFetch();
+      for (let i = 0; i < 2; i += 1) {
+        await proxy.forwardProxyFetch({
+          caller: asUser(evalCaller(agentId), DARA),
+          url: "https://api.example.test/v1/items",
+          method: "GET",
+        });
+      }
+      expect(exchangeCalls()).toHaveLength(1);
+      expect(injectedAuthorization(1)).toBe("Bearer agent-exchanged-1");
+    });
+
+    it("fails the request on a refused exchange and never falls back to the human token", async () => {
+      const proxy = proxyWith(
+        [humanCredential({ agentExchange: exchange })],
+        createApprovalQueueMock("agent"),
+        { lifecycle: true }
+      );
+      stubFetch(() => Response.json({ error: "invalid_grant" }, { status: 400 }));
+
+      await expect(
+        proxy.forwardProxyFetch({
+          caller: asUser(evalCaller(agentId), DARA),
+          url: "https://api.example.test/v1/items",
+          method: "GET",
+        })
+      ).rejects.toThrow(/agent-exchange-failed.*invalid_grant/);
+      expect(targetCalls()).toHaveLength(0);
+    });
+
+    it("re-exchanges, never injecting the human token, when the provider rejects the agent token", async () => {
+      const proxy = proxyWith(
+        [humanCredential({ agentExchange: exchange })],
+        createApprovalQueueMock("agent"),
+        { lifecycle: true }
+      );
+      let targetHits = 0;
+      stubFetch(undefined, () =>
+        (targetHits += 1) === 1
+          ? new Response("expired", { status: 401, statusText: "Unauthorized" })
+          : new Response("ok", { status: 200, statusText: "OK" })
+      );
+
+      await proxy.forwardProxyFetch({
+        caller: asUser(evalCaller(agentId), DARA),
+        url: "https://api.example.test/v1/items",
+        method: "GET",
+      });
+
+      expect(exchangeCalls()).toHaveLength(2);
+      expect(injectedAuthorization(0)).toBe("Bearer agent-exchanged-1");
+      expect(injectedAuthorization(1)).toBe("Bearer agent-exchanged-2");
+    });
+
+    function bobsWithExchange(): Credential {
+      return humanCredential({
+        id: "cred-human-bob",
+        connectionId: "cred-human-bob",
+        owner: { sourceId: "/repo", sourceKind: "workspace", label: "/repo", userId: BOB },
+        accessToken: "bob-token",
+        agentExchange: exchange,
+      });
+    }
   });
 });

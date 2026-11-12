@@ -27,19 +27,33 @@ function approvingQueue(decision: "session" | "agent" | "version") {
   };
 }
 
-function workerCaller() {
-  return createVerifiedCaller("worker:test", "worker", {
-    callerId: "worker:test",
-    callerKind: "worker",
-    repoPath: "/repo",
-    effectiveVersion: "hash-1",
-  });
+const DARA = "usr_dara";
+const BOB = "usr_bob";
+
+function asUser<T extends ReturnType<typeof createVerifiedCaller>>(caller: T, userId: string): T {
+  return { ...caller, subject: { userId, handle: userId.slice(4) } };
+}
+
+function workerCaller(userId = DARA) {
+  return asUser(
+    createVerifiedCaller("worker:test", "worker", {
+      callerId: "worker:test",
+      callerKind: "worker",
+      repoPath: "/repo",
+      effectiveVersion: "hash-1",
+    }),
+    userId
+  );
 }
 
 const agentId = "do:workers/agent-worker:AiChatWorker:conversation-1";
 
-function agentCaller() {
+function agentCaller(userId = DARA) {
   const callerId = "do:vibestudio/internal:EvalDO:hash-1";
+  return asUser(agentCallerWithoutUser(callerId), userId);
+}
+
+function agentCallerWithoutUser(callerId: string) {
   return createVerifiedCaller(
     callerId,
     "do",
@@ -65,10 +79,11 @@ function agentCaller() {
   );
 }
 
-function storeParams(actor: "human" | "agent", label: string) {
+function storeParams(actor: "human" | "agent", label: string, extra: Record<string, unknown> = {}) {
   return {
     label,
     actor,
+    ...extra,
     audience: [{ url: "https://api.example.test/", match: "origin" as const }],
     injection: {
       type: "header" as const,
@@ -104,7 +119,7 @@ describe("credentialService credential actor", () => {
     expect(JSON.stringify(listed)).not.toContain("human-token");
   });
 
-  it("refuses an agent session a human-attributed credential without prompting", async () => {
+  it("refuses an agent its user's human credential without an agent exchange, without prompting", async () => {
     const store = new MemoryCredentialStore();
     const approvalQueue = approvingQueue("session");
     const service = createCredentialService({
@@ -159,5 +174,124 @@ describe("credentialService credential actor", () => {
     ])) as StoredCredentialSummary;
 
     expect(store.loadUrlBound(stored.id)?.grants ?? []).toEqual([]);
+  });
+
+  it("stamps the owning member from the verified caller", async () => {
+    const store = new MemoryCredentialStore();
+    const service = createCredentialService({
+      credentialStore: store as never,
+      approvalQueue: approvingQueue("session") as never,
+    });
+    const stored = (await service.handler({ caller: workerCaller(BOB) }, "storeCredential", [
+      storeParams("human", "Provider"),
+    ])) as StoredCredentialSummary;
+    expect(store.loadUrlBound(stored.id)?.owner?.userId).toBe(BOB);
+    // The request cannot name an owner: the schema has no such field.
+    expect(() =>
+      StoreUrlBoundCredentialParamsSchema.parse({
+        ...storeParams("human", "Provider"),
+        owner: { userId: DARA },
+      })
+    ).toThrow();
+  });
+
+  it("lets every member keep their own human credential under one label, but no one else's", async () => {
+    const store = new MemoryCredentialStore();
+    const approvalQueue = approvingQueue("session");
+    const service = createCredentialService({
+      credentialStore: store as never,
+      approvalQueue: approvalQueue as never,
+    });
+    const daras = (await service.handler({ caller: workerCaller(DARA) }, "storeCredential", [
+      storeParams("human", "Namlu"),
+    ])) as StoredCredentialSummary;
+    const bobs = (await service.handler({ caller: workerCaller(BOB) }, "storeCredential", [
+      storeParams("human", "Namlu"),
+    ])) as StoredCredentialSummary;
+    expect(daras.id).not.toBe(bobs.id);
+    // Shared (non-personal) labels stay unique across the hub.
+    await service.handler({ caller: workerCaller(DARA) }, "storeCredential", [
+      storeParams("agent", "Shared"),
+    ]);
+    await expect(
+      service.handler({ caller: workerCaller(BOB) }, "storeCredential", [
+        storeParams("agent", "Shared"),
+      ])
+    ).rejects.toThrow(/already in use/);
+
+    // Each member resolves their own; a member with none is asked to connect one.
+    await expect(
+      service.handler({ caller: workerCaller(BOB) }, "resolveCredential", [
+        { url: "https://api.example.test/v1", credentialLabel: "Namlu" },
+      ])
+    ).resolves.toMatchObject({ id: bobs.id });
+    await expect(
+      service.handler({ caller: workerCaller("usr_carol") }, "resolveCredential", [
+        { url: "https://api.example.test/v1", credentialLabel: "Namlu" },
+      ])
+    ).rejects.toThrow(/credential-owner-required/);
+    await expect(
+      service.handler({ caller: workerCaller(BOB) }, "resolveCredential", [
+        { url: "https://api.example.test/v1", credentialId: daras.id },
+      ])
+    ).rejects.toThrow(/credential-owner-mismatch/);
+  });
+
+  it("lets an agent resolve its user's human credential when it declares an agent exchange", async () => {
+    const store = new MemoryCredentialStore();
+    const approvalQueue = approvingQueue("session");
+    const service = createCredentialService({
+      credentialStore: store as never,
+      approvalQueue: approvalQueue as never,
+    });
+    const agentExchange = {
+      tokenUrl: "https://auth.example.test/oauth/token",
+      clientId: "vibestudio",
+    };
+    const stored = (await service.handler({ caller: workerCaller() }, "storeCredential", [
+      storeParams("human", "Provider", {
+        agentExchange,
+        metadata: { oauthTokenOrigin: "https://auth.example.test" },
+      }),
+    ])) as StoredCredentialSummary;
+    expect(stored.agentExchange).toEqual(agentExchange);
+    approvalQueue.request.mockClear();
+    approvalQueue.request.mockImplementation(async () => "agent");
+
+    await expect(
+      service.handler({ caller: agentCaller() }, "resolveCredential", [
+        { url: "https://api.example.test/v1" },
+      ])
+    ).resolves.toMatchObject({ id: stored.id });
+    expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+    // ...but another member's agent may not.
+    await expect(
+      service.handler({ caller: agentCaller(BOB) }, "resolveCredential", [
+        { url: "https://api.example.test/v1" },
+      ])
+    ).rejects.toThrow(/credential-owner-required/);
+  });
+
+  it("refuses an agent exchange aimed anywhere but the credential's own token endpoint origin", async () => {
+    const service = createCredentialService({
+      credentialStore: new MemoryCredentialStore() as never,
+      approvalQueue: approvingQueue("session") as never,
+    });
+    await expect(
+      service.handler({ caller: workerCaller() }, "storeCredential", [
+        storeParams("human", "Provider", {
+          agentExchange: { tokenUrl: "https://evil.example.test/oauth/token", clientId: "x" },
+          metadata: { oauthTokenOrigin: "https://auth.example.test" },
+        }),
+      ])
+    ).rejects.toThrow(/share its origin/);
+    await expect(
+      service.handler({ caller: workerCaller() }, "storeCredential", [
+        storeParams("agent", "Provider", {
+          agentExchange: { tokenUrl: "https://auth.example.test/oauth/token", clientId: "x" },
+          metadata: { oauthTokenOrigin: "https://auth.example.test" },
+        }),
+      ])
+    ).rejects.toThrow(/human-attributed/);
   });
 });

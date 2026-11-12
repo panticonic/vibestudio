@@ -1339,6 +1339,7 @@ export function createCredentialConnectionCoordinator(
       {
         label: request.credential.label,
         actor: request.credential.actor,
+        agentExchange: request.credential.agentExchange,
         audience,
         injection,
         bindings: request.credential.bindings,
@@ -1421,6 +1422,7 @@ export function createCredentialConnectionCoordinator(
       {
         label: request.credential.label,
         actor: request.credential.actor,
+        agentExchange: request.credential.agentExchange,
         audience,
         injection,
         bindings: request.credential.bindings,
@@ -1535,6 +1537,7 @@ export function createCredentialConnectionCoordinator(
       {
         label: request.credential.label,
         actor: request.credential.actor,
+        agentExchange: request.credential.agentExchange,
         audience,
         injection,
         bindings,
@@ -1624,6 +1627,7 @@ export function createCredentialConnectionCoordinator(
       {
         label: request.credential.label,
         actor: request.credential.actor,
+        agentExchange: request.credential.agentExchange,
         audience,
         injection,
         bindings: request.credential.bindings,
@@ -1705,6 +1709,7 @@ export function createCredentialConnectionCoordinator(
       {
         label: request.credential.label,
         actor: request.credential.actor,
+        agentExchange: request.credential.agentExchange,
         audience,
         injection,
         bindings: request.credential.bindings,
@@ -1802,6 +1807,7 @@ export function createCredentialConnectionCoordinator(
       {
         label: request.credential.label,
         actor: request.credential.actor,
+        agentExchange: request.credential.agentExchange,
         audience,
         injection,
         bindings: request.credential.bindings,
@@ -1891,6 +1897,7 @@ export function createCredentialConnectionCoordinator(
       {
         label: request.credential.label,
         actor: request.credential.actor,
+        agentExchange: request.credential.agentExchange,
         audience,
         injection,
         bindings: request.credential.bindings,
@@ -1989,6 +1996,7 @@ export function createCredentialConnectionCoordinator(
       {
         label: request.credential.label,
         actor: request.credential.actor,
+        agentExchange: request.credential.agentExchange,
         audience,
         injection,
         bindings: request.credential.bindings,
@@ -2154,6 +2162,7 @@ export function createCredentialConnectionCoordinator(
       {
         label: request.credential.label,
         actor: request.credential.actor,
+        agentExchange: request.credential.agentExchange,
         audience,
         injection,
         bindings: request.credential.bindings,
@@ -2314,6 +2323,7 @@ export function createCredentialConnectionCoordinator(
         {
           label: request.credential.label,
           actor: request.credential.actor,
+          agentExchange: request.credential.agentExchange,
           audience,
           injection,
           bindings: request.credential.bindings,
@@ -2538,6 +2548,7 @@ export function createCredentialConnectionCoordinator(
         {
           label: oauthRequest.credential.label,
           actor: oauthRequest.credential.actor,
+          agentExchange: oauthRequest.credential.agentExchange,
           audience: oauthRequest.credential.audience,
           injection: oauthRequest.credential.injection,
           bindings: oauthRequest.credential.bindings,

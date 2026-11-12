@@ -1392,6 +1392,7 @@ async function main() {
     sessionGrantStore: credentialSessionGrantStore,
     credentialUseGrantStore,
     credentialLifecycle,
+    entityGraph: entityCache,
     authorizeInternalRequest: async (input) => {
       const localModelAuthorization = await localModelLoopbackAuthority.authorize(input);
       if (localModelAuthorization) return localModelAuthorization;
