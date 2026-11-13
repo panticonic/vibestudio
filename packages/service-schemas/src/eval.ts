@@ -501,6 +501,27 @@ export const evalNatlangCallSummarySchema = z
     completionTokens: z.number(),
     durationMs: z.number(),
     recordId: z.string().optional(),
+    /** Why a failed call failed (the provider's typed reason, as in its failure's `errorData.reason`). */
+    reason: z.string().optional(),
+    /**
+     * A finite-result call's decision readout: the value its model's scores chose and how sure they were
+     * (`mode: "scored"`), or that the model could not score and the call ran the tool loop instead (`mode:
+     * "tool-loop"`, with natlang's `reason`).
+     */
+    decision: z
+      .discriminatedUnion("mode", [
+        z
+          .object({
+            mode: z.literal("scored"),
+            value: z.string(),
+            p: z.number(),
+            runnerUp: z.string().optional(),
+            pRunnerUp: z.number().optional(),
+          })
+          .strict(),
+        z.object({ mode: z.literal("tool-loop"), reason: z.string() }).strict(),
+      ])
+      .optional(),
   })
   .strict();
 export type EvalNatlangCallSummary = z.infer<typeof evalNatlangCallSummarySchema>;

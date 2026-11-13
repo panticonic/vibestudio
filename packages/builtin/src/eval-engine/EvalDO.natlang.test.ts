@@ -12,6 +12,7 @@ import type {
   NatlangLoweredCell,
   NatlangProviderHost,
 } from "@vibestudio/service-schemas/evalNatlang";
+import { evalRunResultSchema } from "@vibestudio/service-schemas/eval";
 import { EvalDO } from "./EvalDO.js";
 import { cellMayReferenceNatlang } from "./evalNatlangProvider.js";
 
@@ -240,6 +241,74 @@ describe("EvalDO natlang provider", () => {
     expect(moduleMap[NATLANG_SOURCE]).toBe(h.provider.module);
   });
 
+  it("keeps a failed natlang call's typed record and its call summaries in the run result", async () => {
+    const h = await harness();
+    const failure = {
+      protocol: "natlang-call-failure/1",
+      code: "natlang_call_failed",
+      callId: "run-1-1/1",
+      name: "triage",
+      reason: "blocked",
+      outcome: "quiesced",
+      detail: "blocked: no ticket text was given",
+      trace: 'await natlang.trace("run-1-1/1")',
+      next: "pass the missing evidence as an argument",
+    };
+    setPriv(h.instance, "engine", {
+      EVAL_ENGINE_HOST_CONTRACT_VERSION: 1,
+      executeSandbox: vi.fn(async () => ({
+        success: false,
+        consoleOutput: "",
+        error: {
+          message: "natlang triage: quiesced: blocked: no ticket text was given (record run-1-1/1)",
+          name: "NatlangCallError",
+          errorKind: "application",
+          errorData: failure,
+        },
+        failureKind: "user-code",
+        failureCode: "natlang_call_failed",
+      })),
+    });
+    const summaries = [
+      {
+        callId: "run-1-1/1",
+        name: "triage",
+        outcome: "quiesced",
+        reason: "blocked",
+        turns: 1,
+        promptTokens: 2,
+        completionTokens: 3,
+        durationMs: 4,
+        decision: {
+          mode: "scored" as const,
+          value: '"urgent"',
+          p: 0.55,
+          runnerUp: '"normal"',
+          pRunnerUp: 0.45,
+        },
+      },
+    ];
+    const create = h.provider.module["createEvalNatlang"] as (
+      host: NatlangProviderHost
+    ) => EvalNatlang;
+    h.provider.module["createEvalNatlang"] = (host: NatlangProviderHost) => ({
+      ...create(host),
+      runCell: async (execute: () => Promise<unknown>) => ({
+        value: await execute(),
+        calls: summaries,
+      }),
+    });
+    const result = await h.run("await nl`x`()");
+    expect(result).toMatchObject({
+      success: false,
+      failureKind: "user-code",
+      failureCode: "natlang_call_failed",
+      error: { errorData: failure },
+      natlang: { calls: summaries },
+    });
+    expect(() => evalRunResultSchema.parse(result)).not.toThrow();
+  });
+
   it("turns lowering error diagnostics into a user-code failure and does not execute", async () => {
     const h = await harness();
     h.provider.lower = (source) => ({
@@ -302,15 +371,16 @@ describe("EvalDO natlang provider", () => {
   });
 
   it("rejects a provider built for another host contract before running the cell", async () => {
-    const h = await harness({ version: 2 });
+    const other = NATLANG_PROVIDER_HOST_CONTRACT_VERSION + 1;
+    const h = await harness({ version: other });
     await expect(h.run("await nl`x`()")).rejects.toThrow(
-      /uses host contract 2; this runtime requires 1/
+      `uses host contract ${other}; this runtime requires ${NATLANG_PROVIDER_HOST_CONTRACT_VERSION}`
     );
     expect(h.executed).toHaveLength(0);
 
     const missing = await harness({ version: undefined });
     await expect(missing.run("await nl`x`()")).rejects.toThrow(
-      /uses host contract undefined; this runtime requires 1/
+      `uses host contract undefined; this runtime requires ${NATLANG_PROVIDER_HOST_CONTRACT_VERSION}`
     );
   });
 

@@ -6,7 +6,7 @@ import type { EvalNatlangCallSummary } from "./eval.js";
  * Bump this whenever either side's structural contract changes; a provider
  * built against another version must fail before it runs a cell.
  */
-export const NATLANG_PROVIDER_HOST_CONTRACT_VERSION = 1 as const;
+export const NATLANG_PROVIDER_HOST_CONTRACT_VERSION = 2 as const;
 
 /** What the host hands the provider once per EvalDO owner. */
 export interface NatlangProviderHost {
