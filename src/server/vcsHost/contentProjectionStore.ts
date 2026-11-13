@@ -64,14 +64,29 @@ async function mapConcurrent<T, R>(
   project: (value: T, index: number) => Promise<R>
 ): Promise<R[]> {
   const results = new Array<R>(values.length);
+  const failures: unknown[] = [];
   let next = 0;
   const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-    while (next < values.length) {
+    while (failures.length === 0 && next < values.length) {
       const index = next++;
-      results[index] = await project(values[index]!, index);
+      try {
+        results[index] = await project(values[index]!, index);
+      } catch (error) {
+        failures.push(error);
+        return;
+      }
     }
   });
+  // A failure stops admission, but every admitted file operation is joined
+  // before the failure reaches the caller: the caller may immediately replay
+  // or remove this projection, which must not race stray writes into it.
   await Promise.all(workers);
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Content projection file operations failed", {
+      cause: failures[0],
+    });
+  }
   return results;
 }
 
