@@ -1258,9 +1258,11 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
   function resolveRuntimeEntityForApproval(callerId: string): EntityRecord | null {
     if (!runtimeInspector) return null;
     try {
-      const active = runtimeInspector.listActiveEntities();
-      if (!Array.isArray(active)) return null;
-      return active.find((entity) => entity.id === callerId && entity.status === "active") ?? null;
+      return (
+        runtimeInspector
+          .listActiveEntities()
+          .find((entity) => entity.id === callerId && entity.status === "active") ?? null
+      );
     } catch {
       return null;
     }

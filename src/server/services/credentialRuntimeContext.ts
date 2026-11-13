@@ -12,7 +12,8 @@ export interface CredentialRuntimePanelInfo {
 }
 
 export interface CredentialRuntimeInspector {
-  listActiveEntities(): EntityRecord[] | Promise<EntityRecord[]>;
+  /** Synchronous: approval identity is resolved inline from the live entity projection. */
+  listActiveEntities(): EntityRecord[];
   resolvePanelSlotByEntity?(entityId: string): string | null | Promise<string | null>;
   listPanels?(): CredentialRuntimePanelInfo[] | Promise<CredentialRuntimePanelInfo[]>;
 }
@@ -121,12 +122,12 @@ async function lookupPanelSlot(
   }
 }
 
-async function safeListActiveCredentialEntities(
+function safeListActiveCredentialEntities(
   runtimeInspector: CredentialRuntimeInspector | undefined
-): Promise<EntityRecord[]> {
+): EntityRecord[] {
   if (!runtimeInspector) return [];
   try {
-    return await runtimeInspector.listActiveEntities();
+    return runtimeInspector.listActiveEntities();
   } catch {
     return [];
   }
