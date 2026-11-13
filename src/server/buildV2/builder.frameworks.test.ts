@@ -36,7 +36,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { buildUnit, type BuilderSession } from "./builder.js";
+import { buildUnit, buildUnitStored, type BuilderSession } from "./builder.js";
 import { BuildDiagnosticsError, diagnosticsFromError } from "./diagnostics.js";
 import { createBuilderTestSession } from "./builderTestSession.js";
 import { discoverPackageGraph } from "./packageGraph.js";
@@ -351,6 +351,49 @@ describe("buildUnit framework-agnostic panel builds", () => {
     const html = result.artifacts.find((a) => a.role === "html")?.content ?? "";
     expect(html).toContain('id="root"');
     expect(html).toContain("<title>Hello Vanilla</title>");
+  }, 60_000);
+
+  it("binds a coalesced build to each requesting source state", async () => {
+    scaffoldStubPackages();
+    const panelDir = path.join(workspaceRoot, "panels", "shared-bytes");
+    writeJson(path.join(panelDir, "package.json"), {
+      name: "@workspace-panels/shared-bytes",
+      version: "0.1.0",
+      private: true,
+      type: "module",
+      vibestudio: { title: "Shared Bytes", entry: "index.ts" },
+      dependencies: { "@workspace/runtime": "workspace:*" },
+    });
+    fs.writeFileSync(
+      path.join(panelDir, "index.ts"),
+      'import { greet } from "@workspace/runtime";\ndocument.title = greet("shared");\n'
+    );
+    fs.writeFileSync(
+      path.join(panelDir, "index.html"),
+      '<html><body><div id="root"></div></body></html>'
+    );
+    commit(panelDir, "shared bytes");
+    const graph = discoverPackageGraph(workspaceRoot);
+    const node = graph.get("@workspace-panels/shared-bytes");
+    const firstState = `state:${"1".repeat(64)}`;
+    const secondState = `state:${"2".repeat(64)}`;
+
+    // Two semantic states with one effective version share the artifact bytes.
+    // The second request adopts the first one's in-flight compilation, yet it
+    // must still receive an execution identity committed to its own state.
+    const [first, second] = await Promise.all([
+      buildUnitStored(session, node, "b".repeat(64), graph, workspaceRoot, firstState),
+      buildUnitStored(session, node, "b".repeat(64), graph, workspaceRoot, secondState),
+    ]);
+
+    expect(second.buildKey).toBe(first.buildKey);
+    expect(first.sourceStateHash).toBe(firstState);
+    expect(first.metadata.sourceStateHash).toBe(firstState);
+    expect(second.sourceStateHash).toBe(secondState);
+    expect(second.metadata.sourceStateHash).toBe(secondState);
+    expect(second.metadata.execution?.executionDigest).not.toBe(
+      first.metadata.execution?.executionDigest
+    );
   }, 60_000);
 
   it("builds a svelte panel: framework=svelte, compiled component + Svelte 5 mount() (no new Component)", async () => {

@@ -13,7 +13,9 @@ const rank = (priority: BuildPriority) =>
 interface FlightRow {
   id: string;
   owner: string;
-  state: "running" | "complete" | "failed";
+  /** `abandoned`: the producer's own request was cancelled before it settled.
+   * The key is unowned work, not a result; a remaining requester claims it. */
+  state: "running" | "complete" | "failed" | "abandoned";
   failure: string | null;
 }
 
@@ -21,7 +23,8 @@ interface FlightRow {
  * sharing a result cache. Waiters hold no compiler permits. Completion means
  * the canonical cache publication has settled; each consumer then hydrates its
  * own provenance. Ownership ends on settlement, cancellation, or confirmed
- * process death, never elapsed time. */
+ * process death, never elapsed time. A cancelled producer's reason belongs to
+ * its own requester: it abandons the key and another requester takes it over. */
 export class SharedBuildCoordinator {
   private readonly db: DatabaseSync;
   private readonly owner = `${process.pid}:${randomUUID()}:${cacheProcessIdentity(process.pid) ?? ""}`;
@@ -97,7 +100,12 @@ export class SharedBuildCoordinator {
       this.db
         .prepare("INSERT INTO requests VALUES (?, ?, ?, ?)")
         .run(request, row.id, this.owner, rank(priority.priority));
-      return { row, producer: row.owner === this.owner && this.requestCount(row.id) === 1 };
+      return {
+        row,
+        producer:
+          this.claimAbandoned(row.id) ||
+          (row.owner === this.owner && this.requestCount(row.id) === 1),
+      };
     });
     const promote = (next: BuildPriority) => {
       this.db
@@ -110,15 +118,18 @@ export class SharedBuildCoordinator {
         this.notify();
         priority.bindQueuedPromotion(promote);
         if (!elected.producer) {
-          await this.observe(() => {
+          const claimed = await this.observe(() => {
             const row = this.db
               .prepare("SELECT * FROM flights WHERE id = ?")
               .get(elected.row.id) as unknown as FlightRow | undefined;
             if (!row) throw new Error(`Shared build ${key} lost its ownership receipt`);
             if (row.state === "failed") throw deserializeRpcFailure(JSON.parse(row.failure!));
-            return row.state === "complete" ? { done: true, value: undefined } : { done: false };
+            if (row.state === "complete") return { done: true, value: false };
+            if (row.state === "abandoned" && this.claimAbandoned(row.id))
+              return { done: true, value: true };
+            return { done: false };
           }, signal);
-          return { produced: false } as const;
+          if (!claimed) return { produced: false } as const;
         }
         const compilerPriority = new BuildPriorityOwner(priority.priority);
         const adoptDemand = () => {
@@ -140,7 +151,10 @@ export class SharedBuildCoordinator {
             () => {
               throw error;
             },
-            () => this.settle(elected.row.id, false, error),
+            () =>
+              signal.aborted
+                ? this.abandon(elected.row.id)
+                : this.settle(elected.row.id, false, error),
             "Shared compilation and failure settlement failed"
           );
         } finally {
@@ -239,6 +253,30 @@ export class SharedBuildCoordinator {
         this.owner
       );
     this.notify();
+  }
+
+  /** Release a cancelled producer's ownership without publishing its
+   * cancellation as the key's outcome. */
+  private abandon(id: string): void {
+    this.db
+      .prepare(
+        "UPDATE flights SET state = 'abandoned' WHERE id = ? AND owner = ? AND state = 'running'"
+      )
+      .run(id, this.owner);
+    this.notify();
+  }
+
+  /** Atomically take over abandoned work; exactly one requester wins. */
+  private claimAbandoned(id: string): boolean {
+    return (
+      Number(
+        this.db
+          .prepare(
+            "UPDATE flights SET state = 'running', owner = ? WHERE id = ? AND state = 'abandoned'"
+          )
+          .run(this.owner, id).changes
+      ) === 1
+    );
   }
 
   private requestCount(id: string): number {

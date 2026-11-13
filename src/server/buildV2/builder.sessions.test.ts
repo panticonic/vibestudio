@@ -300,6 +300,40 @@ describe("Build V2 process and role ownership", () => {
     }
   });
 
+  it("admits a new request instead of adopting a flight whose requesters withdrew", async () => {
+    const processOwner = new BuildProcessOwner({ appRoot: process.cwd(), appNodeModules: [] });
+    const entered = deferred<void>();
+    const requester = new AbortController();
+    const result = storedBuildResult("d".repeat(64));
+    const withdrawn = processOwner.admitSharedBuild("/shared-cache\0rerequest", (signal) => {
+      return new BuildFlight<StoredBuildResult>("interactive", async () => {
+        entered.resolve();
+        // The withdrawn producer is still unwinding when the next request arrives.
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve()));
+        await new Promise<void>((resolve) => setImmediate(resolve));
+        throw signal.reason;
+      });
+    });
+    const work = processOwner.borrowSharedBuild(withdrawn.entry, requester.signal, "interactive");
+    try {
+      await entered.promise;
+      requester.abort(new Error("First requester canceled"));
+      await expect(work).rejects.toThrow("First requester canceled");
+      const next = processOwner.admitSharedBuild(
+        "/shared-cache\0rerequest",
+        () => new BuildFlight<StoredBuildResult>("interactive", async () => result)
+      );
+      expect(next.owner).toBe(true);
+      expect(next.entry).not.toBe(withdrawn.entry);
+      await expect(
+        processOwner.borrowSharedBuild(next.entry, new AbortController().signal, "interactive")
+      ).resolves.toBe(result);
+    } finally {
+      await Promise.allSettled([work, withdrawn.entry.flight.promise]);
+      await processOwner.shutdown();
+    }
+  });
+
   it("cancels and joins shared work when its process owner shuts down", async () => {
     const processOwner = new BuildProcessOwner({ appRoot: process.cwd(), appNodeModules: [] });
     const entered = deferred<void>();

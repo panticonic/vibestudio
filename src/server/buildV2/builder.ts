@@ -339,8 +339,11 @@ export class BuildProcessOwner {
     key: string,
     create: (signal: AbortSignal) => BuildFlight<StoredBuildResult>
   ): { readonly entry: SharedBuildFlightEntry; readonly owner: boolean } {
+    // A flight whose requesters all withdrew is only unwinding. Its cancellation
+    // belongs to them, so a new request starts its own flight; the coordinator
+    // hands it the abandoned key once the old producer releases it.
     const existing = this.sharedBuildFlights.get(key);
-    if (existing) return { entry: existing, owner: false };
+    if (existing && !existing.controller.signal.aborted) return { entry: existing, owner: false };
     this.lifetime.assertOpen();
     const controller = new AbortController();
     const signal = AbortSignal.any([controller.signal, this.lifetime.signal]);
@@ -2476,13 +2479,19 @@ async function buildUnitStoredUnchecked(
     );
   }
 
+  // A build key locates reusable artifact bytes, not the semantic source state
+  // that requested them. Whichever path supplies those bytes — the store, an
+  // adopted in-flight build started for another state, or a shared producer —
+  // the caller receives them bound to its own exact state.
+  const boundToRequestedState = (build: StoredBuildResult): Promise<StoredBuildResult> =>
+    build.sourceStateHash !== stateRef && build.sourceStateHash !== null
+      ? session.store.rebindSourceState(build, stateRef)
+      : Promise.resolve(build);
+
   // Check store first
   const cachedRecord = await session.store.getOrHydrate(buildKey, stateRef);
-  let cached = cachedRecord;
-  if (cached && cached.sourceStateHash !== stateRef && cached.sourceStateHash !== null) {
-    cached = await session.store.rebindSourceState(cached, stateRef);
-  }
-  if (cached) {
+  if (cachedRecord) {
+    const cached = await boundToRequestedState(cachedRecord);
     await ensureNodeProgramBuildReady(session, cached);
     return cached;
   }
@@ -2497,7 +2506,7 @@ async function buildUnitStoredUnchecked(
   const inFlight = session.inFlightBuilds.get(buildKey);
   if (inFlight) {
     logVerbose("BuildV2", `${node.name}: adopting in-flight build ${buildKey}`);
-    return inFlight.adopt(requestedPriority);
+    return boundToRequestedState(await inFlight.adopt(requestedPriority));
   }
 
   const flight = admitSessionBuild(
@@ -2527,11 +2536,13 @@ async function buildUnitStoredUnchecked(
   );
   session.inFlightBuilds.set(buildKey, flight);
 
+  let produced: StoredBuildResult;
   try {
-    return await flight.promise;
+    produced = await flight.promise;
   } finally {
     if (session.inFlightBuilds.get(buildKey) === flight) session.inFlightBuilds.delete(buildKey);
   }
+  return boundToRequestedState(produced);
 }
 
 /** Materialize artifact strings only for callers crossing the build RPC wire boundary. */

@@ -150,6 +150,25 @@ describe("cross-process build ownership", () => {
     a.send("release", "producer");
     await a.read("complete", "producer");
   });
+  it("hands a cancelled producer's key to a waiting borrower instead of its cancellation", async () => {
+    const directory = root();
+    const a = await child(directory);
+    const b = await child(directory);
+    a.send("run", "producer");
+    await a.read("entered", "producer");
+    b.send("run", "borrower");
+    await b.read("admitted", "borrower");
+    a.send("cancel", "producer");
+    expect(deserializeRpcFailure((await a.read("failed", "producer")).failure)).toMatchObject({
+      message: "request explicitly cancelled",
+    });
+    await b.read("entered", "borrower");
+    b.send("release", "borrower");
+    expect((await b.read("complete", "borrower")).result).toEqual({
+      produced: true,
+      value: "artifact",
+    });
+  });
   it("reserves compiler capacity for interactive work across processes", async () => {
     const directory = root();
     const a = await child(directory, 2);
