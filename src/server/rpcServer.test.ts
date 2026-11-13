@@ -6503,6 +6503,31 @@ describe("RpcServer caller retirement", () => {
     expect(settled).toBe(true);
   });
 
+  it("runs every caller-retired listener and reports each failure", async () => {
+    const onClientDisconnect = vi.fn();
+    const { server } = createServer({ onClientDisconnect });
+    const first = new Error("first owner failed");
+    const second = new Error("second owner failed");
+    const released: string[] = [];
+    server.onCallerRetired(() => Promise.reject(first));
+    server.onCallerRetired((callerId, callerKind) => {
+      released.push(`${callerId}/${callerKind}`);
+    });
+    const stop = server.onCallerRetired(() => {
+      throw second;
+    });
+
+    const failure = await server.retireCaller("shell:owners", "shell").catch((error) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([first, second]);
+    expect(onClientDisconnect).toHaveBeenCalledWith("shell:owners", "shell");
+    expect(released).toEqual(["shell:owners/shell"]);
+
+    stop();
+    await server.retireCaller("shell:owners").catch(() => undefined);
+    expect(released).toHaveLength(2);
+  });
+
   it("preserves failed owner cleanup and resumes only on explicit retirement", async () => {
     const original = new Error("native descriptor close failed");
     const onClientDisconnect = vi.fn().mockRejectedValueOnce(original).mockResolvedValue(undefined);

@@ -609,6 +609,9 @@ export class RpcServer {
     Map<string, AbortController>
   >();
   /** Terminal caller teardown, shared by token revocation and explicit reach cleanup. */
+  private readonly callerRetiredListeners = new Set<
+    (callerId: string, callerKind: CallerKind) => void | Promise<void>
+  >();
   private readonly callerRetirements = new Map<
     string,
     {
@@ -1708,11 +1711,16 @@ export class RpcServer {
     this.connections.setBridge(callerId, connectionId, bridge, transport);
   }
 
-  /** Register a callback for client disconnect events. */
-  setOnClientDisconnect(
-    handler: (callerId: string, callerKind: CallerKind) => void | Promise<void>
-  ): void {
-    this.deps.onClientDisconnect = handler;
+  /**
+   * Observe callers' terminal departure (grace expiry or retirement): owners of
+   * caller-scoped resources release them here. The retirement settles after
+   * every listener, and reports their failures.
+   */
+  onCallerRetired(
+    listener: (callerId: string, callerKind: CallerKind) => void | Promise<void>
+  ): () => void {
+    this.callerRetiredListeners.add(listener);
+    return () => this.callerRetiredListeners.delete(listener);
   }
 
   /** Register a callback for client authentication events. */
@@ -2518,11 +2526,24 @@ export class RpcServer {
     if (!retirement || retirement.phase !== "draining" || retirement.pendingSockets.size > 0)
       return;
     retirement.phase = "cleanup";
-    const cleanup = Promise.resolve().then(() =>
-      retirement.callerKind
-        ? this.deps.onClientDisconnect?.(callerId, retirement.callerKind)
-        : undefined
-    );
+    const callerKind = retirement.callerKind;
+    const cleanup = Promise.resolve().then(async () => {
+      if (!callerKind) return;
+      const cleanups = [
+        ...(this.deps.onClientDisconnect ? [this.deps.onClientDisconnect] : []),
+        ...this.callerRetiredListeners,
+      ];
+      const results = await Promise.allSettled(
+        cleanups.map(async (cleanupCaller) => cleanupCaller(callerId, callerKind))
+      );
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : []
+      );
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(failures, `Caller ${callerId} cleanup failed`);
+      }
+    });
     void cleanup.then(
       () => {
         retirement.phase = "settled";

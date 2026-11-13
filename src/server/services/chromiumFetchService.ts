@@ -30,6 +30,11 @@ export interface ChromiumFetchServiceDeps {
   onHostDisconnected(listener: (hostConnectionId: string) => void): () => void;
   /** A runtime entity's retirement ends every response it opened. */
   onEntityRetired(listener: (entityId: string) => void): () => void;
+  /**
+   * A caller that is not a runtime entity (a shell or user session) retires
+   * when it departs for good; that ends every response it opened.
+   */
+  onCallerRetired(listener: (callerId: string) => void): () => void;
   /** A host-side close that no caller is waiting on failed. */
   reportCloseFailure(responseId: string, error: unknown): void;
 }
@@ -45,7 +50,7 @@ export function createChromiumFetchService(
   >();
   const owner = (ctx: HandlerContext) =>
     ctx.authorization?.agentBinding?.channelId ?? ctx.caller.runtime.id;
-  /** The runtime entity whose lifetime bounds the caller's open responses. */
+  /** The runtime entity (or, for a shell or user session, the caller) whose lifetime bounds its open responses. */
   const ownerEntityId = (ctx: HandlerContext) =>
     ctx.caller.agentBinding?.entityId ?? ctx.caller.runtime.id;
   /** No caller waits on this close; its failure is reported, not dropped. */
@@ -58,13 +63,15 @@ export function createChromiumFetchService(
     for (const [responseId, entry] of responses)
       if (entry.hostConnectionId === hostConnectionId) responses.delete(responseId);
   });
-  const stopEntityListener = deps.onEntityRetired((entityId) => {
+  const retireOwner = (ownerId: string) => {
     for (const [responseId, entry] of responses) {
-      if (entry.ownerEntityId !== entityId) continue;
+      if (entry.ownerEntityId !== ownerId) continue;
       responses.delete(responseId);
       closeUnobserved(entry.hostConnectionId, responseId);
     }
-  });
+  };
+  const stopEntityListener = deps.onEntityRetired(retireOwner);
+  const stopCallerListener = deps.onCallerRetired(retireOwner);
   const open = async (ctx: HandlerContext, url: string, session: "public" | "browser") => {
     const opened = await deps.open(url, session);
     responses.set(opened.response.responseId, {
@@ -137,6 +144,7 @@ export function createChromiumFetchService(
     stop() {
       stopHostListener();
       stopEntityListener();
+      stopCallerListener();
     },
   };
 }

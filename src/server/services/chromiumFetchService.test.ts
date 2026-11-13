@@ -26,6 +26,7 @@ const RESPONSE_ID = RESPONSE_IDS[0]!;
 function fixture() {
   const hostListeners = new Set<(hostConnectionId: string) => void>();
   const entityListeners = new Set<(entityId: string) => void>();
+  const callerListeners = new Set<(callerId: string) => void>();
   let opened = 0;
   const deps = {
     open: vi.fn(async (url: string) => ({
@@ -49,12 +50,17 @@ function fixture() {
       entityListeners.add(listener);
       return () => entityListeners.delete(listener);
     },
+    onCallerRetired: (listener: (callerId: string) => void) => {
+      callerListeners.add(listener);
+      return () => callerListeners.delete(listener);
+    },
     reportCloseFailure: vi.fn(),
   };
   return {
     deps,
     disconnectHost: (id: string) => hostListeners.forEach((listener) => listener(id)),
     retireEntity: (id: string) => entityListeners.forEach((listener) => listener(id)),
+    retireCaller: (id: string) => callerListeners.forEach((listener) => listener(id)),
   };
 }
 
@@ -89,6 +95,21 @@ describe("chromiumFetchService", () => {
     f.retireEntity("panel:panels/chat:1");
     expect(f.deps.close).toHaveBeenCalledWith("host-1", RESPONSE_ID);
     await expect(handle(service, "read", [RESPONSE_ID, 0, 1024])).rejects.toThrow(
+      "Chromium response is unavailable"
+    );
+  });
+
+  it("closes a shell session's open responses when the caller retires", async () => {
+    const f = fixture();
+    const service = createChromiumFetchService(f.deps);
+    const shell: ServiceContext = { caller: createVerifiedCaller("shell:desktop-1", "shell") };
+    await service.handler(shell, "openPublic", ["https://example.com/"]);
+
+    f.retireCaller("panel:panels/chat:1");
+    expect(f.deps.close).not.toHaveBeenCalled();
+    f.retireCaller("shell:desktop-1");
+    expect(f.deps.close).toHaveBeenCalledWith("host-1", RESPONSE_ID);
+    await expect(service.handler(shell, "read", [RESPONSE_ID, 0, 1024])).rejects.toThrow(
       "Chromium response is unavailable"
     );
   });

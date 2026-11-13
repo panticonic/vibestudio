@@ -562,9 +562,12 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
     >;
     container.registerManaged({
       name: "chromiumFetch",
-      dependencies: ["cdpBridge"],
+      dependencies: ["cdpBridge", "rpcServer"],
       async start(resolve) {
         const bridge = assertPresent(resolve<import("./cdpBridge.js").CdpBridge>("cdpBridge"));
+        const { server: rpcServer } = assertPresent(
+          resolve<{ server: import("./rpcServer.js").RpcServer }>("rpcServer")
+        );
         const { createChromiumFetchService } = await import("./services/chromiumFetchService.js");
         const headlessHost = async (): Promise<string> => {
           const select = () =>
@@ -607,6 +610,7 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
             panelGateEntityCache.onChange((entityId, change) => {
               if (change === "retire" || change === "delete") listener(entityId);
             }),
+          onCallerRetired: (listener) => rpcServer.onCallerRetired(listener),
           reportCloseFailure: (responseId, error) =>
             console.warn(`[chromiumFetch] Could not close response ${responseId}:`, error),
         });
