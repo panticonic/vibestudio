@@ -35,6 +35,7 @@ import { DiskProjector } from "./diskProjector.js";
 import { assertSemanticVcsPathAdmissible } from "@vibestudio/shared/vcs/pathAdmission";
 import { normalizeRepositoryPath } from "./paths.js";
 import { WORKSPACE_SOURCE_DIRS } from "@vibestudio/workspace-contracts/sourceDirs";
+import { mapConcurrent } from "../hostCore/mapConcurrent.js";
 
 const CONTENT_HASH = /^[0-9a-f]{64}$/;
 const CONTENT_ROOT = /^state:[0-9a-f]{64}$/;
@@ -565,23 +566,17 @@ export class ContextMaterializer {
       ): repository is Extract<WorkspaceMaterializationRepository, { presence: "present" }> =>
         repository.presence === "present"
     );
-    const roots = new Array<MaterializedRepository>(present.length);
-    const pending = present.entries();
-    const deriveNext = async (): Promise<void> => {
-      for (const [index, repository] of pending) {
-        const contentRoot = await this.deriveRepositoryContentRoot(repository);
-        roots[index] = {
-          repositoryId: repository.repositoryId,
-          repoPath: repository.repoPath,
-          contentRoot,
-        };
-      }
-    };
-    await Promise.all(
-      Array.from(
-        { length: Math.min(CONTENT_ROOT_DERIVATION_CONCURRENCY, present.length) },
-        deriveNext
-      )
+    // Derivation stores blobs and trees; a failure joins every admitted
+    // derivation before it reaches the caller.
+    const roots = await mapConcurrent(
+      present,
+      CONTENT_ROOT_DERIVATION_CONCURRENCY,
+      "Content root derivation failed",
+      async (repository): Promise<MaterializedRepository> => ({
+        repositoryId: repository.repositoryId,
+        repoPath: repository.repoPath,
+        contentRoot: await this.deriveRepositoryContentRoot(repository),
+      })
     );
     return roots.sort((left, right) =>
       compareUtf16CodeUnits(left.repositoryId, right.repositoryId)

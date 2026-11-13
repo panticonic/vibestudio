@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { mapConcurrent } from "../hostCore/mapConcurrent.js";
 
 const FILE_CONCURRENCY = 32;
 
@@ -7,37 +8,6 @@ interface ProjectionEntry {
   source: string;
   target: string;
   kind: "file" | "symlink";
-}
-
-async function mapConcurrent<T>(
-  values: readonly T[],
-  concurrency: number,
-  apply: (value: T) => Promise<void>
-): Promise<void> {
-  let cursor = 0;
-  const failures: unknown[] = [];
-  await Promise.all(
-    Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-      while (failures.length === 0) {
-        const value = values[cursor++];
-        if (value === undefined) return;
-        try {
-          await apply(value);
-        } catch (error) {
-          failures.push(error);
-          return;
-        }
-      }
-    })
-  );
-  // Error publication transfers ownership back to the caller, which may
-  // immediately delete the target or release the source installation. Join
-  // every admitted copy before that boundary, even after one copy fails.
-  if (failures.length === 1) throw failures[0];
-  if (failures.length > 1)
-    throw new AggregateError(failures, "Immutable dependency projection failed", {
-      cause: failures[0],
-    });
 }
 
 /**
@@ -82,25 +52,30 @@ export async function materializeImmutableTree(source: string, target: string): 
     }
   }
 
-  await mapConcurrent(entries, FILE_CONCURRENCY, async (entry) => {
-    await fs.promises.mkdir(path.dirname(entry.target), { recursive: true });
-    if (entry.kind === "symlink") {
-      await fs.promises.symlink(await fs.promises.readlink(entry.source), entry.target);
-      return;
-    }
-    try {
-      await fs.promises.link(entry.source, entry.target);
-    } catch (error) {
-      if (
-        !["EXDEV", "EPERM", "EACCES", "EMLINK"].includes(
-          (error as NodeJS.ErrnoException).code ?? ""
-        )
-      ) {
-        throw error;
+  await mapConcurrent(
+    entries,
+    FILE_CONCURRENCY,
+    "Immutable dependency projection failed",
+    async (entry) => {
+      await fs.promises.mkdir(path.dirname(entry.target), { recursive: true });
+      if (entry.kind === "symlink") {
+        await fs.promises.symlink(await fs.promises.readlink(entry.source), entry.target);
+        return;
       }
-      await fs.promises.copyFile(entry.source, entry.target, fs.constants.COPYFILE_FICLONE);
+      try {
+        await fs.promises.link(entry.source, entry.target);
+      } catch (error) {
+        if (
+          !["EXDEV", "EPERM", "EACCES", "EMLINK"].includes(
+            (error as NodeJS.ErrnoException).code ?? ""
+          )
+        ) {
+          throw error;
+        }
+        await fs.promises.copyFile(entry.source, entry.target, fs.constants.COPYFILE_FICLONE);
+      }
     }
-  });
+  );
 }
 
 /** Publish an independently owned Windows resource tree. Symlinks in an

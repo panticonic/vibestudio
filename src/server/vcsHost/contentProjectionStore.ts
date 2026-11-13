@@ -37,6 +37,7 @@ import {
   mirrorWorktreeTree,
   putFile,
 } from "../services/blobstoreService.js";
+import { mapConcurrent } from "../hostCore/mapConcurrent.js";
 
 /**
  * Join a state path onto a worktree dir and assert the result stays inside it —
@@ -57,38 +58,6 @@ const SIDECAR_DIR = ".gad";
 const SIDECAR_FILE = "CHECKOUT.json";
 const FILE_INGEST_CONCURRENCY = 8;
 const FILE_MATERIALIZATION_CONCURRENCY = 16;
-
-async function mapConcurrent<T, R>(
-  values: readonly T[],
-  concurrency: number,
-  project: (value: T, index: number) => Promise<R>
-): Promise<R[]> {
-  const results = new Array<R>(values.length);
-  const failures: unknown[] = [];
-  let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-    while (failures.length === 0 && next < values.length) {
-      const index = next++;
-      try {
-        results[index] = await project(values[index]!, index);
-      } catch (error) {
-        failures.push(error);
-        return;
-      }
-    }
-  });
-  // A failure stops admission, but every admitted file operation is joined
-  // before the failure reaches the caller: the caller may immediately replay
-  // or remove this projection, which must not race stray writes into it.
-  await Promise.all(workers);
-  if (failures.length === 1) throw failures[0];
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Content projection file operations failed", {
-      cause: failures[0],
-    });
-  }
-  return results;
-}
 
 interface ContentFileEntry {
   path: string;
@@ -353,29 +322,34 @@ export class ContentProjectionStore {
     sidecar: SidecarState
   ): Promise<{ files: ContentFileEntry[]; entries: Record<string, SidecarEntry> }> {
     const trustedBefore = sidecar.scannedAtMs - ContentProjectionStore.RACY_MTIME_WINDOW_MS;
-    const hashed = await mapConcurrent(scanned, FILE_INGEST_CONCURRENCY, async (file) => {
-      const cached = sidecar.files[file.path];
-      let contentHash: string;
-      if (
-        cached &&
-        cached.size === file.size &&
-        cached.mtimeMs === file.mtimeMs &&
-        file.mtimeMs < trustedBefore
-      ) {
-        contentHash = cached.contentHash;
-      } else {
-        contentHash = (await putFile(this.deps.blobsDir, file.absPath)).digest;
+    const hashed = await mapConcurrent(
+      scanned,
+      FILE_INGEST_CONCURRENCY,
+      "Content projection file operations failed",
+      async (file) => {
+        const cached = sidecar.files[file.path];
+        let contentHash: string;
+        if (
+          cached &&
+          cached.size === file.size &&
+          cached.mtimeMs === file.mtimeMs &&
+          file.mtimeMs < trustedBefore
+        ) {
+          contentHash = cached.contentHash;
+        } else {
+          contentHash = (await putFile(this.deps.blobsDir, file.absPath)).digest;
+        }
+        return {
+          file: { path: file.path, contentHash, size: file.size, mode: file.mode },
+          sidecar: {
+            contentHash,
+            size: file.size,
+            mtimeMs: file.mtimeMs,
+            mode: file.mode,
+          },
+        };
       }
-      return {
-        file: { path: file.path, contentHash, size: file.size, mode: file.mode },
-        sidecar: {
-          contentHash,
-          size: file.size,
-          mtimeMs: file.mtimeMs,
-          mode: file.mode,
-        },
-      };
-    });
+    );
     const entries: Record<string, SidecarEntry> = {};
     for (const [index, result] of hashed.entries()) entries[scanned[index]!.path] = result.sidecar;
     const files = hashed.map((result) => result.file);
@@ -517,6 +491,7 @@ export class ContentProjectionStore {
     const materialized = await mapConcurrent(
       target,
       FILE_MATERIALIZATION_CONCURRENCY,
+      "Content projection file operations failed",
       async (file): Promise<{ path: string; entry: SidecarEntry | null; unchanged: boolean }> => {
         const relPath = file.path;
         const absPath = safeWorktreeJoin(dir, relPath);
@@ -690,6 +665,7 @@ export class ContentProjectionStore {
       await mapConcurrent(
         [...(byDepth.get(depth) ?? [])],
         FILE_MATERIALIZATION_CONCURRENCY,
+        "Content projection file operations failed",
         async (relDir) => {
           const absDir = safeWorktreeJoin(dir, relDir);
           try {
