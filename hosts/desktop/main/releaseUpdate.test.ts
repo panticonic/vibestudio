@@ -300,6 +300,27 @@ describe("release update controller", () => {
     const restart = emitted.filter((entry) => entry.event === "notification:show").at(-1);
     expect(restart?.payload["title"]).toBe("Vibestudio updated");
     expect(restart?.payload["actions"]).toMatchObject([{ id: "desktop-release-update-restart" }]);
+    expect(emitted).toContainEqual({
+      event: "notification:dismiss",
+      payload: { id: "desktop-release-update" },
+    });
+
+    // The installed release runs after a restart: the next check does not offer it again.
+    emitted.length = 0;
+    await controller!.checkNow("interval");
+    expect(emitted.filter((entry) => entry.event === "notification:show")).toEqual([]);
+    controller!.stop();
+  });
+
+  it("keeps offering a release after the person dismisses a progress or error notice", async () => {
+    const { controller, emitted } = harness();
+    await controller!.checkNow("startup");
+    await controller!.handleNotificationAction("desktop-release-update-install-status", "dismiss");
+    await controller!.handleNotificationAction("desktop-release-update-error", "dismiss");
+    emitted.length = 0;
+    await controller!.checkNow("interval");
+    expect(emitted.at(-1)?.payload["title"]).toBe("Vibestudio 0.2.0 is available");
+    controller!.stop();
   });
 
   it("tells the user to run it themselves when polkit refuses", async () => {

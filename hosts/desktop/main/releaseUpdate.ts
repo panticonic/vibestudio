@@ -224,6 +224,8 @@ export function createReleaseUpdateController(
   let lastCompletedAt = 0;
   let candidate: AvailableRelease | null = null;
   let dismissedVersion: string | null = null;
+  /** A release the package manager installed; it runs after a restart, so it is not offered again. */
+  let installedAwaitingRestart: string | null = null;
 
   const schedule = (delay: number, reason: ReleaseUpdateCheckReason) => {
     if (stopped) return;
@@ -259,6 +261,7 @@ export function createReleaseUpdateController(
     // for this exact release rather than offering a download that isn't ready.
     const downloadUrl = delivery.kind === "download" ? macReleaseDownload(payload) : undefined;
     if (delivery.kind === "download" && !downloadUrl) return;
+    if (installedAwaitingRestart && !semver.gt(newer.version, installedAwaitingRestart)) return;
     candidate = Object.freeze({
       currentVersion: deps.currentVersion,
       targetVersion: newer.version,
@@ -323,6 +326,10 @@ export function createReleaseUpdateController(
           `The package repository still provides Vibestudio ${installed}. Version ${targetVersion} is not available there yet. Your current app is still usable; try the upgrade again once the repository publishes it.`
         );
       }
+      // The offer is taken: only the restart remains, until a still newer release.
+      installedAwaitingRestart = targetVersion;
+      candidate = null;
+      deps.eventService.emit("notification:dismiss", { id: NOTIFICATION_ID });
       deps.eventService.emit("notification:show", {
         id: INSTALL_NOTIFICATION_ID,
         type: "success",
@@ -440,7 +447,9 @@ export function createReleaseUpdateController(
       )
         return;
       if (actionId === "dismiss") {
-        dismissedVersion = candidate?.targetVersion ?? null;
+        // Only dismissing the offer itself silences that release; a progress
+        // or error notice is about one attempt, not about the release.
+        if (id === NOTIFICATION_ID) dismissedVersion = candidate?.targetVersion ?? null;
         return;
       }
       try {
