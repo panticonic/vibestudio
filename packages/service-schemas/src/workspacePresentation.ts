@@ -159,6 +159,19 @@ export const workspacePresentationMethods = defineReceiverServiceMethods({
     argumentNames: ["slotIds"],
     returns: z.record(z.string(), z.string()),
   },
+  titlesForEntities: {
+    website: {
+      kind: "closed",
+      reason:
+        "The workspacePresentation receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    ...method("read"),
+    description:
+      "Resolve stored titles for entities, including those of closed slots whose binding was removed.",
+    args: z.tuple([z.array(z.string().min(1)).max(1_000)]),
+    argumentNames: ["entityIds"],
+    returns: z.record(z.string(), z.string()),
+  },
   incrementAccess: {
     website: {
       kind: "closed",

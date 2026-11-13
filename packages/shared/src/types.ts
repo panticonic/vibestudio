@@ -473,10 +473,9 @@ export type PanelContextMenuAction =
   | "add-child"
   | "add-child-below"
   | "open-in-new-column"
-  | "close-pane"
   | "toggle-pin"
   | "unload"
-  | "archive";
+  | "close";
 
 // =============================================================================
 // Panel Move/Drag-and-Drop Types

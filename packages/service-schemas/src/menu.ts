@@ -51,10 +51,9 @@ export const PanelContextMenuActionSchema = z.enum([
   "add-child",
   "add-child-below",
   "open-in-new-column",
-  "close-pane",
   "toggle-pin",
   "unload",
-  "archive",
+  "close",
 ]) satisfies z.ZodType<PanelContextMenuAction>;
 
 export const menuMethods = defineServiceMethods({
@@ -109,7 +108,7 @@ export const menuMethods = defineServiceMethods({
       rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
     },
     description:
-      "Pop up the per-panel context menu (back/reload/duplicate/archive/etc.) for the given panel; resolves with the chosen panel action, or null if dismissed.",
+      "Pop up the per-panel context menu (back/reload/duplicate/close/etc.) for the given panel; resolves with the chosen panel action, or null if dismissed.",
     args: z.tuple([z.string(), MenuPositionSchema, PanelContextPresentationSchema.optional()]),
     returns: PanelContextMenuActionSchema.nullable(),
     access: SHOW_MENU_ACCESS,

@@ -8,6 +8,8 @@ import { AuthorityResourceScopeSchema, UnitAuthorityManifestSchema } from "./bui
 import {
   LifecycleKeySchema,
   LifecycleLeaseSchema,
+  PanelReopenResultSchema,
+  RawClosedPanelSchema,
   RawPanelDetailSchema,
   RawPanelTreePageSchema,
   RawPanelTreePathSchema,
@@ -877,6 +879,19 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
   slotCloseOwnedRoots: { ...workspaceStateMethods["slot.closeOwnedRoots"] },
   slotCloseCleanupPage: { ...workspaceStateMethods["slot.closeCleanupPage"] },
   slotCloseCleanupAck: { ...workspaceStateMethods["slot.closeCleanupAck"] },
+  slotClosedRoots: {
+    ...workspaceStateMethods["slot.closedRoots"],
+    returns: z.array(RawClosedPanelSchema),
+  },
+  slotReopenPlan: { ...workspaceStateMethods["slot.reopenPlan"] },
+  slotReopen: {
+    ...workspaceStateMethods["slot.reopen"],
+    returns: PanelReopenResultSchema.extend({
+      slots: z.array(
+        z.object({ slotId: z.string(), entityId: z.string(), source: z.string() }).strict()
+      ),
+    }).strict(),
+  },
   slotGet: { ...workspaceStateMethods["slot.get"], returns: RawSlotRowSchema.nullable() },
   slotHistoryRelative: { ...workspaceStateMethods["slot.historyRelative"] },
   slotHistoryEntry: { ...workspaceStateMethods["slot.historyEntry"] },

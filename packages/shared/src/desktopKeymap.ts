@@ -21,6 +21,7 @@ export type DesktopKeyPlatform = "mac" | "other";
 export type DesktopBindingId =
   | "newPanel"
   | "closePanel"
+  | "reopenClosedPanel"
   | "nextPanel"
   | "previousPanel"
   | "commandPalette"
@@ -75,6 +76,7 @@ interface DesktopBinding {
 const BINDINGS: Record<DesktopBindingId, DesktopBinding> = {
   newPanel: { mac: { primary: "Cmd+T" }, other: { primary: "Ctrl+T" } },
   closePanel: { mac: { primary: "Cmd+W" }, other: { primary: "Ctrl+W" } },
+  reopenClosedPanel: { mac: { primary: "Cmd+Shift+T" }, other: { primary: "Ctrl+Shift+T" } },
   // Cycling the panes in reading order, which is this layout's tab strip.
   //
   // `Cmd+Alt+Right` is what Chrome uses on macOS and is already spent here on

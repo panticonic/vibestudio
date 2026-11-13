@@ -218,6 +218,43 @@ export const EntityRecordSchema = z.object({
   error: z.string().optional(),
 });
 
+export const RawClosedPanelSchema = z
+  .object({
+    slotId: PanelSlotIdSchema,
+    parentSlotId: PanelSlotIdSchema.nullable(),
+    closedAt: z.number().int(),
+    closedCount: z.number().int().positive(),
+    entityId: PanelEntityIdSchema,
+    source: z.string(),
+  })
+  .strict();
+
+export const ClosedPanelSchema = RawClosedPanelSchema.extend({ title: z.string() }).strict();
+
+export const ClosedPanelsInputSchema = z
+  .object({
+    /** Only closes in trees this user owns; omitted means every tree. */
+    ownerUserId: z.string().nullable().optional(),
+    limit: z.number().int().positive().max(50).optional(),
+  })
+  .strict();
+
+export const PanelReopenPlanSchema = z
+  .object({
+    slotId: PanelSlotIdSchema,
+    closedAt: z.number().int(),
+    slots: z.array(z.object({ slotId: PanelSlotIdSchema, entry: SlotHistoryRowSchema }).strict()),
+  })
+  .strict();
+
+export const PanelReopenInputSchema = z
+  .object({ slotId: PanelSlotIdSchema, closedAt: z.number().int() })
+  .strict();
+
+export const PanelReopenResultSchema = z
+  .object({ slotId: PanelSlotIdSchema, reopenedCount: z.number().int().positive() })
+  .strict();
+
 export const RawPanelDetailSchema = z
   .object({
     revision: z.number().int().nonnegative(),
@@ -920,6 +957,83 @@ export const workspaceStateMethods = defineServiceMethods({
     authority: WORKSPACE_STATE_WRITE_POLICY,
     access: { sensitivity: "destructive" },
     returns: z.void(),
+  },
+  "slot.closedRoots": {
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    agentFacing: false,
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale: "Bounded read of reopenable closes, presented with their retained titles",
+    },
+    args: z.tuple([ClosedPanelsInputSchema]),
+    description: "List the closes that can be reopened now, most recent first.",
+    authority: WORKSPACE_STATE_READ_POLICY,
+    access: { sensitivity: "read" },
+    returns: z.array(ClosedPanelSchema),
+  },
+  "slot.reopenPlan": {
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    agentFacing: false,
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale: "Read of the history entries one close retained for reactivation",
+    },
+    args: z.tuple([PanelSlotIdSchema]),
+    description:
+      "Read the slots and current history entries a reopen of this closed root must reactivate.",
+    authority: WORKSPACE_STATE_READ_POLICY,
+    access: { sensitivity: "read" },
+    returns: PanelReopenPlanSchema,
+  },
+  "slot.reopen": {
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    agentFacing: false,
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Reopening a subtree restores the ownership and ancestry identities its close retired",
+    },
+    args: z.tuple([PanelReopenInputSchema]),
+    description:
+      "Atomically reverse one close once every slot's current entity has been reactivated.",
+    authority: contextBoundaryAuthority({
+      service: "workspace-state",
+      method: "slot.reopen",
+      primaryCapability: "workspace.runtime-state.manage",
+      principals: ["user", "code", "host"],
+      operation: "openPanel",
+      targetPath: ["slotId"],
+      tier: "gated",
+    }),
+    access: { sensitivity: "write" },
+    returns: PanelReopenResultSchema,
   },
   "panel.search": {
     website: {

@@ -55,6 +55,10 @@ import type {
   WorkspacePanelCloseCleanupPage,
   WorkspacePanelCloseCleanupPageInput,
   WorkspacePanelCloseResult,
+  WorkspaceClosedPanel,
+  WorkspacePanelReopenPlan,
+  WorkspacePanelReopenResult,
+  WorkspacePanelTreeHistoryRow,
   WorkspacePanelTopologyPage,
   WorkspacePanelTreePageInput,
   WorkspacePanelTopologyPath,
@@ -3070,6 +3074,9 @@ export class WorkspaceDO extends DurableObjectBase {
     // in one transaction, so concurrent patches compose instead of losing keys.
     return this.ctx.storage.transactionSync(() => {
       const slot = this.requireSlot(slotId);
+      if (slot.closed_at !== null) {
+        throw new Error(`Cannot patch state of closed slot: ${slotId}`);
+      }
       if (!slot.current_entry_key) {
         throw new Error(`Slot ${slotId} has no current history entry`);
       }
@@ -3234,7 +3241,11 @@ export class WorkspaceDO extends DurableObjectBase {
         );
         return { closeId, closedCount: pending };
       }
-      const now = Date.now();
+      // A close stamp identifies its close: every slot one close takes down
+      // shares it, and no other close reuses it. Reopen relies on this to
+      // reverse exactly one close without disturbing descendants that were
+      // closed on their own before it.
+      const now = this.nextCloseStamp();
       this.sql.exec(
         `WITH RECURSIVE subtree(slot_id, current_entity_id) AS (
            SELECT slot_id, current_entity_id FROM slots
@@ -3268,12 +3279,181 @@ export class WorkspaceDO extends DurableObjectBase {
             WHERE child.closed_at IS NULL
          )
          UPDATE slots
-            SET closed_at = ?, current_entity_id = NULL, current_entry_key = NULL
+            SET closed_at = ?, current_entity_id = NULL
           WHERE slot_id IN (SELECT slot_id FROM subtree)`,
         slotId,
         now
       );
       return { closeId, closedCount };
+    });
+  }
+
+  private nextCloseStamp(): number {
+    const latest = this.sql
+      .exec(`SELECT MAX(closed_at) AS latest FROM slots`)
+      .one()["latest"] as number | null;
+    return Math.max(Date.now(), (latest ?? 0) + 1);
+  }
+
+  /**
+   * The slots one close took down: its root and every descendant reached
+   * through slots carrying the same close stamp. A descendant closed earlier
+   * on its own carries an earlier stamp and stays closed.
+   */
+  private closedSubtree(slotId: string, closedAt: number): string[] {
+    return this.sql
+      .exec(
+        `WITH RECURSIVE subtree(slot_id, depth) AS (
+           SELECT slot_id, 0 FROM slots WHERE slot_id = ? AND closed_at = ?
+           UNION ALL
+           SELECT child.slot_id, subtree.depth + 1
+             FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
+            WHERE child.closed_at = ?
+         )
+         SELECT slot_id FROM subtree ORDER BY depth, slot_id`,
+        slotId,
+        closedAt,
+        closedAt
+      )
+      .toArray()
+      .map((row) => String((row as { slot_id: string }).slot_id));
+  }
+
+  /** Throw unless `slotId` roots a close that can be reversed now. */
+  private requireReopenableRoot(slotId: string, closedAt?: number): DbSlotRow & { closed_at: number } {
+    const slot = this.requireSlot(slotId);
+    if (slot.closed_at === null) throw new Error(`Slot is not closed: ${slotId}`);
+    if (closedAt !== undefined && slot.closed_at !== closedAt) {
+      throw new Error(`Slot ${slotId} was closed again after the close being reopened`);
+    }
+    if (slot.parent_slot_id !== null) {
+      const parent = this.requireSlot(slot.parent_slot_id);
+      if (parent.closed_at !== null) {
+        throw new Error(`Cannot reopen ${slotId} while its parent ${parent.slot_id} is closed`);
+      }
+    }
+    return slot as DbSlotRow & { closed_at: number };
+  }
+
+  /**
+   * Closes that can be reversed now, most recent first: closed roots whose
+   * parent is open, that retained their current entry, and whose runtime
+   * cleanup has finished.
+   */
+  @schemaRpc()
+  slotClosedRoots(input: { ownerUserId?: string | null; limit?: number }): WorkspaceClosedPanel[] {
+    const limit = Math.max(1, Math.min(50, input.limit ?? 20));
+    const ownerFiltered = Object.prototype.hasOwnProperty.call(input, "ownerUserId");
+    const rows = this.sql
+      .exec(
+        `SELECT s.slot_id, s.parent_slot_id, s.closed_at, h.entity_id, h.source
+           FROM slots s
+           JOIN slot_history h
+             ON h.slot_id = s.slot_id AND h.entry_key = s.current_entry_key
+           LEFT JOIN slots parent ON parent.slot_id = s.parent_slot_id
+          WHERE s.closed_at IS NOT NULL
+            AND (s.parent_slot_id IS NULL OR parent.closed_at IS NULL)
+            AND NOT EXISTS (SELECT 1 FROM panel_close_cleanup c WHERE c.close_id = s.slot_id)
+            ${ownerFiltered ? "AND s.owner_user_id IS ?" : ""}
+          ORDER BY s.closed_at DESC, s.slot_id ASC
+          LIMIT ?`,
+        ...(ownerFiltered ? [input.ownerUserId ?? null] : []),
+        limit
+      )
+      .toArray() as Array<{
+      slot_id: string;
+      parent_slot_id: string | null;
+      closed_at: number;
+      entity_id: string;
+      source: string;
+    }>;
+    return rows.map((row) => ({
+      slotId: row.slot_id as WorkspaceClosedPanel["slotId"],
+      parentSlotId: row.parent_slot_id as WorkspaceClosedPanel["parentSlotId"],
+      closedAt: row.closed_at,
+      closedCount: this.closedSubtree(row.slot_id, row.closed_at).length,
+      entityId: row.entity_id as WorkspaceClosedPanel["entityId"],
+      source: row.source,
+    }));
+  }
+
+  /** The current history entries a reopen of `slotId`'s close must reactivate. */
+  @schemaRpc()
+  slotReopenPlan(slotId: string): WorkspacePanelReopenPlan {
+    return this.ctx.storage.transactionSync(() => {
+      const root = this.requireReopenableRoot(slotId);
+      const pending = this.sql
+        .exec(`SELECT 1 FROM panel_close_cleanup WHERE close_id = ? LIMIT 1`, slotId)
+        .toArray()[0];
+      if (pending) throw new Error(`Close of ${slotId} is still retiring its runtimes`);
+      const slots = this.closedSubtree(slotId, root.closed_at).map((memberId) => {
+        const entry = this.sql
+          .exec(
+            `SELECT h.* FROM slots s
+               JOIN slot_history h ON h.slot_id = s.slot_id AND h.entry_key = s.current_entry_key
+              WHERE s.slot_id = ?`,
+            memberId
+          )
+          .toArray()[0] as DbSlotHistoryRow | undefined;
+        if (!entry) {
+          throw new Error(`Closed slot ${memberId} retained no current entry and cannot reopen`);
+        }
+        return {
+          slotId: memberId as WorkspacePanelReopenPlan["slotId"],
+          entry: entry as WorkspacePanelTreeHistoryRow,
+        };
+      });
+      return {
+        slotId: slotId as WorkspacePanelReopenPlan["slotId"],
+        closedAt: root.closed_at,
+        slots,
+      };
+    });
+  }
+
+  /**
+   * Reverse one close. Every slot it took down must already have its current
+   * entry's incarnation reactivated (runtime.createEntity with the entry key);
+   * the slots then rejoin the tree in one transaction, in their old positions.
+   */
+  @schemaRpc()
+  slotReopen(input: { slotId: string; closedAt: number }): WorkspacePanelReopenResult & {
+    slots: Array<{ slotId: string; entityId: string; source: string }>;
+  } {
+    return this.ctx.storage.transactionSync(() => {
+      const root = this.requireReopenableRoot(input.slotId, input.closedAt);
+      const members = this.closedSubtree(input.slotId, root.closed_at);
+      const slots: Array<{ slotId: string; entityId: string; source: string }> = [];
+      for (const memberId of members) {
+        const entry = this.sql
+          .exec(
+            `SELECT h.* FROM slots s
+               JOIN slot_history h ON h.slot_id = s.slot_id AND h.entry_key = s.current_entry_key
+              WHERE s.slot_id = ?`,
+            memberId
+          )
+          .toArray()[0] as DbSlotHistoryRow | undefined;
+        if (!entry) {
+          throw new Error(`Closed slot ${memberId} retained no current entry and cannot reopen`);
+        }
+        this.assertCompleteActivePanelIncarnation({
+          entryKey: entry.entry_key,
+          entityId: entry.entity_id,
+          source: entry.source,
+          contextId: entry.context_id,
+        });
+        this.sql.exec(
+          `UPDATE slots SET closed_at = NULL, current_entity_id = ? WHERE slot_id = ?`,
+          entry.entity_id,
+          memberId
+        );
+        slots.push({ slotId: memberId, entityId: entry.entity_id, source: entry.source });
+      }
+      return {
+        slotId: input.slotId as WorkspacePanelReopenResult["slotId"],
+        reopenedCount: members.length,
+        slots,
+      };
     });
   }
 

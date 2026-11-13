@@ -328,6 +328,18 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         preparePanelMutation(ctx, "movePanel", String(slotId)),
       "workspace-state.slot.close.contextBoundary": (ctx, [slotId]) =>
         preparePanelMutation(ctx, "close", String(slotId)),
+      // Reopening puts a closed subtree back under its parent: the same
+      // boundary as opening a panel there.
+      "workspace-state.slot.reopen.contextBoundary": async (ctx, [input]) => {
+        const slot = await receiver.slotGet(String((input as { slotId: string }).slotId));
+        const target: PanelAccessPermissionTarget = slot?.parent_slot_id
+          ? await panelTarget(slot.parent_slot_id)
+          : { id: "workspace-root" };
+        return {
+          selections: await preparePanelAccessAuthority(deps.panelAccess, ctx, "openPanel", target),
+          payload: null,
+        };
+      },
       "workspace-state.panel.updateTitle.contextBoundary": (ctx, [slotId]) =>
         preparePanelMutation(ctx, "updatePanelState", String(slotId)),
     },
@@ -515,6 +527,36 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         return result;
       },
       "slot.closeCleanupAck": (_ctx, [slotIds]) => receiver.slotCloseCleanupAck(slotIds),
+      "slot.closedRoots": async (_ctx, [input]) => {
+        const closed = await receiver.slotClosedRoots(input);
+        // Closing removed each slot's binding, but titles are entity-owned and
+        // outlive it; an unavailable projection falls back to the source.
+        const titles =
+          closed.length > 0
+            ? await deps.presentation
+                .titlesForEntities(closed.map((entry) => entry.entityId))
+                .catch((error: unknown) => {
+                  reportProjectionFailure("closed-panel titles", error);
+                  return {} as Record<string, string>;
+                })
+            : {};
+        return closed.map((entry) => ({
+          ...entry,
+          title: titles[entry.entityId] ?? entry.source,
+        }));
+      },
+      "slot.reopenPlan": (_ctx, [slotId]) => receiver.slotReopenPlan(slotId),
+      "slot.reopen": async (_ctx, [input]) => {
+        const { slots, ...result } = await receiver.slotReopen(input);
+        // The entity titles survived the close; rebinding restores them.
+        for (const slot of slots) {
+          project("reopened-slot bind", () =>
+            deps.presentation.bindSlot(slot.slotId, slot.entityId, slot.source, null)
+          );
+        }
+        deps.onSlotStateChanged?.({ kind: "tree" });
+        return result;
+      },
       "panel.search": (_ctx, [query, limit]) =>
         deps.presentation.search(query, limit).then((value) => value.results),
       "panel.sourceUsage": (_ctx, [limit]) => deps.presentation.sourceUsage(limit),

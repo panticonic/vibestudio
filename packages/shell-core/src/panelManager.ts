@@ -738,10 +738,7 @@ export class PanelManager {
             )}`
           );
         } finally {
-          if (this.registry.getPanel(id)) this.registry.removePanel(id);
-          this.currentEntityBySlot.delete(id);
-          this.currentEntitySourceBySlot.delete(id);
-          this.runtimePanelLru.delete(id);
+          this.forgetClosedSlots([id]);
         }
       }
       if (acknowledged.length > 0) {
@@ -750,6 +747,21 @@ export class PanelManager {
       cursor = page.nextCursor ?? undefined;
     } while (cursor);
     return cleanedCount;
+  }
+
+  /**
+   * Drop local projections of slots the server has closed. Closes made by any
+   * other client or runtime reach this host only as tree invalidations, so the
+   * registry must forget them here as well as after its own close drains.
+   */
+  forgetClosedSlots(slotIds: readonly string[]): void {
+    for (const id of slotIds) {
+      if (this.registry.getPanel(id)) this.registry.removePanel(id);
+      const slotId = id as PanelSlotId;
+      this.currentEntityBySlot.delete(slotId);
+      this.currentEntitySourceBySlot.delete(slotId);
+      this.runtimePanelLru.delete(slotId);
+    }
   }
 
   /**

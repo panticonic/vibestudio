@@ -1644,7 +1644,7 @@ describe("WorkspaceDO slot operations", () => {
     expect(instance.slotGet("child")?.parent_slot_id).toBe("root");
   });
 
-  it("slotClose marks the slot closed and clears current pointers", () => {
+  it("slotClose marks the slot closed, clears its entity, and retains its entry for reopen", () => {
     const rec = instance.entityActivate(panelInput({ key: "close-1" }));
     instance.slotCreate({
       slotId: "slot-c",
@@ -1659,7 +1659,109 @@ describe("WorkspaceDO slot operations", () => {
     instance.slotClose("slot-c");
     const slot = instance.slotGet("slot-c");
     expect(slot?.closed_at).toBeTypeOf("number");
-    expect(slot?.current_entry_key).toBeNull();
+    expect(slot?.current_entity_id).toBeNull();
+    expect(slot?.current_entry_key).toBe("close-1");
+    expect(() => instance.slotPatchCurrentStateArgs("slot-c", {}, {
+      entryKey: "close-1",
+      activeBuildKey: null,
+    })).toThrow(/closed slot/);
+  });
+
+  describe("reopen", () => {
+    const openSlot = (slotId: string, parentSlotId: string | null) => {
+      const entity = instance.entityActivate(preparedPanelInput({ key: `${slotId}-entry` }));
+      instance.slotCreate({
+        slotId,
+        parentSlotId,
+        initialEntry: {
+          entryKey: entity.key,
+          entityId: entity.id,
+          source: SOURCE,
+          contextId: "ctx-1",
+        },
+      });
+      return entity;
+    };
+    /** What runtime.retireEntity + its cleanup do to the closed slots' entities. */
+    const retireClosed = (closeId: string) => {
+      const page = instance.slotCloseCleanupPage({ closeId, limit: 200 });
+      for (const { entityId } of page.items) {
+        const retired = entityId ? instance.entityRetire(entityId) : null;
+        if (retired) instance.entityCleanupComplete(retired.id, retired.authoritySessionId ?? "");
+      }
+      instance.slotCloseCleanupAck(page.items.map(({ slotId }) => slotId));
+    };
+    /** What runtime.createEntity does for each planned entry before slot.reopen. */
+    const reactivate = (slotId: string) => {
+      for (const { entry } of instance.slotReopenPlan(slotId).slots) {
+        instance.entityActivate(preparedPanelInput({ key: entry.entry_key }));
+      }
+    };
+    const openIds = () =>
+      instance
+        .panelTreePage({ group: { kind: "roots", ownerUserId: null }, limit: 50 })
+        .nodes.map((node) => node.slotId);
+
+    it("reverses exactly one close and leaves an earlier, separate close closed", () => {
+      openSlot("root", null);
+      openSlot("kept-child", "root");
+      openSlot("grandchild", "kept-child");
+      openSlot("closed-first", "root");
+      instance.slotClose("closed-first");
+      retireClosed("closed-first");
+      instance.slotClose("root");
+      retireClosed("root");
+
+      const plan = instance.slotReopenPlan("root");
+      expect(plan.slots.map((slot) => slot.slotId)).toEqual(["root", "kept-child", "grandchild"]);
+      expect(() => instance.slotReopen({ slotId: "root", closedAt: plan.closedAt })).toThrow(
+        /not active and complete/
+      );
+
+      reactivate("root");
+      expect(instance.slotReopen({ slotId: "root", closedAt: plan.closedAt })).toMatchObject({
+        slotId: "root",
+        reopenedCount: 3,
+      });
+      expect(openIds()).toEqual(["root"]);
+      expect(instance.panelTreeDetail("grandchild")?.slot.parent_slot_id).toBe("kept-child");
+      expect(instance.slotGet("closed-first")?.closed_at).toBeTypeOf("number");
+      expect(instance.slotClosedRoots({}).map((entry) => entry.slotId)).toEqual(["closed-first"]);
+    });
+
+    it("lists reopenable closes most recent first, hiding those under a closed parent", () => {
+      openSlot("a", null);
+      openSlot("a-child", "a");
+      openSlot("b", null);
+      instance.slotClose("a-child");
+      retireClosed("a-child");
+      instance.slotClose("b");
+      retireClosed("b");
+      expect(instance.slotClosedRoots({}).map((entry) => [entry.slotId, entry.closedCount])).toEqual([
+        ["b", 1],
+        ["a-child", 1],
+      ]);
+      const closes = instance.slotClosedRoots({});
+      expect(closes[0]!.closedAt).toBeGreaterThan(closes[1]!.closedAt);
+
+      instance.slotClose("a");
+      retireClosed("a");
+      expect(instance.slotClosedRoots({}).map((entry) => entry.slotId)).toEqual(["a", "b"]);
+      expect(() => instance.slotReopenPlan("a-child")).toThrow(/parent a is closed/);
+    });
+
+    it("refuses while the close is still retiring its runtimes, or after a newer close", () => {
+      openSlot("p", null);
+      instance.slotClose("p");
+      expect(instance.slotClosedRoots({})).toEqual([]);
+      expect(() => instance.slotReopenPlan("p")).toThrow(/still retiring/);
+      retireClosed("p");
+      const { closedAt } = instance.slotReopenPlan("p");
+      expect(() => instance.slotReopen({ slotId: "p", closedAt: closedAt - 1 })).toThrow(
+        /closed again/
+      );
+      expect(() => instance.slotReopenPlan("never-closed-or-missing")).toThrow(/not found/);
+    });
   });
 
   it("closes a subtree deeper than one thousand levels and pages cleanup in bounded batches", () => {

@@ -50,10 +50,9 @@ export type PanelCommandId =
   | "add-child"
   | "add-child-below"
   | "open-in-new-column"
-  | "close-pane"
   | "toggle-pin"
   | "unload"
-  | "archive";
+  | "close";
 
 /** Canonical desktop tree/breadcrumb context-menu grouping. */
 export const PANEL_CONTEXT_MENU_SECTIONS = [
@@ -65,7 +64,7 @@ export const PANEL_CONTEXT_MENU_SECTIONS = [
   ["command-agent"],
   ["open-child-beside", "add-child", "add-child-below", "open-in-new-column", "duplicate"],
   ["copy-address", "open-external", "copy-panel-id"],
-  ["toggle-pin", "close-pane", "archive"],
+  ["toggle-pin", "close"],
 ] as const satisfies ReadonlyArray<ReadonlyArray<PanelCommandId>>;
 
 export interface PanelCommandContext {
@@ -292,13 +291,6 @@ export function getPanelCommandDefinitions(
       enabled: Boolean(chrome),
     },
     {
-      id: "close-pane",
-      label: "Close Pane",
-      description: "Close this local view without archiving the panel",
-      visible: Boolean(context.presentation),
-      enabled: Boolean(context.presentation),
-    },
-    {
       id: "toggle-pin",
       label: context.isPinned ? "Unpin Panel" : "Pin Panel",
       description: "Pinned panels stay loaded in the background",
@@ -324,9 +316,9 @@ export function getPanelCommandDefinitions(
       enabled: Boolean(chrome),
     },
     {
-      id: "archive",
-      label: "Archive Panel",
-      description: "Remove this panel and its descendants from the active tree",
+      id: "close",
+      label: "Close Panel",
+      description: "Close this panel and its descendants; Reopen Closed Panel brings them back",
       shortcut: desktopNeutralShortcutLabel("closePanel"),
       visible: true,
       enabled: Boolean(chrome),

@@ -4637,6 +4637,50 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotClosedRoots",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "slotClosedRoots",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.inspect",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotCloseOwnedRoots",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
@@ -4983,6 +5027,94 @@
       "r3b": {
         "review": "owner-serialized-current-panel-state-patch",
         "change": "Replaces whole stateArgs updates with an RFC 7386 merge patch serialized and schema-validated by the Workspace owner. Preserves runtime-state.manage and the prepared context boundary, rejects an entry or active-build conflict, and grants no navigation, cross-owner access, or website authority."
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotReopen",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "slotReopen",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotReopenPlan",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "slotReopenPlan",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "user"
+      ],
+      "sensitivity": "read",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.inspect",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -38543,6 +38675,52 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:workspace-state.slot.closedRoots",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "slot.closedRoots",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "workspace-state.builtin-rpc",
+      "reviewRationale": "Bounded read of reopenable closes, presented with their retained titles",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspace-state.slot.closedRoots"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workspace-state.slot.closedRoots),allOf(capability(user,service:workspace-state.slot.closedRoots),workspace-member),allOf(capability(code,service:workspace-state.slot.closedRoots),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:workspace-state.slot.closedRoots",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:workspace-state.slot.closeOwnedRoots",
       "rpcPlane": "host-service",
       "owner": "workspace-state",
@@ -39086,6 +39264,143 @@
         "review": "receiver-owned-context-boundary-principals",
         "change": "Prepared context-boundary requirements now derive from the receiver-declared principals rather than a hard-coded branch set. Private workspace-state methods retain their closed website eligibility; this does not grant website access to panel state."
       },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.slot.reopen",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "slot.reopen",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "workspace-state.identity",
+      "reviewRationale": "Reopening a subtree restores the ownership and ancestry identities its close retired",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "workspace.runtime-state.manage"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"workspace.runtime-state.manage\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"workspace.runtime-state.manage\"}]}",
+      "r3b": {
+        "review": "reopen-is-open-panel-under-parent",
+        "change": "Reverses one close of a subtree the caller could see. Prepared as the openPanel context boundary on the closed root's parent (workspace root for a closed root), the same gate slot.create applies; it restores only slots that close took down, after their exact retained history entities were reactivated, and grants no new identity or context."
+      },
+      "capability": "service:workspace-state.slot.reopen",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.slot.reopen#capability:context.boundary",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "slot.reopen",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "residency": "identity",
+      "mechanismFamily": "workspace-state.identity",
+      "reviewRationale": "Reopening a subtree restores the ownership and ancestry identities its close retired",
+      "capability": "context.boundary",
+      "resourceDerivation": {
+        "kind": "prepared",
+        "resolver": "workspace-state.slot.reopen.contextBoundary"
+      },
+      "authorityPrincipals": [
+        "code",
+        "host",
+        "session",
+        "user"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "schema-owned-authority-preparation"
+      ],
+      "currentOutcomes": {
+        "allowed": "prepared authority leaf selected and satisfied",
+        "denied": "missing prepared authority leaf fails before handler entry"
+      },
+      "predicates": [
+        "live-session",
+        "exact-prepared-resource",
+        "registered-preparer"
+      ],
+      "r3aRequirement": "{\"kind\":\"any\",\"requirements\":[{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"user\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"code\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"all\",\"requirements\":[{\"kind\":\"capability\",\"principal\":\"session\",\"capability\":\"context.boundary\"},{\"kind\":\"relationship\",\"name\":\"workspace-member\"}]},{\"kind\":\"capability\",\"principal\":\"host\",\"capability\":\"context.boundary\"}]}",
+      "r3b": {
+        "review": "schema-owned-prepared-leaf",
+        "change": null
+      },
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:workspace-state.slot.reopenPlan",
+      "rpcPlane": "host-service",
+      "owner": "workspace-state",
+      "method": "slot.reopenPlan",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "transport",
+      "mechanismFamily": "workspace-state.builtin-rpc",
+      "reviewRationale": "Read of the history entries one close retained for reactivation",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:workspace-state.slot.reopenPlan"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:workspace-state.slot.reopenPlan),allOf(capability(user,service:workspace-state.slot.reopenPlan),workspace-member),allOf(capability(code,service:workspace-state.slot.reopenPlan),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:workspace-state.slot.reopenPlan",
       "parityAssertion": "generated-census:host-authority"
     },
     {

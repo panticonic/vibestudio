@@ -427,7 +427,7 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
 
     // Server authority closes the subtree + emits; the desktop reactively tears
     // down views/leases for removed panels (tree invalidation →
-    // pruneRemovedPanelLocally).
+    // PanelManager.forgetClosedSlots).
     await this.serverClient.call("workspace-state", "slot.close", [panelId]);
 
     if (siblingToFocus) {

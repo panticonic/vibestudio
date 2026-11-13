@@ -731,21 +731,21 @@ test.describe("Multi-column panel layout", () => {
           .toBe(true);
       });
 
-      // ---- Scenario 4: close-pane never archives ------------------------
-      await test.step("closing a pane from its local rail keeps the panel in the tree", async () => {
+      // ---- Scenario 4: a pane's × closes its panel, and Undo reopens it ---
+      await test.step("closing a pane's panel removes it from the tree until Undo", async () => {
         const surfaces = await getSurfaceRects(testApp!, wcId);
         const secondSurface = surfaces.find((surface) => surface.panelId === panel2);
         expect(secondSurface).toBeDefined();
 
-        // Every pane exposes its own close action while another logical pane
-        // would survive; no focus round-trip through the global titlebar.
+        // Every pane carries its own close; no focus round-trip through the
+        // global titlebar.
         expect(
           await shellEval<boolean>(
             testApp!,
             wcId,
             `(() => {
                const frame = document.querySelector('[data-pane-id=${JSON.stringify(secondSurface!.paneId)}]');
-               const button = frame?.querySelector('button[aria-label="Close pane"]');
+               const button = frame?.querySelector('button[aria-label="Close panel"]');
                if (!(button instanceof HTMLElement)) return false;
                button.click();
                return true;
@@ -756,16 +756,54 @@ test.describe("Multi-column panel layout", () => {
         await expect
           .poll(async () => (await getNativePanelSlotDebugInfo(testApp!)).length, POLL)
           .toBe(1);
+        // Closing is tab-like: the panel leaves the tree, and the surviving
+        // single pane still offers its own close.
+        await expect
+          .poll(async () => (await getPanelTree(testApp!)).some((panel) => panel.id === panel2), POLL)
+          .toBe(false);
+        const survivingPaneId = (await getSurfaceRects(testApp!, wcId))[0]?.paneId;
+        expect(survivingPaneId).toBeTruthy();
         expect(
-          await shellEval<number>(
+          await shellEval<boolean>(
             testApp!,
             wcId,
-            `document.querySelectorAll('button[aria-label="Close pane"]').length`
+            `Boolean(document.querySelector('[data-pane-id=${JSON.stringify(survivingPaneId)}]')
+               ?.querySelector('button[aria-label="Close panel"]'))`
           )
-        ).toBe(0);
-        // The panel is still in the tree — pane close is layout-only, never archive.
-        const tree = await getPanelTree(testApp!);
-        expect(tree.some((panel) => panel.id === panel2)).toBe(true);
+        ).toBe(true);
+
+        // The close leaves one persistent Undo notice; it restores the panel
+        // with its identity.
+        await expect
+          .poll(
+            () =>
+              shellEval<boolean>(
+                testApp!,
+                wcId,
+                `(() => {
+                   const button = document.querySelector('button[aria-label="Undo"]');
+                   if (!(button instanceof HTMLElement)) return false;
+                   button.click();
+                   return true;
+                 })()`
+              ),
+            POLL
+          )
+          .toBe(true);
+        await expect
+          .poll(async () => (await getPanelTree(testApp!)).some((panel) => panel.id === panel2), POLL)
+          .toBe(true);
+        await expect
+          .poll(
+            () =>
+              shellEval<number>(
+                testApp!,
+                wcId,
+                `document.querySelectorAll('button[aria-label="Undo"]').length`
+              ),
+            POLL
+          )
+          .toBe(0);
         expect(await shellErrorOverlayCount(testApp!, wcId)).toBe(0);
       });
 

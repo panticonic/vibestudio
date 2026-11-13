@@ -7,7 +7,7 @@ describe("PanelContextMenuActionSchema", () => {
       "open-child-beside",
       "add-child-below",
       "open-in-new-column",
-      "close-pane",
+      "close",
     ]) {
       expect(PanelContextMenuActionSchema.parse(action)).toBe(action);
     }

@@ -377,6 +377,8 @@ export const PANEL_TREE_MEMBERS = [
   "parent",
   "navigate",
   "navigateHistory",
+  "closed",
+  "reopen",
 ];
 
 const PANEL_TREE_GROUP_SCHEMA = {
@@ -420,7 +422,7 @@ const PANEL_TREE_NODE_SCHEMA = {
 const PANEL_HANDLE_SCHEMA = {
   type: "object",
   description:
-    "Live panel handle. `id` is the durable panel-tree slot id; PanelHandle has no separate `slotId` field. Scalar fields are last-observed descriptors; methods include observe(), stateArgs, focus(), archive(), and CDP automation.",
+    "Live panel handle. `id` is the durable panel-tree slot id; PanelHandle has no separate `slotId` field. Scalar fields are last-observed descriptors; methods include observe(), stateArgs, focus(), archive() (reversible with panelTree.reopen(id)), and CDP automation.",
   properties: {
     id: { type: "string" },
     title: { type: "string" },
@@ -734,6 +736,51 @@ export const PANEL_TREE_METHOD_CATALOG = {
       ],
       minItems: 2,
       maxItems: 3,
+    },
+  },
+  closed: {
+    signature:
+      "closed(input?: { ownerUserId?: string | null; limit?: number }): Promise<ClosedPanel[]>",
+    description:
+      "List closes that reopen() can reverse now, most recent first: { slotId, parentSlotId, closedAt, closedCount, title, source }. A close under a still-closed parent is listed only once that parent is reopened.",
+    argumentNames: ["input"],
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        {
+          type: "object",
+          properties: {
+            ownerUserId: { type: ["string", "null"] },
+            limit: { type: "number", maximum: 50 },
+          },
+          additionalProperties: false,
+        },
+      ],
+      maxItems: 1,
+    },
+  },
+  reopen: {
+    signature: "reopen(id: string, options?: PanelWaitOptions): Promise<PanelHandle>",
+    description:
+      "Reverse the close of a panel (from handle.archive() or the shell's Close): the panel and every descendant that close took down return to their old place with their history, state, and context.",
+    argumentNames: ["id", "options"],
+    argsSchema: {
+      type: "array",
+      prefixItems: [
+        { type: "string", description: "Slot id of the closed panel, as listed by closed()." },
+        {
+          type: "object",
+          properties: {
+            signal: {
+              type: "object",
+              description: "AbortSignal that cancels readiness observation after the reopen commits.",
+            },
+          },
+          additionalProperties: false,
+        },
+      ],
+      minItems: 1,
+      maxItems: 2,
     },
   },
 };

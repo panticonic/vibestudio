@@ -1098,6 +1098,182 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           }
         }
       },
+      "slot.closedRoots": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
+        "capability": "workspace.runtime-state.inspect",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "user",
+          "code",
+          "host"
+        ],
+        "presentation": {
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
+          "capability": "workspace.runtime-state.inspect",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "slot.reopenPlan": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
+        "capability": "workspace.runtime-state.inspect",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "user",
+          "code",
+          "host"
+        ],
+        "presentation": {
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
+          "capability": "workspace.runtime-state.inspect",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "slot.reopen": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "user",
+          "code",
+          "host"
+        ],
+        "presentation": {
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        },
+        "prepared": {
+          "resolver": "workspace-state.slot.reopen.contextBoundary",
+          "contextBoundary": {
+            "operation": "openPanel",
+            "targetArgument": 0,
+            "targetPath": [
+              "slotId"
+            ]
+          },
+          "leaves": [
+            {
+              "capability": "context.boundary",
+              "requirement": {
+                "kind": "any",
+                "requirements": [
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "user",
+                        "capability": "context.boundary"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "code",
+                        "capability": "context.boundary"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "session",
+                        "capability": "context.boundary"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
+                  }
+                ]
+              },
+              "tier": "gated"
+            }
+          ]
+        },
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
       "panel.search": {
         "website": {
           "kind": "closed",
@@ -3587,6 +3763,182 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
             "domain": "automation",
             "verb": "manage"
           }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "slotClosedRoots": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
+        "capability": "workspace.runtime-state.inspect",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "user",
+          "code",
+          "host"
+        ],
+        "presentation": {
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
+          "capability": "workspace.runtime-state.inspect",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "slotReopenPlan": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
+        "capability": "workspace.runtime-state.inspect",
+        "tier": "open",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "user",
+          "code",
+          "host"
+        ],
+        "presentation": {
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        },
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+          },
+          "capability": "workspace.runtime-state.inspect",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "slotReopen": {
+        "website": {
+          "kind": "closed",
+          "reason": "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "user",
+          "code",
+          "host"
+        ],
+        "presentation": {
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        },
+        "prepared": {
+          "resolver": "workspace-state.slot.reopen.contextBoundary",
+          "contextBoundary": {
+            "operation": "openPanel",
+            "targetArgument": 0,
+            "targetPath": [
+              "slotId"
+            ]
+          },
+          "leaves": [
+            {
+              "capability": "context.boundary",
+              "requirement": {
+                "kind": "any",
+                "requirements": [
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "user",
+                        "capability": "context.boundary"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "code",
+                        "capability": "context.boundary"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "all",
+                    "requirements": [
+                      {
+                        "kind": "capability",
+                        "principal": "session",
+                        "capability": "context.boundary"
+                      },
+                      {
+                        "kind": "relationship",
+                        "name": "workspace-member"
+                      }
+                    ]
+                  },
+                  {
+                    "kind": "capability",
+                    "principal": "host",
+                    "capability": "context.boundary"
+                  }
+                ]
+              },
+              "tier": "gated"
+            }
+          ]
         },
         "effect": {
           "kind": "host-capability",

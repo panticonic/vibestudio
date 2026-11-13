@@ -53,7 +53,7 @@ describe("panelCommands", () => {
       transition: "reload",
       typed: false,
     });
-    expect(getBrowserNavigationIntentForCommand("archive")).toBeNull();
+    expect(getBrowserNavigationIntentForCommand("close")).toBeNull();
 
     expect(
       getBrowserNavigationIntentForAddressAction({
@@ -99,7 +99,7 @@ describe("panelCommands", () => {
     expect(commands.map((command) => command.id)).toContain("forward");
     expect(commands.map((command) => command.id)).not.toContain("back");
     expect(commands.map((command) => command.id)).not.toContain("open-external");
-    expect(commands.find((command) => command.id === "archive")?.shortcut).toBe("Cmd/Ctrl+W");
+    expect(commands.find((command) => command.id === "close")?.shortcut).toBe("Cmd/Ctrl+W");
     expect(commands.find((command) => command.id === "copy-address")?.description).toBe(
       "Copy this panel's address"
     );
@@ -131,7 +131,6 @@ describe("panelCommands", () => {
     expect(commands.find((command) => command.id === "open-in-new-column")?.label).toBe(
       "Move Pane to New Column"
     );
-    expect(commands.find((command) => command.id === "close-pane")?.enabled).toBe(true);
 
     const contextIds = PANEL_CONTEXT_MENU_SECTIONS.flat();
     expect(contextIds.filter((id) => id.includes("reload"))).toEqual(["reload-panel"]);

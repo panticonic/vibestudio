@@ -9117,6 +9117,26 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "workspace-state.slot.closedRoots": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale: "Bounded read of reopenable closes, presented with their retained titles",
+    },
+    capability: "workspace.runtime-state.inspect",
+    presentation: {
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
+  },
   "workspace-state.slot.closeOwnedRoots": {
     tier: {
       tier: "gated",
@@ -9282,6 +9302,47 @@ export const HOST_AUTHORITY_METHODS = {
       authorityCategory: {
         domain: "automation",
         verb: "manage",
+      },
+    },
+  },
+  "workspace-state.slot.reopen": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Reopening a subtree restores the ownership and ancestry identities its close retired",
+    },
+    capability: "workspace.runtime-state.manage",
+    presentation: {
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
+  "workspace-state.slot.reopenPlan": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale: "Read of the history entries one close retained for reactivation",
+    },
+    capability: "workspace.runtime-state.inspect",
+    presentation: {
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
       },
     },
   },
@@ -9656,6 +9717,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "workspace-state.slot.create": ["context.boundary"],
   "workspace-state.slot.move": ["context.boundary"],
   "workspace-state.slot.patchCurrentStateArgs": ["context.boundary"],
+  "workspace-state.slot.reopen": ["context.boundary"],
   "workspace.applyPreparedConfig": ["workspace.config.apply"],
 } as const satisfies Record<string, readonly string[]>;
 

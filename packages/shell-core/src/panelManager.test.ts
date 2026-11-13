@@ -513,6 +513,20 @@ function makeManagerDeps(workspacePath: string) {
 }
 
 describe("PanelManager", () => {
+  it("forgets slots another client closed when the server reports their removal", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test" });
+    const { deps } = makeManagerDeps("/unused");
+    const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
+    const kept = await manager.create("panels/chat", { addAsRoot: true, isRoot: true });
+    const closed = await manager.create("panels/chat", { addAsRoot: true, isRoot: true });
+    expect(registry.getPanel(closed.panelId)).toBeDefined();
+
+    manager.forgetClosedSlots([closed.panelId, "never-cached"]);
+
+    expect(registry.getPanel(closed.panelId)).toBeUndefined();
+    expect(registry.getPanel(kept.panelId)).toBeDefined();
+  });
+
   it("retains late exact metadata for lifecycle titles without replacing durable custom titles", async () => {
     const sourceRegistry = new PanelRegistry({ workspaceId: "workspace-test" });
     const { deps } = makeManagerDeps("/unused");

@@ -463,6 +463,7 @@ export function createDesktopWorkspaceRuntime(deps: {
     onCredentialCaptureRequest: deps.onCredentialCaptureRequest,
     onPanelTreeInvalidated: (payload) => {
       latestTree = payload;
+      controller.core.panelManager.forgetClosedSlots(payload.removedSlotIds);
     },
   });
   const watch = createServerEventSubscriptionBridge({

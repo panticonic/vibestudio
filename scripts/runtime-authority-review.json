@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:61a076a13d49698fbc82db52079d4c663ecf28d1a34cf35a297b20eb67826409",
+  "censusDigest": "sha256:6007e465c8d2ee16c854441f0725de5cb78613072bd48cc8e309ac387eeb8b7a",
   "decisions": {
     "host:terminalApps.launch": {
       "review": "single-prepared-terminal-program-consent",
@@ -1932,6 +1932,10 @@
     "host:view.setBrowserDataSurface": {
       "review": "protected-browser-data-settings-layout",
       "change": "Allows only the authenticated panel-hosting client to place an already registered workspace Browser data view inside Settings. The receiver checks the live client capability and derives protected storage from the registered desktop owner; supplied layout, theme, and subsection carry no protected data. Ordinary panels and websites cannot present the view or read its values, and no gated browser-vault authority is widened."
+    },
+    "host:workspace-state.slot.reopen": {
+      "review": "reopen-is-open-panel-under-parent",
+      "change": "Reverses one close of a subtree the caller could see. Prepared as the openPanel context boundary on the closed root's parent (workspace root for a closed root), the same gate slot.create applies; it restores only slots that close took down, after their exact retained history entities were reactivated, and grants no new identity or context."
     }
   },
   "version": 1

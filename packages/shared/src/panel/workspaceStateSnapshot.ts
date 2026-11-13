@@ -56,6 +56,46 @@ export interface WorkspacePanelCloseResult {
   closedCount: number;
 }
 
+/**
+ * One close that can be undone now. A close is identified by its root slot and
+ * its `closedAt` stamp, which is unique per close operation. It is reopenable
+ * while its root's parent is open (or it closed a root).
+ */
+export interface WorkspaceClosedPanel {
+  slotId: PanelSlotId;
+  parentSlotId: PanelSlotId | null;
+  closedAt: number;
+  /** Slots this close took down, the root included. */
+  closedCount: number;
+  /** The root's current entry when it closed. */
+  entityId: PanelEntityId;
+  source: string;
+}
+
+/** A closed panel as presented to shells: the raw close plus its display title. */
+export interface WorkspacePresentedClosedPanel extends WorkspaceClosedPanel {
+  title: string;
+}
+
+/** What reopening one close must reactivate before the close can be reversed. */
+export interface WorkspacePanelReopenPlan {
+  slotId: PanelSlotId;
+  closedAt: number;
+  /** Every slot the close took down, root first, each with its current history entry. */
+  slots: Array<{ slotId: PanelSlotId; entry: WorkspacePanelTreeHistoryRow }>;
+}
+
+export interface WorkspacePanelReopenInput {
+  slotId: PanelSlotId;
+  /** The close being reversed; a later close of the same slot is a different close. */
+  closedAt: number;
+}
+
+export interface WorkspacePanelReopenResult {
+  slotId: PanelSlotId;
+  reopenedCount: number;
+}
+
 export interface WorkspacePanelCloseCleanupPage {
   items: Array<{ slotId: PanelSlotId; entityId: PanelEntityId | null }>;
   nextCursor: string | null;
