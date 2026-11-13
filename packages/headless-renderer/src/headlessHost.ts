@@ -114,9 +114,9 @@ export class HeadlessHost implements PanelHost {
       this.handleRuntimeLeaseChanged(payload as PanelRuntimeLeaseChangedEvent);
     });
     this.stopContextEvents = this.events.on("runtime:contextRemoved", ({ contextId }) => {
-      this.intentQueue = this.intentQueue
-        .then(() => this.pages?.retireContext(contextId))
-        .catch((error) => log.warn(`context ${contextId} retirement failed: ${String(error)}`));
+      this.serialize(async () => this.pages?.retireContext(contextId)).catch((error) =>
+        log.warn(`context ${contextId} retirement failed: ${String(error)}`)
+      );
     });
     await this.events.subscribeAll(["panel:runtimeLeaseChanged", "runtime:contextRemoved"]);
     connection.onResubscribe(async () => {
@@ -434,7 +434,7 @@ export class HeadlessHost implements PanelHost {
         hostOperation: (action, args) => this.handleHostOperation(action, args),
         detach: (targetId) => this.pages!.detachRelay(targetId),
         registerRejected: (targetId, reason) => {
-          void this.releaseAndUnload(targetId, `register rejected: ${reason}`);
+          this.releaseInQueue(targetId, `register rejected: ${reason}`);
           log.warn(`dropped panel ${targetId} after register rejection (${reason})`);
         },
       },
@@ -666,27 +666,47 @@ export class HeadlessHost implements PanelHost {
       }
     }
     this.enqueueIntents(intents);
-    this.intentQueue = this.intentQueue.then(() =>
+    await this.serialize(async () =>
       this.pages?.reconcileContextOwners(owners.contexts, observedContexts)
     );
-    await this.intentQueue;
+  }
+
+  /**
+   * Run a host side effect after every earlier one has settled. The task's
+   * own outcome goes to its caller; a failure never blocks later tasks.
+   */
+  private serialize<T>(task: () => Promise<T>): Promise<T> {
+    const run = this.intentQueue.then(task);
+    this.intentQueue = run.then(
+      () => undefined,
+      () => undefined
+    );
+    return run;
+  }
+
+  /** Release a panel in queue order; nobody awaits it, so failures are logged. */
+  private releaseInQueue(slotId: string, why: string): void {
+    this.serialize(() => this.releaseAndUnload(slotId, why)).catch((error) =>
+      log.warn(`releasing panel ${slotId} (${why}) failed: ${String(error)}`)
+    );
   }
 
   /** Serialize host side effects; lease ownership itself advances immediately. */
   private enqueueIntents(intents: LeaseIntent[]): void {
-    this.intentQueue = this.intentQueue.then(async () => {
-      for (const intent of intents) {
+    for (const intent of intents) {
+      this.serialize(async () => {
         try {
           await this.processIntent(intent);
         } catch (error) {
-          if (intent.kind === "load" && !this.isCurrentLoadIntent(intent)) continue;
+          if (intent.kind === "load" && !this.isCurrentLoadIntent(intent)) return;
           log.warn(`intent ${intent.kind} for ${intent.slotId} failed: ${String(error)}`);
-          if (intent.kind === "load") {
-            await this.releaseAndUnload(intent.slotId, "load failed");
-          }
+          // Release before any later intent runs, so it cannot drop a newer lease.
+          if (intent.kind === "load") await this.releaseAndUnload(intent.slotId, "load failed");
         }
-      }
-    });
+      }).catch((error) =>
+        log.warn(`releasing panel ${intent.slotId} after its failed load failed: ${String(error)}`)
+      );
+    }
   }
 
   private isCurrentLoadIntent(intent: Extract<LeaseIntent, { kind: "load" }>): boolean {
@@ -789,7 +809,9 @@ export class HeadlessHost implements PanelHost {
           lease.runtimeEntityId,
           lease.connectionId,
         ])
-        .catch(() => undefined);
+        .catch((error: unknown) =>
+          log.warn(`server did not take back panel ${slotId}'s lease: ${String(error)}`)
+        );
     }
   }
 
@@ -803,7 +825,7 @@ export class HeadlessHost implements PanelHost {
       hasRetentionIntent: () => false,
       isKeepLoaded: this.gcIsKeepLoaded,
     });
-    for (const slotId of victims) void this.releaseAndUnload(slotId, "idle");
+    for (const slotId of victims) this.releaseInQueue(slotId, "idle");
 
     if (this.config.idleExitMs && this.config.idleExitMs > 0) {
       if (this.tracker.heldSlots().length === 0) {

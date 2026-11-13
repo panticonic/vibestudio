@@ -394,6 +394,54 @@ describe("HeadlessHost lifecycle guards", () => {
     expect(releaseAndUnload).toHaveBeenCalledWith(slotId, "load failed");
   });
 
+  it("keeps processing intents after releasing a failed load also fails", async () => {
+    const host = new HeadlessHost(config());
+    const tracker = new LeaseTracker("headless-test");
+    const bad = asPanelSlotId("panel:tree/bad");
+    tracker.reconcile({
+      version: { epoch: "boot", counter: 1 },
+      leases: [
+        {
+          slotId: bad,
+          runtimeEntityId: asPanelEntityId("panel:nav-bad"),
+          clientSessionId: "headless-test",
+          hostConnectionId: "headless-test",
+          connectionId: "lease-bad",
+          holderLabel: "Headless",
+          platform: "headless",
+          supportsCdp: true,
+          loadOnLeaseAssignment: true,
+          acquiredAt: 1,
+        },
+      ],
+    });
+    const processed: string[] = [];
+    const processIntent = vi.fn(async (intent: { slotId: string }) => {
+      if (intent.slotId === bad) throw new Error("load failed");
+      processed.push(intent.slotId);
+    });
+    const releaseAndUnload = vi.fn(async () => {
+      throw new Error("page already gone");
+    });
+    Object.assign(host as unknown as Record<string, unknown>, {
+      tracker,
+      processIntent,
+      releaseAndUnload,
+      intentQueue: Promise.resolve(),
+    });
+    const enqueue = (intents: unknown[]) =>
+      (host as unknown as { enqueueIntents(intents: unknown[]): void }).enqueueIntents(intents);
+
+    enqueue([
+      { kind: "load", slotId: bad, runtimeEntityId: "panel:nav-bad", connectionId: "lease-bad" },
+    ]);
+    enqueue([{ kind: "unload", slotId: "panel:tree/next" }]);
+    await (host as unknown as { intentQueue: Promise<void> }).intentQueue;
+
+    expect(releaseAndUnload).toHaveBeenCalledWith(bad, "load failed");
+    expect(processed).toEqual(["panel:tree/next"]);
+  });
+
   it("advances lease identity immediately while older host effects are queued", () => {
     const host = new HeadlessHost(config());
     const tracker = new LeaseTracker("headless-test");
@@ -534,7 +582,7 @@ describe("HeadlessHost lifecycle guards", () => {
     expect(releaseAndUnload).toHaveBeenCalledWith(freeNew, "panel cap");
   });
 
-  it("idle-unloads stale panels via the shared selector but exempts keepLoaded ones", () => {
+  it("idle-unloads stale panels via the shared selector but exempts keepLoaded ones", async () => {
     const host = new HeadlessHost(config()); // idleUnloadMs: 60_000
     const tracker = new LeaseTracker("headless-test");
     const makeLease = (slotId: string, keepLoaded: boolean) =>
@@ -583,6 +631,7 @@ describe("HeadlessHost lifecycle guards", () => {
     );
 
     (host as unknown as { checkIdle(): void }).checkIdle();
+    await (host as unknown as { intentQueue: Promise<void> }).intentQueue;
 
     expect(releaseAndUnload).toHaveBeenCalledWith(freeIdle, "idle");
     expect(releaseAndUnload).not.toHaveBeenCalledWith(pinnedIdle, "idle");
