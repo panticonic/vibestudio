@@ -100,7 +100,7 @@ export class CredentialUseGrantStore implements CredentialUseGrantStoreLike {
       this.loaded = true;
     } catch (error) {
       throw new Error(
-        `Credential use grant store ${this.filePath} cannot be loaded without risking data loss: ${
+        `Credential use grant store cannot be loaded without risking data loss: ${
           error instanceof Error ? error.message : String(error)
         }`,
         { cause: error }

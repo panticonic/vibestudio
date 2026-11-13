@@ -146,7 +146,7 @@ export class WebsitePublicationJournal {
         }
       } catch (error) {
         throw new Error(
-          `Website publication journal ${this.filePath} cannot be loaded without risking data loss: ${
+          `Website publication journal cannot be loaded without risking data loss: ${
             error instanceof Error ? error.message : String(error)
           }`,
           { cause: error }
