@@ -73,6 +73,9 @@ export class DisplayCapturePicker {
     if (new URL(url).origin !== new URL(request.securityOrigin).origin) return {};
     return new Promise<Streams>((resolve) => {
       let picker: BrowserWindow | null = null;
+      // Read while the picker is alive: once the person closes it, the destroyed
+      // window no longer yields its contents, and the request must still settle.
+      let pickerContentsId: number | null = null;
       let finished = false;
       const finish = (streams: Streams = {}) => {
         if (finished) return;
@@ -81,10 +84,8 @@ export class DisplayCapturePicker {
           owner.off("did-start-navigation", navigation);
           owner.off("destroyed", finish);
         }
-        if (picker) {
-          this.pending.delete(picker.webContents.id);
-          if (!picker.isDestroyed()) picker.destroy();
-        }
+        if (pickerContentsId !== null) this.pending.delete(pickerContentsId);
+        if (picker && !picker.isDestroyed()) picker.destroy();
         resolve(streams);
       };
       const navigation = (
@@ -127,7 +128,8 @@ export class DisplayCapturePicker {
         picker.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
         picker.webContents.on("will-navigate", (event) => event.preventDefault());
         const audioAvailable = request.audioRequested && process.platform === "win32";
-        this.pending.set(picker.webContents.id, {
+        pickerContentsId = picker.webContents.id;
+        this.pending.set(pickerContentsId, {
           sources,
           origin: new URL(url).origin,
           audioAvailable,

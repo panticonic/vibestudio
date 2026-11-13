@@ -11,11 +11,16 @@ vi.mock("electron", async () => {
   const { EventEmitter } = await import("node:events");
   class Window extends EventEmitter {
     destroyed = false;
-    webContents = Object.assign(new EventEmitter(), {
+    private readonly contents = Object.assign(new EventEmitter(), {
       id: 100 + native.windows.length,
       mainFrame: {},
       setWindowOpenHandler: vi.fn(),
     });
+    // As in Electron, a destroyed window no longer yields its contents.
+    get webContents() {
+      if (this.destroyed) throw new TypeError("Object has been destroyed");
+      return this.contents;
+    }
     static fromWebContents() {
       return null;
     }
