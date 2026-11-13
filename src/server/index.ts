@@ -3577,6 +3577,8 @@ async function main() {
     retireRuntime: async (runtimeId) => {
       await rpcServerForGateway?.retireCaller(runtimeId);
     },
+    reportRetirementFailure: (runtimeId, error) =>
+      console.error(`[WebsiteDocuments] Could not retire website runtime ${runtimeId}:`, error),
     changed: (runtimeId, connected, documentId, userId) => {
       eventService.emitProjected("website:connection-changed", (owner) =>
         owner.userId === userId &&

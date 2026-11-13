@@ -17,6 +17,7 @@ function fixture(decision: "session" | "always" | "deny" = "session") {
   const retireRuntime = vi.fn(async (_id: string) => {});
   const changed = vi.fn();
   const isHostForRuntime = vi.fn((host: string) => host === "native-host");
+  const reportRetirementFailure = vi.fn();
   const documents = new WebsiteDocuments({
     workspaceId: "ws-1",
     grants,
@@ -24,6 +25,7 @@ function fixture(decision: "session" | "always" | "deny" = "session") {
     retireRuntime,
     changed,
     isHostForRuntime,
+    reportRetirementFailure,
   });
   cleanups.push(async () => {
     await documents.close();
@@ -37,7 +39,16 @@ function fixture(decision: "session" | "always" | "deny" = "session") {
     user: { userId: "usr_alice", handle: "alice" },
     origin: "https://example.com",
   };
-  return { documents, grants, request, retireRuntime, changed, isHostForRuntime, input };
+  return {
+    documents,
+    grants,
+    request,
+    retireRuntime,
+    changed,
+    isHostForRuntime,
+    reportRetirementFailure,
+    input,
+  };
 }
 
 describe("website document admission", () => {
@@ -215,6 +226,20 @@ describe("website document admission", () => {
     expect(f.grants.isSubjectExecutionCurrent(fact.binding)).toBe(false);
     expect(f.documents.fact(f.input.runtimeId)).toBe(null);
     await vi.waitFor(() => expect(f.retireRuntime).toHaveBeenCalledWith(f.input.runtimeId));
+  });
+
+  it("reports a grant withdrawal's failed transport retirement", async () => {
+    const f = fixture("always");
+    await f.documents.begin(f.input);
+    await f.documents.connect(f.input.runtimeId, f.input.documentId, f.input.hostId);
+    const failure = new Error("transport retirement failed");
+    f.retireRuntime.mockRejectedValueOnce(failure);
+    const fact = f.documents.fact(f.input.runtimeId)!;
+    const grant = f.grants.grantsForSubjects([fact.subject], "workspace.connect")[0]!;
+    f.grants.revoke(grant.id!);
+    await vi.waitFor(() =>
+      expect(f.reportRetirementFailure).toHaveBeenCalledWith(f.input.runtimeId, failure)
+    );
   });
 
   it("a captured execution loses authority when presentation ownership changes", async () => {

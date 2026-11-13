@@ -41,12 +41,13 @@ export class WebsiteDocuments {
       isHostForRuntime: (hostId: string, runtimeId: string, user: UserSubject) => boolean;
       retireRuntime: (runtimeId: string) => Promise<void>;
       changed: (runtimeId: string, connected: boolean, documentId: string, userId: string) => void;
+      /** A disconnect no caller awaits (grant withdrawal, consent expiry) failed to retire. */
+      reportRetirementFailure: (runtimeId: string, error: unknown) => void;
     }
   ) {
     this.stopGrantWithdrawal = deps.grants.onGrantWithdrawal((grant) => {
       for (const doc of this.documents.values()) {
-        if (doc.connectionGrantId === grant.id)
-          void this.end(doc.runtimeId, doc.documentId).catch(() => {});
+        if (doc.connectionGrantId === grant.id) this.endUnobserved(doc);
       }
     });
   }
@@ -184,6 +185,13 @@ export class WebsiteDocuments {
 
   async end(runtimeId: string, documentId?: string, hostId?: string): Promise<void> {
     return this.transition(runtimeId, () => this.endDocument(runtimeId, documentId, hostId));
+  }
+
+  /** End a document on an event no caller awaits; its failure is reported, not dropped. */
+  private endUnobserved(doc: Document): void {
+    void this.end(doc.runtimeId, doc.documentId).catch((error: unknown) =>
+      this.deps.reportRetirementFailure(doc.runtimeId, error)
+    );
   }
 
   private async endDocument(
@@ -341,7 +349,7 @@ export class WebsiteDocuments {
       const expiresAt = allowed.expiresAt;
       const expire = () => {
         const remaining = expiresAt - Date.now();
-        if (remaining <= 0) void this.end(doc.runtimeId, doc.documentId).catch(() => {});
+        if (remaining <= 0) this.endUnobserved(doc);
         else doc.consentExpiry = setTimeout(expire, Math.min(remaining, 2_147_483_647));
       };
       expire();
