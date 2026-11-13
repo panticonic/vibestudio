@@ -1,3 +1,4 @@
+import { NOT_PAIRED_GUIDANCE, NO_WORKSPACE_GUIDANCE } from "../pairingGuidance.js";
 import type {
   GitOverwritePreview,
   GitInteropProvider,
@@ -9,6 +10,7 @@ import { createTypedServiceClient } from "@vibestudio/shared/typedServiceClient"
 import { formatRelativeTime } from "@vibestudio/git/formatting";
 import {
   JSON_FLAG,
+  type ArgSpec,
   type CliCommand,
   type FlagSpec,
   type ParsedInvocation,
@@ -123,18 +125,18 @@ interface VcsGitCommand {
   summary: string;
   usage: string;
   flags: FlagSpec[];
+  /** Positionals: the repo (or Git URL) may be given in place of its flag. */
+  args?: readonly ArgSpec[];
   run: (inv: ParsedInvocation) => Promise<number>;
 }
 
 function resolveGitRpcClient(): CliRpcClient {
   const creds = loadCliCredentials();
   if (!creds) {
-    throw new AuthError("not signed in — pair a device or use a managed agent profile");
+    throw new AuthError(NOT_PAIRED_GUIDANCE);
   }
   if (!creds.workspaceName) {
-    throw new AuthError(
-      "no remote workspace selected — run `vibestudio remote select <workspace>`"
-    );
+    throw new AuthError(NO_WORKSPACE_GUIDANCE);
   }
   return new CliRpcClient(creds);
 }
@@ -585,6 +587,7 @@ const vcsGitCommands: VcsGitCommand[] = [
     summary: "Show upstream state for tracked repos",
     usage: "vibestudio vcs git status [--repo REPOPATH ...]",
     flags: [REPO_FLAG, JSON_FLAG],
+    args: [{ name: "REPOPATH", variadic: true }],
     run: gitStatus,
   },
   {
@@ -601,6 +604,7 @@ const vcsGitCommands: VcsGitCommand[] = [
       GIT_ANONYMOUS_FLAG,
       JSON_FLAG,
     ],
+    args: [{ name: "REPOPATH" }],
     run: gitEnable,
   },
   {
@@ -608,6 +612,7 @@ const vcsGitCommands: VcsGitCommand[] = [
     summary: "Detach a repo from upstream tracking",
     usage: "vibestudio vcs git disable --repo REPOPATH [--forget-remote]",
     flags: [REPO_FLAG, GIT_REMOTE_FLAG, GIT_FORGET_REMOTE_FLAG, JSON_FLAG],
+    args: [{ name: "REPOPATH" }],
     run: gitDisable,
   },
   {
@@ -615,6 +620,7 @@ const vcsGitCommands: VcsGitCommand[] = [
     summary: "Toggle auto-push for a tracked repo",
     usage: "vibestudio vcs git auto --repo REPOPATH [--off]",
     flags: [REPO_FLAG, GIT_OFF_FLAG, JSON_FLAG],
+    args: [{ name: "REPOPATH" }],
     run: gitAuto,
   },
   {
@@ -622,6 +628,7 @@ const vcsGitCommands: VcsGitCommand[] = [
     summary: "Export gad main and push it to the tracked upstream",
     usage: "vibestudio vcs git push --repo REPOPATH [--force]",
     flags: [REPO_FLAG, GIT_FORCE_PUSH_FLAG, JSON_FLAG],
+    args: [{ name: "REPOPATH" }],
     run: gitPush,
   },
   {
@@ -629,6 +636,7 @@ const vcsGitCommands: VcsGitCommand[] = [
     summary: "Fetch upstream changes and import an exact semantic candidate",
     usage: "vibestudio vcs git pull --repo REPOPATH [--dry-run]",
     flags: [REPO_FLAG, GIT_DRY_RUN_FLAG, JSON_FLAG],
+    args: [{ name: "REPOPATH" }],
     run: gitPull,
   },
   {
@@ -644,6 +652,7 @@ const vcsGitCommands: VcsGitCommand[] = [
       GIT_DESCRIPTION_FLAG,
       JSON_FLAG,
     ],
+    args: [{ name: "REPOPATH" }],
     run: gitPublish,
   },
   {
@@ -659,6 +668,7 @@ const vcsGitCommands: VcsGitCommand[] = [
       GIT_ANONYMOUS_FLAG,
       JSON_FLAG,
     ],
+    args: [{ name: "URL" }],
     run: gitImport,
   },
   {
@@ -673,6 +683,7 @@ const vcsGitCommands: VcsGitCommand[] = [
       GIT_BRANCH_FLAG,
       JSON_FLAG,
     ],
+    args: [{ name: "REPOPATH" }],
     run: gitRemoteSet,
   },
   {
@@ -684,6 +695,7 @@ const vcsGitCommands: VcsGitCommand[] = [
       { name: "name", takesValue: true, description: "Remote name (default: origin)" },
       JSON_FLAG,
     ],
+    args: [{ name: "REPOPATH" }],
     run: gitRemoteRemove,
   },
 ];
@@ -751,6 +763,7 @@ async function runVcsGit(_inv: ParsedInvocation, rawArgs: string[]): Promise<num
         summary: command.summary,
         usage: command.usage,
         flags: command.flags,
+        ...(command.args ? { args: command.args } : {}),
         run: async () => 0,
       },
       commandArgs

@@ -224,6 +224,7 @@ export const panelCommands: CliCommand[] = [
     usage:
       "vibestudio panel screenshot <panelId> [--out shot.png] [--format png|jpeg] [--quality N]",
     flags: [OUT_FLAG, FORMAT_FLAG, QUALITY_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
+    args: [{ name: "PANEL_ID" }],
     run: screenshot,
   },
   {
@@ -232,6 +233,7 @@ export const panelCommands: CliCommand[] = [
     summary: "Read a running panel's console history (or just its errors)",
     usage: "vibestudio panel console <panelId> [--errors] [--limit N]",
     flags: [ERRORS_FLAG, LIMIT_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
+    args: [{ name: "PANEL_ID" }],
     run: consoleHistory,
   },
 ];

@@ -49,6 +49,7 @@ import {
   clientInvocation,
   linkClientShim,
   syncClientIndex,
+  terminalListing,
   unlinkClientShim,
   type ShimContext,
 } from "./clientShims.js";
@@ -146,6 +147,7 @@ export function createTerminalCommand(context: TerminalCommandContext): CliComma
       },
     ],
     details: DETAILS,
+    args: [{ name: "PAIRING_LINK" }],
     run: (inv) => runClientCommand(inv, context, { kind: "default" }),
   };
 }
@@ -171,6 +173,7 @@ export function createOpenCommand(context: TerminalCommandContext): CliCommand {
       "vibestudio open <client> [intent] [words…] [--param key=value …] [--develop] [--workspace <name>] [--yes]",
     flags: [...CLIENT_FLAGS],
     details: OPEN_DETAILS,
+    args: [{ name: "CLIENT" }, { name: "INTENT" }, { name: "WORDS", variadic: true }],
     run: usageGuarded((inv) => {
       const [id, ...rest] = inv.positionals;
       if (!id) throw new UsageError("Name the client to open: vibestudio open <client> [intent]");
@@ -191,6 +194,7 @@ export function clientCommandFor(name: string, context: TerminalCommandContext):
     usage: `vibestudio ${name} [intent] [words…] [--param key=value …] [--develop] [--workspace <name>] [--yes]`,
     flags: [...CLIENT_FLAGS],
     details: OPEN_DETAILS,
+    args: [{ name: "INTENT" }, { name: "WORDS", variadic: true }],
     run: (inv) => runClientCommand(inv, context, { kind: "client", id, rest: inv.positionals }),
   };
 }
@@ -219,6 +223,7 @@ export function createClientsCommands(context: TerminalCommandContext): CliComma
           description: "Command name (default: the client's command)",
         },
       ],
+      args: [{ name: "CLIENT" }],
       run: usageGuarded((inv) => {
         const [id, ...extra] = inv.positionals;
         if (!id || extra.length > 0) {
@@ -233,6 +238,7 @@ export function createClientsCommands(context: TerminalCommandContext): CliComma
       name: "unlink",
       summary: "Remove a command that `clients link` wrote",
       usage: "vibestudio clients unlink <command>",
+      args: [{ name: "COMMAND" }],
       run: usageGuarded(async (inv) => {
         const [name, ...extra] = inv.positionals;
         if (!name || extra.length > 0) {
@@ -353,11 +359,7 @@ async function planClient(
       const clients = createTypedServiceClient("clients", clientsMethods, call);
       const listings = await clients.list(descriptor);
       syncClientIndex(shimContext(context), listings);
-      // A client id can exist once per runtime (`chat`); a terminal runs the terminal one.
-      const listing =
-        listings.find(
-          (candidate) => candidate.id === request.id && candidate.runtime === "terminal"
-        ) ?? listings.find((candidate) => candidate.id === request.id);
+      const listing = terminalListing(listings, request.id);
       if (!listing) {
         throw new UsageError(
           `No client "${request.id}" is available in this terminal. See \`vibestudio clients list\`.`
@@ -496,7 +498,7 @@ async function linkClient(
   return withSystemClients(session, context, async (listings) => {
     const shims = shimContext(context);
     const { table } = syncClientIndex(shims, listings);
-    const listing = listings.find((candidate) => candidate.id === id);
+    const listing = terminalListing(listings, id);
     if (!listing || listing.runtime !== "terminal") {
       throw new UsageError(
         `No terminal client "${id}" is available. See \`vibestudio clients list\`.`
@@ -803,7 +805,9 @@ export async function retireServer(
 }
 
 function withServerLog(error: unknown, logFile: string | undefined): unknown {
-  // An interruption is the person's own choice, not a failure with a log to read.
+  // An interruption is the person's own choice, and a usage error is about what
+  // they typed: neither is a failure with a server log to read.
+  if (error instanceof UsageError) return error;
   if (error instanceof CliError && error.exitCode === EXIT_INTERRUPTED) return error;
   if (!logFile || (error instanceof Error && error.message.includes(logFile))) return error;
   return new CliError(

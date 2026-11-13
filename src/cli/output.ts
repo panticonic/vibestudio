@@ -30,9 +30,10 @@ export function setPlainOutput(enabled: boolean): void {
 export class CliError extends Error {
   constructor(
     message: string,
-    public readonly exitCode: number = EXIT_ERROR
+    public readonly exitCode: number = EXIT_ERROR,
+    options?: ErrorOptions
   ) {
-    super(message);
+    super(message, options);
     this.name = "CliError";
   }
 }

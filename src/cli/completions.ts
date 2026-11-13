@@ -248,6 +248,7 @@ disk with no network call; \`vibestudio clients list\` refreshes it.
 
 \`vibestudio completions dynamic <commands|clients|intents> [client]\` is what
 the scripts call at Tab time.`,
+    args: [{ name: "SHELL" }, { name: "KIND" }, { name: "CLIENT" }],
     run: async (inv) => {
       const [first, ...rest] = inv.positionals;
       if (first === "dynamic") {

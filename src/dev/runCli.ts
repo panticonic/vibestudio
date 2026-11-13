@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import * as path from "node:path";
+import { printError } from "../cli/output.js";
 import { resolveDevInstance, waitForDevInstanceReady } from "./instanceRegistry.js";
 
 function extractInstance(argv: string[]): { instanceId?: string; argv: string[] } {
@@ -43,6 +44,6 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exitCode = 1;
+  // The same exit-code mapping and redaction as the installed CLI's entry.
+  process.exitCode = printError(error, { json: false });
 });

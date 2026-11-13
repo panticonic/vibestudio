@@ -1,3 +1,4 @@
+import { NOT_PAIRED_GUIDANCE, NO_WORKSPACE_GUIDANCE } from "../pairingGuidance.js";
 import { loadCliCredentials } from "../credentialStore.js";
 import { RpcClient, shellCallerId } from "../rpcClient.js";
 import { isValidSessionName, loadAgentSession } from "../sessionStore.js";
@@ -90,12 +91,10 @@ function scopeKeyForContext(contextId: string): string {
 function requireWorkspaceCredential(): NonNullable<ReturnType<typeof loadCliCredentials>> {
   const creds = loadCliCredentials();
   if (!creds) {
-    throw new AuthError("not signed in — pair a device or use a managed agent profile");
+    throw new AuthError(NOT_PAIRED_GUIDANCE);
   }
   if (!creds.workspaceName) {
-    throw new AuthError(
-      "no remote workspace selected — run `vibestudio remote select <workspace>`"
-    );
+    throw new AuthError(NO_WORKSPACE_GUIDANCE);
   }
   return creds;
 }

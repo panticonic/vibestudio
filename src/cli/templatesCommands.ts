@@ -1,3 +1,4 @@
+import { NOT_PAIRED_GUIDANCE, NO_WORKSPACE_GUIDANCE } from "./pairingGuidance.js";
 import { randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import {
@@ -45,9 +46,8 @@ const RECEIPT = flag("receipt", "Save the exact JSON receipt");
 
 function requireClient(): { rpc: RpcClient; templates: TemplatesClient } {
   const credentials = loadCliCredentials();
-  if (!credentials)
-    throw new AuthError('not paired — run `vibestudio remote pair "<pair-link>"` first');
-  if (!credentials.workspaceName) throw new AuthError("no remote workspace selected");
+  if (!credentials) throw new AuthError(NOT_PAIRED_GUIDANCE);
+  if (!credentials.workspaceName) throw new AuthError(NO_WORKSPACE_GUIDANCE);
   const rpc = new RpcClient(requireDeviceCliCredentials(credentials, "template management"));
   return { rpc, templates: createTemplatesClient(rpc) };
 }
@@ -154,6 +154,7 @@ export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
     name: "contribution-inspect",
+    args: [{ name: "URL" }],
     summary: "Review selected units for contribution to their installed source",
     flags: [PART, RECEIPT, JSON_FLAG],
     run: (inv) =>
@@ -173,6 +174,7 @@ export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
     name: "contribution-push",
+    args: [{ name: "RECEIPT_FILE" }],
     summary: "Push a reviewed contribution on its own upstream branch",
     flags: [COMMAND_ID, JSON_FLAG],
     run: (inv) =>
@@ -189,6 +191,7 @@ export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
     name: "update-prepare",
+    args: [{ name: "URL" }],
     summary: "Prepare the latest template update in a separate review context",
     flags: [COMMAND_ID, JSON_FLAG],
     run: (inv) =>
@@ -201,6 +204,7 @@ export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
     name: "update-review",
+    args: [{ name: "OPERATION_ID" }],
     summary: "Resume a template update and inspect remaining conflicts",
     flags: [JSON_FLAG],
     run: (inv) => run(inv, (c) => c.reviewUpdate({ operationId: operationId(inv) }), renderJson),
@@ -208,6 +212,7 @@ export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
     name: "update-read",
+    args: [{ name: "OPERATION_ID" }],
     summary: "Read base, local, and incoming versions of an update file",
     flags: [
       flag("repo-path", "Workspace unit"),
@@ -229,6 +234,7 @@ export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
     name: "update-resolve",
+    args: [{ name: "OPERATION_ID" }],
     summary: "Resolve an exact update conflict using ours or theirs",
     flags: [
       flag("delta-id", "Native delta from update review"),
@@ -260,6 +266,7 @@ export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
     name: "update-publish",
+    args: [{ name: "OPERATION_ID" }],
     summary: "Apply a fully reviewed template update to workspace main",
     flags: [JSON_FLAG],
     run: (inv) => run(inv, (c) => c.publishUpdate({ operationId: operationId(inv) }), renderJson),
@@ -267,6 +274,7 @@ export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
     name: "inspect",
+    args: [{ name: "URL" }],
     summary: "Resolve and verify an exact upstream workspace snapshot",
     flags: [CREDENTIAL, JSON_FLAG],
     run: (inv) =>
@@ -303,8 +311,6 @@ export const templatesCommands: CliCommand[] = [
       run(
         inv,
         async (c) => {
-          if (inv.positionals.length)
-            throw new UsageError("author-inspect accepts selections through flags");
           const parts = inv
             .flagsMulti("part")
             .map((part) => part.trim())
@@ -324,6 +330,7 @@ export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
     name: "author-review",
+    args: [{ name: "RECEIPT_FILE" }],
     summary: "Check account access and compare a release with its upstream before publishing",
     flags: [
       VERSION,
@@ -388,6 +395,7 @@ export const templatesCommands: CliCommand[] = [
   {
     group: "templates",
     name: "author-publish",
+    args: [{ name: "RECEIPT_FILE" }],
     summary: "Publish the exact reviewed release; reject changed workspace or upstream source",
     flags: [RECEIPT, JSON_FLAG],
     run: (inv) =>

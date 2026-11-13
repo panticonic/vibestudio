@@ -521,6 +521,7 @@ export const channelCommands: CliCommand[] = [
     summary: "Read a channel's durable message log (paged)",
     usage: "vibestudio channel history [id] [--after N] [--limit N]",
     flags: [AFTER_FLAG, LIMIT_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
+    args: [{ name: "ID" }],
     run: history,
   },
   {
@@ -529,6 +530,7 @@ export const channelCommands: CliCommand[] = [
     summary: "Publish a durable message on a channel as yourself",
     usage: "vibestudio channel send [id] --text '...' [--to @handle] [--as NAME]",
     flags: [TEXT_FLAG, TO_FLAG, AS_FLAG, ...SCOPE_FLAGS, JSON_FLAG],
+    args: [{ name: "ID" }],
     run: send,
   },
   {
@@ -537,6 +539,7 @@ export const channelCommands: CliCommand[] = [
     summary: "Follow a channel live over the WS push transport",
     usage: "vibestudio channel tail [id]",
     flags: [...SCOPE_FLAGS, JSON_FLAG],
+    args: [{ name: "ID" }],
     run: tail,
   },
   {
@@ -545,6 +548,7 @@ export const channelCommands: CliCommand[] = [
     summary: "List a channel's current participants",
     usage: "vibestudio channel roster [id]",
     flags: [...SCOPE_FLAGS, JSON_FLAG],
+    args: [{ name: "ID" }],
     run: roster,
   },
 ];

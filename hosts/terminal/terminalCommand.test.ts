@@ -9,8 +9,10 @@ import {
   createOpenCommand,
   createTerminalCommand,
   isTerminalCancellation,
+  printTerminalError,
   retireServer,
 } from "./terminalCommand.js";
+import { UsageError } from "../../src/cli/output.js";
 import { TerminalHostState } from "./hostState.js";
 import { isBuiltInCommand } from "./clientShims.js";
 import type { LocalServer } from "./localServer.js";
@@ -52,6 +54,25 @@ describe("terminal command retirement", () => {
         cause: original,
       });
       expect(messages).not.toContain("Local server stopped.");
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+});
+
+describe("terminal errors", () => {
+  it("points a server failure at the log, but not a mistake in what was typed", () => {
+    const written: string[] = [];
+    const stderr = vi.spyOn(console, "error").mockImplementation((line: unknown) => {
+      written.push(String(line));
+    });
+    try {
+      const usage = new UsageError("Usage: vibestudio clients link <client> [--name <command>]");
+      expect(printTerminalError(usage, "/private/server.log")).toBe(usage.exitCode);
+      expect(written.join("")).not.toContain("Server log");
+      written.length = 0;
+      printTerminalError(new Error("connection refused"), "/private/server.log");
+      expect(written.join("")).toContain("Server log: /private/server.log");
     } finally {
       stderr.mockRestore();
     }

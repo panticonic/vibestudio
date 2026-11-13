@@ -473,6 +473,7 @@ export const vcsCommands: CliCommand[] = [
     summary: "Compare the working state with an event or external delta",
     usage: "vibestudio vcs compare [SOURCE_EVENT_ID] [--delta DELTA_ID | --local]",
     flags: [DELTA_FLAG, LOCAL_FLAG, LIMIT_FLAG, ...common],
+    args: [{ name: "SOURCE_EVENT_ID" }],
     run: compare,
   },
   {
@@ -488,6 +489,7 @@ export const vcsCommands: CliCommand[] = [
     summary: "Resolve PATH to stable repository/file identity",
     usage: "vibestudio vcs resolve-file PATH",
     flags: common,
+    args: [{ name: "PATH" }],
     run: resolveFile,
   },
   {
@@ -496,6 +498,7 @@ export const vcsCommands: CliCommand[] = [
     summary: "Move one stable file identity atomically",
     usage: "vibestudio vcs move-file SOURCE DESTINATION [SOURCE DESTINATION ...] [--dry-run]",
     flags: transferFlags,
+    args: [{ name: "SOURCE DESTINATION", variadic: true }],
     run: (inv) => transfer(inv, "move"),
   },
   {
@@ -504,6 +507,7 @@ export const vcsCommands: CliCommand[] = [
     summary: "Copy a file with explicit immediate provenance",
     usage: "vibestudio vcs copy-file SOURCE DESTINATION [SOURCE DESTINATION ...] [--dry-run]",
     flags: transferFlags,
+    args: [{ name: "SOURCE DESTINATION", variadic: true }],
     run: (inv) => transfer(inv, "copy"),
   },
   {

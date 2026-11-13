@@ -26,6 +26,14 @@ export interface FlagSpec {
   description?: string;
 }
 
+/** One positional argument a command accepts, in order. */
+export interface ArgSpec {
+  /** Placeholder shown in messages, e.g. "PATH". */
+  name: string;
+  /** Consumes every remaining positional; only meaningful last. */
+  variadic?: boolean;
+}
+
 export interface ParsedInvocation {
   positionals: string[];
   flags: Record<string, string | boolean>;
@@ -45,6 +53,13 @@ export interface CliCommand {
   /** Extra help paragraphs printed after the flags. */
   details?: string;
   flags?: FlagSpec[];
+  /**
+   * Positional arguments, in order. A command that declares none takes none:
+   * the parser rejects an argument past the declared ones instead of the
+   * command silently ignoring it. Whether one is required is the command's to
+   * say, with its own message.
+   */
+  args?: readonly ArgSpec[];
   /**
    * Script-runner commands forward argv verbatim to an external script and
    * skip flag validation entirely.
@@ -140,11 +155,25 @@ export function parseInvocation(command: CliCommand, argv: string[]): ParsedInvo
       positionals.push(arg);
     }
   }
+  const args = command.args ?? [];
+  if (!args.some((arg) => arg.variadic) && positionals.length > args.length) {
+    const label = [command.group, command.name].filter(Boolean).join(" ");
+    throw new UsageError(
+      args.length === 0
+        ? `${label} takes no arguments; got ${JSON.stringify(positionals[0])}`
+        : `Unexpected argument for ${label}: ${JSON.stringify(positionals[args.length])} ` +
+            `(it takes ${args.map(argLabel).join(" ")})`
+    );
+  }
   return {
     positionals,
     flags,
     flagsMulti: (name: string) => multi[name] ?? [],
   };
+}
+
+function argLabel(arg: ArgSpec): string {
+  return arg.variadic ? `${arg.name}...` : arg.name;
 }
 
 /** Render per-command help: usage line plus declared flags. */
@@ -155,7 +184,8 @@ function commandLine(command: CliCommand): string {
 }
 
 export function renderCommandHelp(command: CliCommand): string {
-  const usage = command.usage ?? commandLine(command);
+  const usage =
+    command.usage ?? [commandLine(command), ...(command.args ?? []).map(argLabel)].join(" ");
   const lines = [`${command.summary}`, "", `Usage: ${usage}`];
   const flags = command.flags ?? [];
   if (flags.length > 0) {
@@ -179,8 +209,8 @@ export function renderCommandHelp(command: CliCommand): string {
 
 /** Render usage lines for one group's commands. */
 export function renderGroupHelp(commands: CliCommand[], group: string): string {
-  const lines = groupCommands(commands, group).map(
-    (cmd) => `  ${commandLine(cmd).padEnd(36)} ${cmd.summary}`
-  );
-  return lines.join("\n");
+  const members = groupCommands(commands, group);
+  // Summaries line up even when one command name is longer than the rest.
+  const width = Math.max(36, ...members.map((cmd) => commandLine(cmd).length));
+  return members.map((cmd) => `  ${commandLine(cmd).padEnd(width)} ${cmd.summary}`).join("\n");
 }

@@ -1548,6 +1548,7 @@ export const systemTestCommands: CliCommand[] = [
     name: "run",
     summary: "Run exact tests, a category, or the complete catalog",
     usage: "vibestudio system-test run [TEST_NAME ...] [--category CATEGORY | --all]",
+    args: [{ name: "TEST_NAME", variadic: true }],
     flags: [...RUN_FLAGS, ...SCOPE_FLAGS, JSON_FLAG],
     run,
   },
@@ -1566,6 +1567,7 @@ export const systemTestCommands: CliCommand[] = [
       ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
+    args: [{ name: "RUN_ID" }],
     run: status,
   },
   {
@@ -1578,6 +1580,7 @@ export const systemTestCommands: CliCommand[] = [
       ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
+    args: [{ name: "RUN_ID" }],
     run: wait,
   },
   {
@@ -1594,6 +1597,7 @@ export const systemTestCommands: CliCommand[] = [
     summary: "Read bounded diagnostics for a run or one test",
     usage: "vibestudio system-test inspect RUN_ID [--test TEST_NAME]",
     flags: [{ name: "test", takesValue: true }, ...READ_FLAGS],
+    args: [{ name: "RUN_ID" }],
     run: inspect,
   },
   {
@@ -1602,6 +1606,7 @@ export const systemTestCommands: CliCommand[] = [
     summary: "Export one test trajectory and invocation record",
     usage: "vibestudio system-test trajectory RUN_ID TEST_NAME [--full]",
     flags: [{ name: "full", takesValue: false }, ...READ_FLAGS],
+    args: [{ name: "RUN_ID" }, { name: "TEST_NAME" }],
     run: trajectory,
   },
   {
@@ -1629,6 +1634,7 @@ export const systemTestCommands: CliCommand[] = [
       ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
+    args: [{ name: "RUN_ID" }],
     run: rerun,
   },
   {
@@ -1637,6 +1643,7 @@ export const systemTestCommands: CliCommand[] = [
     summary: "Cancel a pending or running system-test job",
     usage: "vibestudio system-test cancel RUN_ID",
     flags: [...SCOPE_FLAGS, JSON_FLAG],
+    args: [{ name: "RUN_ID" }],
     run: cancel,
   },
 ];

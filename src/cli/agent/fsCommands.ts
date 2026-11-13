@@ -309,6 +309,7 @@ export const fsCommands: CliCommand[] = [
       ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
+    args: [{ name: "PATH" }],
     run: ls,
   },
   {
@@ -321,6 +322,7 @@ export const fsCommands: CliCommand[] = [
       ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
+    args: [{ name: "PATH" }],
     run: read,
   },
   {
@@ -335,6 +337,7 @@ export const fsCommands: CliCommand[] = [
       ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
+    args: [{ name: "PATH" }, { name: "CONTENT" }],
     run: write,
   },
   {
@@ -352,6 +355,7 @@ export const fsCommands: CliCommand[] = [
       ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
+    args: [{ name: "PATH" }],
     run: rm,
   },
   {
@@ -360,6 +364,7 @@ export const fsCommands: CliCommand[] = [
     summary: "Move/rename a file or directory",
     usage: "vibestudio fs mv SRC DEST",
     flags: [...SCOPE_FLAGS, JSON_FLAG],
+    args: [{ name: "SRC" }, { name: "DEST" }],
     run: mv,
   },
   {
@@ -368,6 +373,7 @@ export const fsCommands: CliCommand[] = [
     summary: "Copy a file",
     usage: "vibestudio fs cp SRC DEST",
     flags: [...SCOPE_FLAGS, JSON_FLAG],
+    args: [{ name: "SRC" }, { name: "DEST" }],
     run: cp,
   },
   {
@@ -380,6 +386,7 @@ export const fsCommands: CliCommand[] = [
       ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
+    args: [{ name: "PATH" }],
     run: mkdir,
   },
   {
@@ -388,6 +395,7 @@ export const fsCommands: CliCommand[] = [
     summary: "Stat a file or directory",
     usage: "vibestudio fs stat PATH",
     flags: [...SCOPE_FLAGS, JSON_FLAG],
+    args: [{ name: "PATH" }],
     run: stat,
   },
   {
@@ -418,6 +426,7 @@ export const fsCommands: CliCommand[] = [
       ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
+    args: [{ name: "PATTERN" }, { name: "PATH" }],
     run: grep,
   },
   {
@@ -436,6 +445,7 @@ export const fsCommands: CliCommand[] = [
       ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
+    args: [{ name: "PATTERN" }, { name: "PATH" }],
     run: glob,
   },
 ];

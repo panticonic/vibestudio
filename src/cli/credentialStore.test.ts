@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { AuthError } from "./output.js";
 import {
   assertCliProfileIsUnpaired,
   clearCliCredentials,
@@ -97,6 +98,8 @@ describe("CLI persisted device credential", () => {
     saveCliCredentials(receipt);
     expect(loadCliIdentity()).toEqual(receipt);
     expect(() => loadCliCredentials()).toThrow(/paired.*no workspace is selected/);
+    // An authentication-state problem: the CLI exits with the auth class (3).
+    expect(() => loadCliCredentials()).toThrow(AuthError);
     expect(() => assertCliProfileIsUnpaired()).toThrow(/already paired/);
     saveCliCredentials(CURRENT);
     expect(loadCliCredentials()).toEqual(CURRENT);

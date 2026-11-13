@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseInvocation, renderCommandHelp } from "./commandTable.js";
 import { createModelCommands, type ModelConnectResult } from "./modelCommands.js";
-import { setPlainOutput } from "./output.js";
+import { UsageError, setPlainOutput } from "./output.js";
 
 const CONNECTED: ModelConnectResult = {
   providerId: "openai-codex",
@@ -81,7 +81,10 @@ describe("model connect CLI command", () => {
       const { modelConnect, connect } = command();
       vi.spyOn(console, "error").mockImplementation(() => undefined);
 
-      const code = await modelConnect.run(parseInvocation(modelConnect, positionals), []);
+      // An extra provider is rejected by the parser, a missing one by the command.
+      const code = await Promise.resolve()
+        .then(() => modelConnect.run(parseInvocation(modelConnect, positionals), []))
+        .catch((error: unknown) => (error instanceof UsageError ? error.exitCode : 1));
 
       expect(code).toBe(2);
       expect(connect).not.toHaveBeenCalled();

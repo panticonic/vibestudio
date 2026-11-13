@@ -7,6 +7,7 @@ import {
   isBuiltInCommand,
   linkClientShim,
   syncClientIndex,
+  terminalListing,
   unlinkClientShim,
   type ShimContext,
 } from "./clientShims.js";
@@ -152,6 +153,18 @@ describe("shims", () => {
     syncClientIndex(ctx, [{ id: "chat", runtime: "terminal" }]);
     expect(fs.readFileSync(file, "utf8")).toContain('exec vibestudio open chat "$@"');
     expect(ctx.state.read().shims["vchat"]).toEqual({ clientId: "chat", command: "open chat" });
+  });
+
+  it("follows the terminal listing of an id that another runtime also declares", () => {
+    const ctx = context();
+    const web = { id: "chat", runtime: "web" as const };
+    const { table } = syncClientIndex(ctx, [web, chat]);
+    expect(terminalListing([web, chat], "chat")).toBe(chat);
+    expect(terminalListing([web], "chat")).toBe(web);
+    const file = linkClientShim(ctx, { name: "vchat", listing: chat, table });
+    syncClientIndex(ctx, [web, chat]);
+    expect(fs.readFileSync(file, "utf8")).toContain('exec vibestudio chat "$@"');
+    expect(ctx.state.read().shims["vchat"]).toEqual({ clientId: "chat", command: "chat" });
   });
 });
 

@@ -122,14 +122,27 @@ function humanBytes(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(2)} GiB`;
 }
 
+/**
+ * Bytes stored under a path. Status reads live roots that a running server
+ * collects concurrently, so an entry removed during the walk stores nothing
+ * rather than failing the whole report.
+ */
 function storedBytes(storedPath: string): number {
-  const stat = fs.lstatSync(storedPath);
-  if (!stat.isDirectory()) {
-    return Math.ceil((stat.blocks * 512 || stat.size) / Math.max(1, stat.nlink));
+  try {
+    const stat = fs.lstatSync(storedPath);
+    if (!stat.isDirectory()) {
+      return Math.ceil((stat.blocks * 512 || stat.size) / Math.max(1, stat.nlink));
+    }
+    return fs
+      .readdirSync(storedPath)
+      .reduce(
+        (total, child) => total + storedBytes(path.join(storedPath, child)),
+        stat.blocks * 512
+      );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return 0;
+    throw error;
   }
-  return fs
-    .readdirSync(storedPath)
-    .reduce((total, child) => total + storedBytes(path.join(storedPath, child)), stat.blocks * 512);
 }
 
 function offlineStatus(root: Extract<StorageRoot, { kind: "offline-only" }>) {

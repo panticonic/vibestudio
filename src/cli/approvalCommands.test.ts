@@ -6,6 +6,7 @@ import { createApprovalQueue } from "../server/services/approvalQueue.js";
 import { createShellApprovalService } from "../server/services/shellApprovalService.js";
 import { approvalCommands } from "./approvalCommands.js";
 import { parseInvocation } from "./commandTable.js";
+import { ConnectionError } from "./output.js";
 
 const rpc = vi.hoisted(() => ({
   call: vi.fn(),
@@ -337,6 +338,17 @@ describe("hub approvals for a paired device", () => {
     openHub.mockRejectedValue(new Error("hub unreachable"));
     expect(await run("list")).toBe(1);
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining("hub unreachable"));
+  });
+
+  it("does not report an empty queue when no queue answered", async () => {
+    identity.mockReturnValue({ kind: "device", phase: "account" });
+    hub.call.mockRejectedValue(new ConnectionError("cannot reach http://hub"));
+    expect(await run("list")).toBe(3);
+    expect(output()).toEqual([]);
+    const errors = vi.mocked(console.error).mock.calls.map(([line]) => String(line));
+    expect(errors).toEqual([expect.stringContaining("hub approvals unavailable: cannot reach")]);
+    expect(errors[0]!.match(/cannot reach/g)).toHaveLength(1);
+    expect(hub.close).toHaveBeenCalledOnce();
   });
 
   it("watches both queues, tags records by source, and joins both on stop", async () => {

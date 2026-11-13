@@ -388,6 +388,7 @@ export const evalCommands: CliCommand[] = [
       ...SCOPE_FLAGS,
       JSON_FLAG,
     ],
+    args: [{ name: "FILE" }],
     run: evalRun,
   },
   {

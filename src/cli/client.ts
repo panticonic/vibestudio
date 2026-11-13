@@ -61,7 +61,7 @@ import { systemTestCommands } from "./systemTestCommands.js";
 import { storageCommands } from "./storageCommands.js";
 import { templatesCommands } from "./templatesCommands.js";
 import { remoteHost } from "./remoteHeadlessHost.js";
-import { NOT_PAIRED_GUIDANCE } from "./pairingGuidance.js";
+import { NOT_PAIRED_GUIDANCE, NO_WORKSPACE_GUIDANCE } from "./pairingGuidance.js";
 import { cliConfigRoot } from "./configPaths.js";
 import {
   findCommand,
@@ -75,6 +75,7 @@ import {
 } from "./commandTable.js";
 import {
   AuthError,
+  EXIT_USAGE,
   UsageError,
   jsonMode,
   printError,
@@ -144,9 +145,7 @@ async function remoteStatus(inv: ParsedInvocation): Promise<number> {
       return 0;
     }
     if (!creds.workspaceName || !isSelectedWorkspaceUrl(creds.url)) {
-      throw new AuthError(
-        "no remote workspace selected - run `vibestudio remote select <workspace>`"
-      );
+      throw new AuthError(NO_WORKSPACE_GUIDANCE);
     }
     const rpc = new RpcClient(creds);
     try {
@@ -554,6 +553,7 @@ const remoteCommands: CliCommand[] = [
       { name: "label", takesValue: true, description: "Device label shown on the server" },
       JSON_FLAG,
     ],
+    args: [{ name: "PAIRING_LINK" }],
     run: remotePair,
   },
   {
@@ -637,6 +637,7 @@ const remoteCommands: CliCommand[] = [
     summary: "Revoke a paired device and close its live sessions",
     usage: "vibestudio remote revoke-device <device-id>",
     flags: [JSON_FLAG],
+    args: [{ name: "DEVICE_ID" }],
     run: remoteRevokeDevice,
   },
   {
@@ -699,6 +700,7 @@ const remoteCommands: CliCommand[] = [
       },
       JSON_FLAG,
     ],
+    args: [{ name: "NAME" }],
     run: remoteWorkspaceCreate,
   },
   {
@@ -707,6 +709,7 @@ const remoteCommands: CliCommand[] = [
     summary: "Select a workspace on the paired server",
     usage: "vibestudio remote select <workspace>",
     flags: [{ name: "workspace", takesValue: true }, JSON_FLAG],
+    args: [{ name: "WORKSPACE" }],
     run: remoteWorkspaceSelect,
   },
   {
@@ -857,7 +860,7 @@ const commandRegistry: CliCommand[] = [
 export async function main(argv: string[]): Promise<number> {
   const [group, ...rest] = argv;
   setPlainOutput(argv.includes("--plain"));
-  if (!group || group === "--help") {
+  if (!group || group === "--help" || group === "-h") {
     printHelp();
     return 0;
   }
@@ -909,6 +912,12 @@ export async function main(argv: string[]): Promise<number> {
   if (!sub || sub === "--help" || sub === "help") {
     printGroupHelp(group);
     return 0;
+  }
+  if (sub.startsWith("-")) {
+    // Flags belong to a command: `vibestudio <group> <command> [flags]`.
+    console.error(`vibestudio ${group}: name a command before ${sub}`);
+    printGroupHelp(group);
+    return EXIT_USAGE;
   }
   const command = findCommand(commandRegistry, group, sub);
   if (!command) {
@@ -1097,8 +1106,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
       process.exitCode = code;
     })
     .catch((err) => {
-      console.error(err instanceof Error ? err.message : String(err));
-      process.exitCode = 1;
+      // A command that throws instead of returning still exits with the code
+      // its error class maps to (usage 2, auth 3, ...), redacted like any other.
+      process.exitCode = printError(err, { json: false });
     });
 }
 

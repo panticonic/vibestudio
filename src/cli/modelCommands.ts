@@ -61,6 +61,7 @@ export function createModelCommands(dependencies: ModelCommandDependencies): Cli
         },
         JSON_FLAG,
       ],
+      args: [{ name: "PROVIDER" }],
       run: async (invocation) => {
         const json = jsonMode(invocation.flags["json"] === true);
         try {

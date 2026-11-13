@@ -1,3 +1,4 @@
+import { NOT_PAIRED_GUIDANCE, NO_WORKSPACE_GUIDANCE } from "../pairingGuidance.js";
 import type { RuntimeEntityHandle } from "@vibestudio/shared/runtime/entitySpec";
 import { docsMethods } from "@vibestudio/service-schemas/docs";
 import { runtimeMethods } from "@vibestudio/service-schemas/runtime";
@@ -45,12 +46,10 @@ const DEFAULT_SESSION = "default";
 function requireWorkspaceCredentials(): CliCredentials {
   const creds = loadCliCredentials();
   if (!creds) {
-    throw new AuthError('not paired — run `vibestudio remote pair "<pair-link>"` first');
+    throw new AuthError(NOT_PAIRED_GUIDANCE);
   }
   if (!creds.workspaceName) {
-    throw new AuthError(
-      "no remote workspace selected — run `vibestudio remote select <workspace>`"
-    );
+    throw new AuthError(NO_WORKSPACE_GUIDANCE);
   }
   return creds;
 }
@@ -97,9 +96,7 @@ async function ensureAgentSessionWithCredentials(
     throw new UsageError(`Invalid session name: ${name} (use letters, digits, "_", "-")`);
   }
   if (!creds.workspaceName) {
-    throw new AuthError(
-      "no remote workspace selected — run `vibestudio remote select <workspace>`"
-    );
+    throw new AuthError(NO_WORKSPACE_GUIDANCE);
   }
   const existing = loadAgentSession(name);
   const sameWorkspace =
@@ -583,6 +580,7 @@ export const agentCommands: CliCommand[] = [
       { name: "workspace", takesValue: true, description: "Select a workspace before attaching" },
       JSON_FLAG,
     ],
+    args: [{ name: "NAME" }, { name: "PAIRING_LINK" }],
     run: attach,
   },
   {
@@ -591,6 +589,7 @@ export const agentCommands: CliCommand[] = [
     summary: "Show a session and verify its entity is still live",
     usage: "vibestudio agent status [NAME]",
     flags: [JSON_FLAG],
+    args: [{ name: "NAME" }],
     run: status,
   },
   {
@@ -602,6 +601,7 @@ export const agentCommands: CliCommand[] = [
       { name: "rm", takesValue: false, description: "Also remove the session's context folder" },
       JSON_FLAG,
     ],
+    args: [{ name: "NAME" }],
     run: detach,
   },
   {
@@ -627,6 +627,7 @@ export const agentCommands: CliCommand[] = [
       },
       JSON_FLAG,
     ],
+    args: [{ name: "SERVICE.METHOD" }, { name: "ARGS_JSON" }],
     run: call,
   },
   {
@@ -635,6 +636,7 @@ export const agentCommands: CliCommand[] = [
     summary: "List registered RPC services, or describe one",
     usage: "vibestudio agent services [NAME]",
     flags: [JSON_FLAG],
+    args: [{ name: "NAME" }],
     run: services,
   },
   {
@@ -650,6 +652,7 @@ export const agentCommands: CliCommand[] = [
       },
       JSON_FLAG,
     ],
+    args: [{ name: "NAME_OR_REPO_PATH" }],
     run: skills,
   },
   {
@@ -663,6 +666,7 @@ export const agentCommands: CliCommand[] = [
       { name: "limit", takesValue: true, description: "Max records (<=1000)" },
       JSON_FLAG,
     ],
+    args: [{ name: "UNIT" }],
     run: logs,
   },
   {
@@ -675,6 +679,7 @@ export const agentCommands: CliCommand[] = [
       { name: "limit", takesValue: true, description: "Max log records (<=1000)" },
       JSON_FLAG,
     ],
+    args: [{ name: "UNIT" }],
     run: diag,
   },
   skillCommand,

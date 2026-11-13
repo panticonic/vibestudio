@@ -103,6 +103,7 @@ export const contextCommands: CliCommand[] = [
     summary: "Export a context snapshot into a local directory",
     usage: "vibestudio context mirror [<contextId>] [dir]",
     flags: [...SCOPE_FLAGS, JSON_FLAG],
+    args: [{ name: "CONTEXT_ID" }, { name: "DIR" }],
     run: mirror,
   },
 ];

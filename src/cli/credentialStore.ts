@@ -18,6 +18,7 @@ import {
   type CliStoredPairing,
 } from "@vibestudio/shared/cliCredentials";
 import { writeFileAtomicSync } from "../atomicFile.js";
+import { AuthError } from "./output.js";
 import { cliCredentialPath } from "./configPaths.js";
 
 export {
@@ -38,7 +39,7 @@ export const credentialPath = cliCredentialPath;
 
 function assertNotLegacy(parsed: unknown, filePath: string): void {
   if (isLegacyCliCredential(parsed)) {
-    throw new Error(
+    throw new AuthError(
       `The CLI credential at ${filePath} was paired with an older Vibestudio build and cannot be used. ` +
         "Run `vibestudio remote logout` to remove it, then pair this device again."
     );
@@ -48,7 +49,7 @@ function assertNotLegacy(parsed: unknown, filePath: string): void {
 export function loadCliCredentials(filePath: string = credentialPath()): CliCredentials | null {
   const identity = loadCliIdentity(filePath);
   if (identity?.kind === "device" && identity.phase === "account") {
-    throw new Error(
+    throw new AuthError(
       "This CLI is paired, but no workspace is selected; run `vibestudio remote select Personal` or `vibestudio terminal` to finish opening your account"
     );
   }
@@ -91,7 +92,7 @@ export function requireDeviceCliCredentials(
   operation: string
 ): CliDeviceCredentials {
   if (credentials.kind !== "device") {
-    throw new Error(
+    throw new AuthError(
       `${operation} requires a paired human device profile; agent profiles cannot manage device identity`
     );
   }
@@ -103,7 +104,7 @@ export function requireDeviceCliIdentity(
   operation: string
 ): CliDeviceIdentity {
   if (identity.kind !== "device")
-    throw new Error(
+    throw new AuthError(
       `${operation} requires a paired human device profile; agent profiles cannot manage device identity`
     );
   return identity;

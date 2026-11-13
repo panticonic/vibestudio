@@ -17,6 +17,21 @@ const SHIM_NAME = /^[a-z][a-z0-9-]{0,62}$/u;
 type Listing = Pick<ClientListing, "id" | "runtime" | "terminalCommand"> &
   Partial<Pick<ClientListing, "intents" | "unavailableReason">>;
 
+/**
+ * The listing a terminal acts on for a client id. An id can be declared once
+ * per runtime (`chat` on the web and in the terminal); the terminal one wins,
+ * and another runtime's is returned only when there is no terminal one.
+ */
+export function terminalListing<T extends Pick<ClientListing, "id" | "runtime">>(
+  listings: readonly T[],
+  id: string
+): T | undefined {
+  return (
+    listings.find((candidate) => candidate.id === id && candidate.runtime === "terminal") ??
+    listings.find((candidate) => candidate.id === id)
+  );
+}
+
 /** What a client's shim runs: its registered command, else `open <id>`. */
 export function clientInvocation(listing: Listing, table: CommandTable): string {
   return listing.terminalCommand && table.commands[listing.terminalCommand]?.clientId === listing.id
@@ -118,7 +133,7 @@ export function syncClientIndex(context: ShimContext, listings: readonly Listing
   const removedShims: string[] = [];
   const directory = context.directory ?? shimDirectory();
   for (const [name, shim] of Object.entries(context.state.read().shims)) {
-    const listing = listings.find((candidate) => candidate.id === shim.clientId);
+    const listing = terminalListing(listings, shim.clientId);
     if (!listing) {
       unlinkClientShim(context, name);
       removedShims.push(name);

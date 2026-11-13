@@ -92,5 +92,6 @@ export const skillCommand: CliCommand = {
     },
     JSON_FLAG,
   ],
+  args: [{ name: "install|print" }],
   run: skill,
 };

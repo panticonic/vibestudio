@@ -1,4 +1,4 @@
-import { formatRpcFailure } from "@vibestudio/rpc";
+import { NOT_PAIRED_GUIDANCE } from "./pairingGuidance.js";
 import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { randomUUID } from "node:crypto";
@@ -10,10 +10,18 @@ import {
 import { readEventWatchRecords } from "@vibestudio/service-schemas/events";
 import type { EventPayloads } from "@vibestudio/shared/events";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
-import { JSON_FLAG, type CliCommand, type ParsedInvocation } from "./commandTable.js";
+import { JSON_FLAG, type ArgSpec, type CliCommand, type ParsedInvocation } from "./commandTable.js";
 import { loadCliIdentity, type CliCredentials } from "./credentialStore.js";
 import { openHubControlRpc } from "./remoteClient.js";
-import { AuthError, UsageError, jsonMode, printError, printResult } from "./output.js";
+import {
+  AuthError,
+  CliError,
+  EXIT_ERROR,
+  UsageError,
+  jsonMode,
+  printError,
+  printResult,
+} from "./output.js";
 import { RpcClient } from "./rpcClient.js";
 import { typedClient } from "./typedClients.js";
 
@@ -39,10 +47,17 @@ interface SurfaceSet {
   incomplete: boolean;
 }
 
-function unavailableError(failure: SurfaceFailure): Error {
-  return new Error(`${failure.source} approvals unavailable: ${formatRpcFailure(failure.error)}`, {
-    cause: failure.error,
-  });
+/**
+ * The rendered failure names the queue and then its cause (printError formats
+ * the cause chain), and keeps the cause's exit class: an unreachable hub is a
+ * connection failure (3), not a generic one.
+ */
+function unavailableError(failure: SurfaceFailure): CliError {
+  return new CliError(
+    `${failure.source} approvals unavailable`,
+    failure.error instanceof CliError ? failure.error.exitCode : EXIT_ERROR,
+    { cause: failure.error }
+  );
 }
 
 interface Surface {
@@ -60,7 +75,7 @@ interface Surface {
 async function openSurfaces(): Promise<SurfaceSet> {
   const identity = loadCliIdentity();
   if (!identity) {
-    throw new AuthError('not paired — run `vibestudio remote pair "<pair-link>"` first');
+    throw new AuthError(NOT_PAIRED_GUIDANCE);
   }
   const workspace =
     identity.kind === "agent" || identity.phase === "workspace"
@@ -101,10 +116,21 @@ async function listAll(set: SurfaceSet): Promise<LabelledApproval[]> {
     )
   );
   const approvals: LabelledApproval[] = [];
+  let answered = 0;
   settled.forEach((result, index) => {
-    if (result.status === "fulfilled") approvals.push(...result.value);
-    else set.unavailable.push({ source: set.surfaces[index]!.source, error: result.reason });
+    if (result.status === "fulfilled") {
+      answered += 1;
+      approvals.push(...result.value);
+    } else set.unavailable.push({ source: set.surfaces[index]!.source, error: result.reason });
   });
+  // No queue answered: an empty list would claim there is nothing pending.
+  if (answered === 0) {
+    const [first, ...rest] = set.unavailable;
+    if (first && rest.length === 0) throw unavailableError(first);
+    if (first) {
+      throw new AggregateError(set.unavailable.map(unavailableError), "No approval queue answered");
+    }
+  }
   // The list is what the reachable queues hold; the caller is told it is not everything.
   set.incomplete = set.unavailable.length > 0;
   return approvals;
@@ -183,13 +209,14 @@ function command(
   summary: string,
   usage: string,
   action: (inv: ParsedInvocation, set: SurfaceSet) => Promise<unknown>,
-  options: { input?: boolean; render?: (result: unknown) => void } = {}
+  options: { args?: readonly ArgSpec[]; input?: boolean; render?: (result: unknown) => void } = {}
 ): CliCommand {
   return {
     group: "approvals",
     name,
     summary,
     usage: `vibestudio approvals ${usage}`,
+    ...(options.args ? { args: options.args } : {}),
     flags: [
       ...(options.input
         ? [{ name: "input", takesValue: false, description: "Read the response JSON from stdin" }]
@@ -334,7 +361,8 @@ export const approvalCommands: CliCommand[] = [
     async (inv, set) => {
       positionals(inv, 1, "show ID");
       return (await pendingApproval(set, inv.positionals[0]!)).approval;
-    }
+    },
+    { args: [{ name: "ID" }] }
   ),
   {
     group: "approvals",
@@ -353,7 +381,8 @@ export const approvalCommands: CliCommand[] = [
       const [id, decision] = validate(shellApprovalMethods.resolve.args, inv.positionals);
       await (await pendingApproval(set, id)).client.resolve(id, decision);
       return { approvalId: id, decision };
-    }
+    },
+    { args: [{ name: "ID" }, { name: "DECISION" }] }
   ),
   command(
     "review",
@@ -367,7 +396,7 @@ export const approvalCommands: CliCommand[] = [
       const { client } = await pendingApproval(set, inv.positionals[0]!);
       return client.resolveInstallReview(inv.positionals[0]!, resolution);
     },
-    { input: true }
+    { input: true, args: [{ name: "ID" }, { name: "RESPONSE_JSON" }] }
   ),
   command(
     "rules",
@@ -382,7 +411,7 @@ export const approvalCommands: CliCommand[] = [
       await (await pendingApproval(set, id)).client.resolveTaskRules(id, resolution);
       return { approvalId: id, decision: resolution.decision };
     },
-    { input: true }
+    { input: true, args: [{ name: "ID" }, { name: "RESPONSE_JSON" }] }
   ),
   command(
     "submit",
@@ -410,6 +439,6 @@ export const approvalCommands: CliCommand[] = [
       }
       return { approvalId: id, decision: "submit" };
     },
-    { input: true }
+    { input: true, args: [{ name: "ID" }, { name: "VALUES_JSON" }] }
   ),
 ];
