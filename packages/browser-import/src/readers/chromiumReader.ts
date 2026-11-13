@@ -64,6 +64,16 @@ function readJsonFile(filePath: string): unknown {
   return JSON.parse(content);
 }
 
+/**
+ * `Local State` belongs to the user data directory. A profile directory never
+ * holds one, except where the data directory is itself the main profile
+ * (Opera); otherwise it is the profile's parent.
+ */
+function chromiumLocalStatePath(profilePath: string): string {
+  const own = path.join(profilePath, "Local State");
+  return fs.existsSync(own) ? own : path.join(path.dirname(profilePath), "Local State");
+}
+
 function firstExistingProfileFile(profilePath: string, relativePaths: string[]): string | null {
   for (const relativePath of relativePaths) {
     const filePath = path.join(profilePath, relativePath);
@@ -327,7 +337,7 @@ export class ChromiumReader implements BrowserDataReader {
         has_cross_site_ancestor: number;
       }>;
 
-      const localStatePath = path.join(path.dirname(profilePath), "Local State");
+      const localStatePath = chromiumLocalStatePath(profilePath);
       const hostBound = chromiumCookieDatabaseVersion(db) >= CHROMIUM_HOST_BOUND_COOKIE_VERSION;
       const cookies: ImportedCookie[] = [];
 
@@ -408,7 +418,7 @@ export class ChromiumReader implements BrowserDataReader {
         times_used: number;
       }>;
 
-      const localStatePath = path.join(path.dirname(profilePath), "Local State");
+      const localStatePath = chromiumLocalStatePath(profilePath);
       const passwords: ImportedPassword[] = [];
 
       for (const row of rawRows) {

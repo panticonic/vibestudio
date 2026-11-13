@@ -198,6 +198,15 @@ describe("Chromium profile detection", () => {
     expect(profiles[1]!.id).toBe("Profile 1");
   });
 
+  it("detects a main profile kept in the data directory itself, as Opera does", () => {
+    fs.writeFileSync(path.join(tmpDir, "Local State"), JSON.stringify({ profile: {} }));
+    fs.writeFileSync(path.join(tmpDir, "Preferences"), "{}");
+
+    expect(detectChromiumProfiles(tmpDir)).toEqual([
+      { id: "Default", displayName: "Default", path: tmpDir, isDefault: true },
+    ]);
+  });
+
   it("returns empty array for empty directory", () => {
     const profiles = detectChromiumProfiles(tmpDir);
     expect(profiles).toHaveLength(0);

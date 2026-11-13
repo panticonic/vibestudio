@@ -9,8 +9,24 @@ import type { DetectedProfile } from "../types.js";
  * 1. Parse `Local State` JSON -> `profile.info_cache` for profile metadata.
  * 2. Fallback: scan for `Default`, `Profile 1`, `Profile 2`, ... directories
  *    that contain a `Preferences` file.
+ *
+ * Some browsers (Opera, Opera GX) keep their main profile in the data
+ * directory itself rather than in `Default`; a data directory holding its own
+ * `Preferences` is that profile.
  */
 export function detectChromiumProfiles(dataDir: string): DetectedProfile[] {
+  const profiles = detectProfileDirectories(dataDir);
+  if (
+    fs.existsSync(path.join(dataDir, "Preferences")) &&
+    !profiles.some((profile) => profile.id === "Default")
+  ) {
+    for (const profile of profiles) profile.isDefault = false;
+    profiles.unshift({ id: "Default", displayName: "Default", path: dataDir, isDefault: true });
+  }
+  return profiles;
+}
+
+function detectProfileDirectories(dataDir: string): DetectedProfile[] {
   const localStatePath = path.join(dataDir, "Local State");
 
   if (fs.existsSync(localStatePath)) {
