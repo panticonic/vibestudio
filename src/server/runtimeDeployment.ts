@@ -6,6 +6,7 @@
  */
 import {
   classSecretName,
+  LIFECYCLE_SECRET,
   RPC_AUTH_TOKEN,
   RUNTIME_SCRIPT,
   UNIVERSAL_DO_LOADER_SECRET,
@@ -64,6 +65,8 @@ export function buildRuntimeDeployment(input: RuntimeDeploymentInput): RuntimeDe
     doBindingNames[`${source}:${cls.className}`] = bindingName;
     bindings.push({ name: bindingName, class_name: cls.className });
     classSecret(cls.className, RPC_AUTH_TOKEN, cls.rpcToken);
+    // The host's authority to delete this class's retired objects' storage.
+    classSecret(cls.className, LIFECYCLE_SECRET, input.doLoaderSecret);
     internalEnv[cls.className] = cls.env;
     // Eval compiles agent code with the isolate's own `new Function`. Only a
     // class the deployment declares gets code generation; its isolates are a

@@ -401,7 +401,7 @@ function fakeNode(options: { failFork?: boolean | string; failDestroy?: boolean 
     failFork: options.failFork ?? false,
     failDestroy: options.failDestroy ?? false,
     objects: [] as Array<Record<string, unknown>>,
-    destroyed: [] as Array<{ key: string; secret: string | null }>,
+    destroyed: [] as Array<{ key: string; path: string; secret: string | null }>,
   };
   const ordinary = vi.mocked(fetch).getMockImplementation()!;
   vi.mocked(fetch).mockImplementation(async (input, init) => {
@@ -424,6 +424,7 @@ function fakeNode(options: { failFork?: boolean | string; failDestroy?: boolean 
       const headers = new Headers((init as RequestInit).headers);
       state.destroyed.push({
         key: url.pathname.split("/")[2]!,
+        path: url.pathname,
         secret: headers.get("X-Vibestudio-Lifecycle-Secret"),
       });
       return new Response(null, { status: 204 });
@@ -454,12 +455,18 @@ describe("RuntimeManager", () => {
       ).durable_objects;
       // Every product class holds its own credential, and only EvalDO may generate code.
       for (const className of INTERNAL_DO_CLASSES) {
-        expect(classes[className]!.secrets).toEqual([`RPC_AUTH_TOKEN__${className}`]);
+        expect(classes[className]!.secrets).toEqual([
+          `RPC_AUTH_TOKEN__${className}`,
+          `LIFECYCLE_SECRET__${className}`,
+        ]);
         expect(classes[className]!.codegen).toBe(className === "EvalDO" ? true : undefined);
       }
       expect(classes["UniversalDO"]).toEqual({ secrets: ["DO_LOADER_SECRET__UniversalDO"] });
       expect(Object.keys(secrets).sort()).toEqual(
-        [...INTERNAL_DO_CLASSES.map((c) => `RPC_AUTH_TOKEN__${c}`), "DO_LOADER_SECRET__UniversalDO"].sort()
+        [
+          ...INTERNAL_DO_CLASSES.flatMap((c) => [`RPC_AUTH_TOKEN__${c}`, `LIFECYCLE_SECRET__${c}`]),
+          "DO_LOADER_SECRET__UniversalDO",
+        ].sort()
       );
       // Nothing a class holds alone is in the manifest or another class's env.
       const manifest = JSON.stringify(config);
@@ -1460,6 +1467,28 @@ describe("RuntimeManager", () => {
       expect(node.destroyed).toHaveLength(2);
     } finally {
       await reopened.shutdown();
+    }
+  });
+
+  it("retires a product object's storage through its own class, under the lifecycle secret", async () => {
+    const mgr = new RuntimeManager(createMockDeps());
+    await mgr.startWorker(startArgs());
+    const node = fakeNode();
+    try {
+      await mgr.destroyRetiredDOStorage({
+        source: "vibestudio/internal",
+        className: "EvalDO",
+        objectKey: "ctx/run 1",
+      });
+      expect(node.destroyed).toEqual([
+        {
+          key: expect.any(String),
+          path: "/_w/vibestudio/internal/EvalDO/ctx%2Frun%201/__vibestudio_destroy",
+          secret: mgr.getDoLoaderSecret(),
+        },
+      ]);
+    } finally {
+      await mgr.shutdown();
     }
   });
 

@@ -9,7 +9,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import router from "./router.js";
 import workerHost from "./workerHost.js";
-import { classSecretName, RPC_AUTH_TOKEN } from "./celldRuntime.js";
+import { classSecretName, DESTROY_METHOD, LIFECYCLE_SECRET, RPC_AUTH_TOKEN } from "./celldRuntime.js";
 
 export { UniversalDO, ExecutablePreparation } from "./universalDo.js";
 export default router;
@@ -50,6 +50,7 @@ export function internalClassEnv(env: InternalEnv, className: string): Record<st
   const projected: Record<string, unknown> = { ...env, ...own, [RPC_AUTH_TOKEN]: token };
   delete projected["INTERNAL_DO_ENV"];
   delete projected[classSecretName(RPC_AUTH_TOKEN, className)];
+  delete projected[classSecretName(LIFECYCLE_SECRET, className)];
   projected["WORKER_SOURCE"] = INTERNAL_DO_SOURCE;
   projected["WORKER_CLASS_NAME"] = className;
   return Object.freeze(projected);
@@ -62,9 +63,32 @@ export function internalDurableObjectClass<T extends DurableObjectConstructor>(
   Base: T,
   className: string
 ): T {
+  const lifecycleSecret = (env: InternalEnv): unknown => env[classSecretName(LIFECYCLE_SECRET, className)];
   const Bound = class extends (Base as DurableObjectConstructor) {
+    private readonly retirement: { ctx: DurableObjectState; secret: unknown };
     constructor(ctx: DurableObjectState, env: InternalEnv) {
       super(ctx, internalClassEnv(env, className) as never);
+      this.retirement = { ctx, secret: lifecycleSecret(env) };
+    }
+
+    /**
+     * Reclaiming the storage of a retired object is the host's lifecycle call,
+     * not part of the class: it deletes everything the object stored.
+     */
+    async fetch(request: Request): Promise<Response> {
+      const segments = new URL(request.url).pathname.split("/").filter(Boolean);
+      if (segments[1] === DESTROY_METHOD) {
+        const provided = request.headers.get("X-Vibestudio-Lifecycle-Secret");
+        if (typeof this.retirement.secret !== "string" || provided !== this.retirement.secret) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        await this.retirement.ctx.storage.deleteAll();
+        return new Response(null, { status: 204 });
+      }
+      return (super["fetch" as never] as unknown as (request: Request) => Promise<Response>).call(
+        this,
+        request
+      );
     }
   };
   Object.defineProperty(Bound, "name", { value: className });

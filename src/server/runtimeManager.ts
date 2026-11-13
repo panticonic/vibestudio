@@ -56,6 +56,7 @@ import { CelldNode, CelldNodeProcess, resolveCelldBinary } from "./celldNode.js"
 import { DurableObjectCloneReceipts } from "./durableObjectCloneReceipts.js";
 import { migrateLegacyWorkerdStorage } from "./celldMigration.js";
 import { buildRuntimeDeployment, type RuntimeDeployment } from "./runtimeDeployment.js";
+import { DESTROY_METHOD } from "./runtimeNames.js";
 import {
   destroyWorkerdConnections,
   getWorkerdConnectionDispatcher,
@@ -4354,12 +4355,17 @@ export class RuntimeManager {
     await response.arrayBuffer();
   }
 
-  /** Stop the facet and delete the cell's storage (root, facet index, facets). */
+  /**
+   * Delete a retired object's storage: a userland object's UniversalDO cell
+   * (stopping its facet, deleting root, facet index and facets), or a product
+   * object's own cell (the class answers the lifecycle call by deleting
+   * everything it stored).
+   */
   private async destroyCell(ref: DORef): Promise<void> {
-    const response = await this.nodeFetch(
-      `/_u/${encodeURIComponent(this.cellName(ref))}/__vibestudio_destroy`,
-      { lifecycle: true }
-    );
+    const path = isInternalDOSource(ref.source)
+      ? `/_w/${ref.source}/${ref.className}/${encodeURIComponent(ref.objectKey)}/${DESTROY_METHOD}`
+      : `/_u/${encodeURIComponent(this.cellName(ref))}/${DESTROY_METHOD}`;
+    const response = await this.nodeFetch(path, { lifecycle: true });
     if (!response.ok) {
       throw new Error(
         `Failed to destroy storage of ${ref.source}:${ref.className}/${ref.objectKey} ` +
@@ -4536,7 +4542,10 @@ export class RuntimeManager {
     journalOnly?: boolean;
   }): Promise<string> {
     if (!input.intent.trim()) throw new Error("Durable Object storage maintenance requires intent");
-    this.requireUserlandStorage(input.ref, `Durable Object storage ${input.kind}`);
+    // A product class owns its storage: only its retirement is the host's.
+    if (input.kind !== "destroy") {
+      this.requireUserlandStorage(input.ref, `Durable Object storage ${input.kind}`);
+    }
     if (!input.journalOnly) await this.ensureWorkerdRunning();
     const targetId = this.durableObjectTargetId(input.ref);
     const previous = this.doMaintenanceChains.get(targetId);

@@ -41,6 +41,11 @@ const again = await fetch("http://127.0.0.1:18765/_object", { method: "POST", he
 console.log("fork again (refused)", again.status, (await again.text()).slice(0, 200));
 const restore = await fetch("http://127.0.0.1:18765/_object", { method: "POST", headers: objectHeaders, body: JSON.stringify({ op: "restore", namespace: "do_vibestudio_internal_WebhookStoreDO", from: "k1", to: "k2", stop: true }) });
 console.log("restore", restore.status, (await restore.text()).slice(0, 200));
+const destroyHeaders = { Authorization: "Bearer gw", "X-Vibestudio-Dispatch-Secret": "ds", "X-Vibestudio-Lifecycle-Secret": "dls" };
+const refused = await fetch("http://127.0.0.1:18765/_w/vibestudio/internal/WebhookStoreDO/k2/__vibestudio_destroy", { method: "POST", headers: { ...destroyHeaders, "X-Vibestudio-Lifecycle-Secret": "wrong" } });
+console.log("destroy with a wrong secret", refused.status);
+const destroyed = await fetch("http://127.0.0.1:18765/_w/vibestudio/internal/WebhookStoreDO/k2/__vibestudio_destroy", { method: "POST", headers: destroyHeaders });
+console.log("destroy a product object", destroyed.status);
 await running.reload(); console.log("reload ok");
 console.log("proxy saw", seen);
 console.log("shutdown requested", await running.requestShutdown(), await running.exited);

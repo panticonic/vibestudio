@@ -7,6 +7,10 @@ export const RUNTIME_SCRIPT = "vibestudio";
  * script, so a class's secret binding carries the class name. */
 export const RPC_AUTH_TOKEN = "RPC_AUTH_TOKEN";
 export const UNIVERSAL_DO_LOADER_SECRET = "DO_LOADER_SECRET";
+/** Authorizes the host to delete a product object's storage (retirement). */
+export const LIFECYCLE_SECRET = "LIFECYCLE_SECRET";
+/** The path segment a class answers a storage-destroy request on. */
+export const DESTROY_METHOD = "__vibestudio_destroy";
 
 export function classSecretName(name: string, className: string): string {
   return `${name}__${className}`;
