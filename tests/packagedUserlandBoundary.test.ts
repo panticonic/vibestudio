@@ -3,7 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createPackage } from "@electron/asar";
 import { describe, expect, it } from "vitest";
-import { writeNativeIsolationArtifacts } from "./helpers/nativeIsolationArtifacts.js";
+import { writeCelldRelease, writeNativeIsolationArtifacts } from "./helpers/nativeIsolationArtifacts.js";
 import { afterPack } from "../scripts/check-electron-package-boundary.mjs";
 import { writeNodeRuntimeFixture } from "./helpers/nodeRuntimeArtifacts.js";
 import { nativeIsolationTarget } from "../scripts/native-isolation-artifacts.mjs";
@@ -105,6 +105,13 @@ describe("packaged host/userland boundary", () => {
           )
         );
       }
+      // The celld runtime: the manifest names it, the CI-built input exists, and
+      // the unpacked payload is the same bytes.
+      const celld = writeCelldRelease(app, process.platform, process.arch);
+      const unpackedCelld = path.join(resources, "app.asar.unpacked", celld.installedPath);
+      fs.mkdirSync(path.dirname(unpackedCelld), { recursive: true });
+      fs.writeFileSync(unpackedCelld, celld.bytes);
+      fs.chmodSync(unpackedCelld, 0o755);
       fs.writeFileSync(path.join(app, "dist", "main.cjs"), "module.exports = {};\n");
       await createPackage(app, path.join(resources, "app.asar"));
       const context = {
