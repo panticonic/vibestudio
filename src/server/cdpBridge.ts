@@ -152,6 +152,9 @@ export class CdpBridge {
   /** Host provider connections: stable hostConnectionId → provider transport */
   private providers = new Map<string, CdpHostProviderConnection>();
 
+  /** Observers of a host provider's terminal disconnect. */
+  private readonly providerDisconnectListeners = new Set<(hostConnectionId: string) => void>();
+
   /** Registered targets from providers: targetId → provider metadata */
   private targetRegistry = new Map<string, RegisteredTarget>();
 
@@ -442,6 +445,16 @@ export class CdpBridge {
     });
   }
 
+  /**
+   * Observe a host provider's disconnect: state it held for the server (open
+   * responses, targets) ends with it. A reconnect that replaces the transport
+   * of a still-live provider is not a disconnect.
+   */
+  onProviderDisconnected(listener: (hostConnectionId: string) => void): () => void {
+    this.providerDisconnectListeners.add(listener);
+    return () => this.providerDisconnectListeners.delete(listener);
+  }
+
   isProviderConnected(hostConnectionId: string): boolean {
     return this.providers.get(hostConnectionId)?.readyState === WebSocket.OPEN;
   }
@@ -613,6 +626,7 @@ export class CdpBridge {
           waiter.reject(this.hostUnavailableError(waiter.targetId));
         }
       }
+      for (const listener of [...this.providerDisconnectListeners]) listener(hostConnectionId);
     });
 
     ws.on("error", (err) => {

@@ -14,7 +14,7 @@ export interface ChromiumFetchMetadata {
   size: number;
 }
 
-export function createChromiumFetchService(deps: {
+export interface ChromiumFetchServiceDeps {
   open(
     url: string,
     session: "public" | "browser"
@@ -26,23 +26,55 @@ export function createChromiumFetchService(deps: {
     limit: number
   ): Promise<{ bytesBase64: string; done: boolean }>;
   close(hostConnectionId: string, responseId: string): Promise<void>;
-}): ServiceDefinition {
-  const responses = new Map<string, { owner: string; hostConnectionId: string }>();
-  const owner = (ctx: Parameters<ServiceDefinition["handler"]>[0]) =>
+  /** A host's disconnect ends every response it held. */
+  onHostDisconnected(listener: (hostConnectionId: string) => void): () => void;
+  /** A runtime entity's retirement ends every response it opened. */
+  onEntityRetired(listener: (entityId: string) => void): () => void;
+  /** A host-side close that no caller is waiting on failed. */
+  reportCloseFailure(responseId: string, error: unknown): void;
+}
+
+type HandlerContext = Parameters<ServiceDefinition["handler"]>[0];
+
+export function createChromiumFetchService(
+  deps: ChromiumFetchServiceDeps
+): ServiceDefinition & { stop(): void } {
+  const responses = new Map<
+    string,
+    { owner: string; ownerEntityId: string; hostConnectionId: string }
+  >();
+  const owner = (ctx: HandlerContext) =>
     ctx.authorization?.agentBinding?.channelId ?? ctx.caller.runtime.id;
-  const open = async (
-    ctx: Parameters<ServiceDefinition["handler"]>[0],
-    url: string,
-    session: "public" | "browser"
-  ) => {
+  /** The runtime entity whose lifetime bounds the caller's open responses. */
+  const ownerEntityId = (ctx: HandlerContext) =>
+    ctx.caller.agentBinding?.entityId ?? ctx.caller.runtime.id;
+  /** No caller waits on this close; its failure is reported, not dropped. */
+  const closeUnobserved = (hostConnectionId: string, responseId: string) => {
+    void deps
+      .close(hostConnectionId, responseId)
+      .catch((error: unknown) => deps.reportCloseFailure(responseId, error));
+  };
+  const stopHostListener = deps.onHostDisconnected((hostConnectionId) => {
+    for (const [responseId, entry] of responses)
+      if (entry.hostConnectionId === hostConnectionId) responses.delete(responseId);
+  });
+  const stopEntityListener = deps.onEntityRetired((entityId) => {
+    for (const [responseId, entry] of responses) {
+      if (entry.ownerEntityId !== entityId) continue;
+      responses.delete(responseId);
+      closeUnobserved(entry.hostConnectionId, responseId);
+    }
+  });
+  const open = async (ctx: HandlerContext, url: string, session: "public" | "browser") => {
     const opened = await deps.open(url, session);
     responses.set(opened.response.responseId, {
       owner: owner(ctx),
+      ownerEntityId: ownerEntityId(ctx),
       hostConnectionId: opened.hostConnectionId,
     });
     return opened.response;
   };
-  const owned = (ctx: Parameters<ServiceDefinition["handler"]>[0], responseId: string) => {
+  const owned = (ctx: HandlerContext, responseId: string) => {
     const entry = responses.get(responseId);
     if (!entry || entry.owner !== owner(ctx)) throw new Error("Chromium response is unavailable");
     return entry;
@@ -89,8 +121,10 @@ export function createChromiumFetchService(deps: {
         const entry = owned(ctx, responseId);
         const result = await deps.read(entry.hostConnectionId, responseId, offset, limit);
         if (result.done) {
+          // The caller already holds these final bytes; releasing the host's
+          // copy is cleanup that must not discard them.
           responses.delete(responseId);
-          await deps.close(entry.hostConnectionId, responseId);
+          closeUnobserved(entry.hostConnectionId, responseId);
         }
         return result;
       },
@@ -100,5 +134,9 @@ export function createChromiumFetchService(deps: {
         await deps.close(entry.hostConnectionId, responseId);
       },
     }),
+    stop() {
+      stopHostListener();
+      stopEntityListener();
+    },
   };
 }

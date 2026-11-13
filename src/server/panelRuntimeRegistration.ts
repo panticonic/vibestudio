@@ -557,7 +557,9 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
   }
 
   {
-    let chromiumFetchDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition;
+    let chromiumFetchDefinition: ReturnType<
+      typeof import("./services/chromiumFetchService.js").createChromiumFetchService
+    >;
     container.registerManaged({
       name: "chromiumFetch",
       dependencies: ["cdpBridge"],
@@ -600,7 +602,18 @@ export async function registerPanelServices(deps: CommonDeps): Promise<void> {
               { responseId },
             ]);
           },
+          onHostDisconnected: (listener) => bridge.onProviderDisconnected(listener),
+          onEntityRetired: (listener) =>
+            panelGateEntityCache.onChange((entityId, change) => {
+              if (change === "retire" || change === "delete") listener(entityId);
+            }),
+          reportCloseFailure: (responseId, error) =>
+            console.warn(`[chromiumFetch] Could not close response ${responseId}:`, error),
         });
+        return chromiumFetchDefinition;
+      },
+      async stop(instance: { stop(): void } | undefined) {
+        instance?.stop();
       },
       getServiceDefinition() {
         if (!chromiumFetchDefinition) throw new Error("chromiumFetch service not initialized");
