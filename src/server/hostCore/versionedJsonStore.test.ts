@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { saveVersionedJsonFile, type VersionedJsonCodec } from "./versionedJsonStore.js";
+import {
+  loadVersionedJsonFile,
+  saveVersionedJsonFile,
+  type VersionedJsonCodec,
+} from "./versionedJsonStore.js";
 
 describe("versionedJsonStore", () => {
   it("does not allow an encoder to override the authoritative version field", () => {
@@ -19,5 +23,29 @@ describe("versionedJsonStore", () => {
       /encoder returned an invalid body/
     );
     expect(fs.existsSync(filePath)).toBe(false);
+  });
+
+  it("names the unreadable store file so it can be repaired", () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), "versioned-json-store-"));
+    const filePath = path.join(directory, "store.json");
+    const codec: VersionedJsonCodec<{ value: string }> = {
+      schemaName: "test store",
+      currentVersion: 2,
+      decodeCurrent: () => ({ value: "unused" }),
+      encode: (value) => value,
+    };
+
+    fs.writeFileSync(filePath, "{");
+    expect(() => loadVersionedJsonFile(filePath, codec)).toThrow(
+      `test store at ${filePath} contains malformed JSON`
+    );
+    fs.writeFileSync(filePath, JSON.stringify({ value: "x" }));
+    expect(() => loadVersionedJsonFile(filePath, codec)).toThrow(
+      `test store at ${filePath} has no schemaVersion`
+    );
+    fs.writeFileSync(filePath, JSON.stringify({ schemaVersion: 1, value: "x" }));
+    expect(() => loadVersionedJsonFile(filePath, codec)).toThrow(
+      `test store at ${filePath} has schema version 1; expected 2`
+    );
   });
 });

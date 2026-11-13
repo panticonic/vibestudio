@@ -26,16 +26,18 @@ export function loadVersionedJsonFile<T>(filePath: string, codec: VersionedJsonC
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    throw new Error(`${codec.schemaName} contains malformed JSON`, { cause: error });
+    throw new Error(`${codec.schemaName} at ${filePath} contains malformed JSON`, {
+      cause: error,
+    });
   }
 
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || !(versionKey in parsed)) {
-    throw new Error(`${codec.schemaName} has no ${versionKey}`);
+    throw new Error(`${codec.schemaName} at ${filePath} has no ${versionKey}`);
   }
   const storedVersion = (parsed as Record<string, unknown>)[versionKey];
   if (storedVersion !== codec.currentVersion) {
     throw new Error(
-      `${codec.schemaName} has schema version ${String(storedVersion)}; expected ${codec.currentVersion}`
+      `${codec.schemaName} at ${filePath} has schema version ${String(storedVersion)}; expected ${codec.currentVersion}`
     );
   }
   return codec.decodeCurrent(parsed);
