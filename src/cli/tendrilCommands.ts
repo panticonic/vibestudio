@@ -51,6 +51,12 @@ const MAX_WAKES_FLAG: FlagSpec = {
   takesValue: true,
   description: `Page-event wakes in a row before events are held for the person (default ${DEFAULT_MAX_CONSECUTIVE_WAKES})`,
 };
+const FOLLOW_FLAG: FlagSpec = {
+  name: "follow",
+  takesValue: false,
+  description:
+    "Keep running and print one line per event (for monitor tools that wake on each line)",
+};
 const FROM_NOW_FLAG: FlagSpec = {
   name: "from-now",
   takesValue: false,
@@ -204,12 +210,17 @@ async function wait(inv: ParsedInvocation): Promise<number> {
       feed,
       async (items) => {
         for (const item of items)
-          console.log(json ? JSON.stringify(feedBody(feed.channelId, item)) : frame(item));
+          // One line per item, so a monitor that wakes per output line wakes once per event.
+          console.log(
+            json
+              ? JSON.stringify(feedBody(feed.channelId, item))
+              : frame(item).replace(/\s*\n\s*/g, " ")
+          );
       },
-      { once: true }
+      { once: inv.flags["follow"] !== true }
     );
     await feed.client.close();
-    return outcome === "delivered" ? 0 : 130;
+    return outcome === "delivered" || inv.flags["follow"] === true ? 0 : 130;
   } catch (error) {
     return printError(error, { json });
   }
@@ -405,13 +416,14 @@ export const tendrilCommands: CliCommand[] = [
     group: "tendril",
     name: "wait",
     summary: "Wait for the next tendril page events on a channel, print them, and exit",
-    usage: "vibestudio tendril wait [channel] [--json] [--from-now]",
+    usage: "vibestudio tendril wait [channel] [--follow] [--json] [--from-now]",
     details:
       "Prints page events (framed as data) and messages a person typed or spoken on a page, " +
       "then exits; run it again to wait for more. It resumes after what it last printed, applies " +
       "the wake bound, and has no timeout. Use it as a background command (Claude Code, Muse) or " +
-      "in a listener that starts a headless run per wake (Codex).",
-    flags: [JSON_FLAG, FROM_NOW_FLAG, MAX_WAKES_FLAG, STATE_FLAG, ...SCOPE_FLAGS],
+      "in a listener that starts a headless run per wake (Codex). With --follow it keeps running and " +
+      "prints one line per event, for monitor tools that wake the agent on each output line.",
+    flags: [JSON_FLAG, FOLLOW_FLAG, FROM_NOW_FLAG, MAX_WAKES_FLAG, STATE_FLAG, ...SCOPE_FLAGS],
     args: CHANNEL_ARG,
     run: wait,
   },
