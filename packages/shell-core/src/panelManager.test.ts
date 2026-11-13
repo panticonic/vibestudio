@@ -516,6 +516,31 @@ function makeManagerDeps(workspacePath: string) {
 }
 
 describe("PanelManager", () => {
+  it("does not save view state over the stored state while it is still loading", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test" });
+    const { deps } = makeManagerDeps("/unused");
+    let finishLoad!: (state: { collapsedIds: string[] }) => void;
+    const saved: string[][] = [];
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      allowMissingManifests: true,
+      viewState: {
+        load: () => new Promise((resolve) => (finishLoad = resolve)),
+        save: (state) => {
+          saved.push([...state.collapsedIds]);
+        },
+      },
+    });
+
+    const reading = manager.getCollapsedIds();
+    const collapsing = manager.setCollapsed(asPanelSlotId("panel:tree/new"), true);
+    finishLoad({ collapsedIds: ["panel:tree/stored"] });
+    await Promise.all([reading, collapsing]);
+
+    expect(saved).toEqual([["panel:tree/stored", "panel:tree/new"]]);
+  });
+
   it("forgets slots another client closed when the server reports their removal", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test" });
     const { deps } = makeManagerDeps("/unused");

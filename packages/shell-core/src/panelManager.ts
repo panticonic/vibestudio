@@ -245,7 +245,8 @@ export class PanelManager {
 
   private readonly collapsedIds = new Set<string>();
   private currentTheme: "light" | "dark" = "dark";
-  private viewStateLoaded = false;
+  /** The stored view state's load, shared by every caller until it settles. */
+  private viewStateLoad: Promise<void> | null = null;
   /**
    * Mirrors the slot's current panelEntityId by slotId. Tracks the *currently
    * active* panel entity per slot — what gets retired on the next navigation.
@@ -1728,16 +1729,23 @@ export class PanelManager {
     return slot.current_entity_id;
   }
 
-  private async ensureViewStateLoaded(): Promise<void> {
-    if (this.viewStateLoaded) return;
-    this.viewStateLoaded = true;
-    const state = await Promise.resolve(this.viewState?.load()).catch(() => null);
-    for (const slotId of state?.collapsedIds ?? []) {
-      this.collapsedIds.add(slotId);
-    }
-    if (typeof state?.focusedPanelId === "string" && state.focusedPanelId) {
-      this.registry.setFocusedPanelId(state.focusedPanelId);
-    }
+  /**
+   * Merge the stored view state before anything reads or saves it. Concurrent
+   * callers join one load: a save that ran ahead of it would overwrite the
+   * stored state with only what this session has touched. An unreadable store
+   * is treated as empty, as before.
+   */
+  private ensureViewStateLoaded(): Promise<void> {
+    this.viewStateLoad ??= (async () => {
+      const state = await Promise.resolve(this.viewState?.load()).catch(() => null);
+      for (const slotId of state?.collapsedIds ?? []) {
+        this.collapsedIds.add(slotId);
+      }
+      if (typeof state?.focusedPanelId === "string" && state.focusedPanelId) {
+        this.registry.setFocusedPanelId(state.focusedPanelId);
+      }
+    })();
+    return this.viewStateLoad;
   }
 
   private async persistViewState(): Promise<void> {
