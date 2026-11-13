@@ -5,10 +5,10 @@ import { resolveRequiredHostArtifactRoot } from "../appRoot.js";
 import { canonicalJson } from "@vibestudio/content-addressing";
 import { domainHash, parseSha256 } from "@vibestudio/shared/execution/identity";
 import {
-  INTERNAL_DO_PROGRAMS_FILE,
-  readPublishedInternalDoPrograms,
-  type PublishedInternalDoPrograms,
-} from "../../../scripts/lib/internal-do-programs.mjs";
+  RUNTIME_APP_FILE,
+  readPublishedRuntimeApp,
+  type PublishedRuntimeApp,
+} from "../../../scripts/lib/runtime-app.mjs";
 import {
   executionArtifactDigest,
   executionSourceClosureDigest,
@@ -30,8 +30,9 @@ export const INTERNAL_DO_SOURCE = "vibestudio/internal";
 export { INTERNAL_DO_CLASSES };
 export const INTERNAL_DO_PRODUCT_SEED_ID = "product:vibestudio-internal-do";
 
+/** One product class inside the runtime application. Every class shares the
+ * application's exact bytes; its execution identity binds the class name. */
 export interface InternalDOProgram {
-  readonly bundle: string;
   readonly buildKey: string;
   readonly identity: InternalDOExecutionIdentity;
 }
@@ -49,7 +50,7 @@ export interface InternalDOExecutionIdentity {
 }
 
 declare global {
-  var __VIBESTUDIO_INTERNAL_DO_PROGRAMS__: unknown;
+  var __VIBESTUDIO_RUNTIME_APP__: unknown;
 }
 
 let cached: InternalDOPrograms | null = null;
@@ -62,46 +63,44 @@ function freeze<T>(value: T): T {
   return value;
 }
 
-/** A loader-owned capture, never an unchecked bundle DTO. Publication owns
- * payload proof; this host owns immutable selection and class-bound identity. */
+/** A loader-owned capture of the runtime application, never an unchecked
+ * bundle DTO. Publication owns payload proof; this host owns immutable
+ * selection and class-bound identity. */
 export class InternalDOPrograms {
   readonly #programs: ReadonlyMap<string, InternalDOProgram>;
-  readonly #publication: PublishedInternalDoPrograms;
+  readonly #publication: PublishedRuntimeApp;
 
   private constructor(input: unknown) {
-    this.#publication = readPublishedInternalDoPrograms(input);
+    this.#publication = readPublishedRuntimeApp(input);
+    const buildKey = this.#publication.buildKey;
     this.#programs = new Map(
-      INTERNAL_DO_CLASSES.map((className) => {
-        const program = this.#publication.programs[className]!;
-        return [
-          className,
-          freeze({
-            ...program,
-            identity: captureExecutionIdentity(program.buildKey, className),
-          }),
-        ];
-      })
+      INTERNAL_DO_CLASSES.map((className) => [
+        className,
+        freeze({ buildKey, identity: captureExecutionIdentity(buildKey, className) }),
+      ])
     );
     Object.freeze(this);
   }
 
   static readInstalled(): InternalDOPrograms {
-    const snapshot = process.env["VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH"];
+    const snapshot = process.env["VIBESTUDIO_RUNTIME_APP_PATH"];
     if (snapshot) {
       if (!path.isAbsolute(snapshot))
-        throw new Error("VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH must be absolute");
+        throw new Error("VIBESTUDIO_RUNTIME_APP_PATH must be absolute");
       return new InternalDOPrograms(JSON.parse(fs.readFileSync(snapshot, "utf8")));
     }
-    if (globalThis.__VIBESTUDIO_INTERNAL_DO_PROGRAMS__ !== undefined)
-      return new InternalDOPrograms(globalThis.__VIBESTUDIO_INTERNAL_DO_PROGRAMS__);
+    if (globalThis.__VIBESTUDIO_RUNTIME_APP__ !== undefined)
+      return new InternalDOPrograms(globalThis.__VIBESTUDIO_RUNTIME_APP__);
     return new InternalDOPrograms(
       JSON.parse(
-        fs.readFileSync(
-          path.join(resolveRequiredHostArtifactRoot(), INTERNAL_DO_PROGRAMS_FILE),
-          "utf8"
-        )
+        fs.readFileSync(path.join(resolveRequiredHostArtifactRoot(), RUNTIME_APP_FILE), "utf8")
       )
     );
+  }
+
+  /** The exact module the workspace's runtime node deploys. */
+  app(): { readonly bundle: string; readonly buildKey: string } {
+    return this.#publication;
   }
 
   get(className: string): InternalDOProgram {
@@ -113,7 +112,7 @@ export class InternalDOPrograms {
     return program;
   }
 
-  publication(): PublishedInternalDoPrograms {
+  publication(): PublishedRuntimeApp {
     return this.#publication;
   }
 }

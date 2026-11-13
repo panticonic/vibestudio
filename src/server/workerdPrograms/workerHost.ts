@@ -1,43 +1,22 @@
 import { serializeRpcFailure, deserializeRpcFailure } from "@vibestudio/rpc";
 import { WORKER_EXECUTABLE_VERSION_HEADER } from "../workerExecutableDispatch.js";
-import { WorkerEntrypoint } from "cloudflare:workers";
+import {
+  gatewayFetch,
+  loadedNetworkPolicy,
+  type CelldWorkerCode,
+  type HostProgramEnv,
+} from "./celldRuntime.js";
 
-interface EgressProps {
-  id: string;
-}
-
-interface WorkerHostEnv {
-  EGRESS: Fetcher;
-  GATEWAY: Fetcher;
+interface WorkerHostEnv extends HostProgramEnv {
   LOADER: WorkerLoader;
-  WORKERD_EGRESS_SECRET: string;
-  WORKERD_LOADER_SECRET: string;
 }
 
 interface WorkerCodePayload extends WorkerLoaderWorkerCode {
   callerId: string;
 }
 
-type EgressExports = Cloudflare.Exports & {
-  EgressGateway(options: { props: EgressProps }): Fetcher;
-};
-
-function egressBinding(ctx: ExecutionContext, id: string): Fetcher {
-  const exports = ctx.exports as EgressExports;
-  return exports.EgressGateway({ props: { id } });
-}
-
-export class EgressGateway extends WorkerEntrypoint<WorkerHostEnv, EgressProps> {
-  async fetch(request: Request): Promise<Response> {
-    const headers = new Headers(request.headers);
-    headers.set("X-Vibestudio-Egress-Caller", this.ctx.props.id);
-    headers.set("X-Vibestudio-Egress-Secret", this.env.WORKERD_EGRESS_SECRET);
-    return this.env.EGRESS.fetch(new Request(request, { headers }));
-  }
-}
-
 const workerHost: ExportedHandler<WorkerHostEnv> = {
-  async fetch(request, env, ctx): Promise<Response> {
+  async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
     const name = parts[0] ? decodeURIComponent(parts[0]) : "";
@@ -51,14 +30,11 @@ const workerHost: ExportedHandler<WorkerHostEnv> = {
 
     const identity = `${name}@${version}`;
     try {
-      const stub = env.LOADER.get(identity, async () => {
-        const codeResponse = await env.GATEWAY.fetch(
-          new Request(
-            `http://gateway/_workercode/${encodeURIComponent(name)}?version=${encodeURIComponent(version)}`,
-            {
-              headers: loaderHeaders,
-            }
-          )
+      const stub = env.LOADER.get(identity, async (): Promise<CelldWorkerCode> => {
+        const codeResponse = await gatewayFetch(
+          env,
+          `/_workercode/${encodeURIComponent(name)}?version=${encodeURIComponent(version)}`,
+          { headers: loaderHeaders }
         );
         if (!codeResponse.ok) {
           const failure = (await codeResponse.json()) as {
@@ -73,7 +49,7 @@ const workerHost: ExportedHandler<WorkerHostEnv> = {
           mainModule: code.mainModule,
           modules: code.modules,
           env: code.env,
-          globalOutbound: egressBinding(ctx, code.callerId),
+          ...loadedNetworkPolicy(code.callerId),
         };
       });
 

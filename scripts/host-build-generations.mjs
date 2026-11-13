@@ -29,11 +29,10 @@ const REQUIRED = {
     "fs-disk-worker.cjs",
     ...Object.values(NATIVE_WORKSPACE_ENTRIES),
     "dependency-content-maintenance.cjs",
-    "internal-do-programs.json",
+    "runtime-app.json",
     ...OWNERSHIP_REAPER_ARTIFACTS.map((entry) => entry.slice("dist/".length)),
     "host-build-fingerprint.json",
     "headless-host",
-    "workerd-programs",
     ...HOST_BRAND_RUNTIME_ARTIFACTS.map((entry) => entry.slice("dist/".length)),
   ],
 };

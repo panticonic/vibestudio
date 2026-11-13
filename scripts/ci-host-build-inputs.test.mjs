@@ -41,7 +41,7 @@ test("generation transport validates build receipt identity independently of poi
       ])) {
         const file = path.join(cwd, artifact);
         fs.mkdirSync(path.dirname(file), { recursive: true });
-        if (["dist/headless-host", "dist/workerd-programs"].includes(artifact))
+        if (["dist/headless-host"].includes(artifact))
           fs.mkdirSync(file, { recursive: true });
         else fs.writeFileSync(file, "fixture payload");
       }

@@ -3,19 +3,18 @@ import {
   INTERNAL_DO_CLASSES,
 } from "../../src/server/internalDOs/internalDoLoader.js";
 import {
-  captureInternalDoPrograms,
-  type CompiledInternalDoProgram,
-} from "../../scripts/lib/internal-do-programs.mjs";
+  RUNTIME_APP_HOST_EXPORTS,
+  captureRuntimeApp,
+  type CompiledRuntimeApp,
+} from "../../scripts/lib/runtime-app.mjs";
 
 /** Fixtures publish genuine producer output, then enter the actual installed
  * consumer through its existing global coordinate. No test factory ships. */
-export function internalDoProgramsFromCompiler(
-  compiled: Readonly<Record<string, CompiledInternalDoProgram>>
-): InternalDOPrograms {
-  if (process.env["VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH"] !== undefined)
+export function internalDoProgramsFromCompiler(compiled: CompiledRuntimeApp): InternalDOPrograms {
+  if (process.env["VIBESTUDIO_RUNTIME_APP_PATH"] !== undefined)
     throw new Error("Internal DO fixture cannot replace an active hub snapshot coordinate");
-  const publication = captureInternalDoPrograms(compiled);
-  const key = "__VIBESTUDIO_INTERNAL_DO_PROGRAMS__";
+  const publication = captureRuntimeApp(compiled);
+  const key = "__VIBESTUDIO_RUNTIME_APP__";
   const previous = Object.getOwnPropertyDescriptor(globalThis, key);
   try {
     Object.defineProperty(globalThis, key, {
@@ -26,20 +25,15 @@ export function internalDoProgramsFromCompiler(
     return InternalDOPrograms.readInstalled();
   } finally {
     if (previous) Object.defineProperty(globalThis, key, previous);
-    else delete globalThis.__VIBESTUDIO_INTERNAL_DO_PROGRAMS__;
+    else delete globalThis.__VIBESTUDIO_RUNTIME_APP__;
   }
 }
 
 export function internalDoProgramsForFixture(label = "fixture"): InternalDOPrograms {
-  return internalDoProgramsFromCompiler(
-    Object.fromEntries(
-      INTERNAL_DO_CLASSES.map((className) => [
-        className,
-        {
-          bundle: `export class ${className} {} // ${label}\n`,
-          exports: [className],
-        },
-      ])
-    )
-  );
+  return internalDoProgramsFromCompiler({
+    bundle:
+      INTERNAL_DO_CLASSES.map((className) => `export class ${className} {}`).join("\n") +
+      `\nexport default {}; // ${label}\n`,
+    exports: [...RUNTIME_APP_HOST_EXPORTS, ...INTERNAL_DO_CLASSES],
+  });
 }

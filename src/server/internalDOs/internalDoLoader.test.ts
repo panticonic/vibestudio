@@ -14,7 +14,7 @@ describe("internalDOExecutionIdentity", () => {
   it("fixture publication restores the existing global after consumer failure", () => {
     const descriptor = Object.getOwnPropertyDescriptor(
       globalThis,
-      "__VIBESTUDIO_INTERNAL_DO_PROGRAMS__"
+      "__VIBESTUDIO_RUNTIME_APP__"
     );
     const failure = new Error("original installed admission failure");
     const read = vi.spyOn(InternalDOPrograms, "readInstalled").mockImplementation(() => {
@@ -23,7 +23,7 @@ describe("internalDOExecutionIdentity", () => {
     try {
       expect(() => bundle()).toThrow(failure);
       expect(
-        Object.getOwnPropertyDescriptor(globalThis, "__VIBESTUDIO_INTERNAL_DO_PROGRAMS__")
+        Object.getOwnPropertyDescriptor(globalThis, "__VIBESTUDIO_RUNTIME_APP__")
       ).toEqual(descriptor);
     } finally {
       read.mockRestore();
@@ -31,12 +31,12 @@ describe("internalDOExecutionIdentity", () => {
   });
 
   it("fixture publication cannot replace an active hub snapshot coordinate", () => {
-    const key = "VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH";
+    const key = "VIBESTUDIO_RUNTIME_APP_PATH";
     const prior = process.env[key];
-    process.env[key] = "/owned/hub/internal-do-programs.json";
+    process.env[key] = "/owned/hub/runtime-app.json";
     try {
       expect(() => bundle()).toThrow(/cannot replace an active hub snapshot/);
-      expect(process.env[key]).toBe("/owned/hub/internal-do-programs.json");
+      expect(process.env[key]).toBe("/owned/hub/runtime-app.json");
     } finally {
       if (prior === undefined) delete process.env[key];
       else process.env[key] = prior;
@@ -65,11 +65,14 @@ describe("internalDOExecutionIdentity", () => {
     });
   });
 
-  it("enumerates each reviewed product-seed entrypoint with its own program key", () => {
-    const artifacts = internalDOExecutionArtifacts(bundle());
+  it("enumerates each reviewed product-seed entrypoint of the one runtime application", () => {
+    const programs = bundle();
+    const artifacts = internalDOExecutionArtifacts(programs);
     expect(artifacts).toHaveLength(INTERNAL_DO_CLASSES.length);
-    expect(new Set(artifacts.map((artifact) => artifact.buildKey))).toHaveLength(
-      INTERNAL_DO_CLASSES.length
+    // One deployed module holds every product class; the class name and its
+    // reviewed authority, not separate bytes, distinguish their executions.
+    expect(new Set(artifacts.map((artifact) => artifact.buildKey))).toEqual(
+      new Set([programs.app().buildKey])
     );
     expect(new Set(artifacts.map((artifact) => artifact.executionDigest))).toHaveLength(
       INTERNAL_DO_CLASSES.length

@@ -5,17 +5,15 @@ import {
   DO_INCARNATION_VERSION_HEADER,
   type DoExecutableAdmission,
 } from "./executableVersion.js";
+import {
+  gatewayFetch,
+  loadedNetworkPolicy,
+  type CelldWorkerCode,
+  type HostProgramEnv,
+} from "./celldRuntime.js";
 
-interface EgressProps {
-  id: string;
-}
-
-interface UniversalDoEnv {
-  EGRESS: Fetcher;
-  GATEWAY: Fetcher;
+interface UniversalDoEnv extends HostProgramEnv {
   LOADER: WorkerLoader;
-  WORKERD_EGRESS_SECRET: string;
-  WORKERD_LOADER_SECRET: string;
 }
 
 interface DurableObjectCodePayload extends WorkerLoaderWorkerCode {
@@ -29,34 +27,23 @@ interface LoadedFacetClass {
   class: DurableObjectClass;
 }
 
-async function fetchLoader(gateway: Fetcher, request: Request): Promise<Response> {
+async function fetchLoader(
+  env: HostProgramEnv,
+  path: string,
+  init: RequestInit = {}
+): Promise<Response> {
   try {
-    return await gateway.fetch(request);
+    return await gatewayFetch(env, path, {
+      ...init,
+      headers: { "X-Vibestudio-Loader-Secret": env.WORKERD_LOADER_SECRET },
+    });
   } catch (error) {
     console.error(
       "Durable Object loader request failed",
-      new URL(request.url).pathname,
+      path,
       error instanceof Error ? (error.stack ?? error.message) : error
     );
     throw error;
-  }
-}
-
-type EgressExports = Cloudflare.Exports & {
-  EgressGateway(options: { props: EgressProps }): Fetcher;
-};
-
-function egressBinding(ctx: { exports: Cloudflare.Exports }, id: string): Fetcher {
-  const exports = ctx.exports as EgressExports;
-  return exports.EgressGateway({ props: { id } });
-}
-
-export class EgressGateway extends WorkerEntrypoint<UniversalDoEnv, EgressProps> {
-  async fetch(request: Request): Promise<Response> {
-    const headers = new Headers(request.headers);
-    headers.set("X-Vibestudio-Egress-Caller", this.ctx.props.id);
-    headers.set("X-Vibestudio-Egress-Secret", this.env.WORKERD_EGRESS_SECRET);
-    return this.env.EGRESS.fetch(new Request(request, { headers }));
   }
 }
 
@@ -74,7 +61,6 @@ function executableUnitKey(source: string, className: string, version: string): 
 }
 
 function loadExecutable(
-  ctx: { exports: Cloudflare.Exports },
   env: UniversalDoEnv,
   args: { source: string; className: string; version: string; userKey?: string }
 ): WorkerStub {
@@ -82,17 +68,14 @@ function loadExecutable(
   // Objects still own separate facets, SQLite storage, and lifecycle; a live
   // update selects another unit without replacing a sibling's assigned code.
   const unitKey = executableUnitKey(args.source, args.className, args.version);
-  return env.LOADER.get(unitKey, async () => {
+  return env.LOADER.get(unitKey, async (): Promise<CelldWorkerCode> => {
     const startedAt = performance.now();
     const identity = `${args.source}:${args.className}`;
     const codeResponse = await fetchLoader(
-      env.GATEWAY,
-      new Request(
-        `http://gateway/_docode/${encodeURIComponent(args.source)}/${encodeURIComponent(args.className)}` +
-          `?version=${encodeURIComponent(args.version)}` +
-          (args.userKey ? `&objectKey=${encodeURIComponent(args.userKey)}` : ""),
-        { headers: { "X-Vibestudio-Loader-Secret": env.WORKERD_LOADER_SECRET } }
-      )
+      env,
+      `/_docode/${encodeURIComponent(args.source)}/${encodeURIComponent(args.className)}` +
+        `?version=${encodeURIComponent(args.version)}` +
+        (args.userKey ? `&objectKey=${encodeURIComponent(args.userKey)}` : "")
     );
     if (!codeResponse.ok) {
       throw new Error(
@@ -106,12 +89,6 @@ function loadExecutable(
       throw new Error(
         `universal-do: executable changed before loading ${identity}/${args.userKey}`
       );
-    }
-    if (
-      code.egressIdentity !== null &&
-      (typeof code.egressIdentity !== "string" || code.egressIdentity.length === 0)
-    ) {
-      throw new Error(`universal-do: executable ${identity} has no network identity`);
     }
     console.info(
       "Durable Object executable loaded",
@@ -130,7 +107,7 @@ function loadExecutable(
       mainModule: code.mainModule,
       modules: code.modules,
       env: code.env,
-      globalOutbound: code.egressIdentity === null ? null : egressBinding(ctx, code.egressIdentity),
+      ...loadedNetworkPolicy(code.egressIdentity),
     };
   });
 }
@@ -147,7 +124,7 @@ export class ExecutablePreparation extends WorkerEntrypoint<UniversalDoEnv> {
       };
       if (!input.source || !input.className || !input.version)
         throw new Error("Executable preparation requires a complete immutable identity");
-      const worker = loadExecutable(this.ctx, this.env, input);
+      const worker = loadExecutable(this.env, input);
       const receipt = await worker
         .getEntrypoint("VibestudioExecutable")
         .fetch(new Request(`http://executable/${encodeURIComponent(input.className)}`));
@@ -218,17 +195,12 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
         }
         controller.signal.throwIfAborted();
         const response = await fetchLoader(
-          this.env.GATEWAY,
-          new Request(
-            `http://gateway/_doadmission/${encodeURIComponent(args.source)}/${encodeURIComponent(args.className)}` +
-              `?objectKey=${encodeURIComponent(args.userKey)}` +
-              `&executableVersion=${encodeURIComponent(args.version)}` +
-              `&incarnationVersion=${encodeURIComponent(args.incarnationVersion)}`,
-            {
-              headers: { "X-Vibestudio-Loader-Secret": this.env.WORKERD_LOADER_SECRET },
-              signal: controller.signal,
-            }
-          )
+          this.env,
+          `/_doadmission/${encodeURIComponent(args.source)}/${encodeURIComponent(args.className)}` +
+            `?objectKey=${encodeURIComponent(args.userKey)}` +
+            `&executableVersion=${encodeURIComponent(args.version)}` +
+            `&incarnationVersion=${encodeURIComponent(args.incarnationVersion)}`,
+          { signal: controller.signal }
         );
         controller.signal.throwIfAborted();
         if (!response.ok)
@@ -246,7 +218,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
           this.ctx.facets.abort("do", new Error("Runtime image advanced"));
           this.loadedFacet = null;
         }
-        const worker = loadExecutable(this.ctx, this.env, args);
+        const worker = loadExecutable(this.env, args);
         this.loadedFacet = {
           executableVersion: args.version,
           incarnationVersion: args.incarnationVersion,
@@ -313,6 +285,19 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
         )
       );
       this.loadedFacet = null;
+      return new Response(null, { status: 204 });
+    }
+
+    if (parts[1] === "__vibestudio_destroy") {
+      if (request.headers.get("X-Vibestudio-Lifecycle-Secret") !== this.env.WORKERD_LOADER_SECRET) {
+        return new Response("Forbidden", { status: 403 });
+      }
+      // Storage reclamation of a retired object: the runtime stops the facet
+      // and removes its database (and any nested facet's) in one operation.
+      await this.cancelFacetSelection(new Error("Runtime entity storage destroyed"));
+      this.ctx.facets.delete("do");
+      this.loadedFacet = null;
+      await this.ctx.storage.deleteAll();
       return new Response(null, { status: 204 });
     }
 

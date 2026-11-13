@@ -143,7 +143,7 @@ import { readBoundedBody, sendJson, sendText } from "./hostCore/httpResponses.js
 declare const __filename: string;
 
 const WORKSPACE_STARTUP_STDERR_LIMIT_BYTES = 32 * 1024;
-const INTERNAL_DO_PROGRAMS_SNAPSHOT_ENV = "VIBESTUDIO_INTERNAL_DO_PROGRAMS_PATH";
+const INTERNAL_DO_PROGRAMS_SNAPSHOT_ENV = "VIBESTUDIO_RUNTIME_APP_PATH";
 
 /**
  * Freeze the product-baked internal runtime for this hub boot.
@@ -156,7 +156,7 @@ export function snapshotInternalDOProgramsForHub(
   configDir: string,
   programs = getInternalDOPrograms()
 ): string {
-  const snapshotPath = path.join(configDir, "server-auth", "internal-do-programs.snapshot.json");
+  const snapshotPath = path.join(configDir, "server-auth", "runtime-app.snapshot.json");
   writeFileAtomicSync(snapshotPath, JSON.stringify(programs.publication()), { mode: 0o600 });
   return snapshotPath;
 }
