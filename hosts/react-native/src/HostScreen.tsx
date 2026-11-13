@@ -195,9 +195,11 @@ function HomeScreenShortcuts({ runtime }: { runtime: HostRuntime }) {
 function ClientDevelopment({
   runtime,
   clients,
+  act,
 }: {
   runtime: HostRuntime;
   clients: HostUiState["clients"];
+  act: (operation: () => Promise<unknown>) => void;
 }) {
   if (clients.length === 0) return null;
   return (
@@ -208,7 +210,7 @@ function ClientDevelopment({
           key={client.id}
           title={`Develop ${client.title}: ${client.development ? "on" : "off"}`}
           variant="secondary"
-          onPress={() => void runtime.setDevelopmentMode(client.id, !client.development)}
+          onPress={() => act(() => runtime.setDevelopmentMode(client.id, !client.development))}
         />
       ))}
     </View>
@@ -225,21 +227,52 @@ export function createHostScreen(runtime: HostRuntime) {
     const ui = useSyncExternalStore(runtime.ui.subscribe, runtime.ui.get);
     const [scannerOpen, setScannerOpen] = useState(false);
     const [detailsOpen, setDetailsOpen] = useState(false);
-    const [notice, setNotice] = useState<string | null>(null);
+    // A local notice answers the person's own action (scan, paste). It speaks
+    // over the runtime's message only until the runtime says something new, so
+    // a pairing request or failure that arrives later is never hidden by it.
+    const [notice, setNoticeState] = useState<{ text: string; over: string } | null>(null);
+    const setNotice = useCallback(
+      (text: string | null) =>
+        setNoticeState(text ? { text, over: runtime.ui.get().message } : null),
+      []
+    );
+    const shownNotice = notice && notice.over === ui.message ? notice.text : null;
+    const reportFailure = useCallback(
+      (error: unknown) => setNotice(error instanceof Error ? error.message : String(error)),
+      [setNotice]
+    );
+    const act = useCallback(
+      (operation: () => Promise<unknown>) => {
+        operation().then(undefined, reportFailure);
+      },
+      [reportFailure]
+    );
     const scannerLastValue = useRef<string | null>(null);
     const cameraDevice = useCameraDevice("back");
 
-    const present = useCallback(async (rawUrl: string): Promise<boolean> => {
-      const handled = await runtime.handleLink(rawUrl);
-      if (!handled) {
-        setNotice(
-          "That is not a Vibestudio link. Keep the camera pointed at the QR shown by your trusted desktop or server."
-        );
-      } else {
-        setNotice(null);
-      }
-      return handled;
-    }, []);
+    /** Hand a link to the host. Resolves false only for a link that is not Vibestudio's. */
+    const present = useCallback(
+      async (rawUrl: string): Promise<boolean> => {
+        let handled: boolean;
+        try {
+          handled = await runtime.handleLink(rawUrl);
+        } catch (error) {
+          // The link was Vibestudio's but could not be used: say why, and do
+          // not treat it as an unrecognised code the scanner should keep reading.
+          reportFailure(error);
+          return true;
+        }
+        if (!handled) {
+          setNotice(
+            "That is not a Vibestudio link. Keep the camera pointed at the QR shown by your trusted desktop or server."
+          );
+        } else {
+          setNotice(null);
+        }
+        return handled;
+      },
+      [reportFailure, setNotice]
+    );
 
     const codeScanner = useCodeScanner({
       codeTypes: ["qr"],
@@ -255,20 +288,16 @@ export function createHostScreen(runtime: HostRuntime) {
     });
 
     const openScanner = useCallback(async () => {
-      try {
-        let permission = await Camera.getCameraPermissionStatus();
-        if (permission !== "granted") permission = await Camera.requestCameraPermission();
-        if (permission !== "granted") {
-          setNotice("Camera access is required to scan a Vibestudio pairing QR code.");
-          return;
-        }
-        scannerLastValue.current = null;
-        setScannerOpen(true);
-        setNotice(null);
-      } catch (error) {
-        setNotice(error instanceof Error ? error.message : String(error));
+      let permission = await Camera.getCameraPermissionStatus();
+      if (permission !== "granted") permission = await Camera.requestCameraPermission();
+      if (permission !== "granted") {
+        setNotice("Camera access is required to scan a Vibestudio pairing QR code.");
+        return;
       }
-    }, []);
+      scannerLastValue.current = null;
+      setScannerOpen(true);
+      setNotice(null);
+    }, [setNotice]);
 
     const pasteLink = useCallback(async () => {
       const rawUrl = (await Clipboard.getString()).trim();
@@ -277,7 +306,7 @@ export function createHostScreen(runtime: HostRuntime) {
         return;
       }
       await present(rawUrl);
-    }, [present]);
+    }, [present, setNotice]);
 
     const gate = ui.approvals.length > 0 ? launchGateView({ approvals: ui.approvals }) : null;
     const gateDetailsOpen = Boolean(gate?.sourcesExpandedByDefault) || detailsOpen;
@@ -296,7 +325,7 @@ export function createHostScreen(runtime: HostRuntime) {
             </View>
             <View style={styles.statusPanel}>
               <StepIndicator activeStep={activeStep} />
-              <Text style={styles.message}>{notice ?? ui.message}</Text>
+              <Text style={styles.message}>{shownNotice ?? ui.message}</Text>
               <LaunchTimeline ui={ui} />
               {ui.busy ? (
                 <View style={styles.loadingRow}>
@@ -325,12 +354,12 @@ export function createHostScreen(runtime: HostRuntime) {
                   ) : null}
                   <ActionButton
                     title={gate.acceptLabel}
-                    onPress={() => void runtime.resolveApprovals("once")}
+                    onPress={() => act(() => runtime.resolveApprovals("once"))}
                     testID="launch-gate-accept"
                   />
                   <ActionButton
                     title={gate.declineLabel}
-                    onPress={() => void runtime.resolveApprovals("deny")}
+                    onPress={() => act(() => runtime.resolveApprovals("deny"))}
                     variant="danger"
                   />
                   <ActionButton
@@ -375,7 +404,7 @@ export function createHostScreen(runtime: HostRuntime) {
                   <Text style={styles.sectionTitle}>Connect this device?</Text>
                   <Text style={styles.hostLabel}>this Vibestudio server</Text>
                 </View>
-                <ActionButton title="Pair" onPress={() => void runtime.confirmPairing()} />
+                <ActionButton title="Pair" onPress={() => act(() => runtime.confirmPairing())} />
                 <ActionButton
                   title="Cancel"
                   onPress={() => runtime.cancelPairing()}
@@ -385,7 +414,7 @@ export function createHostScreen(runtime: HostRuntime) {
             ) : ui.phase === "running" ? (
               <>
                 <HomeScreenShortcuts runtime={runtime} />
-                <ClientDevelopment runtime={runtime} clients={ui.clients} />
+                <ClientDevelopment runtime={runtime} clients={ui.clients} act={act} />
               </>
             ) : (
               <View style={styles.actions}>
@@ -411,13 +440,13 @@ export function createHostScreen(runtime: HostRuntime) {
                   <>
                     {ui.phase === "needs-pairing" ? (
                       <>
-                        <ActionButton title="Scan QR" onPress={() => void openScanner()} />
-                        <ActionButton title="Paste pairing link" onPress={() => void pasteLink()} />
+                        <ActionButton title="Scan QR" onPress={() => act(openScanner)} />
+                        <ActionButton title="Paste pairing link" onPress={() => act(pasteLink)} />
                       </>
                     ) : null}
                     <ActionButton
                       title="Retry"
-                      onPress={() => void runtime.retry()}
+                      onPress={() => act(() => runtime.retry())}
                       variant="secondary"
                     />
                   </>
