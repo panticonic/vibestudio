@@ -52,6 +52,7 @@ import { fsCommands } from "./agent/fsCommands.js";
 import { vcsCommands } from "./agent/vcsCommands.js";
 import { evalCommands } from "./agent/evalCommand.js";
 import { channelCommands } from "./channelCommands.js";
+import { tendrilCommands } from "./tendrilCommands.js";
 import { approvalCommands } from "./approvalCommands.js";
 import { contextCommands } from "./contextCommands.js";
 import { connectModelProvider } from "./modelConnect.js";
@@ -851,6 +852,7 @@ const commandRegistry: CliCommand[] = [
   ...templatesCommands,
   ...evalCommands,
   ...channelCommands,
+  ...tendrilCommands,
   ...contextCommands,
   ...panelCommands,
   ...systemTestCommands,

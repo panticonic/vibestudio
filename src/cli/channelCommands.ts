@@ -180,6 +180,37 @@ async function list(inv: ParsedInvocation): Promise<number> {
   }
 }
 
+/** Durable log events after `after`, oldest first, up to `limit`. */
+export async function readChannelAfter(
+  client: RpcClient,
+  channelId: string,
+  after: number,
+  limit: number
+): Promise<ServerLogEvent[]> {
+  const target = await existingChannelTarget(client, channelId);
+  const events: ServerLogEvent[] = [];
+  let cursor = after;
+  let throughSeq: number | undefined;
+  while (events.length < limit) {
+    const envelope = await channelCaller(client, target)("getReplayAfter", [
+      {
+        after: cursor,
+        limit: Math.min(500, limit - events.length),
+        ...(throughSeq !== undefined ? { throughSeq } : {}),
+      },
+    ]);
+    events.push(...envelope.logEvents);
+    throughSeq ??= envelope.ready.snapshotLastSeq;
+    if (!envelope.ready.hasMoreAfter) break;
+    const next = envelope.ready.replayToId;
+    if (next === undefined || next <= cursor || throughSeq === undefined) {
+      throw new CliError("channel replay did not return a valid continuation cursor");
+    }
+    cursor = next;
+  }
+  return events;
+}
+
 async function history(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
@@ -188,27 +219,7 @@ async function history(inv: ParsedInvocation): Promise<number> {
     const limit = intFlag(inv, "limit") ?? 50;
     if (limit < 1) throw new UsageError("--limit must be a positive integer");
     const { client } = resolveSessionScope(inv);
-    const target = await existingChannelTarget(client, channelId);
-    const events: ServerLogEvent[] = [];
-    let cursor = after;
-    let throughSeq: number | undefined;
-    while (events.length < limit) {
-      const envelope = await channelCaller(client, target)("getReplayAfter", [
-        {
-          after: cursor,
-          limit: Math.min(500, limit - events.length),
-          ...(throughSeq !== undefined ? { throughSeq } : {}),
-        },
-      ]);
-      events.push(...envelope.logEvents);
-      throughSeq ??= envelope.ready.snapshotLastSeq;
-      if (!envelope.ready.hasMoreAfter) break;
-      const next = envelope.ready.replayToId;
-      if (next === undefined || next <= cursor || throughSeq === undefined) {
-        throw new CliError("channel replay did not return a valid continuation cursor");
-      }
-      cursor = next;
-    }
+    const events = await readChannelAfter(client, channelId, after, limit);
     const entries = events.map(toHistoryEntry);
     printResult(entries, {
       json,
@@ -313,11 +324,13 @@ export async function followChannel(
     render(event: ServerLogEvent): void;
     /** Events replayed from before the follow began (default 10). */
     replayMessageLimit?: number;
+    /** Resume after this sequence instead of replaying the recent tail. */
+    afterSeq?: number;
   }
 ): Promise<ChannelFollow> {
   const { callerId, channelId } = options;
   const target = await existingChannelTarget(client, channelId);
-  let lastRenderedSeq = 0;
+  let lastRenderedSeq = options.afterSeq ?? 0;
   const render = (event: ServerLogEvent): void => {
     if (event.id <= lastRenderedSeq) return;
     lastRenderedSeq = event.id;
@@ -458,7 +471,7 @@ async function tail(inv: ParsedInvocation): Promise<number> {
 
 // ── flag helpers ─────────────────────────────────────────────────────────────
 
-function requireChannelId(inv: ParsedInvocation): string {
+export function requireChannelId(inv: ParsedInvocation): string {
   const id = inv.positionals[0] ?? process.env["VIBESTUDIO_CHANNEL_ID"];
   if (!id) {
     throw new UsageError(
@@ -468,7 +481,7 @@ function requireChannelId(inv: ParsedInvocation): string {
   return id;
 }
 
-function intFlag(inv: ParsedInvocation, name: string): number | undefined {
+export function intFlag(inv: ParsedInvocation, name: string): number | undefined {
   const raw = inv.flags[name];
   if (typeof raw !== "string") return undefined;
   const value = Number(raw);
@@ -478,7 +491,7 @@ function intFlag(inv: ParsedInvocation, name: string): number | undefined {
   return value;
 }
 
-const AFTER_FLAG: FlagSpec = {
+export const AFTER_FLAG: FlagSpec = {
   name: "after",
   takesValue: true,
   description: "Only events with seq greater than N",

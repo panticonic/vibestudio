@@ -16,6 +16,8 @@ export const GROUP_DESCRIPTIONS: Record<string, string> = {
   templates: "discover, inspect, author, and publish workspace templates",
   eval: "run sandboxed code in the active agent context",
   channel: "list, read, send, and follow conversation channels",
+  tendril:
+    "bring tendril page events to an agent outside the workspace (wait, Claude Code channel, webhook)",
   context: "materialize and watch remote context folders",
   panel: "inspect and capture workspace panels",
   "system-test": "run and inspect headless agentic system tests on a paired instance",

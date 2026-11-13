@@ -651,3 +651,39 @@ Not done or not verified:
    test for it has not been run.
 5. Whether the mobile `credentials.deviceId` equals the server's paired device id for
    that client (`deviceOfPrincipal`) is assumed from the code, to be confirmed by H5.
+
+## 11. Agents outside the workspace (2026-11-13)
+
+Workspace agents are channel participants: page events reach them over pubsub
+with the vessel's wake bound and framing. Agents running elsewhere get the same
+events through CLI bridges that follow the tendril's channel with a paired
+direct session (`src/cli/tendrilCommands.ts`, rules in `src/cli/tendrilFeed.ts`):
+
+- `vibestudio tendril wait` prints the next events and exits (background command
+  for Claude Code and Muse; a listener loop for Codex).
+- `vibestudio tendril channel` is a Claude Code channel: a stdio MCP server that
+  declares `claude/channel` and sends `notifications/claude/channel`. Custom
+  channels need `--dangerously-load-development-channels` during the research
+  preview, or an organization allowlist entry.
+- `vibestudio tendril webhook` POSTs Standard Webhooks signed deliveries
+  (Grok Bot, Hermes, OpenClaw), retrying transient failures with backoff.
+
+Each bridge applies the same rules as the vessel: `tendril.event` and a person's
+page message wake, `tendril.record` does not, six event wakes in a row without a
+human message withhold further events and the next human message carries the
+count, and event data is framed as page data. A bridge saves its cursor and
+bound in a state file and resumes after the last event it handed over. The
+bridges run on the machine where the CLI is paired; durable server-side webhook
+delivery (a webhook endpoint kind in the channel's delivery projection, with
+host-mediated egress) was not built.
+
+Hosts that cannot be pushed to from here:
+- OpenAI dots: MCP Events (webhook mode) wakes a dot from an MCP server. A
+  tendril connector implementing it needs a public HTTPS MCP endpoint; not built.
+- Claude Duet: no push path. Connectors are called only when Duet runs, it
+  checks them every few hours, and Claude does not support MCP Events yet (open
+  request anthropics/claude-code#101434). Channels are Claude Code only.
+- Instinct publishes no trigger mechanism.
+
+Not run: `tendrilFeed.test.ts` is written but has not been run, and no bridge
+has been tried against a live agent host.
