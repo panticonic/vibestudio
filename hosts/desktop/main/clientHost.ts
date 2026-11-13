@@ -16,6 +16,7 @@ import { buildMethods } from "@vibestudio/service-schemas/build";
 import {
   isClientCapability,
   type ClientCapability,
+  type ClientLaunchProgressPhase,
   type ClientSelection,
   type HostDescriptor,
   type ReadyClient,
@@ -143,6 +144,8 @@ interface LaunchSession {
   state: LaunchStateWire | null;
   /** The handling of the latest state: delivery, activation, or its presentation. */
   processing: Promise<void>;
+  /** The furthest step the launch reached, where an unavailable launch stopped. */
+  reached: ClientLaunchProgressPhase;
 }
 
 /**
@@ -185,7 +188,13 @@ export class DesktopClientHost implements PendingClientUpdates {
    */
   async launch(select: ClientSelection): Promise<LaunchStateWire> {
     const launcher = this.deps.launches.create(this.descriptor);
-    const session: LaunchSession = { select, launcher, state: null, processing: Promise.resolve() };
+    const session: LaunchSession = {
+      select,
+      launcher,
+      state: null,
+      processing: Promise.resolve(),
+      reached: "resolve",
+    };
     this.gating?.launcher.end();
     this.gating = session;
     launcher.subscribe((state) => {
@@ -201,10 +210,12 @@ export class DesktopClientHost implements PendingClientUpdates {
       throw error;
     } finally {
       // A launch that reached a state nothing continues is over; one that waits
-      // on a review or a build stays until it is replaced or finished.
+      // on a review or a build stays until it is replaced or finished. An ended
+      // launch no longer gates anything: a later server announcement must not
+      // ask its ended launcher to continue and replace the reason on the gate.
       if (session.state?.state === "ready" || session.state?.state === "unavailable") {
         session.launcher.end();
-        if (this.gating === session && session.state.state === "ready") this.gating = null;
+        if (this.gating === session) this.gating = null;
       }
     }
   }
@@ -251,6 +262,7 @@ export class DesktopClientHost implements PendingClientUpdates {
         status: "unavailable",
         reason: "You chose not to start this. Nothing from it was run.",
         declined: true,
+        phase: session.reached,
       });
       return;
     }
@@ -274,6 +286,7 @@ export class DesktopClientHost implements PendingClientUpdates {
         status: "unavailable",
         reason: "You chose not to start this. Nothing from it was run.",
         declined: true,
+        phase: session.reached,
       });
       return;
     }
@@ -292,9 +305,11 @@ export class DesktopClientHost implements PendingClientUpdates {
           if (this.gating === session) this.gating = null;
           break;
         case "approval-required":
+          session.reached = "build";
           this.deps.gate.present(null, { status: "approval-required", approvals: state.approvals });
           break;
         case "preparing":
+          session.reached = state.phase;
           this.deps.gate.present(null, {
             status: "preparing",
             phase: state.phase,
@@ -302,7 +317,11 @@ export class DesktopClientHost implements PendingClientUpdates {
           });
           break;
         case "unavailable":
-          this.deps.gate.present(null, { status: "unavailable", reason: state.reason });
+          this.deps.gate.present(null, {
+            status: "unavailable",
+            reason: state.reason,
+            phase: session.reached,
+          });
           break;
       }
       this.deps.launchObserved?.({ select: session.select, state });
@@ -666,8 +685,14 @@ export class DesktopClientHost implements PendingClientUpdates {
 
   private async close(running: RunningClient, reason: string, outcome: EndOutcome): Promise<void> {
     const { clientId, title, source } = running;
-    // One window must exist while another launch is prepared, or the app would quit.
-    this.deps.gate.present(title, { status: "starting", reason: `${title} is restarting.` });
+    // One window must exist while another launch is prepared, or the app would
+    // quit. A client that is not launched again is not restarting: when it was
+    // the only client with a window, the gate stays and says why it ended.
+    if (outcome.relaunch) {
+      this.deps.gate.present(title, { status: "starting", reason: `${title} is restarting.` });
+    } else if (this.deps.windows.all().every((window) => window.spec.clientId === clientId)) {
+      this.deps.gate.present(title, { status: "unavailable", reason: outcome.why });
+    }
     this.forget(running);
     this.deps.windows.closeClient(clientId, reason);
     this.deps.notify(`${title} was closed`, outcome.why);

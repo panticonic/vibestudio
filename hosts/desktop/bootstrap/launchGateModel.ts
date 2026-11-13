@@ -15,7 +15,13 @@ export type LaunchGateStatus =
   | { status: "approval-required"; approvals: PendingUnitInstallReviewApproval[] }
   | { status: "preparing"; phase: ClientLaunchProgressPhase; reason: string }
   | { status: "ready"; title: string }
-  | { status: "unavailable"; reason: string; declined?: true }
+  | {
+      status: "unavailable";
+      reason: string;
+      declined?: true;
+      /** The step the launch stopped at; absent when no launch ran (a running client ended). */
+      phase?: ClientLaunchProgressPhase;
+    }
   /** The launch failed for a reason of the host or the connection, not the client's availability. */
   | { status: "failed"; reason: string };
 
@@ -57,7 +63,11 @@ export function launchGateProgress(launch: LaunchGateStatus): LaunchGateProgress
     case "ready":
       return PHASES.map((phase) => ({ phase, state: "complete" }));
     case "unavailable":
-      return [{ phase: "resolve", state: "failed", detail: launch.reason }];
+      // A declined review is the person's decision, not a failed step.
+      if (!launch.phase) return [];
+      return launch.declined
+        ? upTo(launch.phase, "blocked")
+        : upTo(launch.phase, "failed", launch.reason);
     case "failed":
       return [];
   }

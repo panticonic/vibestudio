@@ -18,9 +18,26 @@ describe("launch gate model", () => {
     expect(
       launchGateProgress({ status: "ready", title: "Browser" }).every((s) => s.state === "complete")
     ).toBe(true);
-    expect(launchGateProgress({ status: "unavailable", reason: "no build" })).toEqual([
-      { phase: "resolve", state: "failed", detail: "no build" },
+    // An unavailable launch shows where it actually stopped.
+    expect(
+      launchGateProgress({ status: "unavailable", reason: "unknown", phase: "resolve" })
+    ).toEqual([{ phase: "resolve", state: "failed", detail: "unknown" }]);
+    expect(
+      launchGateProgress({ status: "unavailable", reason: "no build", phase: "build" })
+    ).toEqual([
+      { phase: "resolve", state: "complete" },
+      { phase: "extensions", state: "complete" },
+      { phase: "build", state: "failed", detail: "no build" },
     ]);
+    expect(
+      launchGateProgress({ status: "unavailable", reason: "no", declined: true, phase: "build" })
+    ).toEqual([
+      { phase: "resolve", state: "complete" },
+      { phase: "extensions", state: "complete" },
+      { phase: "build", state: "blocked" },
+    ]);
+    // A client that ended without a launch has no steps to show.
+    expect(launchGateProgress({ status: "unavailable", reason: "retired" })).toEqual([]);
   });
 
   it("says one readable sentence per state", () => {

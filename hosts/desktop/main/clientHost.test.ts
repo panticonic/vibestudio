@@ -410,7 +410,11 @@ describe("DesktopClientHost launch and delivery", () => {
     await t.host.launch({ default: true });
 
     await t.host.resolveGateApprovals("deny");
-    expect(t.gate.at(-1)!.status).toMatchObject({ status: "unavailable", declined: true });
+    expect(t.gate.at(-1)!.status).toMatchObject({
+      status: "unavailable",
+      declined: true,
+      phase: "build",
+    });
     expect(t.calls.find((c) => c.method === "resolveBootstrap")!.args).toEqual([["ap1"], "deny"]);
     expect(t.windowsMade).toEqual([]);
     await expect(t.host.resolveGateApprovals("once")).rejects.toThrow(/no review waiting/);
@@ -427,6 +431,22 @@ describe("DesktopClientHost launch and delivery", () => {
 
     t.host.clientsChanged();
     await vi.waitFor(() => expect(t.windowsMade).toHaveLength(1));
+  });
+
+  it("shows the step where a launch that became unavailable stopped", async () => {
+    const t = harness();
+    t.launches.push({ state: "preparing", phase: "build", reason: "building" });
+    t.launches.push({ state: "unavailable", reason: "the build failed" });
+
+    await t.host.launch({ default: true });
+    t.host.clientsChanged();
+    await vi.waitFor(() =>
+      expect(t.gate.at(-1)!.status).toEqual({
+        status: "unavailable",
+        reason: "the build failed",
+        phase: "build",
+      })
+    );
   });
 
   it("does not launch again when the server announces the answer the gate gave", async () => {
@@ -662,6 +682,15 @@ describe("DesktopClientHost principal sessions and trust", () => {
     expect(order[0]).toBe("starting");
     expect(t.gate.at(-1)!.status).toMatchObject({ reason: expect.stringContaining("hub-control") });
     expect(t.host.catalog.lookup("vs-client://browser/bk1/index.html")).toBeNull();
+
+    // The launch is over: a later announcement does not ask its ended launcher
+    // to continue, and the server's reason stays on the gate.
+    const shown = t.gate.length;
+    t.host.clientsChanged();
+    // A later request on the same channel settles after any reply to that one.
+    await t.launchLink.retain([]);
+    expect(t.gate).toHaveLength(shown);
+    expect(t.gate.at(-1)!.status).toMatchObject({ status: "unavailable" });
   });
 
   it("relaunches without an optional capability the server withdrew", async () => {
@@ -684,6 +713,10 @@ describe("DesktopClientHost principal sessions and trust", () => {
     await vi.waitFor(() => expect(window.closeCalls).toBe(1));
     expect(t.launches).toEqual([]);
     expect(t.notices[0]![1]).toMatch(/retired/);
+    // Nothing is restarting: the gate that keeps the app open says why it ended.
+    expect(t.gate.map((entry) => entry.status)).toEqual([
+      { status: "unavailable", reason: expect.stringMatching(/retired/) },
+    ]);
   });
 
   it("does not act on a session that ended for another reason", async () => {
