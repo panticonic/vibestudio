@@ -568,10 +568,15 @@ class ReconnectingPipe implements IrohClientPipe {
         await delay(retryDelay);
       }
       if (this.closed || this.suspended) break;
+      // A dialed pipe is this attempt's until it is installed: every exit that
+      // does not install it retires it, so a failed handshake never leaves its
+      // physical connection open on the shared endpoint.
+      let dialed: IrohClientPipe | null = null;
       try {
-        const pipe = await this.options.dial();
+        const pipe = (dialed = await this.options.dial());
         await pipe.ready();
-        if (this.closed) {
+        if (this.closed || this.suspended) {
+          dialed = null;
           await this.retirePipe(pipe);
           break;
         }
@@ -606,6 +611,7 @@ class ReconnectingPipe implements IrohClientPipe {
           // other: keep the loop's backoff rather than announcing a connection
           // and immediately retracting it.
           connected.disposeObservers();
+          dialed = null;
           await this.retirePipe(pipe).catch(() => undefined);
           const failure = new Error("physical Iroh connection closed before it was installed");
           this.options.onReconnectResult?.({
@@ -622,6 +628,7 @@ class ReconnectingPipe implements IrohClientPipe {
           if (!this.hasConnected) throw failure;
           continue;
         }
+        dialed = null;
         this.connected = connected;
         this.hasConnected = true;
         this.connectedSince = this.now();
@@ -636,6 +643,8 @@ class ReconnectingPipe implements IrohClientPipe {
         return connected;
       } catch (error) {
         const failure = asError(error);
+        // Retirement failures stay owned by `retiringPipes` and surface at close.
+        if (dialed) await this.retirePipe(dialed).catch(() => undefined);
         this.options.onReconnectResult?.({ attempt, success: false, error: failure });
         this.emitReconnect({
           attempt,

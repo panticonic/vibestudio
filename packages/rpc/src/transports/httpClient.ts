@@ -305,10 +305,15 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
       }
       const requestId = message.requestId;
       let admit!: () => void;
+      let rejectAdmission!: (error: unknown) => void;
       let rejectCompletion!: (error: unknown) => void;
-      const admitted = new Promise<void>((resolve) => {
+      const admitted = new Promise<void>((resolve, reject) => {
         admit = resolve;
+        rejectAdmission = reject;
       });
+      // A refused delivery is also reported by `completion`; a caller that only
+      // awaits completion must not see an unhandled admission rejection.
+      void admitted.catch(() => {});
       const completion = new Promise<RpcEnvelope | null>((resolve, reject) => {
         rejectCompletion = reject;
         captures.set(requestId, (responseEnvelope) => {
@@ -320,6 +325,7 @@ export function httpClientTransport(config: HttpClientTransportConfig): Connecti
         admit();
       } catch (error) {
         captures.delete(requestId);
+        rejectAdmission(error);
         rejectCompletion(error);
       }
       return { admitted, completion };

@@ -441,6 +441,50 @@ describe("reconnecting Iroh client", () => {
     await owner.close();
   });
 
+  it("retires a dialed pipe whose handshake fails before redialing", async () => {
+    const failed = new FakePipe();
+    vi.spyOn(failed, "ready").mockRejectedValue(new Error("control stream reset"));
+    const closeFailed = vi.spyOn(failed, "close");
+    const healthy = new FakePipe();
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: failed.peerEndpointId,
+      dial: vi.fn().mockResolvedValueOnce(failed).mockResolvedValue(healthy),
+      closeEndpoint: vi.fn().mockResolvedValue(undefined),
+      minRetryDelayMs: 1,
+      maxRetryDelayMs: 1,
+      random: () => 0,
+    });
+    const session = owner.openSession({ connectionId: "handshake", getToken: () => "credential" });
+    await expect(session.ready?.()).rejects.toThrow("control stream reset");
+    expect(closeFailed).toHaveBeenCalledOnce();
+    await expect(session.ready?.()).resolves.toBeUndefined();
+    await owner.close();
+  });
+
+  it("does not install a pipe whose dial completes after suspension", async () => {
+    const late = new FakePipe();
+    const closeLate = vi.spyOn(late, "close");
+    let answer!: (pipe: FakePipe) => void;
+    const owner = createReconnectingIrohClientPipe({
+      peerEndpointId: late.peerEndpointId,
+      dial: vi.fn().mockReturnValueOnce(
+        new Promise<FakePipe>((resolve) => {
+          answer = resolve;
+        })
+      ),
+      closeEndpoint: vi.fn().mockResolvedValue(undefined),
+      suspendEndpoint: vi.fn().mockResolvedValue(undefined),
+    });
+    const connecting = owner.ready();
+    await owner.suspend();
+    answer(late);
+    await expect(connecting).rejects.toThrow("suspended while connecting");
+    expect(closeLate).toHaveBeenCalledOnce();
+    expect(owner.status()).toBe("disconnected");
+    expect(late.sessions).toHaveLength(0);
+    await owner.close();
+  });
+
   it("does not turn an unreachable initial peer into an indefinite reconnect loop", async () => {
     const healthy = new FakePipe();
     const dial = vi

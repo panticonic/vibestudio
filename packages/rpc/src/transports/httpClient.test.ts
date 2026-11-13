@@ -181,6 +181,22 @@ describe("httpClientTransport", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("settles admission with the failure when an inbound request cannot be delivered", async () => {
+    const transport = httpClientTransport({
+      selfId: "do:approval:Waiter:key",
+      serverUrl: "http://127.0.0.1:65530",
+      authToken: "token",
+      fetch: vi.fn() as unknown as typeof fetch,
+    });
+    const refused = new Error("receiver refused");
+    transport.onMessage(() => {
+      throw refused;
+    });
+    const invocation = transport.respond(requestEnvelope());
+    await expect(invocation.admitted).rejects.toBe(refused);
+    await expect(invocation.completion).rejects.toBe(refused);
+  });
+
   it("retains an inbound invocation until its actual terminal response arrives", async () => {
     const fetchMock = vi.fn(async () => new Response("{}")) as unknown as typeof fetch;
     const transport = httpClientTransport({
