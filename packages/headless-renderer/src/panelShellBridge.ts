@@ -176,33 +176,40 @@ export class PanelShellBridge {
 
   private connect(): Promise<PanelShellSession> {
     this.opening ??= (async () => {
-      try {
-        const session = await this.openSession();
-        await session.ready?.();
-        if (this.closed) {
-          await session.close();
-          throw new Error("panel shell bridge closed");
-        }
-        this.session = session;
-        this.relay = createBridgeStreamRelay({
-          chunkFormat: "base64",
-          openStream: (envelope, signal, body) => {
-            if (!session.streamReadable) throw new Error("This panel session cannot stream.");
-            return session.streamReadable(this.stamp(session, envelope), signal, body);
-          },
-          sendToPanel: (message) => this.deliver({ t: "stream", message }),
-        });
-        this.stopSession = session.onMessage((envelope) =>
-          this.deliver({ t: "envelope", envelope })
-        );
-        this.deliver({ t: "ready" });
-        return session;
-      } catch (error) {
-        this.deliver({ t: "ready", error: error instanceof Error ? error.message : String(error) });
-        throw error;
+      const session = await this.openSession();
+      await session.ready?.();
+      if (this.closed) {
+        await session.close();
+        throw new Error("panel shell bridge closed");
       }
+      this.session = session;
+      this.relay = createBridgeStreamRelay({
+        chunkFormat: "base64",
+        openStream: (envelope, signal, body) => {
+          if (!session.streamReadable) throw new Error("This panel session cannot stream.");
+          return session.streamReadable(this.stamp(session, envelope), signal, body);
+        },
+        sendToPanel: (message) => this.deliver({ t: "stream", message }),
+      });
+      this.stopSession = session.onMessage((envelope) => this.deliver({ t: "envelope", envelope }));
+      return session;
     })();
     return this.opening;
+  }
+
+  /**
+   * Answer one document's `hello`. Every document the panel loads (a reload,
+   * a navigation, a history step) runs the page script again and waits for its
+   * own `ready`; the session is shared, the answer is per document.
+   */
+  private async announce(): Promise<void> {
+    try {
+      await this.connect();
+      this.deliver({ t: "ready" });
+    } catch (error) {
+      this.deliver({ t: "ready", error: error instanceof Error ? error.message : String(error) });
+      throw error;
+    }
   }
 
   private stamp(session: PanelShellSession, envelope: RpcEnvelope): RpcEnvelope {
@@ -212,10 +219,9 @@ export class PanelShellBridge {
   }
 
   private async receive(message: PageMessage): Promise<void> {
+    if (message.t === "hello") return this.announce();
     const session = await this.connect();
     switch (message.t) {
-      case "hello":
-        return;
       case "envelope":
         await session.send(this.stamp(session, message.envelope));
         return;

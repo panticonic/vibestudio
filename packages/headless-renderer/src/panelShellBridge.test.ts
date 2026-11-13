@@ -98,6 +98,17 @@ describe("panel shell bridge", () => {
     expect(opened).toHaveBeenCalledTimes(1);
   });
 
+  it("answers every document's hello on the one panel session", async () => {
+    const { bridge, fromPage, opened, delivered } = setup();
+    await bridge.install();
+    fromPage({ t: "hello" });
+    await vi.waitFor(() => expect(delivered()).toEqual([{ t: "ready" }]));
+    // The panel reloaded its document: the new page script waits for its own answer.
+    fromPage({ t: "hello" });
+    await vi.waitFor(() => expect(delivered()).toEqual([{ t: "ready" }, { t: "ready" }]));
+    expect(opened).toHaveBeenCalledTimes(1);
+  });
+
   it("relays the page's envelopes on the session stamped as the authenticated panel, and the session's to the page", async () => {
     const { bridge, fromPage, session, delivered, inbound } = setup();
     await bridge.install();

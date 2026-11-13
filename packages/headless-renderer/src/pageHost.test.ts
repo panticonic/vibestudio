@@ -61,7 +61,9 @@ function harness(data: string) {
   return { host, send };
 }
 
-function lifecycleHarness(navigateResult: { errorText?: string } = {}) {
+function lifecycleHarness(
+  navigateResult: { errorText?: string; loaderId?: string } = { loaderId: "loader-1" }
+) {
   const owners = new Map<string, string>();
   let eventHandler:
     | ((event: { method: string; params: unknown; sessionId?: string }) => void)
@@ -185,7 +187,7 @@ describe("PageHost navigation readiness", () => {
 
   it("repeats a navigation once per observed network-change abort", async () => {
     const { host, input, send, fireDocumentReady } = lifecycleHarness();
-    const navigations = [{ errorText: "net::ERR_NETWORK_CHANGED" }, {}];
+    const navigations = [{ errorText: "net::ERR_NETWORK_CHANGED" }, { loaderId: "loader-2" }];
     const base = send.getMockImplementation()!;
     send.mockImplementation(async (method: string, ...rest: unknown[]) =>
       method === "Page.navigate" ? (navigations.shift() ?? {}) : base(method, ...(rest as []))
@@ -196,6 +198,48 @@ describe("PageHost navigation readiness", () => {
     );
     fireDocumentReady();
     await expect(loading).resolves.toBeUndefined();
+  });
+
+  it("completes a navigation that commits no new document", async () => {
+    // A download or a 204 aborts the load and leaves the current document.
+    const aborted = lifecycleHarness({ errorText: "net::ERR_ABORTED", loaderId: "loader-1" });
+    await expect(aborted.host.loadPanel(aborted.input)).resolves.toBeUndefined();
+
+    // A fragment navigation stays in the document: Chromium reports no loader.
+    const { host, input, send, fireDocumentReady } = lifecycleHarness();
+    const loading = host.loadPanel(input);
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Page.navigate", { url: input.panelUrl }, "mgmt-1")
+    );
+    fireDocumentReady();
+    await loading;
+    send.mockImplementation(async () => ({}));
+    await expect(
+      host.navigate(input.slotId, "navigate", `${input.panelUrl}#section`)
+    ).resolves.toBeUndefined();
+  });
+
+  it("completes a history step to a same-document entry", async () => {
+    const { host, input, send, fireDocumentReady, emit } = lifecycleHarness();
+    const loading = host.loadPanel(input);
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Page.navigate", { url: input.panelUrl }, "mgmt-1")
+    );
+    fireDocumentReady();
+    await loading;
+    send.mockImplementation(async (method: string) =>
+      method === "Page.getNavigationHistory"
+        ? { currentIndex: 1, entries: [{ id: 1 }, { id: 2 }] }
+        : {}
+    );
+    const back = host.navigate(input.slotId, "goBack");
+    await vi.waitFor(() =>
+      expect(send).toHaveBeenCalledWith("Page.navigateToHistoryEntry", { entryId: 1 }, "mgmt-1")
+    );
+    // An iframe's in-document navigation is not the panel's.
+    emit("Page.navigatedWithinDocument", { frameId: "child-frame", url: "x#a" });
+    emit("Page.navigatedWithinDocument", { frameId: "target-1", url: `${input.panelUrl}#a` });
+    await expect(back).resolves.toBeUndefined();
   });
 
   it("rejects an outstanding readiness wait when the panel is unloaded", async () => {

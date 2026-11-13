@@ -85,6 +85,13 @@ export interface PanelScreenshotResult {
   height: number;
 }
 
+/** What a navigation step reports about the document it leads to. */
+interface NavigationOutcome {
+  errorText?: string;
+  /** The navigation stayed within the current document. */
+  sameDocument?: boolean;
+}
+
 interface DocumentReadyWaiter {
   resolve(): void;
   reject(error: Error): void;
@@ -209,11 +216,7 @@ export class PageHost {
         this.cdp.send("Network.enable", undefined, mgmtSessionId),
       ]);
       await this.navigateAndWait(input.slotId, "panel navigation", async () => {
-        const nav = (await this.cdp.send(
-          "Page.navigate",
-          { url: input.panelUrl },
-          mgmtSessionId
-        )) as { errorText?: string };
+        const nav = await this.pageNavigate(input.panelUrl, mgmtSessionId);
         if (nav.errorText && nav.errorText !== "net::ERR_ABORTED") {
           this.consoleHistory.recordLifecycle(input.slotId, `did-fail-load: ${nav.errorText}`, {
             url: input.panelUrl,
@@ -258,10 +261,26 @@ export class PageHost {
     });
   }
 
+  /**
+   * `Page.navigate`, reporting whether it committed a new document. Chromium
+   * omits the loader id for a same-document (fragment) navigation, which fires
+   * no DOMContentLoaded.
+   */
+  private async pageNavigate(url: string, sessionId: string): Promise<NavigationOutcome> {
+    const result = (await this.cdp.send("Page.navigate", { url }, sessionId)) as {
+      loaderId?: string;
+      errorText?: string;
+    };
+    return {
+      ...(result.errorText ? { errorText: result.errorText } : {}),
+      ...(!result.errorText && !result.loaderId ? { sameDocument: true } : {}),
+    };
+  }
+
   private async navigateAndWait(
     slotId: string,
     operation: string,
-    navigate: () => Promise<{ errorText?: string }>
+    navigate: () => Promise<NavigationOutcome>
   ): Promise<void> {
     for (;;) {
       const documentReady = this.waitForDocumentReady(slotId);
@@ -279,6 +298,11 @@ export class PageHost {
         }
         if (result.errorText && result.errorText !== "net::ERR_ABORTED") {
           failure = new Error(`${operation} failed: ${result.errorText}`);
+        } else if (result.errorText || result.sameDocument) {
+          // Nothing new will be parsed: an aborted load (a download, a 204)
+          // leaves the current document in place, and a same-document
+          // navigation keeps it. Either way the navigation is complete.
+          this.documentReadyWaiters.get(slotId)?.resolve();
         }
       } catch (error) {
         failure = error instanceof Error ? error : new Error(String(error));
@@ -311,13 +335,8 @@ export class PageHost {
       { source: initScript },
       page.mgmtSessionId
     );
-    await this.navigateAndWait(
-      slotId,
-      "panel reload",
-      () =>
-        this.cdp.send("Page.navigate", { url: panelUrl }, page.mgmtSessionId) as Promise<{
-          errorText?: string;
-        }>
+    await this.navigateAndWait(slotId, "panel reload", () =>
+      this.pageNavigate(panelUrl, page.mgmtSessionId)
     );
   }
 
@@ -389,11 +408,7 @@ export class PageHost {
         if (!url) throw new Error("navigate requires a url");
         const browserContextId = this.contextsById.get(page.contextId);
         if (browserContextId) await this.beforeNavigate?.(browserContextId, url);
-        await this.navigateAndWait(
-          slotId,
-          "navigate",
-          () => this.cdp.send("Page.navigate", { url }, session) as Promise<{ errorText?: string }>
-        );
+        await this.navigateAndWait(slotId, "navigate", () => this.pageNavigate(url, session));
         return;
       }
       case "reload":
@@ -852,6 +867,15 @@ export class PageHost {
         this.documentReadyWaiters.get(slotId)?.resolve();
         this.emitViewChanged(slotId);
         return;
+      case "Page.navigatedWithinDocument": {
+        // A history step to a same-document entry: complete, with no new document.
+        const page = this.pages.get(slotId);
+        if (page && (event.params as { frameId?: string }).frameId === page.targetId) {
+          this.documentReadyWaiters.get(slotId)?.resolve();
+          this.emitViewChanged(slotId);
+        }
+        return;
+      }
       case "Page.loadEventFired":
         this.emitViewChanged(slotId);
         return;
