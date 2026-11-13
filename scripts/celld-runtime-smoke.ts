@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import { runtimeAppBuildOptions, runtimeAppCompilerOutput } from "./runtime-app-build.mjs";
 import { captureRuntimeApp } from "./lib/runtime-app.mjs";
 import { CelldNode } from "../src/server/celldNode.ts";
+import { buildRuntimeDeployment } from "../src/server/runtimeDeployment.ts";
 
 const root = process.argv[2]!;
 fs.rmSync(root, { recursive: true, force: true });
@@ -15,18 +16,14 @@ const proxyPort = (proxy.address() as any).port;
 const node = new CelldNode({ binary: process.env.CELLD!, stateDir: `${root}/celld`, blobRoot: `${root}/blobs`, nodeId: "smoke-node",
   egressProxyUrl: `http://127.0.0.1:${proxyPort}`, egressSecret: "s".repeat(32), onOutput: (s, l) => { if (/ERROR|WARN|error/.test(l)) console.log(s, l); } });
 const classes = app.internalClasses;
-const internalEnv = Object.fromEntries(classes.map((c) => [c, { RPC_AUTH_TOKEN: `t-${c}` }]));
-const bindings = Object.fromEntries(classes.map((c) => [`vibestudio/internal:${c}`, `do_vibestudio_internal_${c}`]));
-const t0 = Date.now();
-await node.deploy(app.bundle, {
-  name: "vibestudio", compatibility_date: "2025-12-01", compatibility_flags: ["nodejs_compat"],
-  worker_loaders: [{ binding: "LOADER" }],
-  durable_objects: { bindings: [{ name: "UNIVERSAL_DO", class_name: "UniversalDO" }, ...classes.map((c) => ({ name: bindings[`vibestudio/internal:${c}`], class_name: c }))] },
-  migrations: [{ tag: "v1", new_sqlite_classes: ["UniversalDO", ...classes] }],
-  services: [{ binding: "WORKER_HOST", service: "vibestudio", entrypoint: "WorkerHost" }, { binding: "EXECUTABLE_PREPARATION", service: "vibestudio", entrypoint: "ExecutablePreparation" }],
-  celld: { durable_objects: { EvalDO: { codegen: true } } },
-  vars: { WORKERD_DO_BINDINGS: bindings, WORKERD_GATEWAY_TOKEN: "gw", WORKERD_DISPATCH_SECRET: "ds", WORKERD_LOADER_SECRET: "ls", GATEWAY_URL: "http://127.0.0.1:9", WORKSPACE_ID: "ws", WORKERD_SESSION_ID: "s", WORKERD_BOOT_GENERATION: "1", INTERNAL_DO_ENV: internalEnv },
+const { config, secrets } = buildRuntimeDeployment({
+  compatibility: { compatibilityDate: "2025-12-01", compatibilityFlags: ["nodejs_compat"] },
+  classes: classes.map((c) => ({ className: c, rpcToken: `t-${c}`, env: {}, codegen: c === "EvalDO" })),
+  doLoaderSecret: "dls",
+  vars: { WORKERD_GATEWAY_TOKEN: "gw", WORKERD_DISPATCH_SECRET: "ds", WORKERD_LOADER_SECRET: "ls", GATEWAY_URL: "http://127.0.0.1:9", WORKSPACE_ID: "ws", WORKERD_SESSION_ID: "s", WORKERD_BOOT_GENERATION: "1" },
 });
+const t0 = Date.now();
+await node.deploy(app.bundle, config, secrets);
 console.log("deployed in", Date.now() - t0, "ms");
 const running = node.start({ listen: 18765, inspector: 18766 });
 for (;;) {
@@ -36,6 +33,14 @@ for (;;) {
 const r2 = await fetch("http://127.0.0.1:18765/_w/vibestudio/internal/WebhookStoreDO/k1/ping", { method: "POST", headers: { Authorization: "Bearer gw", "X-Vibestudio-Dispatch-Secret": "ds" }, body: "{}" });
 console.log("internal DO", r2.status, (await r2.text()).slice(0, 300));
 const ins = await fetch("http://127.0.0.1:18766/json/list"); console.log("inspector", ins.status, (await ins.text()).slice(0, 300));
+const forkBody = JSON.stringify({ op: "fork", namespace: "do_vibestudio_internal_WebhookStoreDO", from: "k1", to: "k2" });
+const objectHeaders = { Authorization: "Bearer gw", "X-Vibestudio-Dispatch-Secret": "ds", "Content-Type": "application/json" };
+const fork = await fetch("http://127.0.0.1:18765/_object", { method: "POST", headers: objectHeaders, body: forkBody });
+console.log("fork", fork.status, (await fork.text()).slice(0, 200));
+const again = await fetch("http://127.0.0.1:18765/_object", { method: "POST", headers: objectHeaders, body: forkBody });
+console.log("fork again (refused)", again.status, (await again.text()).slice(0, 200));
+const restore = await fetch("http://127.0.0.1:18765/_object", { method: "POST", headers: objectHeaders, body: JSON.stringify({ op: "restore", namespace: "do_vibestudio_internal_WebhookStoreDO", from: "k1", to: "k2", stop: true }) });
+console.log("restore", restore.status, (await restore.text()).slice(0, 200));
 await running.reload(); console.log("reload ok");
 console.log("proxy saw", seen);
 console.log("shutdown requested", await running.requestShutdown(), await running.exited);

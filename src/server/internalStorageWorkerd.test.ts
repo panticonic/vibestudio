@@ -1,24 +1,17 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { createHash } from "node:crypto";
-import { DatabaseSync } from "node:sqlite";
-import { canonicalJson } from "@vibestudio/content-addressing";
 import { serializeRpcFailure, type RpcFailure } from "@vibestudio/rpc";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import * as esbuild from "esbuild";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import { DODispatch } from "./doDispatch.js";
-import { INTERNAL_DO_SOURCE, type InternalDOPrograms } from "./internalDOs/internalDoLoader.js";
-import { internalDoProgramsFromCompiler } from "../../tests/fixtures/internalDoPrograms.js";
-import {
-  internalDoBuildOptions,
-  internalDoCompilerOutputs,
-} from "../../scripts/internal-do-build.mjs";
+import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
+import { celldTestBinary, nodeProxy } from "../../tests/helpers/celldNodeHarness.js";
 import { postToDurableObject, type DORef } from "./workerdRpcRelay.js";
 import {
   schemaProbeEnvironmentForFixture,
@@ -67,16 +60,13 @@ import {
 import { workspaceRpcSchema, workspaceRpcSchemaMetadata } from "./buildV2/workspaceRpcSchemas.js";
 import { createHostDoAuthorityAttester } from "./bootstrap/workerd.js";
 import {
-  buildWorkerdPrograms,
-  type WorkerdProgramSources,
-} from "../../scripts/build-workerd-programs.mjs";
-import {
   cleanupStoredBuildFixtures,
   storedBuildFixture,
 } from "../../tests/helpers/storedBuildFixture.js";
 
-let compiledWorkerdPrograms: WorkerdProgramSources;
-let compiledInternalDOPrograms: InternalDOPrograms;
+const EGRESS_SECRET = "internal-storage-egress-secret";
+// The product's runtime application (dist/runtime-app.json) on the fork's node.
+const celldBinary = celldTestBinary();
 
 function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
   const contentRoots = [
@@ -102,17 +92,6 @@ function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
   });
 }
 
-beforeAll(async () => {
-  const [internalDoBuild, programs] = await Promise.all([
-    esbuild.build({ ...internalDoBuildOptions(), logLevel: "silent" }),
-    buildWorkerdPrograms({ write: false }),
-  ]);
-  compiledInternalDOPrograms = internalDoProgramsFromCompiler(
-    internalDoCompilerOutputs(internalDoBuild)
-  );
-  compiledWorkerdPrograms = programs;
-});
-
 // Loader gateway servers started by harnesses; closed in afterEach. Userland
 // DOs route through the UniversalDO facet host, which fetches `/_docode` from
 // `getServerUrl`, so the harness must serve those loader endpoints.
@@ -136,7 +115,7 @@ async function createWorkerdHarness(
   const statePath = mkdtempSync(join(tmpdir(), "vibestudio-workerd-state-"));
   activeFixtureRoots.push(workspacePath, statePath);
   const manager = new WorkerdManager({
-    schemaProbeEnvironment: schemaProbeEnvironmentForFixture(compiledWorkerdPrograms),
+    schemaProbeEnvironment: schemaProbeEnvironmentForFixture("internal-storage-test"),
     schemaProbeReleaseRoot: join(statePath, "installed-resources"),
     tokenManager,
     fsService: {
@@ -144,19 +123,18 @@ async function createWorkerdHarness(
     } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
     workspaceId: "workspace:internal-workerd-test",
-    workerdPrograms: compiledWorkerdPrograms,
-    internalDOPrograms: compiledInternalDOPrograms,
     getInternalDoEnv: () => ({}),
     workspacePath,
     statePath,
     // Internal DO outbound RPCs route through the same loopback harness. The
     // port is resolved only when a DO class is registered, after the server
     // below has bound and populated the holder.
-    getProxyPort: () => (mainRpc ? portHolder.value : 9),
-    getSharedEgressPort: () => Promise.resolve(mainRpc ? portHolder.value : 10),
+    // The node sends all egress, product classes' RPC callbacks included, and
+    // reaches the gateway, through the one proxy listener below.
+    getSharedEgressPort: () => Promise.resolve(portHolder.value),
     registerEgressCaller: () => {},
     unregisterEgressCaller: () => {},
-    egressSecret: "internal-storage-egress-secret",
+    egressSecret: EGRESS_SECRET,
     getWorkerdGatewayToken: () => "internal-test-workerd-gateway-token",
     ...managerOverrides,
   } satisfies WorkerdManagerDeps);
@@ -200,7 +178,10 @@ async function createWorkerdHarness(
     },
   });
 
-  const loaderServer = createServer(async (req, res) => {
+  const gatewayHandler = async (
+    req: import("node:http").IncomingMessage,
+    res: import("node:http").ServerResponse
+  ): Promise<void> => {
     const u = req.url ?? "";
     if (u === "/rpc" && req.method === "POST" && mainRpc) {
       const chunks: Buffer[] = [];
@@ -234,7 +215,7 @@ async function createWorkerdHarness(
       return;
     }
     if (u.startsWith("/_doadmission/")) {
-      if (req.headers["x-vibestudio-loader-secret"] !== manager.getLoaderSecret()) {
+      if (req.headers["x-vibestudio-loader-secret"] !== manager.getDoLoaderSecret()) {
         res.writeHead(403);
         res.end("forbidden");
         return;
@@ -267,7 +248,7 @@ async function createWorkerdHarness(
       return;
     }
     if (u.startsWith("/_docode/")) {
-      if (req.headers["x-vibestudio-loader-secret"] !== manager.getLoaderSecret()) {
+      if (req.headers["x-vibestudio-loader-secret"] !== manager.getDoLoaderSecret()) {
         res.writeHead(403);
         res.end("forbidden");
         return;
@@ -297,7 +278,20 @@ async function createWorkerdHarness(
     }
     res.writeHead(404);
     res.end("nf");
+  };
+  // A product class's callback to `/rpc` arrives through the proxy under its
+  // service identity; the runtime application's own programs arrive as host
+  // programs. Both are served by the one gateway fixture.
+  const proxy = nodeProxy({
+    secret: EGRESS_SECRET,
+    gateway: (req, res) => void gatewayHandler(req, res),
+    other: ({ request }, res) => {
+      const target = new URL(request.url ?? "", "http://gateway");
+      request.url = `${target.pathname}${target.search}`;
+      void gatewayHandler(request, res);
+    },
   });
+  const loaderServer = createServer(proxy.listener);
   portHolder.value = await new Promise<number>((r) =>
     loaderServer.listen(0, "127.0.0.1", () => {
       const a = loaderServer.address();
@@ -496,8 +490,12 @@ function buildResult(
   };
 }
 
-describe("internal storage DOs under workerd", () => {
+describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
   let manager: WorkerdManager | null = null;
+
+  beforeEach(() => {
+    vi.stubEnv("VIBESTUDIO_CELLD_BIN", celldBinary!);
+  });
 
   afterEach(async () => {
     if (manager) {
@@ -532,50 +530,17 @@ describe("internal storage DOs under workerd", () => {
       { source: INTERNAL_DO_SOURCE, className: "EvalDO" },
     ]);
     const ref = { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey: "retained-eval" };
-    const storage = manager as unknown as {
-      quiesceDurableObjectStorage(ref: DORef): Promise<void>;
-      durableObjectStorageLocation(ref: DORef): { dir: string; hash: string };
-    };
+    // The first activation creates the class's schema in the cell's storage.
     expect(await harness.callDurableObject(ref, "getRunReceipt", "retained")).toBeNull();
-    await storage.quiesceDurableObjectStorage(ref);
-    const { dir, hash } = storage.durableObjectStorageLocation(ref);
-    const db = new DatabaseSync(join(dir, `${hash}.sqlite`));
-    const result = { success: true, console: "retained domain truth", returnValue: 42 };
-    const runDigest = "a".repeat(64);
-    const resultDigest = createHash("sha256").update(canonicalJson(result)).digest("hex");
-    try {
-      db.prepare(
-        "INSERT INTO runs(run_id,args,status,result,started_at) VALUES(?,?, 'done',?,1)"
-      ).run("retained", JSON.stringify({ code: "return 42", runDigest }), JSON.stringify(result));
-      db.prepare("INSERT INTO state(key,value) VALUES(?,?)").run(
-        'eval-result-ack:"retained"',
-        JSON.stringify({ runDigest, resultDigest })
-      );
-    } finally {
-      db.close();
-    }
-    expect(await harness.callDurableObject(ref, "getRunReceipt", "retained")).toEqual({
-      runId: "retained",
-      runDigest,
-      resultDigest,
-      result,
-      acknowledged: true,
-    });
-    await storage.quiesceDurableObjectStorage(ref);
-    const reopened = new DatabaseSync(join(dir, `${hash}.sqlite`));
-    try {
-      expect(reopened.prepare("SELECT version FROM _vibestudio_schema").get()).toEqual({
-        version: 5,
-      });
-      expect(reopened.prepare("SELECT result FROM runs WHERE run_id='retained'").get()).toEqual({
-        result: JSON.stringify(result),
-      });
-    } finally {
-      reopened.close();
-    }
+    // A replaced node reopens that retained storage under the executable's own
+    // schema descriptor: validation accepts it, nothing is rebuilt.
+    const generation = manager.getBootGeneration();
+    await manager.recoverUnresponsiveSandbox("test: replace the node");
+    expect(manager.getBootGeneration()).toBe(generation + 1);
+    expect(await harness.callDurableObject(ref, "getRunReceipt", "retained")).toBeNull();
   }, 60_000);
 
-  it("resets and restores internal DO storage through a graceful workerd stop", async () => {
+  it("keeps internal DO storage across a node replacement and leaves its maintenance to the class", async () => {
     // BrowserVaultDO writes are host-capability attested, which requires the
     // installed product identity; synthesize one for this process the same way
     // a packaged build ships it.
@@ -603,7 +568,7 @@ describe("internal storage DOs under workerd", () => {
     const ref = {
       source: INTERNAL_DO_SOURCE,
       className: "BrowserVaultDO",
-      objectKey: "resettable-browser-environment",
+      objectKey: "durable-browser-environment",
     };
 
     await doDispatch.dispatch(ref, "addPassword", {
@@ -615,16 +580,18 @@ describe("internal storage DOs under workerd", () => {
     });
     expect((await doDispatch.dispatch(ref, "listPasswordSummaries")) as unknown[]).toHaveLength(1);
 
-    // Internal quiesce is a graceful workerd stop (no per-facet abort exists);
-    // the next dispatch lazily restarts workerd against fresh storage.
-    const reset = await manager.resetDOStorage(ref, "exercise internal maintenance");
-    expect((await doDispatch.dispatch(ref, "listPasswordSummaries")) as unknown[]).toHaveLength(0);
-    expect(await manager.listDOStorageBackups(ref)).toEqual([
-      expect.objectContaining({ operationId: reset.operationId }),
-    ]);
-
-    await manager.restoreDOStorageBackup(ref, reset.operationId, "restore the password");
+    // Replacing the node (as crash recovery does) keeps the object's storage:
+    // it lives in the bucket, not in the process.
+    const generation = manager.getBootGeneration();
+    await manager.recoverUnresponsiveSandbox("test: replace the node");
+    expect(manager.getBootGeneration()).toBe(generation + 1);
     expect((await doDispatch.dispatch(ref, "listPasswordSummaries")) as unknown[]).toHaveLength(1);
+
+    // Maintenance (reset, backup, restore) is the userland surface; a product
+    // class owns its own storage and refuses it.
+    await expect(manager.resetDOStorage(ref, "not for product objects")).rejects.toThrow(
+      "not supported for internal DO source"
+    );
   }, 60_000);
 
   // Manual empirical probe (~37s; opt-in via `.only` or removing `.skip`) behind

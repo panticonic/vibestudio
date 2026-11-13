@@ -1,26 +1,20 @@
-import { spawn } from "node:child_process";
-import { createRequire } from "node:module";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { build } from "esbuild";
 import { expect, it, onTestFinished } from "vitest";
+import { celldTestBinary, startCelldProbe, type CelldProbe } from "../../tests/helpers/celldNodeHarness.js";
 
-const require = createRequire(import.meta.url);
-
-it("retains large native transcript and document payloads across process replacement", async () => {
+it.skipIf(!celldTestBinary())("retains large native transcript and document payloads across process replacement on celld", async () => {
   const root = await mkdtemp(join(homedir(), ".native-sqlite-payload-"));
-  let child: ReturnType<typeof spawn> | undefined;
-  let exited: Promise<void> | undefined;
-  let stderr = "";
+  let cleanupProbe: CelldProbe | undefined;
   const requests = new AbortController();
   const ownedFetches: Promise<unknown>[] = [];
   let cleaning: Promise<void> | undefined;
   const cleanup = () =>
     (cleaning ??= (async () => {
       requests.abort(new Error("Native SQLite payload fixture retired"));
-      if (child?.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
-      await exited;
+      await cleanupProbe?.kill();
       await Promise.allSettled(ownedFetches);
       await rm(root, { recursive: true, force: true });
     })());
@@ -73,83 +67,29 @@ it("retains large native transcript and document payloads across process replace
     });
     const module = bundle.outputFiles[0]?.text;
     if (!module) throw new Error("Missing native SQLite payload bundle");
-    await mkdir(join(root, "storage"));
-    await writeFile(join(root, "worker.js"), module);
-    await writeFile(
-      join(root, "config.capnp"),
-      `using Workerd = import "/workerd/workerd.capnp";
-      const config :Workerd.Config = (services=[(name="main",worker=(compatibilityDate="2026-10-02",bindings=[(name="PROBE",durableObjectNamespace="Probe")],durableObjectNamespaces=[(className="Probe",uniqueKey="large-payload-probe",enableSql=true)],durableObjectStorage=(localDisk="storage"),modules=[(name="worker.js",esModule=embed "worker.js")])),(name="storage",disk=(path=${JSON.stringify(join(root, "storage"))},writable=true))],sockets=[(name="http",address="127.0.0.1",http=(),service="main")]);`
-    );
-    const start = async () => {
-      let resolveListening!: (value: string) => void;
-      let rejectListening!: (error: unknown) => void;
-      const listening = new Promise<string>((resolve, reject) => {
-        resolveListening = resolve;
-        rejectListening = reject;
-      });
-      child = spawn(
-        require.resolve("@cloudflare/workerd-linux-64/bin/workerd"),
-        [
-          "serve",
-          "--socket-addr=http=127.0.0.1:0",
-          "--experimental",
-          "--control-fd=3",
-          join(root, "config.capnp"),
-        ],
-        { stdio: ["ignore", "ignore", "pipe", "pipe"] }
-      );
-      exited = new Promise<void>((yes) => child!.once("close", yes));
-      child.once("error", rejectListening);
-      child.stderr!.on("data", (chunk) => {
-        stderr = (stderr + String(chunk)).slice(-20000);
-      });
-      let control = "";
-      child.stdio[3]!.on("data", (chunk: Buffer) => {
-        control += String(chunk);
-        let newline: number;
-        while ((newline = control.indexOf("\n")) !== -1) {
-          const line = control.slice(0, newline);
-          control = control.slice(newline + 1);
-          try {
-            const event = JSON.parse(line) as { event?: string; socket?: string; port?: number };
-            if (
-              event.event === "listen" &&
-              event.socket === "http" &&
-              typeof event.port === "number"
-            )
-              resolveListening(`http://127.0.0.1:${event.port}`);
-          } catch (error) {
-            rejectListening(error);
-          }
-        }
-      });
-      return Promise.race([
-        listening,
-        exited.then(() => {
-          throw new Error(`Workerd exited before readiness: ${stderr}`);
-        }),
-      ]);
-    };
-    const read = (endpoint: string, path: string) => {
-      const operation = fetch(`${endpoint}/${path}`, { signal: requests.signal }).then(
+    // The probe is one node; replacing the process (a durable stop, then a new
+    // node over the same bucket) must reopen what the first one wrote.
+    const probe = await startCelldProbe({ root, bundle: module, classes: ["Probe"] });
+    cleanupProbe = probe;
+    const read = (path: string) => {
+      const operation = fetch(`${probe.endpoint}/${path}`, { signal: requests.signal }).then(
         async (response) => {
-          if (!response.ok)
-            throw new Error(`Native payload ${path} failed: ${await response.text()}\n${stderr}`);
+          if (!response.ok) throw new Error(`Native payload ${path} failed: ${await response.text()}`);
           return response.json();
         }
       );
       ownedFetches.push(operation);
       return operation;
     };
-    const initial = await start();
-    const written = await read(initial, "write");
+    await probe.start();
+    const written = await read("write");
     expect(written).toMatchObject({ written: true, seq: 1 });
     expect(written.recordBytes).toBeGreaterThan(10_000_000);
-    child!.kill("SIGTERM");
-    await exited;
-    const replacement = await start();
-    expect(await read(replacement, "read")).toEqual({ reopened: true, continued: true });
+    await probe.stop();
+    await probe.start();
+    expect(await read("read")).toEqual({ reopened: true, continued: true });
+    await probe.stop();
   } finally {
     await cleanup();
   }
-}, 30_000);
+}, 60_000);

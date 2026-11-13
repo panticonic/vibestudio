@@ -1,25 +1,25 @@
 import { serializeRpcFailure } from "@vibestudio/rpc";
 import { workerExecutableHeaders } from "./workerExecutableDispatch.js";
 /**
- * Integration test for the Phase 1 dynamic worker host — exercises the REAL
- * workerd binary end-to-end:
- *   - `worker-host` loads a regular worker dynamically via `env.LOADER`
- *     (no per-worker config, no restart),
+ * Integration test for the dynamic worker host — exercises the REAL celld
+ * node end-to-end (set `VIBESTUDIO_CELLD_BIN`, or stage `native/celld`):
+ *   - the runtime application's worker host loads a regular worker dynamically
+ *     via `env.LOADER` (no per-worker deployment, no restart),
  *   - RPC dispatch reaches the loaded worker through the router → host → loader,
- *   - outbound `fetch()` is attributed non-forgeably through the shared egress
- *     listener (identity from `ctx.exports.EgressGateway` props),
- *   - worker create/destroy/update never restart workerd (boot generation
+ *   - outbound `fetch()` is attributed non-forgeably: the node stamps the
+ *     identity and its MAC, and a header the worker sets itself is not read,
+ *   - worker create/destroy/update never restart the node (boot generation
  *     stays put across the lifecycle).
  *
- * Unlike workerdManager.test.ts, this does NOT mock spawn or ports — it runs
- * the actual binary, so it validates the generated host code itself.
+ * Unlike workerdManager.test.ts, this does NOT mock the node supervisor or
+ * ports — it runs the actual binary.
  */
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdtempSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 import {
   schemaProbeEnvironmentForFixture,
@@ -46,12 +46,11 @@ import {
   type ExecutionArtifactRefV1,
 } from "@vibestudio/shared/execution/retention";
 import { sha256 } from "@vibestudio/shared/execution/identity";
-import {
-  buildWorkerdPrograms,
-  type WorkerdProgramSources,
-} from "../../scripts/build-workerd-programs.mjs";
+import { celldTestBinary, nodeProxy, type NodeTraffic } from "../../tests/helpers/celldNodeHarness.js";
 
-let compiledWorkerdPrograms: WorkerdProgramSources;
+const EGRESS_SECRET = "dynamic-worker-host-egress-secret";
+// The product's runtime application (dist/runtime-app.json) on the fork's node.
+const celldBinary = celldTestBinary();
 
 function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
   const contentRoots = [
@@ -77,10 +76,6 @@ function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
   });
 }
 
-beforeAll(async () => {
-  compiledWorkerdPrograms = await buildWorkerdPrograms({ write: false });
-});
-
 const WORKER_BUNDLE = `let snapshotCalls = 0; export default {
   async fetch(request, env) {
     const url = new URL(request.url);
@@ -95,7 +90,7 @@ const WORKER_BUNDLE = `let snapshotCalls = 0; export default {
     }
     if (url.pathname.endsWith("/egress")) {
       // Try to forge identity — the egress gateway must override it.
-      const res = await fetch("https://example.com/probe", { headers: { "X-Vibestudio-Egress-Caller": "FORGED" } });
+      const res = await fetch("https://example.com/probe", { headers: { "X-Vibestudio-Egress-Caller": "FORGED", "X-Celld-Egress-Identity": "FORGED" } });
       const seen = await res.json();
       return new Response(JSON.stringify({ result: seen }), { headers: { "content-type": "application/json" } });
     }
@@ -137,8 +132,7 @@ interface Harness {
   manager: WorkerdManager;
   codeFetches: string[];
   gateway: Server;
-  egress: Server;
-  egressHits: Array<{ caller: string | undefined; secret: string | undefined; path: string }>;
+  egressHits: NodeTraffic[];
   workerdCall: (path: string, init?: RequestInit) => Promise<Response>;
 }
 
@@ -158,40 +152,27 @@ async function createHarness(
   const codeFetches: string[] = [];
   const tokenManager = new TokenManager();
   const currentBuild = buildRef ?? { value: workerBuild() };
-  const egressHits: Harness["egressHits"] = [];
-
-  // Shared egress listener: records the attributed caller header.
-  const egress = createServer((req, res) => {
-    egressHits.push({
-      caller: req.headers["x-vibestudio-egress-caller"] as string | undefined,
-      secret: req.headers["x-vibestudio-egress-secret"] as string | undefined,
-      path: req.url ?? "",
-    });
-    res.writeHead(200, { "content-type": "application/json" });
-    res.end(JSON.stringify({ seenCaller: req.headers["x-vibestudio-egress-caller"] ?? null }));
-  });
-  const egressPort = await listen(egress);
 
   // Construct the manager first (getServerUrl reads the port lazily via the
   // holder) so the gateway closure can reference a `const` manager.
   const portHolder = { value: 0 };
   const statePath = mkdtempSync(join(tmpdir(), "vibestudio-dwh-state-"));
   const deps: WorkerdManagerDeps = {
-    schemaProbeEnvironment: schemaProbeEnvironmentForFixture(compiledWorkerdPrograms),
+    schemaProbeEnvironment: schemaProbeEnvironmentForFixture("dynamic-worker-host-test"),
     schemaProbeReleaseRoot: join(statePath, "installed-resources"),
     tokenManager,
     fsService: { closeHandlesForCaller: () => {} } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
     workspaceId: "workspace:dynamic-worker-host-test",
-    workerdPrograms: compiledWorkerdPrograms,
     getInternalDoEnv: () => ({}),
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-dwh-ws-")),
     statePath,
-    getProxyPort: () => 1,
-    getSharedEgressPort: () => Promise.resolve(egressPort),
+    // The node reaches the gateway, and sends all egress, through one proxy
+    // listener (below); its origin is the gateway URL.
+    getSharedEgressPort: () => Promise.resolve(portHolder.value),
     registerEgressCaller: () => {},
     unregisterEgressCaller: () => {},
-    egressSecret: "dynamic-worker-host-egress-secret",
+    egressSecret: EGRESS_SECRET,
     getWorkerdGatewayToken: () => "test-gateway-token",
   };
   const provider: WorkerdWorkspaceProvider = {
@@ -216,7 +197,7 @@ async function createHarness(
   manager.bindWorkspaceProvider(provider);
 
   // Minimal gateway serving the loader endpoints (mirrors gateway.ts).
-  const gateway = createServer((req, res) => {
+  const gatewayHandler = (req: IncomingMessage, res: ServerResponse): void => {
     const url = req.url ?? "";
     const secret = req.headers["x-vibestudio-loader-secret"];
     if (url.startsWith("/_workercode/")) {
@@ -257,7 +238,9 @@ async function createHarness(
     }
     res.writeHead(404);
     res.end("not found");
-  });
+  };
+  const proxy = nodeProxy({ secret: EGRESS_SECRET, gateway: gatewayHandler });
+  const gateway = createServer(proxy.listener);
   portHolder.value = await listen(gateway);
 
   const workerdCall = async (path: string, init: RequestInit = {}): Promise<Response> => {
@@ -281,7 +264,7 @@ async function createHarness(
     }
   };
 
-  return { manager, gateway, egress, egressHits, workerdCall, codeFetches };
+  return { manager, gateway, egressHits: proxy.traffic, workerdCall, codeFetches };
 }
 
 let active: Harness | null = null;
@@ -290,13 +273,16 @@ afterEach(async () => {
   if (active) {
     await active.manager.shutdown();
     await new Promise<void>((r) => active!.gateway.close(() => r()));
-    await new Promise<void>((r) => active!.egress.close(() => r()));
     active = null;
   }
   cleanupStoredBuildFixtures();
 });
 
-describe("dynamic worker host (real workerd)", () => {
+describe.skipIf(!celldBinary)("dynamic worker host (real celld)", () => {
+  beforeEach(() => {
+    vi.stubEnv("VIBESTUDIO_CELLD_BIN", celldBinary!);
+  });
+
   it("selects once per admission while preserving env updates and same-name recreation", async () => {
     active = await createHarness();
     const { manager, workerdCall, codeFetches } = active;
@@ -442,12 +428,16 @@ describe("dynamic worker host (real workerd)", () => {
     const res = await workerdCall("/echo/egress");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { result: { seenCaller: string | null } };
-    // The worker tried to forge "FORGED"; the gateway stamped the real id (the
-    // worker entity's canonical caller id: worker:<source>:<key>).
+    // The worker tried to forge "FORGED"; the node stamped the real id (the
+    // worker entity's canonical caller id: worker:<source>:<key>), and the
+    // proxy verified its MAC before it believed it.
     expect(body.result.seenCaller).toBe("worker:workers/echo:echo");
     const lastHit = egressHits[egressHits.length - 1];
-    expect(lastHit?.caller).toBe("worker:workers/echo:echo");
-    expect(lastHit?.secret).toBe(manager.getEgressSecret());
+    expect(lastHit?.identity).toMatchObject({
+      loaded: true,
+      egressIdentity: ["worker:workers/echo:echo"],
+    });
+    expect(lastHit?.url).toBe("https://example.com/probe");
   }, 30_000);
 
   it("destroys a worker with no restart and stops addressing it", async () => {

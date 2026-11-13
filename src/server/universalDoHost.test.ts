@@ -1,8 +1,8 @@
 import type { RpcFailure } from "@vibestudio/rpc";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 /**
- * Integration test for the Phase 2b UniversalDO facet host — exercises the REAL
- * workerd binary end-to-end:
+ * Integration test for the UniversalDO facet host — exercises the REAL celld
+ * node end-to-end (set `VIBESTUDIO_CELLD_BIN`, or stage `native/celld`):
  *   - a userland DO class loads dynamically into the static `universal-do`
  *     service as a durable facet (no per-class service, no workerd restart),
  *   - dispatch reaches it via `/_u/{packedKey}/{method}`,
@@ -10,12 +10,12 @@ import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
  *   - a NEW userland DO class needs no restart (boot generation unchanged),
  *   - distinct object keys get isolated facet storage.
  */
-import { createServer, type Server } from "node:http";
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
 import { TokenManager } from "@vibestudio/shared/tokenManager";
@@ -40,17 +40,16 @@ import {
   type ExecutionArtifactRefV1,
 } from "@vibestudio/shared/execution/retention";
 import { sha256 } from "@vibestudio/shared/execution/identity";
-import {
-  buildWorkerdPrograms,
-  type WorkerdProgramSources,
-} from "../../scripts/build-workerd-programs.mjs";
+import { celldTestBinary, nodeProxy } from "../../tests/helpers/celldNodeHarness.js";
 import { beginDurableObjectRelay } from "./workerdRpcRelay.js";
 import {
   cleanupStoredBuildFixtures,
   storedBuildFixture,
 } from "../../tests/helpers/storedBuildFixture.js";
 
-let compiledWorkerdPrograms: WorkerdProgramSources;
+const EGRESS_SECRET = "universal-do-host-egress-secret";
+// The product's runtime application (dist/runtime-app.json) on the fork's node.
+const celldBinary = celldTestBinary();
 
 function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
   const contentRoots = [
@@ -75,10 +74,6 @@ function runtimeArtifact(source: string, ref = "main"): ExecutionArtifactRefV1 {
     executionDigest: executionArtifactDigest(unsigned),
   });
 }
-
-beforeAll(async () => {
-  compiledWorkerdPrograms = await buildWorkerdPrograms({ write: false });
-});
 
 const COUNTER_DO = `import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 let unitConstructors = 0;
@@ -226,7 +221,8 @@ interface Harness {
   admissionFetches: Map<string, number>;
   dispatch: (
     ref: { source: string; className: string; objectKey: string },
-    method: string
+    method: string,
+    signal?: AbortSignal
   ) => Promise<unknown>;
 }
 
@@ -260,21 +256,19 @@ async function createHarness(
   const statePath = mkdtempSync(join(tmpdir(), "vibestudio-udo-state-"));
 
   const deps: WorkerdManagerDeps = {
-    schemaProbeEnvironment: schemaProbeEnvironmentForFixture(compiledWorkerdPrograms),
+    schemaProbeEnvironment: schemaProbeEnvironmentForFixture("universal-do-host-test"),
     schemaProbeReleaseRoot: join(statePath, "installed-resources"),
     tokenManager,
     fsService: { closeHandlesForCaller: () => {} } as unknown as WorkerdManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
     workspaceId: "workspace:universal-do-host-test",
-    workerdPrograms: compiledWorkerdPrograms,
     getInternalDoEnv: () => ({}),
     workspacePath: mkdtempSync(join(tmpdir(), "vibestudio-udo-ws-")),
     statePath,
-    getProxyPort: () => 1,
     getSharedEgressPort: () => Promise.resolve(portHolder.value),
     registerEgressCaller: () => {},
     unregisterEgressCaller: () => {},
-    egressSecret: "universal-do-host-egress-secret",
+    egressSecret: EGRESS_SECRET,
     getWorkerdGatewayToken: () => "udo-gateway-token",
   };
   const provider: WorkerdWorkspaceProvider = {
@@ -323,16 +317,13 @@ async function createHarness(
   const codeFetches = new Map<string, number>();
   const admissionFetches = new Map<string, number>();
 
-  const gateway = createServer((req, res) => {
+  // The node reaches this gateway, and sends all egress, through one proxy
+  // listener: loaded code's traffic is answered with who the node says it is.
+  const gatewayHandler = (req: IncomingMessage, res: ServerResponse): void => {
     const url = req.url ?? "";
-    if (req.headers["x-vibestudio-egress-secret"] === "universal-do-host-egress-secret") {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify({ caller: req.headers["x-vibestudio-egress-caller"] }));
-      return;
-    }
     const secret = req.headers["x-vibestudio-loader-secret"];
     if (url.startsWith("/_doadmission/")) {
-      if (secret !== manager.getLoaderSecret()) {
+      if (secret !== manager.getDoLoaderSecret()) {
         res.writeHead(403);
         res.end("forbidden");
         return;
@@ -374,7 +365,7 @@ async function createHarness(
       return;
     }
     if (url.startsWith("/_docode/")) {
-      if (secret !== manager.getLoaderSecret()) {
+      if (secret !== manager.getDoLoaderSecret()) {
         res.writeHead(403);
         res.end("forbidden");
         return;
@@ -411,18 +402,29 @@ async function createHarness(
     }
     res.writeHead(404);
     res.end("nf");
+  };
+  const proxy = nodeProxy({
+    secret: EGRESS_SECRET,
+    gateway: gatewayHandler,
+    other: ({ identity }, res) => {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({ caller: identity.egressIdentity[0] ?? null }));
+    },
   });
+  const gateway = createServer(proxy.listener);
   portHolder.value = await listen(gateway);
 
   const dispatch = async (
     ref: { source: string; className: string; objectKey: string },
-    method: string
+    method: string,
+    signal?: AbortSignal
   ): Promise<unknown> => {
     const port = manager.getPort();
     if (!port) throw new Error("workerd not running");
     const key = encodeUniversalKey(ref);
     const res = await fetch(`http://127.0.0.1:${port}/_u/${encodeURIComponent(key)}/${method}`, {
       method: "POST",
+      ...(signal ? { signal } : {}),
       headers: {
         Authorization: "Bearer udo-gateway-token",
         "X-Vibestudio-Dispatch-Secret": manager.getDispatchSecret(),
@@ -550,7 +552,11 @@ function sourceOwner(reservation: EntityRecord): EntityRecord {
   };
 }
 
-describe("UniversalDO facet host (real workerd)", () => {
+describe.skipIf(!celldBinary)("UniversalDO facet host (real celld)", () => {
+  beforeEach(() => {
+    vi.stubEnv("VIBESTUDIO_CELLD_BIN", celldBinary!);
+  });
+
   it("preserves application failures containing HTTP status text", async () => {
     active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
     const { manager, dispatch } = active;
@@ -578,7 +584,11 @@ describe("UniversalDO facet host (real workerd)", () => {
     });
     expect([...codeFetches.values()].reduce((sum, value) => sum + value, 0)).toBe(1);
     const boot = manager.getBootGeneration();
-    const held = dispatch(first, "hold").then(
+    // A request running in a facet that is retired never answers (celld keeps a
+    // root's response behind its facet's pending call). The host's relay owns
+    // the caller side and drops its request; this caller does the same.
+    const heldCall = new AbortController();
+    const held = dispatch(first, "hold", heldCall.signal).then(
       () => ({ ok: true }),
       (error) => ({ error })
     );
@@ -586,6 +596,7 @@ describe("UniversalDO facet host (real workerd)", () => {
     // owning instance before retirement; no time-based readiness surrogate.
     expect(await dispatch(first, "instance")).toMatchObject({ localCalls: 2, held: true });
     await manager.retireDOEntity(first);
+    heldCall.abort();
     expect(await held).toHaveProperty("error");
     expect(manager.getBootGeneration()).toBe(boot);
     expect(await dispatch(second, "instance")).toMatchObject({ localCalls: 2, held: false });
@@ -674,7 +685,10 @@ describe("UniversalDO facet host (real workerd)", () => {
     const targets = (await fetch(`${inspector}/json/list`).then((response) =>
       response.json()
     )) as Array<{ title: string }>;
-    expect(targets.some((target) => target.title.includes("do-code:"))).toBe(true);
+    // The prepared unit is a dynamic worker's isolate (celld names it `__loader:<n>`).
+    expect(targets.some((target) => target.title.includes("celld dynamic worker isolate"))).toBe(
+      true
+    );
   });
 
   it("keeps shared executable network egress alive after the first loading object retires", async () => {
@@ -894,7 +908,8 @@ describe("UniversalDO facet host (real workerd)", () => {
         .filter(([key]) => !key.startsWith("__vibestudio_schema_probe:"))
         .reduce((sum, [, count]) => sum + count, 0);
     expect(codeLoads()).toBe(1);
-    const held = dispatch(first, "hold").then(
+    const heldCall = new AbortController();
+    const held = dispatch(first, "hold", heldCall.signal).then(
       () => ({ completed: true }),
       (error) => ({ error })
     );
@@ -913,6 +928,7 @@ describe("UniversalDO facet host (real workerd)", () => {
       unitConstructors: 3,
       stateArgs: { configuration: "reconfigured" },
     });
+    heldCall.abort();
     expect(await held).toHaveProperty("error");
     expect(await dispatch(first, "get")).toMatchObject({ count: 1 });
     expect(await dispatch(sibling, "instance")).toMatchObject({

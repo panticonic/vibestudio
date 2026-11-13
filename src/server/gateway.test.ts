@@ -17,6 +17,7 @@ describe("Gateway lifecycle", () => {
       getWorkerHost: () =>
         ({
           getLoaderSecret: () => "fixture-loader",
+          getDoLoaderSecret: () => "fixture-loader",
           getWorkerAdmission: (name: string) => ({ name, version: "fixture-lifetime:1" }),
           getDoCode: async () => ({ version: "fixture-version" }),
         }) as never,
@@ -72,6 +73,7 @@ describe("Gateway lifecycle", () => {
       getWorkerHost: () =>
         ({
           getLoaderSecret: () => "fixture-loader",
+          getDoLoaderSecret: () => "fixture-loader",
           getWorkerAdmission: (name: string) => ({ name, version: "fixture-lifetime:1" }),
           getDoCode,
         }) as never,
@@ -107,6 +109,7 @@ describe("Gateway lifecycle", () => {
       getWorkerHost: () =>
         ({
           getLoaderSecret: () => "fixture-loader",
+          getDoLoaderSecret: () => "fixture-loader",
           getWorkerAdmission: (name: string) => ({ name, version: "fixture-lifetime:1" }),
           getDoAdmission,
         }) as never,

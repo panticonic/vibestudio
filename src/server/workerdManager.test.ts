@@ -18,14 +18,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { stateLayout } from "./stateLayout.js";
-import { INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
+import { encodeUniversalKey } from "./doDispatch.js";
+import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
+import { INTERNAL_DO_CLASSES, INTERNAL_DO_SOURCE } from "./internalDOs/internalDoLoader.js";
 import { schemaProbeEnvironmentForFixture } from "../../tests/fixtures/schemaProbeEnvironment.js";
 import { stageInstalledSchemaProbeEvidence } from "../../scripts/lib/schema-probe-evidence.mjs";
 import { closeDerivedCacheCoordinators } from "@vibestudio/shared/derivedCache";
-import {
-  buildWorkerdPrograms,
-  type WorkerdProgramSources,
-} from "../../scripts/build-workerd-programs.mjs";
 import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "@vibestudio/rpc/internal";
 import {
   executionArtifactDigest,
@@ -35,6 +33,7 @@ import {
 } from "@vibestudio/shared/execution/retention";
 import { sha256 } from "@vibestudio/shared/execution/identity";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
+import { internalDoProgramsForFixture } from "../../tests/fixtures/internalDoPrograms.js";
 
 // Mock child_process to prevent actual workerd spawning
 vi.mock("child_process", () => ({
@@ -90,6 +89,76 @@ vi.mock("child_process", () => ({
     return proc;
   }),
 }));
+
+// The node supervisor is the one place the manager touches the runtime binary.
+// Replace it with a recorder whose processes are the mocked children above, so
+// these tests exercise the manager's lifecycle, not a real node.
+const celldDeployments: Array<{
+  stateDir: string;
+  bundle: string;
+  config: Record<string, unknown> & { name: string };
+  secrets: Record<string, string>;
+}> = [];
+const celldReloads = { count: 0, fail: false };
+
+vi.mock("./celldNode.js", async () => {
+  const { spawn: mockedSpawn } = await import("child_process");
+  class FakeCelldNodeProcess {
+    hasExited = false;
+    constructor(
+      readonly child: ReturnType<typeof mockedSpawn>,
+      readonly listenPort: number,
+      readonly inspectorPort: number | null
+    ) {
+      child.on("exit", () => {
+        this.hasExited = true;
+      });
+    }
+    get pid() {
+      return this.child.pid;
+    }
+    async reload(): Promise<void> {
+      celldReloads.count += 1;
+      if (celldReloads.fail) throw new Error("celld reload failed (500): fixture");
+    }
+    async requestShutdown(): Promise<boolean> {
+      return false;
+    }
+  }
+  class FakeCelldNode {
+    constructor(
+      readonly options: {
+        stateDir: string;
+        onOutput(stream: "stdout" | "stderr", line: string): void;
+      }
+    ) {}
+    async deploy(
+      bundle: string,
+      config: Record<string, unknown> & { name: string },
+      secrets: Record<string, string> = {}
+    ): Promise<void> {
+      celldDeployments.push({ stateDir: this.options.stateDir, bundle, config, secrets });
+    }
+    start(ports: { listen: number; inspector: number | null }) {
+      const child = mockedSpawn("celld", ["--listen", String(ports.listen)]);
+      // The supervisor reports the node's output line by line.
+      for (const stream of ["stdout", "stderr"] as const) {
+        child[stream]?.on("data", (data: Buffer) => {
+          for (const line of data.toString().split("\n")) {
+            if (line.trim()) this.options.onOutput(stream, line);
+          }
+        });
+      }
+      return new FakeCelldNodeProcess(child, ports.listen, ports.inspector);
+    }
+  }
+  return {
+    CelldNode: FakeCelldNode,
+    CelldNodeProcess: FakeCelldNodeProcess,
+    resolveCelldBinary: () => "/fixture/celld",
+    celldTarget: () => "fixture",
+  };
+});
 
 // Mock port-utils
 vi.mock("./hostCore/portUtils.js", () => ({
@@ -200,7 +269,7 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
   const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-manager-test-"));
   testStatePaths.add(statePath);
   return {
-    schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-mocked-workerd-programs"),
+    schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-mocked-runtime-app"),
     schemaProbeReleaseRoot: path.join(statePath, "installed-resources"),
     tokenManager: {
       ensureToken: vi.fn().mockReturnValue("mock-token-123"),
@@ -234,15 +303,9 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
     singletonRegistry: new SingletonRegistry([]),
     getInternalDoEnv: () => ({}),
     workspaceId: "workspace:test",
-    workerdPrograms: {
-      router: "export default { fetch() { return new Response(null, { status: 204 }); } };",
-      workerHost: "export default { fetch() { return new Response(null, { status: 204 }); } };",
-      universalDo:
-        "export class UniversalDO {}; export default { fetch() { return new Response(); } };",
-    },
+    internalDOPrograms: internalDoProgramsForFixture("manager-test"),
     workspacePath: "/tmp/test-workspace",
     statePath,
-    getProxyPort: () => 49444,
     getSharedEgressPort: () => Promise.resolve(49555),
     registerEgressCaller: () => {},
     unregisterEgressCaller: () => {},
@@ -256,17 +319,12 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
   };
 }
 
-let compiledWorkerdPrograms: WorkerdProgramSources;
-
-beforeAll(async () => {
-  compiledWorkerdPrograms = await buildWorkerdPrograms({ write: false });
-});
-
 async function loadCompiledRouter(): Promise<{
   fetch(request: Request, env: Record<string, unknown>): Promise<Response>;
 }> {
-  const dataUrl = `data:text/javascript;base64,${Buffer.from(compiledWorkerdPrograms.router).toString("base64")}`;
-  const module = (await import(/* @vite-ignore */ dataUrl)) as {
+  // The router belongs to the workers type realm; it is loaded, not type-checked, here.
+  const routerPath = "./workerdPrograms/router.js";
+  const module = (await import(/* @vite-ignore */ routerPath)) as {
     default: { fetch(request: Request, env: Record<string, unknown>): Promise<Response> };
   };
   return module.default;
@@ -316,6 +374,9 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  celldReloads.fail = false;
+  celldReloads.count = 0;
+  celldDeployments.length = 0;
   await closeDerivedCacheCoordinators();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
@@ -329,77 +390,91 @@ afterEach(async () => {
   testStatePaths.clear();
 });
 
-describe("WorkerdManager", () => {
-  it("shares exact module embeds without merging service bindings or module names", async () => {
-    const deps = createMockDeps();
-    const manager = new WorkerdManager(deps);
-    const serializer = manager as unknown as {
-      toCapnpText(config: Record<string, unknown>): string;
-      flushConfigWrites(): Promise<void>;
-      configModuleReferenceCount: number;
-      configModuleReferenceBytes: number;
-      configModulePayloadBytes: number;
-    };
-    const script = "export default { fetch() { return new Response('π'); } };";
-    const helperScript = "export const value = 'λ';";
-    const config = {
-      services: ["first", "second"].map((name) => ({
-        name,
-        worker: {
-          modules: [
-            { name: `${name}.js`, esModule: script },
-            { name: `${name}-helper.js`, esModule: helperScript },
-          ],
-          bindings: [{ name: "OWNER", text: name }],
-        },
-      })),
-    };
-    const write = vi.spyOn(fs.promises, "writeFile");
-    try {
-      const text = serializer.toCapnpText(config);
-      await serializer.flushConfigWrites();
-      expect(write).toHaveBeenCalledTimes(2);
-      const files = [...text.matchAll(/embed "([^"]+)"/gu)].map((match) => match[1]);
-      expect(files).toEqual(["bundle-0.js", "bundle-1.js", "bundle-0.js", "bundle-1.js"]);
-      for (const name of ["first", "second"]) {
-        expect(text).toContain(`name = "${name}.js"`);
-        expect(text).toContain(`name = "${name}-helper.js"`);
-        expect(text).toContain(`text = "${name}"`);
+
+/**
+ * The runtime node as far as the manager's storage operations can see it:
+ * `/_object` (fork, restore through the router) and a UniversalDO cell's
+ * `__vibestudio_destroy`. Everything else answers as the default fetch does.
+ */
+function fakeNode(options: { failFork?: boolean | string; failDestroy?: boolean } = {}) {
+  const state = {
+    failFork: options.failFork ?? false,
+    failDestroy: options.failDestroy ?? false,
+    objects: [] as Array<Record<string, unknown>>,
+    destroyed: [] as Array<{ key: string; secret: string | null }>,
+  };
+  const ordinary = vi.mocked(fetch).getMockImplementation()!;
+  vi.mocked(fetch).mockImplementation(async (input, init) => {
+    const url = new URL(
+      typeof input === "string" ? input : input instanceof URL ? input.href : (input as Request).url
+    );
+    if (url.pathname === "/_object") {
+      const body = JSON.parse(String((init as RequestInit).body)) as Record<string, unknown>;
+      if (state.failFork) {
+        return new Response(
+          typeof state.failFork === "string" ? state.failFork : "injected fork failure",
+          { status: 409 }
+        );
       }
-      const directory = stateLayout(deps.statePath).workerdConfigDir;
-      expect(fs.readFileSync(path.join(directory, files[0]!), "utf8")).toBe(script);
-      expect(fs.readFileSync(path.join(directory, files[1]!), "utf8")).toBe(helperScript);
-      expect(serializer.configModuleReferenceCount).toBe(4);
-      expect(serializer.configModuleReferenceBytes).toBe(
-        2 * (Buffer.byteLength(script) + Buffer.byteLength(helperScript))
-      );
-      expect(serializer.configModulePayloadBytes).toBe(
-        Buffer.byteLength(script) + Buffer.byteLength(helperScript)
-      );
-      write.mockClear();
-      // Each generation owns its own complete payload; no stale-file reuse.
-      const next = serializer.toCapnpText({
-        services: [
-          {
-            name: "replacement",
-            worker: { modules: [{ name: "worker.js", esModule: "export default {};" }] },
-          },
-        ],
+      state.objects.push(body);
+      return Response.json(body["op"] === "fork" ? { id: "abc" } : { restored: true });
+    }
+    if (url.pathname.endsWith("/__vibestudio_destroy")) {
+      if (state.failDestroy) return new Response("injected destroy failure", { status: 500 });
+      const headers = new Headers((init as RequestInit).headers);
+      state.destroyed.push({
+        key: url.pathname.split("/")[2]!,
+        secret: headers.get("X-Vibestudio-Lifecycle-Secret"),
       });
-      await serializer.flushConfigWrites();
-      expect(write).toHaveBeenCalledOnce();
-      expect(next).toContain('embed "bundle-0.js"');
-      expect(fs.readFileSync(path.join(directory, "bundle-0.js"), "utf8")).toBe(
-        "export default {};"
+      return new Response(null, { status: 204 });
+    }
+    return ordinary(input, init);
+  });
+  return state;
+}
+
+describe("WorkerdManager", () => {
+  it("deploys one runtime application whose class credentials are class secrets, not variables", async () => {
+    celldDeployments.length = 0;
+    const deps = createMockDeps({
+      getInternalDoEnv: (className): Record<string, string> =>
+        className === "EvalDO" ? { EVAL_ENGINE_SOURCE: "units/eval" } : {},
+    });
+    const manager = new WorkerdManager(deps);
+    try {
+      await manager.startWorker(startArgs());
+      expect(celldDeployments).toHaveLength(1);
+      const { config, secrets, stateDir } = celldDeployments[0]!;
+      expect(stateDir).toBe(stateLayout(deps.statePath).celldDir);
+      expect(config.name).toBe("vibestudio");
+      const classes = (
+        config["celld"] as {
+          durable_objects: Record<string, { secrets: string[]; codegen?: true }>;
+        }
+      ).durable_objects;
+      // Every product class holds its own credential, and only EvalDO may generate code.
+      for (const className of INTERNAL_DO_CLASSES) {
+        expect(classes[className]!.secrets).toEqual([`RPC_AUTH_TOKEN__${className}`]);
+        expect(classes[className]!.codegen).toBe(className === "EvalDO" ? true : undefined);
+      }
+      expect(classes["UniversalDO"]).toEqual({ secrets: ["DO_LOADER_SECRET__UniversalDO"] });
+      expect(Object.keys(secrets).sort()).toEqual(
+        [...INTERNAL_DO_CLASSES.map((c) => `RPC_AUTH_TOKEN__${c}`), "DO_LOADER_SECRET__UniversalDO"].sort()
       );
-      expect(serializer.configModuleReferenceCount).toBe(1);
+      // Nothing a class holds alone is in the manifest or another class's env.
+      const manifest = JSON.stringify(config);
+      for (const value of Object.values(secrets)) expect(manifest).not.toContain(value);
+      expect((config["vars"] as Record<string, unknown>)["INTERNAL_DO_ENV"]).toMatchObject({
+        EvalDO: { EVAL_ENGINE_SOURCE: "units/eval" },
+      });
+      // The deployed module is the build artifact's own bytes.
+      expect(celldDeployments[0]!.bundle).toBe(deps.internalDOPrograms!.app().bundle);
     } finally {
-      write.mockRestore();
       await manager.shutdown();
     }
   });
 
-  it("reports finite native startup phases without executable payloads or credentials", async () => {
+  it("reports finite startup phases without executable payloads or credentials", async () => {
     const deps = createMockDeps();
     const manager = new WorkerdManager(deps);
     const logger = vi.spyOn(console, "log");
@@ -407,35 +482,24 @@ describe("WorkerdManager", () => {
       await manager.startWorker(startArgs());
       const message = logger.mock.calls
         .map(([message]) => String(message))
-        .find((message) => message.includes("workerdStartupReport="));
+        .find((message) => message.includes("runtimeStartupReport="));
       expect(message).toBeDefined();
-      const report = JSON.parse(message!.split("workerdStartupReport=")[1]!) as Record<
+      const report = JSON.parse(message!.split("runtimeStartupReport=")[1]!) as Record<
         string,
         number
       >;
       expect(Object.keys(report)).toEqual([
         "generation",
         "totalMs",
-        "configPreparationMs",
-        "configSerializationMs",
-        "modulePayloadWriteMs",
-        "configWriteMs",
-        "processPreparationMs",
+        "deployMs",
         "spawnToHttpReadyMs",
-        "moduleReferenceCount",
-        "moduleReferenceBytes",
-        "moduleFileCount",
-        "modulePayloadBytes",
-        "configBytes",
       ]);
       expect(Object.values(report).every((value) => Number.isFinite(value) && value >= 0)).toBe(
         true
       );
-      expect(report["moduleFileCount"]).toBeLessThanOrEqual(report["moduleReferenceCount"]!);
-      expect(report["modulePayloadBytes"]).toBeLessThanOrEqual(report["moduleReferenceBytes"]!);
       expect(message).not.toContain(deps.egressSecret);
       expect(message).not.toContain(deps.getWorkerdGatewayToken());
-      expect(message).not.toContain(deps.workerdPrograms.router);
+      expect(message).not.toContain(deps.internalDOPrograms!.app().bundle);
     } finally {
       logger.mockRestore();
       await manager.shutdown();
@@ -469,22 +533,26 @@ describe("WorkerdManager", () => {
     await manager.shutdown();
   });
 
-  it("keeps generated execution inputs isolated under each workspace's owned state", async () => {
+  it("keeps each workspace's node state under its own owned state", async () => {
+    celldDeployments.length = 0;
     const firstDeps = createMockDeps();
     const secondDeps = createMockDeps();
     const first = new WorkerdManager(firstDeps);
     const second = new WorkerdManager(secondDeps);
-    await first.startWorker(startArgs());
-    await second.startWorker(startArgs());
-    const firstConfig = path.join(firstDeps.statePath, "workerd-config", "config.capnp");
-    const secondConfig = path.join(secondDeps.statePath, "workerd-config", "config.capnp");
-    expect(fs.existsSync(firstConfig)).toBe(true);
-    expect(fs.existsSync(secondConfig)).toBe(true);
-    // Even if the runtime never reaches stop(), reclaiming its owner's state
-    // also reclaims generated bundles and leaves another workspace intact.
-    fs.rmSync(firstDeps.statePath, { recursive: true });
-    expect(fs.existsSync(firstConfig)).toBe(false);
-    expect(fs.existsSync(secondConfig)).toBe(true);
+    try {
+      await first.startWorker(startArgs());
+      await second.startWorker(startArgs());
+      const dirs = celldDeployments.map((deployment) => deployment.stateDir);
+      expect(dirs).toEqual([
+        stateLayout(firstDeps.statePath).celldDir,
+        stateLayout(secondDeps.statePath).celldDir,
+      ]);
+      expect(dirs[0]!.startsWith(firstDeps.statePath)).toBe(true);
+      expect(dirs[1]!.startsWith(secondDeps.statePath)).toBe(true);
+    } finally {
+      await first.shutdown();
+      await second.shutdown();
+    }
   });
 
   describe("current publication schema evidence", () => {
@@ -780,7 +848,8 @@ describe("WorkerdManager", () => {
     });
 
     it("boots the complete product configuration once without duplicate schema probes", async () => {
-      const manager = new WorkerdManager(createMockDeps());
+      const deps = createMockDeps();
+      const manager = new WorkerdManager(deps);
       const before = vi.mocked(spawn).mock.calls.length;
       const schemas = vi.spyOn(manager, "probeDurableObjectSchema");
       await manager.registerAllDOClasses(
@@ -800,10 +869,7 @@ describe("WorkerdManager", () => {
       expect(schemas).not.toHaveBeenCalled();
       const internal = await import("./internalDOs/internalDoLoader.js");
       for (const className of internal.INTERNAL_DO_CLASSES) {
-        const identity = internal.internalDOExecutionIdentity(
-          internal.getInternalDOPrograms(),
-          className
-        );
+        const identity = internal.internalDOExecutionIdentity(deps.internalDOPrograms!, className);
         expect(
           manager.getDurableWorkQueues(INTERNAL_DO_SOURCE, className, identity.executionDigest)
         ).toEqual(identity.durableWorkQueues);
@@ -811,22 +877,12 @@ describe("WorkerdManager", () => {
           manager.getDurableWorkQueues(INTERNAL_DO_SOURCE, className, "f".repeat(64))
         ).toThrow("does not match");
       }
-      const config = await (
-        manager as unknown as {
-          generateConfig(): Promise<{
-            services: Array<{ worker?: { bindings?: Array<{ name: string; text?: string }> } }>;
-          }>;
-        }
-      ).generateConfig();
-      const bindings = config.services.flatMap((service) => service.worker?.bindings ?? []);
-      expect(
-        bindings
-          .filter((binding) => binding.name === "WORKER_CLASS_NAME")
-          .map((binding) => binding.text!)
-          .sort((left, right) => left.localeCompare(right))
-      ).toEqual(["BrowserVaultDO", "EvalDO", "WebhookStoreDO", "WorkspaceDO"]);
-      expect(bindings.filter((binding) => binding.name === "VIBESTUDIO_SCHEMA_DESCRIPTOR")).toEqual(
-        []
+      // One deployment holds every product class, whatever order they registered in.
+      const deployed = celldDeployments.at(-1)!.config as unknown as {
+        durable_objects: { bindings: Array<{ name: string; class_name: string }> };
+      };
+      expect(deployed.durable_objects.bindings.map((binding) => binding.class_name).sort()).toEqual(
+        ["BrowserVaultDO", "EvalDO", "UniversalDO", "WebhookStoreDO", "WorkspaceDO"]
       );
       await manager.shutdown();
     });
@@ -961,36 +1017,50 @@ describe("WorkerdManager", () => {
       await mgr.shutdown();
     });
 
-    it("journals probe storage while peers are live and collects after the process exits", async () => {
+    it("retires probe storage by deleting its cell on the running node", async () => {
       const mgr = new WorkerdManager(createMockDeps());
       await mgr.startWorker(startArgs());
+      const node = fakeNode();
       const internals = mgr as unknown as {
-        process: { exitCode: number | null } | null;
-        destroyDurableObjectStorageFiles(ref: unknown): Promise<void>;
         readOpenDurableObjectMaintenance(): Array<{ kind: string; objectKey: string }>;
       };
-      const ordinaryDestroy = internals.destroyDurableObjectStorageFiles.bind(mgr);
-      const destroy = vi
-        .spyOn(internals, "destroyDurableObjectStorageFiles")
-        .mockImplementation(async (ref) => {
-          if (internals.process?.exitCode === null) throw new Error("database is still open");
-          await ordinaryDestroy(ref);
-        });
       try {
         await expect(
           mgr.probeDurableObjectSchema("workers/runtime-fixture", "BoardDO", mockWorkerBuild())
         ).resolves.toMatchObject({ className: "BoardDO" });
-        expect(destroy).not.toHaveBeenCalled();
+        // The cell is destroyed through UniversalDO under the class's own secret.
+        expect(node.destroyed).toHaveLength(1);
+        expect(decodeURIComponent(node.destroyed[0]!.key)).toContain("__vibestudio_schema_probe");
+        expect(node.destroyed[0]!.secret).toBe(mgr.getDoLoaderSecret());
+        expect(internals.readOpenDurableObjectMaintenance()).toEqual([]);
+      } finally {
+        await mgr.shutdown();
+      }
+    });
+
+    it("keeps a retirement the node refused journaled and collects it at the next start", async () => {
+      const mgr = new WorkerdManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const node = fakeNode({ failDestroy: true });
+      const internals = mgr as unknown as {
+        readOpenDurableObjectMaintenance(): Array<{ kind: string; objectKey: string }>;
+      };
+      try {
+        await mgr.probeDurableObjectSchema("workers/runtime-fixture", "BoardDO", mockWorkerBuild());
         expect(internals.readOpenDurableObjectMaintenance()).toContainEqual(
           expect.objectContaining({
             kind: "destroy",
             objectKey: expect.stringContaining("__vibestudio_schema_probe:"),
           })
         );
+        node.failDestroy = false;
+        // A replaced node's start owes the journal's retirements.
+        await mgr.recoverUnresponsiveSandbox("test: collect journaled retirements");
+        expect(node.destroyed).toHaveLength(1);
+        expect(internals.readOpenDurableObjectMaintenance()).toEqual([]);
       } finally {
         await mgr.shutdown();
       }
-      expect(destroy).toHaveBeenCalledOnce();
     });
 
     it("preserves both probe and retirement failures and reclaims owned scratch at shutdown", async () => {
@@ -1184,37 +1254,81 @@ describe("WorkerdManager", () => {
 
   it("resumes a failed maintenance journal and hides its backup until completion", async () => {
     const mgr = new WorkerdManager(createMockDeps());
+    await mgr.startWorker(startArgs());
+    const node = fakeNode({ failFork: true });
     const ref = { source: "workers/board", className: "BoardDO", objectKey: "main" };
     const internals = mgr as unknown as {
-      verifyDurableObjectBackup(operationId: string): Promise<void>;
       readOpenDurableObjectMaintenance(): Array<{ operationId: string }>;
-    };
-    const verify = internals.verifyDurableObjectBackup.bind(mgr);
-    let failVerification = true;
-    internals.verifyDurableObjectBackup = async (operationId) => {
-      if (failVerification) throw new Error("injected verification failure");
-      await verify(operationId);
     };
 
     await expect(mgr.resetDOStorage(ref, "test resumable reset")).rejects.toThrow(
-      "injected verification failure"
+      "injected fork failure"
     );
     const operationId = internals.readOpenDurableObjectMaintenance()[0]!.operationId;
     await expect(mgr.listDOStorageBackups(ref)).resolves.toEqual([]);
 
-    failVerification = false;
+    node.failFork = false;
     await expect(mgr.resetDOStorage(ref, "retry resumable reset")).resolves.toEqual({
       operationId,
     });
     await expect(mgr.listDOStorageBackups(ref)).resolves.toEqual([
       expect.objectContaining({ operationId }),
     ]);
+    // The backup is a fork of the object into a hidden cell; the reset then
+    // deletes the object's cell (root, facet index and facets).
+    expect(node.objects.at(-1)).toMatchObject({
+      op: "fork",
+      namespace: "UNIVERSAL_DO",
+      from: encodeUniversalKey(ref),
+      to: encodeUniversalKey({ ...ref, objectKey: `__vibestudio_backup:${operationId}` }),
+    });
+    expect(node.destroyed.map((entry) => decodeURIComponent(entry.key))).toEqual([
+      encodeUniversalKey(ref),
+    ]);
     await mgr.shutdown();
+  });
+
+  it("restores a backup into the object's own cell, stopping it, and keeps what it replaced", async () => {
+    const mgr = new WorkerdManager(createMockDeps());
+    await mgr.startWorker(startArgs());
+    const node = fakeNode();
+    const ref = { source: "workers/board", className: "BoardDO", objectKey: "main" };
+    try {
+      const { operationId: backupId } = await mgr.resetDOStorage(ref, "make a backup");
+      node.objects.length = 0;
+      const restored = await mgr.restoreDOStorageBackup(ref, backupId, "restore it");
+      expect(node.objects.map((entry) => entry["op"])).toEqual(["fork", "restore"]);
+      // The current state is backed up before it is replaced.
+      expect(node.objects[0]).toMatchObject({
+        to: encodeUniversalKey({ ...ref, objectKey: `__vibestudio_backup:${restored.operationId}` }),
+      });
+      expect(node.objects[1]).toMatchObject({
+        op: "restore",
+        from: encodeUniversalKey({ ...ref, objectKey: `__vibestudio_backup:${backupId}` }),
+        to: encodeUniversalKey(ref),
+        stop: true,
+      });
+      // A backup of another object is not this object's.
+      await expect(
+        mgr.restoreDOStorageBackup({ ...ref, objectKey: "other" }, backupId, "wrong target")
+      ).rejects.toThrow("does not belong to the exact requested target");
+      // Product objects are owned by their classes, not by this surface.
+      await expect(
+        mgr.resetDOStorage(
+          { source: "vibestudio/internal", className: "EvalDO", objectKey: "owner" },
+          "not allowed"
+        )
+      ).rejects.toThrow("not supported for internal DO source");
+    } finally {
+      await mgr.shutdown();
+    }
   });
 
   it("rotates canonical storage identity atomically with journal progress and preserves it across journal recovery", async () => {
     const deps = createMockDeps();
     const mgr = new WorkerdManager(deps);
+    await mgr.startWorker(startArgs());
+    fakeNode();
     const ref = { source: "workers/agent", className: "Agent", objectKey: "journal-identity" };
     const before = mgr.durableObjectStorageIncarnation(ref);
     expect(mgr.durableObjectStorageIncarnation(ref)).toEqual(before);
@@ -1238,6 +1352,8 @@ describe("WorkerdManager", () => {
     expect(current).toEqual({ incarnation: operationId, generation: before.generation + 1 });
     await mgr.shutdown();
     const reopened = new WorkerdManager(deps);
+    await reopened.startWorker(startArgs());
+    fakeNode();
     expect(reopened.durableObjectStorageIncarnation(ref)).toEqual(current);
     const restored = await reopened.restoreDOStorageBackup(
       ref,
@@ -1264,6 +1380,8 @@ describe("WorkerdManager", () => {
         if (failReply) throw new Error("original publication reply failure");
       },
     });
+    await manager.startWorker(startArgs());
+    fakeNode();
     try {
       const before = manager.durableObjectStorageIncarnation(ref);
       await expect(manager.resetDOStorage(ref, "replace native storage")).rejects.toThrow(
@@ -1291,20 +1409,13 @@ describe("WorkerdManager", () => {
 
   it("resumes after replacement failure and retains only the five newest backups", async () => {
     const mgr = new WorkerdManager(createMockDeps());
+    await mgr.startWorker(startArgs());
+    const node = fakeNode({ failDestroy: true });
     const ref = { source: "workers/board", className: "BoardDO", objectKey: "retained" };
-    const internals = mgr as unknown as {
-      destroyDurableObjectStorageFiles(target: typeof ref): Promise<void>;
-    };
-    const originalDestroy = internals.destroyDurableObjectStorageFiles.bind(mgr);
-    let failDestroy = true;
-    internals.destroyDurableObjectStorageFiles = async (target) => {
-      if (failDestroy) throw new Error("injected replacement failure");
-      await originalDestroy(target);
-    };
     await expect(mgr.resetDOStorage(ref, "first attempt")).rejects.toThrow(
-      "injected replacement failure"
+      "injected destroy failure"
     );
-    failDestroy = false;
+    node.failDestroy = false;
     const resumed = await mgr.resetDOStorage(ref, "resume replacement");
     for (let index = 0; index < 5; index += 1) {
       await mgr.resetDOStorage(ref, `retention ${index}`);
@@ -1312,92 +1423,150 @@ describe("WorkerdManager", () => {
     const backups = await mgr.listDOStorageBackups(ref);
     expect(backups).toHaveLength(5);
     expect(backups.some((backup) => backup.operationId === resumed.operationId)).toBe(false);
+    // The swept backup's cell was deleted along with its record.
+    expect(
+      node.destroyed.some((entry) =>
+        decodeURIComponent(entry.key).includes(resumed.operationId)
+      )
+    ).toBe(true);
     await mgr.shutdown();
   });
 
-  it("tombstones retired internal storage without restarting live peers and collects it at shutdown", async () => {
-    const mgr = new WorkerdManager(createMockDeps());
-    const ref = {
-      source: "vibestudio/internal",
-      className: "EvalDO",
-      objectKey: "retired-eval",
-    };
-    const internals = mgr as unknown as {
-      quiesceDurableObjectStorage(target: typeof ref): Promise<void>;
-      destroyDurableObjectStorageFiles(target: typeof ref): Promise<void>;
-      readOpenDurableObjectMaintenance(): Array<{
-        kind: string;
-        source: string;
-        className: string;
-        objectKey: string;
-      }>;
-    };
-    const quiesce = vi.fn(async () => undefined);
-    const destroy = vi.fn(async () => undefined);
-    internals.quiesceDurableObjectStorage = quiesce;
-    internals.destroyDurableObjectStorageFiles = destroy;
-
-    await mgr.destroyRetiredDOStorage(ref);
-
-    expect(quiesce).not.toHaveBeenCalled();
-    expect(destroy).not.toHaveBeenCalled();
-    expect(internals.readOpenDurableObjectMaintenance()).toContainEqual(
+  it("collects a retirement at once on a running node and at the next start otherwise", async () => {
+    const deps = createMockDeps();
+    const ref = { source: "workers/board", className: "BoardDO", objectKey: "retired" };
+    const down = new WorkerdManager(deps);
+    type Internals = { readOpenDurableObjectMaintenance(): Array<{ kind: string; objectKey: string }> };
+    // No node is running: the retirement is journaled and nothing is destroyed.
+    const quiet = fakeNode();
+    await down.destroyRetiredDOStorage(ref);
+    expect(quiet.destroyed).toEqual([]);
+    expect((down as unknown as Internals).readOpenDurableObjectMaintenance()).toContainEqual(
       expect.objectContaining({ kind: "destroy", ...ref })
     );
+    await down.shutdown();
 
-    await mgr.shutdown();
-
-    expect(quiesce).not.toHaveBeenCalled();
-    expect(destroy).toHaveBeenCalledOnce();
-  });
-
-  it("leaves recovered retirement journals to the stopped generation collector", async () => {
-    const deps = createMockDeps();
-    const ref = {
-      source: "vibestudio/internal",
-      className: "EvalDO",
-      objectKey: "retired-before-restart",
-    };
-    const mgr = new WorkerdManager(deps);
-    type MaintenanceInternals = {
-      destroyDurableObjectStorageFiles(target: typeof ref): Promise<void>;
-      quiesceDurableObjectStorage(target: typeof ref): Promise<void>;
-      doMaintenanceRecovery: Promise<void>;
-    };
-    const failedCollection = vi
-      .spyOn(mgr as unknown as MaintenanceInternals, "destroyDurableObjectStorageFiles")
-      .mockRejectedValue(new Error("storage still owned"));
-    await mgr.destroyRetiredDOStorage(ref);
-    await expect(mgr.shutdown()).rejects.toThrow("shutdown failed");
-    expect(failedCollection).toHaveBeenCalledOnce();
-    failedCollection.mockRestore();
-
-    const quiesce = vi
-      .spyOn(
-        ProductWorkerdManager.prototype as unknown as MaintenanceInternals,
-        "quiesceDurableObjectStorage"
-      )
-      .mockResolvedValue(undefined);
-    const destroy = vi.spyOn(
-      ProductWorkerdManager.prototype as unknown as MaintenanceInternals,
-      "destroyDurableObjectStorageFiles"
-    );
+    // A later manager of the same state starts its node and owes the collection.
     const reopened = new WorkerdManager(deps);
-    let collectionCount = 0;
+    const node = fakeNode();
     try {
-      await (reopened as unknown as MaintenanceInternals).doMaintenanceRecovery;
-      await expect(reopened.resetDOStorage(ref, "reset a retired object")).rejects.toThrow(
-        "belongs to the stopped generation collector"
-      );
-      expect(quiesce).not.toHaveBeenCalled();
-      expect(destroy).not.toHaveBeenCalled();
+      await reopened.startWorker(startArgs());
+      expect(node.destroyed.map((entry) => decodeURIComponent(entry.key))).toEqual([
+        encodeUniversalKey(ref),
+      ]);
+      expect((reopened as unknown as Internals).readOpenDurableObjectMaintenance()).toEqual([]);
+      // With the node running, a retirement is collected in the same call.
+      await reopened.destroyRetiredDOStorage({ ...ref, objectKey: "retired-live" });
+      expect(node.destroyed).toHaveLength(2);
     } finally {
       await reopened.shutdown();
-      collectionCount = destroy.mock.calls.length;
-      quiesce.mockRestore();
-      destroy.mockRestore();
     }
-    expect(collectionCount).toBe(1);
+  });
+
+  describe("cloning a userland object's storage", () => {
+    const ref = { source: "workers/board", className: "BoardDO", objectKey: "source" };
+    const reservation = (over: Record<string, unknown> = {}) =>
+      ({
+        id: canonicalEntityId({ kind: "do", source: ref.source, className: ref.className, key: "copy" }),
+        kind: "do",
+        key: "copy",
+        status: "preparing",
+        className: ref.className,
+        contextId: "ctx-copy",
+        authoritySessionId: "session-1",
+        source: { repoPath: ref.source },
+        cloneProvenance: {
+          storage: "snapshot",
+          operationContextId: "ctx-op",
+          sourceEntityId: canonicalEntityId({
+            kind: "do",
+            source: ref.source,
+            className: ref.className,
+            key: ref.objectKey,
+          }),
+          sourceContextId: "ctx-source",
+          sourceAuthoritySessionId: "session-0",
+          sourceBuildKey: "b".repeat(64),
+          sourceExecutionDigest: "e".repeat(64),
+        },
+        ...over,
+      }) as unknown as import("@vibestudio/shared/runtime/entitySpec").EntityRecord;
+
+    async function cloneHarness() {
+      const mgr = new WorkerdManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const node = fakeNode();
+      // Source identity is the runtime service's to judge; the node's fork is under test.
+      vi.spyOn(
+        mgr as unknown as { assertCloneSourceIdentity(): Promise<void> },
+        "assertCloneSourceIdentity"
+      ).mockResolvedValue(undefined);
+      return { mgr, node };
+    }
+
+    it("forks the source cell into the target's cell and records completion", async () => {
+      const { mgr, node } = await cloneHarness();
+      try {
+        const record = reservation();
+        expect(() => mgr.requireCloneStorageComplete(record)).toThrow("completion does not match");
+        const target = await mgr.cloneDO(ref, "copy", {
+          reservation: record,
+          resolveSource: async () => null,
+        });
+        expect(target).toEqual({ ...ref, objectKey: "copy" });
+        expect(node.objects).toEqual([
+          {
+            op: "fork",
+            namespace: "UNIVERSAL_DO",
+            from: encodeUniversalKey(ref),
+            to: encodeUniversalKey(target),
+          },
+        ]);
+        expect(() => mgr.requireCloneStorageComplete(record)).not.toThrow();
+        // A repeated clone of the same reservation is a no-op.
+        await mgr.cloneDO(ref, "copy", { reservation: record, resolveSource: async () => null });
+        expect(node.objects).toHaveLength(1);
+        // Fresh storage has nothing to copy.
+        expect(() =>
+          mgr.requireCloneStorageComplete(
+            reservation({ cloneProvenance: { ...record.cloneProvenance, storage: "fresh" } })
+          )
+        ).not.toThrow();
+      } finally {
+        await mgr.shutdown();
+      }
+    });
+
+    it("recognizes its own finished fork when a crash lost the receipt, and refuses anything else", async () => {
+      const { mgr, node } = await cloneHarness();
+      try {
+        node.failFork = "the target object BoardDO:x already exists";
+        const record = reservation();
+        // First attempt: the fork fails; the receipt is left open.
+        await expect(
+          mgr.cloneDO(ref, "copy", { reservation: record, resolveSource: async () => null })
+        ).rejects.toThrow("already exists");
+        expect(() => mgr.requireCloneStorageComplete(record)).toThrow();
+        // A retry whose fork finds the target already exists took its own earlier fork.
+        await mgr.cloneDO(ref, "copy", { reservation: record, resolveSource: async () => null });
+        expect(() => mgr.requireCloneStorageComplete(record)).not.toThrow();
+        // Another object's reservation is not a reserved owner of this copy.
+        await expect(
+          mgr.cloneDO(ref, "copy", {
+            reservation: reservation({ status: "active" }),
+            resolveSource: async () => null,
+          })
+        ).rejects.toThrow("no exact reserved owner");
+        // The target's retirement forgets its receipt and deletes its cell.
+        await mgr.destroyRetiredDOStorage({ ...ref, objectKey: "copy" });
+        expect(() => mgr.requireCloneStorageComplete(record)).toThrow();
+        expect(node.destroyed.map((entry) => decodeURIComponent(entry.key))).toContain(
+          encodeUniversalKey({ ...ref, objectKey: "copy" })
+        );
+      } finally {
+        await mgr.shutdown();
+      }
+    });
   });
 
   it("binds the required process-owned egress secret", () => {
@@ -2396,16 +2565,12 @@ describe("WorkerdManager", () => {
       expect(statusOf(mgr, "nope")).toBeNull();
     });
 
-    it("starts workerd with a dev inspector and exposes it for running workers", async () => {
+    it("starts the node with its inspector and exposes it for running workers", async () => {
       const mgr = new WorkerdManager(createMockDeps());
 
       await mgr.startWorker(startArgs());
 
-      expect(spawn).toHaveBeenLastCalledWith(
-        expect.any(String),
-        expect.arrayContaining(["--inspector-addr=127.0.0.1:49652"]),
-        expect.any(Object)
-      );
+      expect(mgr.getInspectorUrl()).toBe("http://127.0.0.1:49652");
       expect(mgr.getWorkerInspectorUrl("workers/runtime-fixture")).toBe("http://127.0.0.1:49652");
       expect(mgr.getWorkerInspectorUrl("workers/missing")).toBeNull();
     });
@@ -2453,7 +2618,31 @@ describe("WorkerdManager", () => {
       );
     });
 
-    it("moves planned generations away from their immediate predecessor ports", async () => {
+    it("adopts a planned generation in place: same process, same ports, one more deployment", async () => {
+      celldDeployments.length = 0;
+      celldReloads.count = 0;
+      const mgr = new WorkerdManager(createMockDeps());
+      await mgr.startWorker(startArgs());
+      const spawns = vi.mocked(spawn).mock.calls.length;
+      const generation = mgr.getBootGeneration();
+      const port = mgr.getPort();
+
+      await (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
+
+      expect(vi.mocked(spawn).mock.calls.length).toBe(spawns);
+      expect(mgr.getPort()).toBe(port);
+      expect(celldReloads.count).toBe(1);
+      expect(celldDeployments).toHaveLength(2);
+      expect(
+        (celldDeployments[1]!.config["vars"] as Record<string, unknown>)["WORKERD_BOOT_GENERATION"]
+      ).toBe(String(generation + 1));
+      expect(mgr.getBootGeneration()).toBe(generation + 1);
+      await mgr.shutdown();
+    });
+
+    it("replaces a node that cannot adopt a generation, moving off its predecessor's ports", async () => {
+      celldReloads.count = 0;
+      celldReloads.fail = true;
       vi.mocked(findServicePort).mockImplementation(
         async (service, _host, excludedPorts = new Set()) => {
           const start = service === "workerdInspector" ? 49652 : 49552;
@@ -2461,22 +2650,28 @@ describe("WorkerdManager", () => {
         }
       );
       const mgr = new WorkerdManager(createMockDeps());
-      await mgr.startWorker(startArgs());
-      expect(mgr.getPort()).toBe(49552);
+      try {
+        await mgr.startWorker(startArgs());
+        expect(mgr.getPort()).toBe(49552);
 
-      await (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
+        await (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
 
-      expect(mgr.getPort()).toBe(49553);
-      expect(vi.mocked(findServicePort)).toHaveBeenCalledWith(
-        "workerd",
-        "127.0.0.1",
-        new Set([49552])
-      );
-      expect(vi.mocked(findServicePort)).toHaveBeenCalledWith(
-        "workerdInspector",
-        "127.0.0.1",
-        new Set([49652])
-      );
+        expect(celldReloads.count).toBe(1);
+        expect(mgr.getPort()).toBe(49553);
+        expect(vi.mocked(findServicePort)).toHaveBeenCalledWith(
+          "workerd",
+          "127.0.0.1",
+          new Set([49552])
+        );
+        expect(vi.mocked(findServicePort)).toHaveBeenCalledWith(
+          "workerdInspector",
+          "127.0.0.1",
+          new Set([49652])
+        );
+      } finally {
+        celldReloads.fail = false;
+        await mgr.shutdown();
+      }
     });
   });
 
@@ -2908,11 +3103,12 @@ describe("WorkerdManager", () => {
       expect(settled).toBe(false);
       expect(mgr.getBootGeneration()).toBe(generation + 1);
       expect(mgr.getPort()).not.toBeNull();
-      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(spawnCount + 1);
+      // The generation was adopted in place: the node was never replaced.
+      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(spawnCount);
       release();
       expect(await restart).toBe(original);
       expect(independent).toHaveBeenCalledOnce();
-      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(spawnCount + 1);
+      expect(vi.mocked(spawn)).toHaveBeenCalledTimes(spawnCount);
     });
 
     it("replaces an unresponsive sandbox without a graceful begin RPC and reports crash recovery", async () => {
@@ -2966,6 +3162,9 @@ describe("WorkerdManager", () => {
     });
 
     it("retries a queued crash recovery in its own transition after the owner transition fails", async () => {
+      // A node that cannot adopt the generation is replaced, which is the path
+      // whose start can fail.
+      celldReloads.fail = true;
       const mgr = new WorkerdManager(createMockDeps());
       const ready = vi.fn();
       mgr.onRestartReady(ready);
@@ -2994,9 +3193,11 @@ describe("WorkerdManager", () => {
       expect(internal.restartRequests.size).toBe(0);
       expect(mgr.getPort()).not.toBeNull();
       expect(ready).toHaveBeenCalledWith(expect.objectContaining({ reason: "crash" }));
+      celldReloads.fail = false;
     });
 
     it("refuses to overlap generations when SIGKILL cannot be confirmed", async () => {
+      celldReloads.fail = true;
       const mgr = new WorkerdManager(
         createMockDeps({ workerdStopTimeoutsMs: { sigtermMs: 1, sigkillMs: 1 } })
       );
@@ -3012,6 +3213,7 @@ describe("WorkerdManager", () => {
 
       await expect(internal.restartWorkerd()).rejects.toThrow(/refusing to overlap/u);
       expect(vi.mocked(spawn)).toHaveBeenCalledTimes(spawnCount);
+      celldReloads.fail = false;
     });
 
     it("recovers an unexpectedly exited runtime and reports a crash generation", async () => {
@@ -3105,7 +3307,8 @@ describe("WorkerdManager", () => {
         expect.objectContaining({ reason: "shutdown", generation: mgr.getBootGeneration() + 1 })
       );
       const process = vi.mocked(spawn).mock.results.at(-1)?.value;
-      expect(process.kill).toHaveBeenCalledWith("SIGKILL");
+      // The node is asked to stop itself; only a node that cannot be asked is signalled.
+      expect(process.kill).toHaveBeenCalledWith("SIGTERM");
     });
   });
 
