@@ -157,6 +157,45 @@ describe("RootBootstrapInviteLifecycle", () => {
     expect(f.cancelPairing).toHaveBeenCalledTimes(1);
   });
 
+  it("renews an expired credential whose reach never armed without reporting its cancellation", async () => {
+    let sequence = 0;
+    let scheduled: (() => void) | null = null;
+    const publish = vi.fn();
+    const onRenewalError = vi.fn();
+    const reach = new Map<number, ReturnType<typeof deferred<{ id: number; ready: boolean }>>>();
+    const lifecycle = new RootBootstrapInviteLifecycle({
+      hasRoot: () => false,
+      createPairing: () => ({ id: ++sequence, expiresAt: 61_000 }),
+      describePairing: (pairing) => ({ id: pairing.id, ready: false }),
+      armPairing: (pairing) => {
+        const armed = deferred<{ id: number; ready: boolean }>();
+        reach.set(pairing.id, armed);
+        return armed.promise;
+      },
+      cancelPairing: async (pairing) => {
+        reach.get(pairing.id)!.reject(new Error("invitation canceled"));
+      },
+      publish,
+      onRenewalError,
+      now: () => 1_000,
+      schedule: (callback) => {
+        scheduled = callback;
+        return () => {
+          scheduled = null;
+        };
+      },
+    });
+    await lifecycle.start();
+    // The credential expires before its remote reach became ready.
+    (scheduled as unknown as () => void)();
+    await vi.waitFor(() => expect(publish).toHaveBeenLastCalledWith({ id: 2, ready: false }));
+    expect(onRenewalError).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalledWith(null);
+    reach.get(2)!.resolve({ id: 2, ready: true });
+    await vi.waitFor(() => expect(publish).toHaveBeenLastCalledWith({ id: 2, ready: true }));
+    await lifecycle.stop();
+  });
+
   it("retains the original reach failure and retirement failure", async () => {
     const failure = new Error("endpoint destroyed");
     const cleanup = new Error("retirement failed");

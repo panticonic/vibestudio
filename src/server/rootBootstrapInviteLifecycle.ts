@@ -105,6 +105,9 @@ export class RootBootstrapInviteLifecycle<Pairing extends RootBootstrapPairing, 
       return null;
     }
     const previous = this.currentPairing;
+    // The previous credential is superseded before its retirement: a reach
+    // that settles from that cancellation is not a renewal failure.
+    this.currentPairing = null;
     if (previous && this.pairings.has(previous)) {
       await this.retirePairing(previous);
       await Promise.allSettled([...this.tasks]);
