@@ -62,6 +62,11 @@ import { sendJson, sendText } from "../hostCore/httpResponses.js";
 
 const log = createDevLogger("BlobstoreService");
 
+/** An HTTP failure body names its cause (ENOSPC, a client abort, ...) so the caller can act on it. */
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export interface BlobstoreServiceDeps {
   blobsDir: string;
 }
@@ -2372,7 +2377,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
           sendJson(res, 200, await putBlob(deps.blobsDir, req));
         } catch (error) {
           log.warn("Blob PUT failed:", error);
-          sendText(res, 500, "Blob write failed");
+          sendText(res, 500, `Blob write failed: ${errorText(error)}`);
         }
       },
     },
@@ -2398,7 +2403,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
             return;
           }
           log.warn("Blob stat failed:", error);
-          sendText(res, 500, "Blob read failed");
+          sendText(res, 500, `Blob read failed: ${errorText(error)}`);
           return;
         }
 
@@ -2412,7 +2417,7 @@ export function createBlobstoreService(deps: BlobstoreServiceDeps): ServiceWithR
         stream.on("error", (error) => {
           log.warn("Blob read stream failed:", error);
           if (!res.headersSent) {
-            sendText(res, 500, "Blob read failed");
+            sendText(res, 500, `Blob read failed: ${errorText(error)}`);
           } else {
             res.destroy(error);
           }

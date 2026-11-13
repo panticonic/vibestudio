@@ -494,7 +494,7 @@ export class Gateway {
           log.warn(`Route dispatch error:`, err);
           if (!res.headersSent && !res.writableEnded) {
             res.writeHead(500, { "Content-Type": "text/plain" });
-            res.end("Route dispatch error");
+            res.end(`Route dispatch error: ${err instanceof Error ? err.message : String(err)}`);
           }
         });
         return;
@@ -571,7 +571,9 @@ export class Gateway {
         log.warn(`Gateway request failed:`, error);
         if (!res.headersSent && !res.writableEnded) {
           res.writeHead(500, { "Content-Type": "text/plain" });
-          res.end("Gateway request failed");
+          res.end(
+            `Gateway request failed: ${error instanceof Error ? error.message : String(error)}`
+          );
         }
       });
     });
@@ -1175,7 +1177,9 @@ async function handleRouteRequest(
       log.warn(`Service route handler error (${result.serviceName}):`, err);
       if (!res.headersSent) {
         res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Internal Server Error");
+        res.end(
+          `${result.serviceName} route failed: ${err instanceof Error ? err.message : String(err)}`
+        );
       } else {
         try {
           res.end();

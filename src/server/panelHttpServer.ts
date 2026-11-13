@@ -394,7 +394,7 @@ export class PanelHttpServer {
       log.warn(`Request handler error: ${err}`);
       if (!res.headersSent) {
         res.writeHead(500, { "Content-Type": "text/plain" });
-        res.end("Internal Server Error");
+        res.end(`Panel request failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     });
   }
