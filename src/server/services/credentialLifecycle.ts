@@ -1,6 +1,6 @@
 import { formatOAuthTokenExchangeError } from "./credentialMechanisms/errors.js";
 import { refreshModelProviderCredential } from "./credentialMechanisms/modelProvider.js";
-import type { Credential } from "@vibestudio/credential-client/types";
+import type { Credential, CredentialAgentLineageLink } from "@vibestudio/credential-client/types";
 import type { CredentialStore } from "@vibestudio/credential-client/store";
 import type { ClientConfigStore } from "@vibestudio/credential-client/clientConfigStore";
 import type { OAuthConnectionErrorCode } from "@vibestudio/credential-client/types";
@@ -22,9 +22,127 @@ export interface CredentialLifecycleDeps {
   clientConfigStore: Pick<ClientConfigStore, "loadVersion">;
 }
 
+/** An agent-attributed token obtained through a credential's agent exchange. */
+export interface AgentExchangeToken {
+  accessToken: string;
+  /** Absent when the provider returned no `expires_in` (never cached then). */
+  expiresAt?: number;
+}
+
+const TOKEN_EXCHANGE_GRANT = "urn:ietf:params:oauth:grant-type:token-exchange";
+const ACCESS_TOKEN_TYPE = "urn:ietf:params:oauth:token-type:access_token";
+const AGENT_LINEAGE_TOKEN_TYPE = "urn:vibestudio:params:oauth:token-type:agent-lineage";
+const AGENT_EXCHANGE_SKEW_MS = 30_000;
+
 export class CredentialLifecycle {
   private readonly refreshes = new Map<string, Promise<Credential & { id: string }>>();
+  /** Exchanged agent tokens by (credential id, leaf agent instance). */
+  private readonly agentTokens = new Map<string, AgentExchangeToken>();
+  private readonly agentExchanges = new Map<string, Promise<AgentExchangeToken>>();
   constructor(private readonly deps: CredentialLifecycleDeps) {}
+
+  /**
+   * RFC 8693 exchange of a human-attributed credential's current access token
+   * for a token attributed to the agent at the end of `lineage` (root first),
+   * acting for that human. The host performs it; the agent never holds the
+   * subject token or the delegation authority. Tokens are reused until 30 s
+   * before the provider-declared expiry and never beyond it.
+   */
+  exchangeForAgent(
+    credential: Credential & { id: string },
+    lineage: readonly CredentialAgentLineageLink[]
+  ): Promise<AgentExchangeToken> {
+    const leaf = lineage.at(-1);
+    if (!leaf) {
+      return Promise.reject(
+        new CredentialLifecycleError("invalid_connection_spec", "agent lineage is empty")
+      );
+    }
+    const key = `${credential.id}\u0000${leaf.instance}`;
+    const cached = this.agentTokens.get(key);
+    if (cached?.expiresAt !== undefined && cached.expiresAt > Date.now() + AGENT_EXCHANGE_SKEW_MS) {
+      return Promise.resolve(cached);
+    }
+    this.agentTokens.delete(key);
+    const pending = this.agentExchanges.get(key);
+    if (pending) return pending;
+    const exchange = this.performAgentExchange(credential, lineage)
+      .then((token) => {
+        if (token.expiresAt !== undefined) this.agentTokens.set(key, token);
+        return token;
+      })
+      .finally(() => this.agentExchanges.delete(key));
+    this.agentExchanges.set(key, exchange);
+    return exchange;
+  }
+
+  /** Drop a cached agent token the provider has since rejected. */
+  forgetAgentToken(credentialId: string, leafInstance: string): void {
+    this.agentTokens.delete(`${credentialId}\u0000${leafInstance}`);
+  }
+
+  private async performAgentExchange(
+    credential: Credential & { id: string },
+    lineage: readonly CredentialAgentLineageLink[]
+  ): Promise<AgentExchangeToken> {
+    const exchange = credential.agentExchange;
+    if (credential.actor !== "human" || !exchange) {
+      throw new CredentialLifecycleError(
+        "invalid_connection_spec",
+        "credential has no agent exchange"
+      );
+    }
+    const subject = await this.refreshIfNeeded(credential);
+    const body = new URLSearchParams();
+    for (const [name, value] of Object.entries(exchange.extraParams ?? {})) body.set(name, value);
+    body.set("grant_type", TOKEN_EXCHANGE_GRANT);
+    body.set("client_id", exchange.clientId);
+    body.set("subject_token", subject.accessToken);
+    body.set("subject_token_type", ACCESS_TOKEN_TYPE);
+    body.set(
+      "actor_token",
+      JSON.stringify({
+        v: 1,
+        chain: lineage.map((link) => ({
+          definition: link.definition,
+          instance: link.instance,
+          ...(link.label ? { label: link.label } : {}),
+        })),
+      })
+    );
+    body.set("actor_token_type", AGENT_LINEAGE_TOKEN_TYPE);
+    if (exchange.scope) body.set("scope", exchange.scope);
+
+    const response = await fetch(exchange.tokenUrl, {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body,
+    });
+    const text = await response.text();
+    const data = parseJsonObject(text, { strict: response.ok });
+    if (!response.ok || typeof data?.["error"] === "string") {
+      throw new CredentialLifecycleError(
+        "token_exchange_failed",
+        formatOAuthTokenExchangeError(response.status, data, text)
+      );
+    }
+    const accessToken = data?.["access_token"];
+    if (typeof accessToken !== "string" || accessToken.length === 0) {
+      throw new CredentialLifecycleError("invalid_token_response");
+    }
+    const tokenType = data?.["token_type"];
+    if (typeof tokenType === "string" && tokenType.toLowerCase() !== "bearer") {
+      throw new CredentialLifecycleError(
+        "invalid_token_response",
+        "agent token exchange did not return bearer token_type"
+      );
+    }
+    const expiresIn = readNumericField(data?.["expires_in"]);
+    return {
+      accessToken,
+      ...(typeof expiresIn === "number" ? { expiresAt: Date.now() + expiresIn * 1000 } : {}),
+    };
+  }
 
   async refreshIfNeeded(
     credential: Credential & { id: string },

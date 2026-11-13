@@ -24,9 +24,48 @@ export interface OAuthRefreshRecipe {
   };
 }
 
+/**
+ * The kind of actor the external provider attributes requests made with a
+ * credential to. `human` means the provider treats every use as the user acting
+ * personally, so the host never injects it for an agent execution session.
+ * `agent` means the provider marks uses as an agent acting for the user; any
+ * caller may use it, because over-attributing to an agent is safe.
+ */
+export type CredentialActor = "human" | "agent";
+
+/**
+ * RFC 8693 token exchange through which the host obtains an agent-attributed
+ * token from a human-attributed credential (`actor: "human"`), so an agent
+ * execution session can act FOR the user without ever acting AS the user. The
+ * host posts the user's current access token as `subject_token` and a
+ * host-attested agent lineage as `actor_token`; agents never hold either.
+ * `tokenUrl` must share its origin with the credential's own OAuth token
+ * endpoint. Public client: only `client_id` is sent.
+ */
+export interface CredentialAgentExchange {
+  tokenUrl: string;
+  clientId: string;
+  scope?: string;
+  /** Additional form parameters; may not override the exchange's own names. */
+  extraParams?: Record<string, string>;
+}
+
+/** One agent in a host-attested lineage, ordered root first. */
+export interface CredentialAgentLineageLink {
+  /** Durable agent identity (the provider keys its agent principal on this). */
+  definition: string;
+  /** This live run of that agent (the provider keys a delegation on this). */
+  instance: string;
+  label?: string;
+}
+
 export interface Credential {
   id?: string;
   label?: string;
+  /** Provider attribution of this credential's uses; see {@link CredentialActor}. */
+  actor?: CredentialActor;
+  /** Agent token exchange for a human-attributed credential; see {@link CredentialAgentExchange}. */
+  agentExchange?: CredentialAgentExchange;
   owner?: CredentialOwner;
   bindings?: CredentialBinding[];
   grants?: CredentialUseGrant[];
@@ -125,6 +164,12 @@ export interface CredentialBinding {
 
 export interface CredentialOwner {
   userProfileId?: string;
+  /**
+   * Hub account that connected or stored the credential, stamped by the host
+   * from the verified caller (WP0 subject), never from the request. A
+   * human-attributed credential is used only for this account's own actions.
+   */
+  userId?: string;
   sourceId: string;
   sourceKind: "workspace" | "package" | "plugin" | "user";
   label: string;
@@ -207,6 +252,8 @@ export interface AccountIdentity {
 
 export interface StoreUrlBoundCredentialRequest {
   label: string;
+  actor?: CredentialActor;
+  agentExchange?: CredentialAgentExchange;
   audience: UrlAudience[];
   injection: CredentialInjection;
   bindings?: CredentialBinding[];
@@ -458,6 +505,8 @@ export interface ConnectCredentialRequest {
   flow: CredentialFlowSpec;
   credential: {
     label: string;
+    actor?: CredentialActor;
+    agentExchange?: CredentialAgentExchange;
     audience: UrlAudience[];
     injection: CredentialInjection;
     bindings?: CredentialBinding[];
@@ -528,6 +577,8 @@ export interface RequestCredentialInputRequest {
   description?: string;
   credential: {
     label: string;
+    actor?: CredentialActor;
+    agentExchange?: CredentialAgentExchange;
     audience: UrlAudience[];
     injection: CredentialInjection;
     bindings?: CredentialBinding[];
@@ -625,6 +676,8 @@ export interface ProxyGitHttpRequest {
 export interface StoredCredentialSummary {
   id: string;
   label: string;
+  actor?: CredentialActor;
+  agentExchange?: CredentialAgentExchange;
   accountIdentity?: AccountIdentity;
   audience: UrlAudience[];
   injection: CredentialInjection;

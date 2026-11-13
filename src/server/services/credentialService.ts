@@ -8,6 +8,12 @@ import {
 } from "@vibestudio/credential-client/clientConfigStore";
 import { CredentialStore } from "@vibestudio/credential-client/store";
 import { credentialLifecycle as summarizeCredentialLifecycle } from "@vibestudio/credential-client/credentialStatus";
+import {
+  credentialCallerUse,
+  credentialRefusesAgentGrant,
+  credentialSelectionRefusal,
+  type CredentialCallerFacts,
+} from "@vibestudio/credential-client/credentialActor";
 import type {
   AccountIdentity,
   AuditEntry,
@@ -85,6 +91,7 @@ import {
 import type { CredentialUseGrantStoreLike } from "./credentialUseGrantStore.js";
 import {
   assertCredentialApprovalDecision,
+  credentialCallerRefusalError,
   credentialApprovalDeniedError,
   credentialApprovalDecisions,
 } from "./credentialApprovalDecisions.js";
@@ -316,9 +323,22 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     if (opts.replaceCredentialId && !replaced) {
       throw new Error("Credential selected for replacement no longer exists; retry the connection");
     }
+    const actingUserId = verifiedInitiatingUserId(ctx);
+    if (
+      replaced?.actor === "human" &&
+      replaced.owner?.userId !== undefined &&
+      replaced.owner.userId !== actingUserId
+    ) {
+      throw credentialCallerRefusalError(replaced, "credential-owner-mismatch");
+    }
+    if (request.agentExchange) {
+      assertAgentExchangeTarget(request);
+    }
     await assertCredentialLabelAvailable(credentialStore, {
       label: request.label,
       ...(replaced?.id ? { replacingCredentialId: replaced.id } : {}),
+      ...(request.actor ? { actor: request.actor } : {}),
+      ...(actingUserId ? { ownerUserId: actingUserId } : {}),
     });
     const id = replaced?.id ?? randomUUID();
     const audience = normalizeUrlAudiences(request.audience);
@@ -340,13 +360,17 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
         replacementCredentialLabel: opts.replacementCredentialLabel,
       });
     }
-    const owner =
-      replaced?.owner ??
-      ({
-        sourceId: identity?.repoPath ?? ctx.caller.runtime.id,
-        sourceKind: identity ? ("workspace" as const) : ("user" as const),
-        label: identity?.repoPath ?? ctx.caller.runtime.id,
-      } satisfies NonNullable<Credential["owner"]>);
+    // The owning member is whoever connected the credential, from the verified
+    // caller (WP0 subject), never from the request.
+    const owner = {
+      ...(replaced?.owner ??
+        ({
+          sourceId: identity?.repoPath ?? ctx.caller.runtime.id,
+          sourceKind: identity ? ("workspace" as const) : ("user" as const),
+          label: identity?.repoPath ?? ctx.caller.runtime.id,
+        } satisfies NonNullable<Credential["owner"]>)),
+      ...(actingUserId ? { userId: actingUserId } : {}),
+    } satisfies NonNullable<Credential["owner"]>;
     const accountIdentity = normalizeAccountIdentity(
       request.accountIdentity,
       ctx.caller.runtime.id
@@ -354,6 +378,8 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const credential: Credential = {
       id,
       label: request.label,
+      ...(request.actor ? { actor: request.actor } : {}),
+      ...(request.agentExchange ? { agentExchange: request.agentExchange } : {}),
       owner,
       bindings,
       // Re-authentication changes secret material, not the semantic credential
@@ -874,6 +900,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       }
     } else if (request.url) {
       const found = await findUrlBoundCredentialForUrl(
+        callerUseFacts(ctx),
         new URL(request.url),
         use,
         request.credentialLabel
@@ -895,7 +922,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
       return summarizeUrlBoundCredential(credential);
     }
 
-    await authorizeCredentialUse(ctx, credential, usage, ctx.signal);
+    await authorizeCredentialUse(ctx, credential, usage, ctx.signal, { viaEgress: true });
     return summarizeUrlBoundCredential(credential);
   }
 
@@ -932,7 +959,7 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     const endpointIsTemplated = params.endpoint !== null && /\{[^}]+\}/u.test(params.endpoint);
     const candidate =
       params.endpoint && !endpointIsTemplated
-        ? await findUrlBoundCredentialForUrl(new URL(params.endpoint), "fetch")
+        ? await findUrlBoundCredentialForUrl(callerUseFacts(ctx), new URL(params.endpoint), "fetch")
         : await findUrlBoundCredentialForProvider(params.providerId, "fetch");
     if (!candidate || !candidate.credential.id) {
       return { request: params, credentialId: null, resourceKey: null };
@@ -1304,16 +1331,26 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
    * on ambiguity; returns null when nothing matches.
    */
   async function findUrlBoundCredentialForUrl(
+    caller: CredentialCallerFacts,
     targetUrl: URL,
     use: CredentialBindingUse = "fetch",
     label?: string
   ): Promise<{ credential: Credential; usage: CredentialUseContext } | null> {
-    const credentials = (await credentialStore.listUrlBound()).filter(
+    const audienceMatches = (await credentialStore.listUrlBound()).filter(
       (credential) =>
         !credential.revokedAt &&
         (label === undefined || credential.label === label) &&
         !!findCredentialBinding(credential, targetUrl, use)
     );
+    // Another member's personal credential is never a candidate; with nothing
+    // usable left, the acting member is asked to connect their own.
+    const credentials = audienceMatches.filter(
+      (credential) => credentialCallerUse(credential, caller).kind !== "refused"
+    );
+    const refusal = credentialSelectionRefusal(audienceMatches, caller);
+    if (credentials.length === 0 && refusal) {
+      throw credentialCallerRefusalError(audienceMatches[0]!, refusal);
+    }
     if (credentials.length > 1) {
       throw new Error("Multiple credentials match requested URL; choose an explicit credential");
     }
@@ -1440,12 +1477,37 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     );
   }
 
+  /**
+   * The verified caller facts the actor/ownership rule needs. The acting
+   * member is the WP0 account behind the operation (deputies resolve to the
+   * human whose lineage launched them).
+   */
+  function callerUseFacts(ctx: ServiceContext): CredentialCallerFacts {
+    const agentId = resolveApprovalIdentity(ctx).agentId;
+    const userId = verifiedInitiatingUserId(ctx);
+    return { ...(agentId ? { agentId } : {}), ...(userId ? { userId } : {}) };
+  }
+
+  /**
+   * `viaEgress`: the authorized use is a later egress request, where the egress
+   * proxy performs any agent exchange. Service paths that consume the stored
+   * material themselves (token-exchange subjects, native model injection) never
+   * hand an agent the human credential, so for them an agent is refused.
+   */
   async function authorizeCredentialUse(
     ctx: ServiceContext,
     credential: Credential,
     usage: CredentialUseContext,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    options: { viaEgress?: boolean } = {}
   ): Promise<void> {
+    const callerUse = credentialCallerUse(credential, callerUseFacts(ctx));
+    if (callerUse.kind === "refused") {
+      throw credentialCallerRefusalError(credential, callerUse.code);
+    }
+    if (callerUse.kind === "agent-exchange" && !options.viaEgress) {
+      throw credentialCallerRefusalError(credential, "credential-actor-mismatch");
+    }
     if (canCallerUseStoredCredential(ctx, credential, usage)) {
       return;
     }
@@ -1587,6 +1649,11 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     now: number
   ): Promise<void> {
     const identity = resolveApprovalIdentity(ctx);
+    // Preapproval covers the uses this caller is permitted to make. An agent
+    // may connect a human-attributed credential for its user, but uses it only
+    // through an agent exchange (and never at all without one); its use then
+    // goes through the ordinary just-in-time grant, so nothing is preapproved.
+    if (credentialCallerUse(credential, callerUseFacts(ctx)).kind !== "direct") return;
     const usageContexts = bindings.flatMap(preapprovedUseContextsForBinding);
     if (decision === "once") {
       throw new Error("A connection approval that preapproves later use cannot be allow-once");
@@ -1648,6 +1715,9 @@ export function createCredentialService(deps: CredentialServiceDeps = {}): Servi
     grant: CredentialUseGrant,
     now: number
   ): Promise<void> {
+    if (grant.scope === "agent" && credentialRefusesAgentGrant(credential)) {
+      throw credentialCallerRefusalError(credential, "credential-actor-mismatch");
+    }
     if (credentialUseGrantStore) {
       await credentialUseGrantStore.upsert(credential.id, grant);
       return;
@@ -1910,6 +1980,8 @@ function summarizeUrlBoundCredential(credential: Credential): StoredCredentialSu
   return {
     id: credential.id,
     label: credential.label,
+    ...(credential.actor ? { actor: credential.actor } : {}),
+    ...(credential.agentExchange ? { agentExchange: credential.agentExchange } : {}),
     accountIdentity: credential.accountIdentity,
     audience: primaryBinding.audience,
     injection: primaryBinding.injection,
@@ -2179,5 +2251,50 @@ function registrableDomainForUrl(raw: string): string | null {
     return parts.length >= 2 ? parts.slice(-2).join(".") : hostname;
   } catch {
     return null;
+  }
+}
+
+const AGENT_EXCHANGE_RESERVED_PARAMS = new Set([
+  "grant_type",
+  "client_id",
+  "subject_token",
+  "subject_token_type",
+  "actor_token",
+  "actor_token_type",
+  "scope",
+]);
+
+/**
+ * An agent exchange spends the user's access token as `subject_token`, so it
+ * may only target the same authority that issued that token: the origin of the
+ * credential's own OAuth token endpoint. It only makes sense on a
+ * human-attributed credential.
+ */
+function assertAgentExchangeTarget(
+  request: Pick<Credential, "actor" | "agentExchange" | "oauthRefresh" | "metadata">
+): void {
+  const exchange = request.agentExchange;
+  if (!exchange) return;
+  if (request.actor !== "human") {
+    throw new Error("agentExchange requires a human-attributed credential (actor: 'human')");
+  }
+  const issuer = request.oauthRefresh?.tokenUrl ?? request.metadata?.["oauthTokenOrigin"];
+  let exchangeOrigin: string;
+  let issuerOrigin: string;
+  try {
+    exchangeOrigin = new URL(exchange.tokenUrl).origin;
+    issuerOrigin = issuer ? new URL(issuer).origin : "";
+  } catch {
+    throw new Error("agentExchange tokenUrl must be an absolute URL");
+  }
+  if (!issuerOrigin || exchangeOrigin !== issuerOrigin) {
+    throw new Error(
+      "agentExchange tokenUrl must share its origin with the credential's OAuth token endpoint"
+    );
+  }
+  for (const name of Object.keys(exchange.extraParams ?? {})) {
+    if (AGENT_EXCHANGE_RESERVED_PARAMS.has(name)) {
+      throw new Error(`agentExchange extraParams may not override ${name}`);
+    }
   }
 }
