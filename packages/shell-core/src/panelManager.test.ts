@@ -10,7 +10,12 @@ import { applyStateArgsMergePatch, decodePanelStateArgs } from "@vibestudio/shar
 import { PanelLifecycleAggregateError, PanelManager } from "./panelManager.js";
 import { PanelNavigationCommitError } from "./panelNavigationTransaction.js";
 import { canonicalEntityId, runtimeEntitySource } from "@vibestudio/shared/runtime/entitySpec";
-import { asPanelSlotId, type PanelEntityId, type PanelSlotId } from "@vibestudio/shared/panel/ids";
+import {
+  asPanelEntityId,
+  asPanelSlotId,
+  type PanelEntityId,
+  type PanelSlotId,
+} from "@vibestudio/shared/panel/ids";
 import type {
   EntityRecord,
   RuntimeEntityCreateSpec,
@@ -1949,6 +1954,92 @@ describe("PanelManager", () => {
     expect((await manager.getPanel(oldest))?.id).toBe(oldest);
     expect(detail).toHaveBeenCalledWith(oldest);
     expect(registry.listPanels().length).toBeLessThanOrEqual(256);
+  });
+
+  it("never evicts a focused, leased, or parent projection", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test" });
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const manager = new PanelManager({ registry, ...deps, allowMissingManifests: true });
+    const parent = await manager.createBrowser(null, "https://parent.example", {
+      addAsRoot: true,
+    });
+    const focusedChild = await manager.createBrowser(parent.panelId, "https://child.example");
+    const leased = await manager.createBrowser(null, "https://leased.example", {
+      addAsRoot: true,
+    });
+    registry.setFocusedPanelId(focusedChild.panelId);
+    registry.applyRuntimeLeaseSnapshot({
+      version: { epoch: "test", counter: 1 },
+      leases: [
+        {
+          slotId: leased.panelId,
+          runtimeEntityId: asPanelEntityId(registry.getPanel(leased.panelId)!.runtimeEntityId!),
+          clientSessionId: "client",
+          hostConnectionId: "client",
+          connectionId: "connection",
+          holderLabel: "desktop",
+          platform: "desktop",
+          supportsCdp: false,
+          loadOnLeaseAssignment: true,
+          acquiredAt: 0,
+        },
+      ],
+    });
+
+    for (let index = 0; index < 300; index++) {
+      await manager.createBrowser(null, "https://later.example", { addAsRoot: true });
+    }
+
+    expect(registry.getPanel(parent.panelId)).toBeDefined();
+    expect(registry.getPanel(focusedChild.panelId)).toBeDefined();
+    expect(registry.findParentId(focusedChild.panelId)).toBe(parent.panelId);
+    expect(registry.getPanel(leased.panelId)).toBeDefined();
+    expect(registry.listPanels().length).toBe(256);
+  });
+
+  it("projects a panel read from storage beneath its stored parent", async () => {
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const writer = new PanelManager({
+      registry: new PanelRegistry({ workspaceId: "workspace-test" }),
+      ...deps,
+      allowMissingManifests: true,
+    });
+    const root = await writer.createBrowser(null, "https://root.example", { addAsRoot: true });
+    const child = await writer.createBrowser(root.panelId, "https://child.example");
+    const grandchild = await writer.createBrowser(child.panelId, "https://grandchild.example");
+
+    const registry = new PanelRegistry({ workspaceId: "workspace-test" });
+    const reader = new PanelManager({ registry, ...deps, allowMissingManifests: true });
+    await reader.getPanel(grandchild.panelId);
+
+    expect(registry.findParentId(grandchild.panelId)).toBe(child.panelId);
+    expect(registry.findParentId(child.panelId)).toBe(root.panelId);
+    expect(registry.getRootPanels().map((panel) => panel.id)).toEqual([root.panelId]);
+  });
+
+  it("re-reads the current entity after another client's navigation wins the commit", async () => {
+    const { deps } = makeManagerDeps("/tmp/workspace");
+    const first = new PanelManager({
+      registry: new PanelRegistry({ workspaceId: "workspace-test" }),
+      ...deps,
+      allowMissingManifests: true,
+    });
+    const created = await first.createBrowser(null, "https://start.example", {
+      addAsRoot: true,
+    });
+    const other = new PanelManager({
+      registry: new PanelRegistry({ workspaceId: "workspace-test" }),
+      ...deps,
+      allowMissingManifests: true,
+    });
+    await other.navigate(created.panelId, "https://other.example");
+
+    await expect(first.navigate(created.panelId, "https://stale.example")).rejects.toBeInstanceOf(
+      PanelNavigationCommitError
+    );
+    await expect(first.navigate(created.panelId, "https://retry.example")).resolves.toMatchObject({
+      source: "browser:https://retry.example/",
+    });
   });
 });
 

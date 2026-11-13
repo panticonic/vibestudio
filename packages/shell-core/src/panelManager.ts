@@ -763,6 +763,26 @@ export class PanelManager {
   }
 
   /**
+   * Commit a prepared navigation. A failed commit leaves the slot's current
+   * entity unknown to this host: the server may have rejected a stale expected
+   * entity (another client navigated) or committed before the response was
+   * lost. Either way the cached entity can no longer be trusted, so the next
+   * operation re-reads it from the durable slot instead of failing against it.
+   */
+  private async commitNavigation(
+    clients: Parameters<typeof commitPreparedPanelNavigation>[0],
+    input: Parameters<typeof commitPreparedPanelNavigation>[1]
+  ): ReturnType<typeof commitPreparedPanelNavigation> {
+    try {
+      return await commitPreparedPanelNavigation(clients, input);
+    } catch (error) {
+      this.currentEntityBySlot.delete(input.slotId);
+      this.currentEntitySourceBySlot.delete(input.slotId);
+      throw error;
+    }
+  }
+
+  /**
    * Drop local projections of slots the server has closed. Closes made by any
    * other client or runtime reach this host only as tree invalidations, so the
    * registry must forget them here as well as after its own close drains.
@@ -956,7 +976,7 @@ export class PanelManager {
     });
     const entityId = asPanelEntityId(handle.id);
 
-    const transition = await commitPreparedPanelNavigation(
+    const transition = await this.commitNavigation(
       { runtime, workspaceState },
       {
         slotId,
@@ -1049,7 +1069,7 @@ export class PanelManager {
         `Prepared history entity mismatch: expected ${targetEntityId}, received ${entityId}`
       );
     }
-    const transition = await commitPreparedPanelNavigation(
+    const transition = await this.commitNavigation(
       { runtime, workspaceState },
       {
         slotId,
@@ -1351,7 +1371,7 @@ export class PanelManager {
       stateArgs: stateArgsPayload,
     });
     const entityId = asPanelEntityId(handle.id);
-    const transition = await commitPreparedPanelNavigation(
+    const transition = await this.commitNavigation(
       {
         runtime: this.runtime,
         workspaceState: this.workspaceState,
@@ -1646,6 +1666,16 @@ export class PanelManager {
 
       const detail = await this.workspaceState.getPanelDetail(slotId);
       if (!detail) return null;
+      // The registry is the host's parent authority (view nesting, sibling
+      // placement, the parent entity a panel's grant is bound to), so a panel
+      // is projected beneath its stored parent, never as a detached root.
+      const parentId = detail.slot.parent_slot_id;
+      if (parentId && !this.registry.getPanel(parentId)) {
+        const parent = await this.readStoredPanel(parentId);
+        if (!parent) {
+          throw new Error(`Panel ${slotId} has no stored parent ${parentId}`);
+        }
+      }
       panel = this.registry.getPanel(slotId) ?? panel;
       const snapshot = this.snapshotFromHistoryRow(detail.currentHistory);
       const entity = detail.entity;
@@ -1690,7 +1720,7 @@ export class PanelManager {
         panel.children = children;
       } else {
         panel = projected;
-        this.registry.addPanel(panel, null, { addAsRoot: true });
+        this.registry.addPanel(panel, parentId, { addAsRoot: true });
       }
       this.currentEntityBySlot.set(slotId, detail.entity.id as PanelEntityId);
       this.currentEntitySourceBySlot.set(slotId, detail.entity.source);
@@ -1700,17 +1730,32 @@ export class PanelManager {
     });
   }
 
+  /**
+   * Bound the idle projections. Only a panel nothing depends on is evicted: a
+   * loaded runtime (any host's lease) or the focused panel is in use, and a
+   * panel with projected children is their parent authority. In-use panels
+   * may hold the cache above its bound; they leave it when they go idle.
+   */
   private touchRuntimePanel(slotId: PanelSlotId): void {
     this.runtimePanelLru.set(slotId, ++this.runtimePanelClock);
-    while (this.runtimePanelLru.size > PanelManager.MAX_RUNTIME_PANEL_CACHE) {
-      const oldest = [...this.runtimePanelLru.entries()].sort((a, b) => a[1] - b[1])[0];
-      if (!oldest) return;
-      const [candidate] = oldest;
+    if (this.runtimePanelLru.size <= PanelManager.MAX_RUNTIME_PANEL_CACHE) return;
+    const byAge = [...this.runtimePanelLru.entries()].sort((a, b) => a[1] - b[1]);
+    let excess = this.runtimePanelLru.size - PanelManager.MAX_RUNTIME_PANEL_CACHE;
+    for (const [candidate] of byAge) {
+      if (excess === 0) return;
+      if (!this.isEvictablePanel(candidate)) continue;
+      excess -= 1;
       this.runtimePanelLru.delete(candidate);
       this.currentEntityBySlot.delete(candidate);
       this.currentEntitySourceBySlot.delete(candidate);
       if (this.registry.getPanel(candidate)) this.registry.removePanel(candidate);
     }
+  }
+
+  private isEvictablePanel(slotId: PanelSlotId): boolean {
+    if (this.registry.getFocusedPanelId() === slotId) return false;
+    if (this.registry.getRuntimeLease(slotId)) return false;
+    return (this.registry.getPanel(slotId)?.children.length ?? 0) === 0;
   }
 
   /**
