@@ -6,7 +6,7 @@ import type { ClientLaunchEntries, SnapshotClient } from "@vibestudio/client-hos
 import { ClientIntegration } from "./clientIntegration.js";
 import { buildDockMenu, buildJumpList } from "./launchSurfaces.js";
 import { ShortcutRegistry, type ShortcutRequest } from "./shortcutRegistry.js";
-import { ClientBadges, ClientTrays } from "./trayBadge.js";
+import { AppBadge, ClientTrays } from "./trayBadge.js";
 
 const clients: ClientLaunchEntries[] = [
   {
@@ -115,6 +115,17 @@ describe("global shortcuts", () => {
     expect(t.registry.list("chat")).toEqual([]);
   });
 
+  it("keeps the chord a client had when moving it to one another application holds", () => {
+    const t = registry(["Ctrl+H"]);
+    t.registry.register("chat", ask);
+    expect(() => t.registry.register("chat", { ...ask, accelerator: "Ctrl+H" })).toThrow(
+      /another application/
+    );
+    expect(t.registry.list("chat")).toEqual([ask]);
+    t.registered.get(ask.accelerator)!();
+    expect(t.run).toHaveBeenCalledWith("chat", ask);
+  });
+
   it("drops a registration whose intent the client no longer declares", () => {
     const t = registry();
     t.registry.register("chat", ask);
@@ -147,13 +158,26 @@ describe("tray and badge", () => {
 
   it("sums what each client reports and forgets a client that goes", () => {
     const app = { setBadgeCount: vi.fn(() => true) };
-    const badges = new ClientBadges(app);
+    const badges = new AppBadge(app);
     badges.set("a", 2);
     badges.set("b", 3);
     expect(app.setBadgeCount).toHaveBeenLastCalledWith(5);
     badges.clear("a");
     expect(app.setBadgeCount).toHaveBeenLastCalledWith(3);
     expect(() => badges.set("b", -1)).toThrow(/whole number/);
+  });
+
+  it("lets each contributor change only its own part of the one badge", () => {
+    const app = { setBadgeCount: vi.fn(() => true) };
+    const badge = new AppBadge(app);
+    badge.set("chat", 4);
+    badge.set("host:approvals", 2);
+    badge.set("host:attention", 1);
+    expect(app.setBadgeCount).toHaveBeenLastCalledWith(7);
+    // Focusing the window answers the attention request, not the client's unread count.
+    badge.clear("host:attention");
+    badge.set("host:approvals", 0);
+    expect(app.setBadgeCount).toHaveBeenLastCalledWith(4);
   });
 });
 

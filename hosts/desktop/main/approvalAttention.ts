@@ -15,8 +15,6 @@ export interface ApprovalAttention {
   /** Apply the latest pending list: badge count, frame flash, OS notification. */
   handlePendingChanged(snapshot: WorkspaceApprovalSnapshot): void;
   removeWorkspace(workspaceId: string): void;
-  /** Stop frame flashing once the user has brought the window forward. */
-  handleWindowFocus(): void;
   /** Stop attention updates before the server connection is torn down. */
   dispose(): void;
   /**
@@ -37,13 +35,20 @@ export interface ApprovalAttention {
 export function createApprovalAttention(deps: {
   getWindow(): BaseWindow | null;
   listPending(): Promise<WorkspaceApprovalSnapshot[] | null>;
+  /**
+   * This module's part of the application badge: the number of pending
+   * approvals. The badge is shared with clients' own counts, so this sets
+   * only its own contribution.
+   */
+  setBadge(count: number): void;
   log?: Pick<Console, "warn">;
 }): ApprovalAttention {
   const log = deps.log ?? console;
   const knownIds = new Set<string>();
   // Null retires an owner and fences any refresh begun before its removal.
   const workspaces = new Map<string, WorkspaceApprovalSnapshot | null>();
-  let flashing = false;
+  /** The window whose frame flashes, until the person brings that window forward. */
+  let flashed: { window: BaseWindow; stop: () => void } | null = null;
   let activeNotification: { notification: Notification; key: string } | null = null;
   let disposed = false;
 
@@ -60,24 +65,36 @@ export function createApprovalAttention(deps: {
     win.focus();
   };
 
-  const setBadge = (count: number) => {
-    // macOS dock and Linux launcher badge. Windows has no count badge —
-    // the frame flash below covers it there.
-    try {
-      app.setBadgeCount(count);
-    } catch {
-      // Badge unsupported on this platform/desktop environment.
-    }
-  };
+  // macOS dock and Linux launcher badge. Windows has no count badge — the
+  // frame flash below covers it there.
+  const setBadge = (count: number) => deps.setBadge(count);
 
-  const flash = (on: boolean) => {
-    if (on === flashing) return;
-    flashing = on;
+  const setFrameFlash = (window: BaseWindow, on: boolean) => {
+    if (window.isDestroyed()) return;
     try {
-      liveWindow()?.flashFrame(on);
+      window.flashFrame(on);
     } catch {
       // Frame flash unsupported; badge/notification still apply.
     }
+  };
+
+  const stopFlash = () => {
+    const current = flashed;
+    if (!current) return;
+    flashed = null;
+    current.window.off("focus", current.stop);
+    setFrameFlash(current.window, false);
+  };
+
+  /** Flash the window approvals are presented in; focusing that window stops it. */
+  const startFlash = () => {
+    const win = liveWindow();
+    if (flashed?.window === win) return;
+    stopFlash();
+    if (!win) return;
+    flashed = { window: win, stop: stopFlash };
+    win.once("focus", stopFlash);
+    setFrameFlash(win, true);
   };
 
   const closeNotification = () => {
@@ -137,7 +154,7 @@ export function createApprovalAttention(deps: {
 
     setBadge(runtimePending.length);
     if (runtimePending.length === 0) {
-      flash(false);
+      stopFlash();
       closeNotification();
       return;
     }
@@ -148,7 +165,7 @@ export function createApprovalAttention(deps: {
     const userIsLooking = win !== null && win.isFocused() && win.isVisible();
     if (userIsLooking) return;
 
-    flash(true);
+    startFlash();
     if (process.platform === "darwin") {
       app.dock?.bounce("critical");
     }
@@ -166,17 +183,14 @@ export function createApprovalAttention(deps: {
       workspaces.set(workspaceId, null);
       apply(true);
     },
-    handleWindowFocus() {
-      if (disposed) return;
-      flash(false);
-    },
     dispose() {
       if (disposed) return;
       disposed = true;
       workspaces.clear();
       knownIds.clear();
       closeNotification();
-      flash(false);
+      stopFlash();
+      setBadge(0);
     },
     async refresh(opts = {}) {
       if (disposed) return;

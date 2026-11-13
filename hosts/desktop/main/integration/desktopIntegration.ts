@@ -30,7 +30,7 @@ import { buildDockMenu, buildJumpList } from "./launchSurfaces.js";
 import type { LauncherEnvironment, LauncherFs, LauncherPlatform } from "./launcherArtifacts.js";
 import { LauncherService } from "./launcherService.js";
 import { ShortcutRegistry } from "./shortcutRegistry.js";
-import { ClientBadges, ClientTrays } from "./trayBadge.js";
+import { ClientTrays, type AppBadge } from "./trayBadge.js";
 
 const log = createDevLogger("DesktopIntegration");
 
@@ -67,6 +67,8 @@ export interface DesktopIntegrationDeps {
   openIntentWindow(clientId: string, intent: ClientIntent): Promise<void>;
   openLink(link: string): Promise<boolean>;
   notify(title: string, message: string): void;
+  /** The application icon's badge; a client's count is its contribution, keyed by client id. */
+  badge: AppBadge;
   /** Replaces the confirmation dialog for hosts that have no person at the screen (the test driver). */
   confirmLauncher?(title: string): Promise<boolean>;
 }
@@ -160,7 +162,7 @@ export function createDesktopIntegration(deps: DesktopIntegrationDeps) {
     activate: (clientId) => void deps.windows.focus(clientId),
     action: (clientId, actionId) => lastWindow(clientId)?.send("vibestudio:tray-action", actionId),
   });
-  const badges = new ClientBadges(app);
+  const badges = deps.badge;
 
   /** The Dock menu (macOS) and jump list (Windows), from the clients' launch entries. */
   function applySurfaces(clients: readonly ClientLaunchEntries[]): void {

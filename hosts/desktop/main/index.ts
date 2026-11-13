@@ -200,6 +200,7 @@ import {
   createDesktopIntegration,
   type DesktopIntegration,
 } from "./integration/desktopIntegration.js";
+import { AppBadge } from "./integration/trayBadge.js";
 import { ClientHostState } from "./clientHostState.js";
 import { SupervisionRelay } from "./supervisionRelay.js";
 import { DesktopDriverSignals, startDesktopDeviceDriver } from "./testApiDevice.js";
@@ -611,6 +612,10 @@ const launchGate = new LaunchGate({
   title: () =>
     startupMode.kind === "pending" ? "Vibestudio - Connect" : `Vibestudio — ${workspaceId}`,
 });
+/** The application icon's badge, shared by clients, pending approvals and attention requests. */
+const appBadge = new AppBadge(app);
+/** The badge contribution of a request for attention, withdrawn once the window is focused. */
+const ATTENTION_BADGE = "host:attention";
 const panelHost = new PanelHostWindow({
   openPanelLocation: sendIncomingPanelLocation,
   getSystemWorkspaceId: () => serverSession?.workspaceId ?? null,
@@ -622,6 +627,7 @@ const panelHost = new PanelHostWindow({
   getWindowTitle: () =>
     IS_HEADLESS_HOST ? `Vibestudio Headless Host — ${workspaceId}` : `Vibestudio — ${workspaceId}`,
   getApprovalAttention: () => approvalAttention,
+  attentionSeen: () => appBadge.clear(ATTENTION_BADGE),
   initializePanelTreeOnce,
   onHostedShellReady: finishPresentedStartup,
   menus: clientMenus,
@@ -1494,13 +1500,13 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
         ? "connected"
         : "starting";
   // The deep link the app was opened with (room/fp/code/sig) — rebuilt so the
-  // chooser can auto-pair. Peeked (non-draining) so a getState poll is idempotent.
+  // chooser can auto-pair. Peeked (non-draining) so every push and read is idempotent.
   const pending = peekPendingConnectLink();
   const pendingPairLink = pending ? createConnectDeepLink(pending) : null;
   const pairingLinkError = peekPendingConnectLinkError();
-  // Only the chooser reads localWorkspaces. The renderer polls getState every 500ms
-  // while "starting", so computing the workspace scan on every tick is pure waste —
-  // the poll only watches for the mode flip. Compute the heavy fields only when shown.
+  // Only the chooser (and the failure page) reads localWorkspaces. Every startup
+  // progress push carries this state, so the workspace scan is computed only
+  // when it is shown.
   if (mode !== "choose-connection" && mode !== "failed") {
     return {
       mode,
@@ -1543,22 +1549,25 @@ function getBootstrapConnectionState(): BootstrapConnectionState {
 
 /**
  * Push the current bootstrap connection state to the launch-gate renderer.
- * Event-driven complement to the pull `get-state` IPC: the renderer applies
- * pushes immediately and keeps a slow poll only as a liveness fallback.
+ * The renderer reads it once with `get-state` and then follows these pushes;
+ * nothing polls.
  */
 function pushBootstrapConnectionState(): void {
   launchGate.send("vibestudio:bootstrap:state-changed", getBootstrapConnectionState());
 }
 
-function normalizeBootstrapWorkspaceName(rawName: unknown): string {
+/** The workspace name the chooser asked for, or why it cannot be used. */
+function bootstrapWorkspaceName(rawName: unknown): { name: string } | { problem: string } {
   if (typeof rawName !== "string" || rawName.trim().length === 0) {
-    throw new Error("Workspace name is required");
+    return { problem: "Workspace name is required" };
   }
   const name = rawName.trim();
   if (!WORKSPACE_NAME_RE.test(name)) {
-    throw new Error("Workspace name must contain only letters, numbers, hyphens, and underscores");
+    return {
+      problem: "Workspace name must contain only letters, numbers, hyphens, and underscores",
+    };
   }
-  return name;
+  return { name };
 }
 
 function installBootstrapConnectionHandlers(): void {
@@ -1634,12 +1643,18 @@ function installBootstrapConnectionHandlers(): void {
   // throwaway exchange, no orphan windows.
   ipcMain.handle("vibestudio:bootstrap:launch-local-workspace", (event, workspaceName?: string) => {
     requireLaunchGateSender(event, "vibestudio:bootstrap:launch-local-workspace");
-    const name = normalizeBootstrapWorkspaceName(workspaceName);
+    // A name the person typed that cannot be used is answered with a result the
+    // chooser shows as written, like a pairing link that cannot be used; a
+    // thrown error would reach them wrapped in IPC's own prefix.
+    const requested = bootstrapWorkspaceName(workspaceName);
+    if ("problem" in requested) return { ok: false, message: requested.problem };
+    const { name } = requested;
     const knownWorkspaces = centralData.listWorkspaces();
     if (knownWorkspaces.length > 0 && !centralData.hasWorkspace(name)) {
-      throw new Error(
-        `No workspace named “${name}”. Pick one from the list; once it is open, create new workspaces from Switch Workspace….`
-      );
+      return {
+        ok: false,
+        message: `No workspace named “${name}”. Pick one from the list; once it is open, create new workspaces from Switch Workspace….`,
+      };
     }
     log.info(`[bootstrap] Launching local workspace "${name}" by user request`);
     resolveChooserChoice({ kind: "local", name });
@@ -2330,6 +2345,7 @@ app.on("ready", async () => {
     approvalAttention = createApprovalAttention({
       getWindow: () => clientWindows.all().at(-1)?.browserWindow() ?? null,
       listPending: listWorkspaceApprovals,
+      setBadge: (count) => appBadge.set("host:approvals", count),
       log,
     });
   }
@@ -2337,7 +2353,7 @@ app.on("ready", async () => {
   const handleAttentionRequired = (title: string, message: string) => {
     const focusWindow = () => panelHost.showAndFocus();
     panelHost.requestAttention();
-    app.setBadgeCount(1);
+    appBadge.set(ATTENTION_BADGE, 1);
     if (Notification.isSupported()) {
       const nativeNotification = new Notification({
         title,
@@ -3233,6 +3249,7 @@ app.on("ready", async () => {
           return clientHost.openLink(link);
         },
         notify: showUserNotification,
+        badge: appBadge,
         // A driver has no person at the screen to answer the dialog: it confirms for them.
         ...(IS_DEVELOPMENT_CLIENT_EXECUTOR ? { confirmLauncher: async () => true } : {}),
       });

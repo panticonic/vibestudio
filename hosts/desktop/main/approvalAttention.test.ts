@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { PendingApproval } from "@vibestudio/shared/approvals";
 
@@ -80,7 +81,11 @@ function makeStartupUnitApproval(overrides: Partial<PendingApproval> = {}): Pend
 }
 
 function makeWindow(opts: { focused?: boolean; visible?: boolean } = {}) {
+  const events = new EventEmitter();
   return {
+    once: vi.fn((event: string, listener: () => void) => events.once(event, listener)),
+    off: vi.fn((event: string, listener: () => void) => events.off(event, listener)),
+    emit: (event: string) => events.emit(event),
     isDestroyed: vi.fn(() => false),
     isFocused: vi.fn(() => opts.focused ?? false),
     isVisible: vi.fn(() => opts.visible ?? true),
@@ -94,6 +99,7 @@ function makeWindow(opts: { focused?: boolean; visible?: boolean } = {}) {
 
 function makeAttention(window: ReturnType<typeof makeWindow> | null, pending?: PendingApproval[]) {
   return createApprovalAttention({
+    setBadge: (count) => electronMocks.app.setBadgeCount(count),
     getWindow: () => window as never,
     listPending: vi.fn(async () => (pending ? [snapshot(pending)] : null)),
     log: { warn: vi.fn() },
@@ -159,6 +165,7 @@ describe("createApprovalAttention", () => {
   it("does not let a delayed refresh restore removed or resolved requests", async () => {
     const pending = deferred<WorkspaceApprovalSnapshot[]>();
     const attention = createApprovalAttention({
+      setBadge: (count) => electronMocks.app.setBadgeCount(count),
       getWindow: () => makeWindow() as never,
       listPending: () => pending.promise,
     });
@@ -175,6 +182,7 @@ describe("createApprovalAttention", () => {
   it("retires absent snapshot owners without erasing concurrent new requests", async () => {
     const pending = deferred<WorkspaceApprovalSnapshot[]>();
     const attention = createApprovalAttention({
+      setBadge: (count) => electronMocks.app.setBadgeCount(count),
       getWindow: () => makeWindow() as never,
       listPending: () => pending.promise,
     });
@@ -296,15 +304,21 @@ describe("createApprovalAttention", () => {
     expect(electronMocks.notificationInstances).toHaveLength(0);
   });
 
-  it("stops flashing on window focus and focuses the shell on notification click", () => {
+  it("stops flashing when the flashed window gets focus and focuses the shell on notification click", () => {
     const window = makeWindow({ focused: false });
     const attention = makeAttention(window);
 
     attention.handlePendingChanged(snapshot([makeApproval()]));
-    attention.handleWindowFocus();
+    expect(window.flashFrame).toHaveBeenLastCalledWith(true);
+    window.emit("focus");
     expect(window.flashFrame).toHaveBeenLastCalledWith(false);
+    // A later approval flashes it again: the focus answered the earlier one only.
+    attention.handlePendingChanged(
+      snapshot([makeApproval(), makeApproval({ approvalId: "approval-2" })])
+    );
+    expect(window.flashFrame).toHaveBeenLastCalledWith(true);
 
-    const [notification] = electronMocks.notificationInstances;
+    const notification = electronMocks.notificationInstances.at(-1);
     notification!.handlers.get("click")?.();
     expect(window.show).toHaveBeenCalled();
     expect(window.focus).toHaveBeenCalled();
@@ -314,6 +328,7 @@ describe("createApprovalAttention", () => {
     const pending = deferred<WorkspaceApprovalSnapshot[]>();
     const warn = vi.fn();
     const attention = createApprovalAttention({
+      setBadge: (count) => electronMocks.app.setBadgeCount(count),
       getWindow: () => makeWindow() as never,
       listPending: () => pending.promise,
       log: { warn },

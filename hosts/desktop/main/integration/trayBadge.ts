@@ -59,30 +59,32 @@ export interface BadgePort {
   setBadgeCount(count: number): boolean;
 }
 
-/** The largest count a client may show; the OS truncates what it cannot draw. */
+/** The largest count a contributor may show; the OS truncates what it cannot draw. */
 export const MAX_BADGE_COUNT = 99_999;
 
 /**
- * The application icon's badge (`badge`). Clients share one icon, so the badge
- * is the sum of what each running client reports; a client that stops, is
- * retired or loses the capability contributes nothing.
+ * The application icon's badge: the only writer of the OS badge count. There
+ * is one icon, so its count is the sum of what each contributor reports —
+ * each running client with `badge` (by client id), and the host's own
+ * contributions (pending approvals, a request for attention). A contributor
+ * changes or withdraws only its own part; none can erase another's.
  */
-export class ClientBadges {
+export class AppBadge {
   private readonly counts = new Map<string, number>();
 
   constructor(private readonly app: BadgePort) {}
 
-  set(clientId: string, count: unknown): void {
+  set(contributor: string, count: unknown): void {
     if (!Number.isInteger(count) || (count as number) < 0 || (count as number) > MAX_BADGE_COUNT) {
       throw new Error(`A badge count is a whole number from 0 to ${MAX_BADGE_COUNT}`);
     }
-    if (count === 0) this.counts.delete(clientId);
-    else this.counts.set(clientId, count as number);
+    if (count === 0) this.counts.delete(contributor);
+    else this.counts.set(contributor, count as number);
     this.apply();
   }
 
-  clear(clientId: string): void {
-    if (this.counts.delete(clientId)) this.apply();
+  clear(contributor: string): void {
+    if (this.counts.delete(contributor)) this.apply();
   }
 
   total(): number {
@@ -92,6 +94,10 @@ export class ClientBadges {
   }
 
   private apply(): void {
-    this.app.setBadgeCount(this.total());
+    try {
+      this.app.setBadgeCount(this.total());
+    } catch {
+      // The platform or desktop environment draws no badge; the counts stay.
+    }
   }
 }

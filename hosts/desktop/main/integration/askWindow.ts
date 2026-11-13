@@ -3,6 +3,9 @@ import type { AskPort } from "./clientIntegration.js";
 
 type Ask = Parameters<AskPort["open"]>[0];
 
+/** What the ask page shows for one submission: the intent's text, or why it failed. */
+export type AskResult = { ok: true; text: string } | { ok: false; message: string };
+
 function escapeHtml(value: string): string {
   return value
     .replace(/&/gu, "&amp;")
@@ -43,8 +46,10 @@ export function renderAskPage(title: string, dark: boolean): string {
     if (event.key !== "Enter" || !input.value.trim()) return;
     input.disabled = true;
     out.textContent = "...";
-    try { out.textContent = await window.__vibestudioAsk.submit(input.value); }
-    catch (error) { out.textContent = error instanceof Error ? error.message : String(error); }
+    try {
+      const result = await window.__vibestudioAsk.submit(input.value);
+      out.textContent = result.ok ? result.text : result.message;
+    } catch (error) { out.textContent = error instanceof Error ? error.message : String(error); }
     input.disabled = false;
     input.select();
     input.focus();
@@ -62,11 +67,17 @@ export class AskWindows implements AskPort {
   private readonly byClient = new Map<string, BrowserWindow>();
 
   constructor(private readonly preloadPath: string) {
-    ipcMain.handle("vibestudio:ask:submit", (event, text: unknown) => {
+    ipcMain.handle("vibestudio:ask:submit", async (event, text: unknown): Promise<AskResult> => {
       const entry = this.asks.get(event.sender.id);
       if (!entry) throw new Error("Only an ask window can submit");
       if (typeof text !== "string") throw new Error("An ask takes text");
-      return entry.ask.submit(text);
+      // The intent's failure is its answer to the person: returned as text,
+      // not thrown, which IPC would wrap in its own "Error invoking remote method" prefix.
+      try {
+        return { ok: true, text: await entry.ask.submit(text) };
+      } catch (error) {
+        return { ok: false, message: error instanceof Error ? error.message : String(error) };
+      }
     });
     ipcMain.on("vibestudio:ask:close", (event: IpcMainEvent) => {
       this.asks.get(event.sender.id)?.window.close();

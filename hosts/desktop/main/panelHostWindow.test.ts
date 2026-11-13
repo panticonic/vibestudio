@@ -151,6 +151,7 @@ function createHarness() {
     isHeadlessHost: false,
     getWindowTitle: () => "Vibestudio test",
     getApprovalAttention: () => null,
+    attentionSeen: vi.fn(),
     initializePanelTreeOnce: vi.fn(),
     menus: {
       shortcutsFor: vi.fn(() => ({ intercept: vi.fn(), isChromeOwned: vi.fn(() => false) })),

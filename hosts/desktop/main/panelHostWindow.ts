@@ -56,6 +56,8 @@ export interface PanelHostWindowDeps {
   isHeadlessHost: boolean;
   getWindowTitle: () => string;
   getApprovalAttention: () => ApprovalAttention | null;
+  /** The person brought the window forward: a request for its attention is answered. */
+  attentionSeen: () => void;
   /** A headless host has no client; it prepares its panels as soon as the window exists. */
   initializePanelTreeOnce: (reason: string) => void;
   onHostedShellReady?: () => void;
@@ -301,8 +303,7 @@ export class PanelHostWindow {
     window.setTitle(this.deps.getWindowTitle());
     window.on("focus", () => {
       this.deps.menus.applyFor(windowId);
-      app.setBadgeCount(0);
-      this.deps.getApprovalAttention()?.handleWindowFocus();
+      this.deps.attentionSeen();
       void this.deps.getApprovalAttention()?.refresh({ quiet: true });
     });
     // Release child views and overlays while Electron's native window is still

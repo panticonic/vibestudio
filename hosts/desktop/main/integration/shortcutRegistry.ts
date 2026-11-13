@@ -64,14 +64,19 @@ export class ShortcutRegistry {
     const registration: Registration = { ...request, clientId };
     // Release the old chord first: replacing a registration with the same chord must not conflict with itself.
     if (mine) this.deps.shortcuts.unregister(mine.accelerator);
-    const registered = this.deps.shortcuts.register(request.accelerator, () =>
-      this.deps.run(clientId, request)
-    );
-    if (!registered) {
-      this.registrations.delete(key);
+    if (!this.bind(registration)) {
+      // A failed replacement leaves the shortcut the client already had.
+      if (mine && !this.bind(mine)) this.registrations.delete(key);
       throw new Error(`${request.accelerator} is held by another application`);
     }
     this.registrations.set(key, registration);
+  }
+
+  private bind(registration: Registration): boolean {
+    const { clientId, ...request } = registration;
+    return this.deps.shortcuts.register(request.accelerator, () =>
+      this.deps.run(clientId, request)
+    );
   }
 
   unregister(clientId: string, id: string): void {

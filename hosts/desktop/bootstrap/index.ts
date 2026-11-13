@@ -73,7 +73,6 @@ const openReviewApprovalIds = new Set<string>();
 let decisionError: string | null = null;
 /** The person declined the review: a decision to report calmly, not a failure. */
 let startupDeclined = false;
-let startupWaitBeganAt = 0;
 
 function setPending(next: PendingUnitInstallReviewApproval[]): boolean {
   if (samePendingApprovals(pending, next)) return false;
@@ -382,6 +381,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
 
+/** A chooser action the host declined answers `{ ok: false, message }`: show its message as written. */
+function requireAccepted(result: unknown, fallback: string): void {
+  if (!isRecord(result) || result["ok"] !== false) return;
+  throw new Error(typeof result["message"] === "string" ? result["message"] : fallback);
+}
+
 function isBootstrapConnectionState(value: unknown): value is BootstrapConnectionState {
   if (!isRecord(value)) return false;
   if (
@@ -501,9 +506,10 @@ function renderConnectionHandoff(): void {
   // Connection establishment and host launch form one timeline. Every reported
   // connection milestone remains visible as later stages become active.
   appendLaunchTimeline(approvalsContainer, startupTimeline(connectionState?.startupProgress));
-  const elapsedMs = startupWaitBeganAt ? Date.now() - startupWaitBeganAt : 0;
+  // The log is offered for as long as the server is starting. Nothing renders
+  // this page again while a step is stuck, so the offer cannot wait to appear.
   const startupLogPath = connectionState?.serverLogPath ?? connectionState?.startupError?.logPath;
-  if (elapsedMs >= 15_000 && startupLogPath) {
+  if (startupLogPath) {
     const actions = document.createElement("div");
     actions.className = "toolbar";
     const logButton = document.createElement("button");
@@ -526,7 +532,6 @@ function renderConnectionHandoff(): void {
 async function runConnectionAction(actionId: string, action: () => Promise<void>): Promise<void> {
   if (connectionBusyAction) return;
   connectionBusyAction = actionId;
-  startupWaitBeganAt = Date.now();
   connectionHandoff = connectionHandoffFor(actionId);
   connectionError = null;
   if (connectionHandoff) {
@@ -590,18 +595,9 @@ function appendPairRemote(parent: HTMLElement): void {
       if (!bootstrapApi) throw new Error("Bootstrap connection controls are unavailable");
       const link = pairLinkValue.trim();
       if (!link) throw new Error("Paste the pairing link from your server first");
-      const result = await bootstrapApi.pairRemote({ link });
       // On success the host accepts the pairing and connects in this process;
       // only a failed parse returns an { ok: false } result for us to surface.
-      if (isRecord(result) && result["ok"] === false) {
-        throw new Error(
-          typeof result["message"] === "string"
-            ? result["message"]
-            : typeof result["error"] === "string"
-              ? result["error"]
-              : "Pairing failed"
-        );
-      }
+      requireAccepted(await bootstrapApi.pairRemote({ link }), "Pairing failed");
     })
   );
   form.onsubmit = (event) => {
@@ -639,7 +635,10 @@ function appendLocalWorkspaces(parent: HTMLElement, state: BootstrapConnectionSt
         text,
         connectionButton("Launch", `local:${workspace.name}`, async () => {
           if (!bootstrapApi) throw new Error("Bootstrap connection controls are unavailable");
-          await bootstrapApi.launchLocalWorkspace(workspace.name);
+          requireAccepted(
+            await bootstrapApi.launchLocalWorkspace(workspace.name),
+            "The workspace could not be launched"
+          );
         })
       );
       list.append(row);
@@ -668,7 +667,10 @@ function appendLocalWorkspaces(parent: HTMLElement, state: BootstrapConnectionSt
     const launchButton = connectionButton("Create and launch", "local:new", async () => {
       if (!bootstrapApi) throw new Error("Bootstrap connection controls are unavailable");
       const name = localWorkspaceValue.trim() || state.lastLocalWorkspaceName || "default";
-      await bootstrapApi.launchLocalWorkspace(name);
+      requireAccepted(
+        await bootstrapApi.launchLocalWorkspace(name),
+        "The workspace could not be launched"
+      );
     });
     form.onsubmit = (event) => {
       event.preventDefault();
@@ -696,12 +698,7 @@ function renderConnectionChooser(state: BootstrapConnectionState): void {
     const link = state.pendingPairLink;
     void runConnectionAction("pair", async () => {
       if (!bootstrapApi) throw new Error("Bootstrap connection controls are unavailable");
-      const result = await bootstrapApi.pairRemote({ link });
-      if (isRecord(result) && result["ok"] === false) {
-        throw new Error(
-          typeof result["message"] === "string" ? result["message"] : "Pairing failed"
-        );
-      }
+      requireAccepted(await bootstrapApi.pairRemote({ link }), "Pairing failed");
     });
     return;
   }
@@ -777,18 +774,9 @@ function appendPairConfirmation(parent: HTMLElement, link: string): void {
     connectionButton("Trust and connect", "pair", async () => {
       if (!bootstrapApi) throw new Error("Bootstrap connection controls are unavailable");
       autoPairTriggered = true;
-      const result = await bootstrapApi.pairRemote({ link });
       // On success the host accepts the pairing and connects in this process;
       // only a failed parse returns { ok: false } for us to surface.
-      if (isRecord(result) && result["ok"] === false) {
-        throw new Error(
-          typeof result["message"] === "string"
-            ? result["message"]
-            : typeof result["error"] === "string"
-              ? result["error"]
-              : "Pairing failed"
-        );
-      }
+      requireAccepted(await bootstrapApi.pairRemote({ link }), "Pairing failed");
     })
   );
   actions.append(dismissPairButton("Cancel"));
@@ -814,7 +802,6 @@ function dismissPairButton(label: string): HTMLButtonElement {
 }
 
 function renderStartingWorkspace(): void {
-  if (!startupWaitBeganAt) startupWaitBeganAt = Date.now();
   connectionHandoff = {
     title: "Starting workspace",
     detail: "Preparing the selected workspace and startup approval gate...",
@@ -913,7 +900,6 @@ async function init(): Promise<void> {
   if (!isBootstrapConnectionState(state)) {
     throw new Error("The host did not report a connection state");
   }
-  if (state.mode === "starting") startupWaitBeganAt = Date.now();
   applyBootstrapState(state);
 }
 

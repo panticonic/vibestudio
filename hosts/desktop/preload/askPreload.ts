@@ -5,8 +5,9 @@
  */
 
 import { contextBridge, ipcRenderer } from "electron";
+import type { AskResult } from "../main/integration/askWindow.js";
 
 contextBridge.exposeInMainWorld("__vibestudioAsk", {
-  submit: (text: string) => ipcRenderer.invoke("vibestudio:ask:submit", text) as Promise<string>,
+  submit: (text: string) => ipcRenderer.invoke("vibestudio:ask:submit", text) as Promise<AskResult>,
   close: () => ipcRenderer.send("vibestudio:ask:close"),
 });
