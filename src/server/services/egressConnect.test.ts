@@ -3,6 +3,29 @@ import { request } from "node:http";
 import { connect as netConnect } from "node:net";
 import { parseConnectAuthority, EgressProxy } from "./egressProxy.js";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { signCelldEgress } from "./celldEgressIdentity.js";
+
+const SECRET = "connect-test-secret";
+
+/** The headers celld stamps on a CONNECT of `callerId`'s isolate. */
+function nodeHeaders(authority: string, callerId = "worker:connect-test"): Record<string, string> {
+  return signCelldEgress({
+    secret: SECRET,
+    kind: "connect",
+    method: "CONNECT",
+    target: authority,
+    identity: { loaded: true, egressIdentity: [callerId] },
+  });
+}
+
+/** Start the node's listener with `resolve` deciding who a verified caller is. */
+async function startNode(
+  instance: EgressProxy,
+  resolve: (callerId: string) => ReturnType<typeof caller> | null
+): Promise<number> {
+  instance.setCallerResolver(resolve);
+  return instance.startShared(SECRET);
+}
 
 function caller() {
   return createVerifiedCaller("worker:connect-test", "worker", {
@@ -25,9 +48,13 @@ function proxy(extra: Record<string, unknown> = {}) {
   return { instance, store };
 }
 
-function connectRequest(port: number, authority: string) {
+function connectRequest(
+  port: number,
+  authority: string,
+  headers: Record<string, string> = nodeHeaders(authority)
+) {
   return new Promise<{ status: number; socket?: NodeJS.ReadableStream }>((resolve, reject) => {
-    const req = request({ host: "127.0.0.1", port, method: "CONNECT", path: authority });
+    const req = request({ host: "127.0.0.1", port, method: "CONNECT", path: authority, headers });
     req.once("connect", (response, socket) =>
       resolve({ status: response.statusCode ?? 0, socket })
     );
@@ -67,7 +94,7 @@ describe("CONNECT egress boundary", () => {
       throw new Error("network.connect denied");
     });
     const { instance, store } = proxy({ authorizeEffect });
-    const port = await instance.startForCaller(caller(), () => caller());
+    const port = await startNode(instance, () => caller());
     try {
       const result = await connectRequest(port, "example.com:443");
       expect(result.status).toBe(403);
@@ -84,7 +111,7 @@ describe("CONNECT egress boundary", () => {
   it("denies an approved private literal before dialing", async () => {
     const authorizeEffect = vi.fn(async () => undefined);
     const { instance } = proxy({ authorizeEffect });
-    const port = await instance.startForCaller(caller(), () => caller());
+    const port = await startNode(instance, () => caller());
     try {
       const result = await connectRequest(port, "127.0.0.1:9");
       expect(result.status).toBe(403);
@@ -99,12 +126,15 @@ describe("CONNECT egress boundary", () => {
     const authorizeEffect = vi.fn(() => new Promise<void>((resolve) => (approve = resolve)));
     const { instance } = proxy({ authorizeEffect });
     const testCaller = caller();
-    const port = await instance.startForCaller(testCaller, () => testCaller);
+    const port = await startNode(instance, () => testCaller);
     const socket = netConnect({ host: "127.0.0.1", port });
     try {
       await new Promise<void>((resolve, reject) => {
         socket.once("connect", () => {
-          socket.write("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n");
+          const stamped = Object.entries(nodeHeaders("example.com:443"))
+            .map(([name, value]) => `${name}: ${value}\r\n`)
+            .join("");
+          socket.write(`CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n${stamped}\r\n`);
           resolve();
         });
         socket.once("error", reject);
@@ -121,12 +151,11 @@ describe("CONNECT egress boundary", () => {
   });
 
   it("shares one port for concurrent startup calls", async () => {
-    const testCaller = caller();
     const { instance } = proxy();
     try {
       const [first, second] = await Promise.all([
-        instance.startForCaller(testCaller, () => testCaller),
-        instance.startForCaller(testCaller, () => testCaller),
+        instance.startShared(SECRET),
+        instance.startShared(SECRET),
       ]);
       expect(second).toBe(first);
     } finally {
@@ -139,11 +168,35 @@ describe("CONNECT egress boundary", () => {
     let live: typeof testCaller | null = testCaller;
     const authorizeEffect = vi.fn(async () => undefined);
     const { instance } = proxy({ authorizeEffect });
-    const port = await instance.startForCaller(testCaller, () => live);
+    const port = await startNode(instance, () => live);
     try {
       live = null;
       const result = await connectRequest(port, "example.com:443");
       expect(result.status).toBe(403);
+      expect(authorizeEffect).not.toHaveBeenCalled();
+    } finally {
+      await instance.stop();
+    }
+  });
+
+  it("refuses a CONNECT whose MAC does not verify", async () => {
+    const authorizeEffect = vi.fn(async () => undefined);
+    const { instance } = proxy({ authorizeEffect });
+    const port = await startNode(instance, () => caller());
+    try {
+      const forged = signCelldEgress({
+        secret: "another-secret-entirely",
+        kind: "connect",
+        method: "CONNECT",
+        target: "example.com:443",
+        identity: { loaded: true, egressIdentity: ["worker:connect-test"] },
+      });
+      expect((await connectRequest(port, "example.com:443", forged)).status).toBe(403);
+      // A MAC made for another target does not carry over to this one.
+      expect(
+        (await connectRequest(port, "example.com:443", nodeHeaders("example.org:443"))).status
+      ).toBe(403);
+      expect((await connectRequest(port, "example.com:443", {})).status).toBe(403);
       expect(authorizeEffect).not.toHaveBeenCalled();
     } finally {
       await instance.stop();

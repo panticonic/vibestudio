@@ -65,6 +65,7 @@ import { authorizeVerifiedCaller } from "./authorityRuntime.js";
 import { createTestExecutionSession } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { authorityFailureForDecision } from "@vibestudio/shared/authorization";
+import { attributeAsNode } from "./celldEgressTestHeaders.js";
 
 class MemoryCredentialStore {
   constructor(private readonly credentials = new Map<string, Credential>()) {}
@@ -351,7 +352,7 @@ function requestThroughHttpProxy(params: {
         path: params.targetUrl,
         headers: {
           ...(params.body ? { "Content-Length": Buffer.byteLength(params.body) } : {}),
-          ...params.headers,
+          ...attributeAsNode(params.headers ?? {}, "fetch", params.method ?? "GET", params.targetUrl),
         },
       },
       (response) => {
@@ -386,7 +387,7 @@ function requestWebSocketUpgradeThroughProxy(params: {
         Upgrade: "websocket",
         "Sec-WebSocket-Key": Buffer.alloc(16).toString("base64"),
         "Sec-WebSocket-Version": "13",
-        ...params.headers,
+        ...attributeAsNode(params.headers ?? {}, "websocket", "GET", params.targetUrl),
       },
     });
     req.on("upgrade", (response, socket) => {
@@ -784,8 +785,16 @@ describe("EgressProxy", () => {
             host: `127.0.0.1:${upstreamPort}`,
             "X-Forwarded-Proto": "http",
             Authorization: "Bearer sentinel",
-            "X-Vibestudio-Egress-Caller": "worker:test",
-            "X-Vibestudio-Egress-Secret": "secret",
+            // Origin-form request line (ws sends the path): the MAC covers it as sent.
+            ...attributeAsNode(
+              {
+                "X-Vibestudio-Egress-Caller": "worker:test",
+                "X-Vibestudio-Egress-Secret": "secret",
+              },
+              "websocket",
+              "GET",
+              "/v1/socket"
+            ),
           },
         });
         const clientClose = once(client, "close");
@@ -1588,10 +1597,12 @@ describe("EgressProxy", () => {
         });
       });
       const caller = workerCaller("worker:test");
-      const proxyPort = await proxy.startForCaller(caller, () => caller);
+      proxy.setCallerResolver((id) => (id === caller.runtime.id ? caller : null));
+      const proxyPort = await proxy.startShared("secret");
 
       const res = await requestThroughHttpProxy({
         proxyPort,
+        headers: { "X-Vibestudio-Egress-Caller": caller.runtime.id, "X-Vibestudio-Egress-Secret": "secret" },
         targetUrl: `http://127.0.0.1:${targetPort}/raw`,
       });
 
@@ -1681,11 +1692,16 @@ describe("EgressProxy", () => {
         });
       });
       const caller = workerCaller("worker:test");
-      const proxyPort = await proxy.startForCaller(caller, () => caller);
+      proxy.setCallerResolver((id) => (id === caller.runtime.id ? caller : null));
+      const proxyPort = await proxy.startShared("secret");
       const res = await requestThroughHttpProxy({
         proxyPort,
         targetUrl: `http://127.0.0.1:${targetPort}/internal`,
-        headers: { Authorization: "Bearer caller-controlled-key" },
+        headers: {
+          "X-Vibestudio-Egress-Caller": caller.runtime.id,
+          "X-Vibestudio-Egress-Secret": "secret",
+          Authorization: "Bearer caller-controlled-key",
+        },
       });
       expect(res.status).toBe(200);
       expect(authorizeInternalRequest).toHaveBeenCalledWith(
@@ -1726,10 +1742,12 @@ describe("EgressProxy", () => {
         });
       });
       const caller = workerCaller("worker:test");
-      const proxyPort = await proxy.startForCaller(caller, () => caller);
+      proxy.setCallerResolver((id) => (id === caller.runtime.id ? caller : null));
+      const proxyPort = await proxy.startShared("secret");
       for (const path of ["/one", "/two"]) {
         const res = await requestThroughHttpProxy({
           proxyPort,
+          headers: { "X-Vibestudio-Egress-Caller": caller.runtime.id, "X-Vibestudio-Egress-Secret": "secret" },
           targetUrl: `http://127.0.0.1:${targetPort}${path}`,
         });
         expect(res.status).toBe(403);
@@ -3054,10 +3072,12 @@ describe("EgressProxy", () => {
     );
     const caller = workerCaller("worker:test");
     try {
-      const proxyPort = await proxy.startForCaller(caller, () => caller);
+      proxy.setCallerResolver((id) => (id === caller.runtime.id ? caller : null));
+      const proxyPort = await proxy.startShared("secret");
       for (let index = 0; index < 5; index += 1) {
         const result = await requestThroughHttpProxy({
           proxyPort,
+          headers: { "X-Vibestudio-Egress-Caller": caller.runtime.id, "X-Vibestudio-Egress-Secret": "secret" },
           targetUrl: `${origin}/v1/items`,
           method: "POST",
         });
@@ -3065,6 +3085,7 @@ describe("EgressProxy", () => {
       }
       const blocked = await requestThroughHttpProxy({
         proxyPort,
+        headers: { "X-Vibestudio-Egress-Caller": caller.runtime.id, "X-Vibestudio-Egress-Secret": "secret" },
         targetUrl: `${origin}/v1/items`,
         method: "POST",
       });
@@ -3105,10 +3126,12 @@ describe("EgressProxy", () => {
       .spyOn(proxy as unknown as { forwardHttpRequest: () => Promise<never> }, "forwardHttpRequest")
       .mockRejectedValue(original);
     try {
-      const proxyPort = await proxy.startForCaller(caller, () => caller);
+      proxy.setCallerResolver((id) => (id === caller.runtime.id ? caller : null));
+      const proxyPort = await proxy.startShared("secret");
       for (let index = 0; index < 5; index += 1) {
         const failure = await requestThroughHttpProxy({
           proxyPort,
+          headers: { "X-Vibestudio-Egress-Caller": caller.runtime.id, "X-Vibestudio-Egress-Secret": "secret" },
           targetUrl: `${origin}/v1/items`,
           method: "POST",
         });
@@ -3126,6 +3149,7 @@ describe("EgressProxy", () => {
       }
       const blocked = await requestThroughHttpProxy({
         proxyPort,
+        headers: { "X-Vibestudio-Egress-Caller": caller.runtime.id, "X-Vibestudio-Egress-Secret": "secret" },
         targetUrl: `${origin}/v1/items`,
         method: "POST",
       });

@@ -50,6 +50,12 @@ import {
 } from "./credentialApprovalDecisions.js";
 import { CredentialLifecycleError, type CredentialLifecycle } from "./credentialLifecycle.js";
 import { deleteDynamicProperty } from "../../lintHelpers";
+import {
+  CELLD_EGRESS_HEADERS,
+  celldEgressSubject,
+  verifyCelldEgress,
+  type CelldEgressKind,
+} from "./celldEgressIdentity.js";
 import type {
   HostAuthorityEffect,
   ServiceContext,
@@ -98,15 +104,12 @@ const HOP_BY_HOP_REQUEST_HEADERS = new Set([
   "upgrade",
 ]);
 
-/** Internal headers the dynamic-worker egress path uses for attribution. They
+/** Internal headers the node's attribution uses (identity, nonce, MAC). They
  *  are consumed by the shared listener and MUST be stripped before forwarding
  *  upstream so they never leak to the destination. */
-const EGRESS_CALLER_HEADER = "x-vibestudio-egress-caller";
-const EGRESS_SECRET_HEADER = "x-vibestudio-egress-secret";
 const VIBESTUDIO_WS_HEADERS_PARAM = "__vibestudio_ws_headers";
 const INTERNAL_EGRESS_HEADERS = new Set([
-  EGRESS_CALLER_HEADER,
-  EGRESS_SECRET_HEADER,
+  ...CELLD_EGRESS_HEADERS,
   EGRESS_CREDENTIAL_HEADER,
   EGRESS_WEBSOCKET_SCOPE_HEADER,
   CDP_INTERNAL_GRANT_HEADER,
@@ -421,37 +424,43 @@ export class EgressProxy {
     this.operations.delete(callerId);
     for (const controller of entries ?? []) controller.abort(new Error("Egress caller retired"));
   }
-  private readonly attributedServers = new Map<string, EgressListener>();
   private readonly circuits = new Map<string, CircuitState>();
   private readonly sessionGrantStore: CredentialSessionGrantStore;
   private readonly credentialUseGrantStore: CredentialUseGrantStoreLike | null;
-  /** Shared attributed-by-header listener (dynamic worker host). One server for
-   *  all dynamically-loaded workers; identity travels in a trusted header
-   *  instead of a per-caller port. */
+  /** The node's egress listener. Every outbound request of every isolate
+   *  arrives here carrying the identity celld stamps and authenticates. */
   private sharedServer: EgressListener | null = null;
   private sharedSecret: string | null = null;
   private callerResolver:
     | ((callerId: string) => VerifiedCaller | null | Promise<VerifiedCaller | null>)
     | null = null;
+  private hostProgramOrigins: (() => readonly string[]) | null = null;
 
   constructor(private readonly deps: EgressProxyDeps) {
     this.sessionGrantStore = deps.sessionGrantStore ?? new CredentialSessionGrantStore();
     this.credentialUseGrantStore = deps.credentialUseGrantStore ?? null;
   }
 
-  /** Wire the resolver that maps an egress-caller id (from the trusted header)
-   *  to the live worker's VerifiedCaller. Set by the server at startup. */
+  /** Wire the resolver that maps a verified identity's caller id (a loaded
+   *  worker's `egressIdentity[0]`, or a product class's service principal) to
+   *  the live VerifiedCaller. Set by the server at startup. */
   setCallerResolver(
     fn: (callerId: string) => VerifiedCaller | null | Promise<VerifiedCaller | null>
   ): void {
     this.callerResolver = fn;
   }
 
+  /** The origins the runtime application's own programs (router, worker host,
+   *  UniversalDO) may reach: the gateway's loopback origin, never anything else. */
+  setHostProgramOrigins(origins: () => readonly string[]): void {
+    this.hostProgramOrigins = origins;
+  }
+
   /**
-   * Start (once) the shared attributed-by-header egress listener for the
-   * dynamic worker host. Requests carry `X-Vibestudio-Egress-Caller` (the worker
-   * identity, stamped non-forgeably by the host's EgressGateway) gated by
-   * `X-Vibestudio-Egress-Secret`. Returns the listener port (memoized).
+   * Start (once) the node's egress listener. celld stamps each request with
+   * its identity and an HMAC under `secret` (docs/services/egress.md); the
+   * proxy verifies the MAC before it trusts any field. Returns the listener
+   * port (memoized).
    */
   async startShared(secret: string): Promise<number> {
     if (this.stopped) throw new Error("Egress proxy stopped");
@@ -463,36 +472,85 @@ export class EgressProxy {
     this.sharedSecret = secret;
     this.sharedServer = new EgressListener({
       request: async (req, res) => {
-        const caller = await this.resolveAttributedCaller(req);
-        if (!caller) {
+        const subject = await this.resolveAttributedCaller(req, "fetch");
+        if (subject === "host-program") {
+          void this.handleHostProgramRequest(req, res);
+          return;
+        }
+        if (!subject) {
           req.resume();
           this.respondWithError(res, 403, "egress: unattributed request");
           return;
         }
-        void this.handleHttpRequest(req, res, caller);
+        void this.handleHttpRequest(req, res, subject);
       },
       connect: (req, socket, head) => {
-        void this.resolveAttributedCaller(req).then((caller) =>
-          this.handleConnect(req, socket, head, caller)
+        void this.resolveAttributedCaller(req, "connect").then((subject) =>
+          this.handleConnect(req, socket, head, subject === "host-program" ? null : subject)
         );
       },
       upgrade: (req, socket, head) => {
-        void this.resolveAttributedCaller(req).then((caller) =>
-          this.handleWebSocketUpgrade(req, socket, head, caller)
+        void this.resolveAttributedCaller(req, "websocket").then((subject) =>
+          this.handleWebSocketUpgrade(req, socket, head, subject === "host-program" ? null : subject)
         );
       },
     });
     return this.sharedServer.ready;
   }
 
-  /** Resolve the trusted caller for a shared-listener request, or null if the
-   *  secret is missing/wrong or the caller id is unknown. */
-  private async resolveAttributedCaller(req: IncomingMessage): Promise<VerifiedCaller | null> {
-    const secret = this.readHeader(req, EGRESS_SECRET_HEADER);
-    if (!this.sharedSecret || !secret || secret !== this.sharedSecret) return null;
-    const callerId = this.readHeader(req, EGRESS_CALLER_HEADER);
-    if (!callerId) return null;
-    return (await this.callerResolver?.(callerId)) ?? null;
+  /**
+   * Resolve who a shared-listener request speaks for. Null when the MAC does
+   * not verify or the identity is unknown; "host-program" for the runtime
+   * application's own programs (admitted to the gateway only).
+   */
+  private async resolveAttributedCaller(
+    req: IncomingMessage,
+    kind: CelldEgressKind
+  ): Promise<VerifiedCaller | "host-program" | null> {
+    if (!this.sharedSecret) return null;
+    const identity = verifyCelldEgress({
+      headers: req.headers,
+      kind,
+      method: req.method ?? "",
+      target: req.url ?? "",
+      secret: this.sharedSecret,
+    });
+    if (!identity) return null;
+    const subject = celldEgressSubject(identity);
+    if (!subject) return null;
+    if (subject.kind === "host-program") return "host-program";
+    return (await this.callerResolver?.(subject.callerId)) ?? null;
+  }
+
+  /** A host program's request: HTTP to the gateway's loopback origin only. */
+  private async handleHostProgramRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    const targetUrl = this.resolveTargetUrl(req);
+    const allowed = this.hostProgramOrigins?.() ?? [];
+    if (!targetUrl || !allowed.includes(targetUrl.origin)) {
+      req.resume();
+      this.respondWithError(res, 403, "egress: host programs may reach only the gateway");
+      return;
+    }
+    const operation = this.beginOperation("host-program");
+    operation.hold(res);
+    try {
+      await this.forwardHttpRequest(
+        req,
+        res,
+        targetUrl,
+        this.preparePlatformRpcHeaders(req.headers, targetUrl),
+        await resolveNetworkDestination(
+          targetUrl,
+          { kind: "internal-loopback", origin: targetUrl.origin },
+          operation.signal
+        ),
+        operation.signal
+      );
+    } catch {
+      if (!res.headersSent) this.respondWithError(res, 502, "Failed to reach the gateway");
+    } finally {
+      operation.finish();
+    }
   }
 
   async start(): Promise<number> {
@@ -511,47 +569,12 @@ export class EgressProxy {
     return this.server.ready;
   }
 
-  async startForCaller(
-    caller: VerifiedCaller,
-    resolveCaller: () => VerifiedCaller | null | Promise<VerifiedCaller | null>
-  ): Promise<number> {
-    if (this.stopped) throw new Error("Egress proxy stopped");
-    const key = caller.runtime.id;
-    const existing = this.attributedServers.get(key);
-    if (existing) return existing.ready;
-    const liveCaller = async () => {
-      const current = await resolveCaller();
-      return current?.runtime.id === key ? current : null;
-    };
-    const listener = new EgressListener({
-      request: async (req, res) => {
-        await this.handleHttpRequest(req, res, await liveCaller());
-      },
-      connect: (req, socket, head) => {
-        void liveCaller().then((caller) => this.handleConnect(req, socket, head, caller));
-      },
-      upgrade: (req, socket, head) => {
-        void liveCaller().then((caller) => this.handleWebSocketUpgrade(req, socket, head, caller));
-      },
-    });
-    this.attributedServers.set(key, listener);
-    try {
-      const port = await listener.ready;
-      if (this.attributedServers.get(key) !== listener || !(await liveCaller()))
-        throw new Error("Egress caller retired during startup");
-      return port;
-    } catch (error) {
-      if (this.attributedServers.get(key) === listener) this.attributedServers.delete(key);
-      await listener.close();
-      throw error;
-    }
-  }
-
   async stopShared(): Promise<void> {
     const shared = this.sharedServer;
     this.sharedServer = null;
     this.sharedSecret = null;
     this.callerResolver = null;
+    this.hostProgramOrigins = null;
     await shared?.close();
   }
 
@@ -560,13 +583,10 @@ export class EgressProxy {
     for (const callerId of this.operations.keys()) this.abortOperations(callerId);
     const server = this.server;
     this.server = null;
-    const attributed = [...this.attributedServers.values()];
-    this.attributedServers.clear();
     await Promise.all([
       ...[...this.webSocketScopes].map(([id, scope]) => this.closeWebSocketScope(scope.caller, id)),
       this.stopShared(),
       ...(server ? [server.close()] : []),
-      ...attributed.map((listener) => listener.close()),
     ]);
   }
 
@@ -577,9 +597,6 @@ export class EgressProxy {
         .map(([id, scope]) => this.closeWebSocketScope(scope.caller, id))
     );
     this.abortOperations(callerId);
-    const entry = this.attributedServers.get(callerId);
-    this.attributedServers.delete(callerId);
-    await entry?.close();
     for (const key of this.circuits.keys()) {
       if (key.startsWith(`${callerId}:`) || key === callerId) this.circuits.delete(key);
     }

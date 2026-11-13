@@ -1,3 +1,4 @@
+import { CELLD_EGRESS_HEADERS, signCelldEgress } from "./celldEgressIdentity.js";
 import { createServer, request, type IncomingHttpHeaders } from "node:http";
 import { WebSocketServer } from "ws";
 import { describe, expect, it, vi } from "vitest";
@@ -111,8 +112,14 @@ async function fixture(options: { approvalQueue?: ReturnType<typeof createApprov
         path:
           extra.path ?? `${websocket ? "ws" : "http"}://127.0.0.1:${address.port}/model/responses`,
         headers: {
-          "X-Vibestudio-Egress-Caller": extra.callerId ?? caller.runtime.id,
-          "X-Vibestudio-Egress-Secret": secret,
+          ...signCelldEgress({
+            secret,
+            kind: websocket ? "websocket" : "fetch",
+            method: "GET",
+            target:
+              extra.path ?? `${websocket ? "ws" : "http"}://127.0.0.1:${address.port}/model/responses`,
+            identity: { loaded: true, egressIdentity: [extra.callerId ?? caller.runtime.id] },
+          }),
           ...(selection === undefined ? {} : { [EGRESS_CREDENTIAL_HEADER]: selection }),
           ...(extra.scopeId === undefined
             ? {}
@@ -335,8 +342,7 @@ describe.each([false, true])("host egress exact credential (WebSocket=%s)", (web
       expect(f.observed).toHaveLength(1);
       expect(f.observed[0]?.authorization).toBe("Bearer selected-token");
       expect(f.observed[0]).not.toHaveProperty(EGRESS_CREDENTIAL_HEADER);
-      expect(f.observed[0]).not.toHaveProperty("x-vibestudio-egress-secret");
-      expect(f.observed[0]).not.toHaveProperty("x-vibestudio-egress-caller");
+      for (const name of CELLD_EGRESS_HEADERS) expect(f.observed[0]).not.toHaveProperty(name);
     } finally {
       await f.close();
     }
@@ -444,8 +450,13 @@ it("strips egress routing headers from an authenticated platform callback", asyn
           headers: {
             Authorization: "Bearer callback-token",
             "X-Vibestudio-Runtime-Id": "worker:agent",
-            "X-Vibestudio-Egress-Caller": "worker:agent",
-            "X-Vibestudio-Egress-Secret": "private-routing-secret",
+            ...signCelldEgress({
+              secret: "private-routing-secret",
+              kind: "fetch",
+              method: "POST",
+              target: `${origin}/rpc`,
+              identity: { loaded: true, egressIdentity: ["worker:agent"] },
+            }),
             [EGRESS_CREDENTIAL_HEADER]: "selected",
           },
         },
@@ -462,8 +473,7 @@ it("strips egress routing headers from an authenticated platform callback", asyn
     expect(observed?.authorization).toBe("Bearer callback-token");
     expect(observed?.["x-vibestudio-runtime-id"]).toBe("worker:agent");
     expect(observed).not.toHaveProperty(EGRESS_CREDENTIAL_HEADER);
-    expect(observed).not.toHaveProperty("x-vibestudio-egress-secret");
-    expect(observed).not.toHaveProperty("x-vibestudio-egress-caller");
+    for (const name of CELLD_EGRESS_HEADERS) expect(observed).not.toHaveProperty(name);
   } finally {
     await proxy.stop();
     await new Promise<void>((resolve, reject) =>
