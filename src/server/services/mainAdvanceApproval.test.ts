@@ -639,6 +639,28 @@ describe("createMainAdvanceApprovalGate", () => {
       );
     });
 
+    it("tells the user when the deletion's dependents are unknown", async () => {
+      const deps = gateDeps({ decision: "once" });
+      const gate = createMainAdvanceApprovalGate(deps);
+
+      await gate.approveRepoDeletion({
+        ...deletionCandidate,
+        dependents: { status: "unknown", reason: "build graph unavailable" },
+      });
+
+      expect(deps.authorizeEffect).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          challenge: expect.objectContaining({
+            description: expect.stringContaining("could not determine which repos depend on it"),
+            details: expect.arrayContaining([
+              { label: "Dependents at risk", value: "Unknown: build graph unavailable" },
+            ]),
+          }),
+        })
+      );
+    });
+
     it("throws when the user denies the deletion", async () => {
       const gate = createMainAdvanceApprovalGate(gateDeps({ decision: "deny" }));
       await expect(gate.approveRepoDeletion(deletionCandidate)).rejects.toThrow(

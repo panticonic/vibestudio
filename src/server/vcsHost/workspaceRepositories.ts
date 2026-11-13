@@ -43,31 +43,27 @@ export class WorkspaceRepositories {
   }
 
   /**
-   * Repos whose build units directly depend on the selected repo. Discovery
-   * failures are non-blocking because this data only enriches the severe
-   * deletion approval prompt.
+   * Repos whose build units directly depend on the selected repo. A discovery
+   * failure propagates: the deletion prompt must say the answer is unknown,
+   * never that there are no dependents.
    */
   async deletionDependents(repoPath: string): Promise<string[]> {
-    try {
-      const view = await this.workspaceView();
-      const normalized = normalizeRepositoryPath(repoPath);
-      const graph = await this.deps.discoverGraph(view.stateHash);
-      const node = graph
-        .allNodes()
-        .find((candidate) => normalizeRepositoryPath(candidate.relativePath) === normalized);
-      if (!node) return [];
-      const dependents = new Set<string>();
-      for (const dependencyName of graph.getReverseDeps(node.name)) {
-        const dependency = graph.tryGet(dependencyName);
-        if (dependency) {
-          dependents.add(normalizeRepositoryPath(dependency.relativePath));
-        }
+    const view = await this.workspaceView();
+    const normalized = normalizeRepositoryPath(repoPath);
+    const graph = await this.deps.discoverGraph(view.stateHash);
+    const node = graph
+      .allNodes()
+      .find((candidate) => normalizeRepositoryPath(candidate.relativePath) === normalized);
+    if (!node) return [];
+    const dependents = new Set<string>();
+    for (const dependencyName of graph.getReverseDeps(node.name)) {
+      const dependency = graph.tryGet(dependencyName);
+      if (dependency) {
+        dependents.add(normalizeRepositoryPath(dependency.relativePath));
       }
-      dependents.delete(normalized);
-      return [...dependents].sort();
-    } catch {
-      return [];
     }
+    dependents.delete(normalized);
+    return [...dependents].sort();
   }
 
   async workspaceView(): Promise<{ stateHash: string }> {

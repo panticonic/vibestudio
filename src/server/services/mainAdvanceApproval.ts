@@ -262,9 +262,15 @@ export function createMainRefAdvanceGate(deps: {
           // dependents warning (repos whose build breaks) is host-computed from
           // the build dependency graph, exactly like the file count is from the
           // CAS diff (§5) — never caller-supplied.
-          const dependents = deps.computeDeleteDependents
-            ? await deps.computeDeleteDependents(entry.repoPath).catch(() => [])
-            : [];
+          const dependents: RepoDeletionDependents = deps.computeDeleteDependents
+            ? await deps.computeDeleteDependents(entry.repoPath).then(
+                (repos) => ({ status: "known" as const, repos }),
+                (error: unknown) => ({
+                  status: "unknown" as const,
+                  reason: error instanceof Error ? error.message : String(error),
+                })
+              )
+            : { status: "known", repos: [] };
           await deps.approvalGate.approveRepoDeletion({
             caller: context.caller,
             ...(context.signal ? { signal: context.signal } : {}),
@@ -525,6 +531,10 @@ async function observePublicationStage<T>(
 }
 
 /** A pending whole-repo deletion awaiting the user's explicit, severe approval. */
+export type RepoDeletionDependents =
+  | { status: "known"; repos: string[] }
+  | { status: "unknown"; reason: string };
+
 export interface RepoDeletionApprovalCandidate {
   caller: VerifiedCaller;
   signal?: AbortSignal;
@@ -534,8 +544,9 @@ export interface RepoDeletionApprovalCandidate {
   /** The `main` state being archived (shown + used to scope the request). */
   stateHash: string;
   /** Live repos that depend on this one (force-delete) — surfaced so the user
-   *  sees what will break. Empty for a clean deletion. */
-  dependents?: string[];
+   *  sees what will break. Empty for a clean deletion. When the dependency
+   *  graph could not be read, the prompt says so instead of implying none. */
+  dependents?: RepoDeletionDependents;
   /** Host-computed diff-review payload for the whole batch (§5.1). */
   diffReview?: DiffReviewEntry[];
 }
@@ -936,11 +947,14 @@ export function createMainAdvanceApprovalGate(deps: {
         throw new Error(`Unknown caller identity: ${candidate.caller.runtime.id}`);
       }
       const fileSummary = `${candidate.fileCount} file${candidate.fileCount === 1 ? "" : "s"}`;
-      const dependents = candidate.dependents ?? [];
+      const dependentsFact = candidate.dependents ?? { status: "known", repos: [] };
+      const dependents = dependentsFact.status === "known" ? dependentsFact.repos : [];
       const dependentWarning =
-        dependents.length > 0
-          ? ` WARNING: ${dependents.length} repo(s) depend on it and will likely fail to build: ${dependents.join(", ")}.`
-          : "";
+        dependentsFact.status === "unknown"
+          ? ` WARNING: Vibestudio could not determine which repos depend on it (${dependentsFact.reason}); other repos may fail to build.`
+          : dependents.length > 0
+            ? ` WARNING: ${dependents.length} repo(s) depend on it and will likely fail to build: ${dependents.join(", ")}.`
+            : "";
       await authorizeProtectedPublication(deps, candidate.caller, {
         ...(candidate.signal ? { signal: candidate.signal } : {}),
         capability: WORKSPACE_REPO_DELETE_CAPABILITY,
@@ -966,9 +980,11 @@ export function createMainAdvanceApprovalGate(deps: {
           details: [
             { label: "Repo", value: candidate.repoPath },
             { label: "Files removed", value: String(candidate.fileCount) },
-            ...(dependents.length > 0
-              ? [{ label: "Dependents at risk", value: dependents.join(", ") }]
-              : []),
+            ...(dependentsFact.status === "unknown"
+              ? [{ label: "Dependents at risk", value: `Unknown: ${dependentsFact.reason}` }]
+              : dependents.length > 0
+                ? [{ label: "Dependents at risk", value: dependents.join(", ") }]
+                : []),
             { label: "Archived state", value: candidate.stateHash },
           ],
           ...(candidate.diffReview ? { diffReview: candidate.diffReview } : {}),
