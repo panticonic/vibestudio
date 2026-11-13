@@ -50,6 +50,11 @@ interface TrackedApproval {
   timers: ReturnType<typeof setTimeout>[];
   deliveredTargets: PushDeliveryTarget[];
   sending: boolean;
+  /**
+   * Whether the approval has passed its presence delay. Until then a device
+   * registration must not push it: the person is answering at an active shell.
+   */
+  released: boolean;
 }
 
 function categoryFor(approval: PendingApproval): string {
@@ -198,6 +203,7 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
   ): Promise<void> {
     if (trackedApproval.sending) return;
     trackedApproval.sending = true;
+    trackedApproval.released = true;
     clearTrackedTimers(trackedApproval);
     try {
       const delivered = await sendApproval(trackedApproval);
@@ -236,6 +242,7 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
       timers: [],
       deliveredTargets: [],
       sending: false,
+      released: false,
     };
     tracked.set(approval.approvalId, trackedApproval);
 
@@ -289,6 +296,7 @@ export function createApprovalPushBridge(deps: ApprovalPushBridgeDeps): Approval
   const unsubscribe = deps.approvalQueue.onPendingChanged(onPendingChanged);
   const unsubscribePushRegistrations = deps.push.onRegistrationsChanged(() => {
     for (const trackedApproval of tracked.values()) {
+      if (!trackedApproval.released) continue;
       clearTrackedTimers(trackedApproval);
       void attemptSend(trackedApproval, "registration");
     }

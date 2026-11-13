@@ -354,6 +354,40 @@ describe("approvalPushBridge", () => {
     await expect(promise).resolves.toBe("deny");
   });
 
+  it("keeps a presence-delayed approval delayed when a device registers", async () => {
+    const queue = createQueue();
+    const push = createPushMock();
+    const timers = createTimerHarness();
+    createApprovalPushBridge({
+      approvalQueue: queue,
+      push,
+      workspaceMemberUserIds: () => MEMBER_USER_IDS,
+      scopeAccess: { isMember: (id) => MEMBER_USER_IDS.includes(id), isAdmin: () => true },
+      shellPresence: {
+        isAnyShellActive: () => true,
+        markActive: vi.fn(),
+        getActiveShellCount: () => 1,
+      },
+      delayMs: 10_000,
+      presenceMaxAgeMs: 6_000,
+      setTimeoutFn: timers.setTimeoutFn,
+      clearTimeoutFn: timers.clearTimeoutFn,
+    });
+
+    const promise = requestCapability(queue);
+    push.triggerRegistrationsChanged();
+    await flush();
+    expect(push.sendToTargets).not.toHaveBeenCalled();
+
+    // The deadline still owns the first delivery.
+    timers.advanceByTime(10_000);
+    await flush();
+    expect(push.sendToTargets).toHaveBeenCalledTimes(1);
+
+    queue.resolve(queue.listPending()[0]!.approvalId, "deny");
+    await expect(promise).resolves.toBe("deny");
+  });
+
   it("fires a delayed push when shell presence goes stale", async () => {
     const queue = createQueue();
     const push = createPushMock();
