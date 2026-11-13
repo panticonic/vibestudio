@@ -11,6 +11,19 @@ import {
 } from "@vibestudio/service-schemas/problemReportBundle";
 import type { EgressProxy } from "../services/egressProxy";
 import { ProblemReportingStore } from "./store";
+/**
+ * Minimum retry delay requested by an HTTP `Retry-After` header: either
+ * delta-seconds or an HTTP date. An absent or unparseable value requests no
+ * minimum, so the ordinary backoff applies instead of a non-finite due time
+ * that would leave the submission queued but never claimable.
+ */
+export function retryAfterMs(value: string | null, now: number): number {
+  if (!value?.trim()) return 0;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000);
+  const at = Date.parse(value);
+  return Number.isFinite(at) ? Math.max(0, at - now) : 0;
+}
 export class ReportDelivery {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private active: Promise<void> | null = null;
@@ -154,10 +167,13 @@ export class ReportDelivery {
         this.store.finish(id, lease, "rejected", `intake-${response.status}`);
         return;
       }
-      const retryHeader = new Headers(response.headerPairs).get("retry-after");
-      let retry = retryHeader ? Number(retryHeader) * 1000 : 0;
-      if (!Number.isFinite(retry)) retry = Math.max(0, Date.parse(retryHeader!) - Date.now());
-      this.retry(row, id, lease, `http-${response.status}`, retry);
+      this.retry(
+        row,
+        id,
+        lease,
+        `http-${response.status}`,
+        retryAfterMs(new Headers(response.headerPairs).get("retry-after"), Date.now())
+      );
     } catch (error) {
       if (
         error instanceof z.ZodError ||
@@ -174,12 +190,7 @@ export class ReportDelivery {
         this.store.finish(id, lease, "paused", "reporting-access-unavailable");
         return;
       }
-      this.retry(
-        row,
-        id,
-        lease,
-        error instanceof z.ZodError ? "receipt-invalid" : "transport-unavailable"
-      );
+      this.retry(row, id, lease, "transport-unavailable");
     } finally {
       clearTimeout(deadline);
       if (this.controller === controller) this.controller = null;

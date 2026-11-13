@@ -87,6 +87,22 @@ describe("durable report delivery", () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(f.store.submission("alice", "ws", f.report.submissionId)["state"]).toBe("paused");
   });
+  it("falls back to ordinary backoff when Retry-After is unparseable", async () => {
+    vi.useFakeTimers();
+    let calls = 0;
+    const f = fixture(async () =>
+      response(++calls === 1 ? 503 : 401, {}, [["retry-after", "eventually"]])
+    );
+    f.delivery.wake();
+    await vi.advanceTimersByTimeAsync(1);
+    const queued = f.store.submission("alice", "ws", f.report.submissionId);
+    expect(queued["state"]).toBe("queued");
+    expect(Number.isFinite(Number(queued["due_at"]))).toBe(true);
+    await vi.advanceTimersByTimeAsync(6000);
+    // The retry first recovers status (GET), then re-posts.
+    expect(calls).toBe(3);
+    expect(f.store.submission("alice", "ws", f.report.submissionId)["state"]).toBe("paused");
+  });
   it("rejects an acknowledgement for different bytes rather than marking a report received", async () => {
     vi.useFakeTimers();
     const f = fixture(async () =>
