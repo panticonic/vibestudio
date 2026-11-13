@@ -241,7 +241,7 @@ export class HeadlessHostManager {
   async ensureHeadlessHost(timeoutMs?: number): Promise<ClientSession | null> {
     const existing = this.availableHeadlessHost();
     if (existing) return existing;
-    if (!this.config.enabled || this.disabled) return null;
+    if (!this.config.enabled || this.disabled || this.stopped) return null;
     if (Date.now() < this.nextAttemptAt) return null;
     this.spawnInFlight ??= this.spawnAndWait(timeoutMs).finally(() => {
       this.spawnInFlight = null;
@@ -278,6 +278,9 @@ export class HeadlessHostManager {
 
     const ownership = await this.deps.ownership();
     this.scope = ownership.scope;
+    // stop() may have run while the ownership opened; it can no longer retire
+    // a child spawned now.
+    if (this.stopped) return null;
     let owned: OwnedProcess;
     let child: ChildProcess;
     try {

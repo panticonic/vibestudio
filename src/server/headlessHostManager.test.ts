@@ -273,6 +273,14 @@ describe("HeadlessHostManager keep-alive", () => {
     expect(spawnFn).not.toHaveBeenCalled();
   });
 
+  it("does not spawn a host on demand once stopped", async () => {
+    const { manager, spawnFn } = makeManager({ connect: true });
+    await manager.stop();
+
+    await expect(manager.ensureHeadlessHost()).resolves.toBeNull();
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
   it("retires the host and its Chromium group together on stop, with no kill timer", async () => {
     const child = new MockChild();
     child.pid = 4_321;
