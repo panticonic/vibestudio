@@ -5,6 +5,7 @@ import type { StdioOptions } from "node:child_process";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { getProfileDataPath } from "@vibestudio/env-paths";
+import { formatRpcFailure } from "@vibestudio/rpc";
 import { Ownership, awaitRetirement, readLedger, sweep } from "@vibestudio/shared/ownership";
 import { ledgerDirOf } from "@vibestudio/shared/ownershipLedger";
 import { signalExitCode } from "../../scripts/run-electron-lifecycle.mjs";
@@ -433,10 +434,9 @@ try {
   const record = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
   console.error(
     JSON.stringify({
-      error: error instanceof Error ? error.message : String(error),
-      ...(error instanceof Error && error.cause !== undefined
-        ? { cause: error.cause instanceof Error ? error.cause.message : String(error.cause) }
-        : {}),
+      // The whole failure tree: an aggregate (command and retirement both
+      // failed, several drivers failed) names each constituent and its cause.
+      error: formatRpcFailure(error),
       classification: record["classification"] ?? "infrastructure",
       recoverable: record["recoverable"] ?? false,
       ...(record["automaticRecovery"] ? { automaticRecovery: record["automaticRecovery"] } : {}),

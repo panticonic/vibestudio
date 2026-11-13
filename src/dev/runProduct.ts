@@ -150,6 +150,8 @@ async function runProductTerminal(env: NodeJS.ProcessEnv, args: string[]): Promi
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
+  // util.inspect, not `.stack`: an aggregate (launch and retirement both
+  // failed) shows each constituent failure and its cause, not only its summary.
+  console.error(error);
   process.exitCode = 1;
 });

@@ -475,6 +475,29 @@ async function runDesktop(
   );
 }
 
+const DEVELOPER_INSTANCE_OPTIONS = `Developer instance options:
+  --instance <id>  Use a named persistent isolated instance (default: source)
+  --ephemeral      Use an isolated temporary instance root; combine with
+                   --instance to give parallel CLI commands a stable target
+  --clean-room     Use an ephemeral instance with private state, profile credentials,
+                   and derived caches
+  --template-checkouts <path>
+                   Complete registry-defined official template source root
+  --extra-template-checkout <path>
+                   Add a non-official template checkout (repeatable)
+  --workspace-checkout <path>
+                   Open this checkout as an additional workspace
+  --production-templates Ignore configured checkouts and boot the pinned releases
+`;
+
+const DESKTOP_HELP = `pnpm dev — build this checkout and open the desktop app on a developer instance
+
+Usage: pnpm dev [options]
+
+${DEVELOPER_INSTANCE_OPTIONS}
+Other options are passed to the desktop app.
+`;
+
 const TERMINAL_HELP = `pnpm dev:terminal — build this checkout and open the terminal browser
 on an ephemeral developer instance (the terminal counterpart of pnpm dev)
 
@@ -628,6 +651,11 @@ async function main(): Promise<void> {
     console.log(TERMINAL_HELP);
     return;
   }
+  // Help is local text: it never builds, claims an instance, or opens a window.
+  if (launchMode === "desktop" && hasFlag(instanceArgs.forwarded, "--help")) {
+    console.log(DESKTOP_HELP);
+    return;
+  }
   const terminalOptions =
     launchMode === "terminal" ? extractTerminalOptions(instanceArgs.forwarded) : null;
   const parsed = terminalOptions
@@ -645,20 +673,7 @@ async function main(): Promise<void> {
     console.log(`[instance] retired the leftovers of ownership ${retired}`);
   }
   if (mode === "server" && hasFlag(parsed.forwarded, "--help")) {
-    console.log(`Developer instance options:
-  --instance <id>  Use a named persistent isolated instance (default: source)
-  --ephemeral      Use an isolated temporary instance root; combine with
-                   --instance to give parallel CLI commands a stable target
-  --clean-room     Use an ephemeral instance with private state, profile credentials,
-                   and derived caches
-  --template-checkouts <path>
-                   Complete registry-defined official template source root
-  --extra-template-checkout <path>
-                   Add a non-official template checkout (repeatable)
-  --workspace-checkout <path>
-                   Open this checkout as an additional workspace
-  --production-templates Ignore configured checkouts and boot the pinned releases
-`);
+    console.log(DEVELOPER_INSTANCE_OPTIONS);
     const env: NodeJS.ProcessEnv = { ...process.env, NODE_ENV: "development" };
     const helpOwnership = await Ownership.open({
       profileDir,
@@ -1077,6 +1092,8 @@ async function main(): Promise<void> {
 }
 
 main().catch((error) => {
-  console.error(error instanceof Error ? (error.stack ?? error.message) : String(error));
+  // util.inspect, not `.stack`: an aggregate (launch and retirement both
+  // failed) shows each constituent failure and its cause, not only its summary.
+  console.error(error);
   process.exitCode = 1;
 });
