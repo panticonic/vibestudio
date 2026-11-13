@@ -61,7 +61,23 @@ describe("DefaultRecoveryCoordinator", () => {
     await expect(coord.run("resubscribe")).rejects.toBe(failure);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(failed).toHaveBeenCalledTimes(1);
-    expect(following).not.toHaveBeenCalled();
+    // One resource's failure does not leave the others unrecovered.
+    expect(following).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports every failed handler of one generation", async () => {
+    const coord = createRecoveryCoordinator();
+    const first = new Error("first");
+    const second = new Error("second");
+    coord.registerResubscribeHandler("first", () => {
+      throw first;
+    });
+    coord.registerResubscribeHandler("second", async () => {
+      throw second;
+    });
+    const failure = await coord.run("resubscribe").catch((error) => error);
+    expect(failure).toBeInstanceOf(AggregateError);
+    expect((failure as AggregateError).errors).toEqual([first, second]);
   });
 
   it("allows the next explicit recovery generation after the original failure", async () => {

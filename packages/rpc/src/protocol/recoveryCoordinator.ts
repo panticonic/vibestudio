@@ -1,3 +1,5 @@
+import { isRpcConnectionLost } from "../errors.js";
+
 export type RecoveryKind = "resubscribe" | "cold-recover";
 
 export interface ResubscribeRegistrationOptions {
@@ -83,14 +85,35 @@ export class DefaultRecoveryCoordinator implements RecoveryCoordinator {
     };
   }
 
+  /**
+   * Handlers recover independent resources, so one handler's failure is its
+   * own: the rest still run and every failure is reported. A lost connection
+   * is different: it interrupts the generation itself, every later handler
+   * would lose it too, and the host signals the next generation when the
+   * connection returns.
+   */
   private async runHandlers(kind: RecoveryKind, generation: number): Promise<void> {
     const handlers =
       kind === "cold-recover" ? [...this.handlers[kind].values()] : this.handlers[kind].values();
+    const failures: unknown[] = [];
+    let interrupted = false;
     for (const handler of handlers) {
       if (this.handlers[kind].get(handler.name) !== handler) continue;
-      await handler.fn();
+      try {
+        await handler.fn();
+      } catch (error) {
+        failures.push(error);
+        if (isRpcConnectionLost(error)) {
+          interrupted = true;
+          break;
+        }
+      }
     }
-    this.completedGeneration[kind] = generation;
+    if (!interrupted) this.completedGeneration[kind] = generation;
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(failures, `${kind} recovery failed in ${failures.length} handlers`);
+    }
   }
 }
 
