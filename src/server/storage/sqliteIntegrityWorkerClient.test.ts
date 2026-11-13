@@ -72,4 +72,42 @@ describe("SqliteIntegrityWorkerClient", () => {
       persisted.close();
     }
   });
+
+  it("names the damaged database and its integrity problems", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-sqlite-worker-"));
+    roots.push(root);
+    const databasePath = path.join(root, "damaged.sqlite");
+    const database = new DatabaseSync(databasePath);
+    database.exec(
+      "CREATE TABLE records (id INTEGER PRIMARY KEY, value TEXT); CREATE INDEX by_value ON records(value)"
+    );
+    const insert = database.prepare("INSERT INTO records (value) VALUES (?)");
+    for (let index = 0; index < 200; index += 1) insert.run(`value-${index}`);
+    database.close();
+    // Change one stored value without its index entry.
+    const bytes = fs.readFileSync(databasePath);
+    bytes[bytes.indexOf("value-123")] = "V".charCodeAt(0);
+    fs.writeFileSync(databasePath, bytes);
+
+    const client = new SqliteIntegrityWorkerClient();
+    clients.push(client);
+    const failure = await client.verify([databasePath]).then(
+      () => null,
+      (error: Error) => error
+    );
+    expect(failure?.message).toContain(`${databasePath} failed SQLite integrity_check:`);
+    expect(failure?.message).toContain("missing from index by_value");
+  });
+
+  it("names a database that cannot be opened", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-sqlite-worker-"));
+    roots.push(root);
+    const databasePath = path.join(root, "garbage.sqlite");
+    fs.writeFileSync(databasePath, Buffer.alloc(8192, 0xff));
+    const client = new SqliteIntegrityWorkerClient();
+    clients.push(client);
+    await expect(client.verify([databasePath])).rejects.toThrow(
+      `${databasePath} failed SQLite verification:`
+    );
+  });
 });
