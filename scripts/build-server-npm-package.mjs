@@ -326,7 +326,6 @@ export function stageNodeRuntimeInstaller(root) {
 }
 
 function copyWorkerdWindowsMetadata(root) {
-  copyFile("scripts/workerd.exe.manifest", path.join(root, "scripts/workerd.exe.manifest"));
 }
 
 export function stagePassthroughScriptClosure(root) {

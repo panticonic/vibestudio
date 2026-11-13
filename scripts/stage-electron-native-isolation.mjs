@@ -18,7 +18,6 @@ import {
   rmSync,
 } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { Arch } from "electron-builder";
 import { prepareNativeDependencyFiles } from "./native-host-dependencies.mjs";
@@ -27,6 +26,13 @@ import {
   nativeIsolationBinaryDigest,
   assertNativeIsolationArtifacts,
 } from "./native-isolation-artifacts.mjs";
+import {
+  nativeCelldArtifact,
+  nativeCelldDigest,
+  nativeCelldTarget,
+  readNativeCelldManifest,
+  assertNativeCelldBinary,
+} from "./native-celld-artifacts.mjs";
 import {
   assertDarwinProcessObserver,
   darwinProcessObserverDigest,
@@ -43,6 +49,29 @@ function electronNativeArtifacts(context) {
   const appRoot = context.packager.projectDir;
   const artifactRoot = path.join(appRoot, "native/isolation/artifacts");
   return assertNativeIsolationArtifacts(appRoot, artifactRoot, [target]);
+}
+
+/**
+ * The celld runtime of the packaged target: a CI-built binary under
+ * `native/celld/artifacts/<platform>-<arch>/`, verified against the manifest's
+ * digest, staged where the application resolves it.
+ */
+function electronCelldArtifact(context) {
+  const architecture = Arch[context.arch];
+  if (typeof architecture !== "string") throw new Error("Unknown Electron packaging architecture");
+  const target = nativeCelldTarget(
+    context.electronPlatformName,
+    architecture,
+    readNativeCelldManifest(context.packager.projectDir)
+  );
+  const source = path.join(
+    context.packager.projectDir,
+    "native/celld/artifacts",
+    `${target.platform}-${target.arch}`,
+    target.binary
+  );
+  assertNativeCelldBinary(source, target);
+  return { source, artifact: nativeCelldArtifact(target), target };
 }
 
 /** Publish a complete native payload without overwriting an inode a live host executes. */
@@ -80,6 +109,12 @@ export default async function stageElectronNativeIsolation(context) {
       !artifact.endsWith(".json") && !artifact.endsWith(".exe")
     );
   }
+  const celld = electronCelldArtifact(context);
+  publishNativeArtifact(
+    celld.source,
+    path.join(context.packager.projectDir, celld.artifact),
+    !celld.artifact.endsWith(".exe")
+  );
 }
 
 export function includeElectronRuntimeScriptClosure(context) {
@@ -119,15 +154,13 @@ export async function assertPackagedNativeIsolation(resources, context) {
     selectedManifests[0] !== `${nodeRuntimeTargetName(target)}.json`
   )
     throw new Error("Packaged application contains an unselected Node runtime selector");
-  if (context.electronPlatformName === "win32") {
-    const require = createRequire(path.join(context.packager.projectDir, "package.json"));
-    const source = `${require("workerd").default}.manifest`;
-    const installed = path.join(
-      resources,
-      "app.asar.unpacked/node_modules/@cloudflare/workerd-windows-64/bin/workerd.exe.manifest"
-    );
-    if (!readFileSync(installed).equals(readFileSync(source)))
-      throw new Error("Packaged Windows workerd manifest differs from release input");
+  const celld = electronCelldArtifact(context);
+  const installedCelld = path.join(resources, "app.asar.unpacked", celld.artifact);
+  if (nativeCelldDigest(installedCelld) !== celld.target.sha256) {
+    throw new Error(`Packaged celld runtime differs from release input: ${celld.artifact}`);
+  }
+  if (!celld.artifact.endsWith(".exe") && (statSync(installedCelld).mode & 0o111) === 0) {
+    throw new Error(`Packaged celld runtime is not executable: ${celld.artifact}`);
   }
   for (const { source, artifact } of electronNativeArtifacts(context)) {
     const installed = path.join(resources, "app.asar.unpacked", artifact);

@@ -35,6 +35,7 @@ import stageElectronNativeIsolation, {
 
 import {
   nativeIsolationBinary as binary,
+  writeCelldRelease,
   writeNativeIsolationArtifacts as writeArtifacts,
 } from "./helpers/nativeIsolationArtifacts.js";
 
@@ -105,6 +106,7 @@ describe("native isolation artifact matrix", () => {
     const target = nativeIsolationTarget("linux", "arm64");
     writeNodeRuntimeFixture(root, "linux", "arm64");
     writeArtifacts(artifactRoot, [target]);
+    const celld = writeCelldRelease(root, "linux", "arm64");
     try {
       await stageElectronNativeIsolation({
         electronPlatformName: "linux",
@@ -113,6 +115,8 @@ describe("native isolation artifact matrix", () => {
       });
       const destination = path.join(root, target.artifact);
       expect(readFileSync(destination)).toEqual(binary(target));
+      // The celld runtime is staged where the application resolves it.
+      expect(readFileSync(path.join(root, celld.installedPath))).toEqual(celld.bytes);
       await stageElectronNativeIsolation({
         electronPlatformName: "linux",
         arch: 3,
@@ -138,6 +142,7 @@ describe("native isolation artifact matrix", () => {
     const runtimeTarget = nodeRuntimeTarget("linux", "arm64");
     writeNodeRuntimeFixture(root, "linux", "arm64");
     writeArtifacts(artifactRoot, [target]);
+    const celld = writeCelldRelease(root, "linux", "arm64");
     const source = path.join(
       artifactRoot,
       "native-isolation-linux-arm64",
@@ -145,6 +150,7 @@ describe("native isolation artifact matrix", () => {
     );
     const resources = path.join(root, "resources");
     const installed = path.join(resources, "app.asar.unpacked", target.artifact);
+    const installedCelld = path.join(resources, "app.asar.unpacked", celld.installedPath);
     const context = { electronPlatformName: "linux", arch: 3, packager: { projectDir: root } };
     try {
       await expect(assertPackagedNativeIsolation(resources, context)).rejects.toThrow(
@@ -153,6 +159,9 @@ describe("native isolation artifact matrix", () => {
       mkdirSync(path.dirname(installed), { recursive: true });
       writeFileSync(installed, readFileSync(source));
       chmodSync(installed, 0o755);
+      mkdirSync(path.dirname(installedCelld), { recursive: true });
+      writeFileSync(installedCelld, celld.bytes);
+      chmodSync(installedCelld, 0o755);
       const sourceManifest = path.join(artifactRoot, "native-isolation-linux-arm64/manifest.json");
       const installedManifest = path.join(
         resources,
@@ -170,33 +179,22 @@ describe("native isolation artifact matrix", () => {
       await expect(assertPackagedNativeIsolation(resources, context)).resolves.not.toThrow();
       writeFileSync(installed, Buffer.from("changed"));
       await expect(assertPackagedNativeIsolation(resources, context)).rejects.toThrow(/differs/);
+      writeFileSync(installed, readFileSync(source));
+      writeFileSync(installedCelld, Buffer.from("changed"));
+      await expect(assertPackagedNativeIsolation(resources, context)).rejects.toThrow(
+        /celld runtime differs/
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
       roots.splice(roots.indexOf(root), 1);
     }
   });
 
-  it("stages Windows Node without requiring or shipping an MXC executor", async () => {
+  it("stages Windows Node and the celld runtime without requiring or shipping an MXC executor", async () => {
     const { root } = fixture();
     const config = desktopRuntimeConfig(root);
     writeNodeRuntimeFixture(root, "win32", "x64");
-    const workerdPackage = path.join(root, "node_modules/@cloudflare/workerd-windows-64");
-    mkdirSync(path.join(workerdPackage, "bin"), { recursive: true });
-    writeFileSync(
-      path.join(workerdPackage, "package.json"),
-      JSON.stringify({ name: "@cloudflare/workerd-windows-64", version: "test" })
-    );
-    writeFileSync(path.join(workerdPackage, "bin/workerd.exe"), "vendor workerd");
-    const workerdPackageRoot = path.join(root, "node_modules/workerd");
-    mkdirSync(workerdPackageRoot, { recursive: true });
-    writeFileSync(
-      path.join(workerdPackageRoot, "package.json"),
-      JSON.stringify({ name: "workerd", main: "index.cjs" })
-    );
-    writeFileSync(
-      path.join(workerdPackageRoot, "index.cjs"),
-      `module.exports = { default: ${JSON.stringify(path.join(workerdPackage, "bin/workerd.exe"))} };\n`
-    );
+    const celld = writeCelldRelease(root, "win32", "x64");
     const context = {
       electronPlatformName: "win32",
       arch: 1,
@@ -211,17 +209,13 @@ describe("native isolation artifact matrix", () => {
         recursive: true,
       }
     );
-    cpSync(
-      workerdPackage,
-      path.join(resources, "app.asar.unpacked/node_modules/@cloudflare/workerd-windows-64"),
-      { recursive: true }
-    );
+    const installedCelld = path.join(resources, "app.asar.unpacked", celld.installedPath);
+    mkdirSync(path.dirname(installedCelld), { recursive: true });
+    cpSync(path.join(root, celld.installedPath), installedCelld);
     await expect(assertPackagedNativeIsolation(resources, context)).resolves.toBeUndefined();
     expect(() => statSync(path.join(root, "dist/mxc"))).toThrow();
     expect(() => statSync(path.join(resources, "app.asar.unpacked/dist/mxc"))).toThrow();
-    expect(readFileSync(path.join(workerdPackage, "bin/workerd.exe.manifest"))).toEqual(
-      readFileSync("scripts/workerd.exe.manifest")
-    );
+    expect(readFileSync(path.join(root, celld.installedPath))).toEqual(celld.bytes);
   });
 
   it("uses Electron Builder's real resource filter without dropping vendored node_modules", async () => {

@@ -31,6 +31,8 @@ const INPUT_FILES = [
   "scripts/server-runtime-artifacts.mjs",
   "native/isolation/targets.json",
   "scripts/native-isolation-artifacts.mjs",
+  "native/celld/targets.json",
+  "scripts/native-celld-artifacts.mjs",
   "scripts/clean-host-build-output.mjs",
   "scripts/runtime-app-build.mjs",
   "scripts/lib/runtime-app.mjs",

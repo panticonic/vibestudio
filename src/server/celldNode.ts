@@ -17,6 +17,7 @@
  * the ownership reaper retires it with its owner.
  */
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getPhysicalPathForAsarPath } from "@vibestudio/shared/runtimePaths";
@@ -74,12 +75,45 @@ export function resolveCelldBinary(
     const staged = getPhysicalPathForAsarPath(
       path.join(appRoot, "native", "celld", celldTarget(), executable)
     );
-    if (fs.existsSync(staged)) return staged;
+    if (fs.existsSync(staged)) {
+      assertStagedCelldDigest(appRoot, staged);
+      return staged;
+    }
   }
   throw new Error(
     `No celld runtime is staged for ${celldTarget()}: set VIBESTUDIO_CELLD_BIN to a fork build ` +
       `or stage native/celld/${celldTarget()}/${executable}`
   );
+}
+
+const verifiedDigests = new Map<string, string>();
+
+/** The staged binary is the exact build `native/celld/targets.json` names for this target. */
+function assertStagedCelldDigest(appRoot: string, staged: string): void {
+  const manifest = JSON.parse(
+    fs.readFileSync(
+      getPhysicalPathForAsarPath(path.join(appRoot, "native", "celld", "targets.json")),
+      "utf8"
+    )
+  ) as { targets: Array<{ platform: string; arch: string; sha256: string | null }> };
+  const target = manifest.targets.find(
+    (entry) => entry.platform === process.platform && entry.arch === process.arch
+  );
+  if (!target?.sha256) {
+    throw new Error(`No celld build is published for ${celldTarget()}`);
+  }
+  const key = `${staged}:${fs.statSync(staged).mtimeMs}`;
+  let digest = verifiedDigests.get(key);
+  if (digest === undefined) {
+    digest = crypto.createHash("sha256").update(fs.readFileSync(staged)).digest("hex");
+    verifiedDigests.set(key, digest);
+  }
+  if (digest !== target.sha256) {
+    throw new Error(
+      `The staged celld runtime is not the build this application names ` +
+        `(expected ${target.sha256}, found ${digest}): ${staged}`
+    );
+  }
 }
 
 export interface CelldNodeOptions {
@@ -287,6 +321,59 @@ export class CelldNode {
         `celld deploy failed (code=${exit.code}, signal=${exit.signal}):\n${output.join("\n")}`
       );
     }
+  }
+
+  /**
+   * `celld cell import`: create the object `NAME` of `className` in `script`'s
+   * namespace from database files (a root, and facets by name). The bucket is
+   * written directly, so the object must not be addressed until this returns,
+   * and a deployment that declares `className` must already be published.
+   *
+   * Returns "imported", or "exists" when the object is already there (a
+   * repeated migration). An import a crash left unfinished is taken over.
+   */
+  async importCell(input: {
+    script: string;
+    className: string;
+    name: string;
+    root: string;
+    facets?: Readonly<Record<string, string>>;
+  }): Promise<"imported" | "exists"> {
+    const args = (replaceUnfinished: boolean): string[] => [
+      "cell",
+      "import",
+      input.script,
+      input.className,
+      input.name,
+      "--file",
+      input.root,
+      ...Object.entries(input.facets ?? {}).flatMap(([name, file]) => ["--facet", `${name}=${file}`]),
+      "--bucket",
+      this.bucket,
+      ...(replaceUnfinished ? ["--replace-unfinished"] : []),
+    ];
+    const run = async (replaceUnfinished: boolean) => {
+      const child = spawn(this.options.binary, args(replaceUnfinished), {
+        stdio: ["ignore", "ignore", "pipe"],
+        env: { ...this.baseEnv(), CELLD_SECRETS_KEY_FILE: this.secretsKeyFile },
+      });
+      let stderr = "";
+      child.stderr?.on("data", (data: Buffer) => {
+        stderr = (stderr + data.toString()).slice(-4000);
+      });
+      const exit = await new Promise<CelldNodeExit>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
+      return { code: exit.code, stderr };
+    };
+    let result = await run(false);
+    if (result.code !== 0 && /unfinished/iu.test(result.stderr)) result = await run(true);
+    if (result.code === 0) return "imported";
+    if (/already exists/iu.test(result.stderr)) return "exists";
+    throw new Error(
+      `celld cell import ${input.className} ${input.name} failed (code=${result.code}): ${result.stderr.trim()}`
+    );
   }
 
   /** Spawn a node serving the bucket's current deployment. */

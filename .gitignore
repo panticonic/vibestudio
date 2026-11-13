@@ -80,3 +80,7 @@ test-results/
 
 # Private Durable Pi verification captures and disposable proof artifacts.
 /experiments/durable-pi/
+
+# The celld runtime payload is staged by scripts/stage-native-celld.mjs; the
+# manifest (native/celld/targets.json) is the tracked input.
+/native/celld/*/

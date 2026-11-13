@@ -3,7 +3,6 @@ import { chmodSync, statSync } from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { prepareWindowsWorkerdMetadata } from "./workerd-windows-metadata.mjs";
 import {
   assertDarwinProcessObserver,
   darwinProcessObserverPath,
@@ -64,7 +63,6 @@ export function prepareNativeDependencyFiles({
   arch = process.arch,
   prepareObserver = prepareDarwinProcessObserver,
 } = {}) {
-  prepareWindowsWorkerdMetadata({ cwd, platform, arch });
   if (platform !== "darwin") return;
   prepareObserver({ cwd, arch });
   const require = createRequire(path.join(cwd, "package.json"));

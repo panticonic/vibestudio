@@ -25,14 +25,14 @@ function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "desktop-package-test-"));
   roots.push(root);
   for (const [name, cpu] of [
-    ["workerd-linux-64", "x64"],
-    ["workerd-linux-arm64", "arm64"],
+    ["native-linux-64", "x64"],
+    ["native-linux-arm64", "arm64"],
   ]) {
-    const dir = path.join(root, "node_modules/@cloudflare", name);
+    const dir = path.join(root, "node_modules/@fixture", name);
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
       path.join(dir, "package.json"),
-      JSON.stringify({ name: `@cloudflare/${name}`, os: ["linux"], cpu: [cpu] })
+      JSON.stringify({ name: `@fixture/${name}`, os: ["linux"], cpu: [cpu] })
     );
   }
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ dependencies: {} }));
@@ -145,10 +145,10 @@ test("preserves the canonical ordered package boundary across both closure passe
   const moduleMatcher = getNodeModuleFileMatcher(root, destination, (value) => value, {}, packager);
   const moduleFilter = moduleMatcher.createFilter();
   for (const [name, kept] of [
-    ["workerd-linux-64", true],
-    ["workerd-linux-arm64", false],
+    ["native-linux-64", true],
+    ["native-linux-arm64", false],
   ]) {
-    const file = path.join(root, "node_modules/@cloudflare", name, "package.json");
+    const file = path.join(root, "node_modules/@fixture", name, "package.json");
     assert.equal(moduleFilter(file, fs.statSync(file)), kept, name);
   }
   // Real linked SDK packages keep source/type exports, but their development
@@ -179,7 +179,7 @@ test("preserves the canonical ordered package boundary across both closure passe
 test("selects one native architecture using the packager's real file matcher", () => {
   const root = fixture();
   const names = excludedNativePackages(root, "linux", "x64");
-  assert.deepEqual(names, ["@cloudflare/workerd-linux-arm64"]);
+  assert.deepEqual(names, ["@fixture/native-linux-arm64"]);
   const files = names.map((name) => `!node_modules/${name}{,/**/*}`);
   const matcher = getNodeModuleFileMatcher(
     root,
@@ -190,10 +190,10 @@ test("selects one native architecture using the packager's real file matcher", (
   );
   const filter = matcher.createFilter();
   for (const [name, kept] of [
-    ["workerd-linux-64", true],
-    ["workerd-linux-arm64", false],
+    ["native-linux-64", true],
+    ["native-linux-arm64", false],
   ]) {
-    const file = path.join(root, "node_modules/@cloudflare", name, "package.json");
+    const file = path.join(root, "node_modules/@fixture", name, "package.json");
     assert.equal(filter(file, fs.statSync(file)), kept);
   }
 });
@@ -271,7 +271,7 @@ test("promotes final installers and retires each joined staging tree", async () 
   assert.ok(
     seen[0].files.some(
       (file) =>
-        typeof file === "string" && file.startsWith("!node_modules/@cloudflare/workerd-linux-arm64")
+        typeof file === "string" && file.startsWith("!node_modules/@fixture/native-linux-arm64")
     )
   );
   assert.ok(seen[0].files.includes("scripts/lib/runtime-helper.mjs"));

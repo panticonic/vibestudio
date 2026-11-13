@@ -54,6 +54,7 @@ import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { CelldNode, CelldNodeProcess, resolveCelldBinary } from "./celldNode.js";
 import { DurableObjectCloneReceipts } from "./durableObjectCloneReceipts.js";
+import { migrateLegacyWorkerdStorage } from "./celldMigration.js";
 import { buildRuntimeDeployment, type RuntimeDeployment } from "./runtimeDeployment.js";
 import {
   destroyWorkerdConnections,
@@ -2495,6 +2496,40 @@ export class WorkerdManager {
     return this.celld;
   }
 
+  private legacyMigration: Promise<void> | null = null;
+
+  /**
+   * The one-time move of a workspace's workerd-era object storage into celld
+   * cells. It needs the deployment published (the import checks the class's
+   * engine) and the node not yet running (the import writes the bucket
+   * directly). A failure fails the start: a node that ran without the
+   * workspace's objects would create them empty.
+   */
+  private migrateLegacyStorage(): Promise<void> {
+    this.legacyMigration ??= (async () => {
+      const node = await this.ensureCelldNode();
+      const layout = stateLayout(this.deps.statePath);
+      const report = await migrateLegacyWorkerdStorage({
+        layout: layout.databases,
+        stateDir: layout.celldDir,
+        workspaceId: this.deps.workspaceId,
+        internalClasses: this.internalDOPrograms().publication().internalClasses,
+        importer: node,
+        log: (message) => log.info(message),
+      });
+      if (report.state === "migrated") {
+        log.info(
+          `Migrated legacy workerd storage into celld cells: ${report.imported.length} imported, ` +
+            `${report.existing.length} already present, ${report.unmapped.length} unmapped location(s)`
+        );
+      }
+    })().catch((error: unknown) => {
+      this.legacyMigration = null;
+      throw error;
+    });
+    return this.legacyMigration;
+  }
+
   /** Publish this generation's deployment of the runtime application. */
   private async deployGeneration(): Promise<void> {
     const node = await this.ensureCelldNode();
@@ -2931,6 +2966,7 @@ export class WorkerdManager {
       this.retiredInspectorPort = null;
     }
     await this.deployGeneration();
+    await this.migrateLegacyStorage();
     const deployedAt = performance.now();
     if (this.shuttingDown) throw this.shutdownCancellation;
 
