@@ -84,6 +84,15 @@ export interface DurableObjectSchemaUpgrade {
 }
 
 const SCHEMA_TABLE = "_vibestudio_schema";
+
+/**
+ * SQL predicate excluding objects the runtime owns rather than the class:
+ * SQLite's own (`sqlite_*`) and celld's bookkeeping (`_cf_*`, `_litestream*`),
+ * which a celld cell keeps in the same database as application tables. LIKE
+ * treats `_` as a wildcard, so the reserved prefixes are matched with substr.
+ */
+const APPLICATION_OBJECT =
+  "name NOT LIKE 'sqlite_%' AND substr(name, 1, 4) <> '_cf_' AND substr(name, 1, 11) <> '_litestream'";
 const FRAMEWORK_OBJECTS = new Set([SCHEMA_TABLE, "_vibestudio_direct_rpc_nonces"]);
 
 function normalizedShape(sql: SchemaSqlStorage, schemaTables?: readonly string[]): string {
@@ -93,7 +102,7 @@ function normalizedShape(sql: SchemaSqlStorage, schemaTables?: readonly string[]
       .exec(
         `SELECT type, name, tbl_name, sql FROM sqlite_master
          WHERE type IN ('table', 'index', 'view', 'trigger')
-           AND name NOT LIKE 'sqlite_%'
+           AND ${APPLICATION_OBJECT}
          ORDER BY type, name`
       )
       .toArray()
@@ -144,7 +153,7 @@ export function validateDurableObjectSchemaIndexes(
   const actual = sql
     .exec(
       `SELECT tbl_name, sql FROM sqlite_master
-       WHERE type = 'index' AND name NOT LIKE 'sqlite_%'
+       WHERE type = 'index' AND ${APPLICATION_OBJECT}
        ORDER BY name`
     )
     .toArray()
@@ -227,7 +236,7 @@ function schemaObjects(sql: SchemaSqlStorage): string[] {
     .exec(
       `SELECT name FROM sqlite_master
        WHERE type IN ('table', 'index', 'view', 'trigger')
-         AND name NOT LIKE 'sqlite_%'`
+         AND ${APPLICATION_OBJECT}`
     )
     .toArray()
     .map((row) => String(row["name"]));
