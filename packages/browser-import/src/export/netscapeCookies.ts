@@ -8,8 +8,8 @@ export function exportNetscapeCookies(cookies: ImportedCookie[]): string {
     const flag = domain.startsWith(".") ? "TRUE" : "FALSE";
     const path = cookie.path;
     const secure = cookie.secure ? "TRUE" : "FALSE";
-    const expiry =
-      cookie.expirationDate != null ? String(Math.floor(cookie.expirationDate / 1000)) : "0";
+    // `expirationDate` is already Unix seconds, as the Netscape format wants.
+    const expiry = cookie.expirationDate != null ? String(Math.floor(cookie.expirationDate)) : "0";
     const name = cookie.name;
     const value = cookie.value;
 

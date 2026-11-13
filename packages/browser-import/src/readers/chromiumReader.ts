@@ -79,6 +79,18 @@ function tableExists(db: Database, tableName: string): boolean {
   return !!row;
 }
 
+/** First Chromium cookie database version whose values begin with SHA-256(host_key). */
+const CHROMIUM_HOST_BOUND_COOKIE_VERSION = 24;
+
+function chromiumCookieDatabaseVersion(db: Database): number {
+  if (!tableExists(db, "meta")) return 0;
+  const row = db.prepare("SELECT value FROM meta WHERE key = 'version'").get() as
+    | { value: unknown }
+    | undefined;
+  const version = Number(row?.value);
+  return Number.isInteger(version) ? version : 0;
+}
+
 function tableColumns(db: Database, tableName: string): Set<string> {
   return new Set(
     (
@@ -316,6 +328,7 @@ export class ChromiumReader implements BrowserDataReader {
       }>;
 
       const localStatePath = path.join(path.dirname(profilePath), "Local State");
+      const hostBound = chromiumCookieDatabaseVersion(db) >= CHROMIUM_HOST_BOUND_COOKIE_VERSION;
       const cookies: ImportedCookie[] = [];
 
       for (const row of rawRows) {
@@ -338,7 +351,8 @@ export class ChromiumReader implements BrowserDataReader {
               value: await this.cryptoProvider.decryptChromiumValue(
                 row.encrypted_value!,
                 this.browser,
-                localStatePath
+                localStatePath,
+                hostBound ? row.host_key : undefined
               ),
             };
           } catch {

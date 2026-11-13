@@ -73,20 +73,22 @@ export async function getWin32DecryptionKey(localStatePath: string): Promise<Buf
 export function decryptLegacyWin32Value(
   encrypted: Buffer,
   execute: Utf8CommandRunner = runUtf8Command
-): string {
+): Buffer {
   const psScript = [
     "Add-Type -AssemblyName System.Security;",
     `$encrypted = [Convert]::FromBase64String("${encrypted.toString("base64")}");`,
     "$decrypted = [Security.Cryptography.ProtectedData]::Unprotect($encrypted, $null, 'CurrentUser');",
-    "[Text.Encoding]::UTF8.GetString($decrypted)",
+    // Bytes, not text: the caller decodes once it has removed any binding prefix.
+    "[Convert]::ToBase64String($decrypted)",
   ].join(" ");
 
   try {
-    return execute(`powershell -NoProfile -Command "${psScript}"`, {
+    const output = execute(`powershell -NoProfile -Command "${psScript}"`, {
       encoding: "utf-8",
       timeout: 10000,
       stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    });
+    return Buffer.from(output.trim(), "base64");
   } catch (error) {
     throw new BrowserDataError(
       "DECRYPTION_FAILED",
@@ -102,7 +104,7 @@ export function decryptLegacyWin32Value(
  * Layout after stripping the 3-byte "v10" prefix:
  *   [nonce: 12 bytes][ciphertext: N bytes][auth tag: 16 bytes]
  */
-export function decryptWin32Value(encrypted: Buffer, key: Buffer): string {
+export function decryptWin32Value(encrypted: Buffer, key: Buffer): Buffer {
   // Strip version prefix (3 bytes: "v10")
   const prefix = encrypted.subarray(0, 3).toString("ascii");
   const data = prefix === "v10" ? encrypted.subarray(3) : encrypted;
@@ -113,6 +115,5 @@ export function decryptWin32Value(encrypted: Buffer, key: Buffer): string {
 
   const decipher = crypto.createDecipheriv("aes-256-gcm", key, nonce);
   decipher.setAuthTag(tag);
-  const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-  return decrypted.toString("utf-8");
+  return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
 }

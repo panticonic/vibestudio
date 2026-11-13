@@ -199,6 +199,20 @@ function firefoxSameSite(value: number): SameSiteValue {
   }
 }
 
+/** The tags root folder: found by its fixed GUID, or the legacy fixed id. */
+function firefoxTagsRootId(db: Database): number {
+  const hasGuid = (
+    db.prepare("PRAGMA table_info(moz_bookmarks)").all() as Array<{ name: string }>
+  ).some((column) => column.name === "guid");
+  if (hasGuid) {
+    const row = db.prepare("SELECT id FROM moz_bookmarks WHERE guid = 'tags________'").get() as
+      | { id: number }
+      | undefined;
+    if (row) return row.id;
+  }
+  return 4;
+}
+
 /**
  * Reader for Firefox-family browsers (Firefox, Zen).
  * Reads data from places.sqlite, cookies.sqlite, formhistory.sqlite,
@@ -225,6 +239,10 @@ export class FirefoxReader implements BrowserDataReader {
         parentMap.set(row.id, { title: row.title || "", parentId: row.parent });
       }
 
+      // Firefox records each tag on a URL as another type=1 row inside a tag
+      // folder under the tags root; those rows are tags, not bookmarks.
+      const tagsRoot = firefoxTagsRootId(db);
+
       // Query actual bookmarks (type=1)
       const rows = db
         .prepare(
@@ -236,9 +254,11 @@ export class FirefoxReader implements BrowserDataReader {
         WHERE b.type = 1
           AND p.url IS NOT NULL
           AND p.url NOT LIKE 'place:%'
+          AND b.parent <> ?
+          AND b.parent NOT IN (SELECT id FROM moz_bookmarks WHERE parent = ?)
       `
         )
-        .iterate() as Iterable<{
+        .iterate(tagsRoot, tagsRoot) as Iterable<{
         id: number;
         title: string | null;
         parent: number;

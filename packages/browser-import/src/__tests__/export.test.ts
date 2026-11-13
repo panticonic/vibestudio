@@ -70,7 +70,7 @@ const cookies: ImportedCookie[] = [
     domain: ".example.com",
     hostOnly: false,
     path: "/",
-    expirationDate: 1700000000000,
+    expirationDate: 1700000000.5,
     secure: true,
     httpOnly: true,
     sameSite: "lax",
@@ -309,7 +309,7 @@ describe("exportNetscapeCookies", () => {
     expect(fields[4]).toBe("0");
   });
 
-  it("converts expiry to Unix seconds", () => {
+  it("writes the Unix-seconds expiry as whole seconds", () => {
     const txt = exportNetscapeCookies(cookies);
     const lines = txt.trimEnd().split("\n");
     const line = lines.find((l) => l.includes("session_id"))!;

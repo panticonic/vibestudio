@@ -15,9 +15,10 @@ export async function createCryptoProvider(): Promise<CryptoProvider> {
     async decryptChromiumValue(
       encrypted: Buffer,
       browser: BrowserName,
-      localStatePath: string
+      localStatePath: string,
+      boundHostKey?: string
     ): Promise<string> {
-      return chromiumCrypto.decrypt(encrypted, browser, localStatePath);
+      return chromiumCrypto.decrypt(encrypted, browser, localStatePath, boundHostKey);
     },
 
     async decryptFirefoxLogin(

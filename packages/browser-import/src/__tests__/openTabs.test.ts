@@ -5,6 +5,7 @@ import * as path from "path";
 import initSqlJs from "sql.js";
 import { ChromiumReader } from "../readers/chromiumReader.js";
 import { readOpenTabs } from "../readers/openTabs.js";
+import type { CryptoProvider } from "../types.js";
 
 let tmpDir: string;
 
@@ -147,6 +148,44 @@ describe("ChromiumReader cookie import", () => {
         },
       }),
     ]);
+  });
+});
+
+describe("ChromiumReader host-bound cookie values", () => {
+  it("asks for host-bound decryption only in a meta version 24+ database", async () => {
+    const boundTo: Array<string | undefined> = [];
+    const cryptoProvider = {
+      decryptChromiumValue: async (
+        _encrypted: Buffer,
+        _browser: string,
+        _localStatePath: string,
+        boundHostKey?: string
+      ) => {
+        boundTo.push(boundHostKey);
+        return "decrypted";
+      },
+    } as unknown as CryptoProvider;
+    for (const version of [23, 24]) {
+      const profilePath = path.join(tmpDir, `chrome-v${version}`);
+      fs.mkdirSync(profilePath, { recursive: true });
+      const SQL = await initSqlJs();
+      const db = new SQL.Database();
+      db.exec(`
+        CREATE TABLE meta (key TEXT, value TEXT);
+        INSERT INTO meta VALUES ('version', '${version}');
+        CREATE TABLE cookies (host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB,
+          path TEXT, expires_utc INTEGER, is_secure INTEGER, is_httponly INTEGER,
+          samesite INTEGER, source_scheme INTEGER, source_port INTEGER);
+        INSERT INTO cookies VALUES ('.example.com', 'sid', '', X'763130', '/', 0, 1, 1, 1, 2, 443);
+      `);
+      fs.writeFileSync(path.join(profilePath, "Cookies"), Buffer.from(db.export()));
+      db.close();
+      const cookies = await new ChromiumReader({ cryptoProvider, browser: "chrome" }).readCookies(
+        profilePath
+      );
+      expect(cookies[0]).toMatchObject({ valueStatus: "available", value: "decrypted" });
+    }
+    expect(boundTo).toEqual([undefined, ".example.com"]);
   });
 });
 

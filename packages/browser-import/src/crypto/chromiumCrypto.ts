@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { BrowserName } from "../types.js";
 import { BrowserDataError } from "../errors.js";
 
@@ -18,14 +19,44 @@ export class ChromiumCrypto {
   /**
    * Decrypt a Chromium encrypted value (cookie or password).
    *
-   * Detects the encryption version from the prefix bytes and dispatches
-   * to the appropriate platform-specific decryption.
+   * `boundHostKey` is a cookie's `host_key` when its database (meta version 24,
+   * Chromium 130+) binds every value to its host: the plaintext then begins
+   * with SHA-256(host_key), which is verified and removed. A mismatch means the
+   * key or the row is wrong, so it fails instead of yielding garbage.
    */
-  async decrypt(encrypted: Buffer, browser: BrowserName, localStatePath: string): Promise<string> {
+  async decrypt(
+    encrypted: Buffer,
+    browser: BrowserName,
+    localStatePath: string,
+    boundHostKey?: string
+  ): Promise<string> {
     if (!encrypted || encrypted.length === 0) {
       return "";
     }
+    const plaintext = await this.decryptBytes(encrypted, browser, localStatePath);
+    if (boundHostKey === undefined) return plaintext.toString("utf-8");
+    const binding = createHash("sha256").update(boundHostKey, "utf-8").digest();
+    if (
+      plaintext.length < binding.length ||
+      !plaintext.subarray(0, binding.length).equals(binding)
+    ) {
+      throw new BrowserDataError(
+        "DECRYPTION_FAILED",
+        "Decrypted Chromium cookie value is not bound to its host"
+      );
+    }
+    return plaintext.subarray(binding.length).toString("utf-8");
+  }
 
+  /**
+   * Detect the encryption version from the prefix bytes and dispatch to the
+   * platform-specific decryption.
+   */
+  private async decryptBytes(
+    encrypted: Buffer,
+    browser: BrowserName,
+    localStatePath: string
+  ): Promise<Buffer> {
     // Detect version prefix from first 3 bytes
     const prefix = encrypted.subarray(0, 3).toString("ascii");
 
@@ -77,7 +108,7 @@ export class ChromiumCrypto {
     encrypted: Buffer,
     browser: BrowserName,
     localStatePath: string
-  ): Promise<string> {
+  ): Promise<Buffer> {
     switch (this.platform) {
       case "linux": {
         const { getLinuxDecryptionKey, decryptLinuxValue } = await import("./platforms/linux.js");
@@ -113,7 +144,7 @@ export class ChromiumCrypto {
    * v11: GNOME Keyring / KWallet encryption (Linux only).
    * Uses the same AES-128-CBC algorithm as v10 but with a keyring-provided password.
    */
-  private async decryptV11(encrypted: Buffer, browser: BrowserName): Promise<string> {
+  private async decryptV11(encrypted: Buffer, browser: BrowserName): Promise<Buffer> {
     if (this.platform !== "linux") {
       throw new BrowserDataError(
         "UNSUPPORTED_ENCRYPTION_VERSION",
@@ -145,7 +176,7 @@ export class ChromiumCrypto {
    * v20: App-Bound Encryption (Windows only, Chrome 127+).
    * Currently not decryptable without elevated privileges.
    */
-  private async decryptV20(_encrypted: Buffer, _localStatePath: string): Promise<string> {
+  private async decryptV20(_encrypted: Buffer, _localStatePath: string): Promise<Buffer> {
     throw new BrowserDataError(
       "UNSUPPORTED_ENCRYPTION_VERSION",
       "v20 (App-Bound Encryption) is not yet supported. " +

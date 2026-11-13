@@ -95,7 +95,7 @@ export async function getLinuxDecryptionKey(
  * The encrypted buffer should have its 3-byte version prefix already stripped
  * OR be passed as the full buffer (prefix will be stripped here).
  */
-export function decryptLinuxValue(encrypted: Buffer, key: Buffer): string {
+export function decryptLinuxValue(encrypted: Buffer, key: Buffer): Buffer {
   // Strip version prefix (3 bytes: "v10" or "v11") if present
   const prefix = encrypted.subarray(0, 3).toString("ascii");
   const data = prefix === "v10" || prefix === "v11" ? encrypted.subarray(3) : encrypted;
@@ -103,6 +103,5 @@ export function decryptLinuxValue(encrypted: Buffer, key: Buffer): string {
   // AES-128-CBC with IV = 16 bytes of space (0x20)
   const iv = Buffer.alloc(16, 0x20);
   const decipher = crypto.createDecipheriv("aes-128-cbc", key, iv);
-  const decrypted = Buffer.concat([decipher.update(data), decipher.final()]);
-  return decrypted.toString("utf-8");
+  return Buffer.concat([decipher.update(data), decipher.final()]);
 }

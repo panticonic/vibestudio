@@ -63,7 +63,7 @@ export async function getDarwinDecryptionKey(browser: BrowserName): Promise<Buff
  * Decrypt a Chromium encrypted value using AES-128-CBC (macOS format).
  * Identical to the Linux decryption format.
  */
-export function decryptDarwinValue(encrypted: Buffer, key: Buffer): string {
+export function decryptDarwinValue(encrypted: Buffer, key: Buffer): Buffer {
   // Strip version prefix (3 bytes: "v10")
   const prefix = encrypted.subarray(0, 3).toString("ascii");
   const data = prefix === "v10" ? encrypted.subarray(3) : encrypted;
@@ -71,6 +71,5 @@ export function decryptDarwinValue(encrypted: Buffer, key: Buffer): string {
   // AES-128-CBC with IV = 16 bytes of space (0x20)
   const iv = Buffer.alloc(16, 0x20);
   const decipher = crypto.createDecipheriv("aes-128-cbc", key, iv);
-  const decrypted = Buffer.concat([decipher.update(data), decipher.final()]);
-  return decrypted.toString("utf-8");
+  return Buffer.concat([decipher.update(data), decipher.final()]);
 }

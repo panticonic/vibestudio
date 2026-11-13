@@ -8,10 +8,15 @@ import { BrowserDataError } from "../errors.js";
 
 // ---- Helper: encrypt with AES-128-CBC (Linux/macOS format) ----
 
-function encryptAes128Cbc(plaintext: string, key: Buffer, prefix: string): Buffer {
+function encryptAes128Cbc(
+  plaintext: string,
+  key: Buffer,
+  prefix: string,
+  encoding: BufferEncoding = "utf-8"
+): Buffer {
   const iv = Buffer.alloc(16, 0x20);
   const cipher = crypto.createCipheriv("aes-128-cbc", key, iv);
-  const encrypted = Buffer.concat([cipher.update(plaintext, "utf-8"), cipher.final()]);
+  const encrypted = Buffer.concat([cipher.update(plaintext, encoding), cipher.final()]);
   return Buffer.concat([Buffer.from(prefix, "ascii"), encrypted]);
 }
 
@@ -63,7 +68,7 @@ describe("AES-128-CBC decryption (Linux/macOS)", () => {
     const plaintext = "my-secret-cookie-value";
     const encrypted = encryptAes128Cbc(plaintext, key, "v10");
 
-    const result = decryptLinuxValue(encrypted, key);
+    const result = decryptLinuxValue(encrypted, key).toString("utf-8");
     expect(result).toBe(plaintext);
   });
 
@@ -71,27 +76,27 @@ describe("AES-128-CBC decryption (Linux/macOS)", () => {
     const plaintext = "another-secret";
     const encrypted = encryptAes128Cbc(plaintext, key, "v11");
 
-    const result = decryptLinuxValue(encrypted, key);
+    const result = decryptLinuxValue(encrypted, key).toString("utf-8");
     expect(result).toBe(plaintext);
   });
 
   it("handles empty plaintext", () => {
     const encrypted = encryptAes128Cbc("", key, "v10");
-    const result = decryptLinuxValue(encrypted, key);
+    const result = decryptLinuxValue(encrypted, key).toString("utf-8");
     expect(result).toBe("");
   });
 
   it("decrypts long values", () => {
     const plaintext = "a".repeat(1000);
     const encrypted = encryptAes128Cbc(plaintext, key, "v10");
-    const result = decryptLinuxValue(encrypted, key);
+    const result = decryptLinuxValue(encrypted, key).toString("utf-8");
     expect(result).toBe(plaintext);
   });
 
   it("decrypts unicode values", () => {
     const plaintext = "p\u00e4ssw\u00f6rd-\u2603-\u{1f600}";
     const encrypted = encryptAes128Cbc(plaintext, key, "v10");
-    const result = decryptLinuxValue(encrypted, key);
+    const result = decryptLinuxValue(encrypted, key).toString("utf-8");
     expect(result).toBe(plaintext);
   });
 
@@ -99,8 +104,8 @@ describe("AES-128-CBC decryption (Linux/macOS)", () => {
     const plaintext = "cross-platform-test";
     const encrypted = encryptAes128Cbc(plaintext, key, "v10");
 
-    const linuxResult = decryptLinuxValue(encrypted, key);
-    const darwinResult = decryptDarwinValue(encrypted, key);
+    const linuxResult = decryptLinuxValue(encrypted, key).toString("utf-8");
+    const darwinResult = decryptDarwinValue(encrypted, key).toString("utf-8");
     expect(linuxResult).toBe(darwinResult);
     expect(linuxResult).toBe(plaintext);
   });
@@ -124,27 +129,27 @@ describe("AES-256-GCM decryption (Windows)", () => {
     const plaintext = "windows-secret-cookie";
     const encrypted = encryptAes256Gcm(plaintext, key, "v10");
 
-    const result = decryptWin32Value(encrypted, key);
+    const result = decryptWin32Value(encrypted, key).toString("utf-8");
     expect(result).toBe(plaintext);
   });
 
   it("handles empty plaintext", () => {
     const encrypted = encryptAes256Gcm("", key, "v10");
-    const result = decryptWin32Value(encrypted, key);
+    const result = decryptWin32Value(encrypted, key).toString("utf-8");
     expect(result).toBe("");
   });
 
   it("decrypts long values", () => {
     const plaintext = "b".repeat(2000);
     const encrypted = encryptAes256Gcm(plaintext, key, "v10");
-    const result = decryptWin32Value(encrypted, key);
+    const result = decryptWin32Value(encrypted, key).toString("utf-8");
     expect(result).toBe(plaintext);
   });
 
   it("decrypts unicode values", () => {
     const plaintext = "\u00fc\u00f1\u00eec\u00f6d\u00e9-\u{1f511}";
     const encrypted = encryptAes256Gcm(plaintext, key, "v10");
-    const result = decryptWin32Value(encrypted, key);
+    const result = decryptWin32Value(encrypted, key).toString("utf-8");
     expect(result).toBe(plaintext);
   });
 
@@ -216,6 +221,24 @@ describe("ChromiumCrypto version detection", () => {
     }
   });
 
+  it("verifies and removes a host-bound cookie value's SHA-256(host_key) prefix", async () => {
+    const key = deriveKey("peanuts");
+    const binding = crypto.createHash("sha256").update(".example.com").digest();
+    const encrypted = encryptAes128Cbc(
+      Buffer.concat([binding, Buffer.from("cookie-value")]).toString("latin1"),
+      key,
+      "v10",
+      "latin1"
+    );
+
+    await expect(
+      cryptoInstance.decrypt(encrypted, "chrome", "/tmp/state", ".example.com")
+    ).resolves.toBe("cookie-value");
+    await expect(
+      cryptoInstance.decrypt(encrypted, "chrome", "/tmp/state", ".other.example")
+    ).rejects.toMatchObject({ code: "DECRYPTION_FAILED" });
+  });
+
   it("rejects unversioned Chromium ciphertext on non-Windows platforms", async () => {
     await expect(
       cryptoInstance.decrypt(Buffer.from("plain-or-old-ciphertext"), "chrome", "/tmp/state")
@@ -235,9 +258,9 @@ describe("ChromiumCrypto version detection", () => {
 describe("legacy Windows DPAPI decryption", () => {
   it("decrypts an unversioned raw DPAPI value", () => {
     const encrypted = Buffer.from([0, 1, 2, 3, 254, 255]);
-    const execute = vi.fn(() => "legacy-secret\n");
+    const execute = vi.fn(() => `${Buffer.from("legacy-secret").toString("base64")}\n`);
 
-    expect(decryptLegacyWin32Value(encrypted, execute)).toBe("legacy-secret");
+    expect(decryptLegacyWin32Value(encrypted, execute).toString("utf-8")).toBe("legacy-secret");
     expect(execute).toHaveBeenCalledWith(
       expect.stringContaining(encrypted.toString("base64")),
       expect.objectContaining({ encoding: "utf-8", timeout: 10000 })

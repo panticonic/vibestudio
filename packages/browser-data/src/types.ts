@@ -386,10 +386,16 @@ export interface ImportResult {
 // ---- Crypto ----
 
 export interface CryptoProvider {
+  /**
+   * `boundHostKey`: a cookie's `host_key` when its database binds values to
+   * their host (Chromium cookie meta version 24+); the binding is verified and
+   * removed from the returned value.
+   */
   decryptChromiumValue(
     encrypted: Buffer,
     browser: BrowserName,
-    localStatePath: string
+    localStatePath: string,
+    boundHostKey?: string
   ): Promise<string>;
   decryptFirefoxLogin(
     encryptedBase64: string,
