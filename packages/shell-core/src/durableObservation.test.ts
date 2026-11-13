@@ -156,6 +156,25 @@ describe("observeDurableProjection", () => {
     expect(error).toHaveBeenCalledWith(readError);
   });
 
+  it("settles every later refresh with a failed admission's error", async () => {
+    const failure = new Error("watch refused");
+    let changed!: () => Promise<void>;
+    const observation = observeDurableProjection({
+      listen: (listener) => {
+        changed = listener;
+        return vi.fn();
+      },
+      admit: () => Promise.reject(failure),
+      read: vi.fn(),
+      apply: vi.fn(),
+      error: vi.fn(),
+    });
+    await expect(observation.ready).rejects.toBe(failure);
+
+    await expect(observation.refresh()).rejects.toBe(failure);
+    await expect(changed()).resolves.toBeUndefined();
+  });
+
   it("retires an attempted watch after admission rejects", async () => {
     const failure = new Error("watch refused");
     const leave = vi.fn().mockResolvedValue(undefined);

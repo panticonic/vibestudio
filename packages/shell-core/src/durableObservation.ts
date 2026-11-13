@@ -39,6 +39,8 @@ export function observeDurableProjection<T>(input: {
   let running: Promise<void> | null = null;
   let stopping: Promise<void> | null = null;
   let retirementReason: unknown = new DurableObservationStoppedError();
+  /** A failed admission ends the observation: no read can ever be admitted. */
+  let admissionFailure: { error: unknown } | null = null;
   const receipts = new Map<number, { resolve(): void; reject(error: unknown): void }>();
 
   const settleThrough = (generation: number, error?: unknown) => {
@@ -87,6 +89,7 @@ export function observeDurableProjection<T>(input: {
 
   const refresh = (): Promise<void> => {
     if (!active) return Promise.reject(retirementReason);
+    if (admissionFailure) return Promise.reject(admissionFailure.error);
     const generation = ++requested;
     const receipt = new Promise<void>((resolve, reject) => {
       receipts.set(generation, { resolve, reject });
@@ -96,7 +99,10 @@ export function observeDurableProjection<T>(input: {
     return receipt;
   };
 
-  const unlisten = input.listen(() => (active ? refresh() : Promise.resolve()));
+  // After a failed admission (already reported) an event has nothing to refresh.
+  const unlisten = input.listen(() =>
+    active && !admissionFailure ? refresh() : Promise.resolve()
+  );
   const admission = input.admit ? input.admit() : Promise.resolve();
   const ready = admission.then(
     async () => {
@@ -105,6 +111,7 @@ export function observeDurableProjection<T>(input: {
       await refresh();
     },
     (error: unknown) => {
+      admissionFailure = { error };
       if (active) {
         input.error(error);
         settleThrough(requested, error);

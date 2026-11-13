@@ -378,8 +378,15 @@ export class PanelTreeCache {
     this.emit();
   }
 
+  /**
+   * `revision` is the last change event this cache has accounted for. A query
+   * answered at a later revision is current only for its own group: advancing
+   * the cache to it would drop the intervening events that change the other
+   * cached groups. So a query sets the revision only as the starting point,
+   * before any event has been applied; events advance it after that.
+   */
   private acceptRevision(revision: number): void {
-    if (revision > this.revision) this.revision = revision;
+    if (this.revision === 0) this.revision = revision;
   }
 
   private maxNodesPerGroup(): number {

@@ -146,6 +146,31 @@ describe("PanelTreeCache", () => {
     expect(cache.getGroup(group)?.nodes.map((node) => node.slotId)).toEqual(["replacement"]);
   });
 
+  it("keeps applying change events for other groups after a query answers at a later revision", async () => {
+    const querySource = source();
+    const cache = new PanelTreeCache(querySource);
+    const roots = { kind: "roots" as const, ownerUserId: "user" };
+    const children = { kind: "children" as const, parentSlotId: "parent" };
+    await cache.loadFirst(roots);
+    vi.mocked(querySource.page).mockResolvedValueOnce({
+      revision: 3,
+      group: children,
+      nodes: [],
+      nextCursor: null,
+    });
+    await cache.loadFirst(children);
+
+    const changedRoots = cache.invalidate({
+      revision: 2,
+      reset: false,
+      groups: [roots],
+      changedSlotIds: ["newer" as never],
+      removedSlotIds: [],
+    });
+
+    expect(changedRoots).toEqual([roots]);
+  });
+
   it("returns every loaded sibling page for revalidation after a reset", async () => {
     const querySource = source();
     const cache = new PanelTreeCache(querySource);
