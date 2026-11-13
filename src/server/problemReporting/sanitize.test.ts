@@ -41,4 +41,22 @@ describe("report text sanitization", () => {
     );
     expect(result.redactions).toEqual(["sensitive-field"]);
   });
+
+  it("removes credentials recognizable by their syntax, wherever they appear", () => {
+    const text =
+      "Failed with ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, sk-abcdefghijklmnopqrstuv and Bearer abcdefghijklmnop; " +
+      "slack xoxb-1234567890-abc, AKIAABCDEFGHIJKLMNOP, eyJhbGciOiJI.eyJzdWIiOiIx.c2lnbmF0dXJl, passwd=hunter2hunter2";
+    const result = sanitizeReportText(text);
+    for (const secret of [
+      "ghp_",
+      "sk-abc",
+      "abcdefghijklmnop",
+      "xoxb-",
+      "AKIA",
+      "eyJhbGci",
+      "hunter2",
+    ])
+      expect(result.text).not.toContain(secret);
+    expect(result.redactions).toEqual(["sensitive-field", "credential-token"]);
+  });
 });

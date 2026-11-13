@@ -128,7 +128,8 @@ it("makes sanitization reviewable and rejects an outdated preview", async () => 
   const f = fixture();
   const draft = await f.human.create({
     ...reportFixture().problem,
-    symptom: "registered-sensitive-token at https://example.com/?password=secret",
+    symptom:
+      "registered-sensitive-token at https://example.com/?password=secret with ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   });
   const preview = await f.human.prepare(draft.id, 1);
   expect(preview.revision).toBe(2);
@@ -138,6 +139,7 @@ it("makes sanitization reviewable and rejects an outdated preview", async () => 
   expect(revised.value.submissionId).toBe(preview.submissionId);
   expect(preview.bytes).not.toContain("password=secret");
   expect(preview.bytes).not.toContain("registered-sensitive-token");
+  expect(preview.bytes).not.toContain("ghp_aaaa");
   await expect(f.human.send(draft.id, 1, preview.digest)).rejects.toThrow();
   await f.human.send(draft.id, preview.revision, preview.digest);
   expect(f.store.submission("alice", "ws", preview.submissionId)["state"]).toBe("queued");
