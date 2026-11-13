@@ -91,6 +91,37 @@ describe("authority index manager", () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 
+  it("starts a fresh analysis for a request that arrives after every waiter withdrew", async () => {
+    const manager = new AuthorityIndexManager();
+    const expected = index("state:published");
+    const create = vi
+      .fn<(signal: AbortSignal) => Promise<AuthorityDependencyIndex>>()
+      // The withdrawn analysis keeps unwinding after its abort is delivered.
+      .mockImplementationOnce(
+        (signal) =>
+          new Promise((_resolve, reject) =>
+            signal.addEventListener("abort", () => setImmediate(() => reject(signal.reason)))
+          )
+      )
+      .mockResolvedValueOnce(expected);
+    const withdrawn = new AbortController();
+    const first = manager.indexAt(
+      expected.stateHash,
+      expected.epoch,
+      create,
+      undefined,
+      withdrawn.signal
+    );
+    withdrawn.abort(new Error("panel closed"));
+    await expect(first).rejects.toThrow("panel closed");
+
+    const next = new AbortController();
+    await expect(
+      manager.indexAt(expected.stateHash, expected.epoch, create, undefined, next.signal)
+    ).resolves.toBe(expected);
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
   it("returns an incomplete attempt without retaining it for the same-state retry", async () => {
     const manager = new AuthorityIndexManager();
     const incomplete = {

@@ -83,7 +83,12 @@ export class AuthorityIndexManager {
           settled = true;
           waiterSignal.removeEventListener("abort", onAbort);
           flight.waiters -= 1;
-          if (flight.waiters === 0 && !flight.persistentWaiter) flight.controller.abort();
+          if (flight.waiters === 0 && !flight.persistentWaiter) {
+            // The cancelled analysis is only unwinding; a later request for the
+            // same state must start its own rather than inherit this abort.
+            if (this.flights.get(key) === flight) this.flights.delete(key);
+            flight.controller.abort();
+          }
         };
         const onAbort = () => {
           leave();
@@ -108,14 +113,14 @@ export class AuthorityIndexManager {
     const controller = new AbortController();
     const promise = create(controller.signal).then(
       (index) => {
-        this.flights.delete(key);
+        if (this.flights.get(key) === flight) this.flights.delete(key);
         if (index.complete && index.blockingConsumers.size === 0) {
           this.touch(this.analyzed, key, index);
         }
         return index;
       },
       (error: unknown) => {
-        this.flights.delete(key);
+        if (this.flights.get(key) === flight) this.flights.delete(key);
         throw error;
       }
     );
