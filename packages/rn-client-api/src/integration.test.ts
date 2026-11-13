@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { createRnClientApi } from "./api";
 import { createMemoryBroker } from "./testing";
-import { METHOD_CAPABILITY, type ClientDescription } from "./protocol";
+import { METHOD_CAPABILITY, type ClientDescription, type UpdateOffer } from "./protocol";
 import { INTEGRATION_METHOD_CAPABILITY, type InstalledLauncher } from "./integrationProtocol";
 
 const description: ClientDescription = {
@@ -72,7 +72,37 @@ describe("integration.install", () => {
 
   it("gates every method on the integration.install capability", () => {
     for (const method of Object.keys(INTEGRATION_METHOD_CAPABILITY)) {
-      expect(METHOD_CAPABILITY[method as keyof typeof METHOD_CAPABILITY]).toBe("integration.install");
+      expect(METHOD_CAPABILITY[method as keyof typeof METHOD_CAPABILITY]).toBe(
+        "integration.install"
+      );
     }
+  });
+});
+
+describe("startup state", () => {
+  it("keeps capability and update changes announced while the initial reads are in flight", async () => {
+    let answer!: () => void;
+    const answered = new Promise<void>((resolve) => (answer = resolve));
+    const { channel, host } = createMemoryBroker(async (method) => {
+      await answered;
+      if (method === "client.describe") return description;
+      if (method === "updates.pending") return null;
+      throw new Error(`unexpected ${method}`);
+    });
+    const update: UpdateOffer = {
+      buildKey: "bk2",
+      effectiveVersion: "1.0.1",
+      previousBuildKey: "bk",
+      change: {} as UpdateOffer["change"],
+    };
+
+    const starting = createRnClientApi(channel);
+    host.emit({ type: "capabilities", granted: [] });
+    host.emit({ type: "update", update });
+    answer();
+    const api = await starting;
+
+    expect(api.capabilities.granted()).toEqual([]);
+    expect(api.updates.pending()).toEqual(update);
   });
 });

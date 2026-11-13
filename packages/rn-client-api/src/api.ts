@@ -147,21 +147,31 @@ export interface RnClientApi {
 
 export async function createRnClientApi(channel: BrokerChannel): Promise<RnClientApi> {
   const hub = new EventHub(channel);
-  const client = await channel.request("client.describe");
 
-  let granted: readonly ClientCapability[] = client.grantedCapabilities;
+  // Events and request results travel separately, so their arrival order says
+  // nothing. The host changes its state before announcing it, so any event
+  // heard since subscribing is at least as new as a snapshot read after
+  // subscribing: the snapshot only fills in when no event has arrived.
+  let granted: readonly ClientCapability[] | null = null;
   const capabilityListeners = new Set<(granted: readonly ClientCapability[]) => void>();
   hub.ofType("capabilities", (event) => {
     granted = event.granted;
-    for (const listener of [...capabilityListeners]) listener(granted);
+    for (const listener of [...capabilityListeners]) listener(event.granted);
   });
 
-  let pending: UpdateOffer | null = await channel.request("updates.pending");
+  let pending: { offer: UpdateOffer | null } | null = null;
   const updateListeners = new Set<(update: UpdateOffer) => void>();
   hub.ofType("update", (event) => {
-    pending = event.update;
+    pending = { offer: event.update };
     for (const listener of [...updateListeners]) listener(event.update);
   });
+
+  const [client, pendingSnapshot] = await Promise.all([
+    channel.request("client.describe"),
+    channel.request("updates.pending"),
+  ]);
+  granted ??= client.grantedCapabilities;
+  pending ??= { offer: pendingSnapshot };
 
   const intentListeners = new Set<(intent: ClientIntent) => void>();
   hub.ofType("intent", (event) => {
@@ -247,8 +257,8 @@ export async function createRnClientApi(channel: BrokerChannel): Promise<RnClien
     hostAbi: RN_CLIENT_API_ABI,
     client,
     capabilities: {
-      granted: () => granted,
-      has: (capability) => granted.includes(capability),
+      granted: () => granted!,
+      has: (capability) => granted!.includes(capability),
       onChange(listener) {
         capabilityListeners.add(listener);
         return () => capabilityListeners.delete(listener);
@@ -277,7 +287,7 @@ export async function createRnClientApi(channel: BrokerChannel): Promise<RnClien
       keys: () => channel.request("state.keys"),
     },
     updates: {
-      pending: () => pending,
+      pending: () => pending!.offer,
       onUpdate(listener) {
         updateListeners.add(listener);
         return () => updateListeners.delete(listener);
