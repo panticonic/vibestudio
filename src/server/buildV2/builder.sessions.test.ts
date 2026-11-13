@@ -161,7 +161,7 @@ describe("Build V2 process and role ownership", () => {
       expect(adopter.owner).toBe(false);
       expect(adopter.entry).toBe(producer.entry);
       const adopted = processOwner.borrowSharedBuild(
-        adopter.entry,
+        adopter,
         new AbortController().signal,
         "interactive"
       );
@@ -234,10 +234,10 @@ describe("Build V2 process and role ownership", () => {
       throw new Error("A coalesced build must retain the producer's operation");
     });
     const producerWork = withBuilderWorkers(producer, () =>
-      processOwner.borrowSharedBuild(admitted.entry, producer.signal, "interactive")
+      processOwner.borrowSharedBuild(admitted, producer.signal, "interactive")
     );
     const adopterWork = withBuilderWorkers(adopter, () =>
-      processOwner.borrowSharedBuild(adopterAdmission.entry, adopter.signal, "interactive")
+      processOwner.borrowSharedBuild(adopterAdmission, adopter.signal, "interactive")
     );
     let producerClosed = false;
     let closeProducer: Promise<void> | undefined;
@@ -285,7 +285,7 @@ describe("Build V2 process and role ownership", () => {
         return storedBuildResult("b".repeat(64));
       });
     });
-    const work = processOwner.borrowSharedBuild(admitted.entry, requester.signal, "interactive");
+    const work = processOwner.borrowSharedBuild(admitted, requester.signal, "interactive");
 
     try {
       await entered.promise;
@@ -296,6 +296,43 @@ describe("Build V2 process and role ownership", () => {
       expect(sharedSignal?.aborted).toBe(true);
     } finally {
       await Promise.allSettled([work, admitted.entry.flight.promise]);
+      await processOwner.shutdown();
+    }
+  });
+
+  it("keeps a flight for an admitted requester that has not started waiting yet", async () => {
+    const processOwner = new BuildProcessOwner({ appRoot: process.cwd(), appNodeModules: [] });
+    const release = deferred<void>();
+    const result = storedBuildResult("e".repeat(64));
+    const first = processOwner.admitSharedBuild("/shared-cache\0early-withdraw", (signal) => {
+      return new BuildFlight<StoredBuildResult>("interactive", async () => {
+        await new Promise<void>((resolve, reject) => {
+          signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+          void release.promise.then(resolve);
+        });
+        return result;
+      });
+    });
+    const second = processOwner.admitSharedBuild("/shared-cache\0early-withdraw", () => {
+      throw new Error("A coalesced build must not start a second compiler operation");
+    });
+    const withdrawing = new AbortController();
+    const secondWork = processOwner.borrowSharedBuild(second, withdrawing.signal, "interactive");
+    try {
+      withdrawing.abort(new Error("Second requester withdrew"));
+      await expect(secondWork).rejects.toThrow("Second requester withdrew");
+      expect(first.entry.controller.signal.aborted).toBe(false);
+
+      const firstWork = processOwner.borrowSharedBuild(
+        first,
+        new AbortController().signal,
+        "interactive"
+      );
+      release.resolve();
+      await expect(firstWork).resolves.toBe(result);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([secondWork, first.entry.flight.promise]);
       await processOwner.shutdown();
     }
   });
@@ -314,7 +351,7 @@ describe("Build V2 process and role ownership", () => {
         throw signal.reason;
       });
     });
-    const work = processOwner.borrowSharedBuild(withdrawn.entry, requester.signal, "interactive");
+    const work = processOwner.borrowSharedBuild(withdrawn, requester.signal, "interactive");
     try {
       await entered.promise;
       requester.abort(new Error("First requester canceled"));
@@ -326,7 +363,7 @@ describe("Build V2 process and role ownership", () => {
       expect(next.owner).toBe(true);
       expect(next.entry).not.toBe(withdrawn.entry);
       await expect(
-        processOwner.borrowSharedBuild(next.entry, new AbortController().signal, "interactive")
+        processOwner.borrowSharedBuild(next, new AbortController().signal, "interactive")
       ).resolves.toBe(result);
     } finally {
       await Promise.allSettled([work, withdrawn.entry.flight.promise]);
@@ -349,7 +386,7 @@ describe("Build V2 process and role ownership", () => {
       });
     });
     const borrower = processOwner.borrowSharedBuild(
-      admitted.entry,
+      admitted,
       new AbortController().signal,
       "interactive"
     );

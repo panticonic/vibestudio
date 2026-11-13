@@ -338,12 +338,12 @@ export class BuildProcessOwner {
   admitSharedBuild(
     key: string,
     create: (signal: AbortSignal) => BuildFlight<StoredBuildResult>
-  ): { readonly entry: SharedBuildFlightEntry; readonly owner: boolean } {
+  ): SharedBuildAdmission {
     // A flight whose requesters all withdrew is only unwinding. Its cancellation
     // belongs to them, so a new request starts its own flight; the coordinator
     // hands it the abandoned key once the old producer releases it.
     const existing = this.sharedBuildFlights.get(key);
-    if (existing && !existing.controller.signal.aborted) return { entry: existing, owner: false };
+    if (existing && !existing.controller.signal.aborted) return claimSharedBuild(existing, false);
     this.lifetime.assertOpen();
     const controller = new AbortController();
     const signal = AbortSignal.any([controller.signal, this.lifetime.signal]);
@@ -369,26 +369,17 @@ export class BuildProcessOwner {
         if (this.sharedBuildFlights.get(key) === entry) this.sharedBuildFlights.delete(key);
       }
     );
-    return { entry, owner: true };
+    return claimSharedBuild(entry, true);
   }
 
+  /** Await the admitted flight for one requester, then withdraw its claim. */
   async borrowSharedBuild(
-    entry: SharedBuildFlightEntry,
+    admission: SharedBuildAdmission,
     signal: AbortSignal,
     priority: BuildPriority
   ): Promise<StoredBuildResult> {
-    entry.borrowers++;
-    let released = false;
-    const release = (): void => {
-      if (released) return;
-      released = true;
-      entry.borrowers--;
-      if (entry.borrowers === 0 && !entry.settled && !entry.controller.signal.aborted) {
-        entry.controller.abort(
-          signal.aborted ? signal.reason : new Error("All shared build requesters withdrew")
-        );
-      }
-    };
+    const { entry } = admission;
+    const release = (): void => admission.release(signal.aborted ? signal.reason : undefined);
     if (signal.aborted) {
       release();
       throw signal.reason;
@@ -476,6 +467,35 @@ interface SharedBuildFlightEntry {
   readonly controller: AbortController;
   borrowers: number;
   settled: boolean;
+}
+
+/**
+ * One requester's claim on a shared flight. It counts from admission, not from
+ * the later borrow: a requester still preparing to wait must keep the flight
+ * alive when another requester withdraws in between.
+ */
+interface SharedBuildAdmission {
+  readonly entry: SharedBuildFlightEntry;
+  readonly owner: boolean;
+  /** Withdraw this claim (idempotent); the last withdrawal cancels unsettled work. */
+  release(reason?: unknown): void;
+}
+
+function claimSharedBuild(entry: SharedBuildFlightEntry, owner: boolean): SharedBuildAdmission {
+  entry.borrowers++;
+  let released = false;
+  return {
+    entry,
+    owner,
+    release(reason) {
+      if (released) return;
+      released = true;
+      entry.borrowers--;
+      if (entry.borrowers === 0 && !entry.settled && !entry.controller.signal.aborted) {
+        entry.controller.abort(reason ?? new Error("All shared build requesters withdrew"));
+      }
+    },
+  };
 }
 
 export function createBuildProcessOwner(input: {
@@ -616,7 +636,7 @@ function admitSessionBuild(
     adopter.bindQueuedPromotion((promoted) => admitted.entry.flight.priority.promote(promoted));
     try {
       const result = await withBuilderWorkers(session, () =>
-        session.processOwner.borrowSharedBuild(admitted.entry, session.signal, adopter.priority)
+        session.processOwner.borrowSharedBuild(admitted, session.signal, adopter.priority)
       );
       if (admitted.owner) return result;
       const hydrated = await session.store.getOrHydrate(buildKey, sourceStateHash);
@@ -628,6 +648,8 @@ function admitSessionBuild(
       await ensureNodeProgramBuildReady(session, hydrated);
       return hydrated;
     } finally {
+      // Joins a claim the borrow never reached (worker setup failed first).
+      admitted.release(session.signal.aborted ? session.signal.reason : undefined);
       adopter.clearQueuedPromotion();
       roleLease.release();
     }
