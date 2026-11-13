@@ -103,6 +103,8 @@ export class ClientSessionRelay {
   private readonly entries = new Map<string, Entry>();
   /** Ids claimed by an open that has not finished (a workspace connection is still being made). */
   private readonly reserved = new Set<string>();
+  /** Workspace opens still being made; disposal joins them. */
+  private readonly opening = new Set<Promise<unknown>>();
   private disposed = false;
 
   constructor(private readonly options: ClientSessionRelayOptions) {}
@@ -129,19 +131,30 @@ export class ClientSessionRelay {
     );
   }
 
-  async openWorkspace(sessionId: string, workspaceId: string): Promise<SessionOpened> {
+  openWorkspace(sessionId: string, workspaceId: string): Promise<SessionOpened> {
     this.claim(sessionId);
-    try {
-      const opened = await this.options.openers.workspace(
-        workspaceId,
-        `workspace:${this.options.tag}:${sessionId}`,
-        this.handlersFor(sessionId)
-      );
-      return this.register(sessionId, "shell", opened);
-    } catch (error) {
-      this.reserved.delete(sessionId);
-      throw error;
-    }
+    const operation = (async () => {
+      try {
+        const opened = await this.options.openers.workspace(
+          workspaceId,
+          `workspace:${this.options.tag}:${sessionId}`,
+          this.handlersFor(sessionId)
+        );
+        if (this.disposed) {
+          // The instance stopped while the connection was being made: nothing
+          // else will ever retire this session, so release it here.
+          await opened.release();
+          throw new BrokerError("CLIENT_STOPPED", "This client has stopped.");
+        }
+        return this.register(sessionId, "shell", opened);
+      } finally {
+        this.reserved.delete(sessionId);
+      }
+    })();
+    this.opening.add(operation);
+    const settled = () => void this.opening.delete(operation);
+    void operation.then(settled, settled);
+    return operation;
   }
 
   openAuxiliary(
@@ -214,6 +227,9 @@ export class ClientSessionRelay {
     const results = await Promise.allSettled(
       [...this.entries].map(([sessionId, entry]) => this.retire(sessionId, entry))
     );
+    // An open in flight releases its own session once it sees the disposal and
+    // reports any failure to its own caller; disposal joins it.
+    await Promise.allSettled([...this.opening]);
     const failures = results.flatMap((result) =>
       result.status === "rejected" ? [result.reason] : []
     );

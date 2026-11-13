@@ -204,7 +204,12 @@ export function createRemoteSession(options: RemoteSessionOptions): RemoteSessio
       );
     },
     async close() {
-      if (closed) return;
+      if (closed) {
+        // Closed by the server (or a failed open): there is nothing to ask the
+        // host, but this side still owns its event subscriptions.
+        stopListening();
+        return;
+      }
       try {
         await openedPromise;
         await channel.request("session.close", sessionId);

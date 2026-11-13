@@ -14,6 +14,7 @@ const fixture = vi.hoisted(() => ({
   deleteIdentity: vi.fn(async () => {}),
   reset: vi.fn(async () => true),
   connectionIds: [] as string[],
+  signDelegation: vi.fn(async (_identity: string, endpointId: string) => ({ endpointId })),
 }));
 vi.mock("react-native", () => ({
   AppState: {
@@ -33,7 +34,17 @@ vi.mock("react-native-keychain", () => ({
 }));
 vi.mock("./nativeBridge.js", () => ({
   mobileIrohIdentity: { delete: fixture.deleteIdentity },
-  createMobileEndpointBinding: vi.fn(),
+  createMobileEndpointBinding: vi.fn(() => ({
+    bind: async () => ({
+      endpointId: "bb".repeat(32),
+      connect: async () => ({
+        closed: () => new Promise<never>(() => {}),
+        close: () => {},
+      }),
+      close: async () => {},
+    }),
+  })),
+  signMobileEndpointDelegation: fixture.signDelegation,
 }));
 vi.mock("@vibestudio/rpc", async (original) => ({
   ...(await original<typeof import("@vibestudio/rpc")>()),
@@ -145,6 +156,18 @@ describe("MobileEndpointPool relay configuration", () => {
     await expect(fixture.recovery!("resubscribe")).rejects.toBe(failure);
     expect(calls).toEqual(["rpc", "account"]);
     await connection.close();
+  });
+
+  it("signs the endpoint delegation again after a failed signature", async () => {
+    const pool = new MobileEndpointPool("identity", pairing.relays);
+    pool.acquire(pairing.relays);
+    fixture.signDelegation.mockRejectedValueOnce(new Error("keystore locked"));
+    await expect(pool.dial(pairing)).rejects.toThrow("keystore locked");
+    await expect(pool.dial(pairing)).resolves.toMatchObject({
+      delegation: { endpointId: "bb".repeat(32) },
+    });
+    expect(fixture.signDelegation).toHaveBeenCalledTimes(2);
+    await pool.release();
   });
 
   it("shares one endpoint when peers prefer different homes in the same relay set", async () => {

@@ -101,7 +101,8 @@ export interface IrohConnection {
 export class MobileEndpointPool {
   private owner: {
     owner: EndpointGenerationOwner<MobileConnection, MobileEndpoint>;
-    delegation: Promise<EndpointDelegation>;
+    /** This owner's endpoint delegation; cleared when signing fails so a later dial retries. */
+    delegation: Promise<EndpointDelegation> | null;
   } | null = null;
   private references = 0;
   private closed = false;
@@ -130,27 +131,30 @@ export class MobileEndpointPool {
    */
   async dial(reach: StoredShellPairing) {
     if (this.closed) throw new Error("Mobile Iroh endpoint pool is closed");
-    const current = (this.owner ??= (() => {
-      const owner = new EndpointGenerationOwner(
+    const current = (this.owner ??= {
+      owner: new EndpointGenerationOwner(
         createMobileEndpointBinding(
           globalThis.crypto.getRandomValues(new Uint8Array(32)),
           this.relays
         )
-      );
-      return {
-        owner,
-        delegation: owner
-          .ready()
-          .then(({ endpointId }) => signMobileEndpointDelegation(this.identityId, endpointId)),
-      };
-    })());
+      ),
+      delegation: null,
+    });
+    // A failed bind or signature (a locked keystore, say) belongs to this dial
+    // only; the next dial on the same owner signs again instead of inheriting it.
+    const signing = (current.delegation ??= current.owner
+      .ready()
+      .then(({ endpointId }) => signMobileEndpointDelegation(this.identityId, endpointId)));
+    signing.catch(() => {
+      if (current.delegation === signing) current.delegation = null;
+    });
     const [dialed, delegation] = await Promise.all([
       current.owner.dial({
         reach,
         overallDeadlineMs: 30_000,
         perAttemptDeadlineMs: 12_000,
       }),
-      current.delegation,
+      signing,
     ]);
     return { ...dialed, delegation };
   }

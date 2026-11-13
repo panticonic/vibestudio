@@ -14,6 +14,7 @@ import { ClientInstance, type ClientInstanceHooks } from "./clientInstance";
 import { HostState } from "./hostState";
 import type { KeyValueStore } from "./ports";
 import { fakeOpeners } from "./testSupport";
+import { ClientSessionRelay } from "./sessionRelay";
 
 const DIGEST = "d".repeat(64);
 const PRINCIPAL = "client:browser:react-native:dev1";
@@ -217,6 +218,19 @@ describe("capability enforcement on sessions", () => {
   });
 });
 
+describe("closing a client's account", () => {
+  it("closes a workspace connection that finishes opening after the account closed", async () => {
+    const t = setup();
+    const api = await createRnClientApi(t.channel);
+    const account = await api.session.openAccount();
+    const opening = account.openWorkspace("ws-personal");
+    await account.close();
+    await expect(opening).rejects.toThrow("The mobile account is closed");
+    expect(t.opened.some((entry) => entry.kind === "workspace")).toBe(true);
+    expect(t.opened.every((entry) => entry.released)).toBe(true);
+  });
+});
+
 describe("trust revoked", () => {
   it("tells the client why, ends its sessions and asks the host to tear the instance down", async () => {
     const t = setup();
@@ -341,5 +355,35 @@ describe("state, updates and device calls", () => {
     t.instance.setCapabilities(["device-session", "clipboard"]);
     expect(api.capabilities.has("clipboard")).toBe(true);
     await api.clipboard.setString("x");
+  });
+});
+
+describe("a client's session relay", () => {
+  it("releases a workspace session whose connection is made after the client stopped", async () => {
+    const { openers, opened } = fakeOpeners();
+    let finishOpen!: () => void;
+    const connectionMade = new Promise<void>((resolve) => {
+      finishOpen = resolve;
+    });
+    const relay = new ClientSessionRelay({
+      tag: "browser",
+      openers: {
+        ...openers,
+        workspace: async (workspaceId, label, handlers) => {
+          await connectionMade;
+          return openers.workspace(workspaceId, label, handlers);
+        },
+      },
+      emit: () => undefined,
+      onTrustRevoked: () => undefined,
+    });
+    const opening = relay.openWorkspace("s-00000000-0000", "ws-personal");
+    const disposed = relay.dispose();
+    finishOpen();
+    await expect(opening).rejects.toMatchObject({ code: "CLIENT_STOPPED" });
+    await disposed;
+    expect(opened).toHaveLength(1);
+    expect(opened[0]!.released).toBe(true);
+    expect(relay.size).toBe(0);
   });
 });

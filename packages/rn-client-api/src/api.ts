@@ -181,22 +181,36 @@ export async function createRnClientApi(channel: BrokerChannel): Promise<RnClien
       channel.request("session.openAccountControl", sessionId)
     );
     const workspaces = new Set<RemoteConnection>();
+    /** Workspace opens still in flight; closing the account joins them. */
+    const opening = new Set<Promise<RemoteConnection>>();
     let closing: Promise<void> | null = null;
     const account: RemoteAccount = {
       control,
-      async openWorkspace(workspaceId, onRecovery) {
-        if (closing) throw new Error("The mobile account is closed");
-        const connection = await openRemoteConnection(
-          deps,
-          (sessionId) => channel.request("session.openWorkspace", sessionId, workspaceId),
-          {
-            hubControlRpc: control.rpc,
-            ...(onRecovery ? { onRecovery } : {}),
+      openWorkspace(workspaceId, onRecovery) {
+        if (closing) return Promise.reject(new Error("The mobile account is closed"));
+        const open = (async () => {
+          const connection = await openRemoteConnection(
+            deps,
+            (sessionId) => channel.request("session.openWorkspace", sessionId, workspaceId),
+            {
+              hubControlRpc: control.rpc,
+              ...(onRecovery ? { onRecovery } : {}),
+            }
+          );
+          if (closing) {
+            // The account closed while this connection was being made; nothing
+            // else will ever close it.
+            await connection.close();
+            throw new Error("The mobile account is closed");
           }
-        );
-        workspaces.add(connection);
-        connection.session.onClosed(() => workspaces.delete(connection));
-        return connection;
+          workspaces.add(connection);
+          connection.session.onClosed(() => workspaces.delete(connection));
+          return connection;
+        })();
+        opening.add(open);
+        const settled = () => void opening.delete(open);
+        void open.then(settled, settled);
+        return open;
       },
       close() {
         closing ??= (async () => {
@@ -204,6 +218,9 @@ export async function createRnClientApi(channel: BrokerChannel): Promise<RnClien
             ...[...workspaces].map((workspace) => workspace.close()),
             control.close(),
           ]);
+          // An open in flight closes its own connection once it sees `closing`
+          // and reports that to its caller.
+          await Promise.allSettled([...opening]);
           const failures = results.flatMap((result) =>
             result.status === "rejected" ? [result.reason] : []
           );
