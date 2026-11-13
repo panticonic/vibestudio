@@ -300,6 +300,20 @@ describe("HeadlessHost lifecycle guards", () => {
     expect((host as unknown as { browser: unknown }).browser).toBeNull();
   });
 
+  it("retires an unresponsive browser without waiting for it to answer", async () => {
+    const host = new HeadlessHost(config());
+    const stopBrowser = vi.fn(async () => undefined);
+    Object.assign(host, {
+      browser: { stop: stopBrowser },
+      // A wedged browser never answers a command.
+      cdp: { close: vi.fn(), send: vi.fn(() => new Promise(() => {})) },
+      connection: { rpc: { call: vi.fn(async () => undefined) }, close: vi.fn(async () => {}) },
+    });
+
+    await host.stop("wedged browser");
+    expect(stopBrowser).toHaveBeenCalledOnce();
+  });
+
   it("joins failed shutdowns and releases the remaining native owners", async () => {
     const host = new HeadlessHost(config());
     const failure = new Error("browser retirement failed");

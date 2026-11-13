@@ -172,11 +172,9 @@ export class HeadlessHost implements PanelHost {
     }
     await release(() => this.bridge?.stop());
     await this.browserStart?.catch(() => {});
-    try {
-      await this.cdp?.send("Browser.close");
-    } catch {
-      // Fall through to confirmed process retirement.
-    }
+    // Retirement ends Chromium's process group and joins it; its profile is
+    // disposable, so there is nothing a graceful Browser.close would save, and
+    // awaiting its reply from a wedged browser would hang shutdown.
     await release(() => this.retireBrowser());
     await release(() => this.stopLeaseEvents?.());
     this.stopLeaseEvents = null;
