@@ -490,6 +490,8 @@ export async function describeEvalHelpName(
   deps: {
     bindings: Record<string, unknown>;
     runtimeModuleName: string;
+    /** Help for ambient names a loaded provider describes itself (natlang). */
+    providerHelp?: (name: string) => unknown | undefined;
     describeBinding: (name: string, binding: Record<string, unknown>) => Promise<unknown | null>;
     docs: {
       describe: (id: string) => Promise<unknown | null>;
@@ -497,6 +499,8 @@ export async function describeEvalHelpName(
     };
   }
 ): Promise<unknown> {
+  const provided = deps.providerHelp?.(serviceName);
+  if (provided !== undefined) return provided;
   const dot = serviceName.indexOf(".");
   if (dot > 0) {
     const bindingName = serviceName.slice(0, dot);

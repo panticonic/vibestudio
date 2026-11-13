@@ -140,6 +140,7 @@ import {
 } from "@vibestudio/workspace/configParser";
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { getCentralDataPath } from "@vibestudio/env-paths";
+import { evalDoProviderEnv } from "./evalProviderEnv.js";
 import {
   resolveHistoricalWorkspaceHost,
   requireCompatibleTransitionHost,
@@ -609,6 +610,11 @@ async function main() {
       nextConfig.providers?.cdpClient?.source?.trim()
     );
     compare(
+      "providers.natlang.source",
+      previousConfig.providers?.natlang?.source?.trim(),
+      nextConfig.providers?.natlang?.source?.trim()
+    );
+    compare(
       "providers.browserData.extension",
       workspaceProviderExtensionPackageName(previousConfig, "browserData"),
       workspaceProviderExtensionPackageName(nextConfig, "browserData")
@@ -658,17 +664,7 @@ async function main() {
   };
   /** Manifest `providers.*` env bindings for internal DO classes (workerdManager). */
   const internalDoProviderEnv = (className: string): Record<string, string> => {
-    if (className === "EvalDO") {
-      const env: Record<string, string> = {};
-      const providers = workspaceConfig.providers;
-      if (providers?.evalEngine?.source)
-        env["EVAL_ENGINE_SOURCE"] = providers.evalEngine.source.trim();
-      if (providers?.evalRuntime?.source)
-        env["EVAL_RUNTIME_SOURCE"] = providers.evalRuntime.source.trim();
-      if (providers?.cdpClient?.source)
-        env["EVAL_CDP_CLIENT_SOURCE"] = providers.cdpClient.source.trim();
-      return env;
-    }
+    if (className === "EvalDO") return evalDoProviderEnv(workspaceConfig.providers);
     return {};
   };
   // ===========================================================================
@@ -1296,12 +1292,24 @@ async function main() {
     admission.committed();
   };
   let buildSystemInstance: import("./buildV2/index.js").BuildSystemV2 | null = null;
-  const { isSealedCodeAdmitted } = await import("./services/codeAdmission.js");
+  const { isSealedCodeAdmitted, isDoCodeAdmitted } = await import("./services/codeAdmission.js");
   const isCodeApproved = async (code: VerifiedCodeIdentity): Promise<boolean> => {
     if (code.repoPath === "vibestudio/internal") return true;
     if (code.callerKind === "extension") {
       const image = (await extensionHostForGateway?.resolveActiveAdmissionImage(code)) ?? null;
       return isSealedCodeAdmitted({ code, image, admissionStore: unitAdmissionStore });
+    }
+    if (code.callerId.startsWith("do-code:")) {
+      // A plain Durable Object's raw egress is attributed to its sealed executable,
+      // not to an entity.
+      const manager = container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
+      return isDoCodeAdmitted({
+        code,
+        executable: manager?.resolveDoCodeExecutable(code.callerId) ?? null,
+        getBuild: async (buildKey, executionDigest) =>
+          (await buildSystemInstance?.getBuildByExecution(buildKey, executionDigest)) ?? null,
+        admissionStore: unitAdmissionStore,
+      });
     }
     const entity = entityCache.resolveActive(code.evalOrigin?.ownerId ?? code.callerId);
     if (

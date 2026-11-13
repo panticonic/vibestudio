@@ -4,7 +4,7 @@ import { schemaRpcMock } from "@vibestudio/rpc/test-utils";
  * eval, ABSENT for non-agent (CLI/panel) eval.
  */
 import { describe, expect, it, vi } from "vitest";
-import { buildOwnerBindings } from "./evalOwnerBindings.js";
+import { buildOwnerBindings, ownerIngestionRecorder } from "./evalOwnerBindings.js";
 
 describe("buildOwnerBindings", () => {
   it("injects no owner bindings for a non-agent eval (no channelId/agentRef → CLI/panel)", () => {
@@ -30,6 +30,7 @@ describe("buildOwnerBindings", () => {
       agent: {
         setModel: (m: string) => Promise<unknown>;
         describe: () => Promise<unknown>;
+        addressees: () => Promise<unknown>;
         setApprovalLevel: (n: number) => Promise<unknown>;
       };
       chat: {
@@ -58,6 +59,11 @@ describe("buildOwnerBindings", () => {
     await b.agent.describe();
     expect(call).toHaveBeenCalledWith("do:a:Agent:k", "describeEvalOwner", ["chan-1"]);
 
+    // Addressee listing is a read-classified receiver method, not a chatOp (a
+    // write), so it stays usable from a read-only eval.
+    await b.agent.addressees();
+    expect(call).toHaveBeenCalledWith("do:a:Agent:k", "listEvalAddressees", ["chan-1"]);
+
     await b.chat.send("hi");
     expect(call).toHaveBeenCalledWith("do:a:Agent:k", "chatOp", ["chan-1", "send", ["hi"]]);
     await b.chat.getParticipants();
@@ -71,5 +77,33 @@ describe("buildOwnerBindings", () => {
     expect(b.chat.contextId).toBe("ctx-1");
     expect(b.chat.channelId).toBe("chan-1");
     expect(b).not.toHaveProperty("automations");
+  });
+});
+
+describe("ownerIngestionRecorder", () => {
+  it("reports outside content to the owning agent, gated by its own-EvalDO receiver check", async () => {
+    const call = vi.fn(async (..._args: unknown[]) => undefined);
+    const record = ownerIngestionRecorder({ channelId: "chan-1", agentRef: "do:a:Agent:k" }, call)!;
+    await record({ key: "web:example.com" });
+    expect(call).toHaveBeenCalledWith("do:a:Agent:k", "observeOutsideContent", [
+      "chan-1",
+      "web:example.com",
+    ]);
+  });
+
+  it("rejects the web call when the agent cannot record the content", async () => {
+    const record = ownerIngestionRecorder(
+      { channelId: "chan-1", agentRef: "do:a:Agent:k" },
+      async () => {
+        throw new Error("refusing caller");
+      }
+    )!;
+    await expect(record({ key: "web:example.com" })).rejects.toThrow("refusing caller");
+  });
+
+  it("is absent for an eval no agent owns, which holds no standing task grants", () => {
+    const call = vi.fn();
+    expect(ownerIngestionRecorder({}, call)).toBeUndefined();
+    expect(ownerIngestionRecorder({ channelId: "chan-1" }, call)).toBeUndefined();
   });
 });

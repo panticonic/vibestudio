@@ -16,6 +16,7 @@
     "allowUnusedLabels": false,
     "allowUnreachableCode": false,
     "esModuleInterop": true,
+    "allowArbitraryExtensions": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,

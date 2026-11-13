@@ -33,6 +33,7 @@ import { resolveChromium } from "./browser/acquire.js";
 import { launchChromium, type LaunchedChromium } from "./browser/launch.js";
 import { CdpConnection } from "./browser/cdpConnection.js";
 import { PageHost } from "./pageHost.js";
+import { PanelShellBridge } from "./panelShellBridge.js";
 import { ConsoleHistoryStore } from "./consoleHistory.js";
 import { CdpHostBridgeClient } from "./hostBridge.js";
 import { BrowserCookieProjector } from "./browserCookieProjector.js";
@@ -280,7 +281,21 @@ export class HeadlessHost implements PanelHost {
         },
         popupFailed: (panelId, error) =>
           this.bridge?.sendEvent(panelId, "Vibestudio.popup", { error: error.message }),
-      }
+      },
+      this.config.openPanelSession
+        ? (cdpSessionId, panelInit) => {
+            const { entityId, connectionId } = panelInit as {
+              entityId: string;
+              connectionId: string;
+            };
+            return new PanelShellBridge(
+              this.cdp!,
+              cdpSessionId,
+              () => this.config.openPanelSession!(entityId, connectionId),
+              (message, error) => log.warn(`${message}: ${String(error)}`)
+            );
+          }
+        : undefined
     );
     await this.pages.initializeBrowserActivities();
     this.pages.onViewChanged((slotId) => {

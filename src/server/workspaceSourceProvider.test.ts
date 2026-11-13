@@ -12,11 +12,11 @@ import {
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import { resolveExactCausalInvocation } from "./workspaceSourceProvider.js";
 
-function setup(operation?: NativeInvocationSource["operation"]) {
+function setup(operation?: NativeInvocationSource["operation"], channelId = "channel:one") {
   const binding = {
     entityId: "do:workers/agent:Agent:one",
     contextId: "context:one",
-    channelId: "channel:one",
+    channelId,
   };
   const source: NativeInvocationSource = {
     owner: {
@@ -140,6 +140,39 @@ describe("native exact causal invocation", () => {
       commandIdForTrajectoryInvocation({ ...state.parent })
     );
   });
+  it("authenticates a channel-less native owner as its own trajectory, with no originating input", async () => {
+    // The model gateway has no agent channel: the host binds it to its own entity id.
+    const entityId = "do:workers/agent:Agent:one";
+    const state = setup(
+      {
+        kind: "model",
+        purpose: "generation",
+        attempt: 0,
+        cutoff: 4,
+        providerId: "openai",
+        modelId: "gpt-5",
+        endpoint: null,
+        requestDigest: "c".repeat(64),
+      },
+      entityId
+    );
+    state.inspect.mockResolvedValue({
+      source: state.source,
+      executor: structuredClone(state.source.owner),
+      status: "running",
+      abortRequested: false,
+      originatingInput: null,
+    });
+    expect(state.parent.logId).toBe(entityId);
+    await expect(state.resolve()).resolves.toEqual({
+      active: true,
+      owningUserId: "runtime-owner",
+      initiatingUserId: null,
+      nativeInvocation: nativeInvocationIdentity(state.source),
+    });
+    expect(state.getEnvelope).not.toHaveBeenCalled();
+  });
+
   it("authenticates direct tool task coordinates without treating them as model-generated calls", async () => {
     const state = setup({
       kind: "direct-tool",

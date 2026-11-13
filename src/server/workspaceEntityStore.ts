@@ -266,9 +266,23 @@ export class WorkspaceEntityStore {
    * The ONLY sanctioned way to activate a WorkspaceDO-backed entity.
    */
   private activationCommand(input: EntityActivationInput) {
+    const nativeOwner = this.deps.resolveNativeOwner(input);
     return {
       ...input,
-      nativeOwner: this.deps.resolveNativeOwner(input),
+      // A native owner's invocations are attributed to a trajectory. An agent's
+      // is its channel; an owner with no channel (the model gateway) is its own
+      // trajectory, named by its entity id. Binding it here gives the causal
+      // invocation checks one host-owned fact for both.
+      ...(nativeOwner && !input.agentBinding
+        ? {
+            agentBinding: {
+              entityId: this.entityId(input),
+              contextId: input.contextId,
+              channelId: this.entityId(input),
+            },
+          }
+        : {}),
+      nativeOwner,
       durableWorkQueues: this.deps.resolveDurableWorkQueues(input),
     };
   }

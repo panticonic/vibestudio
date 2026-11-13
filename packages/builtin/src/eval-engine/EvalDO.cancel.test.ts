@@ -749,6 +749,31 @@ describe("EvalDO cancellation + forced recovery", () => {
     );
   });
 
+  it("ends the inter-cell kernel hold when the host cancels its leg, without waiting for a release", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    mockOwnedCall(
+      instance,
+      vi.fn(() => Promise.resolve(undefined))
+    );
+    const controller = new AbortController();
+    Object.defineProperty(instance, "rpcAbortSignal", { get: () => controller.signal });
+    await instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 60_000 });
+    await instance.attachKernelLeaseHolder("kernel-1");
+    const held = instance.holdKernelLease("kernel-1");
+    let settled = false;
+    void held.then(
+      () => (settled = true),
+      () => (settled = true)
+    );
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    const reason = new Error("host shutdown cancelled the residency request");
+    controller.abort(reason);
+    await expect(held).rejects.toBe(reason);
+    // The kernel stays leased; a later holder may attach.
+    await expect(instance.attachKernelLeaseHolder("kernel-1")).resolves.toEqual({ attached: true });
+  });
+
   it("retires resident channels through their recorded target without contextual rediscovery", async () => {
     const { instance, sql } = await createTestDO(EvalDO, { WORKER_CLASS_NAME: "EvalDO" });
     sql.exec(
@@ -3326,7 +3351,8 @@ describe("EvalDO cancellation + forced recovery", () => {
         support: unknown,
         execution: unknown,
         gatewayToken: string,
-        parent: null
+        parent: null,
+        owner: Record<string, never>
       ) => {
         getPanelHandle(id: string): {
           cdp: { session(): Promise<unknown> };
@@ -3338,7 +3364,8 @@ describe("EvalDO cancellation + forced recovery", () => {
       support,
       executionA,
       "gateway-token",
-      null
+      null,
+      {}
     );
     const retainedHandle = runtime.getPanelHandle("panel:tree/retained");
     const receipt = {
@@ -3425,7 +3452,8 @@ describe("EvalDO cancellation + forced recovery", () => {
         support: unknown,
         execution: unknown,
         gatewayToken: string,
-        parent: null
+        parent: null,
+        owner: Record<string, never>
       ) => {
         fs: { exists(): Promise<unknown> };
         openExternal(url: string): Promise<unknown>;
@@ -3435,7 +3463,8 @@ describe("EvalDO cancellation + forced recovery", () => {
       support,
       executionA,
       "gateway-token",
-      null
+      null,
+      {}
     );
 
     await expect(runtime.fs.exists()).rejects.toThrow(/actively executing/);

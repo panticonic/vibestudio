@@ -25,7 +25,9 @@ import {
 import browserDataRuntimeCatalog from "./generated/browserDataRuntimeCatalog.json";
 import gadRuntimeCatalog from "./generated/gadRuntimeCatalog.json";
 import gitRuntimeCatalog from "./generated/gitRuntimeCatalog.json";
+import memoryRuntimeCatalog from "./generated/memoryRuntimeCatalog.json";
 import templatesRuntimeCatalog from "./generated/templatesRuntimeCatalog.json";
+import webRuntimeCatalog from "./generated/webRuntimeCatalog.json";
 import webhooksRuntimeCatalog from "./generated/webhooksRuntimeCatalog.json";
 import workspaceServiceResolutionSchema from "./generated/workspaceServiceResolution.json";
 import { GAD_RUNTIME_METHOD_NAMES } from "@vibestudio/shared/gadRuntimeMethods";
@@ -879,6 +881,18 @@ export const portableExports: Record<string, RuntimeSurfaceEntry> = {
     "Exact source inspection and publication through the admitted template receiver.",
     undefined,
     templatesRuntimeCatalog
+  ),
+  web: namespaceEntry(
+    Object.keys(webRuntimeCatalog),
+    "Web search, page fetch, and cached-page read: the agent web_search, web_fetch, and web_read tools' implementation, callable from code. search runs up to five queries through DuckDuckGo, or Tavily, Brave, or Exa when a credential is registered (provider requests use the caller's credentialed egress). fetch loads a page through managed Chromium, caches the cleaned markdown in the blobstore, and returns a head excerpt and a digest; session \"browser\" uses imported cookies and needs approval. read returns a byte range of a cached page by digest. Returned page and result text is untrusted external content.",
+    undefined,
+    webRuntimeCatalog
+  ),
+  memory: namespaceEntry(
+    Object.keys(memoryRuntimeCatalog),
+    "Workspace memory recall (the agent memory_recall tool's implementation): recall({ query, kinds?, limit? }) searches completed conversation messages, committed file content, and commit summaries with provenance. Recall finds things; verify against the source records it points to.",
+    undefined,
+    memoryRuntimeCatalog
   ),
   notifications: namespaceEntry(NOTIFICATIONS_MEMBERS, undefined, "notification"),
   problemReports: namespaceEntry(

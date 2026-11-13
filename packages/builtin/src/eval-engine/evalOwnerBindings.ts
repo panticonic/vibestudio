@@ -93,6 +93,25 @@ export interface ChatBinding {
 type CallFn = (target: string, method: string, callArgs: unknown[]) => Promise<unknown>;
 
 /**
+ * Outside-content reporter for an agent-owned eval, or undefined when no agent
+ * owns it (CLI/panel eval holds no standing task grants to give up). The `web`
+ * binding calls it with each page or search result before returning it; the
+ * owning agent then drops its standing task authority through the same
+ * `outsideContentReset` its `web_*` tools use. A failed report rejects the web
+ * call: content must not reach the task without the reset.
+ */
+export function ownerIngestionRecorder(
+  args: OwnerBindingArgs,
+  call: CallFn
+): ((entry: { key: string }) => Promise<void>) | undefined {
+  if (!args.channelId || !args.agentRef) return undefined;
+  const { channelId, agentRef } = args;
+  return async (entry) => {
+    await call(agentRef, "observeOutsideContent", [channelId, entry.key]);
+  };
+}
+
+/**
  * Build the owner bindings. Returns `{}` when the eval has NO owning agent (a
  * CLI/panel eval supplies no `channelId`/`agentRef`) — `chat`/`agent` are then
  * ABSENT, so referencing them in eval code throws a `ReferenceError` (and
@@ -140,6 +159,9 @@ export function buildOwnerBindings(
     // through chatOp would make a harmless snapshot inherit that method's
     // write sensitivity and fail every read-only eval.
     describe: () => call(agentRef, "describeEvalOwner", [channelId]),
+    // Same read classification as `describe`: who this agent can message (the
+    // `list_addressees` tool's rows, each with the exact `to` ref for notify).
+    addressees: () => call(agentRef, "listEvalAddressees", [channelId]),
     configure: (patch: Record<string, unknown>) => configure(patch),
     setModel: (model: string) => configure({ model }),
     setThinkingLevel: (thinkingLevel: string) => configure({ thinkingLevel }),

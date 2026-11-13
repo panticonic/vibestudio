@@ -15,6 +15,7 @@ import {
   type PanelDomSnapshot,
 } from "@vibestudio/shared/panel/domSnapshot";
 export type { PanelDomSnapshot } from "@vibestudio/shared/panel/domSnapshot";
+import { PanelShellBridge, shellBridgeScript } from "./panelShellBridge.js";
 import { createDevLogger } from "@vibestudio/dev-log";
 import {
   PANEL_PAGE_OBSERVATION_EXPRESSION,
@@ -56,7 +57,12 @@ interface PanelPage {
   bootTransport: PanelDocumentBootTransport;
   /** In-flight main-frame script requests of the current document, by request id. */
   scriptRequests: Map<string, string>;
+  /** The panel's shell bridge, when the host supplies one (the page has no preload to provide it). */
+  shell?: PanelShellBridge;
 }
+
+/** Makes the shell bridge of one panel document: the page's CDP session, and the init (entity, connection) it boots with. */
+export type ShellBridgeFactory = (cdpSessionId: string, panelInit: unknown) => PanelShellBridge;
 
 export interface LoadPanelInput {
   slotId: string;
@@ -107,7 +113,8 @@ export class PageHost {
       configureContext?(id: string): Promise<void>;
       popup?(panelId: string, url: string): Promise<void>;
       popupFailed?(panelId: string, error: Error): void;
-    }
+    },
+    private readonly shellBridge?: ShellBridgeFactory
   ) {
     cdp.onEvent((event) => this.routeEvent(event));
   }
@@ -187,7 +194,7 @@ export class PageHost {
 
     try {
       await this.beforeNavigate?.(browserContextId, input.panelUrl);
-      const initScript = `globalThis.__vibestudioPanelInit = ${JSON.stringify(input.panelInit)}; globalThis.__vibestudioHostPlatform = "headless";`;
+      const initScript = await this.initScript(page, input.panelInit);
       await this.cdp.send(
         "Page.addScriptToEvaluateOnNewDocument",
         { source: initScript },
@@ -219,6 +226,15 @@ export class PageHost {
       throw error;
     }
     log.info(`loaded panel ${input.slotId} (${input.panelUrl})`);
+  }
+
+  /** The script that runs before the panel's own: its init, and the shell bridge when the host supplies one. */
+  private async initScript(page: PanelPage, panelInit: unknown): Promise<string> {
+    const init = `globalThis.__vibestudioPanelInit = ${JSON.stringify(panelInit)}; globalThis.__vibestudioHostPlatform = "headless";`;
+    if (!this.shellBridge) return init;
+    page.shell = this.shellBridge(page.mgmtSessionId, panelInit);
+    await page.shell.install();
+    return `${init}\n${shellBridgeScript()}`;
   }
 
   private waitForDocumentReady(slotId: string): Promise<void> {
@@ -286,7 +302,10 @@ export class PageHost {
     page.panelUrl = panelUrl;
     const browserContextId = this.contextsById.get(page.contextId);
     if (browserContextId) await this.beforeNavigate?.(browserContextId, panelUrl);
-    const initScript = `globalThis.__vibestudioPanelInit = ${JSON.stringify(panelInit)}; globalThis.__vibestudioHostPlatform = "headless";`;
+    // A new document boots with a new connection: its bridge relays on a new session.
+    await page.shell?.close();
+    page.shell = undefined;
+    const initScript = await this.initScript(page, panelInit);
     await this.cdp.send(
       "Page.addScriptToEvaluateOnNewDocument",
       { source: initScript },
@@ -308,6 +327,9 @@ export class PageHost {
     if (!page) return;
     page.browserOwner?.abort(new Error("Panel unloaded"));
     this.retiringPages.add(page);
+    await page.shell
+      ?.close()
+      .catch((error) => log.warn(`panel ${slotId} shell bridge close failed: ${String(error)}`));
     await this.detachRelay(slotId);
     try {
       const closed = (await this.cdp.send("Target.closeTarget", { targetId: page.targetId })) as {
