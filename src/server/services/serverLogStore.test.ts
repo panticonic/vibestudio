@@ -67,6 +67,24 @@ describe("serverLogStore", () => {
     expect(store.tail().records[0]!.fields![0]).toEqual({ token: "[redacted]", ok: true });
   });
 
+  it("redacts structured secrets that JSON serialization would escape", () => {
+    const store = createServerLogStore();
+    const secret = 'pa"ss\\word-1234';
+    store.addSecret(secret);
+    store.append("info", ["payload", { token: secret, nested: [`Bearer ${secret}`] }]);
+    expect(store.tail().records[0]!.fields![0]).toEqual({
+      token: "[redacted]",
+      nested: ["Bearer [redacted]"],
+    });
+  });
+
+  it("redacts already-buffered structured fields when a secret is registered", () => {
+    const store = createServerLogStore();
+    store.append("info", ["payload", { token: "tok-abcdefgh" }]);
+    store.addSecret("tok-abcdefgh");
+    expect(store.tail().records[0]!.fields![0]).toEqual({ token: "[redacted]" });
+  });
+
   it("evicts oldest records beyond the buffer size but keeps seq/stats totals", () => {
     const store = createServerLogStore({ bufferSize: 3 });
     for (let i = 1; i <= 5; i++) store.append("info", [`m${i}`]);

@@ -151,14 +151,20 @@ export function createServerLogStore(
     return out;
   };
 
-  /** Redact secrets inside a JSON-safe structured value. */
+  /**
+   * Redact secrets inside a JSON-safe structured value. Strings are matched as
+   * values, before serialization would escape a quote or backslash in them.
+   */
   const redactDeep = (value: unknown): unknown => {
     if (secrets.length === 0) return value;
-    try {
-      return JSON.parse(redact(JSON.stringify(value)));
-    } catch {
-      return value;
+    if (typeof value === "string") return redact(value);
+    if (Array.isArray(value)) return value.map(redactDeep);
+    if (value && typeof value === "object") {
+      return Object.fromEntries(
+        Object.entries(value).map(([key, entry]) => [redact(key), redactDeep(entry)])
+      );
     }
+    return value;
   };
 
   const writeJsonl = (record: ServerLogRecord): void => {
@@ -291,6 +297,7 @@ export function createServerLogStore(
         if (record.message.includes(secret)) {
           record.message = record.message.split(secret).join("[redacted]");
         }
+        if (record.fields) record.fields = record.fields.map(redactDeep);
       }
     },
 
