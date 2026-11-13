@@ -175,6 +175,43 @@ describe("pushService", () => {
     expect(service.internal.listRegistrations()).toEqual([]);
   });
 
+  it("keeps a rotated token registered while its predecessor's send is rejected", async () => {
+    const databasePath = tempDatabasePath();
+    let service!: ReturnType<typeof createPushService>;
+    const send = vi.fn(async (message: { token?: string }) => {
+      if (message.token === "old-token") {
+        // The device rotates its FCM token while the old one is in flight.
+        await service.definition.handler(
+          { caller: createVerifiedCaller("shell", "shell", null, null, PUSH_SUBJECT) },
+          "register",
+          [{ clientId: "mobile-1", platform: "android", token: "new-token" }]
+        );
+        throw { code: "messaging/registration-token-not-registered" };
+      }
+      return "message-id";
+    });
+    service = createPushService({
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+      databasePath,
+      firebaseAdminLoader: async () => ({ send }),
+      metrics: createPushMetrics(),
+    });
+
+    await service.definition.handler(
+      { caller: createVerifiedCaller("shell", "shell", null, null, PUSH_SUBJECT) },
+      "register",
+      [{ clientId: "mobile-1", platform: "android", token: "old-token" }]
+    );
+
+    await expect(
+      service.internal.send(PUSH_USER_ID, { clientId: "mobile-1", title: "Approve" })
+    ).rejects.toMatchObject({ code: "messaging/registration-token-not-registered" });
+    expect(service.internal.listRegistrations()).toEqual([
+      expect.objectContaining({ clientId: "mobile-1", token: "new-token" }),
+    ]);
+  });
+
   it("notifies internal listeners when registrations change", async () => {
     const databasePath = tempDatabasePath();
     const service = createPushService({

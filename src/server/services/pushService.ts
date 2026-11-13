@@ -223,6 +223,18 @@ class PushRegistrationStore {
     );
   }
 
+  /**
+   * Remove a registration only while it still holds `token`. A device that
+   * re-registered a rotated token in the meantime keeps its new registration.
+   */
+  deleteToken(userId: string, clientId: string, token: string): boolean {
+    return (
+      this.db
+        .prepare("DELETE FROM push_registrations WHERE user_id = ? AND client_id = ? AND token = ?")
+        .run(userId, clientId, token).changes > 0
+    );
+  }
+
   deleteUser(userId: string): number {
     return Number(
       this.db.prepare("DELETE FROM push_registrations WHERE user_id = ?").run(userId).changes
@@ -234,11 +246,22 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** A configured service account that does not parse names its source, not just the JSON error. */
+function parseServiceAccount(json: string, source: string): Record<string, unknown> {
+  try {
+    return JSON.parse(json) as Record<string, unknown>;
+  } catch (error) {
+    throw new Error(`Firebase service account in ${source} is not valid JSON`, { cause: error });
+  }
+}
+
 function readServiceAccount(env: NodeJS.ProcessEnv): Record<string, unknown> | null {
-  const inlineJson =
-    env["VIBESTUDIO_FIREBASE_SERVICE_ACCOUNT_JSON"] ?? env["FIREBASE_SERVICE_ACCOUNT_JSON"];
-  if (inlineJson) {
-    return JSON.parse(inlineJson) as Record<string, unknown>;
+  for (const name of [
+    "VIBESTUDIO_FIREBASE_SERVICE_ACCOUNT_JSON",
+    "FIREBASE_SERVICE_ACCOUNT_JSON",
+  ] as const) {
+    const inlineJson = env[name];
+    if (inlineJson) return parseServiceAccount(inlineJson, name);
   }
 
   const candidatePaths = [
@@ -248,7 +271,7 @@ function readServiceAccount(env: NodeJS.ProcessEnv): Record<string, unknown> | n
 
   for (const candidate of candidatePaths) {
     if (fs.existsSync(candidate)) {
-      return JSON.parse(fs.readFileSync(candidate, "utf-8")) as Record<string, unknown>;
+      return parseServiceAccount(fs.readFileSync(candidate, "utf-8"), candidate);
     }
   }
 
@@ -443,8 +466,12 @@ export function createPushService(deps: PushServiceDeps): PushServiceResult {
         logOnly: false,
       };
     } catch (error) {
-      if (isInvalidTokenError(error)) {
-        store.delete(registration.userId, registration.clientId);
+      // Firebase rejected this token, not the client: delivery can race a
+      // re-registration that rotated it, which must survive.
+      if (
+        isInvalidTokenError(error) &&
+        store.deleteToken(registration.userId, registration.clientId, registration.token)
+      ) {
         emitRegistrationsChanged();
       }
       metrics.recordPushSend({ platform: registration.platform, category, outcome: "failed" });
