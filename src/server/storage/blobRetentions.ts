@@ -78,7 +78,8 @@ export function retainBlob(
       .get(namespace, owner);
     if (prior && prior["digest"] !== digest)
       throw new Error(
-        "Blob retention owner already names different content; release it explicitly first"
+        `Blob retention owner ${owner} in ${namespace} already names different content ` +
+          `(${String(prior["digest"])}, not ${digest}); release it explicitly first`
       );
     db.prepare(
       "INSERT OR IGNORE INTO blob_retentions(namespace, owner, digest) VALUES (?, ?, ?)"

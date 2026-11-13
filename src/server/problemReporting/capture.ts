@@ -177,10 +177,13 @@ export class ReportCapture {
         } catch {
           this.store.deleteLocal(owner, this.workspaceId, report.reportId, true);
         }
-      } catch {
+      } catch (error) {
         this.dropped++;
+        // Local diagnostics only: the cause stays on this machine's stderr.
         process.stderr.write(
-          "[problem-reporting] Observation could not be retained; capture loss counted.\n"
+          `[problem-reporting] Observation could not be retained; capture loss counted: ${
+            error instanceof Error ? error.message : String(error)
+          }\n`
         );
       }
   }

@@ -1095,7 +1095,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       request.contentHashes.map(async (contentHash) => {
         const bytes = await getBytes(this.deps.blobsDir, contentHash);
         if (!bytes) throw new Error(`semantic content blob ${contentHash} is missing`);
-        return { contentHash, text: UTF8_DECODER.decode(bytes) };
+        let text: string;
+        try {
+          text = UTF8_DECODER.decode(bytes);
+        } catch (error) {
+          throw new Error(`semantic merge content ${contentHash} is not UTF-8 text`, {
+            cause: error,
+          });
+        }
+        return { contentHash, text };
       })
     );
     return this.gad().semanticHostReadAck({ acknowledgement: { request, files } });
