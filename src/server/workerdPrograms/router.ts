@@ -45,7 +45,11 @@ async function fetchDurableObject(stub: DurableObjectStub, request: Request): Pr
  * replacement of a quiesced cell's state by another's.
  */
 interface ForkableNamespace extends DurableObjectNamespace {
-  fork(sourceId: DurableObjectId, options?: { to?: DurableObjectId }): Promise<DurableObjectId>;
+  fork(
+    sourceId: DurableObjectId,
+    options?: { to?: DurableObjectId; replaceUnfinished?: boolean }
+  ): Promise<DurableObjectId>;
+  deleteUnfinished(id: DurableObjectId): Promise<{ deleted: number }>;
   restore(
     targetId: DurableObjectId,
     fromId: DurableObjectId,
@@ -54,13 +58,15 @@ interface ForkableNamespace extends DurableObjectNamespace {
 }
 
 interface ObjectOperation {
-  op: "fork" | "restore";
+  op: "fork" | "restore" | "deleteUnfinished";
   /** `UNIVERSAL_DO`, or the binding name of a product class. */
   namespace: string;
   /** Cell names (`idFromName`). */
   from: string;
   to: string;
   stop?: boolean;
+  /** `fork`: take over a target an interrupted fork left unfinished. */
+  replaceUnfinished?: boolean;
 }
 
 async function objectOperation(env: RouterEnv, request: Request): Promise<Response> {
@@ -75,8 +81,12 @@ async function objectOperation(env: RouterEnv, request: Request): Promise<Respon
     if (input.op === "fork") {
       const id = await namespace.fork(namespace.idFromName(input.from), {
         to: namespace.idFromName(input.to),
+        ...(input.replaceUnfinished ? { replaceUnfinished: true } : {}),
       });
       return Response.json({ id: id.toString() });
+    }
+    if (input.op === "deleteUnfinished") {
+      return Response.json(await namespace.deleteUnfinished(namespace.idFromName(input.to)));
     }
     if (input.op === "restore") {
       await namespace.restore(namespace.idFromName(input.to), namespace.idFromName(input.from), {

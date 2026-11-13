@@ -390,7 +390,6 @@ afterEach(async () => {
   testStatePaths.clear();
 });
 
-
 /**
  * The runtime node as far as the manager's storage operations can see it:
  * `/_object` (fork, restore through the router) and a UniversalDO cell's
@@ -399,6 +398,7 @@ afterEach(async () => {
 function fakeNode(options: { failFork?: boolean | string; failDestroy?: boolean } = {}) {
   const state = {
     failFork: options.failFork ?? false,
+    failForkCode: undefined as string | undefined,
     failDestroy: options.failDestroy ?? false,
     objects: [] as Array<Record<string, unknown>>,
     destroyed: [] as Array<{ key: string; path: string; secret: string | null }>,
@@ -413,7 +413,12 @@ function fakeNode(options: { failFork?: boolean | string; failDestroy?: boolean 
       if (state.failFork) {
         return new Response(
           typeof state.failFork === "string" ? state.failFork : "injected fork failure",
-          { status: 409 }
+          {
+            status: 409,
+            ...(state.failForkCode
+              ? { headers: { "X-Vibestudio-Object-Error": state.failForkCode } }
+              : {}),
+          }
         );
       }
       state.objects.push(body);
@@ -1288,6 +1293,8 @@ describe("RuntimeManager", () => {
       namespace: "UNIVERSAL_DO",
       from: encodeUniversalKey(ref),
       to: encodeUniversalKey({ ...ref, objectKey: `__vibestudio_backup:${operationId}` }),
+      // A fork the node lost mid-publication is taken over, not renamed around.
+      replaceUnfinished: true,
     });
     expect(node.destroyed.map((entry) => decodeURIComponent(entry.key))).toEqual([
       encodeUniversalKey(ref),
@@ -1307,7 +1314,10 @@ describe("RuntimeManager", () => {
       expect(node.objects.map((entry) => entry["op"])).toEqual(["fork", "restore"]);
       // The current state is backed up before it is replaced.
       expect(node.objects[0]).toMatchObject({
-        to: encodeUniversalKey({ ...ref, objectKey: `__vibestudio_backup:${restored.operationId}` }),
+        to: encodeUniversalKey({
+          ...ref,
+          objectKey: `__vibestudio_backup:${restored.operationId}`,
+        }),
       });
       expect(node.objects[1]).toMatchObject({
         op: "restore",
@@ -1432,9 +1442,7 @@ describe("RuntimeManager", () => {
     expect(backups.some((backup) => backup.operationId === resumed.operationId)).toBe(false);
     // The swept backup's cell was deleted along with its record.
     expect(
-      node.destroyed.some((entry) =>
-        decodeURIComponent(entry.key).includes(resumed.operationId)
-      )
+      node.destroyed.some((entry) => decodeURIComponent(entry.key).includes(resumed.operationId))
     ).toBe(true);
     await mgr.shutdown();
   });
@@ -1443,7 +1451,9 @@ describe("RuntimeManager", () => {
     const deps = createMockDeps();
     const ref = { source: "workers/board", className: "BoardDO", objectKey: "retired" };
     const down = new RuntimeManager(deps);
-    type Internals = { readOpenDurableObjectMaintenance(): Array<{ kind: string; objectKey: string }> };
+    type Internals = {
+      readOpenDurableObjectMaintenance(): Array<{ kind: string; objectKey: string }>;
+    };
     // No node is running: the retirement is journaled and nothing is destroyed.
     const quiet = fakeNode();
     await down.destroyRetiredDOStorage(ref);
@@ -1496,7 +1506,12 @@ describe("RuntimeManager", () => {
     const ref = { source: "workers/board", className: "BoardDO", objectKey: "source" };
     const reservation = (over: Record<string, unknown> = {}) =>
       ({
-        id: canonicalEntityId({ kind: "do", source: ref.source, className: ref.className, key: "copy" }),
+        id: canonicalEntityId({
+          kind: "do",
+          source: ref.source,
+          className: ref.className,
+          key: "copy",
+        }),
         kind: "do",
         key: "copy",
         status: "preparing",
@@ -1549,6 +1564,7 @@ describe("RuntimeManager", () => {
             namespace: "UNIVERSAL_DO",
             from: encodeUniversalKey(ref),
             to: encodeUniversalKey(target),
+            replaceUnfinished: true,
           },
         ]);
         expect(() => mgr.requireCloneStorageComplete(record)).not.toThrow();
@@ -1570,6 +1586,7 @@ describe("RuntimeManager", () => {
       const { mgr, node } = await cloneHarness();
       try {
         node.failFork = "the target object BoardDO:x already exists";
+        node.failForkCode = "ERR_OBJECT_EXISTS";
         const record = reservation();
         // First attempt: the fork fails; the receipt is left open.
         await expect(

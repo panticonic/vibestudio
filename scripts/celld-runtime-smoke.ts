@@ -38,7 +38,11 @@ const objectHeaders = { Authorization: "Bearer gw", "X-Vibestudio-Dispatch-Secre
 const fork = await fetch("http://127.0.0.1:18765/_object", { method: "POST", headers: objectHeaders, body: forkBody });
 console.log("fork", fork.status, (await fork.text()).slice(0, 200));
 const again = await fetch("http://127.0.0.1:18765/_object", { method: "POST", headers: objectHeaders, body: forkBody });
-console.log("fork again (refused)", again.status, (await again.text()).slice(0, 200));
+console.log("fork again (refused)", again.status, again.headers.get("X-Vibestudio-Object-Error"), (await again.text()).slice(0, 200));
+const replaced = await fetch("http://127.0.0.1:18765/_object", { method: "POST", headers: objectHeaders, body: JSON.stringify({ ...JSON.parse(forkBody), replaceUnfinished: true }) });
+console.log("fork again with replaceUnfinished (finished target still refused)", replaced.status, replaced.headers.get("X-Vibestudio-Object-Error"));
+const notUnfinished = await fetch("http://127.0.0.1:18765/_object", { method: "POST", headers: objectHeaders, body: JSON.stringify({ op: "deleteUnfinished", namespace: "do_vibestudio_internal_WebhookStoreDO", from: "k2", to: "k2" }) });
+console.log("deleteUnfinished of a finished object", notUnfinished.status, notUnfinished.headers.get("X-Vibestudio-Object-Error"));
 const restore = await fetch("http://127.0.0.1:18765/_object", { method: "POST", headers: objectHeaders, body: JSON.stringify({ op: "restore", namespace: "do_vibestudio_internal_WebhookStoreDO", from: "k1", to: "k2", stop: true }) });
 console.log("restore", restore.status, (await restore.text()).slice(0, 200));
 const destroyHeaders = { Authorization: "Bearer gw", "X-Vibestudio-Dispatch-Secret": "ds", "X-Vibestudio-Lifecycle-Secret": "dls" };

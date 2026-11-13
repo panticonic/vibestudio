@@ -67,7 +67,8 @@ export function resolveCelldBinary(
   const override = env["VIBESTUDIO_CELLD_BIN"];
   if (override) {
     if (!path.isAbsolute(override)) throw new Error("VIBESTUDIO_CELLD_BIN must be absolute");
-    if (!fs.existsSync(override)) throw new Error(`VIBESTUDIO_CELLD_BIN does not exist: ${override}`);
+    if (!fs.existsSync(override))
+      throw new Error(`VIBESTUDIO_CELLD_BIN does not exist: ${override}`);
     return override;
   }
   const executable = process.platform === "win32" ? "celld.exe" : "celld";
@@ -347,17 +348,25 @@ export class CelldNode {
       input.name,
       "--file",
       input.root,
-      ...Object.entries(input.facets ?? {}).flatMap(([name, file]) => ["--facet", `${name}=${file}`]),
+      ...Object.entries(input.facets ?? {}).flatMap(([name, file]) => [
+        "--facet",
+        `${name}=${file}`,
+      ]),
       "--bucket",
       this.bucket,
+      "--json",
       ...(replaceUnfinished ? ["--replace-unfinished"] : []),
     ];
     const run = async (replaceUnfinished: boolean) => {
       const child = spawn(this.options.binary, args(replaceUnfinished), {
-        stdio: ["ignore", "ignore", "pipe"],
+        stdio: ["ignore", "pipe", "pipe"],
         env: { ...this.baseEnv(), CELLD_SECRETS_KEY_FILE: this.secretsKeyFile },
       });
+      let stdout = "";
       let stderr = "";
+      child.stdout?.on("data", (data: Buffer) => {
+        stdout = (stdout + data.toString()).slice(-4000);
+      });
       child.stderr?.on("data", (data: Buffer) => {
         stderr = (stderr + data.toString()).slice(-4000);
       });
@@ -365,14 +374,21 @@ export class CelldNode {
         child.once("error", reject);
         child.once("exit", (code, signal) => resolve({ code, signal }));
       });
-      return { code: exit.code, stderr };
+      return {
+        code: exit.code,
+        errorCode: importErrorCode(stdout),
+        message: stdout.trim() || stderr.trim(),
+      };
     };
+    // A failure carries a stable code (`--json`): `ERR_OBJECT_EXISTS` is a
+    // repeated migration, `ERR_OBJECT_UNFINISHED` an import a crash left
+    // unfinished.
     let result = await run(false);
-    if (result.code !== 0 && /unfinished/iu.test(result.stderr)) result = await run(true);
+    if (result.code !== 0 && result.errorCode === "ERR_OBJECT_UNFINISHED") result = await run(true);
     if (result.code === 0) return "imported";
-    if (/already exists/iu.test(result.stderr)) return "exists";
+    if (result.errorCode === "ERR_OBJECT_EXISTS") return "exists";
     throw new Error(
-      `celld cell import ${input.className} ${input.name} failed (code=${result.code}): ${result.stderr.trim()}`
+      `celld cell import ${input.className} ${input.name} failed (code=${result.code}): ${result.message}`
     );
   }
 
@@ -407,7 +423,11 @@ export class CelldNode {
     });
     const internalOrigin = new Promise<string>((resolve, reject) => {
       child.once("exit", (code, signal) =>
-        reject(new Error(`celld node exited before announcing its operator listener (${code}, ${signal})`))
+        reject(
+          new Error(
+            `celld node exited before announcing its operator listener (${code}, ${signal})`
+          )
+        )
       );
       const lines = lineReader((line) => {
         const match = INTERNAL_LISTENING.exec(line);
@@ -433,4 +453,14 @@ function lineReader(onLine: (line: string) => void): (data: Buffer) => void {
     pending = lines.pop() ?? "";
     for (const line of lines) if (line.trim()) onLine(line);
   };
+}
+
+/** The `error.code` of a `celld ... --json` failure (printed on stdout), if any. */
+function importErrorCode(stdout: string): string | undefined {
+  try {
+    const parsed = JSON.parse(stdout) as { error?: { code?: unknown } };
+    return typeof parsed.error?.code === "string" ? parsed.error.code : undefined;
+  } catch {
+    return undefined;
+  }
 }

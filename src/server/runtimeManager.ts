@@ -215,6 +215,14 @@ function scopeTracksProtectedMain(scopeRef: string | undefined): boolean {
   return normalized === "main";
 }
 
+/** The router reports the runtime's stable object-operation error code in this header. */
+const OBJECT_ERROR_HEADER = "X-Vibestudio-Object-Error";
+
+function objectErrorCode(error: unknown): string | undefined {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" ? code : undefined;
+}
+
 function errorMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
@@ -2564,10 +2572,7 @@ export class RuntimeManager {
 
   private preemptPreparingTransition(reason: string): void {
     const transition = this.activeTransition;
-    if (
-      transition &&
-      transition.kind === "planned" && transition.state === "preparing"
-    ) {
+    if (transition && transition.kind === "planned" && transition.state === "preparing") {
       transition.prepAbort.abort(
         new Error(`crash recovery preempted graceful workerd prepare: ${reason}`)
       );
@@ -2606,13 +2611,7 @@ export class RuntimeManager {
     // Severity order: crash > planned > stop-if-idle.
     const transition: GenerationTransition = {
       correlationId: crypto.randomUUID(),
-      kind: crash
-        ? "crash"
-        : hasPlanned
-          ? "planned"
-          : onlyStopIfIdle
-            ? "stop-if-idle"
-            : "planned",
+      kind: crash ? "crash" : hasPlanned ? "planned" : onlyStopIfIdle ? "stop-if-idle" : "planned",
       state: "preparing",
       reason: crash
         ? crash.reason
@@ -4330,12 +4329,17 @@ export class RuntimeManager {
     } as RequestInit);
   }
 
-  /** Fork or restore whole cells of UniversalDO through the router. */
+  /**
+   * Fork or restore whole cells of UniversalDO through the router. A failure
+   * carries the runtime's stable error code (`ERR_OBJECT_EXISTS`, ...).
+   */
   private async objectOperation(input: {
     op: "fork" | "restore";
     from: DORef;
     to: DORef;
     stop?: boolean;
+    /** `fork`: take over a target an interrupted fork left unfinished. */
+    replaceUnfinished?: boolean;
   }): Promise<void> {
     const response = await this.nodeFetch("/_object", {
       body: {
@@ -4344,12 +4348,16 @@ export class RuntimeManager {
         from: this.cellName(input.from),
         to: this.cellName(input.to),
         ...(input.stop ? { stop: true } : {}),
+        ...(input.replaceUnfinished ? { replaceUnfinished: true } : {}),
       },
     });
     if (!response.ok) {
-      throw new Error(
-        `${input.op} of ${input.from.className}/${input.from.objectKey} failed ` +
-          `(${response.status}): ${await response.text()}`
+      throw Object.assign(
+        new Error(
+          `${input.op} of ${input.from.className}/${input.from.objectKey} failed ` +
+            `(${response.status}): ${await response.text()}`
+        ),
+        { code: response.headers.get(OBJECT_ERROR_HEADER) ?? undefined }
       );
     }
     await response.arrayBuffer();
@@ -4380,30 +4388,25 @@ export class RuntimeManager {
   }
 
   /**
-   * Fork the target into a backup cell. A fork that already completed (a
-   * retry after a crash) is recognized by its error; a fork that stopped
-   * before completing leaves a cell nothing can reuse, so the backup moves to
-   * a fresh name.
+   * Fork the target into a backup cell named by the operation. A fork that
+   * already completed (a retry after a crash) answers `ERR_OBJECT_EXISTS`; one
+   * that stopped before completing is taken over (`replaceUnfinished`).
    */
   private async backUpDurableObject(row: DurableObjectMaintenanceRow, ref: DORef): Promise<void> {
     const recorded = this.doMaintenanceDb
       .prepare(`SELECT 1 AS present FROM do_storage_backups WHERE operation_id = ?`)
       .get(row.operationId);
     if (recorded) return;
-    let backupId = row.operationId;
-    for (let attempt = 0; ; attempt++) {
-      try {
-        await this.objectOperation({ op: "fork", from: ref, to: this.backupRef(ref, backupId) });
-        break;
-      } catch (error) {
-        const message = errorMessage(error);
-        if (message.includes("already exists")) break;
-        if (message.includes("unfinished publication") && attempt < 2) {
-          backupId = `${row.operationId}:${crypto.randomUUID()}`;
-          continue;
-        }
-        throw error;
-      }
+    const backupId = row.operationId;
+    try {
+      await this.objectOperation({
+        op: "fork",
+        from: ref,
+        to: this.backupRef(ref, backupId),
+        replaceUnfinished: true,
+      });
+    } catch (error) {
+      if (objectErrorCode(error) !== "ERR_OBJECT_EXISTS") throw error;
     }
     this.doMaintenanceDb
       .prepare(
@@ -4785,11 +4788,17 @@ export class RuntimeManager {
       }
       await this.assertCloneSourceIdentity(ref, options.reservation, options.resolveSource);
       try {
-        await this.objectOperation({ op: "fork", from: ref, to: target });
+        await this.objectOperation({
+          op: "fork",
+          from: ref,
+          to: target,
+          // An earlier attempt the node lost mid-publication is taken over.
+          replaceUnfinished: true,
+        });
       } catch (error) {
         // A retry of a clone whose earlier fork finished before its receipt
         // was recorded: the target exists and is complete.
-        if (!(receipt === "retry" && errorMessage(error).includes("already exists"))) throw error;
+        if (!(receipt === "retry" && objectErrorCode(error) === "ERR_OBJECT_EXISTS")) throw error;
       }
       await this.assertCloneSourceIdentity(ref, options.reservation, options.resolveSource);
       this.cloneReceipts.complete(targetId);

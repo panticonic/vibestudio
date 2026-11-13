@@ -221,8 +221,7 @@ interface Harness {
   admissionFetches: Map<string, number>;
   dispatch: (
     ref: { source: string; className: string; objectKey: string },
-    method: string,
-    signal?: AbortSignal
+    method: string
   ) => Promise<unknown>;
 }
 
@@ -416,15 +415,13 @@ async function createHarness(
 
   const dispatch = async (
     ref: { source: string; className: string; objectKey: string },
-    method: string,
-    signal?: AbortSignal
+    method: string
   ): Promise<unknown> => {
     const port = manager.getPort();
     if (!port) throw new Error("workerd not running");
     const key = encodeUniversalKey(ref);
     const res = await fetch(`http://127.0.0.1:${port}/_u/${encodeURIComponent(key)}/${method}`, {
       method: "POST",
-      ...(signal ? { signal } : {}),
       headers: {
         Authorization: "Bearer udo-gateway-token",
         "X-Vibestudio-Dispatch-Secret": manager.getDispatchSecret(),
@@ -584,11 +581,9 @@ describe.skipIf(!celldBinary)("UniversalDO facet host (real celld)", () => {
     });
     expect([...codeFetches.values()].reduce((sum, value) => sum + value, 0)).toBe(1);
     const boot = manager.getBootGeneration();
-    // A request running in a facet that is retired never answers (celld keeps a
-    // root's response behind its facet's pending call). The host's relay owns
-    // the caller side and drops its request; this caller does the same.
-    const heldCall = new AbortController();
-    const held = dispatch(first, "hold", heldCall.signal).then(
+    // A request running in a facet that is retired fails: celld rejects the
+    // facet's pending call and the root's response goes out.
+    const held = dispatch(first, "hold").then(
       () => ({ ok: true }),
       (error) => ({ error })
     );
@@ -596,7 +591,6 @@ describe.skipIf(!celldBinary)("UniversalDO facet host (real celld)", () => {
     // owning instance before retirement; no time-based readiness surrogate.
     expect(await dispatch(first, "instance")).toMatchObject({ localCalls: 2, held: true });
     await manager.retireDOEntity(first);
-    heldCall.abort();
     expect(await held).toHaveProperty("error");
     expect(manager.getBootGeneration()).toBe(boot);
     expect(await dispatch(second, "instance")).toMatchObject({ localCalls: 2, held: false });
@@ -908,8 +902,7 @@ describe.skipIf(!celldBinary)("UniversalDO facet host (real celld)", () => {
         .filter(([key]) => !key.startsWith("__vibestudio_schema_probe:"))
         .reduce((sum, [, count]) => sum + count, 0);
     expect(codeLoads()).toBe(1);
-    const heldCall = new AbortController();
-    const held = dispatch(first, "hold", heldCall.signal).then(
+    const held = dispatch(first, "hold").then(
       () => ({ completed: true }),
       (error) => ({ error })
     );
@@ -928,7 +921,6 @@ describe.skipIf(!celldBinary)("UniversalDO facet host (real celld)", () => {
       unitConstructors: 3,
       stateArgs: { configuration: "reconfigured" },
     });
-    heldCall.abort();
     expect(await held).toHaveProperty("error");
     expect(await dispatch(first, "get")).toMatchObject({ count: 1 });
     expect(await dispatch(sibling, "instance")).toMatchObject({
