@@ -881,7 +881,25 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
   slotCloseCleanupAck: { ...workspaceStateMethods["slot.closeCleanupAck"] },
   slotClosedRoots: {
     ...workspaceStateMethods["slot.closedRoots"],
-    returns: z.array(RawClosedPanelSchema),
+    args: z.tuple([
+      z
+        .object({
+          ownerUserId: z.string().nullable().optional(),
+          limit: z.number().int().positive().max(50).optional(),
+          cursor: z.string().optional(),
+        })
+        .strict(),
+    ]),
+    returns: z
+      .object({ items: z.array(RawClosedPanelSchema), nextCursor: z.string().nullable() })
+      .strict(),
+  },
+  slotPurgePlan: { ...workspaceStateMethods["slot.purgePlan"] },
+  slotPurge: {
+    ...workspaceStateMethods["slot.purge"],
+    returns: z
+      .object({ deletedCount: z.number().int().positive(), entityIds: z.array(z.string()) })
+      .strict(),
   },
   slotReopenPlan: { ...workspaceStateMethods["slot.reopenPlan"] },
   slotReopen: {

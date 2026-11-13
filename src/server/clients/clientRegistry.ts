@@ -1178,7 +1178,7 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
    * survive a restart, so each row is kept only while attesting it again now
    * would produce exactly what the hub holds. A client that is gone, no longer
    * running or trusted, or on a different build or capability set has its row
-   * retired. Hub failures propagate; nothing is retried.
+   * retired. Hub and build-store read failures propagate; nothing is retried.
    */
   async reconcilePrincipals(): Promise<void> {
     await this.initialize();
@@ -1193,8 +1193,11 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
           buildKey: row.buildKey,
           executionDigest: row.executionDigest,
         });
-      } catch {
-        // Not attestable now: the client is gone, stopped, rebuilt or unadmitted.
+      } catch (error) {
+        // A build store that could not be read says nothing about the client;
+        // retiring on it would revoke a running client over a transient fault.
+        if (error instanceof ClientBuildReadError) throw error;
+        // Otherwise not attestable now: the client is gone, stopped, rebuilt or unadmitted.
       }
       if (current && sameCapabilities(current.capabilities, row.capabilities)) continue;
       await this.deps.principalHub.retireClientPrincipals(
@@ -1968,7 +1971,10 @@ export class ClientHost implements UnitChangeApprovalProvider<ReviewedUnit> {
     if (!entry.activeBundleKey) {
       throw new Error(`Cannot activate client ${entry.name} without an immutable build key`);
     }
-    const build = await this.deps.buildSystem.getBuildByKey(entry.activeBundleKey);
+    const buildKey = entry.activeBundleKey;
+    const build = await this.deps.buildSystem.getBuildByKey(buildKey).catch((error: unknown) => {
+      throw new ClientBuildReadError(entry.name, buildKey, error);
+    });
     if (!build) {
       throw new Error(
         `Cannot activate client ${entry.name}: immutable build ${entry.activeBundleKey} is unavailable`
@@ -2395,6 +2401,19 @@ function requireUnitApprovalDecision(
     return decision;
   }
   throw new Error(`Invalid ${decision} decision for a workspace-unit approval`);
+}
+
+/** The build store failed to answer for a client's build; the build's state is unknown. */
+export class ClientBuildReadError extends Error {
+  constructor(clientName: string, buildKey: string, cause: unknown) {
+    super(
+      `Could not read build ${buildKey} of client ${clientName}: ${
+        cause instanceof Error ? cause.message : String(cause)
+      }`,
+      { cause }
+    );
+    this.name = "ClientBuildReadError";
+  }
 }
 
 function requireClientBlock(node: ClientGraphNode): ClientManifestBlock {

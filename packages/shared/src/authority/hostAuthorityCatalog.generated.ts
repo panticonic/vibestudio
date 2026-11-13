@@ -9305,6 +9305,47 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
+  "workspace-state.slot.purge": {
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Permanently deleting a closed subtree erases the slot identities and history a reopen would restore",
+    },
+    capability: "workspace.runtime-state.manage",
+    presentation: {
+      title: "Manage running apps and tasks",
+      action: "manage apps, panels, and scheduled tasks that are currently running",
+      description: "Start, stop, or check on apps and tasks running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "manage",
+      },
+    },
+  },
+  "workspace-state.slot.purgePlan": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale: "Read of what permanently deleting one close would remove",
+    },
+    capability: "workspace.runtime-state.inspect",
+    presentation: {
+      title: "View running apps and tasks",
+      action: "view apps, panels, and scheduled tasks that are currently running",
+      description: "See what apps and tasks are currently running in your workspace",
+      group: "workspace",
+      authorityCategory: {
+        domain: "automation",
+        verb: "see",
+      },
+    },
+  },
   "workspace-state.slot.reopen": {
     tier: {
       tier: "gated",
@@ -9717,6 +9758,7 @@ export const HOST_METHOD_MANIFEST_DEPENDENCIES = {
   "workspace-state.slot.create": ["context.boundary"],
   "workspace-state.slot.move": ["context.boundary"],
   "workspace-state.slot.patchCurrentStateArgs": ["context.boundary"],
+  "workspace-state.slot.purge": ["context.boundary"],
   "workspace-state.slot.reopen": ["context.boundary"],
   "workspace.applyPreparedConfig": ["workspace.config.apply"],
 } as const satisfies Record<string, readonly string[]>;

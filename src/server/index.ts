@@ -4478,6 +4478,10 @@ async function main() {
             hasClientCapability,
           }),
           onAlarmChanged: () => alarmDriverInstance?.notifyChanged(),
+          destroyContext: (contextId) => {
+            if (!runtimeServiceInternal) throw new Error("Runtime service is not available");
+            return runtimeServiceInternal.destroyContext(contextId);
+          },
           onSlotStateChanged: notifySlotStateListeners,
           onPresentationChanged: (panelIds) => {
             eventService.emit("panel-presentation-changed", {

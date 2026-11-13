@@ -64,11 +64,13 @@ export const ABOUT_PAGES = {
   DOWNLOADS: "downloads",
   BOOKMARKS: "bookmarks",
   HISTORY: "history",
+  /** Closed panels of the workspace that opens it; like `new`, owned by its caller. */
+  CLOSED: "closed",
 } as const;
 
 export type AboutPageId = (typeof ABOUT_PAGES)[keyof typeof ABOUT_PAGES];
 
-/** Private workspace that owns each standard page; `new` belongs to its caller. */
+/** Private workspace that owns each standard page; `new` and `closed` belong to their caller. */
 export const ABOUT_PAGE_WORKSPACE_ROLE = {
   [ABOUT_PAGES.KEYBOARD_SHORTCUTS]: "system",
   [ABOUT_PAGES.HELP]: "system",
@@ -79,7 +81,10 @@ export const ABOUT_PAGE_WORKSPACE_ROLE = {
   [ABOUT_PAGES.DOWNLOADS]: "personal",
   [ABOUT_PAGES.BOOKMARKS]: "personal",
   [ABOUT_PAGES.HISTORY]: "personal",
-} as const satisfies Record<Exclude<AboutPageId, typeof ABOUT_PAGES.NEW>, "personal" | "system">;
+} as const satisfies Record<
+  Exclude<AboutPageId, typeof ABOUT_PAGES.NEW | typeof ABOUT_PAGES.CLOSED>,
+  "personal" | "system"
+>;
 
 export function aboutPageWorkspaceRole(page: string): "personal" | "system" | null {
   if (!Object.hasOwn(ABOUT_PAGE_WORKSPACE_ROLE, page)) return null;

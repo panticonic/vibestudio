@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:6007e465c8d2ee16c854441f0725de5cb78613072bd48cc8e309ac387eeb8b7a",
+  "censusDigest": "sha256:9ab66ec45ae6551fd7b2ee2507fba0acb16f0d7c99c3e6ff29dfb01ba7b7fb1a",
   "decisions": {
     "host:terminalApps.launch": {
       "review": "single-prepared-terminal-program-consent",
@@ -1936,6 +1936,10 @@
     "host:workspace-state.slot.reopen": {
       "review": "reopen-is-open-panel-under-parent",
       "change": "Reverses one close of a subtree the caller could see. Prepared as the openPanel context boundary on the closed root's parent (workspace root for a closed root), the same gate slot.create applies; it restores only slots that close took down, after their exact retained history entities were reactivated, and grants no new identity or context."
+    },
+    "host:workspace-state.slot.purge": {
+      "review": "explicit-permanent-delete-of-closed-subtree",
+      "change": "Deletes only a closed subtree whose parent is open, pinned to the exact close stamp, behind the same close context boundary as closing it. Destroys only contexts no surviving slot history or live entity references, server-side under this gate, so a delete never needs per-context runtime authority and never reaches a panel still in the tree."
     }
   },
   "version": 1

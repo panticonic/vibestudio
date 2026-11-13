@@ -23547,6 +23547,190 @@
           }
         }
       },
+      "slot.purge": {
+        "authority": {
+          "principals": [
+            "user",
+            "code",
+            "host"
+          ],
+          "requirement": {
+            "kind": "any",
+            "requirements": [
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "user",
+                    "capability": "workspace.runtime-state.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "code",
+                    "capability": "workspace.runtime-state.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "all",
+                "requirements": [
+                  {
+                    "kind": "capability",
+                    "principal": "session",
+                    "capability": "workspace.runtime-state.manage"
+                  },
+                  {
+                    "kind": "relationship",
+                    "name": "workspace-member"
+                  }
+                ]
+              },
+              {
+                "kind": "capability",
+                "principal": "host",
+                "capability": "workspace.runtime-state.manage"
+              }
+            ]
+          },
+          "resource": {
+            "kind": "literal",
+            "key": "workspace.runtime-state.manage"
+          },
+          "prepared": {
+            "resolver": "workspace-state.slot.purge.contextBoundary",
+            "contextBoundary": {
+              "operation": "close",
+              "targetArgument": 0,
+              "targetPath": [
+                "slotId"
+              ]
+            },
+            "leaves": [
+              {
+                "capability": "context.boundary",
+                "requirement": {
+                  "kind": "any",
+                  "requirements": [
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "user",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "code",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "all",
+                      "requirements": [
+                        {
+                          "kind": "capability",
+                          "principal": "session",
+                          "capability": "context.boundary"
+                        },
+                        {
+                          "kind": "relationship",
+                          "name": "workspace-member"
+                        }
+                      ]
+                    },
+                    {
+                      "kind": "capability",
+                      "principal": "host",
+                      "capability": "context.boundary"
+                    }
+                  ]
+                },
+                "tier": "gated"
+              }
+            ]
+          }
+        },
+        "access": {
+          "sensitivity": "destructive"
+        },
+        "tier": {
+          "tier": "gated",
+          "session": "family",
+          "residency": "identity",
+          "family": "workspace-state.identity",
+          "rationale": "Permanently deleting a closed subtree erases the slot identities and history a reopen would restore"
+        },
+        "capability": "workspace.runtime-state.manage",
+        "presentation": {
+          "title": "Manage running apps and tasks",
+          "action": "manage apps, panels, and scheduled tasks that are currently running",
+          "description": "Start, stop, or check on apps and tasks running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "manage"
+          }
+        }
+      },
+      "slot.purgePlan": {
+        "authority": {
+          "principals": [
+            "user",
+            "code",
+            "host"
+          ]
+        },
+        "access": {
+          "sensitivity": "read"
+        },
+        "tier": {
+          "tier": "open",
+          "session": "family",
+          "residency": "transport",
+          "family": "workspace-state.builtin-rpc",
+          "rationale": "Read of what permanently deleting one close would remove"
+        },
+        "capability": "workspace.runtime-state.inspect",
+        "presentation": {
+          "title": "View running apps and tasks",
+          "action": "view apps, panels, and scheduled tasks that are currently running",
+          "description": "See what apps and tasks are currently running in your workspace",
+          "group": "workspace",
+          "authorityCategory": {
+            "domain": "automation",
+            "verb": "see"
+          }
+        }
+      },
       "slot.reopen": {
         "authority": {
           "principals": [

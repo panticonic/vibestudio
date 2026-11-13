@@ -236,7 +236,27 @@ export const ClosedPanelsInputSchema = z
     /** Only closes in trees this user owns; omitted means every tree. */
     ownerUserId: z.string().nullable().optional(),
     limit: z.number().int().positive().max(50).optional(),
+    cursor: z.string().optional(),
+    /** Case-insensitive match against the closed panel's title or source. */
+    query: z.string().max(200).optional(),
   })
+  .strict();
+
+export const ClosedPanelPageSchema = z
+  .object({ items: z.array(ClosedPanelSchema), nextCursor: z.string().nullable() })
+  .strict();
+
+export const PanelPurgePlanSchema = z
+  .object({
+    slotId: PanelSlotIdSchema,
+    closedAt: z.number().int(),
+    slotIds: z.array(PanelSlotIdSchema),
+    orphanContextIds: z.array(z.string()),
+  })
+  .strict();
+
+export const PanelPurgeResultSchema = z
+  .object({ slotId: PanelSlotIdSchema, deletedCount: z.number().int().positive() })
   .strict();
 
 export const PanelReopenPlanSchema = z
@@ -975,10 +995,11 @@ export const workspaceStateMethods = defineServiceMethods({
       rationale: "Bounded read of reopenable closes, presented with their retained titles",
     },
     args: z.tuple([ClosedPanelsInputSchema]),
-    description: "List the closes that can be reopened now, most recent first.",
+    description:
+      "Page through the closes that can be reopened now, most recent first, optionally matching a title or source.",
     authority: WORKSPACE_STATE_READ_POLICY,
     access: { sensitivity: "read" },
-    returns: z.array(ClosedPanelSchema),
+    returns: ClosedPanelPageSchema,
   },
   "slot.reopenPlan": {
     website: {
@@ -1034,6 +1055,61 @@ export const workspaceStateMethods = defineServiceMethods({
     }),
     access: { sensitivity: "write" },
     returns: PanelReopenResultSchema,
+  },
+  "slot.purgePlan": {
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    agentFacing: false,
+    capability: "workspace.runtime-state.inspect",
+    presentation: WORKSPACE_RUNTIME_STATE_INSPECT_PRESENTATION,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "transport",
+      family: "workspace-state.builtin-rpc",
+      rationale: "Read of what permanently deleting one close would remove",
+    },
+    args: z.tuple([PanelSlotIdSchema]),
+    description:
+      "Read the slots and the otherwise-unused contexts that permanently deleting this closed root removes.",
+    authority: WORKSPACE_STATE_READ_POLICY,
+    access: { sensitivity: "read" },
+    returns: PanelPurgePlanSchema,
+  },
+  "slot.purge": {
+    website: {
+      kind: "closed",
+      reason:
+        "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    agentFacing: false,
+    capability: "workspace.runtime-state.manage",
+    presentation: WORKSPACE_RUNTIME_STATE_PRESENTATION,
+    tier: {
+      tier: "gated",
+      session: "family",
+      residency: "identity",
+      family: "workspace-state.identity",
+      rationale:
+        "Permanently deleting a closed subtree erases the slot identities and history a reopen would restore",
+    },
+    args: z.tuple([PanelReopenInputSchema]),
+    description:
+      "Permanently delete one close: its closed subtree's slots and history. Destroy the plan's orphaned contexts first.",
+    authority: contextBoundaryAuthority({
+      service: "workspace-state",
+      method: "slot.purge",
+      primaryCapability: "workspace.runtime-state.manage",
+      principals: ["user", "code", "host"],
+      operation: "close",
+      targetPath: ["slotId"],
+      tier: "gated",
+    }),
+    access: { sensitivity: "destructive" },
+    returns: PanelPurgeResultSchema,
   },
   "panel.search": {
     website: {

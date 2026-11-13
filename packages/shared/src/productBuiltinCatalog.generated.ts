@@ -1210,6 +1210,140 @@ export const PRODUCT_BUILTIN_CATALOG = [
           },
         },
       },
+      "slot.purgePlan": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
+        capability: "workspace.runtime-state.inspect",
+        tier: "open",
+        session: "family",
+        sensitivity: "read",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
+          group: "workspace",
+          authorityCategory: {
+            domain: "automation",
+            verb: "see",
+          },
+        },
+        effect: {
+          kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
+          capability: "workspace.runtime-state.inspect",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      "slot.purge": {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
+        capability: "workspace.runtime-state.manage",
+        tier: "gated",
+        session: "family",
+        sensitivity: "destructive",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
+          group: "workspace",
+          authorityCategory: {
+            domain: "automation",
+            verb: "manage",
+          },
+        },
+        prepared: {
+          resolver: "workspace-state.slot.purge.contextBoundary",
+          contextBoundary: {
+            operation: "close",
+            targetArgument: 0,
+            targetPath: ["slotId"],
+          },
+          leaves: [
+            {
+              capability: "context.boundary",
+              requirement: {
+                kind: "any",
+                requirements: [
+                  {
+                    kind: "all",
+                    requirements: [
+                      {
+                        kind: "capability",
+                        principal: "user",
+                        capability: "context.boundary",
+                      },
+                      {
+                        kind: "relationship",
+                        name: "workspace-member",
+                      },
+                    ],
+                  },
+                  {
+                    kind: "all",
+                    requirements: [
+                      {
+                        kind: "capability",
+                        principal: "code",
+                        capability: "context.boundary",
+                      },
+                      {
+                        kind: "relationship",
+                        name: "workspace-member",
+                      },
+                    ],
+                  },
+                  {
+                    kind: "all",
+                    requirements: [
+                      {
+                        kind: "capability",
+                        principal: "session",
+                        capability: "context.boundary",
+                      },
+                      {
+                        kind: "relationship",
+                        name: "workspace-member",
+                      },
+                    ],
+                  },
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
+                  },
+                ],
+              },
+              tier: "gated",
+            },
+          ],
+        },
+        effect: {
+          kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
+          capability: "workspace.runtime-state.manage",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
       "panel.search": {
         website: {
           kind: "closed",
@@ -3680,6 +3814,140 @@ export const PRODUCT_BUILTIN_CATALOG = [
               "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
           },
           capability: "workspace.runtime-state.inspect",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      slotPurgePlan: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
+        capability: "workspace.runtime-state.inspect",
+        tier: "open",
+        session: "family",
+        sensitivity: "read",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "View running apps and tasks",
+          action: "view apps, panels, and scheduled tasks that are currently running",
+          description: "See what apps and tasks are currently running in your workspace",
+          group: "workspace",
+          authorityCategory: {
+            domain: "automation",
+            verb: "see",
+          },
+        },
+        effect: {
+          kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
+          capability: "workspace.runtime-state.inspect",
+          resource: {
+            kind: "receiver-object",
+          },
+        },
+      },
+      slotPurge: {
+        website: {
+          kind: "closed",
+          reason:
+            "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+        },
+        capability: "workspace.runtime-state.manage",
+        tier: "gated",
+        session: "family",
+        sensitivity: "destructive",
+        principals: ["user", "code", "host"],
+        presentation: {
+          title: "Manage running apps and tasks",
+          action: "manage apps, panels, and scheduled tasks that are currently running",
+          description: "Start, stop, or check on apps and tasks running in your workspace",
+          group: "workspace",
+          authorityCategory: {
+            domain: "automation",
+            verb: "manage",
+          },
+        },
+        prepared: {
+          resolver: "workspace-state.slot.purge.contextBoundary",
+          contextBoundary: {
+            operation: "close",
+            targetArgument: 0,
+            targetPath: ["slotId"],
+          },
+          leaves: [
+            {
+              capability: "context.boundary",
+              requirement: {
+                kind: "any",
+                requirements: [
+                  {
+                    kind: "all",
+                    requirements: [
+                      {
+                        kind: "capability",
+                        principal: "user",
+                        capability: "context.boundary",
+                      },
+                      {
+                        kind: "relationship",
+                        name: "workspace-member",
+                      },
+                    ],
+                  },
+                  {
+                    kind: "all",
+                    requirements: [
+                      {
+                        kind: "capability",
+                        principal: "code",
+                        capability: "context.boundary",
+                      },
+                      {
+                        kind: "relationship",
+                        name: "workspace-member",
+                      },
+                    ],
+                  },
+                  {
+                    kind: "all",
+                    requirements: [
+                      {
+                        kind: "capability",
+                        principal: "session",
+                        capability: "context.boundary",
+                      },
+                      {
+                        kind: "relationship",
+                        name: "workspace-member",
+                      },
+                    ],
+                  },
+                  {
+                    kind: "capability",
+                    principal: "host",
+                    capability: "context.boundary",
+                  },
+                ],
+              },
+              tier: "gated",
+            },
+          ],
+        },
+        effect: {
+          kind: "host-capability",
+          website: {
+            kind: "closed",
+            reason:
+              "The workspaceState receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+          },
+          capability: "workspace.runtime-state.manage",
           resource: {
             kind: "receiver-object",
           },

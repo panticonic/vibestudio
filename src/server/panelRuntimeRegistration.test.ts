@@ -46,6 +46,7 @@ describe("createKnownPanelSlotResolver", () => {
       createWorkspaceStateService({
         doDispatch,
         workspaceId: "ws-test",
+        destroyContext: async () => undefined,
         stateArgsSchemaForBuild: async () => undefined,
         storageIncarnation: () => ({ incarnation: "test-incarnation", generation: 1 }),
         presentation: createTypedServiceClient(

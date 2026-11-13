@@ -18,6 +18,7 @@ import type {
   WorkspacePanelTreeSearchPage,
   WorkspacePanelTopologyPage,
 } from "@vibestudio/shared/panel/workspaceStateSnapshot";
+import { closedPanelCursor } from "@vibestudio/shared/panel/workspaceStateSnapshot";
 import type { PanelTreeNode, PanelTreePlacementHint } from "@vibestudio/shared/panel/treeIndex";
 import {
   WORKSPACE_STATE_READ_POLICY as READ_POLICY,
@@ -75,6 +76,11 @@ export interface WorkspaceStateServiceDeps {
    * can re-arm its timer. Called after `alarmSet`/`alarmClear` persist.
    */
   onAlarmChanged?: () => void;
+  /**
+   * Delete a context nothing surviving uses. Called only by `slot.purge`,
+   * whose own context boundary authorized the permanent deletion.
+   */
+  destroyContext(contextId: string): Promise<void>;
   /**
    * Notify listeners that a tree query cache must be invalidated after a
    * durable slot mutation, regardless of which client initiated it.
@@ -328,6 +334,8 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         preparePanelMutation(ctx, "movePanel", String(slotId)),
       "workspace-state.slot.close.contextBoundary": (ctx, [slotId]) =>
         preparePanelMutation(ctx, "close", String(slotId)),
+      "workspace-state.slot.purge.contextBoundary": (ctx, [input]) =>
+        preparePanelMutation(ctx, "close", String((input as { slotId: string }).slotId)),
       // Reopening puts a closed subtree back under its parent: the same
       // boundary as opening a panel there.
       "workspace-state.slot.reopen.contextBoundary": async (ctx, [input]) => {
@@ -528,22 +536,61 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
       },
       "slot.closeCleanupAck": (_ctx, [slotIds]) => receiver.slotCloseCleanupAck(slotIds),
       "slot.closedRoots": async (_ctx, [input]) => {
-        const closed = await receiver.slotClosedRoots(input);
+        const { query, limit = 20, cursor, ...scope } = input;
         // Closing removed each slot's binding, but titles are entity-owned and
         // outlive it; an unavailable projection falls back to the source.
-        const titles =
-          closed.length > 0
-            ? await deps.presentation
-                .titlesForEntities(closed.map((entry) => entry.entityId))
-                .catch((error: unknown) => {
-                  reportProjectionFailure("closed-panel titles", error);
-                  return {} as Record<string, string>;
-                })
-            : {};
-        return closed.map((entry) => ({
-          ...entry,
-          title: titles[entry.entityId] ?? entry.source,
-        }));
+        const present = async <Entry extends { entityId: string; source: string }>(
+          items: Entry[]
+        ) => {
+          const titles =
+            items.length > 0
+              ? await deps.presentation
+                  .titlesForEntities(items.map((entry) => entry.entityId))
+                  .catch((error: unknown) => {
+                    reportProjectionFailure("closed-panel titles", error);
+                    return {} as Record<string, string>;
+                  })
+              : {};
+          return items.map((entry) => ({
+            ...entry,
+            title: titles[entry.entityId] ?? entry.source,
+          }));
+        };
+        const needle = query?.trim().toLowerCase();
+        if (!needle) {
+          const page = await receiver.slotClosedRoots({
+            ...scope,
+            limit,
+            ...(cursor !== undefined ? { cursor } : {}),
+          });
+          return { items: await present(page.items), nextCursor: page.nextCursor };
+        }
+        // Titles live with the presentation owner, so matching walks the
+        // owner's pages in order until this page is full or the closes end.
+        type Page = Awaited<ReturnType<typeof receiver.slotClosedRoots>>;
+        const matched: Array<Page["items"][number] & { title: string }> = [];
+        let next: string | undefined = cursor;
+        do {
+          const page = await receiver.slotClosedRoots({
+            ...scope,
+            limit: 50,
+            ...(next !== undefined ? { cursor: next } : {}),
+          });
+          for (const entry of await present(page.items)) {
+            if (
+              !entry.title.toLowerCase().includes(needle) &&
+              !entry.source.toLowerCase().includes(needle)
+            ) {
+              continue;
+            }
+            matched.push(entry);
+            if (matched.length === limit) {
+              return { items: matched, nextCursor: closedPanelCursor(entry) };
+            }
+          }
+          next = page.nextCursor ?? undefined;
+        } while (next !== undefined);
+        return { items: matched, nextCursor: null };
       },
       "slot.reopenPlan": (_ctx, [slotId]) => receiver.slotReopenPlan(slotId),
       "slot.reopen": async (_ctx, [input]) => {
@@ -556,6 +603,24 @@ export function createWorkspaceStateService(deps: WorkspaceStateServiceDeps): Se
         }
         deps.onSlotStateChanged?.({ kind: "tree" });
         return result;
+      },
+      "slot.purgePlan": (_ctx, [slotId]) => receiver.slotPurgePlan(slotId),
+      "slot.purge": async (_ctx, [input]) => {
+        const plan = await receiver.slotPurgePlan(input.slotId);
+        if (plan.closedAt !== input.closedAt) {
+          throw new Error(`Slot ${input.slotId} was closed again after the close being deleted`);
+        }
+        // Contexts first: if one cannot be destroyed the close stays listed and
+        // deleting it again resumes. Each belongs only to panels being deleted.
+        for (const contextId of plan.orphanContextIds) await deps.destroyContext(contextId);
+        const { entityIds, deletedCount } = await receiver.slotPurge(input);
+        // Their titles named panels that no longer exist anywhere.
+        for (const entityId of entityIds) {
+          project("purged-entity title removal", () =>
+            deps.presentation.setEntityTitle(entityId, null)
+          );
+        }
+        return { slotId: input.slotId, deletedCount };
       },
       "panel.search": (_ctx, [query, limit]) =>
         deps.presentation.search(query, limit).then((value) => value.results),

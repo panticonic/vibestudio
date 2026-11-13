@@ -2226,6 +2226,15 @@ describe("ClientHost principals", () => {
       );
     });
 
+    it("keeps principals and propagates when the build store cannot be read", async () => {
+      const harness = await attestedClient();
+      harness.buildSystem.getBuildByKey.mockRejectedValueOnce(new Error("EIO"));
+      await expect(harness.host.reconcilePrincipals()).rejects.toThrow(
+        /Could not read build .* EIO/
+      );
+      expect(harness.principalHub.retireClientPrincipals).not.toHaveBeenCalled();
+    });
+
     it("propagates a hub failure", async () => {
       const { host, principalHub } = await attestedClient();
       principalHub.listClientPrincipals.mockRejectedValueOnce(new Error("hub unreachable"));

@@ -1661,10 +1661,16 @@ describe("WorkspaceDO slot operations", () => {
     expect(slot?.closed_at).toBeTypeOf("number");
     expect(slot?.current_entity_id).toBeNull();
     expect(slot?.current_entry_key).toBe("close-1");
-    expect(() => instance.slotPatchCurrentStateArgs("slot-c", {}, {
-      entryKey: "close-1",
-      activeBuildKey: null,
-    })).toThrow(/closed slot/);
+    expect(() =>
+      instance.slotPatchCurrentStateArgs(
+        "slot-c",
+        {},
+        {
+          entryKey: "close-1",
+          activeBuildKey: null,
+        }
+      )
+    ).toThrow(/closed slot/);
   });
 
   describe("reopen", () => {
@@ -1726,7 +1732,9 @@ describe("WorkspaceDO slot operations", () => {
       expect(openIds()).toEqual(["root"]);
       expect(instance.panelTreeDetail("grandchild")?.slot.parent_slot_id).toBe("kept-child");
       expect(instance.slotGet("closed-first")?.closed_at).toBeTypeOf("number");
-      expect(instance.slotClosedRoots({}).map((entry) => entry.slotId)).toEqual(["closed-first"]);
+      expect(instance.slotClosedRoots({}).items.map((entry) => entry.slotId)).toEqual([
+        "closed-first",
+      ]);
     });
 
     it("lists reopenable closes most recent first, hiding those under a closed parent", () => {
@@ -1737,23 +1745,77 @@ describe("WorkspaceDO slot operations", () => {
       retireClosed("a-child");
       instance.slotClose("b");
       retireClosed("b");
-      expect(instance.slotClosedRoots({}).map((entry) => [entry.slotId, entry.closedCount])).toEqual([
+      expect(
+        instance.slotClosedRoots({}).items.map((entry) => [entry.slotId, entry.closedCount])
+      ).toEqual([
         ["b", 1],
         ["a-child", 1],
       ]);
-      const closes = instance.slotClosedRoots({});
+      const closes = instance.slotClosedRoots({}).items;
       expect(closes[0]!.closedAt).toBeGreaterThan(closes[1]!.closedAt);
 
       instance.slotClose("a");
       retireClosed("a");
-      expect(instance.slotClosedRoots({}).map((entry) => entry.slotId)).toEqual(["a", "b"]);
+      expect(instance.slotClosedRoots({}).items.map((entry) => entry.slotId)).toEqual(["a", "b"]);
       expect(() => instance.slotReopenPlan("a-child")).toThrow(/parent a is closed/);
+    });
+
+    it("pages closes most recent first with a resumable cursor", () => {
+      for (const id of ["p1", "p2", "p3"]) {
+        openSlot(id, null);
+        instance.slotClose(id);
+        retireClosed(id);
+      }
+      const first = instance.slotClosedRoots({ limit: 2 });
+      expect(first.items.map((entry) => entry.slotId)).toEqual(["p3", "p2"]);
+      expect(first.nextCursor).not.toBeNull();
+      const second = instance.slotClosedRoots({ limit: 2, cursor: first.nextCursor! });
+      expect(second.items.map((entry) => entry.slotId)).toEqual(["p1"]);
+      expect(second.nextCursor).toBeNull();
+      expect(() => instance.slotClosedRoots({ cursor: "nope" })).toThrow(/cursor/);
+    });
+
+    it("permanently deletes a close's whole subtree and only its unshared contexts", () => {
+      const ctxEntity = (slotId: string, parentSlotId: string | null, contextId: string) => {
+        const entity = instance.entityActivate(
+          preparedPanelInput({ key: `${slotId}-entry`, contextId })
+        );
+        instance.slotCreate({
+          slotId,
+          parentSlotId,
+          initialEntry: { entryKey: entity.key, entityId: entity.id, source: SOURCE, contextId },
+        });
+      };
+      ctxEntity("doomed", null, "ctx-doomed");
+      ctxEntity("doomed-child", "doomed", "ctx-shared");
+      ctxEntity("doomed-earlier", "doomed", "ctx-earlier");
+      ctxEntity("survivor", null, "ctx-shared");
+      instance.slotClose("doomed-earlier");
+      retireClosed("doomed-earlier");
+      instance.slotClose("doomed");
+      retireClosed("doomed");
+
+      const plan = instance.slotPurgePlan("doomed");
+      expect([...plan.slotIds].sort()).toEqual(["doomed", "doomed-child", "doomed-earlier"]);
+      expect(plan.slotIds.at(-1)).toBe("doomed");
+      expect(plan.orphanContextIds).toEqual(["ctx-doomed", "ctx-earlier"]);
+
+      expect(() => instance.slotPurge({ slotId: "doomed", closedAt: plan.closedAt - 1 })).toThrow(
+        /closed again/
+      );
+      expect(instance.slotPurge({ slotId: "doomed", closedAt: plan.closedAt })).toMatchObject({
+        deletedCount: 3,
+      });
+      expect(instance.slotGet("doomed")).toBeNull();
+      expect(instance.slotGet("doomed-earlier")).toBeNull();
+      expect(instance.slotClosedRoots({}).items).toEqual([]);
+      expect(instance.panelTreeDetail("survivor")?.currentHistory.context_id).toBe("ctx-shared");
     });
 
     it("refuses while the close is still retiring its runtimes, or after a newer close", () => {
       openSlot("p", null);
       instance.slotClose("p");
-      expect(instance.slotClosedRoots({})).toEqual([]);
+      expect(instance.slotClosedRoots({}).items).toEqual([]);
       expect(() => instance.slotReopenPlan("p")).toThrow(/still retiring/);
       retireClosed("p");
       const { closedAt } = instance.slotReopenPlan("p");

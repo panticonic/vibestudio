@@ -379,6 +379,7 @@ export const PANEL_TREE_MEMBERS = [
   "navigateHistory",
   "closed",
   "reopen",
+  "deleteClosed",
 ];
 
 const PANEL_TREE_GROUP_SCHEMA = {
@@ -740,9 +741,9 @@ export const PANEL_TREE_METHOD_CATALOG = {
   },
   closed: {
     signature:
-      "closed(input?: { ownerUserId?: string | null; limit?: number }): Promise<ClosedPanel[]>",
+      "closed(input?: { ownerUserId?: string | null; limit?: number; cursor?: string; query?: string }): Promise<{ items: ClosedPanel[]; nextCursor: string | null }>",
     description:
-      "List closes that reopen() can reverse now, most recent first: { slotId, parentSlotId, closedAt, closedCount, title, source }. A close under a still-closed parent is listed only once that parent is reopened.",
+      "Page through closes that reopen() can reverse now, most recent first: items are { slotId, parentSlotId, closedAt, closedCount, title, source }. query matches title or source; pass nextCursor back as cursor. A close under a still-closed parent is listed only once that parent is reopened.",
     argumentNames: ["input"],
     argsSchema: {
       type: "array",
@@ -752,6 +753,8 @@ export const PANEL_TREE_METHOD_CATALOG = {
           properties: {
             ownerUserId: { type: ["string", "null"] },
             limit: { type: "number", maximum: 50 },
+            cursor: { type: "string" },
+            query: { type: "string" },
           },
           additionalProperties: false,
         },
@@ -781,6 +784,18 @@ export const PANEL_TREE_METHOD_CATALOG = {
       ],
       minItems: 1,
       maxItems: 2,
+    },
+  },
+  deleteClosed: {
+    signature: "deleteClosed(id: string): Promise<{ deletedCount: number }>",
+    description:
+      "Permanently delete a close listed by closed(): the panel, its closed sub-panels, their history, and every context no surviving panel uses. Irreversible.",
+    argumentNames: ["id"],
+    argsSchema: {
+      type: "array",
+      prefixItems: [{ type: "string", description: "Slot id of the closed panel." }],
+      minItems: 1,
+      maxItems: 1,
     },
   },
 };

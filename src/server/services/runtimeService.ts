@@ -238,6 +238,11 @@ export interface RuntimeServiceInternal {
   }>;
   /** Undo a never-executed development-session context after admission fails. */
   dropSemanticContext(contextId: string): Promise<void>;
+  /**
+   * Retire a context's entities and delete it, for an owner whose own gate
+   * already authorized the deletion (permanently deleting closed panels).
+   */
+  destroyContext(contextId: string): Promise<void>;
 }
 
 export interface RuntimeServiceResult {
@@ -2916,6 +2921,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       resolveContext,
       forkSemanticContext,
       dropSemanticContext,
+      destroyContext: (contextId) => destroyContext({ contextId }),
     },
   };
 }

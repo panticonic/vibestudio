@@ -56,6 +56,7 @@ import type {
   WorkspacePanelCloseCleanupPageInput,
   WorkspacePanelCloseResult,
   WorkspaceClosedPanel,
+  WorkspacePanelPurgePlan,
   WorkspacePanelReopenPlan,
   WorkspacePanelReopenResult,
   WorkspacePanelTreeHistoryRow,
@@ -66,6 +67,7 @@ import type {
   WorkspacePanelTreeRootGroupPage,
   WorkspacePanelTreeRootGroupPageInput,
 } from "@vibestudio/shared/panel/workspaceStateSnapshot";
+import { closedPanelCursor } from "@vibestudio/shared/panel/workspaceStateSnapshot";
 
 const PANEL_TREE_ORDER_STEP = 1_024;
 
@@ -3289,9 +3291,9 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   private nextCloseStamp(): number {
-    const latest = this.sql
-      .exec(`SELECT MAX(closed_at) AS latest FROM slots`)
-      .one()["latest"] as number | null;
+    const latest = this.sql.exec(`SELECT MAX(closed_at) AS latest FROM slots`).one()["latest"] as
+      | number
+      | null;
     return Math.max(Date.now(), (latest ?? 0) + 1);
   }
 
@@ -3320,7 +3322,10 @@ export class WorkspaceDO extends DurableObjectBase {
   }
 
   /** Throw unless `slotId` roots a close that can be reversed now. */
-  private requireReopenableRoot(slotId: string, closedAt?: number): DbSlotRow & { closed_at: number } {
+  private requireReopenableRoot(
+    slotId: string,
+    closedAt?: number
+  ): DbSlotRow & { closed_at: number } {
     const slot = this.requireSlot(slotId);
     if (slot.closed_at === null) throw new Error(`Slot is not closed: ${slotId}`);
     if (closedAt !== undefined && slot.closed_at !== closedAt) {
@@ -3338,12 +3343,44 @@ export class WorkspaceDO extends DurableObjectBase {
   /**
    * Closes that can be reversed now, most recent first: closed roots whose
    * parent is open, that retained their current entry, and whose runtime
-   * cleanup has finished.
+   * cleanup has finished. Keyset-paged by (closed_at DESC, slot_id); the
+   * service matches titles, which the presentation owner holds.
    */
   @schemaRpc()
-  slotClosedRoots(input: { ownerUserId?: string | null; limit?: number }): WorkspaceClosedPanel[] {
+  slotClosedRoots(input: { ownerUserId?: string | null; limit?: number; cursor?: string }): {
+    items: WorkspaceClosedPanel[];
+    nextCursor: string | null;
+  } {
     const limit = Math.max(1, Math.min(50, input.limit ?? 20));
-    const ownerFiltered = Object.prototype.hasOwnProperty.call(input, "ownerUserId");
+    const clauses = [
+      "s.closed_at IS NOT NULL",
+      "(s.parent_slot_id IS NULL OR parent.closed_at IS NULL)",
+      "NOT EXISTS (SELECT 1 FROM panel_close_cleanup c WHERE c.close_id = s.slot_id)",
+    ];
+    const values: Array<string | number | null> = [];
+    if (Object.prototype.hasOwnProperty.call(input, "ownerUserId")) {
+      clauses.push("s.owner_user_id IS ?");
+      values.push(input.ownerUserId ?? null);
+    }
+    if (input.cursor !== undefined) {
+      let cursor: [number, string];
+      try {
+        const parsed = JSON.parse(input.cursor) as unknown;
+        if (
+          !Array.isArray(parsed) ||
+          parsed.length !== 2 ||
+          !Number.isSafeInteger(parsed[0]) ||
+          typeof parsed[1] !== "string"
+        ) {
+          throw new Error("invalid shape");
+        }
+        cursor = [parsed[0], parsed[1]];
+      } catch {
+        throw new Error("Invalid closed-panel cursor");
+      }
+      clauses.push("(s.closed_at < ? OR (s.closed_at = ? AND s.slot_id > ?))");
+      values.push(cursor[0], cursor[0], cursor[1]);
+    }
     const rows = this.sql
       .exec(
         `SELECT s.slot_id, s.parent_slot_id, s.closed_at, h.entity_id, h.source
@@ -3351,14 +3388,11 @@ export class WorkspaceDO extends DurableObjectBase {
            JOIN slot_history h
              ON h.slot_id = s.slot_id AND h.entry_key = s.current_entry_key
            LEFT JOIN slots parent ON parent.slot_id = s.parent_slot_id
-          WHERE s.closed_at IS NOT NULL
-            AND (s.parent_slot_id IS NULL OR parent.closed_at IS NULL)
-            AND NOT EXISTS (SELECT 1 FROM panel_close_cleanup c WHERE c.close_id = s.slot_id)
-            ${ownerFiltered ? "AND s.owner_user_id IS ?" : ""}
+          WHERE ${clauses.join(" AND ")}
           ORDER BY s.closed_at DESC, s.slot_id ASC
           LIMIT ?`,
-        ...(ownerFiltered ? [input.ownerUserId ?? null] : []),
-        limit
+        ...values,
+        limit + 1
       )
       .toArray() as Array<{
       slot_id: string;
@@ -3367,14 +3401,111 @@ export class WorkspaceDO extends DurableObjectBase {
       entity_id: string;
       source: string;
     }>;
-    return rows.map((row) => ({
-      slotId: row.slot_id as WorkspaceClosedPanel["slotId"],
-      parentSlotId: row.parent_slot_id as WorkspaceClosedPanel["parentSlotId"],
-      closedAt: row.closed_at,
-      closedCount: this.closedSubtree(row.slot_id, row.closed_at).length,
-      entityId: row.entity_id as WorkspaceClosedPanel["entityId"],
-      source: row.source,
-    }));
+    const hasMore = rows.length > limit;
+    const visible = hasMore ? rows.slice(0, limit) : rows;
+    const last = visible.at(-1);
+    return {
+      items: visible.map((row) => ({
+        slotId: row.slot_id as WorkspaceClosedPanel["slotId"],
+        parentSlotId: row.parent_slot_id as WorkspaceClosedPanel["parentSlotId"],
+        closedAt: row.closed_at,
+        closedCount: this.closedSubtree(row.slot_id, row.closed_at).length,
+        entityId: row.entity_id as WorkspaceClosedPanel["entityId"],
+        source: row.source,
+      })),
+      nextCursor:
+        hasMore && last
+          ? closedPanelCursor({ closedAt: last.closed_at, slotId: last.slot_id })
+          : null,
+    };
+  }
+
+  /** Every slot under a closed root, whatever close took each down; deepest first. */
+  private closedTree(slotId: string): string[] {
+    return this.sql
+      .exec(
+        `WITH RECURSIVE subtree(slot_id, depth) AS (
+           SELECT slot_id, 0 FROM slots WHERE slot_id = ?
+           UNION ALL
+           SELECT child.slot_id, subtree.depth + 1
+             FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
+         )
+         SELECT slot_id FROM subtree ORDER BY depth DESC, slot_id`,
+        slotId
+      )
+      .toArray()
+      .map((row) => String((row as { slot_id: string }).slot_id));
+  }
+
+  /**
+   * What permanently deleting a close removes: the closed root's whole
+   * subtree (including descendants closed earlier on their own) and the
+   * contexts that no surviving history entry or active entity still uses.
+   */
+  @schemaRpc()
+  slotPurgePlan(slotId: string): WorkspacePanelPurgePlan {
+    return this.ctx.storage.transactionSync(() => {
+      const root = this.requireReopenableRoot(slotId);
+      const pending = this.sql
+        .exec(`SELECT 1 FROM panel_close_cleanup WHERE close_id = ? LIMIT 1`, slotId)
+        .toArray()[0];
+      if (pending) throw new Error(`Close of ${slotId} is still retiring its runtimes`);
+      const slotIds = this.closedTree(slotId);
+      const placeholders = slotIds.map(() => "?").join(", ");
+      const orphanContextIds = this.sql
+        .exec(
+          `SELECT DISTINCT h.context_id FROM slot_history h
+            WHERE h.slot_id IN (${placeholders})
+              AND NOT EXISTS (
+                SELECT 1 FROM slot_history other
+                 WHERE other.context_id = h.context_id
+                   AND other.slot_id NOT IN (${placeholders}))
+              AND NOT EXISTS (
+                SELECT 1 FROM entities e
+                 WHERE e.context_id = h.context_id AND e.status != 'retired')
+            ORDER BY h.context_id`,
+          ...slotIds,
+          ...slotIds
+        )
+        .toArray()
+        .map((row) => String((row as { context_id: string }).context_id));
+      return {
+        slotId: slotId as WorkspacePanelPurgePlan["slotId"],
+        closedAt: root.closed_at,
+        slotIds: slotIds as WorkspacePanelPurgePlan["slotIds"],
+        orphanContextIds,
+      };
+    });
+  }
+
+  /**
+   * Permanently delete one close: its slots and their history. Run after the
+   * plan's orphaned contexts were destroyed; retired entity rows are then
+   * unreferenced and fall to entityGc.
+   */
+  @schemaRpc()
+  slotPurge(input: { slotId: string; closedAt: number }): {
+    deletedCount: number;
+    entityIds: string[];
+  } {
+    return this.ctx.storage.transactionSync(() => {
+      this.requireReopenableRoot(input.slotId, input.closedAt);
+      const slotIds = this.closedTree(input.slotId);
+      const placeholders = slotIds.map(() => "?").join(", ");
+      const entityIds = this.sql
+        .exec(
+          `SELECT DISTINCT entity_id FROM slot_history WHERE slot_id IN (${placeholders})
+            ORDER BY entity_id`,
+          ...slotIds
+        )
+        .toArray()
+        .map((row) => String((row as { entity_id: string }).entity_id));
+      this.sql.exec(`DELETE FROM slot_history WHERE slot_id IN (${placeholders})`, ...slotIds);
+      for (const memberId of slotIds) {
+        this.sql.exec(`DELETE FROM slots WHERE slot_id = ?`, memberId);
+      }
+      return { deletedCount: slotIds.length, entityIds };
+    });
   }
 
   /** The current history entries a reopen of `slotId`'s close must reactivate. */

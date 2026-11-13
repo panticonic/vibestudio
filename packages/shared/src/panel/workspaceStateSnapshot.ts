@@ -85,6 +85,36 @@ export interface WorkspacePanelReopenPlan {
   slots: Array<{ slotId: PanelSlotId; entry: WorkspacePanelTreeHistoryRow }>;
 }
 
+/** Keyset position just after `entry` in the most-recent-first closed-panel order. */
+export function closedPanelCursor(entry: { closedAt: number; slotId: string }): string {
+  return JSON.stringify([entry.closedAt, entry.slotId]);
+}
+
+/** One page of reopenable closes, most recent first. */
+export interface WorkspacePresentedClosedPanelPage {
+  items: WorkspacePresentedClosedPanel[];
+  nextCursor: string | null;
+}
+
+export interface WorkspaceClosedPanelsInput {
+  /** Only closes in trees this user owns; omitted means every tree. */
+  ownerUserId?: string | null;
+  limit?: number;
+  cursor?: string;
+  /** Case-insensitive match against the closed panel's title or source. */
+  query?: string;
+}
+
+/** What permanently deleting one close removes. */
+export interface WorkspacePanelPurgePlan {
+  slotId: PanelSlotId;
+  closedAt: number;
+  /** The closed root's whole subtree, deepest first. */
+  slotIds: PanelSlotId[];
+  /** Contexts no surviving history entry or live entity uses; destroyed before the purge. */
+  orphanContextIds: string[];
+}
+
 export interface WorkspacePanelReopenInput {
   slotId: PanelSlotId;
   /** The close being reversed; a later close of the same slot is a different close. */

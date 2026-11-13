@@ -116,14 +116,21 @@ function makeService(opts: {
   panelAccess?: Partial<PanelAccessPermissionDeps>;
   presentationDispatch?: (method: string, args: unknown[]) => Promise<unknown>;
   stateArgsSchemaForBuild?: (buildKey: string) => Promise<Record<string, unknown> | undefined>;
+  /** slotClosedRoots pages keyed by the cursor that requests them ("" = first). */
+  closedRootPages?: Record<string, unknown>;
 }) {
   const calls: Array<{ method: string; args: unknown[] }> = [];
+  const destroyedContexts: string[] = [];
   const presentationCalls: Array<{ method: string; args: unknown[] }> = [];
   const doDispatch = {
     dispatch: async (_ref: unknown, method: string, ...args: unknown[]) => {
       calls.push({ method, args });
       if (method === "slotClose") return { closeId: String(args[0]), closedCount: 0 };
       if (method === "slotCloseCleanupPage") return { items: [], nextCursor: null };
+      if (method === "slotClosedRoots" && opts.closedRootPages) {
+        const cursor = (args[0] as { cursor?: string }).cursor ?? "";
+        return opts.closedRootPages[cursor];
+      }
       if (opts.dispatchReturns && Object.hasOwn(opts.dispatchReturns, method)) {
         const value = opts.dispatchReturns[method];
         if (method === "panelTreeDetail" && value)
@@ -180,11 +187,15 @@ function makeService(opts: {
       controlsLifecycleContext: opts.panelAccess?.controlsLifecycleContext ?? (async () => false),
     },
     stateArgsSchemaForBuild: opts.stateArgsSchemaForBuild ?? (async () => undefined),
+    destroyContext: async (contextId) => {
+      calls.push({ method: "destroyContext", args: [contextId] });
+      destroyedContexts.push(contextId);
+    },
     ...(opts.onSlotStateChanged ? { onSlotStateChanged: opts.onSlotStateChanged } : {}),
     ...(opts.onPresentationChanged ? { onPresentationChanged: opts.onPresentationChanged } : {}),
     ...(opts.onEntityTitleChanged ? { onEntityTitleChanged: opts.onEntityTitleChanged } : {}),
   });
-  return { svc, calls, presentationCalls };
+  return { svc, calls, presentationCalls, destroyedContexts };
 }
 
 describe("workspaceStateService — topology authority", () => {
@@ -1233,4 +1244,74 @@ describe("workspaceStateService — slot-state change hook", () => {
       expect(onSlotStateChanged).not.toHaveBeenCalled();
     });
   }
+});
+
+describe("workspaceStateService — closed panels", () => {
+  const closed = (slotId: string, closedAt: number, source = `panels/${slotId}`) => ({
+    slotId: `panel:tree/${slotId}`,
+    parentSlotId: null,
+    closedAt,
+    closedCount: 1,
+    entityId: `panel:nav-${slotId}`,
+    source,
+  });
+
+  it("matches titles across the owner's pages and resumes after the last match", async () => {
+    const { svc } = makeService({
+      closedRootPages: {
+        "": { items: [closed("a", 30), closed("b", 20)], nextCursor: '[20,"b"]' },
+        '[20,"b"]': { items: [closed("c", 10), closed("d", 5, "panels/notes")], nextCursor: null },
+      },
+      presentationDispatch: async (method, args) => {
+        if (method !== "titlesForEntities") return undefined;
+        const titles: Record<string, string> = {
+          "panel:nav-a": "Inbox",
+          "panel:nav-c": "Release notes",
+        };
+        return Object.fromEntries(
+          (args[0] as string[]).flatMap((id) => (titles[id] ? [[id, titles[id]]] : []))
+        );
+      },
+    });
+    const call = (input: Record<string, unknown>) =>
+      svc.handler(makeCtx() as never, "slot.closedRoots", [input]) as Promise<{
+        items: Array<{ slotId: string; title: string }>;
+        nextCursor: string | null;
+      }>;
+
+    const first = await call({ query: "NOTES", limit: 1 });
+    expect(first.items.map((item) => [item.slotId, item.title])).toEqual([
+      ["panel:tree/c", "Release notes"],
+    ]);
+    expect(first.nextCursor).toBe('[10,"panel:tree/c"]');
+
+    const plain = await call({});
+    expect(plain.items.map((item) => item.title)).toEqual(["Inbox", "panels/b"]);
+  });
+
+  it("destroys orphaned contexts before deleting the close, and drops its titles", async () => {
+    const { svc, calls } = makeService({
+      dispatchReturns: {
+        slotPurgePlan: {
+          slotId: "panel:tree/root",
+          closedAt: 42,
+          slotIds: ["panel:tree/child", "panel:tree/root"],
+          orphanContextIds: ["ctx-a", "ctx-b"],
+        },
+        slotPurge: { deletedCount: 2, entityIds: ["panel:nav-e1"] },
+      },
+    });
+    await expect(
+      svc.handler(makeCtx() as never, "slot.purge", [{ slotId: "panel:tree/root", closedAt: 42 }])
+    ).resolves.toEqual({ slotId: "panel:tree/root", deletedCount: 2 });
+    expect(
+      calls
+        .map((call) => call.method)
+        .filter((method) => ["slotPurgePlan", "destroyContext", "slotPurge"].includes(method))
+    ).toEqual(["slotPurgePlan", "destroyContext", "destroyContext", "slotPurge"]);
+
+    await expect(
+      svc.handler(makeCtx() as never, "slot.purge", [{ slotId: "panel:tree/root", closedAt: 41 }])
+    ).rejects.toThrow(/closed again/);
+  });
 });
