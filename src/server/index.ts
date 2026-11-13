@@ -662,7 +662,7 @@ async function main() {
       );
     }
   };
-  /** Manifest `providers.*` env bindings for internal DO classes (workerdManager). */
+  /** Manifest `providers.*` env bindings for internal DO classes (runtimeManager). */
   const internalDoProviderEnv = (className: string): Record<string, string> => {
     if (className === "EvalDO") return evalDoProviderEnv(workspaceConfig.providers);
     return {};
@@ -687,7 +687,7 @@ async function main() {
   const { RuntimeDiagnosticsStore } = await import("./runtimeDiagnosticsStore.js");
   const runtimeDiagnostics = new RuntimeDiagnosticsStore({ statePath });
   const entityCache = new EntityCache();
-  let workerdManagerForGateway: import("./workerdManager.js").WorkerdManager | null = null;
+  let runtimeManagerForGateway: import("./runtimeManager.js").RuntimeManager | null = null;
   let primePanelRuntimeImage: (source: string, ref?: string) => Promise<void> = async () => {};
   entityCache.registerBootstrap({ id: "server", kind: "server" });
   entityCache.registerBootstrap({ id: "electron-main", kind: "shell" });
@@ -704,21 +704,21 @@ async function main() {
         container.get<import("./doDispatch.js").DODispatch>("doDispatch")
       ).resolveInvocationRecord(id),
     verifyPreparedStorage: async (record) => {
-      const manager = workerdManagerForGateway;
+      const manager = runtimeManagerForGateway;
       if (!manager)
         throw new Error(
-          `Cannot verify clone storage for ${record.id} before WorkerdManager starts`
+          `Cannot verify clone storage for ${record.id} before RuntimeManager starts`
         );
       manager.requireCloneStorageComplete(record);
     },
     restoreExactExecution: async (record) => {
-      const manager = workerdManagerForGateway;
+      const manager = runtimeManagerForGateway;
       if (!manager) {
-        throw new Error(`Cannot materialize ${record.id} before WorkerdManager starts`);
+        throw new Error(`Cannot materialize ${record.id} before RuntimeManager starts`);
       }
       await manager.restoreDurableObjectEntity(record);
     },
-    getBootGeneration: () => workerdManagerForGateway?.getBootGeneration() ?? 0,
+    getBootGeneration: () => runtimeManagerForGateway?.getBootGeneration() ?? 0,
     onPermanentFailure: (incident) => {
       runtimeDiagnostics.record({
         workspaceId,
@@ -806,7 +806,7 @@ async function main() {
         if (!input.className || !input.activeExecutionDigest)
           throw new Error("Native publication requires an exact executable");
         const manager = assertPresent(
-          container.get<import("./workerdManager.js").WorkerdManager>("workerdManager")
+          container.get<import("./runtimeManager.js").RuntimeManager>("runtimeManager")
         );
         return manager.hasNativeOwner(
           input.source.repoPath,
@@ -826,7 +826,7 @@ async function main() {
           throw new Error("Durable work publication requires an exact sealed class and executable");
         }
         return assertPresent(
-          container.get<import("./workerdManager.js").WorkerdManager>("workerdManager")
+          container.get<import("./runtimeManager.js").RuntimeManager>("runtimeManager")
         ).getDurableWorkQueues(input.source.repoPath, input.className, input.activeExecutionDigest);
       },
     }));
@@ -1103,7 +1103,7 @@ async function main() {
     },
     notifyOwner: createAcquisitionOwnerNotifier(() => {
       const doDispatch = resolvedDoDispatchForTitles;
-      const manager = workerdManagerForGateway;
+      const manager = runtimeManagerForGateway;
       if (!doDispatch || !manager) return null;
       return {
         storageIncarnation: (ref) => manager.durableObjectStorageIncarnation(ref).incarnation,
@@ -1310,7 +1310,7 @@ async function main() {
     if (code.callerId.startsWith("do-code:")) {
       // A plain Durable Object's raw egress is attributed to its sealed executable,
       // not to an entity.
-      const manager = container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
+      const manager = container.get<import("./runtimeManager.js").RuntimeManager>("runtimeManager");
       return isDoCodeAdmitted({
         code,
         executable: manager?.resolveDoCodeExecutable(code.callerId) ?? null,
@@ -1533,9 +1533,9 @@ async function main() {
           return null;
         }
       },
-      getWorkerdManager: () => {
+      getRuntimeManager: () => {
         try {
-          return container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
+          return container.get<import("./runtimeManager.js").RuntimeManager>("runtimeManager");
         } catch {
           return null;
         }
@@ -2274,7 +2274,7 @@ async function main() {
   workspaceVcs.onProtectedPublication((event) => {
     eventService.emit("vcs:publication", event);
     try {
-      workerdManagerForGateway?.commitDurableObjectSchemas(event.workspaceStateHash);
+      runtimeManagerForGateway?.commitDurableObjectSchemas(event.workspaceStateHash);
     } catch (error) {
       console.error("[SchemaGate] Failed to commit published schema descriptors:", error);
     }
@@ -2298,7 +2298,7 @@ async function main() {
             const nextConfig = await loadWorkspaceConfigFromState(event.workspaceStateHash);
             if (reloadSeq !== latestMetaConfigReloadSeq) return;
             const reload = applyWorkspaceConfigReload(nextConfig);
-            workerdManagerForGateway?.reconcileManifestRoutes(reload.routeSources);
+            runtimeManagerForGateway?.reconcileManifestRoutes(reload.routeSources);
             if (!initialWorkspaceUnitReconcileComplete) {
               pendingStartupMetaConfigReload = true;
               return;
@@ -2527,7 +2527,7 @@ async function main() {
   });
   container.registerManaged({
     name: "entityRetirementCleanup",
-    dependencies: ["doDispatch", "workerdManager", "authorityAcquisitionLifecycle", "panelRuntime"],
+    dependencies: ["doDispatch", "runtimeManager", "authorityAcquisitionLifecycle", "panelRuntime"],
     async start() {
       return entityRetirementCleanup;
     },
@@ -2589,7 +2589,7 @@ async function main() {
       resolveRecord: (id) => getEntityStore().resolveRecord(id),
     };
 
-  // Route registry — shared across workerdManager (registers manifest-declared
+  // Route registry — shared across runtimeManager (registers manifest-declared
   // worker routes) and the gateway (dispatches `/_r/` requests). Constructed
   // early so both consumers can wire it without awaiting other services.
   const { RouteRegistry } = await import("./routeRegistry.js");
@@ -2763,9 +2763,9 @@ async function main() {
             id: "runtime-image",
             mandatory: true,
             async snapshotRoots() {
-              const workerdManager = workerdManagerForGateway;
-              if (!workerdManager) throw new Error("Runtime image store is not available");
-              return workerdManager.listRuntimeImages().map((image) => ({
+              const runtimeManager = runtimeManagerForGateway;
+              if (!runtimeManager) throw new Error("Runtime image store is not available");
+              return runtimeManager.listRuntimeImages().map((image) => ({
                 owner: "runtime-image" as const,
                 ownerId: image.id,
                 reason: "active" as const,
@@ -2947,8 +2947,8 @@ async function main() {
                     pendingApproval: "pendingApproval" in row ? row.pendingApproval : null,
                   }))
                 ),
-              workerSources: () => workerdManagerForGateway?.listInstances() ?? [],
-              workerError: (source) => workerdManagerForGateway?.getLastWorkerError(source) ?? null,
+              workerSources: () => runtimeManagerForGateway?.listInstances() ?? [],
+              workerError: (source) => runtimeManagerForGateway?.getLastWorkerError(source) ?? null,
               authorityRows: (requests) =>
                 summarizeAuthorityRequests(requests, [], describeCapability).rows,
             }),
@@ -3264,7 +3264,7 @@ async function main() {
               stateHash
             );
           }
-          const manager = workerdManagerForGateway;
+          const manager = runtimeManagerForGateway;
           const schemaReports = reports.filter(
             (report) => report.kind === "worker" && classesBySource.has(report.repoPath)
           );
@@ -4082,7 +4082,7 @@ async function main() {
       createHostPerformanceService({
         startedAt: serverLogStartedAt,
         eventLoopSamples: () => eventLoopSamples,
-        workerdSnapshot: () => workerdManagerForGateway?.performanceSnapshot() ?? null,
+        workerdSnapshot: () => runtimeManagerForGateway?.performanceSnapshot() ?? null,
       })
     );
   }
@@ -4107,13 +4107,13 @@ async function main() {
       null;
     container.registerManaged({
       name: "eval",
-      dependencies: ["workerdWorkspace", "workerdManager", "doDispatch", "runtime"],
+      dependencies: ["workerdWorkspace", "runtimeManager", "doDispatch", "runtime"],
       async start(resolve) {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
-        const workerdManager = assertPresent(
-          resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
+        const runtimeManager = assertPresent(
+          resolve<import("./runtimeManager.js").RuntimeManager>("runtimeManager")
         );
         const runtime = assertPresent(
           resolve<import("./services/runtimeService.js").RuntimeServiceResult>("runtime")
@@ -4230,7 +4230,7 @@ async function main() {
             systemTestInstance && runId.startsWith("system-test-runner:"),
           activity: activityRegistry,
           recoverUnresponsiveSandbox: ({ runId, timeoutMs }) =>
-            workerdManager.recoverUnresponsiveSandbox(
+            runtimeManager.recoverUnresponsiveSandbox(
               `eval ${runId} remained unresponsive after ${timeoutMs}ms`
             ),
           onKernelLeaseCoordinator: (coordinator) => {
@@ -4429,13 +4429,13 @@ async function main() {
       | null = null;
     container.registerManaged({
       name: "workspace-state",
-      dependencies: ["workerdWorkspace", "workerdManager", "doDispatch"],
+      dependencies: ["workerdWorkspace", "runtimeManager", "doDispatch"],
       async start(resolve) {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
-        const workerdManagerInst = assertPresent(
-          resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
+        const runtimeManagerInst = assertPresent(
+          resolve<import("./runtimeManager.js").RuntimeManager>("runtimeManager")
         );
         const { resolveWorkspaceService } = await import("./workspaceServices.js");
         const presentation = resolveWorkspaceService(
@@ -4447,7 +4447,7 @@ async function main() {
         }
         let presentationReady: Promise<void> | null = null;
         const dispatchPresentation = async (method: string, args: unknown[]) => {
-          presentationReady ??= activateDurableObjectEntity(doDispatch, workerdManagerInst, {
+          presentationReady ??= activateDurableObjectEntity(doDispatch, runtimeManagerInst, {
             source: presentation.source,
             className: presentation.className,
             objectKey: presentation.objectKey,
@@ -4476,7 +4476,7 @@ async function main() {
         workspaceStateDefinition = createWorkspaceStateService({
           doDispatch,
           workspaceId,
-          storageIncarnation: (key) => workerdManager.durableObjectStorageIncarnation(key),
+          storageIncarnation: (key) => runtimeManager.durableObjectStorageIncarnation(key),
           presentation: getWorkspacePresentationClient(),
           panelAccess: (
             await import("./services/createPanelAccessPermissionDeps.js")
@@ -4534,7 +4534,7 @@ async function main() {
         "entityRetirementCleanup",
         "workerdWorkspace",
         "doDispatch",
-        "workerdManager",
+        "runtimeManager",
         "buildSystem",
         "panelHttpServer",
       ],
@@ -4542,8 +4542,8 @@ async function main() {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
-        const workerdManager = assertPresent(
-          resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
+        const runtimeManager = assertPresent(
+          resolve<import("./runtimeManager.js").RuntimeManager>("runtimeManager")
         );
         const buildSystem = assertPresent(
           resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
@@ -4737,7 +4737,7 @@ async function main() {
                     authority: ready.activeAuthority!,
                   };
                 } else {
-                  prepared = await workerdManager.ensureDurableObjectEntity({
+                  prepared = await runtimeManager.ensureDurableObjectEntity({
                     source,
                     ref,
                     className: spec.className,
@@ -4747,7 +4747,7 @@ async function main() {
                   });
                 }
               } else if (spec.kind === "worker") {
-                prepared = await workerdManager.startWorker({
+                prepared = await runtimeManager.startWorker({
                   source,
                   ref,
                   ...(spec.execution.artifact ? { artifact: spec.execution.artifact } : {}),
@@ -4822,13 +4822,13 @@ async function main() {
               return result;
             }) as RuntimeEntityHooks["prepare"],
             recoverExactExecution: async (record) => {
-              await workerdManager.restoreDurableObjectEntity(record);
+              await runtimeManager.restoreDurableObjectEntity(record);
             },
             restartDurableObjectIncarnation: async (record) => {
               if (!record.className) {
                 throw new Error(`Durable Object ${record.id} has no class name`);
               }
-              await workerdManager.restartUserlandDOFacet({
+              await runtimeManager.restartUserlandDOFacet({
                 source: record.source.repoPath,
                 className: record.className,
                 objectKey: record.key,
@@ -4869,7 +4869,7 @@ async function main() {
               reservation,
               cooperativelyPaused,
             }) => {
-              await workerdManager.cloneDO({ source, className, objectKey: fromKey }, toKey, {
+              await runtimeManager.cloneDO({ source, className, objectKey: fromKey }, toKey, {
                 cooperativelyPaused,
                 reservation,
                 resolveSource: () =>
@@ -4879,7 +4879,7 @@ async function main() {
               });
             },
             destroyDurableStorage: async ({ source, className, key }) => {
-              await workerdManager.destroyRetiredDOStorage({
+              await runtimeManager.destroyRetiredDOStorage({
                 source,
                 className,
                 objectKey: key,
@@ -5039,7 +5039,7 @@ async function main() {
                 "runtime.faultAbortAgentVessel accepts only an exact headless agent vessel"
               );
             }
-            await workerdManager.faultAbortUserlandDOFacet({
+            await runtimeManager.faultAbortUserlandDOFacet({
               source: record.source.repoPath,
               className: record.className,
               objectKey: record.key,
@@ -6763,7 +6763,7 @@ async function main() {
   // Server-dispatched semantic control-plane objects activate explicitly.
   const activateDurableObjectEntity = async (
     doDispatch: import("./doDispatch.js").DODispatch,
-    workerdManagerInst: import("./workerdManager.js").WorkerdManager,
+    runtimeManagerInst: import("./runtimeManager.js").RuntimeManager,
     ref: {
       source: string;
       className: string;
@@ -6801,7 +6801,7 @@ async function main() {
       ref.contextId,
       canonicalWorkspaceObjectContextId(workspaceId, { source, className, key: objectKey })
     );
-    const prepared = await workerdManagerInst.ensureDurableObjectEntity({
+    const prepared = await runtimeManagerInst.ensureDurableObjectEntity({
       source,
       className,
       key: objectKey,
@@ -6824,13 +6824,13 @@ async function main() {
     let workerServiceDef: ReturnType<typeof createWorkerService>;
     container.registerManaged({
       name: "workersRpc",
-      dependencies: ["workerdWorkspace", "buildSystem", "workerdManager", "doDispatch"],
+      dependencies: ["workerdWorkspace", "buildSystem", "runtimeManager", "doDispatch"],
       async start(resolve) {
         const buildSystemInst = assertPresent(
           resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
         );
-        const workerdManagerInst = assertPresent(
-          resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
+        const runtimeManagerInst = assertPresent(
+          resolve<import("./runtimeManager.js").RuntimeManager>("runtimeManager")
         );
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
@@ -6843,7 +6843,7 @@ async function main() {
           if (development.kind !== "durable-object") {
             throw new Error("development service must be Durable Object-backed");
           }
-          developmentReady ??= activateDurableObjectEntity(doDispatch, workerdManagerInst, {
+          developmentReady ??= activateDurableObjectEntity(doDispatch, runtimeManagerInst, {
             source: development.source,
             className: development.className,
             objectKey: development.objectKey,
@@ -6917,7 +6917,7 @@ async function main() {
             contextPolicy,
             buildRef,
           }) => {
-            return activateDurableObjectEntity(doDispatch, workerdManagerInst, {
+            return activateDurableObjectEntity(doDispatch, runtimeManagerInst, {
               source,
               className,
               objectKey,
@@ -6927,11 +6927,11 @@ async function main() {
             });
           },
           resetDurableObjectStorage: (target, intent) =>
-            workerdManagerInst.resetDOStorage(target, intent),
+            runtimeManagerInst.resetDOStorage(target, intent),
           listDurableObjectStorageBackups: (target) =>
-            workerdManagerInst.listDOStorageBackups(target),
+            runtimeManagerInst.listDOStorageBackups(target),
           restoreDurableObjectStorageBackup: (target, operationId, intent) =>
-            workerdManagerInst.restoreDOStorageBackup(target, operationId, intent),
+            runtimeManagerInst.restoreDOStorageBackup(target, operationId, intent),
         });
         return workerServiceDef;
       },
@@ -6945,7 +6945,7 @@ async function main() {
   // Shared services needed in both standalone and Electron modes
   // ===========================================================================
 
-  // Filesystem service (used internally by workerdManager; in Electron mode
+  // Filesystem service (used internally by runtimeManager; in Electron mode
   // the main process has its OWN FsService for panel-facing FS RPC)
   {
     const { FsService } = await import("./services/fsService.js");
@@ -6998,9 +6998,9 @@ async function main() {
     });
   }
 
-  const { wireWorkerdCore } = await import("./bootstrap/workerd.js");
+  const { wireRuntimeCore } = await import("./bootstrap/runtime.js");
   const { resolveLiveExecutionCaller } = await import("./services/liveExecutionCaller.js");
-  wireWorkerdCore({
+  wireRuntimeCore({
     schemaProbeReleaseRoot: releaseResourceRoot,
     schemaProbeEnvironment: {
       hostBuild: preparedInput.hostBuild,
@@ -7077,7 +7077,7 @@ async function main() {
       });
     },
     onManagerStarted: (manager) => {
-      workerdManagerForGateway = manager;
+      runtimeManagerForGateway = manager;
     },
     publishSourceBuild: async (manager, source, doClasses, trigger, buildKey) => {
       const build = buildKey
@@ -7235,12 +7235,12 @@ async function main() {
   {
     container.registerManaged({
       name: "lifecycleDriver",
-      dependencies: ["workerdWorkspace", "workerdManager", "doDispatch"],
+      dependencies: ["workerdWorkspace", "runtimeManager", "doDispatch"],
       async start(resolve) {
         const { LifecycleDriver } = await import("./services/lifecycleDriver.js");
         const driver = new LifecycleDriver({
-          workerdManager: assertPresent(
-            resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
+          runtimeManager: assertPresent(
+            resolve<import("./runtimeManager.js").RuntimeManager>("runtimeManager")
           ),
           doDispatch: assertPresent(resolve<import("./doDispatch.js").DODispatch>("doDispatch")),
           drainDurableWorkDeliveries: async (owners, signal) => {
@@ -7509,7 +7509,7 @@ async function main() {
       }
     },
     restartWorker: async (_ctx, entity) => {
-      const manager = workerdManagerForGateway;
+      const manager = runtimeManagerForGateway;
       if (!manager) throw new Error("Worker runtime is not available");
       const instance = manager
         .listInstances()
@@ -7519,7 +7519,7 @@ async function main() {
     },
     restartDurableObject: async (_ctx, entity) => {
       if (!entity.className) throw new Error(`Durable Object entity has no class: ${entity.id}`);
-      const manager = workerdManagerForGateway;
+      const manager = runtimeManagerForGateway;
       if (!manager) throw new Error("Durable Object runtime is not available");
       await manager.restartUserlandDOFacet({
         source: entity.source.repoPath,
@@ -7801,8 +7801,8 @@ async function main() {
         },
       };
     },
-    getWorkerdPort: () => workerdManagerForGateway?.getPort() ?? null,
-    getWorkerHost: () => workerdManagerForGateway,
+    getWorkerdPort: () => runtimeManagerForGateway?.getPort() ?? null,
+    getWorkerHost: () => runtimeManagerForGateway,
     ensureDORoute: async (source, className, objectKey) => {
       await durableObjectExecutionReadiness.ensureReady({
         source,
@@ -7812,7 +7812,7 @@ async function main() {
     },
     adminToken,
     workerdGatewayToken,
-    getWorkerdDispatchSecret: () => workerdManagerForGateway?.getDispatchSecret() ?? null,
+    getWorkerdDispatchSecret: () => runtimeManagerForGateway?.getDispatchSecret() ?? null,
     tokenManager,
     entityCache,
     routeRegistry,
@@ -7833,7 +7833,7 @@ async function main() {
       return {
         ...base,
         uptimeMs: Date.now() - startedAt,
-        workerd: workerdManagerForGateway?.getPort() ? "running" : "stopped",
+        workerd: runtimeManagerForGateway?.getPort() ? "running" : "stopped",
         tokenSource,
         // Remote transport health. Null for loopback-only co-located mode.
         iroh: currentIrohReach(),
@@ -7855,17 +7855,17 @@ async function main() {
       | null = null;
     container.registerManaged({
       name: "workerdInspector",
-      dependencies: ["workerdWorkspace", "workerdManager", "panelHttpServer"],
+      dependencies: ["workerdWorkspace", "runtimeManager", "panelHttpServer"],
       async start(resolve) {
-        const workerdManager = assertPresent(
-          resolve<import("./workerdManager.js").WorkerdManager>("workerdManager")
+        const runtimeManager = assertPresent(
+          resolve<import("./runtimeManager.js").RuntimeManager>("runtimeManager")
         );
         const { server } = assertPresent(
           resolve<{ server: import("./panelHttpServer.js").PanelHttpServer }>("panelHttpServer")
         );
         const { WorkerdInspectorBridge } = await import("./workerdInspectorBridge.js");
         const bridge = new WorkerdInspectorBridge({
-          getInspectorUrl: () => workerdManager.getInspectorUrl(),
+          getInspectorUrl: () => runtimeManager.getInspectorUrl(),
           port: gatewayPort,
         });
         server.setWorkerdInspectorBridge(bridge);
@@ -7873,7 +7873,7 @@ async function main() {
         // eagerly so clients fail fast instead of hanging on a dead socket.
         // Generation-closing (not restart-begin): purely in-process, and it
         // must run for crash transitions too, which skip graceful prepare.
-        workerdManager.onGenerationClosing(() => bridge.closeAll());
+        runtimeManager.onGenerationClosing(() => bridge.closeAll());
         const { createWorkerdInspectorService } =
           await import("./services/workerdInspectorService.js");
         workerdInspectorDefinition = createWorkerdInspectorService({
@@ -8011,32 +8011,32 @@ async function main() {
   // persisted relay-mode webhook subscriptions so the relay resumes routing.
   relayBackhaul.start();
 
-  const workerdManager =
-    container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
+  const runtimeManager =
+    container.get<import("./runtimeManager.js").RuntimeManager>("runtimeManager");
 
   // Wire workerdUrl into rpcServer for HTTP relay to workers/DOs
   const rpcServerInstance = container.get<{
     server: import("./rpcServer.js").RpcServer;
     port: number;
   }>("rpcServer").server;
-  const workerdPort = workerdManager.getPort();
+  const workerdPort = runtimeManager.getPort();
   if (workerdPort) {
     rpcServerInstance.setWorkerdUrl(`http://127.0.0.1:${workerdPort}`);
   }
   // Relay routing follows the workerd process generation. Never leave the
   // prior loopback port looking authoritative during replacement, and publish
-  // the new port only after WorkerdManager declares that generation ready.
+  // the new port only after RuntimeManager declares that generation ready.
   // Generation-closing (not restart-begin): crash transitions skip graceful
   // prepare entirely, and the relay URL must still stop pointing at the dead
   // generation all through recovery. Purely in-process by contract.
-  workerdManager.onGenerationClosing(() => {
+  runtimeManager.onGenerationClosing(() => {
     rpcServerInstance.setWorkerdUrl(null);
     // Lifecycle signal for shell-side consumers (e.g. the browser cookie
     // projection pauses its reconcile loop while the runtime is offline).
     eventService.emit("server-health", { workerd: "restarting", sampledAt: Date.now() });
   });
-  const stopAuthorityRecoveryOnRestart = workerdManager.onRestartReady(async () => {
-    const restartedPort = workerdManager.getPort();
+  const stopAuthorityRecoveryOnRestart = runtimeManager.onRestartReady(async () => {
+    const restartedPort = runtimeManager.getPort();
     if (!restartedPort) {
       throw new Error("workerd restart reported ready without a relay port");
     }
@@ -8045,12 +8045,12 @@ async function main() {
     await acquisitionCoordinator.reprojectOwnerDelivery();
   });
   rpcServerInstance.setWorkerdGatewayToken(workerdGatewayToken);
-  rpcServerInstance.setWorkerdDispatchSecret(workerdManager.getDispatchSecret());
+  rpcServerInstance.setWorkerdDispatchSecret(runtimeManager.getDispatchSecret());
   rpcServerInstance.setExecutableAdmissionResolver((ref) =>
-    workerdManager.getDoAdmission(ref.source, ref.className, ref.objectKey)
+    runtimeManager.getDoAdmission(ref.source, ref.className, ref.objectKey)
   );
   rpcServerInstance.setWorkerAdmissionResolver((targetId) =>
-    workerdManager.resolveWorkerAdmission(targetId)
+    runtimeManager.resolveWorkerAdmission(targetId)
   );
   dispatcher.markInitialized();
 
@@ -8337,7 +8337,7 @@ async function main() {
     const { prepareStartupWorkers } = await import("./startupWorkerPreparation.js");
     const result = await prepareStartupWorkers(
       assertPresent(buildSystemInstance),
-      (build, classes) => workerdManager.prepareWorkerExecutable(build, classes),
+      (build, classes) => runtimeManager.prepareWorkerExecutable(build, classes),
       startupBackgroundLifetime.signal
     );
     console.info(
@@ -8390,7 +8390,7 @@ async function main() {
   // Report ready
   // ===========================================================================
 
-  const workerdMgr = container.get<import("./workerdManager.js").WorkerdManager>("workerdManager");
+  const workerdMgr = container.get<import("./runtimeManager.js").RuntimeManager>("runtimeManager");
 
   const tokenFilePath = layout.adminTokenFile;
 

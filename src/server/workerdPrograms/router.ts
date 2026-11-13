@@ -3,9 +3,9 @@ import { DIRECT_AUTHORITY_ACCEPTED_AT_HEADER } from "@vibestudio/rpc/internal";
 type RouterBinding = string | Fetcher | DurableObjectNamespace | Readonly<Record<string, string>>;
 
 interface RouterEnv extends Record<string, RouterBinding> {
-  WORKERD_DISPATCH_SECRET: string;
-  WORKERD_DO_BINDINGS: Readonly<Record<string, string>>;
-  WORKERD_GATEWAY_TOKEN: string;
+  RUNTIME_DISPATCH_SECRET: string;
+  RUNTIME_DO_BINDINGS: Readonly<Record<string, string>>;
+  RUNTIME_GATEWAY_TOKEN: string;
   WORKER_HOST: Fetcher;
   UNIVERSAL_DO: DurableObjectNamespace;
   EXECUTABLE_PREPARATION: Fetcher;
@@ -65,7 +65,7 @@ interface ObjectOperation {
 
 async function objectOperation(env: RouterEnv, request: Request): Promise<Response> {
   const input = (await request.json()) as ObjectOperation;
-  const bindings = new Set<string>(["UNIVERSAL_DO", ...Object.values(env.WORKERD_DO_BINDINGS)]);
+  const bindings = new Set<string>(["UNIVERSAL_DO", ...Object.values(env.RUNTIME_DO_BINDINGS)]);
   const binding = bindings.has(input.namespace) ? env[input.namespace] : undefined;
   if (!isDurableObjectNamespace(binding)) {
     return new Response(`Unknown namespace ${input.namespace}`, { status: 404 });
@@ -96,7 +96,7 @@ async function objectOperation(env: RouterEnv, request: Request): Promise<Respon
 
 const router: ExportedHandler<RouterEnv> = {
   async fetch(request, env): Promise<Response> {
-    const expectedAuth = `Bearer ${env.WORKERD_GATEWAY_TOKEN}`;
+    const expectedAuth = `Bearer ${env.RUNTIME_GATEWAY_TOKEN}`;
     if (request.headers.get("Authorization") !== expectedAuth) {
       return new Response("Unauthorized", { status: 401 });
     }
@@ -120,7 +120,7 @@ const router: ExportedHandler<RouterEnv> = {
         prefix === "_u" ||
         prefix === "_prepare_executable" ||
         prefix === "_object") &&
-      request.headers.get("X-Vibestudio-Dispatch-Secret") !== env.WORKERD_DISPATCH_SECRET
+      request.headers.get("X-Vibestudio-Dispatch-Secret") !== env.RUNTIME_DISPATCH_SECRET
     ) {
       return new Response("Forbidden", { status: 403 });
     }
@@ -131,7 +131,7 @@ const router: ExportedHandler<RouterEnv> = {
     if (prefix === "_prepare_executable") {
       return env.EXECUTABLE_PREPARATION.fetch(new Request(request, { headers: strippedHeaders }));
     }
-    const doLookup = env.WORKERD_DO_BINDINGS;
+    const doLookup = env.RUNTIME_DO_BINDINGS;
     // Semantic DO dispatch carries a complete serialized envelope. Own those
     // bytes at the physical HTTP ingress before crossing a service binding:
     // a warming facet can return without reading its request, and leaving the

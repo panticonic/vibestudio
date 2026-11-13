@@ -113,7 +113,7 @@ export interface AppArtifactHandler {
   ): Promise<void> | void;
 }
 
-/** Subset of WorkerdManager the gateway needs to serve worker-host loader code.
+/** Subset of RuntimeManager the gateway needs to serve worker-host loader code.
  *  These endpoints expose worker bundles + per-instance env (RPC tokens,
  *  STATE_ARGS), so they are gated by the workerd-only `loaderSecret`. */
 export interface WorkerHostCodeProvider {

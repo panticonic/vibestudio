@@ -3,7 +3,7 @@ import { createDevLogger } from "@vibestudio/dev-log";
 import type { DORef, LifecycleDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 import type { LifecycleKey } from "@panticonic/builtin/workspace-state";
-import type { RestartBeginEvent, RestartReadyEvent, WorkerdManager } from "../workerdManager.js";
+import type { RestartBeginEvent, RestartReadyEvent, RuntimeManager } from "../runtimeManager.js";
 import { workspaceStateEngineMethods } from "@vibestudio/service-schemas/workspaceStateEngine";
 import {
   createTypedServiceClient,
@@ -14,7 +14,7 @@ const log = createDevLogger("LifecycleDriver");
 type WorkspaceStateEngineClient = TypedServiceClient<typeof workspaceStateEngineMethods>;
 
 export interface LifecycleDriverDeps {
-  workerdManager: WorkerdManager;
+  runtimeManager: RuntimeManager;
   doDispatch: LifecycleDoDispatcher;
   workspaceId: string;
   drainDurableWorkDeliveries: (owners: readonly DORef[], signal?: AbortSignal) => Promise<void>;
@@ -51,10 +51,10 @@ export class LifecycleDriver {
   }
 
   start(): void {
-    this.unsubscribeBegin = this.deps.workerdManager.onRestartBegin((event) =>
+    this.unsubscribeBegin = this.deps.runtimeManager.onRestartBegin((event) =>
       this.handleRestartBegin(event)
     );
-    this.unsubscribeReady = this.deps.workerdManager.onRestartReady((event) =>
+    this.unsubscribeReady = this.deps.runtimeManager.onRestartReady((event) =>
       this.handleRestartReady(event)
     );
   }
@@ -72,11 +72,11 @@ export class LifecycleDriver {
     const epoch = await this.workspaceState.lifecycleOpenEpoch({
       kind: reason,
       reason,
-      generation: this.deps.workerdManager.getBootGeneration(),
+      generation: this.deps.runtimeManager.getBootGeneration(),
     });
     await this.resumeTargets(epoch, targets, {
       previousGeneration: null,
-      currentGeneration: this.deps.workerdManager.getBootGeneration(),
+      currentGeneration: this.deps.runtimeManager.getBootGeneration(),
       reason,
     });
     await this.workspaceState.lifecycleCompleteEpoch(epoch);
@@ -86,7 +86,7 @@ export class LifecycleDriver {
     const epoch = await this.workspaceState.lifecycleOpenEpoch({
       kind: "planned",
       reason: "server_shutdown",
-      generation: this.deps.workerdManager.getBootGeneration(),
+      generation: this.deps.runtimeManager.getBootGeneration(),
     });
     const targets = await this.workspaceState.lifecycleListLeases();
     await this.prepareTargets(epoch, targets, "server_shutdown");

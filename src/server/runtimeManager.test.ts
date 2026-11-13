@@ -1,13 +1,13 @@
 /**
- * Tests for WorkerdManager — instance lifecycle, config generation,
+ * Tests for RuntimeManager — instance lifecycle, config generation,
  * name sanitization, and rebuild handling.
  */
 
 import {
-  WorkerdManager as ProductWorkerdManager,
-  type WorkerdManagerDeps,
+  RuntimeManager as ProductRuntimeManager,
+  type RuntimeManagerDeps,
   type WorkerdWorkspaceProvider,
-} from "./workerdManager.js";
+} from "./runtimeManager.js";
 import { spawn } from "child_process";
 import { findServicePort } from "./hostCore/portUtils.js";
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
@@ -253,10 +253,10 @@ function mockWorkerBuildFor(source: string, execution: ExecutionArtifactRefV1): 
   };
 }
 
-type TestWorkerdDeps = WorkerdManagerDeps & WorkerdWorkspaceProvider;
+type TestWorkerdDeps = RuntimeManagerDeps & WorkerdWorkspaceProvider;
 const testStatePaths = new Set<string>();
 
-class WorkerdManager extends ProductWorkerdManager {
+class RuntimeManager extends ProductRuntimeManager {
   constructor(deps: TestWorkerdDeps) {
     super(deps);
     this.bindWorkspaceProvider(deps);
@@ -274,10 +274,10 @@ function createMockDeps(overrides: Partial<TestWorkerdDeps> = {}): TestWorkerdDe
     tokenManager: {
       ensureToken: vi.fn().mockReturnValue("mock-token-123"),
       revokeToken: vi.fn(),
-    } as unknown as WorkerdManagerDeps["tokenManager"],
+    } as unknown as RuntimeManagerDeps["tokenManager"],
     fsService: {
       closeHandlesForCaller: vi.fn(),
-    } as unknown as WorkerdManagerDeps["fsService"],
+    } as unknown as RuntimeManagerDeps["fsService"],
     getServerUrl: () => "http://127.0.0.1:9999",
     bindRuntimeImage: vi.fn(async (unitPath: string, ref?: string) => {
       const artifact = runtimeArtifact(
@@ -330,7 +330,7 @@ async function loadCompiledRouter(): Promise<{
   return module.default;
 }
 
-type StartWorkerArgs = Parameters<WorkerdManager["startWorker"]>[0];
+type StartWorkerArgs = Parameters<RuntimeManager["startWorker"]>[0];
 
 /** Default args for the runtime-managed worker-launch path (startWorker). */
 function startArgs(overrides: Partial<StartWorkerArgs> = {}): StartWorkerArgs {
@@ -343,7 +343,7 @@ function startArgs(overrides: Partial<StartWorkerArgs> = {}): StartWorkerArgs {
 }
 
 /** Status of a live worker instance by sanitized name (replaces getInstanceStatus). */
-function statusOf(mgr: WorkerdManager, name: string) {
+function statusOf(mgr: RuntimeManager, name: string) {
   return mgr.listInstances().find((instance) => instance.name === name) ?? null;
 }
 
@@ -433,14 +433,14 @@ function fakeNode(options: { failFork?: boolean | string; failDestroy?: boolean 
   return state;
 }
 
-describe("WorkerdManager", () => {
+describe("RuntimeManager", () => {
   it("deploys one runtime application whose class credentials are class secrets, not variables", async () => {
     celldDeployments.length = 0;
     const deps = createMockDeps({
       getInternalDoEnv: (className): Record<string, string> =>
         className === "EvalDO" ? { EVAL_ENGINE_SOURCE: "units/eval" } : {},
     });
-    const manager = new WorkerdManager(deps);
+    const manager = new RuntimeManager(deps);
     try {
       await manager.startWorker(startArgs());
       expect(celldDeployments).toHaveLength(1);
@@ -476,7 +476,7 @@ describe("WorkerdManager", () => {
 
   it("reports finite startup phases without executable payloads or credentials", async () => {
     const deps = createMockDeps();
-    const manager = new WorkerdManager(deps);
+    const manager = new RuntimeManager(deps);
     const logger = vi.spyOn(console, "log");
     try {
       await manager.startWorker(startArgs());
@@ -511,7 +511,7 @@ describe("WorkerdManager", () => {
       cleanupWebhookSubscriptions: vi.fn(),
       unregisterEgressCaller: vi.fn(),
     });
-    const manager = new WorkerdManager(deps);
+    const manager = new RuntimeManager(deps);
     const instance = await manager.startWorker(startArgs());
     const original = new Error("native close failed");
     let reject!: (error: unknown) => void;
@@ -537,8 +537,8 @@ describe("WorkerdManager", () => {
     celldDeployments.length = 0;
     const firstDeps = createMockDeps();
     const secondDeps = createMockDeps();
-    const first = new WorkerdManager(firstDeps);
-    const second = new WorkerdManager(secondDeps);
+    const first = new RuntimeManager(firstDeps);
+    const second = new RuntimeManager(secondDeps);
     try {
       await first.startWorker(startArgs());
       await second.startWorker(startArgs());
@@ -578,7 +578,7 @@ describe("WorkerdManager", () => {
         INSERT INTO do_schema_descriptors VALUES ('workers/board','old','BoardDO','{}');
       `);
       old.close();
-      const manager = new WorkerdManager(deps);
+      const manager = new RuntimeManager(deps);
       const probe = vi
         .spyOn(manager, "probeDurableObjectSchema")
         .mockResolvedValue(descriptor(1, "fresh-shape"));
@@ -590,7 +590,7 @@ describe("WorkerdManager", () => {
       });
       expect(probe).toHaveBeenCalledTimes(1);
       await manager.shutdown();
-      const reopened = new WorkerdManager(deps);
+      const reopened = new RuntimeManager(deps);
       const secondProbe = vi.spyOn(reopened, "probeDurableObjectSchema");
       await reopened.ensureDurableObjectEntity({
         source: "workers/board",
@@ -610,9 +610,9 @@ describe("WorkerdManager", () => {
 
     it("replays installed immutable evidence into the current workspace execution only", async () => {
       const source = "workers/board";
-      const first = new WorkerdManager(createMockDeps({ workspaceId: "workspace:first" }));
+      const first = new RuntimeManager(createMockDeps({ workspaceId: "workspace:first" }));
       const secondDeps = createMockDeps({ workspaceId: "workspace:second" });
-      const second = new WorkerdManager(secondDeps);
+      const second = new RuntimeManager(secondDeps);
       const firstProbe = vi
         .spyOn(
           first as unknown as { probeSchemaExecutable(): Promise<ReturnType<typeof descriptor>> },
@@ -694,7 +694,7 @@ describe("WorkerdManager", () => {
     ])(
       "cancels active probe HTTP and joins facet retirement before shutdown (retirement failure: %s, direct publication: %s)",
       async (failRetirement, directPublication) => {
-        const manager = new WorkerdManager(createMockDeps());
+        const manager = new RuntimeManager(createMockDeps());
         const internals = manager as unknown as { stopWorkerd(): Promise<void> };
         const stop = vi.spyOn(internals, "stopWorkerd");
         const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
@@ -777,7 +777,7 @@ describe("WorkerdManager", () => {
     );
 
     it("joins admitted schema work before stopping native workerd and retains independent failures", async () => {
-      const manager = new WorkerdManager(createMockDeps());
+      const manager = new RuntimeManager(createMockDeps());
       const internals = manager as unknown as {
         schemaAdmissions: Map<string, Promise<void>>;
         stopWorkerd(): Promise<void>;
@@ -807,7 +807,7 @@ describe("WorkerdManager", () => {
 
     it("uses exact executable queue evidence without probing each activated entity", async () => {
       const deps = createMockDeps();
-      const manager = new WorkerdManager(deps);
+      const manager = new RuntimeManager(deps);
       const probe = vi.spyOn(manager, "probeDurableObjectSchema").mockResolvedValue({
         ...descriptor(1, "fresh-shape"),
         durableWorkQueues: ["channel-delivery"],
@@ -849,7 +849,7 @@ describe("WorkerdManager", () => {
 
     it("boots the complete product configuration once without duplicate schema probes", async () => {
       const deps = createMockDeps();
-      const manager = new WorkerdManager(deps);
+      const manager = new RuntimeManager(deps);
       const before = vi.mocked(spawn).mock.calls.length;
       const schemas = vi.spyOn(manager, "probeDurableObjectSchema");
       await manager.registerAllDOClasses(
@@ -889,7 +889,7 @@ describe("WorkerdManager", () => {
 
     it("prepares schema evidence without an object and reuses it on activation", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
       const binding = await deps.bindRuntimeImage("workers/board", "state:original");
       const build = (await deps.getBuildByExecution(
         binding.artifact.buildKey,
@@ -926,7 +926,7 @@ describe("WorkerdManager", () => {
 
     it("keeps the newest prepared publication when an older preparation finishes later", async () => {
       const deps = createMockDeps();
-      const manager = new WorkerdManager(deps);
+      const manager = new RuntimeManager(deps);
       const source = "workers/board";
       const first = await deps.bindRuntimeImage(source, "state:first");
       const second = await deps.bindRuntimeImage(source, "state:second");
@@ -971,7 +971,7 @@ describe("WorkerdManager", () => {
     });
 
     it("shares exact schema admission and retains its evidence without a publication", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       let release!: () => void;
       const released = new Promise<void>((resolve) => {
         release = resolve;
@@ -1003,7 +1003,7 @@ describe("WorkerdManager", () => {
     });
 
     it("rejects first activation with the original schema failure", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       const failure = new Error("schema installation failed");
       vi.spyOn(mgr, "probeDurableObjectSchema").mockRejectedValue(failure);
       await expect(
@@ -1018,7 +1018,7 @@ describe("WorkerdManager", () => {
     });
 
     it("retires probe storage by deleting its cell on the running node", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       await mgr.startWorker(startArgs());
       const node = fakeNode();
       const internals = mgr as unknown as {
@@ -1039,7 +1039,7 @@ describe("WorkerdManager", () => {
     });
 
     it("keeps a retirement the node refused journaled and collects it at the next start", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       await mgr.startWorker(startArgs());
       const node = fakeNode({ failDestroy: true });
       const internals = mgr as unknown as {
@@ -1064,7 +1064,7 @@ describe("WorkerdManager", () => {
     });
 
     it("preserves both probe and retirement failures and reclaims owned scratch at shutdown", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       const ordinaryFetch = vi.mocked(fetch).getMockImplementation()!;
       vi.mocked(fetch).mockImplementation(async (input, init) => {
         const url = String(input);
@@ -1122,7 +1122,7 @@ describe("WorkerdManager", () => {
             ) ?? null
         ),
       });
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
       const probe = vi
         .spyOn(mgr, "probeDurableObjectSchema")
         .mockImplementation(async (_source, _className, build) =>
@@ -1214,7 +1214,7 @@ describe("WorkerdManager", () => {
     });
 
     it("stages each publication's exact current descriptor without comparing old generations", () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       expect(
         mgr.validateAndStageDurableObjectSchemas("state:first", [
           {
@@ -1253,7 +1253,7 @@ describe("WorkerdManager", () => {
   });
 
   it("resumes a failed maintenance journal and hides its backup until completion", async () => {
-    const mgr = new WorkerdManager(createMockDeps());
+    const mgr = new RuntimeManager(createMockDeps());
     await mgr.startWorker(startArgs());
     const node = fakeNode({ failFork: true });
     const ref = { source: "workers/board", className: "BoardDO", objectKey: "main" };
@@ -1289,7 +1289,7 @@ describe("WorkerdManager", () => {
   });
 
   it("restores a backup into the object's own cell, stopping it, and keeps what it replaced", async () => {
-    const mgr = new WorkerdManager(createMockDeps());
+    const mgr = new RuntimeManager(createMockDeps());
     await mgr.startWorker(startArgs());
     const node = fakeNode();
     const ref = { source: "workers/board", className: "BoardDO", objectKey: "main" };
@@ -1326,7 +1326,7 @@ describe("WorkerdManager", () => {
 
   it("rotates canonical storage identity atomically with journal progress and preserves it across journal recovery", async () => {
     const deps = createMockDeps();
-    const mgr = new WorkerdManager(deps);
+    const mgr = new RuntimeManager(deps);
     await mgr.startWorker(startArgs());
     fakeNode();
     const ref = { source: "workers/agent", className: "Agent", objectKey: "journal-identity" };
@@ -1351,7 +1351,7 @@ describe("WorkerdManager", () => {
     const current = mgr.durableObjectStorageIncarnation(ref);
     expect(current).toEqual({ incarnation: operationId, generation: before.generation + 1 });
     await mgr.shutdown();
-    const reopened = new WorkerdManager(deps);
+    const reopened = new RuntimeManager(deps);
     await reopened.startWorker(startArgs());
     fakeNode();
     expect(reopened.durableObjectStorageIncarnation(ref)).toEqual(current);
@@ -1372,7 +1372,7 @@ describe("WorkerdManager", () => {
     const ref = { source: "workers/agent", className: "Agent", objectKey: "publication-debt" };
     const published: Array<{ incarnation: string; generation: number }> = [];
     let failReply = true;
-    const manager = new WorkerdManager({
+    const manager = new RuntimeManager({
       ...deps,
       republishStorageOwner: async (target) => {
         expect(target).toEqual(ref);
@@ -1408,7 +1408,7 @@ describe("WorkerdManager", () => {
   });
 
   it("resumes after replacement failure and retains only the five newest backups", async () => {
-    const mgr = new WorkerdManager(createMockDeps());
+    const mgr = new RuntimeManager(createMockDeps());
     await mgr.startWorker(startArgs());
     const node = fakeNode({ failDestroy: true });
     const ref = { source: "workers/board", className: "BoardDO", objectKey: "retained" };
@@ -1435,7 +1435,7 @@ describe("WorkerdManager", () => {
   it("collects a retirement at once on a running node and at the next start otherwise", async () => {
     const deps = createMockDeps();
     const ref = { source: "workers/board", className: "BoardDO", objectKey: "retired" };
-    const down = new WorkerdManager(deps);
+    const down = new RuntimeManager(deps);
     type Internals = { readOpenDurableObjectMaintenance(): Array<{ kind: string; objectKey: string }> };
     // No node is running: the retirement is journaled and nothing is destroyed.
     const quiet = fakeNode();
@@ -1447,7 +1447,7 @@ describe("WorkerdManager", () => {
     await down.shutdown();
 
     // A later manager of the same state starts its node and owes the collection.
-    const reopened = new WorkerdManager(deps);
+    const reopened = new RuntimeManager(deps);
     const node = fakeNode();
     try {
       await reopened.startWorker(startArgs());
@@ -1493,7 +1493,7 @@ describe("WorkerdManager", () => {
       }) as unknown as import("@vibestudio/shared/runtime/entitySpec").EntityRecord;
 
     async function cloneHarness() {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       await mgr.startWorker(startArgs());
       const node = fakeNode();
       // Source identity is the runtime service's to judge; the node's fork is under test.
@@ -1570,7 +1570,7 @@ describe("WorkerdManager", () => {
   });
 
   it("binds the required process-owned egress secret", () => {
-    const mgr = new WorkerdManager(createMockDeps({ egressSecret: "owned-by-bootstrap" }));
+    const mgr = new RuntimeManager(createMockDeps({ egressSecret: "owned-by-bootstrap" }));
 
     expect(mgr.getEgressSecret()).toBe("owned-by-bootstrap");
   });
@@ -1595,7 +1595,7 @@ describe("WorkerdManager", () => {
             : null
         ),
       });
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(
         startArgs({
@@ -1615,7 +1615,7 @@ describe("WorkerdManager", () => {
 
     it("mints a bearer token for the worker entity callerId", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs());
 
@@ -1626,7 +1626,7 @@ describe("WorkerdManager", () => {
     });
 
     it("resolves canonical worker target ids to loader instance names", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       const handle = await mgr.startWorker(
         startArgs({ source: "workers/runtime-fixture", key: "instance:with spaces" })
       );
@@ -1641,7 +1641,7 @@ describe("WorkerdManager", () => {
 
     it("injects parent handle metadata into the worker runtime env", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(
         startArgs({
@@ -1666,7 +1666,7 @@ describe("WorkerdManager", () => {
 
     it("serves create-time user env to the dynamically loaded worker", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs({ env: { NON_SECRET_PROBE: "configured" } }));
 
@@ -1677,7 +1677,7 @@ describe("WorkerdManager", () => {
 
     it("keeps a leased old executable exact and rejects it after the dispatch releases", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
       await mgr.startWorker(startArgs({ env: { FEATURE: "old" } }));
 
       const old = (await mgr.getWorkerAdmission("hello"))!;
@@ -1711,7 +1711,7 @@ describe("WorkerdManager", () => {
         await gate;
         return read(build, artifact);
       };
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
       await mgr.startWorker(startArgs({ env: { FEATURE: "old" } }));
 
       const selecting = mgr.getWorkerAdmission("hello");
@@ -1729,7 +1729,7 @@ describe("WorkerdManager", () => {
 
     it("is idempotent for a live duplicate of the same identity (no-op re-attach)", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       const first = await mgr.startWorker(startArgs());
       // Same (source, key, contextId) → returns the existing instance as a no-op.
@@ -1741,7 +1741,7 @@ describe("WorkerdManager", () => {
 
     it("rejects a sanitized-name collision from a different identity (full targetId match required)", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs());
       // Same key (→ same sanitized name) but a different source ⇒ different
@@ -1759,7 +1759,7 @@ describe("WorkerdManager", () => {
 
     it("rejects the same (source, key) in another context (no silent cross-context reuse)", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs());
       // Same source+key maps to the same (context-free) targetId, but a launch in
@@ -1776,7 +1776,7 @@ describe("WorkerdManager", () => {
       const recordLifecycleEvent = vi.fn();
       const bindRuntimeImage = vi.fn().mockRejectedValueOnce(new Error("boom"));
       const deps = createMockDeps({ bindRuntimeImage, recordLifecycleEvent });
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await expect(mgr.startWorker(startArgs())).rejects.toThrow("boom");
 
@@ -1816,7 +1816,7 @@ describe("WorkerdManager", () => {
       const deps = createMockDeps({
         bindRuntimeImage: vi.fn().mockRejectedValue(new Error("build failed")),
       });
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await expect(mgr.startWorker(startArgs())).rejects.toThrow("build failed");
 
@@ -1828,7 +1828,7 @@ describe("WorkerdManager", () => {
 
     it("sanitizes special characters in the entity key", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs({ key: 'hello"; process.exit();//' }));
       const [instance] = mgr.listInstances();
@@ -1845,7 +1845,7 @@ describe("WorkerdManager", () => {
   describe("ref builds", () => {
     it("stores explicit state ref when provided", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs({ ref: "state:abc123" }));
 
@@ -1855,7 +1855,7 @@ describe("WorkerdManager", () => {
 
     it("binds protected main only when explicitly requested", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs({ ref: "main" }));
 
@@ -1865,7 +1865,7 @@ describe("WorkerdManager", () => {
 
     it("binds runtime-managed workers to their owning context by default", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       const prepared = await mgr.startWorker({
         source: "workers/new",
@@ -1882,7 +1882,7 @@ describe("WorkerdManager", () => {
 
     it("honors explicit context refs for runtime-managed workers", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker({
         source: "workers/new",
@@ -1897,7 +1897,7 @@ describe("WorkerdManager", () => {
 
     it("binds runtime-managed DOs to their owning context by default", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.ensureDurableObjectEntity({
         source: "workers/new-do",
@@ -1911,7 +1911,7 @@ describe("WorkerdManager", () => {
 
     it("restores an internal entity directly from its sealed service identity", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
       const prepared = await mgr.ensureDurableObjectEntity({
         source: "vibestudio/internal",
         className: "BrowserVaultDO",
@@ -1948,7 +1948,7 @@ describe("WorkerdManager", () => {
 
     ledgerTest("execution.workerd-start-worker", async () => {
       const deps = createMockDeps();
-      const first = new WorkerdManager(deps);
+      const first = new RuntimeManager(deps);
       const prepared = await first.ensureDurableObjectEntity({
         source: "workers/new-do",
         className: "NewDO",
@@ -1962,7 +1962,7 @@ describe("WorkerdManager", () => {
           : null
       );
       vi.mocked(deps.bindRuntimeImage).mockClear();
-      const restored = new WorkerdManager(deps);
+      const restored = new RuntimeManager(deps);
       const record = {
         id: "do:workers/new-do:NewDO:k1",
         kind: "do" as const,
@@ -2031,7 +2031,7 @@ describe("WorkerdManager", () => {
     it("restores and retires a sealed DO after its workspace source ref changes", async () => {
       const recordLifecycleEvent = vi.fn();
       const deps = createMockDeps({ recordLifecycleEvent });
-      const first = new WorkerdManager(deps);
+      const first = new RuntimeManager(deps);
       const prepared = await first.ensureDurableObjectEntity({
         source: "workers/new-do",
         className: "NewDO",
@@ -2069,7 +2069,7 @@ describe("WorkerdManager", () => {
       vi.mocked(deps.bindRuntimeImage).mockClear();
       const unregisterEgressCaller = vi.fn();
       deps.unregisterEgressCaller = unregisterEgressCaller;
-      const restored = new WorkerdManager(deps);
+      const restored = new RuntimeManager(deps);
 
       await restored.restoreDurableObjectEntity({
         id: "do:workers/new-do:NewDO:k1",
@@ -2126,7 +2126,7 @@ describe("WorkerdManager", () => {
     });
 
     it("fails a requested fault abort when workerd is not running", async () => {
-      const manager = new WorkerdManager(createMockDeps());
+      const manager = new RuntimeManager(createMockDeps());
 
       await expect(
         manager.faultAbortUserlandDOFacet({
@@ -2140,7 +2140,7 @@ describe("WorkerdManager", () => {
     it("registers every userland DO egress caller with its complete sealed image", async () => {
       const registerEgressCaller = vi.fn();
       const deps = createMockDeps({ registerEgressCaller });
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.registerAllDOClasses([
         { source: "workers/agent-worker", className: "AiChatWorker" },
@@ -2161,7 +2161,7 @@ describe("WorkerdManager", () => {
 
     it("attributes equal DO code images to the same sealed network principal", async () => {
       const registerEgressCaller = vi.fn();
-      const manager = new WorkerdManager(createMockDeps({ registerEgressCaller }));
+      const manager = new RuntimeManager(createMockDeps({ registerEgressCaller }));
       await manager.registerAllDOClasses([
         { source: "workers/agent-worker", className: "AiChatWorker" },
       ]);
@@ -2206,7 +2206,7 @@ describe("WorkerdManager", () => {
 
     it("retains a shared executable while its class binding remains admitted", async () => {
       const unregisterEgressCaller = vi.fn();
-      const manager = new WorkerdManager(createMockDeps({ unregisterEgressCaller }));
+      const manager = new RuntimeManager(createMockDeps({ unregisterEgressCaller }));
       const source = "workers/new-do";
       const className = "NewDO";
       for (const key of ["first", "second"]) {
@@ -2271,7 +2271,7 @@ describe("WorkerdManager", () => {
 
     it("serves object-specific state and source coordinates in the admitted facet props", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       const prepared = await mgr.ensureDurableObjectEntity({
         source: "workers/new-do",
@@ -2348,7 +2348,7 @@ describe("WorkerdManager", () => {
 
     it("honors explicit context refs for runtime-managed DO object images", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.ensureDurableObjectEntity({
         source: "workers/new-do",
@@ -2375,7 +2375,7 @@ describe("WorkerdManager", () => {
 
     it("binds bootstrap-style singleton DOs to explicit main instead of synthetic context refs", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
       const syntheticContextId = "5b0784b0a6d5b81c3ba856394cb1eb6e456e4716ab43030e62d2e8de77a6d2de";
 
       const prepared = await mgr.ensureDurableObjectEntity({
@@ -2396,7 +2396,7 @@ describe("WorkerdManager", () => {
   describe("authority-first workspace stage", () => {
     it("fails closed for every workspace runtime before provider binding", async () => {
       const deps = createMockDeps();
-      const mgr = new ProductWorkerdManager(deps);
+      const mgr = new ProductRuntimeManager(deps);
 
       expect(mgr.getStage()).toBe("control-plane");
       await expect(mgr.ensureDOClass("workers/agent", "AgentDO")).rejects.toThrow(
@@ -2415,7 +2415,7 @@ describe("WorkerdManager", () => {
 
     it("registers the manifest-declared source provider after bootstrap binding", async () => {
       const deps = createMockDeps();
-      const mgr = new ProductWorkerdManager(deps);
+      const mgr = new ProductRuntimeManager(deps);
       mgr.bindWorkspaceProvider(deps);
 
       await mgr.ensureDOClass("workers/workspace-source", "GadWorkspaceDO");
@@ -2426,7 +2426,7 @@ describe("WorkerdManager", () => {
 
     it("prepares the source provider from the bootstrap workspace image", async () => {
       const deps = createMockDeps();
-      const mgr = new ProductWorkerdManager(deps);
+      const mgr = new ProductRuntimeManager(deps);
       mgr.bindWorkspaceProvider(deps);
 
       const prepared = await mgr.ensureDurableObjectEntity({
@@ -2448,7 +2448,7 @@ describe("WorkerdManager", () => {
 
     it("binds the semantic-main-backed workspace provider exactly once", () => {
       const deps = createMockDeps();
-      const mgr = new ProductWorkerdManager(deps);
+      const mgr = new ProductRuntimeManager(deps);
 
       mgr.bindWorkspaceProvider(deps);
 
@@ -2463,7 +2463,7 @@ describe("WorkerdManager", () => {
   describe("updateInstance", () => {
     it("updates env", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs({ ref: "main" }));
       const updated = await mgr.updateInstance("hello", {
@@ -2475,7 +2475,7 @@ describe("WorkerdManager", () => {
 
     it("sets ref on update", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs({ ref: "main" }));
       const updated = await mgr.updateInstance("hello", { ref: "state:feature-x" });
@@ -2485,7 +2485,7 @@ describe("WorkerdManager", () => {
 
     it("restores owning-context tracking on update with an empty selector", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs({ ref: "state:abc123" }));
       const updated = await mgr.updateInstance("hello", { ref: "" });
@@ -2513,7 +2513,7 @@ describe("WorkerdManager", () => {
           return await inheritedFetch(input, init);
         })
       );
-      const manager = new WorkerdManager(createMockDeps());
+      const manager = new RuntimeManager(createMockDeps());
       const spawnCountBefore = vi.mocked(spawn).mock.results.length;
       const started = manager.startWorker(startArgs());
       const originalErrors = Array.from(
@@ -2538,7 +2538,7 @@ describe("WorkerdManager", () => {
         "fetch",
         vi.fn(async () => new Response(null, { status: 401 }))
       );
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       const internals = mgr as unknown as {
         port: number;
         waitForHttpReady(abandoned: () => boolean, signal: AbortSignal): Promise<void>;
@@ -2551,7 +2551,7 @@ describe("WorkerdManager", () => {
     });
 
     it("listInstances strips tokens", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       await mgr.startWorker(startArgs());
 
       const list = mgr.listInstances();
@@ -2561,12 +2561,12 @@ describe("WorkerdManager", () => {
     });
 
     it("listInstances has no entry for an unknown name", () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       expect(statusOf(mgr, "nope")).toBeNull();
     });
 
     it("starts the node with its inspector and exposes it for running workers", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
 
       await mgr.startWorker(startArgs());
 
@@ -2591,7 +2591,7 @@ describe("WorkerdManager", () => {
       vi.stubGlobal("fetch", fetchMock);
       const spawnsBefore = vi.mocked(spawn).mock.results.length;
 
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       const started = mgr.startWorker(startArgs());
       // The first process is never ready on its port; a slow start would keep
       // waiting, so only its exit (here, a bind failure) triggers the retry.
@@ -2621,7 +2621,7 @@ describe("WorkerdManager", () => {
     it("adopts a planned generation in place: same process, same ports, one more deployment", async () => {
       celldDeployments.length = 0;
       celldReloads.count = 0;
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       await mgr.startWorker(startArgs());
       const spawns = vi.mocked(spawn).mock.calls.length;
       const generation = mgr.getBootGeneration();
@@ -2649,7 +2649,7 @@ describe("WorkerdManager", () => {
           return excludedPorts.has(start) ? start + 1 : start;
         }
       );
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       try {
         await mgr.startWorker(startArgs());
         expect(mgr.getPort()).toBe(49552);
@@ -2681,7 +2681,7 @@ describe("WorkerdManager", () => {
   describe("reconcileMutableSourceBuild", () => {
     ledgerTest("execution.worker-push-rebuild", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs({ ref: "main" }));
       const before = (await mgr.getWorkerAdmission("hello"))?.version;
@@ -2716,7 +2716,7 @@ describe("WorkerdManager", () => {
 
     it("keeps rebuild codeVersion strictly above prior env-only updates", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs({ ref: "main" }));
       await mgr.updateInstance("hello", { env: { FEATURE: "enabled" } });
@@ -2763,7 +2763,7 @@ describe("WorkerdManager", () => {
         getBuildByKey: vi.fn(async () => null),
         statePath: fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-runtime-image-error-")),
       });
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs());
 
@@ -2779,7 +2779,7 @@ describe("WorkerdManager", () => {
 
     it("skips ref-targeted instances", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs({ ref: "state:abc123" }));
       const callsBefore = vi.mocked(deps.bindRuntimeImage).mock.calls.length;
@@ -2814,7 +2814,7 @@ describe("WorkerdManager", () => {
 
     it("does not restart workerd on a source rebuild", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs());
       const spawnsBefore = vi.mocked(spawn).mock.calls.length;
@@ -2828,7 +2828,7 @@ describe("WorkerdManager", () => {
 
     it("ignores unrelated sources", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.startWorker(startArgs());
       const callsBefore = vi.mocked(deps.bindRuntimeImage).mock.calls.length;
@@ -2841,7 +2841,7 @@ describe("WorkerdManager", () => {
 
     it("tears down stale DO services when a class is removed from the manifest", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       // Pre-register two DO classes from the same source.
       await mgr.registerAllDOClasses([
@@ -2866,7 +2866,7 @@ describe("WorkerdManager", () => {
         reconcileReceiverClasses: vi.fn(),
       };
       const deps = createMockDeps({ resourceHandleLifecycle });
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.reconcileMutableSourceBuild(
         "workers/agent",
@@ -2887,7 +2887,7 @@ describe("WorkerdManager", () => {
 
     it("leaves DO services alone for a non-authoritative rebuild", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.registerAllDOClasses([{ source: "workers/agent", className: "AgentDO" }]);
 
@@ -2902,7 +2902,7 @@ describe("WorkerdManager", () => {
 
     it("tears down all DO services when manifest drops the durable block entirely", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.registerAllDOClasses([
         { source: "workers/agent", className: "A" },
@@ -2937,7 +2937,7 @@ describe("WorkerdManager", () => {
               ]
             : [],
       });
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       await mgr.reconcileMutableSourceBuild("workers/agent", [{ className: "AgentDO" }]);
 
@@ -2970,7 +2970,7 @@ describe("WorkerdManager", () => {
         getManifestDoClasses: (source) =>
           source === "workers/agent" ? [{ className: "AgentDO" }] : [],
       });
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       mgr.reconcileManifestRoutes(["workers/agent"]);
 
@@ -3006,7 +3006,7 @@ describe("WorkerdManager", () => {
 
     it("rejects mutable userland ensureDO attachment", async () => {
       const deps = createMockDeps();
-      const mgr = new WorkerdManager(deps);
+      const mgr = new RuntimeManager(deps);
 
       // Bring workerd up first (a worker create starts the static host); then
       // register a userland DO class — which by itself never restarts.
@@ -3037,7 +3037,7 @@ describe("WorkerdManager", () => {
   describe("restart lifecycle hooks and boot generation", () => {
     it("skips restart hooks on initial start but emits them for real restarts", async () => {
       const statePath = fs.mkdtempSync(path.join(os.tmpdir(), "vibestudio-workerd-test-"));
-      const mgr = new WorkerdManager(createMockDeps({ statePath }));
+      const mgr = new RuntimeManager(createMockDeps({ statePath }));
       const begin = vi.fn();
       const ready = vi.fn();
       mgr.onRestartBegin(begin);
@@ -3062,12 +3062,12 @@ describe("WorkerdManager", () => {
       });
       expect(fs.readFileSync(path.join(statePath, ".boot-generation"), "utf8").trim()).toBe("2");
 
-      const nextMgr = new WorkerdManager(createMockDeps({ statePath }));
+      const nextMgr = new RuntimeManager(createMockDeps({ statePath }));
       expect(nextMgr.getBootGeneration()).toBe(2);
     });
 
     it("propagates original activation recovery failure after joining independent hooks without restarting the ready process", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       await mgr.startWorker(startArgs());
       const spawnCount = vi.mocked(spawn).mock.calls.length;
       const generation = mgr.getBootGeneration();
@@ -3112,7 +3112,7 @@ describe("WorkerdManager", () => {
     });
 
     it("replaces an unresponsive sandbox without a graceful begin RPC and reports crash recovery", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       const begin = vi.fn();
       const ready = vi.fn();
       mgr.onRestartBegin(begin);
@@ -3138,7 +3138,7 @@ describe("WorkerdManager", () => {
     });
 
     it("lets crash recovery preempt a hung graceful prepare", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       const ready = vi.fn();
       mgr.onRestartReady(ready);
       await mgr.startWorker(startArgs());
@@ -3165,7 +3165,7 @@ describe("WorkerdManager", () => {
       // A node that cannot adopt the generation is replaced, which is the path
       // whose start can fail.
       celldReloads.fail = true;
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       const ready = vi.fn();
       mgr.onRestartReady(ready);
       await mgr.startWorker(startArgs());
@@ -3198,7 +3198,7 @@ describe("WorkerdManager", () => {
 
     it("refuses to overlap generations when SIGKILL cannot be confirmed", async () => {
       celldReloads.fail = true;
-      const mgr = new WorkerdManager(
+      const mgr = new RuntimeManager(
         createMockDeps({ workerdStopTimeoutsMs: { sigtermMs: 1, sigkillMs: 1 } })
       );
       await mgr.startWorker(startArgs());
@@ -3218,7 +3218,7 @@ describe("WorkerdManager", () => {
 
     it("recovers an unexpectedly exited runtime and reports a crash generation", async () => {
       const recordLifecycleEvent = vi.fn();
-      const mgr = new WorkerdManager(createMockDeps({ recordLifecycleEvent }));
+      const mgr = new RuntimeManager(createMockDeps({ recordLifecycleEvent }));
       const begin = vi.fn();
       const ready = vi.fn();
       mgr.onRestartBegin(begin);
@@ -3265,7 +3265,7 @@ describe("WorkerdManager", () => {
     });
 
     it("closes restart admission before shutdown takes process ownership", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       await mgr.startWorker(startArgs());
       const spawnCountBeforeRestart = vi.mocked(spawn).mock.calls.length;
       let releaseBegin!: () => void;
@@ -3291,11 +3291,11 @@ describe("WorkerdManager", () => {
       expect(mgr.getPort()).toBeNull();
       await expect(
         (mgr as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd()
-      ).rejects.toThrow("WorkerdManager is shutting down");
+      ).rejects.toThrow("RuntimeManager is shutting down");
     });
 
     it("publishes the generation-closing edge before shutting down workerd", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       await mgr.startWorker(startArgs());
       const closing = vi.fn();
       mgr.onGenerationClosing(closing);
@@ -3314,14 +3314,14 @@ describe("WorkerdManager", () => {
 
   describe("router generation", () => {
     it("routes source-scoped DO requests with arbitrary-depth source paths", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       const router = await loadCompiledRouter();
       const fetchedUrls: string[] = [];
       const fetchedHeaders: Headers[] = [];
       const env = {
-        WORKERD_GATEWAY_TOKEN: "mock-workerd-gateway-token",
-        WORKERD_DISPATCH_SECRET: mgr.getDispatchSecret(),
-        WORKERD_DO_BINDINGS: {
+        RUNTIME_GATEWAY_TOKEN: "mock-workerd-gateway-token",
+        RUNTIME_DISPATCH_SECRET: mgr.getDispatchSecret(),
+        RUNTIME_DO_BINDINGS: {
           "workspace/workers/example-store:EventStore":
             "do_workspace_workers_example_store_EventStore",
         },
@@ -3363,13 +3363,13 @@ describe("WorkerdManager", () => {
     });
 
     it("rejects source-scoped DO requests without the dispatch secret", async () => {
-      const mgr = new WorkerdManager(createMockDeps());
+      const mgr = new RuntimeManager(createMockDeps());
       const router = await loadCompiledRouter();
       const doFetch = vi.fn(async () => new Response("ok"));
       const env = {
-        WORKERD_GATEWAY_TOKEN: "mock-workerd-gateway-token",
-        WORKERD_DISPATCH_SECRET: mgr.getDispatchSecret(),
-        WORKERD_DO_BINDINGS: {
+        RUNTIME_GATEWAY_TOKEN: "mock-workerd-gateway-token",
+        RUNTIME_DISPATCH_SECRET: mgr.getDispatchSecret(),
+        RUNTIME_DO_BINDINGS: {
           "workspace/workers/example-store:EventStore":
             "do_workspace_workers_example_store_EventStore",
         },
@@ -3408,9 +3408,9 @@ describe("WorkerdManager", () => {
           },
         }),
         {
-          WORKERD_GATEWAY_TOKEN: "mock-workerd-gateway-token",
-          WORKERD_DISPATCH_SECRET: "dispatch-secret",
-          WORKERD_DO_BINDINGS: {},
+          RUNTIME_GATEWAY_TOKEN: "mock-workerd-gateway-token",
+          RUNTIME_DISPATCH_SECRET: "dispatch-secret",
+          RUNTIME_DO_BINDINGS: {},
           WORKER_HOST: { fetch: workerHostFetch },
         }
       );

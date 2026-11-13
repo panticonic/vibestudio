@@ -13,7 +13,7 @@ import type { EgressProxy } from "../services/egressProxy.js";
 import type { RuntimeDiagnosticsStore } from "../runtimeDiagnosticsStore.js";
 import type { RouteRegistry } from "../routeRegistry.js";
 import { attestDirectRpc, attestWorkspaceDoRpc } from "../services/authorityRuntime.js";
-import type { WorkerdManager, WorkerdWorkspaceProvider } from "../workerdManager.js";
+import type { RuntimeManager, WorkerdWorkspaceProvider } from "../runtimeManager.js";
 import type { WorkspaceReleaseIdentity } from "../preparedWorkspaceRelease.js";
 import type { DORef } from "../workerdRpcRelay.js";
 import type { LifecycleCloneInput } from "@vibestudio/shared/doDispatcher";
@@ -73,10 +73,10 @@ export interface WorkerdBootstrapDeps {
   /** Withdraw the person-decision waits of the object a lifecycle release is quiescing. */
   withdrawDecisionWaits(callerId: string, reason: unknown): void;
   republishStorageOwner?: (ref: DORef) => Promise<void>;
-  onManagerStarted(manager: WorkerdManager): void;
+  onManagerStarted(manager: RuntimeManager): void;
   /** Sole owner of source-build publication into durable and derived runtime state. */
   publishSourceBuild(
-    manager: WorkerdManager,
+    manager: RuntimeManager,
     source: string,
     doClasses: Array<{ className: string }> | null,
     trigger: import("../buildV2/index.js").ProtectedPublicationEvent | undefined,
@@ -119,7 +119,7 @@ export function resolveWorkerdServerAliasUrls(config: WorkerdGatewayBootstrapCon
  * fail before crossing the receiver boundary.
  */
 export function createHostDoAuthorityAttester(input: {
-  manager: Pick<WorkerdManager, "resolveDoRpcMethodAuthority" | "describeDoRpcCatalog">;
+  manager: Pick<RuntimeManager, "resolveDoRpcMethodAuthority" | "describeDoRpcCatalog">;
   workspaceId: string;
   services: WorkspaceDeclarations["services"];
   callerId?: string;
@@ -165,7 +165,7 @@ export function createHostDoAuthorityAttester(input: {
     }
     const service = matches[0];
     if (!service) return attestDirectRpc(facts);
-    const methodAuthority: Awaited<ReturnType<WorkerdManager["resolveDoRpcMethodAuthority"]>> =
+    const methodAuthority: Awaited<ReturnType<RuntimeManager["resolveDoRpcMethodAuthority"]>> =
       isHostIntrinsicDirectMethod(method)
         ? {
             effect: { kind: "open" } as const,
@@ -258,15 +258,15 @@ export function createHostDoAuthorityAttester(input: {
 /**
  * Register the workerd process manager and its sole transport dependency.
  *
- * Downstream services depend on `doDispatch` or `workerdManager` through the
+ * Downstream services depend on `doDispatch` or `runtimeManager` through the
  * container graph; this seam owns only process startup, rebuild reconciliation,
  * route publication, attributed egress, and dispatch construction.
  */
-export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
+export function wireRuntimeCore(deps: WorkerdBootstrapDeps): void {
   const egressCallers = new Map<string, VerifiedCaller>();
 
   deps.container.registerManaged({
-    name: "workerdManager",
+    name: "runtimeManager",
     // Workerd calls back into host RPC while activation work and lifecycle
     // release settle. Starting after RpcServer and stopping before it keeps
     // that return path available for the whole sandbox generation. The general
@@ -275,11 +275,11 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
     dependencies: ["fsService", "rpcServer"],
     async start(resolve) {
       const startedAt = performance.now();
-      const { WorkerdManager } = await import("../workerdManager.js");
+      const { RuntimeManager } = await import("../runtimeManager.js");
       const importsReadyAt = performance.now();
       const fsService = assertPresent(resolve<FsService>("fsService"));
       const egressSecret = randomBytes(32).toString("hex");
-      const manager: WorkerdManager = new WorkerdManager({
+      const manager: RuntimeManager = new RuntimeManager({
         schemaProbeEnvironment: deps.schemaProbeEnvironment,
         schemaProbeReleaseRoot: deps.schemaProbeReleaseRoot,
         tokenManager: deps.tokenManager,
@@ -361,7 +361,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         INTERNAL_DO_CLASSES.map((className) => ({ source: INTERNAL_DO_SOURCE, className }))
       );
       const readyAt = performance.now();
-      createDevLogger("WorkerdManager").info(
+      createDevLogger("RuntimeManager").info(
         `workerdBootstrapReport=${JSON.stringify({
           totalMs: readyAt - startedAt,
           importsMs: importsReadyAt - startedAt,
@@ -372,7 +372,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
       );
       return manager;
     },
-    async stop(instance: WorkerdManager | null) {
+    async stop(instance: RuntimeManager | null) {
       const callers = [...egressCallers.keys()];
       egressCallers.clear();
       await Promise.all([
@@ -388,10 +388,10 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
     // Workspace dispatch becomes visible only after the exact bootstrap
     // provider is attached. The workerd process itself is already free to boot
     // and host internal programs while that provider is being prepared.
-    dependencies: ["workerdManager", "rpcServer", "workerdWorkspace"],
+    dependencies: ["runtimeManager", "rpcServer", "workerdWorkspace"],
     async start(resolve) {
       const { DODispatch } = await import("../doDispatch.js");
-      const manager = assertPresent(resolve<WorkerdManager>("workerdManager"));
+      const manager = assertPresent(resolve<RuntimeManager>("runtimeManager"));
       const rpcServer = assertPresent(resolve<{ server: RpcServer }>("rpcServer")).server;
       const dispatch = new DODispatch(deps.ensureUserlandDoReady);
       dispatch.setPreparingTargetReady(deps.ensureUserlandDoPrepared);
@@ -444,9 +444,9 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
 
   deps.container.registerManaged({
     name: "workerdWorkspace",
-    dependencies: ["workerdManager", "buildSystem"],
+    dependencies: ["runtimeManager", "buildSystem"],
     async start(resolve) {
-      const manager = assertPresent(resolve<WorkerdManager>("workerdManager"));
+      const manager = assertPresent(resolve<RuntimeManager>("runtimeManager"));
       const buildSystem = assertPresent(resolve<BuildSystemV2>("buildSystem"));
       const provider: WorkerdWorkspaceProvider = {
         bindRuntimeImage: (unitPath, ref) => buildSystem.bindRuntimeImage(unitPath, ref),
@@ -505,7 +505,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         void next
           .catch((error: unknown) => {
             console.error(
-              `[WorkerdManager] Failed to reconcile rebuilt source ${source} from ${trigger?.publicationId ?? "an unscoped build"}:`,
+              `[RuntimeManager] Failed to reconcile rebuilt source ${source} from ${trigger?.publicationId ?? "an unscoped build"}:`,
               error
             );
           })

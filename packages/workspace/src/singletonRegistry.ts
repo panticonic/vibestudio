@@ -75,7 +75,7 @@ export class SingletonRegistry {
 /**
  * Parsed and validated workspace declarations.
  * Built at workspace load and refreshed on meta reload; consumed by
- * routeRegistry, workspaceServices, workerService, and workerdManager.
+ * routeRegistry, workspaceServices, workerService, and runtimeManager.
  */
 export interface WorkspaceDeclarations {
   singletons: SingletonRegistry;

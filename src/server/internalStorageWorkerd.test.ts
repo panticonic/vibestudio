@@ -19,10 +19,10 @@ import {
 } from "../../tests/fixtures/schemaProbeEnvironment.js";
 useSchemaProbeFixtureCache();
 import {
-  WorkerdManager,
-  type WorkerdManagerDeps,
+  RuntimeManager,
+  type RuntimeManagerDeps,
   type WorkerdWorkspaceProvider,
-} from "./workerdManager.js";
+} from "./runtimeManager.js";
 import { LifecycleDriver } from "./services/lifecycleDriver.js";
 import { prepareDurableWorkOwnerRelease } from "./services/durableWorkRelease.js";
 import { AlarmDriver } from "./services/alarmDriver.js";
@@ -58,7 +58,7 @@ import {
   type WorkspaceRpcMethodDoc,
 } from "./buildV2/workspaceRpcCatalog.js";
 import { workspaceRpcSchema, workspaceRpcSchemaMetadata } from "./buildV2/workspaceRpcSchemas.js";
-import { createHostDoAuthorityAttester } from "./bootstrap/workerd.js";
+import { createHostDoAuthorityAttester } from "./bootstrap/runtime.js";
 import {
   cleanupStoredBuildFixtures,
   storedBuildFixture,
@@ -99,7 +99,7 @@ const activeLoaderServers: Server[] = [];
 const activeFixtureRoots: string[] = [];
 
 async function createWorkerdHarness(
-  overrides: Partial<WorkerdManagerDeps> & {
+  overrides: Partial<RuntimeManagerDeps> & {
     getBuild?: (source: string, ref?: string) => Promise<BuildResult>;
     mainRpc?: (method: string, args: unknown[], target: string) => Promise<unknown>;
     bindWorkspaceProvider?: boolean;
@@ -114,13 +114,13 @@ async function createWorkerdHarness(
   const workspacePath = mkdtempSync(join(tmpdir(), "vibestudio-workerd-workspace-"));
   const statePath = mkdtempSync(join(tmpdir(), "vibestudio-workerd-state-"));
   activeFixtureRoots.push(workspacePath, statePath);
-  const manager = new WorkerdManager({
+  const manager = new RuntimeManager({
     schemaProbeEnvironment: schemaProbeEnvironmentForFixture("internal-storage-test"),
     schemaProbeReleaseRoot: join(statePath, "installed-resources"),
     tokenManager,
     fsService: {
       closeHandlesForCaller: () => {},
-    } as unknown as WorkerdManagerDeps["fsService"],
+    } as unknown as RuntimeManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
     workspaceId: "workspace:internal-workerd-test",
     getInternalDoEnv: () => ({}),
@@ -137,7 +137,7 @@ async function createWorkerdHarness(
     egressSecret: EGRESS_SECRET,
     getWorkerdGatewayToken: () => "internal-test-workerd-gateway-token",
     ...managerOverrides,
-  } satisfies WorkerdManagerDeps);
+  } satisfies RuntimeManagerDeps);
   const provider: WorkerdWorkspaceProvider = {
     bindRuntimeImage: async (source: string, ref?: string) => {
       if (!getBuild) throw new Error("workspace builds are not used by internal DO tests");
@@ -302,7 +302,7 @@ async function createWorkerdHarness(
 
   const sealedEntities = new Map<
     string,
-    Parameters<WorkerdManager["restoreDurableObjectEntity"]>[0]
+    Parameters<RuntimeManager["restoreDurableObjectEntity"]>[0]
   >();
   const attachDurableObject = async (ref: DORef): Promise<void> => {
     const targetId = `do:${ref.source}:${ref.className}:${ref.objectKey}`;
@@ -361,7 +361,7 @@ async function createWorkerdHarness(
 }
 
 function createDODispatch(
-  manager: WorkerdManager,
+  manager: RuntimeManager,
   tokenManager: TokenManager,
   ensureUserlandDoReady: (ref: DORef) => Promise<void>
 ): DODispatch {
@@ -491,7 +491,7 @@ function buildResult(
 }
 
 describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
-  let manager: WorkerdManager | null = null;
+  let manager: RuntimeManager | null = null;
 
   beforeEach(() => {
     vi.stubEnv("VIBESTUDIO_CELLD_BIN", celldBinary!);
@@ -1058,7 +1058,7 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
           credentialSessionGrantStore: { dropForCaller: () => 0 },
           tokenManager: harness.tokenManager,
           releaseBlobRetentions: async () => {},
-          getWorkerdManager: () => manager,
+          getRuntimeManager: () => manager,
           getFsService: () => null,
           getWebhookIngress: () => null,
         }),
@@ -1210,7 +1210,7 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
     manager = harness.manager;
     const doDispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
     const lifecycleDriver = new LifecycleDriver({
-      workerdManager: manager,
+      runtimeManager: manager,
       doDispatch,
       workspaceId: "workspace-lifecycle",
       concurrency: 2,

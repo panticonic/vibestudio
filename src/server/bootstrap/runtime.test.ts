@@ -7,9 +7,9 @@ import { describe, expect, it, vi } from "vitest";
 import {
   parseGatewayAliases,
   resolveWorkerdServerAliasUrls,
-  wireWorkerdCore,
+  wireRuntimeCore,
   type WorkerdBootstrapDeps,
-} from "./workerd.js";
+} from "./runtime.js";
 
 describe("workerd bootstrap policy", () => {
   const egressProxyMock = () =>
@@ -53,7 +53,7 @@ describe("workerd bootstrap policy", () => {
   it("registers the workerd-to-dispatch lifecycle chain explicitly", () => {
     const services: ManagedService[] = [];
     const inert = {};
-    wireWorkerdCore({
+    wireRuntimeCore({
       schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-workerd-bootstrap-fixture"),
       schemaProbeReleaseRoot: "/workspace/release",
       container: { registerManaged: (service) => services.push(service) },
@@ -83,14 +83,14 @@ describe("workerd bootstrap policy", () => {
 
     expect(services.map(({ name, dependencies }) => ({ name, dependencies }))).toEqual([
       {
-        name: "workerdManager",
+        name: "runtimeManager",
         dependencies: ["fsService", "rpcServer"],
       },
       {
         name: "doDispatch",
-        dependencies: ["workerdManager", "rpcServer", "workerdWorkspace"],
+        dependencies: ["runtimeManager", "rpcServer", "workerdWorkspace"],
       },
-      { name: "workerdWorkspace", dependencies: ["workerdManager", "buildSystem"] },
+      { name: "workerdWorkspace", dependencies: ["runtimeManager", "buildSystem"] },
     ]);
   });
 
@@ -114,7 +114,7 @@ describe("workerd bootstrap policy", () => {
       routes: [{ source: "workers/source", pattern: "/source/*" }],
       singletons: new SingletonRegistry([]),
     } as unknown as WorkerdBootstrapDeps["workspaceDeclarations"];
-    wireWorkerdCore({
+    wireRuntimeCore({
       schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-workerd-bootstrap-fixture"),
       schemaProbeReleaseRoot: "/workspace/release",
       container: { registerManaged: (service) => services.push(service) },
@@ -150,7 +150,7 @@ describe("workerd bootstrap policy", () => {
     const attachment = services.find(({ name }) => name === "workerdWorkspace");
     await expect(
       attachment?.start?.(<D>(name: string): D | undefined => {
-        if (name === "workerdManager") return manager as D;
+        if (name === "runtimeManager") return manager as D;
         if (name === "buildSystem") return buildSystem as D;
         return undefined;
       })
@@ -206,11 +206,11 @@ describe("workerd bootstrap policy", () => {
     };
     const inert = {};
     const publishSourceBuild: WorkerdBootstrapDeps["publishSourceBuild"] = vi.fn(
-      async (workerdManager, source, classes, trigger, buildKey) => {
-        await workerdManager.reconcileMutableSourceBuild(source, classes, trigger, buildKey);
+      async (runtimeManager, source, classes, trigger, buildKey) => {
+        await runtimeManager.reconcileMutableSourceBuild(source, classes, trigger, buildKey);
       }
     );
-    wireWorkerdCore({
+    wireRuntimeCore({
       schemaProbeEnvironment: schemaProbeEnvironmentForFixture("owned-workerd-bootstrap-fixture"),
       schemaProbeReleaseRoot: "/workspace/release",
       container: { registerManaged: (service) => services.push(service) },
@@ -244,7 +244,7 @@ describe("workerd bootstrap policy", () => {
     const workspaceService = services.find(({ name }) => name === "workerdWorkspace");
     expect(workspaceService).toBeDefined();
     await workspaceService?.start?.(<D>(name: string): D | undefined => {
-      if (name === "workerdManager") return manager as D;
+      if (name === "runtimeManager") return manager as D;
       if (name === "buildSystem") return buildSystem as D;
       return undefined;
     });

@@ -572,7 +572,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
 
   /**
    * Set a function that returns the current per-process dispatch secret
-   * (`WorkerdManager.getDispatchSecret()`). Stamped onto every `/_w/`
+   * (`RuntimeManager.getDispatchSecret()`). Stamped onto every `/_w/`
    * request as `X-Vibestudio-Dispatch-Secret` and verified by the
    * auto-generated workerd router worker. Closes audit finding 4.8.
    *
@@ -640,7 +640,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
 
   /**
    * Set a probe reporting whether a workerd generation transition is in
-   * flight (`WorkerdManager.isGenerationTransitionInFlight`). While it is,
+   * flight (`RuntimeManager.isGenerationTransitionInFlight`). While it is,
    * dispatches fail with the typed `runtime_restarting` error instead of a
    * generic "workerd not running" — so gateway callers can distinguish a
    * restarting runtime (retry after ready) from a broken one.

@@ -1,5 +1,5 @@
 /**
- * WorkerdManager — the workspace's isolate runtime: one celld node (the
+ * RuntimeManager — the workspace's isolate runtime: one celld node (the
  * panticonic fork) per workspace, running one deployed runtime application.
  *
  * Manages:
@@ -68,15 +68,15 @@ import {
 } from "./runtimeReadinessError.js";
 import type { WorkerdPerformanceSnapshot } from "@vibestudio/service-schemas/hostPerformance";
 
-const log = createDevLogger("WorkerdManager");
+const log = createDevLogger("RuntimeManager");
 // The node's own stop request and process signals normally settle promptly.
 // These are catastrophic containment fallbacks, not lifecycle budgets: give
 // the node ample time to make its cells durable before escalating, and ample
 // time for the kernel to reap it before declaring a generation unsafe to
 // replace.
-const DEFAULT_WORKERD_SIGTERM_TIMEOUT_MS = 60_000;
-const DEFAULT_WORKERD_SIGKILL_TIMEOUT_MS = 30_000;
-const WORKERD_STARTUP_OUTPUT_LINES = 40;
+const DEFAULT_RUNTIME_SIGTERM_TIMEOUT_MS = 60_000;
+const DEFAULT_RUNTIME_SIGKILL_TIMEOUT_MS = 30_000;
+const RUNTIME_STARTUP_OUTPUT_LINES = 40;
 interface WorkerdProcessReceipt {
   pid: number | undefined;
   port: number | null;
@@ -440,7 +440,7 @@ export interface WorkerInstance {
   status: "building" | "starting" | "running" | "stopped" | "error";
 }
 
-export interface WorkerdManagerDeps {
+export interface RuntimeManagerDeps {
   /** Existing admitted host/SDK installation capture; never rescan at admission. */
   readonly schemaProbeEnvironment: WorkspaceReleaseIdentity;
   readonly schemaProbeReleaseRoot: string;
@@ -524,7 +524,7 @@ export interface WorkerdManagerDeps {
 /**
  * Workspace-authored runtime capabilities become available only after the
  * semantic authority has activated exact protected main. Until this provider
- * is bound, WorkerdManager is a sealed control-plane host, not a general
+ * is bound, RuntimeManager is a sealed control-plane host, not a general
  * worker/build host.
  */
 export interface WorkerdWorkspaceProvider {
@@ -543,7 +543,7 @@ export interface WorkerdWorkspaceProvider {
 
 export type WorkerdStage = "control-plane" | "workspace";
 
-type ResolvedWorkerdManagerDeps = WorkerdManagerDeps;
+type ResolvedRuntimeManagerDeps = RuntimeManagerDeps;
 
 type WorkerdRestartRequest =
   | { kind: "planned" }
@@ -592,14 +592,14 @@ function workerdInspectorEnabled(): boolean {
 // WorkerLoader does not expose per-isolate disposal. Keep ordinary retirement
 // restart-free, but compact a generation once unreachable isolates contribute
 // to material sandbox pressure or reach a bounded cross-platform count.
-const WORKERD_DYNAMIC_ISOLATE_COMPACTION_RSS_BYTES = 768 * 1024 * 1024;
-const WORKERD_DYNAMIC_ISOLATE_COMPACTION_COUNT = 16;
+const RUNTIME_DYNAMIC_ISOLATE_COMPACTION_RSS_BYTES = 768 * 1024 * 1024;
+const RUNTIME_DYNAMIC_ISOLATE_COMPACTION_COUNT = 16;
 
 // ---------------------------------------------------------------------------
-// WorkerdManager
+// RuntimeManager
 // ---------------------------------------------------------------------------
 
-export class WorkerdManager {
+export class RuntimeManager {
   private internalDOPrograms(): InternalDOPrograms {
     return this.deps.internalDOPrograms ?? getInternalDOPrograms();
   }
@@ -609,14 +609,14 @@ export class WorkerdManager {
   private readonly workerAdmissions = new Map<
     string,
     {
-      code: NonNullable<Awaited<ReturnType<WorkerdManager["getWorkerCode"]>>>;
+      code: NonNullable<Awaited<ReturnType<RuntimeManager["getWorkerCode"]>>>;
       leases: number;
       retired: boolean;
     }
   >();
   private readonly preparingWorkerAdmissions = new Map<
     string,
-    Promise<NonNullable<Awaited<ReturnType<WorkerdManager["getWorkerCode"]>>>>
+    Promise<NonNullable<Awaited<ReturnType<RuntimeManager["getWorkerCode"]>>>>
   >();
   private workerAdmissionEpoch = 0;
   private readonly workerSelectionTails = new Map<string, Promise<void>>();
@@ -666,7 +666,7 @@ export class WorkerdManager {
   private inspectorPort: number | null = null;
   /** Immediate predecessor excluded from the next generation's inspector lease. */
   private retiredInspectorPort: number | null = null;
-  private deps: ResolvedWorkerdManagerDeps;
+  private deps: ResolvedRuntimeManagerDeps;
   /** Derived exact DO attachments. WorkspaceDO entity rows are their durable owner. */
   private readonly sealedDoImages = new Map<string, RuntimeImageRecord>();
   private readonly runtimeImages: RuntimeImageStore;
@@ -721,7 +721,7 @@ export class WorkerdManager {
     RuntimeImageRecord | SchemaProbeBuild,
     DoExecutableAdmission
   >();
-  /** Session ID — generated once per WorkerdManager lifetime, used for restart detection in bootstrap. */
+  /** Session ID — generated once per RuntimeManager lifetime, used for restart detection in bootstrap. */
   private sessionId = crypto.randomUUID();
   private bootGeneration: number;
   private pendingBootGeneration: number | null = null;
@@ -755,7 +755,7 @@ export class WorkerdManager {
     Promise<DurableObjectPublishedSchemaDescriptor>
   >();
   private readonly shutdownCancellation = Object.assign(
-    new Error("WorkerdManager is shutting down"),
+    new Error("RuntimeManager is shutting down"),
     { code: "ECANCELLED" }
   );
   private readonly schemaAdmissions = new Map<string, Promise<void>>();
@@ -765,7 +765,7 @@ export class WorkerdManager {
    *  crash-style restart-ready so released lifecycle leases resume. */
   private resumeLifecycleAfterStop = false;
 
-  constructor(deps: WorkerdManagerDeps) {
+  constructor(deps: RuntimeManagerDeps) {
     this.deps = deps;
     this.egressSecret = deps.egressSecret;
     this.runtimeImages = new RuntimeImageStore(deps.statePath, deps.executionPublicationPort);
@@ -2451,9 +2451,9 @@ export class WorkerdManager {
       classes,
       doLoaderSecret: this.doLoaderSecret,
       vars: {
-        WORKERD_GATEWAY_TOKEN: this.deps.getWorkerdGatewayToken(),
-        WORKERD_DISPATCH_SECRET: this.dispatchSecret,
-        WORKERD_LOADER_SECRET: this.loaderSecret,
+        RUNTIME_GATEWAY_TOKEN: this.deps.getWorkerdGatewayToken(),
+        RUNTIME_DISPATCH_SECRET: this.dispatchSecret,
+        RUNTIME_LOADER_SECRET: this.loaderSecret,
         GATEWAY_URL: this.deps.getServerUrl(),
         ...((this.deps.getServerAliasUrls?.() ?? []).length > 0
           ? { GATEWAY_URL_ALIASES: [...(this.deps.getServerAliasUrls?.() ?? [])] }
@@ -2551,7 +2551,7 @@ export class WorkerdManager {
    */
   private restartWorkerd(request: WorkerdRestartRequest = { kind: "planned" }): Promise<void> {
     if (this.shuttingDown) {
-      return Promise.reject(new Error("WorkerdManager is shutting down"));
+      return Promise.reject(new Error("RuntimeManager is shutting down"));
     }
     const myEpoch = ++this.requestedEpoch;
     this.restartRequests.set(myEpoch, request);
@@ -3157,8 +3157,8 @@ export class WorkerdManager {
     const retiredGeneration = this.retiredDynamicIsolateGeneration;
     if (
       retiredGeneration === null ||
-      (this.retiredDynamicIsolateIds.size < WORKERD_DYNAMIC_ISOLATE_COMPACTION_COUNT &&
-        (rssBytes === null || rssBytes < WORKERD_DYNAMIC_ISOLATE_COMPACTION_RSS_BYTES)) ||
+      (this.retiredDynamicIsolateIds.size < RUNTIME_DYNAMIC_ISOLATE_COMPACTION_COUNT &&
+        (rssBytes === null || rssBytes < RUNTIME_DYNAMIC_ISOLATE_COMPACTION_RSS_BYTES)) ||
       this.dynamicIsolateCompactionFlight ||
       this.shuttingDown ||
       !this.process ||
@@ -3301,8 +3301,8 @@ export class WorkerdManager {
 
   private rememberWorkerdStartupOutput(line: string, output: string[]): void {
     output.push(line);
-    if (output.length > WORKERD_STARTUP_OUTPUT_LINES) {
-      output.splice(0, output.length - WORKERD_STARTUP_OUTPUT_LINES);
+    if (output.length > RUNTIME_STARTUP_OUTPUT_LINES) {
+      output.splice(0, output.length - RUNTIME_STARTUP_OUTPUT_LINES);
     }
   }
 
@@ -3346,7 +3346,7 @@ export class WorkerdManager {
           proc.kill("SIGKILL");
           exited = await this.waitForProcessReaped(
             proc,
-            this.deps.workerdStopTimeoutsMs?.sigkillMs ?? DEFAULT_WORKERD_SIGKILL_TIMEOUT_MS
+            this.deps.workerdStopTimeoutsMs?.sigkillMs ?? DEFAULT_RUNTIME_SIGKILL_TIMEOUT_MS
           );
         } else {
           // The node's own durable stop (what `celld dev` uses); a signal only
@@ -3357,7 +3357,7 @@ export class WorkerdManager {
           // process actually died — so track exit observation explicitly.
           exited = await this.waitForProcessExitEvent(
             proc,
-            this.deps.workerdStopTimeoutsMs?.sigtermMs ?? DEFAULT_WORKERD_SIGTERM_TIMEOUT_MS
+            this.deps.workerdStopTimeoutsMs?.sigtermMs ?? DEFAULT_RUNTIME_SIGTERM_TIMEOUT_MS
           );
         }
         if (!exited && mode === "graceful") {
@@ -3377,7 +3377,7 @@ export class WorkerdManager {
           // reap that actually succeeded.
           exited = await this.waitForProcessReaped(
             proc,
-            this.deps.workerdStopTimeoutsMs?.sigkillMs ?? DEFAULT_WORKERD_SIGKILL_TIMEOUT_MS
+            this.deps.workerdStopTimeoutsMs?.sigkillMs ?? DEFAULT_RUNTIME_SIGKILL_TIMEOUT_MS
           );
         }
         if (!exited) {
@@ -3751,7 +3751,7 @@ export class WorkerdManager {
       artifact: executionArtifactRefFromBuild(this.deps.workspaceId, build),
       authority: assertPresent(build.metadata.authority),
     };
-    if (this.shuttingDown) throw new Error("WorkerdManager is shutting down");
+    if (this.shuttingDown) throw new Error("RuntimeManager is shutting down");
     for (const className of new Set(classNames)) {
       const key = canonicalJson([image.source, className, runtimeExecutableVersion(image)]);
       this.latestExecutablePreparation.set(doServiceKey(image.source, className), key);
@@ -4755,7 +4755,7 @@ export class WorkerdManager {
       cooperativelyPaused?: boolean;
     }
   ): Promise<DORef> {
-    if (this.shuttingDown) throw new Error("WorkerdManager is shutting down");
+    if (this.shuttingDown) throw new Error("RuntimeManager is shutting down");
     this.requireUserlandStorage(ref, "cloneDO");
     const target = { ...ref, objectKey: newObjectKey };
     if (options.reservation.key !== newObjectKey)
@@ -4903,11 +4903,11 @@ export class WorkerdManager {
     this.doMaintenanceDb.close();
     this.doSchemaDescriptorDb.close();
 
-    log.info("WorkerdManager shut down");
+    log.info("RuntimeManager shut down");
     if (failures.length > 0) {
       throw new AggregateError(
         failures,
-        `WorkerdManager shutdown failed in ${failures.length} phase(s)`
+        `RuntimeManager shutdown failed in ${failures.length} phase(s)`
       );
     }
   }

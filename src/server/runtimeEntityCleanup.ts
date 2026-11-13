@@ -3,7 +3,7 @@ import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import type { ConnectionGrantService } from "@vibestudio/shared/connectionGrants";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
 import type { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
-import type { WorkerdManager } from "./workerdManager.js";
+import type { RuntimeManager } from "./runtimeManager.js";
 import type { EgressProxy } from "./services/egressProxy.js";
 import type { ApprovalQueue } from "./services/approvalQueue.js";
 import type { AcquisitionOwner } from "./services/authorityAcquisitionStore.js";
@@ -27,8 +27,8 @@ export interface RuntimeEntityCleanupDeps {
     ): number;
   };
   workspaceId?: string;
-  getWorkerdManager(): Pick<
-    WorkerdManager,
+  getRuntimeManager(): Pick<
+    RuntimeManager,
     "stopWorker" | "retireDOEntity" | "retireEgressCaller"
   > | null;
   getFsService(): FsService | null;
@@ -64,8 +64,8 @@ export async function cleanupRuntimeEntity(
     }
   };
 
-  const workerdManager = deps.getWorkerdManager();
-  await attempt(() => workerdManager?.retireEgressCaller(record.id));
+  const runtimeManager = deps.getRuntimeManager();
+  await attempt(() => runtimeManager?.retireEgressCaller(record.id));
   await attempt(() => deps.egressProxy.dropCaller(record.id));
   if (record.kind === "panel") {
     await attempt(() => deps.panelRuntimeCoordinator?.retireRuntimeEntity(record.id));
@@ -80,7 +80,7 @@ export async function cleanupRuntimeEntity(
   await attempt(() => deps.tokenManager.revokeToken(record.id));
   await attempt(() => deps.clearPresentationTitle?.(record.id));
   if (record.kind === "worker") {
-    await attempt(() => workerdManager?.stopWorker(record.id));
+    await attempt(() => runtimeManager?.stopWorker(record.id));
   }
   if (record.kind === "do") {
     const { className, key: objectKey } = record;
@@ -103,7 +103,7 @@ export async function cleanupRuntimeEntity(
         );
       }
       await attempt(() =>
-        workerdManager?.retireDOEntity({
+        runtimeManager?.retireDOEntity({
           source: record.source.repoPath,
           className,
           objectKey,

@@ -20,7 +20,7 @@ const { config, secrets } = buildRuntimeDeployment({
   compatibility: { compatibilityDate: "2025-12-01", compatibilityFlags: ["nodejs_compat"] },
   classes: classes.map((c) => ({ className: c, rpcToken: `t-${c}`, env: {}, codegen: c === "EvalDO" })),
   doLoaderSecret: "dls",
-  vars: { WORKERD_GATEWAY_TOKEN: "gw", WORKERD_DISPATCH_SECRET: "ds", WORKERD_LOADER_SECRET: "ls", GATEWAY_URL: "http://127.0.0.1:9", WORKSPACE_ID: "ws", WORKERD_SESSION_ID: "s", WORKERD_BOOT_GENERATION: "1" },
+  vars: { RUNTIME_GATEWAY_TOKEN: "gw", RUNTIME_DISPATCH_SECRET: "ds", RUNTIME_LOADER_SECRET: "ls", GATEWAY_URL: "http://127.0.0.1:9", WORKSPACE_ID: "ws", WORKERD_SESSION_ID: "s", WORKERD_BOOT_GENERATION: "1" },
 });
 const t0 = Date.now();
 await node.deploy(app.bundle, config, secrets);

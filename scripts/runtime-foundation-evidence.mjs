@@ -31,10 +31,10 @@ export const runtimeFoundationEvidence = Object.freeze({
       path: "packages/builtin/src/workspace-state/WorkspaceDO.test.ts",
     },
     "execution.worker-push-rebuild": {
-      path: "src/server/workerdManager.test.ts",
+      path: "src/server/runtimeManager.test.ts",
     },
     "execution.workerd-start-worker": {
-      path: "src/server/workerdManager.test.ts",
+      path: "src/server/runtimeManager.test.ts",
     },
   }),
   sourceContracts: Object.freeze({}),

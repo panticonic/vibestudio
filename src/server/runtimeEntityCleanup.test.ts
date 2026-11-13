@@ -47,7 +47,7 @@ function deps() {
         revokeForCaller: vi.fn(async () => 1),
       },
     },
-    workerdManager: {
+    runtimeManager: {
       stopWorker: vi.fn(async () => {}),
       retireDOEntity: vi.fn(async () => {}),
       retireEgressCaller: vi.fn(),
@@ -72,11 +72,11 @@ describe("cleanupRuntimeEntity", () => {
       releaseBlobRetentions: d.releaseBlobRetentions,
       getFsService: () => d.fsService as never,
       getWebhookIngress: () => d.webhookIngress,
-      getWorkerdManager: () => d.workerdManager as never,
+      getRuntimeManager: () => d.runtimeManager as never,
     });
 
     expect(d.panelRuntimeCoordinator.retireRuntimeEntity).toHaveBeenCalledWith("panel:one");
-    expect(d.workerdManager.retireEgressCaller).toHaveBeenCalledWith("panel:one");
+    expect(d.runtimeManager.retireEgressCaller).toHaveBeenCalledWith("panel:one");
     expect(d.egressProxy.dropCaller).toHaveBeenCalledWith("panel:one");
     expect(d.approvalQueue.cancelForCaller).toHaveBeenCalledWith(
       "panel:one",
@@ -88,8 +88,8 @@ describe("cleanupRuntimeEntity", () => {
     expect(d.webhookIngress.internal.revokeForCaller).toHaveBeenCalledWith("panel:one");
     expect(d.tokenManager.revokeToken).toHaveBeenCalledWith("panel:one");
     expect(d.releaseBlobRetentions).toHaveBeenCalledWith({ kind: "panel", id: "panel:one" });
-    expect(d.workerdManager.stopWorker).not.toHaveBeenCalled();
-    expect(d.workerdManager.retireDOEntity).not.toHaveBeenCalled();
+    expect(d.runtimeManager.stopWorker).not.toHaveBeenCalled();
+    expect(d.runtimeManager.retireDOEntity).not.toHaveBeenCalled();
   });
 
   it("commits only the captured authority owner before withdrawing its prompt", async () => {
@@ -112,7 +112,7 @@ describe("cleanupRuntimeEntity", () => {
       releaseBlobRetentions: d.releaseBlobRetentions,
       getFsService: () => null,
       getWebhookIngress: () => null,
-      getWorkerdManager: () => d.workerdManager as never,
+      getRuntimeManager: () => d.runtimeManager as never,
     });
     expect(d.retireAuthorityOwner).toHaveBeenCalledExactlyOnceWith({
       ownerRuntimeId: "do:one",
@@ -138,11 +138,11 @@ describe("cleanupRuntimeEntity", () => {
         releaseBlobRetentions: d.releaseBlobRetentions,
         getFsService: () => null,
         getWebhookIngress: () => null,
-        getWorkerdManager: () => d.workerdManager as never,
+        getRuntimeManager: () => d.runtimeManager as never,
       })
     ).rejects.toBe(failure);
     expect(d.approvalQueue.cancelForCaller).not.toHaveBeenCalled();
-    expect(d.workerdManager.retireDOEntity).not.toHaveBeenCalled();
+    expect(d.runtimeManager.retireDOEntity).not.toHaveBeenCalled();
     expect(d.releaseBlobRetentions).not.toHaveBeenCalled();
   });
 
@@ -159,9 +159,9 @@ describe("cleanupRuntimeEntity", () => {
       releaseBlobRetentions: workerDeps.releaseBlobRetentions,
       getFsService: () => workerDeps.fsService as never,
       getWebhookIngress: () => workerDeps.webhookIngress,
-      getWorkerdManager: () => workerDeps.workerdManager as never,
+      getRuntimeManager: () => workerDeps.runtimeManager as never,
     });
-    expect(workerDeps.workerdManager.stopWorker).toHaveBeenCalledWith("worker:one");
+    expect(workerDeps.runtimeManager.stopWorker).toHaveBeenCalledWith("worker:one");
 
     const doDeps = deps();
     await cleanupRuntimeEntity(record("do", "do:one"), {
@@ -177,9 +177,9 @@ describe("cleanupRuntimeEntity", () => {
       workspaceId: "workspace:test",
       getFsService: () => doDeps.fsService as never,
       getWebhookIngress: () => doDeps.webhookIngress,
-      getWorkerdManager: () => doDeps.workerdManager as never,
+      getRuntimeManager: () => doDeps.runtimeManager as never,
     });
-    expect(doDeps.workerdManager.retireDOEntity).toHaveBeenCalledWith({
+    expect(doDeps.runtimeManager.retireDOEntity).toHaveBeenCalledWith({
       source: "dos/example",
       className: "ExampleDO",
       objectKey: "one",
@@ -212,12 +212,12 @@ describe("cleanupRuntimeEntity", () => {
       releaseBlobRetentions: d.releaseBlobRetentions,
       getFsService: () => d.fsService as never,
       getWebhookIngress: () => d.webhookIngress,
-      getWorkerdManager: () => d.workerdManager as never,
+      getRuntimeManager: () => d.runtimeManager as never,
     });
     await vi.waitFor(() =>
       expect(d.panelRuntimeCoordinator.retireRuntimeEntity).toHaveBeenCalledWith("panel:blocking")
     );
-    expect(d.workerdManager.retireEgressCaller).toHaveBeenCalledWith("panel:blocking");
+    expect(d.runtimeManager.retireEgressCaller).toHaveBeenCalledWith("panel:blocking");
     expect(d.egressProxy.dropCaller).toHaveBeenCalledWith("panel:blocking");
     expect(d.releaseBlobRetentions).not.toHaveBeenCalled();
     release();
@@ -244,7 +244,7 @@ describe("cleanupRuntimeEntity", () => {
         releaseBlobRetentions: d.releaseBlobRetentions,
         getFsService: () => d.fsService as never,
         getWebhookIngress: () => d.webhookIngress,
-        getWorkerdManager: () => d.workerdManager as never,
+        getRuntimeManager: () => d.runtimeManager as never,
       })
     ).rejects.toMatchObject({
       name: "AggregateError",
@@ -262,7 +262,7 @@ describe("cleanupRuntimeEntity", () => {
 
   it("reports a failed facet retirement instead of losing the live userland object", async () => {
     const d = deps();
-    d.workerdManager.retireDOEntity.mockRejectedValue(new Error("facet abort failed"));
+    d.runtimeManager.retireDOEntity.mockRejectedValue(new Error("facet abort failed"));
 
     await expect(
       cleanupRuntimeEntity(record("do", "do:one"), {
@@ -276,11 +276,11 @@ describe("cleanupRuntimeEntity", () => {
         releaseBlobRetentions: d.releaseBlobRetentions,
         getFsService: () => d.fsService as never,
         getWebhookIngress: () => d.webhookIngress,
-        getWorkerdManager: () => d.workerdManager as never,
+        getRuntimeManager: () => d.runtimeManager as never,
       })
     ).rejects.toThrow("Runtime entity cleanup failed for do:one");
 
-    expect(d.workerdManager.retireDOEntity).toHaveBeenCalledOnce();
+    expect(d.runtimeManager.retireDOEntity).toHaveBeenCalledOnce();
     expect(d.releaseBlobRetentions).not.toHaveBeenCalled();
   });
 
@@ -303,10 +303,10 @@ describe("cleanupRuntimeEntity", () => {
         releaseBlobRetentions: d.releaseBlobRetentions,
         getFsService: () => d.fsService as never,
         getWebhookIngress: () => d.webhookIngress,
-        getWorkerdManager: () => d.workerdManager as never,
+        getRuntimeManager: () => d.runtimeManager as never,
       })
     ).rejects.toThrow("Runtime entity cleanup failed for do:incomplete");
 
-    expect(d.workerdManager.retireDOEntity).not.toHaveBeenCalled();
+    expect(d.runtimeManager.retireDOEntity).not.toHaveBeenCalled();
   });
 });

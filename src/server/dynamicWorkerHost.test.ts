@@ -11,7 +11,7 @@ import { workerExecutableHeaders } from "./workerExecutableDispatch.js";
  *   - worker create/destroy/update never restart the node (boot generation
  *     stays put across the lifecycle).
  *
- * Unlike workerdManager.test.ts, this does NOT mock the node supervisor or
+ * Unlike runtimeManager.test.ts, this does NOT mock the node supervisor or
  * ports — it runs the actual binary.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
@@ -33,10 +33,10 @@ import {
 
 import { TokenManager } from "@vibestudio/shared/tokenManager";
 import {
-  WorkerdManager,
-  type WorkerdManagerDeps,
+  RuntimeManager,
+  type RuntimeManagerDeps,
   type WorkerdWorkspaceProvider,
-} from "./workerdManager.js";
+} from "./runtimeManager.js";
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import type { BuildResult } from "./buildV2/buildStore.js";
 import {
@@ -129,7 +129,7 @@ function workerBuild(bundle = WORKER_BUNDLE, ev = "ev-1"): BuildResult {
 }
 
 interface Harness {
-  manager: WorkerdManager;
+  manager: RuntimeManager;
   codeFetches: string[];
   gateway: Server;
   egressHits: NodeTraffic[];
@@ -157,11 +157,11 @@ async function createHarness(
   // holder) so the gateway closure can reference a `const` manager.
   const portHolder = { value: 0 };
   const statePath = mkdtempSync(join(tmpdir(), "vibestudio-dwh-state-"));
-  const deps: WorkerdManagerDeps = {
+  const deps: RuntimeManagerDeps = {
     schemaProbeEnvironment: schemaProbeEnvironmentForFixture("dynamic-worker-host-test"),
     schemaProbeReleaseRoot: join(statePath, "installed-resources"),
     tokenManager,
-    fsService: { closeHandlesForCaller: () => {} } as unknown as WorkerdManagerDeps["fsService"],
+    fsService: { closeHandlesForCaller: () => {} } as unknown as RuntimeManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
     workspaceId: "workspace:dynamic-worker-host-test",
     getInternalDoEnv: () => ({}),
@@ -193,7 +193,7 @@ async function createHarness(
     getManifestDoClasses: () => [],
     singletonRegistry: new SingletonRegistry([]),
   };
-  const manager = new WorkerdManager(deps);
+  const manager = new RuntimeManager(deps);
   manager.bindWorkspaceProvider(provider);
 
   // Minimal gateway serving the loader endpoints (mirrors gateway.ts).

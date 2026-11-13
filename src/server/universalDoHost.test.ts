@@ -25,10 +25,10 @@ import {
 } from "../../tests/fixtures/schemaProbeEnvironment.js";
 useSchemaProbeFixtureCache();
 import {
-  WorkerdManager,
-  type WorkerdManagerDeps,
+  RuntimeManager,
+  type RuntimeManagerDeps,
   type WorkerdWorkspaceProvider,
-} from "./workerdManager.js";
+} from "./runtimeManager.js";
 import { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry";
 import { encodeUniversalKey } from "./doDispatch.js";
 import { doExecutableHeaders, type DoExecutableAdmission } from "./doExecutableDispatch.js";
@@ -215,7 +215,7 @@ function doBuild(
 
 interface Harness {
   ownedPaths: string[];
-  manager: WorkerdManager;
+  manager: RuntimeManager;
   gateway: Server;
   codeFetches: Map<string, number>;
   admissionFetches: Map<string, number>;
@@ -255,11 +255,11 @@ async function createHarness(
   const portHolder = { value: 0 };
   const statePath = mkdtempSync(join(tmpdir(), "vibestudio-udo-state-"));
 
-  const deps: WorkerdManagerDeps = {
+  const deps: RuntimeManagerDeps = {
     schemaProbeEnvironment: schemaProbeEnvironmentForFixture("universal-do-host-test"),
     schemaProbeReleaseRoot: join(statePath, "installed-resources"),
     tokenManager,
-    fsService: { closeHandlesForCaller: () => {} } as unknown as WorkerdManagerDeps["fsService"],
+    fsService: { closeHandlesForCaller: () => {} } as unknown as RuntimeManagerDeps["fsService"],
     getServerUrl: () => `http://127.0.0.1:${portHolder.value}`,
     workspaceId: "workspace:universal-do-host-test",
     getInternalDoEnv: () => ({}),
@@ -312,7 +312,7 @@ async function createHarness(
     getManifestDoClasses: () => [],
     singletonRegistry: new SingletonRegistry([]),
   };
-  const manager = new WorkerdManager(deps);
+  const manager = new RuntimeManager(deps);
   manager.bindWorkspaceProvider(provider);
   const codeFetches = new Map<string, number>();
   const admissionFetches = new Map<string, number>();
@@ -458,7 +458,7 @@ function deferred<T>() {
 }
 
 async function bindConfiguredObject(
-  manager: WorkerdManager,
+  manager: RuntimeManager,
   ref: { source: string; className: string; objectKey: string },
   stateArgs: Record<string, unknown>
 ) {
@@ -506,7 +506,7 @@ afterEach(async () => {
 function cloneReservation(
   source: { source: string; className: string; objectKey: string },
   key: string,
-  manager: WorkerdManager
+  manager: RuntimeManager
 ): EntityRecord {
   const sourceId = `do:${source.source}:${source.className}:${source.objectKey}`;
   const image = manager.listRuntimeImages().find((entry) => entry.id === sourceId);

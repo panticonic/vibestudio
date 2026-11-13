@@ -3,7 +3,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { deserializeRpcFailure, RemoteRpcAggregateError } from "@vibestudio/rpc";
 import { LifecycleDriver } from "./lifecycleDriver.js";
-import type { RestartBeginEvent, RestartReadyEvent, WorkerdManager } from "../workerdManager.js";
+import type { RestartBeginEvent, RestartReadyEvent, RuntimeManager } from "../runtimeManager.js";
 import type { DODispatch } from "../doDispatch.js";
 import type {
   DORef,
@@ -37,7 +37,7 @@ function makeHarness(
   ];
   let epoch = "";
 
-  const workerdManager = {
+  const runtimeManager = {
     getBootGeneration: () => 7,
     onRestartBegin(fn: (event: RestartBeginEvent) => Promise<void> | void) {
       beginHook = fn;
@@ -51,7 +51,7 @@ function makeHarness(
         readyHook = null;
       };
     },
-  } as Pick<WorkerdManager, "getBootGeneration" | "onRestartBegin" | "onRestartReady">;
+  } as Pick<RuntimeManager, "getBootGeneration" | "onRestartBegin" | "onRestartReady">;
 
   const doDispatch = {
     dispatch: async (_ref: DORef, method: string, ...args: unknown[]) => {
@@ -101,7 +101,7 @@ function makeHarness(
   >;
 
   const driver = new LifecycleDriver({
-    workerdManager: workerdManager as WorkerdManager,
+    runtimeManager: runtimeManager as RuntimeManager,
     doDispatch: doDispatch as DODispatch,
     workspaceId: "workspace-main",
     concurrency: opts.concurrency ?? 2,

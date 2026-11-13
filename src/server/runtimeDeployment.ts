@@ -89,7 +89,7 @@ export function buildRuntimeDeployment(input: RuntimeDeploymentInput): RuntimeDe
         },
       ],
       celld: { durable_objects: classes },
-      vars: { ...input.vars, WORKERD_DO_BINDINGS: doBindingNames, INTERNAL_DO_ENV: internalEnv },
+      vars: { ...input.vars, RUNTIME_DO_BINDINGS: doBindingNames, INTERNAL_DO_ENV: internalEnv },
     },
   };
 }

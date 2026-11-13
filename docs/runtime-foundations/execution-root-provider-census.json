@@ -25,7 +25,7 @@
     {
       "id": "runtime-image",
       "backingSources": ["src/server/runtimeImageStore.ts"],
-      "reviewedReaders": ["src/server/workerdManager.ts"]
+      "reviewedReaders": ["src/server/runtimeManager.ts"]
     },
     {
       "id": "extension-generation",
@@ -64,7 +64,7 @@
       "reason": "Artifact store and collector, not an execution owner."
     },
     {
-      "source": "src/server/bootstrap/workerd.ts",
+      "source": "src/server/bootstrap/runtime.ts",
       "reason": "Startup build resolver; durable runtime ownership is recorded by runtime-image and runtime-entity."
     },
     {

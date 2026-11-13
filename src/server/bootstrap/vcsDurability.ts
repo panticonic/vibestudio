@@ -7,7 +7,7 @@ import {
   type WorkspaceSourceProviderRef,
 } from "../workspaceSourceProvider.js";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
-import type { WorkerdManager } from "../workerdManager.js";
+import type { RuntimeManager } from "../runtimeManager.js";
 import type { GcEpochCoordinator } from "../services/gcEpochCoordinator.js";
 import type { BuildSystemV2 } from "../buildV2/index.js";
 import type { ExecutionPublicationJournal } from "../executionPublicationJournal.js";
@@ -39,7 +39,7 @@ export interface VcsDurabilityBootstrapDeps {
 export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
   deps.container.registerManaged({
     name: "vcsAttach",
-    dependencies: ["doDispatch", "workerdManager"],
+    dependencies: ["doDispatch", "runtimeManager"],
     async start(resolve) {
       const startedAt = performance.now();
       let phaseStartedAt = startedAt;
@@ -52,14 +52,14 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
         phaseStartedAt = now;
       };
       const doDispatch = assertPresent(resolve<DODispatch>("doDispatch"));
-      const workerdManager = assertPresent(resolve<WorkerdManager>("workerdManager"));
+      const runtimeManager = assertPresent(resolve<RuntimeManager>("runtimeManager"));
       const gadRef = deps.workspaceSourceProvider;
       const contextId = canonicalWorkspaceObjectContextId(deps.workspaceId, {
         source: gadRef.source,
         className: gadRef.className,
         key: gadRef.objectKey,
       });
-      const prepared = await workerdManager.ensureDurableObjectEntity({
+      const prepared = await runtimeManager.ensureDurableObjectEntity({
         source: gadRef.source,
         ref: deps.bootstrapStateHash,
         className: gadRef.className,

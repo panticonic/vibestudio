@@ -18,7 +18,7 @@ export {
 
 export interface HostProgramEnv {
   readonly GATEWAY_URL: string;
-  readonly WORKERD_LOADER_SECRET: string;
+  readonly RUNTIME_LOADER_SECRET: string;
 }
 
 /** Fetch a gateway path. `path` must start with `/`. */

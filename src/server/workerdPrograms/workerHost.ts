@@ -26,7 +26,7 @@ const workerHost: ExportedHandler<WorkerHostEnv> = {
 
     const version = request.headers.get(WORKER_EXECUTABLE_VERSION_HEADER);
     if (!version) return new Response("worker-host: missing worker admission", { status: 400 });
-    const loaderHeaders = { "X-Vibestudio-Loader-Secret": env.WORKERD_LOADER_SECRET };
+    const loaderHeaders = { "X-Vibestudio-Loader-Secret": env.RUNTIME_LOADER_SECRET };
 
     const identity = `${name}@${version}`;
     try {

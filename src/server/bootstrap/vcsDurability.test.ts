@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { DODispatch } from "../doDispatch.js";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import type { WorkspaceSemanticPort } from "../workspaceSourceProvider.js";
-import type { WorkerdManager } from "../workerdManager.js";
+import type { RuntimeManager } from "../runtimeManager.js";
 import { wireVcsDurability, type VcsDurabilityBootstrapDeps } from "./vcsDurability.js";
 import { canonicalWorkspaceObjectContextId } from "./workspaceObjectIdentity.js";
 
@@ -41,7 +41,7 @@ describe("wireVcsDurability", () => {
     const { services } = captureServices();
 
     expect(services.map(({ name, dependencies }) => ({ name, dependencies }))).toEqual([
-      { name: "vcsAttach", dependencies: ["doDispatch", "workerdManager"] },
+      { name: "vcsAttach", dependencies: ["doDispatch", "runtimeManager"] },
       {
         name: "semanticWorkspace",
         dependencies: ["vcsAttach"],
@@ -65,7 +65,7 @@ describe("wireVcsDurability", () => {
         executionDigest: "b".repeat(64),
         authority: { provides: [], requests: [] },
       })),
-    } as unknown as WorkerdManager;
+    } as unknown as RuntimeManager;
     let gadClient: WorkspaceSemanticPort | undefined;
     let semanticReady = Promise.resolve();
     const workspaceVcs = {
@@ -85,8 +85,8 @@ describe("wireVcsDurability", () => {
     });
     const attach = services.find((service) => service.name === "vcsAttach");
     const resolve = <D>(name: string): D | undefined =>
-      ({ doDispatch: dispatch, workerdManager: manager })[
-        name as "doDispatch" | "workerdManager"
+      ({ doDispatch: dispatch, runtimeManager: manager })[
+        name as "doDispatch" | "runtimeManager"
       ] as D | undefined;
 
     await expect(attach?.start?.(resolve)).resolves.toBe(workspaceVcs);
@@ -142,7 +142,7 @@ describe("wireVcsDurability", () => {
         executionDigest: "e".repeat(64),
         authority: { provides: [], requests: [] },
       })),
-    } as unknown as WorkerdManager;
+    } as unknown as RuntimeManager;
     let finishInitialization!: () => void;
     const initialization = new Promise<void>((resolve) => {
       finishInitialization = resolve;
@@ -157,8 +157,8 @@ describe("wireVcsDurability", () => {
     const semantic = services.find((service) => service.name === "semanticWorkspace");
 
     const resolve = <D>(name: string) =>
-      ({ vcsAttach: workspaceVcs, workerdManager: manager })[
-        name as "vcsAttach" | "workerdManager"
+      ({ vcsAttach: workspaceVcs, runtimeManager: manager })[
+        name as "vcsAttach" | "runtimeManager"
       ] as D;
     // The managed dependency guarantees that vcsAttach has established the
     // bootstrap identity before semanticWorkspace starts.
@@ -166,8 +166,8 @@ describe("wireVcsDurability", () => {
     const bootstrapResolve = <D>(name: string): D | undefined =>
       ({
         doDispatch: { dispatch: vi.fn() } as unknown as DODispatch,
-        workerdManager: manager,
-      })[name as "doDispatch" | "workerdManager"] as D | undefined;
+        runtimeManager: manager,
+      })[name as "doDispatch" | "runtimeManager"] as D | undefined;
     await attach?.start?.(bootstrapResolve);
     const attachmentStop = attach?.stop?.(workspaceVcs);
     let attachmentRetired = false;
