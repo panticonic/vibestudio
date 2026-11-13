@@ -99,6 +99,30 @@ describe("wsClientTransport", () => {
     expect(token).toHaveBeenCalledTimes(2);
     await transport.close();
   });
+  it("waits for the reconnected session instead of resolving ready() against a lost one", async () => {
+    const { transport, sockets } = createTransportHarness();
+    const connected = transport.connectAndWait();
+    await flushAsyncWork();
+    sockets[0]!.open();
+    sockets[0]!.authenticate();
+    await connected;
+    sockets[0]!.close(1006, "transport interrupted");
+    expect(transport.status?.()).toBe("connecting");
+    let reconnected = false;
+    const ready = transport.ready!().then(() => {
+      reconnected = true;
+    });
+    await flushAsyncWork();
+    expect(reconnected).toBe(false);
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flushAsyncWork();
+    sockets[1]!.open();
+    sockets[1]!.authenticate();
+    await ready;
+    expect(reconnected).toBe(true);
+    await transport.close();
+    await expect(transport.connectAndWait()).rejects.toThrow("RPC client is closed");
+  });
   it("cancels and joins credential acquisition with its connection-attempt owner", async () => {
     let tokenSignal: AbortSignal | undefined;
     let entered!: () => void;

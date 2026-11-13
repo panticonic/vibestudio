@@ -2212,6 +2212,36 @@ describe("createRpcClient — pending-call policy (§3.4)", () => {
     await expect(call).rejects.toMatchObject({ code: "CONNECTION_LOST" });
   });
 
+  it("fails direct-server envelope streams when the transport leaves connected", async () => {
+    const fake = controllableTransport();
+    const rpc = createRpcClient({
+      selfId: "panel:1",
+      callerKind: "panel",
+      transport: fake.transport,
+    });
+
+    const beforeHead = rpc.stream("main", "download", []);
+    const afterHead = rpc.stream("main", "download", []);
+    await flushMicrotasks();
+    const request = fake.sent[1]!;
+    if (request.message.type !== "stream-request") throw new Error("expected a stream request");
+    fake.emitMessage(
+      responseEnvelopeFor(request, request.delivery.caller, {
+        type: "stream-frame",
+        requestId: request.message.requestId,
+        fromId: "main",
+        frameType: FRAME_HEAD,
+        payload: JSON.stringify({ status: 200, statusText: "OK", headerPairs: [], finalUrl: "" }),
+      })
+    );
+    const response = await afterHead;
+
+    fake.emitStatus("connecting");
+
+    await expect(beforeHead).rejects.toMatchObject({ code: "CONNECTION_LOST" });
+    await expect(response.text()).rejects.toMatchObject({ code: "CONNECTION_LOST" });
+  });
+
   it("also treats target 'server' as a direct-server call", async () => {
     const fake = controllableTransport();
     const rpc = createRpcClient({

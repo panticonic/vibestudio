@@ -96,9 +96,16 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
   let lastSeenBootId: string | null = null;
   let authToken: string | null = null;
   let closePromise: Promise<void> | null = null;
+  // Waiter for the next authenticated connection. Once settled it describes a
+  // connection that existed; it is forgotten when that connection is lost so
+  // `ready()` during a reconnect waits for the new session instead of
+  // resolving against the dead one.
   let firstConnectPromise: Promise<void> | null = null;
   let firstConnectResolve: (() => void) | null = null;
   let firstConnectReject: ((error: Error) => void) | null = null;
+  const forgetSettledConnectionWaiter = (): void => {
+    if (!firstConnectResolve) firstConnectPromise = null;
+  };
   let supportsStreamRequestBodies = false;
   const textEncoder = new TextEncoder();
   const nativeStreams = new Map<
@@ -496,6 +503,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         firstConnectReject?.(connectionLostError(msg.reason || `RPC session closed (${msg.code})`));
         firstConnectReject = null;
         firstConnectResolve = null;
+        forgetSettledConnectionWaiter();
         failNativeStreams(connectionLostError("RPC session closed during streaming RPC"));
         setStatus("disconnected");
         // The server retired the authenticated inbox: routed calls cannot be
@@ -652,10 +660,12 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         );
         firstConnectReject = null;
         firstConnectResolve = null;
+        forgetSettledConnectionWaiter();
         failNativeStreams(connectionLostError("Connection lost during streaming RPC"));
         setStatus("disconnected");
         return;
       }
+      forgetSettledConnectionWaiter();
       failNativeStreams(connectionLostError("Connection lost during streaming RPC"));
       scheduleReconnect(socketGeneration);
     };
@@ -683,6 +693,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
       startConnectionAttempt();
     },
     connectAndWait(timeoutMs: number | null = null): Promise<void> {
+      if (closePromise) return Promise.reject(connectionLostError("RPC client is closed"));
       if (socket?.readyState === OPEN && authenticated) return Promise.resolve();
       let shouldConnect = false;
       if (!firstConnectPromise) {

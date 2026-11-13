@@ -477,6 +477,8 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       idleTimer: ReturnType<typeof setTimeout> | null;
       cancel: () => void;
       cleanup: () => void;
+      /** Envelope target — the same direct-server vs routed loss policy as requests (§3.4). */
+      target: string;
       destination?: RpcDestination;
     }
   >();
@@ -691,11 +693,11 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
     return new RpcBoundaryError(CONNECTION_LOST_MESSAGE, "transport", SESSION_CONNECTION_LOST_CODE);
   }
 
-  // Reject + remove every pending request whose target matches `predicate`,
-  // clearing its deadline timer and abort wiring. The pending-call policy
+  // Reject + remove every pending request and envelope stream whose target
+  // matches `predicate`, clearing its deadline timer and abort wiring. The pending-call policy
   // (§3.4) uses it twice: direct-server pendings on pipe-down, routed pendings
   // on cold-recover.
-  function rejectPendingRequests(
+  function rejectPendingCalls(
     predicate: (target: string, destination?: RpcDestination) => boolean,
     error: Error
   ): void {
@@ -705,6 +707,15 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       if (pending.timeout) clearTimeout(pending.timeout);
       pending.abortCleanup?.();
       pending.reject(error);
+    }
+    // Envelope-path streams are pending calls too: their head or body would
+    // otherwise wait forever for frames the lost connection can never deliver.
+    for (const [requestId, pending] of [...pendingStreams]) {
+      if (!predicate(pending.target, pending.destination)) continue;
+      pending.bodyClosed = true;
+      if (pending.headEmitted) pending.controller.error(error);
+      else pending.rejectHead(error);
+      clearPendingStream(requestId);
     }
   }
 
@@ -1547,6 +1558,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       idleTimer: null,
       cancel: sendCancel,
       cleanup: () => signal?.removeEventListener("abort", onAbort),
+      target: targetId,
       ...(options?.destination ? { destination: options.destination } : {}),
     });
     armStreamHeadTimer(requestId, options?.headTimeoutMs ?? streamIdleTimeoutMs);
@@ -1715,7 +1727,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
   const unsubscribeStatus = config.transport.onStatusChange?.((status) => {
     if (status === "connected" && !retired) publishExposures();
     if (status !== "connected") {
-      rejectPendingRequests(isServerTarget, makeConnectionLostError());
+      rejectPendingCalls(isServerTarget, makeConnectionLostError());
     }
   });
 
@@ -1725,7 +1737,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
   const unsubscribeRecovery = config.onRecovery?.((kind) => {
     if (!retired && config.transport.status?.() === "connected") publishExposures();
     if (kind === "cold-recover") {
-      rejectPendingRequests(
+      rejectPendingCalls(
         (target, destination) => !isServerTarget(target, destination),
         makeConnectionLostError()
       );
@@ -1766,7 +1778,6 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         )
       ).catch(() => {});
     }
-    rejectPendingRequests(() => true, error);
     for (const [requestId, pending] of [...pendingStreams]) {
       pending.bodyClosed = true;
       if (pending.headEmitted) pending.controller.error(error);
@@ -1774,6 +1785,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       pending.cancel();
       clearPendingStream(requestId);
     }
+    rejectPendingCalls(() => true, error);
     for (const [requestId, active] of [...activeRequestHandlers]) {
       activeRequestHandlers.delete(requestId);
       active.abort.abort(error);
