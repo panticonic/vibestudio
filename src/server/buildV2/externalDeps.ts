@@ -1579,7 +1579,7 @@ async function ensureDepsInstalledOnce(
         try {
           await fs.promises.rm(cacheDir, { recursive: true, force: true });
           await fs.promises.rename(tmpDir, cacheDir);
-        } catch {
+        } catch (replaceError) {
           // Clean up both dirs to avoid stale state, let build fail transiently
           try {
             await fs.promises.rm(tmpDir, { recursive: true, force: true });
@@ -1591,7 +1591,10 @@ async function ensureDepsInstalledOnce(
           } catch (cleanupError) {
             warnCleanupFailure(cacheDir, cleanupError);
           }
-          throw new Error(`External deps cache race: failed to install for key ${options.key}`);
+          throw new Error(
+            `External deps cache race: failed to replace an incomplete cache for key ${options.key}: ${replaceError instanceof Error ? replaceError.message : String(replaceError)}`,
+            { cause: replaceError }
+          );
         }
       } else {
         throw err;

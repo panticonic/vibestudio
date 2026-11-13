@@ -458,7 +458,9 @@ export class StateTransitionTrigger extends EventEmitter {
         this.source,
         node,
         ev,
-        this.stateHash
+        // Warming runs beside later publications; this build belongs to its
+        // trigger's state, not whichever state the trigger has advanced to.
+        trigger.workspaceStateHash
       );
       if (await this.session.store.has(buildKey)) {
         this.emit("build-complete", { name, buildKey, trigger });
