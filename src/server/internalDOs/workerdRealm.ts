@@ -8,6 +8,7 @@
  * freezing the Vitest process would test a different boundary than production.
  */
 import "ses";
+import { captureRealmCompiler } from "@vibestudio/shared/evalConfinement";
 
 type ConsoleLevel = "debug" | "log" | "info" | "warn" | "error";
 type ConsoleSink = (level: ConsoleLevel, args: unknown[]) => void;
@@ -42,9 +43,16 @@ export function initializeInternalDORealm(): void {
   // while its methods retain access to the closure-held sink.
   globalThis.console = consoleFacade;
 
+  // Dynamic code generation belongs to one class: the node lets only a class
+  // that declares `codegen` (EvalDO) compile from strings, and refuses it
+  // everywhere else. The eval kernel keeps the realm's real compiler; the
+  // lockdown then makes every other path to it inert, as guest code requires
+  // (createPrivateGuestGlobal refuses a realm that can still compile).
+  captureRealmCompiler();
   lockdown({
     errorTaming: "unsafe",
     overrideTaming: "severe",
+    evalTaming: "no-eval",
   });
 
   Object.defineProperty(globalThis, "__vibestudioInstallConsoleSink", {

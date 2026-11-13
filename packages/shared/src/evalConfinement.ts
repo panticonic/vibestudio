@@ -284,16 +284,40 @@ export function tameRealmCodegen(
   return realmFunction;
 }
 
+/** Realms whose real compiler was set aside before a lockdown replaced it. */
+const CAPTURED_COMPILERS = new WeakMap<object, FunctionConstructor>();
+
+/**
+ * Set aside `realm`'s real `Function` before something (SES `lockdown()`) makes
+ * every path to it inert. The reference stays callable: it is only the global
+ * binding and the `.constructor` chains that are replaced, so the kernel that
+ * must compile keeps its capability while guest code, which can only reach what
+ * the lockdown left, has none. Idempotent. Capturing grants nothing in an engine
+ * that refuses code generation: calling the captured constructor there throws.
+ */
+export function captureRealmCompiler(
+  realm: Record<string, unknown> = globalThis as Record<string, unknown>
+): void {
+  const key = realm as unknown as object;
+  if (CAPTURED_COMPILERS.has(key)) return;
+  const compiler = realm["Function"];
+  if (typeof compiler === "function") CAPTURED_COMPILERS.set(key, compiler as FunctionConstructor);
+}
+
 /**
  * The realm's compile capability: its real `Function` if the realm was tamed by
- * `tameRealmCodegen`, else whatever `Function` it currently has. Host code that
+ * `tameRealmCodegen`, or captured before a lockdown, else whatever `Function` it
+ * currently has. Host code that
  * must compile (the eval kernel's `compileFunction`) goes through here so taming
  * a realm does not disarm the kernel that runs inside it.
  */
 export function getRealmCompiler(
   realm: Record<string, unknown> = globalThis as Record<string, unknown>
 ): FunctionConstructor {
-  return TAMED_REALMS.get(realm as unknown as object) ?? (realm["Function"] as FunctionConstructor);
+  const key = realm as unknown as object;
+  return (
+    TAMED_REALMS.get(key) ?? CAPTURED_COMPILERS.get(key) ?? (realm["Function"] as FunctionConstructor)
+  );
 }
 
 /**

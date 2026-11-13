@@ -119,7 +119,7 @@ import {
   createTypedServiceClient,
   type TypedServiceClient,
 } from "@vibestudio/shared/typedServiceClient";
-import { createPrivateGuestGlobal } from "@vibestudio/shared/evalConfinement";
+import { createPrivateGuestGlobal, getRealmCompiler } from "@vibestudio/shared/evalConfinement";
 
 /**
  * EvalDO — the blessed, per-owner unsafe-eval kernel.
@@ -3801,8 +3801,10 @@ export class EvalDO extends DurableObjectBase {
     name = "eval"
   ): (...args: unknown[]) => unknown {
     // Code generation is allowed in this class's isolates only (the node's
-    // per-class `codegen` capability); anywhere else this throws an EvalError.
-    const compiled = new Function(...argNames, body) as (...args: unknown[]) => unknown;
+    // per-class `codegen` capability). The realm's compiler was taken at
+    // bootstrap, before the realm made every other path inert.
+    const Compile = getRealmCompiler();
+    const compiled = new Compile(...argNames, body) as (...args: unknown[]) => unknown;
     Object.defineProperty(compiled, "name", { value: name, configurable: true });
     return compiled;
   }

@@ -397,6 +397,10 @@ export class CelldNode {
       env: {
         ...this.baseEnv(),
         CELLD_SECRETS_KEY_FILE: this.secretsKeyFile,
+        // The default per-isolate heap (128 MB, Cloudflare's) is below what the
+        // eval kernel and the agent runtime need together in one isolate; the
+        // workerd runtime had no such cap. The operator may raise or lower it.
+        CELLD_V8_HEAP_LIMIT_MB: process.env["VIBESTUDIO_RUNTIME_HEAP_LIMIT_MB"] ?? "512",
         CELLD_WATCH: this.workingDir,
         CELLD_NODE: this.options.nodeId,
       },
