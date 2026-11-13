@@ -126,6 +126,7 @@ function fixture(target: DevelopmentRun["target"] = { kind: "build-only" }) {
     recover: vi.fn().mockResolvedValue("recovered"),
   };
   const nativeClose = vi.fn().mockResolvedValue(undefined);
+  const releaseLogs = vi.fn();
   const controller = createDevelopmentNativeService({
     native: { close: nativeClose } as unknown as Parameters<
       typeof createDevelopmentNativeService
@@ -141,6 +142,7 @@ function fixture(target: DevelopmentRun["target"] = { kind: "build-only" }) {
     isolatedExecutor: isolated,
     attachedHostPublisher: attached,
     attachedHostParentId: "host:parent",
+    releaseLogs,
   });
   const service = controller.definition;
   const prepare = (ctx: ServiceContext) =>
@@ -160,6 +162,7 @@ function fixture(target: DevelopmentRun["target"] = { kind: "build-only" }) {
     stop,
     isolated,
     attached,
+    releaseLogs,
   };
 }
 
@@ -338,6 +341,7 @@ describe("native development build ownership", () => {
     expect(f.service.methods?.["retireBuild"]?.capability).toBeUndefined();
     await f.service.handler(caller("do:development"), "retireBuild", [{ run: f.run }]);
     expect(f.retire).toHaveBeenCalledExactlyOnceWith(f.run);
+    expect(f.releaseLogs).toHaveBeenCalledExactlyOnceWith(f.run.runId);
   });
 
   it("rejects another runtime even when it knows the complete run record", async () => {

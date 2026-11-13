@@ -126,7 +126,10 @@ export function createDevelopmentNativeService(deps: {
   attachedHostPublisher?: AttachedHostPublisher;
   attachedHostParentId?: string;
   attachedHostAuthorityCeiling?: readonly CapabilityScope[];
+  /** Drain the log lines a run produced since the last drain. */
   takeLogs?: (runId: string) => Array<{ stream: "stdout" | "stderr"; line: string }>;
+  /** Forget a retired run's undrained log lines. */
+  releaseLogs?: (runId: string) => void;
   templateExchange?: Pick<TemplateRepositoryExchangeExecutor, "prepare" | "apply">;
   /**
    * Read one repository's presence in an exact semantic context.
@@ -683,6 +686,7 @@ export function createDevelopmentNativeService(deps: {
         await deps.executor.retire(run);
         plans.delete(run.runId);
         builds.delete(run.runId);
+        deps.releaseLogs?.(run.runId);
       },
     }),
   };

@@ -66,14 +66,19 @@ export async function wireDevelopmentNative(
   let developmentNativeService: ReturnType<
     typeof import("../services/developmentNativeService.js").createDevelopmentNativeService
   > | null = null;
+  /** Undrained log lines per run, released when the run retires or the host stops. */
+  const logs = new Map<string, Array<{ stream: "stdout" | "stderr"; line: string }>>();
   const close = async () => {
-    await developmentNativeService?.close();
+    try {
+      await developmentNativeService?.close();
+    } finally {
+      logs.clear();
+    }
   };
   let developmentExecutor: InstanceType<typeof DevelopmentExecutor> | null = null;
   let nativeDevelopmentController:
     | import("../services/developmentNativeService.js").ExactNativeDevelopmentController
     | null = null;
-  const logs = new Map<string, Array<{ stream: "stdout" | "stderr"; line: string }>>();
   const isolatedInstanceId = process.env["VIBESTUDIO_INSTANCE"];
   const isolatedGenerationId = process.env["VIBESTUDIO_DEVELOPMENT_INSTANCE_GENERATION"];
   const clientExecutors = new DevelopmentClientExecutorRegistry({
@@ -197,6 +202,7 @@ export async function wireDevelopmentNative(
           logs.delete(runId);
           return current;
         },
+        releaseLogs: (runId) => logs.delete(runId),
         resolveAdoptedRepository: async ({ contextId, repositoryId }) => {
           const workingHead = await deps.workspaceVcs.resolveWorkingState(contextId);
           const inspected = await deps.workspaceVcs.semanticDirectCall("vcsInspect", {
