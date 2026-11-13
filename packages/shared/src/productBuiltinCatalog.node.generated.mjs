@@ -1876,9 +1876,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "objectKey": "workspace",
       "keyMode": "workspace-scoped"
     },
-    "workerd": {
+    "runtime": {
       "staticAuthorityProjection": true,
-      "unsafeEval": false
+      "codegen": false
     },
     "residentCapabilityRequests": [],
     "hostCapabilityRequests": [],
@@ -4381,9 +4381,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "objectKey": "browser-environment",
       "keyMode": "verified-user-workspace"
     },
-    "workerd": {
+    "runtime": {
       "staticAuthorityProjection": true,
-      "unsafeEval": false
+      "codegen": false
     },
     "residentCapabilityRequests": [],
     "hostCapabilityRequests": [],
@@ -5097,9 +5097,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "objectKey": "owner",
       "keyMode": "caller-supplied"
     },
-    "workerd": {
+    "runtime": {
       "staticAuthorityProjection": true,
-      "unsafeEval": true
+      "codegen": true
     },
     "residentCapabilityRequests": [],
     "hostCapabilityRequests": [
@@ -5577,9 +5577,9 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
       "objectKey": "subscription",
       "keyMode": "caller-supplied"
     },
-    "workerd": {
+    "runtime": {
       "staticAuthorityProjection": true,
-      "unsafeEval": false
+      "codegen": false
     },
     "residentCapabilityRequests": [],
     "hostCapabilityRequests": [],

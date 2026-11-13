@@ -20,9 +20,9 @@ interface BuiltinBase {
     objectKey: "workspace" | "browser-environment" | "owner" | "subscription";
     keyMode: "workspace-scoped" | "verified-user-workspace" | "caller-supplied";
   };
-  workerd: {
+  runtime: {
     staticAuthorityProjection: boolean;
-    unsafeEval: boolean;
+    codegen: boolean;
   };
   /** Static authority ceiling for work that has no inbound RPC authority
    * parent, notably durable-object alarms. Direct RPC execution is narrowed
@@ -79,9 +79,9 @@ export const PRODUCT_BUILTINS = [
     methods: workspaceStateMethods,
     directMethods: workspaceStateEngineMethods,
     durableObject: { keyVersion: 1, objectKey: "workspace", keyMode: "workspace-scoped" },
-    workerd: {
+    runtime: {
       staticAuthorityProjection: true,
-      unsafeEval: false,
+      codegen: false,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],
@@ -100,9 +100,9 @@ export const PRODUCT_BUILTINS = [
       objectKey: "browser-environment",
       keyMode: "verified-user-workspace",
     },
-    workerd: {
+    runtime: {
       staticAuthorityProjection: true,
-      unsafeEval: false,
+      codegen: false,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],
@@ -116,9 +116,9 @@ export const PRODUCT_BUILTINS = [
     sourceFile: "packages/builtin/src/eval-engine/EvalDO.ts",
     builtinBecause: "feeds-authority",
     durableObject: { keyVersion: 1, objectKey: "owner", keyMode: "caller-supplied" },
-    workerd: {
+    runtime: {
       staticAuthorityProjection: true,
-      unsafeEval: true,
+      codegen: true,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [
@@ -141,9 +141,9 @@ export const PRODUCT_BUILTINS = [
     sourceFile: "packages/builtin/src/webhook-engine/WebhookStoreDO.ts",
     builtinBecause: "feeds-authority",
     durableObject: { keyVersion: 1, objectKey: "subscription", keyMode: "caller-supplied" },
-    workerd: {
+    runtime: {
       staticAuthorityProjection: true,
-      unsafeEval: false,
+      codegen: false,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],

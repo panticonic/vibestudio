@@ -118,6 +118,8 @@ export interface AppArtifactHandler {
  *  STATE_ARGS), so they are gated by the workerd-only `loaderSecret`. */
 export interface WorkerHostCodeProvider {
   getLoaderSecret(): string;
+  /** The UniversalDO class's own secret for `/_docode` and `/_doadmission`. */
+  getDoLoaderSecret(): string;
   getWorkerAdmission(name: string): Promise<WorkerExecutableAdmission | null>;
   getWorkerCode(
     name: string,
@@ -317,7 +319,7 @@ export class Gateway {
         const provided = req.headers["x-vibestudio-loader-secret"];
         if (
           typeof provided !== "string" ||
-          !constantTimeStringEqual(provided, host.getLoaderSecret())
+          !constantTimeStringEqual(provided, host.getDoLoaderSecret())
         ) {
           res.writeHead(403, { "Content-Type": "text/plain" });
           res.end("Forbidden");
@@ -361,7 +363,7 @@ export class Gateway {
         const provided = req.headers["x-vibestudio-loader-secret"];
         if (
           typeof provided !== "string" ||
-          !constantTimeStringEqual(provided, host.getLoaderSecret())
+          !constantTimeStringEqual(provided, host.getDoLoaderSecret())
         ) {
           res.writeHead(403, { "Content-Type": "text/plain" });
           res.end("Forbidden");

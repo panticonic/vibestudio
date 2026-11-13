@@ -1,12 +1,14 @@
 /**
- * WorkerdManager — Process lifecycle for workerd (Cloudflare V8 isolate runtime).
+ * WorkerdManager — the workspace's isolate runtime: one celld node (the
+ * panticonic fork) per workspace, running one deployed runtime application.
  *
  * Manages:
- * - Locating the workerd binary
- * - Worker instance lifecycle (create, update, destroy)
+ * - Worker and Durable Object executable selection (create, update, destroy)
  * - Context/token provisioning per instance
- * - Cap'n Proto text config generation for build-compiled workerd programs
- * - workerd child process management (start, restart, stop)
+ * - The runtime application's deployment (one module, per-generation vars)
+ * - The node process (start, reload by deploy, crash recovery, stop)
+ *
+ * The class keeps its historical name; the runtime underneath is celld.
  */
 
 import type { WorkerExecutableAdmission } from "./workerExecutableDispatch.js";
@@ -17,16 +19,13 @@ import {
   type InstalledSchemaProbeEvidence,
 } from "./services/schemaProbeEvidence.js";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
-import { spawn, type ChildProcess } from "child_process";
+import type { ChildProcess } from "child_process";
 import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
 import * as crypto from "crypto";
 import * as fs from "fs";
-import { createRequire } from "module";
 import * as path from "path";
-import * as os from "os";
-import { backup, DatabaseSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { stateLayout } from "./stateLayout.js";
-import { pathToFileURL } from "url";
 import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { FsService } from "./services/fsService.js";
@@ -42,10 +41,6 @@ import type { SingletonRegistry } from "@vibestudio/workspace/singletonRegistry"
 import { createDevLogger } from "@vibestudio/dev-log";
 import { productBuiltinByIdentity } from "@vibestudio/shared/productBuiltinCatalog.generated";
 import {
-  getPhysicalPathForAsarPath,
-  getPlatformPackageBinaryPath,
-} from "@vibestudio/shared/runtimePaths";
-import {
   INTERNAL_DO_SOURCE,
   getInternalDOPrograms,
   internalDOExecutionIdentity,
@@ -57,10 +52,9 @@ import { doExecutableHeaders, type DoExecutableAdmission } from "./doExecutableD
 import { assertPresent } from "../lintHelpers";
 import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
-import { DurableObjectStorageClone } from "./durableObjectStorageClone.js";
-import type { WorkerdProgramSources } from "./workerdProgramLoader.js";
-import { resolveRequiredAppRoot } from "./appRoot.js";
-import { SqliteIntegrityWorkerClient } from "./storage/sqliteIntegrityWorkerClient.js";
+import { CelldNode, CelldNodeProcess, resolveCelldBinary } from "./celldNode.js";
+import { DurableObjectCloneReceipts } from "./durableObjectCloneReceipts.js";
+import { buildRuntimeDeployment, type RuntimeDeployment } from "./runtimeDeployment.js";
 import {
   destroyWorkerdConnections,
   getWorkerdConnectionDispatcher,
@@ -73,13 +67,12 @@ import {
 } from "./runtimeReadinessError.js";
 import type { WorkerdPerformanceSnapshot } from "@vibestudio/service-schemas/hostPerformance";
 
-import { UNIVERSAL_DO_UNIQUE_KEY, internalDoUniqueKey } from "./workerdStorageIdentity.js";
-
 const log = createDevLogger("WorkerdManager");
-// Process signals normally settle immediately. These are catastrophic
-// containment fallbacks, not lifecycle budgets: give workerd ample time to
-// drain durable work before escalating, and ample time for the kernel to reap
-// it before declaring a generation unsafe to replace.
+// The node's own stop request and process signals normally settle promptly.
+// These are catastrophic containment fallbacks, not lifecycle budgets: give
+// the node ample time to make its cells durable before escalating, and ample
+// time for the kernel to reap it before declaring a generation unsafe to
+// replace.
 const DEFAULT_WORKERD_SIGTERM_TIMEOUT_MS = 60_000;
 const DEFAULT_WORKERD_SIGKILL_TIMEOUT_MS = 30_000;
 const WORKERD_STARTUP_OUTPUT_LINES = 40;
@@ -218,33 +211,6 @@ function entityScopeRef(explicitRef: string | undefined, contextId: string): str
 function scopeTracksProtectedMain(scopeRef: string | undefined): boolean {
   const normalized = scopeRef && scopeRef.length > 0 ? scopeRef : "main";
   return normalized === "main";
-}
-
-// This file is bundled as both ESM (standalone server) and CJS (Electron
-// utility process). build.mjs injects __filename into the ESM bundle, while
-// CJS provides it natively. Avoid spelling import.meta here: esbuild warns
-// whenever import.meta appears in CJS output, even behind typeof guards.
-const requireFromUrl = pathToFileURL(path.join(resolveRequiredAppRoot(), "package.json")).href;
-
-const require = createRequire(requireFromUrl);
-
-/**
- * Replicate workerd's idFromName() → SQLite filename derivation.
- *
- * workerd derives DO storage filenames as:
- *   1. key = SHA-256(uniqueKey)         — 32 bytes
- *   2. base = HMAC-SHA256(key, name)    — truncate to first 16 bytes
- *   3. mac = HMAC-SHA256(key, base)     — truncate to first 16 bytes
- *   4. filename = hex(base || mac)      — 64 hex chars
- *
- * Verified against workerd source (actor-id-impl.c++) and empirically
- * tested against actual workerd DO storage files.
- */
-function computeWorkerdObjectIdHash(uniqueKey: string, objectName: string): string {
-  const key = crypto.createHash("sha256").update(uniqueKey).digest();
-  const base = crypto.createHmac("sha256", key).update(objectName).digest().subarray(0, 16);
-  const mac = crypto.createHmac("sha256", key).update(base).digest().subarray(0, 16);
-  return Buffer.concat([base, mac]).toString("hex");
 }
 
 function errorMessage(err: unknown): string {
@@ -496,41 +462,39 @@ export interface WorkerdManagerDeps {
   getServerUrl: () => string;
   /** Additional externally advertised gateway URLs that map to this server. */
   getServerAliasUrls?: () => readonly string[];
-  /** Immutable, build-compiled programs used by the workerd host services. */
-  readonly workerdPrograms: WorkerdProgramSources;
   /**
-   * Immutable internal-DO program paired with this manager. Production loads
-   * the build artifact; tests inject an in-memory build so they cannot replace
-   * a concurrently running source server's authority program on disk.
+   * Immutable runtime application paired with this manager (router, worker
+   * host, UniversalDO and every internal class, as one module). Production
+   * loads the build artifact; tests inject an in-memory build so they cannot
+   * replace a concurrently running source server's program on disk.
    */
   readonly internalDOPrograms?: InternalDOPrograms;
   /** Host-owned environment for immutable internal Durable Object programs. */
   getInternalDoEnv(className: string): Record<string, string>;
   /** Workspace source root — used for WORKER_SOURCE binding. */
   workspacePath: string;
-  /** State directory — used for DO storage (localDisk). */
+  /** State directory — holds the node's state and the workspace blob root. */
   statePath: string;
   executionPublicationPort?: ExecutionPublicationPort;
   republishStorageOwner?: (ref: DORef) => Promise<void>;
   /** Route registry for `/_r/` dispatch — optional; when absent, route
    *  registration is a no-op and routes in package manifests have no effect. */
   routeRegistry?: RouteRegistry;
-  getProxyPort: (caller: VerifiedCaller) => Promise<number | null> | number | null;
-  /** Shared attributed-by-header egress listener port for the dynamic worker
-   *  host. Identity travels in the `X-Vibestudio-Egress-Caller` header (stamped
-   *  by the host's EgressGateway from non-forgeable props), gated by
-   *  `egressSecret`. Distinct from `getProxyPort` (per-caller ports, still used
-   *  by static DO services). */
+  /** The node's egress proxy listener port. The node sends every outbound
+   *  request of every isolate there, with a caller identity it stamps and
+   *  authenticates (HMAC over `egressSecret`). */
   getSharedEgressPort: () => Promise<number>;
-  /** Register/unregister a live worker's VerifiedCaller so the shared egress
-   *  listener can resolve the header id → full caller for attribution. */
+  /** Register/unregister a live executable's VerifiedCaller so the egress
+   *  proxy can resolve an authenticated node identity → full caller. */
   registerEgressCaller: (callerId: string, caller: VerifiedCaller) => void;
   unregisterEgressCaller: (callerId: string) => void;
-  /** Process-owned secret bound into worker hosts and checked by shared egress. */
+  /** Node egress HMAC secret, shared with the egress proxy's verifier. */
   egressSecret: string;
   getWorkerdGatewayToken: () => string;
   /** Overrides for tests; production uses the default SIGTERM/SIGKILL windows. */
   workerdStopTimeoutsMs?: { sigtermMs?: number; sigkillMs?: number };
+  /** Product install root; locates the staged runtime binary. */
+  appRoot?: string;
   cleanupWebhookSubscriptions?: (callerId: string) => Promise<void>;
   resourceHandleLifecycle?: {
     reconcileProviderDefinitions(
@@ -583,10 +547,6 @@ type ResolvedWorkerdManagerDeps = WorkerdManagerDeps;
 type WorkerdRestartRequest =
   | { kind: "planned" }
   | { kind: "crash"; reason: string; alreadyExited: boolean }
-  /** Graceful prepare + stop with NO restart; workerd returns lazily on the
-   *  next ensureWorkerdRunning. Used by internal-DO storage maintenance, whose
-   *  only guaranteed file-handle-release boundary is the process itself. */
-  | { kind: "stop"; reason: string }
   | { kind: "stop-if-idle" };
 
 type GenerationTransitionState = "preparing" | "stopping" | "reaping" | "starting";
@@ -600,7 +560,7 @@ type GenerationTransitionState = "preparing" | "stopping" | "reaping" | "startin
  */
 interface GenerationTransition {
   correlationId: string;
-  kind: "planned" | "crash" | "stop" | "stop-if-idle";
+  kind: "planned" | "crash" | "stop-if-idle";
   state: GenerationTransitionState;
   reason: string;
   alreadyExited: boolean;
@@ -680,6 +640,10 @@ export class WorkerdManager {
   // report lastError for workers that never came up.
   private lastWorkerErrors = new Map<string, { message: string; timestamp: number }>();
   private process: ChildProcess | null = null;
+  /** The running node of the current generation (`process` is its child). */
+  private node: CelldNodeProcess | null = null;
+  /** The workspace's node supervisor; created with the first generation. */
+  private celld: CelldNode | null = null;
   // Restart coalescing: callers mutate doServices/instances then call
   // restartWorkerd(). `requestedEpoch` increments per call; `appliedEpoch` is the
   // highest config epoch a completed restart has applied. Concurrent callers
@@ -695,7 +659,6 @@ export class WorkerdManager {
   private shuttingDown = false;
   /** Coalesces host watchdogs that observe the same unresponsive workerd. */
   private unresponsiveRecovery: Promise<void> | null = null;
-  private configDir: string;
   private port: number | null = null;
   /** Immediate predecessor excluded from the next generation's lease. */
   private retiredPort: number | null = null;
@@ -712,7 +675,6 @@ export class WorkerdManager {
     StoredBuildResult,
     ReadonlyMap<string, WorkspaceRpcMethodDoc>
   >();
-  private workerdBinary: string | null = null;
   private lastWorkerdStartupOutput: string[] = [];
   private currentWorkerdReceipt: WorkerdProcessReceipt | null = null;
   private workerdStartedAtMs: number | null = null;
@@ -775,14 +737,16 @@ export class WorkerdManager {
    *  per-instance env (RPC tokens, STATE_ARGS) are unreachable with ordinary
    *  panel/worker credentials. */
   private readonly loaderSecret = crypto.randomBytes(32).toString("hex");
+  /** The UniversalDO class's own loader and lifecycle secret: a class secret,
+   *  so only that class (not the router, the worker host or a product class)
+   *  can fetch executable code or retire an object. */
+  private readonly doLoaderSecret = crypto.randomBytes(32).toString("hex");
   /** Per-process secret the host's EgressGateway stamps on forwarded egress so
    *  the shared egress listener trusts the `X-Vibestudio-Egress-Caller` header. */
   private readonly egressSecret: string;
   private workspaceProvider: WorkerdWorkspaceProvider | null = null;
   private readonly doMaintenanceDb: DatabaseSync;
-  private readonly storageClones: DurableObjectStorageClone;
   private readonly doSchemaDescriptorDb: DatabaseSync;
-  private readonly sqliteIntegrityWorker: SqliteIntegrityWorkerClient;
   private readonly schemaProbeBuilds = new Map<string, SchemaProbeBuild>();
   private readonly schemaAdmissionLifetime = new AbortController();
   private installedSchemaEvidence: Promise<InstalledSchemaProbeEvidence> | undefined;
@@ -795,7 +759,7 @@ export class WorkerdManager {
   );
   private readonly schemaAdmissions = new Map<string, Promise<void>>();
   private readonly doMaintenanceChains = new Map<string, Promise<unknown>>();
-  private readonly doMaintenanceRecovery: Promise<void>;
+  private readonly cloneReceipts: DurableObjectCloneReceipts;
   /** A graceful `stop` ran with live services: the next start owes a
    *  crash-style restart-ready so released lifecycle leases resume. */
   private resumeLifecycleAfterStop = false;
@@ -804,17 +768,10 @@ export class WorkerdManager {
     this.deps = deps;
     this.egressSecret = deps.egressSecret;
     this.runtimeImages = new RuntimeImageStore(deps.statePath, deps.executionPublicationPort);
-    this.sqliteIntegrityWorker = new SqliteIntegrityWorkerClient();
-    // Generated execution inputs belong to the workspace lifetime. A killed
-    // runtime cannot run its finally blocks; the instance owner must still be
-    // able to reclaim them by removing its own state root.
-    this.configDir = stateLayout(deps.statePath).workerdConfigDir;
-    fs.mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
     this.bootGenerationFile = stateLayout(this.deps.statePath).bootGenerationFile;
     this.bootGeneration = this.readBootGeneration();
     const layout = stateLayout(this.deps.statePath).databases;
     fs.mkdirSync(layout.root, { recursive: true });
-    fs.mkdirSync(layout.durableObjectBackupsDir, { recursive: true });
     this.doMaintenanceDb = new DatabaseSync(
       path.toNamespacedPath(layout.durableObjectMaintenanceDb)
     );
@@ -841,11 +798,19 @@ export class WorkerdManager {
         incarnation TEXT NOT NULL UNIQUE,
         generation INTEGER NOT NULL CHECK(generation > 0)
       );
+      -- A backup is a cell of the runtime node under a hidden name (backup_id).
+      CREATE TABLE IF NOT EXISTS do_storage_backups (
+        operation_id TEXT PRIMARY KEY,
+        backup_id TEXT NOT NULL,
+        target_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        intent TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `);
-    this.storageClones = new DurableObjectStorageClone(
-      this.doMaintenanceDb,
-      path.join(layout.root, "do-clone-staging")
-    );
+    this.cloneReceipts = new DurableObjectCloneReceipts(this.doMaintenanceDb);
     const maintenanceSchema = this.doMaintenanceDb
       .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'do_maintenance'`)
       .get() as { sql?: string } | undefined;
@@ -904,20 +869,11 @@ export class WorkerdManager {
       this.doSchemaDescriptorDb.close();
       throw error;
     }
-    const open = this.readOpenDurableObjectMaintenance();
-    // Establish admission synchronously before any asynchronous recovery work.
-    for (const row of open) void this.fenceDurableObjectMaintenance(row);
-    // Retirement belongs to the stopped generation collector. Recovering it
-    // here would race that collector with SQLite verification/replacement.
-    this.doMaintenanceRecovery = Promise.all(
-      open
-        .filter((row) => row.kind !== "destroy")
-        .map((row) => this.resumeDurableObjectMaintenance(row))
-    )
-      .then(() => undefined)
-      .catch((error) => {
-        log.error("Durable Object maintenance recovery failed", error);
-      });
+    // Maintenance a crash interrupted stays fenced from the first instant;
+    // the node completes it once it runs (recoverDurableObjectMaintenance).
+    for (const row of this.readOpenDurableObjectMaintenance()) {
+      void this.fenceDurableObjectMaintenance(row);
+    }
   }
 
   getStage(): WorkerdStage {
@@ -1120,56 +1076,6 @@ export class WorkerdManager {
         this.runtimeImageRebinds.delete(image.id);
       });
     this.runtimeImageRebinds.set(image.id, flight);
-  }
-
-  // =========================================================================
-  // Binary resolution
-  // =========================================================================
-
-  private findWorkerdBinary(): string {
-    if (this.workerdBinary) return this.workerdBinary;
-
-    const maybeExeExtension = process.platform === "win32" ? ".exe" : "";
-    const platformPackages: Record<string, string> = {
-      "darwin arm64 LE": "@cloudflare/workerd-darwin-arm64",
-      "darwin x64 LE": "@cloudflare/workerd-darwin-64",
-      "linux arm64 LE": "@cloudflare/workerd-linux-arm64",
-      "linux x64 LE": "@cloudflare/workerd-linux-64",
-      "win32 x64 LE": "@cloudflare/workerd-windows-64",
-    };
-    const platformKey = `${process.platform} ${os.arch()} ${os.endianness()}`;
-    const platformPackage = platformPackages[platformKey];
-    const appRoot = process.env["VIBESTUDIO_APP_ROOT"];
-
-    if (platformPackage && appRoot) {
-      const packagedCandidate = getPlatformPackageBinaryPath(
-        appRoot,
-        platformPackage,
-        `workerd${maybeExeExtension}`
-      );
-      if (fs.existsSync(packagedCandidate)) {
-        this.workerdBinary = packagedCandidate;
-        return packagedCandidate;
-      }
-    }
-
-    if (platformPackage) {
-      try {
-        const resolved = require.resolve(`${platformPackage}/bin/workerd${maybeExeExtension}`);
-        const physicalResolved = getPhysicalPathForAsarPath(resolved);
-        this.workerdBinary = fs.existsSync(physicalResolved) ? physicalResolved : resolved;
-        return this.workerdBinary;
-      } catch {
-        // Fall through to local candidate paths and PATH lookup below.
-      }
-    }
-
-    // Avoid the `node_modules/.bin/workerd` shim: it shells out to the real
-    // binary with execFileSync(), which leaves the actual child process outside
-    // our process tree and breaks restart/shutdown determinism.
-    throw new Error(
-      `The exact host dependency graph has no workerd binary for ${platformKey}; refusing PATH or cwd fallback resolution`
-    );
   }
 
   // =========================================================================
@@ -1692,7 +1598,7 @@ export class WorkerdManager {
         headers: {
           Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
           "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
-          "X-Vibestudio-Lifecycle-Secret": this.loaderSecret,
+          "X-Vibestudio-Lifecycle-Secret": this.doLoaderSecret,
         },
         dispatcher: getWorkerdConnectionDispatcher(`http://127.0.0.1:${assertPresent(this.port)}`),
       } as RequestInit
@@ -2060,6 +1966,11 @@ export class WorkerdManager {
    *  the inbound `X-Vibestudio-Loader-Secret` header against this. */
   getLoaderSecret(): string {
     return this.loaderSecret;
+  }
+
+  /** Secret of the UniversalDO class's `/_docode` and `/_doadmission` calls. */
+  getDoLoaderSecret(): string {
+    return this.doLoaderSecret;
   }
 
   /** Secret the shared egress listener requires on attributed requests. */
@@ -2488,402 +2399,107 @@ export class WorkerdManager {
   }
 
   // =========================================================================
-  // Config generation
+  // Runtime deployment
   // =========================================================================
 
-  private async generateConfig(): Promise<object> {
-    const services: object[] = [];
-
-    // Collect DO service names that have been emitted (to avoid duplicating in regular loop)
-    const doServiceNames = new Set<string>();
-
-    // ── Internal DO services (one workerd service per source:className) ──
-    // Userland DO classes do NOT get per-class services — they load
-    // dynamically into the static `universal-do` facet host (built below), so a
-    // new userland DO class needs no config change and no workerd restart.
-    // Internal DOs (WorkspaceDO, EvalDO, …) stay static (foundational).
-    for (const [serviceKey, doService] of this.doServices) {
-      if (!isInternalDOSource(doService.source)) continue;
-      const { className } = doService;
-      const builtin = productBuiltinByIdentity(doService.source, className);
+  /**
+   * The wrangler configuration of the runtime application for one generation.
+   * The module is the immutable build artifact; a generation differs only in
+   * its variables. Every product class is always deployed, so registering an
+   * internal class never changes the deployment, and userland classes load
+   * through UniversalDO's Worker Loader.
+   */
+  private runtimeDeployment(): RuntimeDeployment {
+    const programs = this.internalDOPrograms();
+    const internalClasses = programs.publication().internalClasses;
+    const classes = internalClasses.map((className) => {
+      const builtin = productBuiltinByIdentity(INTERNAL_DO_SOURCE, className);
       if (!builtin) {
         throw new Error(`Internal Durable Object ${className} has no builtin catalog entry`);
       }
-      // Each internal DO selects its own pre-built catalog program.
-      const internalBundle = this.internalDOPrograms().get(className);
-      const bundleContent = internalBundle.bundle;
-      doService.buildKey = internalBundle.buildKey;
-
-      doServiceNames.add(doService.serviceName);
-
-      // Service-level auth token — shared by all DO instances of this source:className.
-      // Created once when the service is first built, revoked only when the last instance is destroyed.
-      // NOT tied to any individual instance's lifecycle.
-      //
-      // NOTE: `do-service:*` here is a WORKERD-SIDE bearer-token key, NOT an
-      // entity id. There is no `entities` row for it; the runtime-entity
-      // model only tracks concrete DO instances (`do:<source>:<cls>:<key>`).
-      // Don't grep this string expecting to find a registered principal.
-      const serviceCallerId = `do-service:${serviceKey}`;
-      const serviceToken = this.ensureWorkerBearer(serviceCallerId);
-      const serviceIdentity = internalBundle.identity;
-
-      const serviceCaller = createVerifiedCaller(serviceCallerId, "worker", {
-        callerId: serviceCallerId,
-        callerKind: "worker",
-        repoPath: serviceIdentity.source,
-        effectiveVersion: serviceIdentity.effectiveVersion,
-        executionDigest: serviceIdentity.executionDigest,
-        requested: serviceIdentity.authority.requests,
-      });
-      // Product code owns its schema directly. Its first real object installs
-      // and validates that schema; a disposable host probe would repeat it and
-      // require an otherwise unnecessary workerd generation.
-      const bindings: object[] = [
-        { name: "RPC_AUTH_TOKEN", text: serviceToken },
-        // Source-scoped class identity
-        { name: "WORKER_SOURCE", text: doService.source },
-        { name: "WORKER_CLASS_NAME", text: className },
-        // Session ID for restart detection (changes on each WorkerdManager lifetime)
-        { name: "WORKERD_SESSION_ID", text: this.sessionId },
-        { name: "WORKERD_BOOT_GENERATION", text: String(this.configBootGeneration()) },
-        { name: "WORKSPACE_ID", text: this.deps.workspaceId },
-      ];
-
-      // Gateway URL for RPC bridge (DOs use HttpRpcBridge via POST /rpc)
-      bindings.push({ name: "GATEWAY_URL", text: this.deps.getServerUrl() });
-      const gatewayAliases = this.deps.getServerAliasUrls?.() ?? [];
-      if (gatewayAliases.length > 0) {
-        bindings.push({ name: "GATEWAY_URL_ALIASES", json: JSON.stringify(gatewayAliases) });
-      }
-
-      // Manifest-declared provider bindings for this internal DO class
-      // (meta/vibestudio.yml `providers.*` → e.g. EVAL_ENGINE_SOURCE for EvalDO). Injected here so internal
-      // DOs consume workspace unit identities only through the manifest.
-      const internalEnv = this.deps.getInternalDoEnv(className);
-      for (const [name, text] of Object.entries(internalEnv)) {
-        bindings.push({ name, text });
-      }
-
-      // EvalDO runs sandboxed agent code and needs the workerd UnsafeEval API
-      // (`new Function` is blocked in workerd isolates). `--experimental` is already
-      // passed at spawn. `unsafeEval` is a Void union member in workerd's schema, so
-      // it must render as `unsafeEval = void` — `null` triggers that in capnpValue
-      // (an empty struct `{}` would emit `()`, which workerd rejects: "expected Void").
-      if (builtin.workerd.unsafeEval) {
-        bindings.push({ name: "UNSAFE_EVAL", unsafeEval: null });
-      }
-
-      // DO storage: create a disk service and reference it by name
-      const diskServiceName = `${doService.serviceName}_disk`;
-      const doStoragePath = stateLayout(this.deps.statePath).databases.workerdDoDir;
-      fs.mkdirSync(doStoragePath, { recursive: true });
-
-      const networkServiceName = `${doService.serviceName}_network`;
-      const proxyPort = await this.deps.getProxyPort(serviceCaller);
-      if (!proxyPort) {
-        throw new Error("Egress proxy port not available");
-      }
-
-      const workerDef: Record<string, unknown> = {
-        modules: [{ name: "worker.js", esModule: bundleContent }],
-        bindings,
-        compatibilityDate: "2025-12-01",
-        // `nodejs_compat` gives worker DOs the Node-compatible subset workerd
-        // ships (buffer, util, events, etc.). Build V2 admits registry
-        // dependency closures against this one generic worker target.
-        compatibilityFlags: ["nodejs_compat"],
-        globalOutbound: networkServiceName,
-        durableObjectNamespaces: [
-          {
-            className,
-            uniqueKey: internalDoUniqueKey(doService.source, className),
-            enableSql: true,
-          },
-        ],
-        durableObjectStorage: {
-          localDisk: diskServiceName,
-        },
-      };
-
-      services.push({ name: doService.serviceName, worker: workerDef });
-      services.push({ name: diskServiceName, disk: { path: doStoragePath, writable: true } });
-      services.push({
-        name: networkServiceName,
-        external: {
-          address: `127.0.0.1:${proxyPort}`,
-          http: { forwardedProtoHeader: "X-Forwarded-Proto" },
-        },
-      });
-    }
-
-    // Regular (non-durable) workers are NOT services anymore. They load
-    // dynamically into the static `worker-host` service (built below) via
-    // `env.LOADER`, so worker create/update/destroy never regenerates config
-    // or restarts workerd. Per-instance code+env is served by `/_workercode`.
-
-    // Collect DO class info for router generation (only those whose service was successfully built).
-    // Each entry carries both the actual className (for workerd namespace binding) and the source
-    // (for the /_w/ lookup key, so same-named classes from different sources don't collide).
-    const doClassNames = Array.from(this.doServices.entries())
-      .filter(([, svc]) => doServiceNames.has(svc.serviceName))
-      .map(([, svc]) => ({
-        className: svc.className,
-        source: svc.source,
-        serviceName: svc.serviceName,
-      }));
-
-    // Auto-generate router worker + the static dynamic-worker host.
-    const hasUserlandDOs =
-      this.preparedDoExecutables.size > 0 ||
-      this.preparingDoExecutables.size > 0 ||
-      this.schemaProbeBuilds.size > 0 ||
-      Array.from(this.doServices.values()).some((svc) => !isInternalDOSource(svc.source));
-    const hasAnyService = this.instances.size > 0 || doClassNames.length > 0 || hasUserlandDOs;
-    if (hasAnyService) {
-      // ── Static `worker-host` service: loads regular workers dynamically ──
-      // Always present whenever workerd runs, so worker create/destroy never
-      // restarts. Reached via the router's WORKER_HOST service binding.
-      const gatewayHost = new URL(this.deps.getServerUrl()).host;
-      const sharedEgressPort = await this.deps.getSharedEgressPort();
-      services.push({
-        name: "worker-host",
-        worker: {
-          modules: [{ name: "host.js", esModule: this.deps.workerdPrograms.workerHost }],
-          // `experimental` is required for `env.LOADER` (workerLoader) and
-          // `ctx.exports`. The host MUST carry it; loaded workers must NOT.
-          compatibilityFlags: ["nodejs_compat", "experimental"],
-          compatibilityDate: "2025-12-01",
-          bindings: [
-            { name: "LOADER", workerLoader: { id: "workers" } },
-            { name: "GATEWAY", service: { name: "worker-host-gateway" } },
-            { name: "EGRESS", service: { name: "worker-host-egress" } },
-            { name: "WORKERD_LOADER_SECRET", text: this.loaderSecret },
-            { name: "WORKERD_EGRESS_SECRET", text: this.egressSecret },
-          ],
-        },
-      });
-      services.push({
-        name: "worker-host-gateway",
-        external: { address: gatewayHost, http: {} },
-      });
-      services.push({
-        name: "worker-host-egress",
-        external: {
-          address: `127.0.0.1:${sharedEgressPort}`,
-          http: { forwardedProtoHeader: "X-Forwarded-Proto" },
-        },
-      });
-
-      // ── Static `universal-do` service: hosts ALL userland DO classes as
-      // durable facets, loaded dynamically via `env.LOADER`. A new userland DO
-      // class needs no config change and no workerd restart — just `/_docode`.
-      // Reuses the worker-host gateway + egress external services.
-      const universalDoStoragePath = stateLayout(this.deps.statePath).databases
-        .workerdUniversalDoDir;
-      fs.mkdirSync(universalDoStoragePath, { recursive: true });
-      services.push({
-        name: "universal-do",
-        worker: {
-          modules: [{ name: "udo.js", esModule: this.deps.workerdPrograms.universalDo }],
-          compatibilityFlags: ["nodejs_compat", "experimental"],
-          compatibilityDate: "2025-12-01",
-          bindings: [
-            { name: "LOADER", workerLoader: { id: "userland-dos" } },
-            { name: "GATEWAY", service: { name: "worker-host-gateway" } },
-            { name: "EGRESS", service: { name: "worker-host-egress" } },
-            { name: "WORKERD_LOADER_SECRET", text: this.loaderSecret },
-            { name: "WORKERD_EGRESS_SECRET", text: this.egressSecret },
-          ],
-          durableObjectNamespaces: [
-            { className: "UniversalDO", uniqueKey: UNIVERSAL_DO_UNIQUE_KEY, enableSql: true },
-          ],
-          durableObjectStorage: { localDisk: "universal-do-disk" },
-        },
-      });
-      services.push({
-        name: "universal-do-disk",
-        disk: { path: universalDoStoragePath, writable: true },
-      });
-
-      const routerBindings: object[] = [
-        { name: "WORKER_HOST", service: { name: "worker-host" } },
-        {
-          name: "EXECUTABLE_PREPARATION",
-          service: { name: "universal-do", entrypoint: "ExecutablePreparation" },
-        },
-        {
-          name: "UNIVERSAL_DO",
-          durableObjectNamespace: { className: "UniversalDO", serviceName: "universal-do" },
-        },
-      ];
-      const doBindingNames: Record<string, string> = {};
-
-      // Add DO namespace bindings for the router (durableObjectNamespace, not service).
-      // Binding names are source-scoped to match the generated router lookup.
-      for (const { className, source, serviceName } of doClassNames) {
-        const bindingName = `do_${source.replace(/[^a-zA-Z0-9_]/g, "_")}_${className.replace(/[^a-zA-Z0-9_]/g, "_")}`;
-        doBindingNames[`${source}:${className}`] = bindingName;
-        routerBindings.push({
-          name: bindingName,
-          durableObjectNamespace: { className, serviceName },
-        });
-      }
-
-      routerBindings.push({
-        name: "WORKERD_DO_BINDINGS",
-        json: JSON.stringify(doBindingNames),
-      });
-      routerBindings.push({
-        name: "WORKERD_GATEWAY_TOKEN",
-        text: this.deps.getWorkerdGatewayToken(),
-      });
-      routerBindings.push({
-        name: "WORKERD_DISPATCH_SECRET",
-        text: this.dispatchSecret,
-      });
-
-      services.push({
-        name: "router",
-        worker: {
-          modules: [{ name: "router.js", esModule: this.deps.workerdPrograms.router }],
-          bindings: routerBindings,
-          compatibilityDate: "2024-01-01",
-        },
-      });
-    }
-
-    // Find a port
-    if (!this.port) {
-      const { findServicePort } = await import("./hostCore/portUtils.js");
-      this.port = await findServicePort(
-        "workerd",
-        "127.0.0.1",
-        this.retiredPort === null ? undefined : new Set([this.retiredPort])
+      // Service-level token shared by all objects of this class. NOTE:
+      // `do-service:*` is a bearer-token key, NOT an entity id; the runtime
+      // entity model only tracks concrete objects (`do:<source>:<cls>:<key>`).
+      const serviceCallerId = `do-service:${doServiceKey(INTERNAL_DO_SOURCE, className)}`;
+      // Raw network effects of a product class are attributable to its
+      // service principal (the node stamps `class` on its requests).
+      const identity = programs.get(className).identity;
+      this.deps.registerEgressCaller(
+        serviceCallerId,
+        createVerifiedCaller(serviceCallerId, "worker", {
+          callerId: serviceCallerId,
+          callerKind: "worker",
+          repoPath: identity.source,
+          effectiveVersion: identity.effectiveVersion,
+          executionDigest: identity.executionDigest,
+          requested: identity.authority.requests,
+        })
       );
-      this.retiredPort = null;
-    }
-
-    // Inject WORKERD_URL into DO services (needs port to be resolved)
-    for (const svc of services) {
-      const worker = (svc as Record<string, unknown>)["worker"] as
-        | Record<string, unknown>
-        | undefined;
-      if (worker?.["durableObjectNamespaces"]) {
-        (worker["bindings"] as object[]).push({
-          name: "WORKERD_URL",
-          text: `http://127.0.0.1:${this.port}`,
-        });
-      }
-    }
-
-    return {
-      services,
-      sockets: hasAnyService
-        ? [
-            {
-              name: "http",
-              address: `127.0.0.1:${this.port}`,
-              http: {},
-              service: { name: "router" },
-            },
-          ]
-        : [],
-    };
+      return {
+        className,
+        rpcToken: this.ensureWorkerBearer(serviceCallerId),
+        // Manifest-declared provider bindings for this class (meta/vibestudio.yml
+        // `providers.*`, e.g. EVAL_ENGINE_SOURCE for EvalDO): names of units,
+        // not credentials.
+        env: { ...this.deps.getInternalDoEnv(className) },
+        codegen: builtin.runtime.codegen,
+      };
+    });
+    return buildRuntimeDeployment({
+      compatibility: USER_CODE_COMPATIBILITY,
+      classes,
+      doLoaderSecret: this.doLoaderSecret,
+      vars: {
+        WORKERD_GATEWAY_TOKEN: this.deps.getWorkerdGatewayToken(),
+        WORKERD_DISPATCH_SECRET: this.dispatchSecret,
+        WORKERD_LOADER_SECRET: this.loaderSecret,
+        GATEWAY_URL: this.deps.getServerUrl(),
+        ...((this.deps.getServerAliasUrls?.() ?? []).length > 0
+          ? { GATEWAY_URL_ALIASES: [...(this.deps.getServerAliasUrls?.() ?? [])] }
+          : {}),
+        WORKSPACE_ID: this.deps.workspaceId,
+        WORKERD_SESSION_ID: this.sessionId,
+        WORKERD_BOOT_GENERATION: String(this.configBootGeneration()),
+      },
+    });
   }
 
-  // =========================================================================
-  // Cap'n Proto text config generation
-  // =========================================================================
-
-  /**
-   * Convert the JSON config object to Cap'n Proto text format.
-   * Workerd's JSON config was removed; the native format is capnp text.
-   * Bundle code is written to separate files and referenced via `embed`.
-   */
-  private toCapnpText(config: Record<string, unknown>): string {
-    this.bundleFileCounter = 0;
-    this.pendingConfigWrites = [];
-    this.configModuleFiles.clear();
-    this.configModuleReferenceCount = 0;
-    this.configModuleReferenceBytes = 0;
-    this.configModulePayloadBytes = 0;
-    const body = this.capnpValue(config, 1);
-    return `using Workerd = import "/workerd/workerd.capnp";\n\nconst config :Workerd.Config = ${body};\n`;
+  private celldNode(): CelldNode {
+    if (this.celld) return this.celld;
+    throw new Error("The runtime node supervisor is created by the first generation");
   }
 
-  /**
-   * Flush bundle files collected during `toCapnpText` to disk asynchronously.
-   * (Serialization stays sync for the recursion; the heavy IO is async so it
-   * never blocks the relay event loop during a (re)start.)
-   */
-  private async flushConfigWrites(): Promise<void> {
-    const writes = this.pendingConfigWrites;
-    this.pendingConfigWrites = [];
-    await Promise.all(
-      writes.map((w) => fs.promises.writeFile(path.join(this.configDir, w.filename), w.content))
-    );
+  private async ensureCelldNode(): Promise<CelldNode> {
+    if (this.celld) return this.celld;
+    const port = await this.deps.getSharedEgressPort();
+    this.celld = new CelldNode({
+      binary: resolveCelldBinary(this.deps.appRoot ?? process.env["VIBESTUDIO_APP_ROOT"]),
+      stateDir: stateLayout(this.deps.statePath).celldDir,
+      blobRoot: stateLayout(this.deps.statePath).blobsDir,
+      nodeId: `vibestudio-${crypto
+        .createHash("sha256")
+        .update(this.deps.workspaceId)
+        .digest("hex")
+        .slice(0, 16)}`,
+      egressProxyUrl: `http://127.0.0.1:${port}`,
+      egressSecret: this.egressSecret,
+      onOutput: (stream, line) => {
+        const receipt = this.currentWorkerdReceipt;
+        if (receipt) this.rememberWorkerdStartupOutput(`${stream}: ${line}`, receipt.output);
+        // `celld deploy` reports its progress on stderr; that is not a warning.
+        if (line.startsWith("deploy:")) log.verbose(`[celld] ${line}`);
+        else if (stream === "stderr" || / (ERROR|WARN) /u.test(line)) log.warn(`[celld] ${line}`);
+        else log.verbose(`[celld] ${line}`);
+      },
+    });
+    return this.celld;
   }
 
-  private bundleFileCounter = 0;
-  private pendingConfigWrites: Array<{ filename: string; content: string }> = [];
-  private readonly configModuleFiles = new Map<string, { filename: string; bytes: number }>();
-  private configModuleReferenceCount = 0;
-  private configModuleReferenceBytes = 0;
-  private configModulePayloadBytes = 0;
-
-  /** Equal module payloads share one embed file in this exact configuration.
-   * Service bindings, module names, and durable storage identities remain
-   * distinct. No executable identity is recalculated at runtime. */
-  private configModuleFile(value: string): string {
-    const files = this.configModuleFiles;
-    let module = files.get(value);
-    if (!module) {
-      const filename = `bundle-${this.bundleFileCounter++}.js`;
-      module = { filename, bytes: Buffer.byteLength(value) };
-      files.set(value, module);
-      this.pendingConfigWrites.push({ filename, content: value });
-      this.configModulePayloadBytes += module.bytes;
-    }
-    this.configModuleReferenceCount++;
-    this.configModuleReferenceBytes += module.bytes;
-    return module.filename;
-  }
-
-  private capnpValue(value: unknown, depth: number): string {
-    if (value === null || value === undefined) return "void";
-    if (typeof value === "boolean") return value ? "true" : "false";
-    if (typeof value === "number") return String(value);
-    if (typeof value === "string") {
-      // Escape for Cap'n Proto text strings (same as JSON string escaping)
-      return JSON.stringify(value);
-    }
-
-    if (Array.isArray(value)) {
-      if (value.length === 0) return "[]";
-      const indent = "  ".repeat(depth);
-      const items = value.map((v) => `${indent}${this.capnpValue(v, depth + 1)},`);
-      return `[\n${items.join("\n")}\n${"  ".repeat(depth - 1)}]`;
-    }
-
-    if (typeof value === "object") {
-      const obj = value as Record<string, unknown>;
-      const entries = Object.entries(obj);
-      if (entries.length === 0) return "()";
-
-      const indent = "  ".repeat(depth);
-      const fields = entries.map(([k, v]) => {
-        // esModule bundles: collect for async flush, reference via embed.
-        if (k === "esModule" && typeof v === "string") {
-          const filename = this.configModuleFile(v);
-          return `${indent}${k} = embed "${filename}",`;
-        }
-        return `${indent}${k} = ${this.capnpValue(v, depth + 1)},`;
-      });
-      return `(\n${fields.join("\n")}\n${"  ".repeat(depth - 1)})`;
-    }
-
-    return String(value);
+  /** Publish this generation's deployment of the runtime application. */
+  private async deployGeneration(): Promise<void> {
+    const node = await this.ensureCelldNode();
+    const { config, secrets } = this.runtimeDeployment();
+    await node.deploy(this.internalDOPrograms().app().bundle, config, secrets);
   }
 
   // =========================================================================
@@ -2914,8 +2530,7 @@ export class WorkerdManager {
     const transition = this.activeTransition;
     if (
       transition &&
-      (transition.kind === "planned" || transition.kind === "stop") &&
-      transition.state === "preparing"
+      transition.kind === "planned" && transition.state === "preparing"
     ) {
       transition.prepAbort.abort(
         new Error(`crash recovery preempted graceful workerd prepare: ${reason}`)
@@ -2950,35 +2565,26 @@ export class WorkerdManager {
     const requests = this.consumeQueuedRequests();
     const crash = [...requests].reverse().find((request) => request.kind === "crash");
     const hasPlanned = requests.some((request) => request.kind === "planned");
-    const stop = [...requests]
-      .reverse()
-      .find((request): request is { kind: "stop"; reason: string } => request.kind === "stop");
     const onlyStopIfIdle =
       requests.length > 0 && requests.every((request) => request.kind === "stop-if-idle");
-    // Severity order: crash > planned > stop > stop-if-idle. A planned restart
-    // queued alongside a stop wins — the maintenance caller's file-lock
-    // verification, not the process state, is its correctness arbiter.
+    // Severity order: crash > planned > stop-if-idle.
     const transition: GenerationTransition = {
       correlationId: crypto.randomUUID(),
       kind: crash
         ? "crash"
         : hasPlanned
           ? "planned"
-          : stop
-            ? "stop"
-            : onlyStopIfIdle
-              ? "stop-if-idle"
-              : "planned",
+          : onlyStopIfIdle
+            ? "stop-if-idle"
+            : "planned",
       state: "preparing",
       reason: crash
         ? crash.reason
         : hasPlanned
           ? "planned-restart"
-          : stop
-            ? stop.reason
-            : onlyStopIfIdle
-              ? "idle"
-              : "planned-restart",
+          : onlyStopIfIdle
+            ? "idle"
+            : "planned-restart",
       alreadyExited: crash?.alreadyExited ?? false,
       prepAbort: new AbortController(),
       covered: this.requestedEpoch,
@@ -3058,7 +2664,7 @@ export class WorkerdManager {
 
     // ── preparing (planned/stop; prep hooks may dispatch into workerd) ──
     let prepDegraded = false;
-    if ((transition.kind === "planned" || transition.kind === "stop") && hadRunningProcess) {
+    if (transition.kind === "planned" && hadRunningProcess) {
       transition.state = "preparing";
       const outcome = await this.emitRestartBegin(
         {
@@ -3094,7 +2700,45 @@ export class WorkerdManager {
       transition.alreadyExited ||= lateCrash.alreadyExited;
     }
     transition.covered = Math.max(transition.covered, this.requestedEpoch);
-    const crashStyle = transition.kind === "crash" || prepDegraded;
+    let crashStyle = transition.kind === "crash" || prepDegraded;
+
+    // ── reloading: a planned generation on a live node is adopted in place.
+    // The node keeps its process, listeners and storage; resident objects move
+    // to the new deployment when idle and retired loaded isolates are dropped.
+    // A node that cannot adopt it is replaced like a crashed one.
+    if (!crashStyle && hadRunningProcess && this.node && !this.node.hasExited) {
+      transition.state = "starting";
+      let adopted = false;
+      try {
+        this.pendingBootGeneration = nextGeneration;
+        await this.reloadGeneration();
+        this.bootGeneration = nextGeneration;
+        this.pendingBootGeneration = null;
+        this.writeBootGeneration(this.bootGeneration);
+        this.clearRetiredDynamicIsolatePressure();
+        adopted = true;
+      } catch (error) {
+        this.pendingBootGeneration = null;
+        if (this.shuttingDown) return;
+        // A reload that failed after the node adopted the generation cannot be
+        // told from one that failed before: replace the node either way.
+        log.warn(
+          `celld node could not adopt the generation in place; replacing it. ${errorMessage(error)}`
+        );
+        crashStyle = true;
+      }
+      if (adopted) {
+        // Activation recovery has its own owner: a failure reaches the caller
+        // without replacing the node that already runs this generation.
+        await this.emitRestartReady({
+          correlationId: transition.correlationId,
+          generation: this.bootGeneration,
+          previousGeneration,
+          reason: "planned",
+        });
+        return;
+      }
+    }
 
     // ── stopping: close the old generation in-process, then stop it ──
     transition.state = "stopping";
@@ -3114,26 +2758,12 @@ export class WorkerdManager {
     }
     transition.state = "reaping";
     await this.stopWorkerd(
-      transition.kind === "crash"
-        ? `unresponsive-sandbox:${transition.reason}`
-        : transition.kind === "stop"
-          ? transition.reason
-          : "planned-restart",
-      transition.kind === "crash" ? "force" : "graceful"
+      transition.kind === "crash" ? `unresponsive-sandbox:${transition.reason}` : "planned-restart",
+      crashStyle ? "force" : "graceful"
     );
     this.clearRetiredDynamicIsolatePressure();
 
     if (this.shuttingDown) return;
-
-    // ── stop: the caller wants the process boundary, not a replacement.
-    // ensureWorkerdRunning restarts lazily on the next dispatch. Entities the
-    // prepare released are resumed only by a restart-ready event, so a stop
-    // taken with live services obligates the NEXT successful start to emit a
-    // crash-style ready (reconstruct leases from durable state).
-    if (transition.kind === "stop") {
-      if (hadRunningProcess) this.resumeLifecycleAfterStop = true;
-      return;
-    }
 
     if (
       this.instances.size === 0 &&
@@ -3283,22 +2913,16 @@ export class WorkerdManager {
   private async startWorkerdOnce(): Promise<void> {
     if (this.shuttingDown) throw this.shutdownCancellation;
     const startedAt = performance.now();
-    const config = await this.generateConfig();
-    const configuredAt = performance.now();
-    if (this.shuttingDown) throw this.shutdownCancellation;
-    const configPath = path.join(this.configDir, "config.capnp");
-    const capnpText = this.toCapnpText(config as Record<string, unknown>);
-    const serializedAt = performance.now();
-    const moduleFileCount = this.pendingConfigWrites.length;
-    await this.flushConfigWrites();
-    const payloadWrittenAt = performance.now();
-    await fs.promises.writeFile(configPath, capnpText);
-    const configWrittenAt = performance.now();
-    if (this.shuttingDown) throw this.shutdownCancellation;
-
-    const binary = this.findWorkerdBinary();
+    const { findServicePort } = await import("./hostCore/portUtils.js");
+    if (!this.port) {
+      this.port = await findServicePort(
+        "workerd",
+        "127.0.0.1",
+        this.retiredPort === null ? undefined : new Set([this.retiredPort])
+      );
+      this.retiredPort = null;
+    }
     if (!this.inspectorPort && workerdInspectorEnabled()) {
-      const { findServicePort } = await import("./hostCore/portUtils.js");
       this.inspectorPort = await findServicePort(
         "workerdInspector",
         "127.0.0.1",
@@ -3306,21 +2930,14 @@ export class WorkerdManager {
       );
       this.retiredInspectorPort = null;
     }
-    const args = [
-      "serve",
-      // Required: the static worker-host uses `workerLoader` (env.LOADER) and
-      // `ctx.exports`, both gated behind workerd's experimental features.
-      "--experimental",
-      ...(this.inspectorPort ? [`--inspector-addr=127.0.0.1:${this.inspectorPort}`] : []),
-      configPath,
-    ];
+    await this.deployGeneration();
+    const deployedAt = performance.now();
+    if (this.shuttingDown) throw this.shutdownCancellation;
 
-    const spawningAt = performance.now();
-    this.process = spawn(binary, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env },
-    });
-    const spawnedProcess = this.process;
+    const node = this.celldNode().start({ listen: this.port, inspector: this.inspectorPort });
+    this.node = node;
+    this.process = node.child;
+    const spawnedProcess = node.child;
     const spawnedPid = spawnedProcess.pid;
     const receipt: WorkerdProcessReceipt = {
       pid: spawnedPid,
@@ -3335,39 +2952,25 @@ export class WorkerdManager {
     this.startWorkerdMemorySampling(spawnedPid);
     this.lastWorkerdStartupOutput = receipt.output;
 
-    spawnedProcess.stdout?.on("data", (data: Buffer) => {
-      const line = data.toString().trim();
-      if (line) {
-        this.rememberWorkerdStartupOutput(`stdout: ${line}`, receipt.output);
-        log.verbose(`[workerd] ${line}`);
-      }
-    });
-
-    spawnedProcess.stderr?.on("data", (data: Buffer) => {
-      const line = data.toString().trim();
-      if (line) {
-        this.rememberWorkerdStartupOutput(`stderr: ${line}`, receipt.output);
-        log.warn(`[workerd] ${line}`);
-      }
-    });
-
-    // Wait for startup readiness, detecting early failures (ENOENT, bind
-    // conflicts, crashes, etc.). A surviving process is not enough: workerd
-    // may print a fatal bind error and exit just after spawn, and DO dispatch
-    // must not race ahead until the router accepts HTTP.
+    // Wait for the deployed router to answer. A surviving process is not
+    // enough: the node may report a fatal error and exit just after spawn,
+    // and DO dispatch must not race ahead until the router accepts HTTP.
     await new Promise<void>((resolve, reject) => {
       let settled = false;
       const readinessAbort = new AbortController();
 
       const onExit = (code: number | null, signal: string | null) => {
-        readinessAbort.abort(new Error(`workerd exited before readiness (${code}, ${signal})`));
+        readinessAbort.abort(new Error(`celld exited before readiness (${code}, ${signal})`));
         this.logWorkerdExit(code, signal, receipt);
-        if (this.process === spawnedProcess) this.process = null;
+        if (this.process === spawnedProcess) {
+          this.process = null;
+          this.node = null;
+        }
         if (!settled) {
           settled = true;
           reject(
             new Error(
-              `workerd exited before accepting HTTP (code=${code}, signal=${signal})${this.recentWorkerdOutputSuffix(receipt.output)}`
+              `celld exited before accepting HTTP (code=${code}, signal=${signal})${this.recentWorkerdOutputSuffix(receipt.output)}`
             )
           );
         }
@@ -3375,11 +2978,14 @@ export class WorkerdManager {
 
       const onError = (err: Error) => {
         readinessAbort.abort(err);
-        log.error("workerd process error:", err);
-        if (this.process === spawnedProcess) this.process = null;
+        log.error("celld process error:", err);
+        if (this.process === spawnedProcess) {
+          this.process = null;
+          this.node = null;
+        }
         if (!settled) {
           settled = true;
-          reject(new Error(`workerd failed to start: ${err.message}`, { cause: err }));
+          reject(new Error(`celld failed to start: ${err.message}`, { cause: err }));
         }
       };
 
@@ -3392,25 +2998,29 @@ export class WorkerdManager {
         () => {
           if (settled) return;
           settled = true;
-          // Keep the exit/error handlers for ongoing monitoring, but replace
-          // them with non-rejecting versions since the promise is settled.
           spawnedProcess.removeListener("exit", onExit);
           spawnedProcess.removeListener("error", onError);
           spawnedProcess.on("exit", (code, signal) => {
             this.logWorkerdExit(code, signal, receipt);
             const wasCurrent = this.process === spawnedProcess;
-            if (wasCurrent) this.process = null;
+            if (wasCurrent) {
+              this.process = null;
+              this.node = null;
+            }
             if (wasCurrent && !this.shuttingDown) {
               void this.recoverExitedSandbox(
                 `unexpected exit (code=${code}, signal=${signal})`
               ).catch((err) => {
-                log.error("failed to recover unexpectedly exited workerd:", err);
+                log.error("failed to recover unexpectedly exited celld node:", err);
               });
             }
           });
           spawnedProcess.on("error", (err) => {
-            log.error("workerd process error:", err);
-            if (this.process === spawnedProcess) this.process = null;
+            log.error("celld process error:", err);
+            if (this.process === spawnedProcess) {
+              this.process = null;
+              this.node = null;
+            }
           });
           resolve();
         },
@@ -3419,7 +3029,7 @@ export class WorkerdManager {
           settled = true;
           reject(
             new Error(
-              `${errorMessage(err)}. binary=${binary} port=${receipt.port} config=${configPath}${this.recentWorkerdOutputSuffix(receipt.output)}`
+              `${errorMessage(err)}. port=${receipt.port}${this.recentWorkerdOutputSuffix(receipt.output)}`
             )
           );
         }
@@ -3427,24 +3037,32 @@ export class WorkerdManager {
     });
 
     const readyAt = performance.now();
-    const startupReport = {
-      generation: receipt.generation,
-      totalMs: readyAt - startedAt,
-      configPreparationMs: configuredAt - startedAt,
-      configSerializationMs: serializedAt - configuredAt,
-      modulePayloadWriteMs: payloadWrittenAt - serializedAt,
-      configWriteMs: configWrittenAt - payloadWrittenAt,
-      processPreparationMs: spawningAt - configWrittenAt,
-      spawnToHttpReadyMs: readyAt - spawningAt,
-      moduleReferenceCount: this.configModuleReferenceCount,
-      moduleReferenceBytes: this.configModuleReferenceBytes,
-      moduleFileCount,
-      modulePayloadBytes: this.configModulePayloadBytes,
-      configBytes: Buffer.byteLength(capnpText),
-    };
     log.info(
-      `workerd started on port ${this.port} with ${this.instances.size} worker(s); workerdStartupReport=${JSON.stringify(startupReport)}`
+      `celld node started on port ${this.port} with ${this.instances.size} worker(s); ` +
+        `runtimeStartupReport=${JSON.stringify({
+          generation: receipt.generation,
+          totalMs: readyAt - startedAt,
+          deployMs: deployedAt - startedAt,
+          spawnToHttpReadyMs: readyAt - deployedAt,
+        })}`
     );
+    await this.recoverDurableObjectMaintenance();
+  }
+
+  /**
+   * A planned generation on a live node: publish the new deployment and have
+   * the node adopt it in place. Resident objects move to the new code when
+   * idle; storage, the process and its listeners are unaffected.
+   */
+  private async reloadGeneration(): Promise<void> {
+    const node = this.node;
+    if (!node || node.hasExited) throw new Error("celld node is not running");
+    await this.deployGeneration();
+    await node.reload();
+    if (this.currentWorkerdReceipt) {
+      this.currentWorkerdReceipt.generation = this.configBootGeneration();
+    }
+    log.info(`celld node adopted generation ${this.configBootGeneration()} in place`);
   }
 
   private startWorkerdMemorySampling(pid: number | undefined): void {
@@ -3666,7 +3284,9 @@ export class WorkerdManager {
     mode: "graceful" | "force" = "graceful"
   ): Promise<void> {
     const proc = this.process;
+    const node = this.node;
     this.process = null;
+    this.node = null;
     try {
       if (proc) {
         log.info(
@@ -3693,7 +3313,9 @@ export class WorkerdManager {
             this.deps.workerdStopTimeoutsMs?.sigkillMs ?? DEFAULT_WORKERD_SIGKILL_TIMEOUT_MS
           );
         } else {
-          proc.kill("SIGTERM");
+          // The node's own durable stop (what `celld dev` uses); a signal only
+          // when the node cannot be asked.
+          if (!(node && (await node.requestShutdown()))) proc.kill("SIGTERM");
           // Wait for the process to exit so the port is released before respawn.
           // `proc.killed` only reports that a signal was *sent*, not that the
           // process actually died — so track exit observation explicitly.
@@ -3732,7 +3354,6 @@ export class WorkerdManager {
           );
         }
       }
-      await this.collectRetiredDurableObjectStorage();
     } finally {
       // Always release the pinned ports — including on the SIGKILL-refusal
       // throw above — so the next transition re-probes via findServicePort.
@@ -3866,10 +3487,9 @@ export class WorkerdManager {
       }
     }
 
-    // Install the complete static configuration before workerd starts. Dynamic
-    // workspace classes continue to load without a configuration restart.
+    // Every product class is always deployed, so registering one changes
+    // nothing: the node only has to be running.
     if (internalAdded) {
-      if (this.process) await this.restartWorkerd();
       await this.ensureWorkerdRunning();
       log.info(`Pre-registered ${this.doServices.size} DO class(es)`);
     }
@@ -4182,26 +3802,6 @@ export class WorkerdManager {
     )
       return;
     const admission = (async () => {
-      if (isInternalDOSource(image.source)) {
-        const bundle = this.internalDOPrograms().get(className);
-        const identity = bundle.identity;
-        if (identity.executionDigest !== image.artifact.executionDigest) {
-          throw new RuntimeImageUnavailableError(
-            `Internal Durable Object ${image.source}:${className} schema executable failed sealed identity verification`
-          );
-        }
-        const descriptor = await this.probeSchemaExecutable(image.source, className, {
-          version: identity.executionDigest,
-          modules: { "worker.js": bundle.bundle },
-        });
-        this.recordDurableObjectSchema({
-          source: image.source,
-          effectiveVersion: identity.effectiveVersion,
-          executionDigest: identity.executionDigest,
-          descriptor,
-        });
-        return;
-      }
       const build = await this.requireWorkspaceProvider("schema admission").getBuildByExecution(
         image.artifact.buildKey,
         image.artifact.executionDigest
@@ -4541,22 +4141,15 @@ export class WorkerdManager {
   }
 
   // =========================================================================
-  // DO cloning (filesystem-level SQLite copy)
+  // Durable Object storage
+  //
+  // A userland object is a cell of the runtime node: a UniversalDO named by
+  // its encoded key, whose userland class is its facet `do`. Cloning, backup
+  // and restore are the node's object fork and restore (celld
+  // docs/services/object-fork.md), which copy the cell's root and every facet
+  // together; the host copies no files. Backups are cells too, under a hidden
+  // name derived from the maintenance operation.
   // =========================================================================
-
-  /** Directory holding the UniversalDO facet storage (per-host-object files). */
-  private universalDoStorageDir(): string {
-    return path.join(
-      stateLayout(this.deps.statePath).databases.workerdUniversalDoDir,
-      UNIVERSAL_DO_UNIQUE_KEY
-    );
-  }
-
-  /** workerd host-object storage hash for a userland DO ref (its facet lives in
-   *  `<dir>/<hash>.1.sqlite`, with `<hash>.sqlite`/`.facets` siblings). */
-  private universalHostHash(ref: DORef): string {
-    return computeWorkerdObjectIdHash(UNIVERSAL_DO_UNIQUE_KEY, encodeUniversalKey(ref));
-  }
 
   private durableObjectTargetId(ref: DORef): string {
     return canonicalEntityId({
@@ -4623,7 +4216,7 @@ export class WorkerdManager {
     return { incarnation: row.incarnation, generation: row.generation };
   }
 
-  /** File replacement is idempotent; identity rotation and its journal cursor commit together. */
+  /** Replacement is idempotent; identity rotation and its journal cursor commit together. */
   private acceptDurableObjectStorageReplacement(row: DurableObjectMaintenanceRow): void {
     this.doMaintenanceDb.exec("BEGIN IMMEDIATE");
     try {
@@ -4664,140 +4257,147 @@ export class WorkerdManager {
     );
   }
 
-  /** On-disk location of one DO's storage files (`<hash>.…` under `dir`). */
-  private durableObjectStorageLocation(ref: DORef): { dir: string; hash: string } {
+  /** The node's cell name of a userland object (its UniversalDO host). */
+  private cellName(ref: DORef): string {
+    return encodeUniversalKey(ref);
+  }
+
+  /** Maintenance and clones address userland objects only; product objects
+   *  are owned by their classes. */
+  private requireUserlandStorage(ref: DORef, operation: string): void {
     if (isInternalDOSource(ref.source)) {
-      // Internal classes get one workerd namespace each:
-      // workerd-do/<uniqueKey>/<objectIdHash>.sqlite (+ namespace metadata.sqlite,
-      // which is workerd-owned and never matched by the hash prefix).
-      const uniqueKey = internalDoUniqueKey(ref.source, ref.className);
-      return {
-        dir: path.join(stateLayout(this.deps.statePath).databases.workerdDoDir, uniqueKey),
-        hash: computeWorkerdObjectIdHash(uniqueKey, ref.objectKey),
-      };
-    }
-    return { dir: this.universalDoStorageDir(), hash: this.universalHostHash(ref) };
-  }
-
-  private async quiesceDurableObjectStorage(ref: DORef): Promise<void> {
-    if (isInternalDOSource(ref.source)) {
-      // Internal DOs are plain workerd classes with no per-facet abort: the
-      // only guaranteed file-handle-release boundary is the process itself.
-      // Graceful stop, no restart; the maintenance fence keeps THIS object
-      // from reactivating when other traffic lazily restarts workerd, and the
-      // lock-acquiring verification below stays the correctness arbiter.
-      if (this.process && this.process.exitCode === null) {
-        await this.restartWorkerd({ kind: "stop", reason: "do-storage-maintenance" });
-      }
-    } else if (this.process && this.process.exitCode === null && this.port) {
-      await this.abortUserlandDOFacet(ref, "__vibestudio_retire");
-    }
-    // Release proof, not an assumption: open every database read-write and run
-    // integrity_check. The open must acquire SQLite's file lock (it fails if
-    // workerd still holds the facet's connection) and recovers any residual
-    // WAL, so the files a subsequent copy reads are locked-free and coherent.
-    const { dir: storageDir, hash } = this.durableObjectStorageLocation(ref);
-    const files = (
-      await fs.promises.readdir(storageDir).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return [] as string[];
-        throw error;
-      })
-    ).filter((file) => file.startsWith(`${hash}.`) && file.endsWith(".sqlite"));
-    try {
-      await this.sqliteIntegrityWorker.verify(
-        files.map((file) => path.join(storageDir, file)),
-        { readOnly: false }
-      );
-    } catch (cause) {
-      throw new Error(
-        `workerd has not released or coherently stored Durable Object data: ${errorMessage(cause)}`,
-        { cause }
-      );
+      throw new Error(`${operation} is not supported for internal DO source "${ref.source}"`);
     }
   }
 
-  private durableObjectBackupDir(operationId: string): string {
-    return path.join(
-      stateLayout(this.deps.statePath).databases.durableObjectBackupsDir,
-      operationId
-    );
+  /** A request to the running node's router, authenticated like host dispatch. */
+  private async nodeFetch(
+    pathname: string,
+    init: { body?: unknown; lifecycle?: boolean; signal?: AbortSignal } = {}
+  ): Promise<Response> {
+    if (!this.process || this.process.exitCode !== null || !this.port) {
+      throw new Error("The runtime node is not running");
+    }
+    const origin = `http://127.0.0.1:${this.port}`;
+    return fetch(`${origin}${pathname}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
+        "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
+        ...(init.lifecycle ? { "X-Vibestudio-Lifecycle-Secret": this.doLoaderSecret } : {}),
+        ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+      ...(init.signal ? { signal: init.signal } : {}),
+      dispatcher: getWorkerdConnectionDispatcher(origin),
+    } as RequestInit);
   }
 
-  private async copyDurableObjectStorageToBackup(
-    ref: DORef,
-    operationId: string,
-    intent: string,
-    createdAt: number
-  ): Promise<void> {
-    const { dir: storageDir, hash } = this.durableObjectStorageLocation(ref);
-    const backupDir = this.durableObjectBackupDir(operationId);
-    await fs.promises.mkdir(backupDir, { recursive: true });
-    const existing = await fs.promises.readdir(backupDir).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return [] as string[];
-      throw error;
+  /** Fork or restore whole cells of UniversalDO through the router. */
+  private async objectOperation(input: {
+    op: "fork" | "restore";
+    from: DORef;
+    to: DORef;
+    stop?: boolean;
+  }): Promise<void> {
+    const response = await this.nodeFetch("/_object", {
+      body: {
+        op: input.op,
+        namespace: "UNIVERSAL_DO",
+        from: this.cellName(input.from),
+        to: this.cellName(input.to),
+        ...(input.stop ? { stop: true } : {}),
+      },
     });
-    for (const file of existing) {
-      if (file !== "manifest.json") await fs.promises.unlink(path.join(backupDir, file));
+    if (!response.ok) {
+      throw new Error(
+        `${input.op} of ${input.from.className}/${input.from.objectKey} failed ` +
+          `(${response.status}): ${await response.text()}`
+      );
     }
-    const files = (
-      await fs.promises.readdir(storageDir).catch((error: NodeJS.ErrnoException) => {
-        if (error.code === "ENOENT") return [] as string[];
+    await response.arrayBuffer();
+  }
+
+  /** Stop the facet and delete the cell's storage (root, facet index, facets). */
+  private async destroyCell(ref: DORef): Promise<void> {
+    const response = await this.nodeFetch(
+      `/_u/${encodeURIComponent(this.cellName(ref))}/__vibestudio_destroy`,
+      { lifecycle: true }
+    );
+    if (!response.ok) {
+      throw new Error(
+        `Failed to destroy storage of ${ref.source}:${ref.className}/${ref.objectKey} ` +
+          `(${response.status}): ${await response.text()}`
+      );
+    }
+    await response.arrayBuffer();
+  }
+
+  private backupRef(ref: DORef, backupId: string): DORef {
+    return { ...ref, objectKey: `__vibestudio_backup:${backupId}` };
+  }
+
+  /**
+   * Fork the target into a backup cell. A fork that already completed (a
+   * retry after a crash) is recognized by its error; a fork that stopped
+   * before completing leaves a cell nothing can reuse, so the backup moves to
+   * a fresh name.
+   */
+  private async backUpDurableObject(row: DurableObjectMaintenanceRow, ref: DORef): Promise<void> {
+    const recorded = this.doMaintenanceDb
+      .prepare(`SELECT 1 AS present FROM do_storage_backups WHERE operation_id = ?`)
+      .get(row.operationId);
+    if (recorded) return;
+    let backupId = row.operationId;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await this.objectOperation({ op: "fork", from: ref, to: this.backupRef(ref, backupId) });
+        break;
+      } catch (error) {
+        const message = errorMessage(error);
+        if (message.includes("already exists")) break;
+        if (message.includes("unfinished publication") && attempt < 2) {
+          backupId = `${row.operationId}:${crypto.randomUUID()}`;
+          continue;
+        }
         throw error;
-      })
-    ).filter((file) => file.startsWith(`${hash}.`));
-    for (const file of files) {
-      await fs.promises.copyFile(path.join(storageDir, file), path.join(backupDir, file));
+      }
     }
-    await fs.promises.writeFile(
-      path.join(backupDir, "manifest.json"),
-      JSON.stringify({ operationId, target: ref, intent, createdAt, files }, null, 2),
-      { mode: 0o600 }
-    );
+    this.doMaintenanceDb
+      .prepare(
+        `INSERT OR REPLACE INTO do_storage_backups
+           (operation_id, backup_id, target_id, source, class_name, object_key, intent, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        row.operationId,
+        backupId,
+        row.targetId,
+        ref.source,
+        ref.className,
+        ref.objectKey,
+        row.intent,
+        row.createdAt
+      );
   }
 
-  private async verifyDurableObjectBackup(operationId: string): Promise<void> {
-    const backupDir = this.durableObjectBackupDir(operationId);
-    const manifest = JSON.parse(
-      await fs.promises.readFile(path.join(backupDir, "manifest.json"), "utf8")
-    ) as { files?: unknown };
-    if (!Array.isArray(manifest.files))
-      throw new Error(`Backup ${operationId} has no file manifest`);
-    await this.sqliteIntegrityWorker.verify(
-      manifest.files
-        .filter((file): file is string => typeof file === "string" && file.endsWith(".sqlite"))
-        .map((file) => path.join(backupDir, file))
-    );
+  private backupRow(operationId: string): { backup_id: string; target_id: string } | undefined {
+    return this.doMaintenanceDb
+      .prepare(`SELECT backup_id, target_id FROM do_storage_backups WHERE operation_id = ?`)
+      .get(operationId) as { backup_id: string; target_id: string } | undefined;
   }
 
-  private async restoreDurableObjectFiles(ref: DORef, backupOperationId: string): Promise<void> {
-    await this.verifyDurableObjectBackup(backupOperationId);
-    const backupDir = this.durableObjectBackupDir(backupOperationId);
-    const manifest = JSON.parse(
-      await fs.promises.readFile(path.join(backupDir, "manifest.json"), "utf8")
-    ) as { target?: DORef; files?: string[] };
-    if (
-      manifest.target?.source !== ref.source ||
-      manifest.target?.className !== ref.className ||
-      manifest.target?.objectKey !== ref.objectKey
-    ) {
-      throw new Error(`Backup ${backupOperationId} does not belong to the exact requested target`);
-    }
-    await this.destroyDurableObjectStorageFiles(ref);
-    const { dir: storageDir } = this.durableObjectStorageLocation(ref);
-    await fs.promises.mkdir(storageDir, { recursive: true });
-    for (const file of manifest.files ?? []) {
-      await fs.promises.copyFile(path.join(backupDir, file), path.join(storageDir, file));
-    }
-  }
-
-  /** Called only after the exact process has been reaped, before replacement. */
-  private async collectRetiredDurableObjectStorage(): Promise<void> {
-    const failures: unknown[] = [];
+  /**
+   * Collect the storage of retired objects (journal rows of kind `destroy`),
+   * all of them or one target's. A row that fails stays open and is retried at
+   * the next start; collection never fails the caller.
+   */
+  private async collectRetiredDurableObjectStorage(only?: string): Promise<void> {
     for (const row of this.readOpenDurableObjectMaintenance()) {
-      if (row.kind !== "destroy") continue;
+      if (row.kind !== "destroy" || (only !== undefined && row.targetId !== only)) continue;
       try {
         await this.fenceDurableObjectMaintenance(row);
-        await this.destroyDurableObjectStorageFiles({
+        await this.destroyCell({
           source: row.source,
           className: row.className,
           objectKey: row.objectKey,
@@ -4806,21 +4406,33 @@ export class WorkerdManager {
         this.completeDurableObjectMaintenance(row.operationId);
         releaseDurableObjectRelaySeal(row.targetId, row.operationId);
       } catch (error) {
-        failures.push(error);
+        log.warn(`Retired storage ${row.targetId} awaits the next collection`, error);
       }
     }
-    if (failures.length === 1) throw failures[0];
-    if (failures.length > 1)
-      throw new AggregateError(failures, "Retired storage collection failed");
+  }
+
+  /**
+   * After a node start: the node can finally act on what the journal owes,
+   * the retirements and the maintenance a crash interrupted.
+   */
+  private async recoverDurableObjectMaintenance(): Promise<void> {
+    await this.collectRetiredDurableObjectStorage();
+    for (const row of this.readOpenDurableObjectMaintenance()) {
+      if (row.kind === "destroy") continue;
+      try {
+        await this.resumeDurableObjectMaintenance(row);
+      } catch (error) {
+        log.warn(`Durable Object storage ${row.kind} ${row.operationId} is still open`, error);
+      }
+    }
   }
 
   private async resumeDurableObjectMaintenance(row: DurableObjectMaintenanceRow): Promise<void> {
     if (row.kind === "destroy") {
-      throw new Error(
-        `Retired storage ${row.targetId} belongs to the stopped generation collector`
-      );
+      throw new Error(`Retired storage ${row.targetId} is collected by the node recovery`);
     }
     const ref = { source: row.source, className: row.className, objectKey: row.objectKey };
+    this.requireUserlandStorage(ref, `Durable Object storage ${row.kind}`);
     await this.fenceDurableObjectMaintenance(row);
     try {
       if (row.step === "journaled") {
@@ -4828,41 +4440,45 @@ export class WorkerdManager {
         row.step = "fenced";
       }
       if (row.step === "fenced") {
-        await this.quiesceDurableObjectStorage(ref);
+        // Retire the loaded facet so nothing writes while the copy is cut.
+        await this.abortUserlandDOFacet(ref, "__vibestudio_retire");
         this.updateDurableObjectMaintenance(row.operationId, "retired");
         row.step = "retired";
       }
       if (row.step === "retired") {
-        await this.copyDurableObjectStorageToBackup(
-          ref,
-          row.operationId,
-          row.intent,
-          row.createdAt
-        );
+        // Both reset and restore keep what they replace.
+        await this.backUpDurableObject(row, ref);
         this.updateDurableObjectMaintenance(row.operationId, "backed-up");
         row.step = "backed-up";
       }
       if (row.step === "backed-up") {
-        await this.verifyDurableObjectBackup(row.operationId);
-        this.updateDurableObjectMaintenance(row.operationId, "verified");
-        row.step = "verified";
-      }
-      if (row.step === "verified") {
-        if (row.kind === "reset") await this.destroyDurableObjectStorageFiles(ref);
-        else await this.restoreDurableObjectFiles(ref, assertPresent(row.backupOperationId));
+        if (row.kind === "reset") {
+          await this.destroyCell(ref);
+        } else {
+          const chosen = this.backupRow(assertPresent(row.backupOperationId));
+          if (!chosen || chosen.target_id !== row.targetId) {
+            throw new Error(
+              `Backup ${row.backupOperationId} does not belong to the exact requested target`
+            );
+          }
+          await this.objectOperation({
+            op: "restore",
+            from: this.backupRef(ref, chosen.backup_id),
+            to: ref,
+            stop: true,
+          });
+        }
         this.acceptDurableObjectStorageReplacement(row);
         row.step = "replaced";
       }
       if (row.step === "replaced") {
-        if (!isInternalDOSource(ref.source)) {
-          if (this.deps.republishStorageOwner) await this.deps.republishStorageOwner(ref);
-          else {
-            const binding = this.doObjectBuilds.get(
-              doObjectBuildKey(ref.source, ref.className, ref.objectKey)
-            );
-            if (binding?.admission.props.nativeOwner)
-              throw new Error("Native storage replacement has no publication owner");
-          }
+        if (this.deps.republishStorageOwner) await this.deps.republishStorageOwner(ref);
+        else {
+          const binding = this.doObjectBuilds.get(
+            doObjectBuildKey(ref.source, ref.className, ref.objectKey)
+          );
+          if (binding?.admission.props.nativeOwner)
+            throw new Error("Native storage replacement has no publication owner");
         }
         this.updateDurableObjectMaintenance(row.operationId, "published");
         row.step = "published";
@@ -4873,19 +4489,6 @@ export class WorkerdManager {
         .prepare(`SELECT 1 AS open FROM do_maintenance WHERE operation_id = ? AND status = 'open'`)
         .get(row.operationId);
       if (!stillOpen) releaseDurableObjectRelaySeal(row.targetId, row.operationId);
-      // An internal-DO quiesce stops the whole workerd process. Bring it back
-      // before the operation resolves so unrelated services never depend on a
-      // later caller happening to trigger the lazy restart.
-      if (
-        isInternalDOSource(ref.source) &&
-        !this.shuttingDown &&
-        !(this.process && this.process.exitCode === null) &&
-        (this.instances.size > 0 || this.doServices.size > 0)
-      ) {
-        await this.ensureWorkerdRunning().catch((error) => {
-          log.warn("workerd restart after internal DO storage maintenance failed", error);
-        });
-      }
     }
   }
 
@@ -4896,8 +4499,9 @@ export class WorkerdManager {
     backupOperationId?: string;
     journalOnly?: boolean;
   }): Promise<string> {
-    await this.doMaintenanceRecovery;
     if (!input.intent.trim()) throw new Error("Durable Object storage maintenance requires intent");
+    this.requireUserlandStorage(input.ref, `Durable Object storage ${input.kind}`);
+    if (!input.journalOnly) await this.ensureWorkerdRunning();
     const targetId = this.durableObjectTargetId(input.ref);
     const previous = this.doMaintenanceChains.get(targetId);
     if (previous) await previous;
@@ -4914,12 +4518,23 @@ export class WorkerdManager {
           `Durable Object storage maintenance ${open.operationId} is already open for ${targetId}`
         );
       }
+      if (open.kind === "destroy") {
+        throw new Error(`Durable Object ${targetId} is retired and awaits storage collection`);
+      }
       await this.resumeDurableObjectMaintenance(open);
       if (
         open.kind === input.kind &&
         open.backupOperationId === (input.backupOperationId ?? null)
       ) {
         return open.operationId;
+      }
+    }
+    if (input.kind === "restore") {
+      const chosen = this.backupRow(assertPresent(input.backupOperationId));
+      if (!chosen || chosen.target_id !== targetId) {
+        throw new Error(
+          `Backup ${input.backupOperationId} does not belong to the exact requested target`
+        );
       }
     }
     const operationId = crypto.randomUUID();
@@ -4991,63 +4606,42 @@ export class WorkerdManager {
   }
 
   async listDOStorageBackups(ref: DORef): Promise<DurableObjectStorageBackup[]> {
-    const root = stateLayout(this.deps.statePath).databases.durableObjectBackupsDir;
-    const directories = await fs.promises.readdir(root).catch(() => [] as string[]);
-    const backups: DurableObjectStorageBackup[] = [];
-    for (const operationId of directories) {
-      try {
-        const completed = this.doMaintenanceDb
-          .prepare(
-            `SELECT 1 AS completed FROM do_maintenance
-             WHERE operation_id = ? AND status = 'complete'`
-          )
-          .get(operationId);
-        if (!completed) continue;
-        const manifest = JSON.parse(
-          await fs.promises.readFile(path.join(root, operationId, "manifest.json"), "utf8")
-        ) as DurableObjectStorageBackup;
-        if (
-          manifest.target?.source === ref.source &&
-          manifest.target.className === ref.className &&
-          manifest.target.objectKey === ref.objectKey
-        ) {
-          backups.push(manifest);
-        }
-      } catch {
-        // Half-written crash artifacts are resumed from the journal, never listed.
-      }
-    }
-    return backups.sort((a, b) => b.createdAt - a.createdAt);
+    return this.doMaintenanceDb
+      .prepare(
+        `SELECT b.operation_id, b.intent, b.created_at
+         FROM do_storage_backups b
+         JOIN do_maintenance m ON m.operation_id = b.operation_id AND m.status = 'complete'
+         WHERE b.target_id = ? ORDER BY b.created_at DESC`
+      )
+      .all(this.durableObjectTargetId(ref))
+      .map((raw) => {
+        const row = raw as Record<string, unknown>;
+        return {
+          operationId: String(row["operation_id"]),
+          target: { ...ref },
+          intent: String(row["intent"]),
+          createdAt: Number(row["created_at"]),
+        };
+      });
   }
 
   private async sweepDurableObjectBackups(ref: DORef, retain: number): Promise<void> {
-    const backups = await this.listDOStorageBackups(ref);
-    for (const backup of backups.slice(retain)) {
-      await fs.promises.rm(this.durableObjectBackupDir(backup.operationId), {
-        recursive: true,
-        force: true,
-      });
+    for (const backup of (await this.listDOStorageBackups(ref)).slice(retain)) {
+      const row = this.backupRow(backup.operationId);
+      if (!row) continue;
+      await this.destroyCell(this.backupRef(ref, row.backup_id));
+      this.doMaintenanceDb
+        .prepare(`DELETE FROM do_storage_backups WHERE operation_id = ?`)
+        .run(backup.operationId);
     }
   }
 
   /**
-   * Clone a DO's storage to a new object key. The clone starts with identical
-   * state. Used for channel forking.
-   *
-   * Userland DOs run as facets of the static UniversalDO host: each host object
-   * owns one facet whose storage is the set of files prefixed by the host's id
-   * hash (`<hash>.sqlite`, `<hash>.1.sqlite`, `<hash>.facets`, + WAL/SHM). The
-   * facet name is constant, so the layout is portable across host objects.
-   *
-   * The ordinary path fences and retires the source facet before copying its
-   * released files. When the verified runtime caller is the source object
-   * itself, retiring it would deadlock the call that requested the clone. That
-   * exact actor is already serialized and paused on the host RPC, so the
-   * cooperative path uses SQLite's online backup API for each database and
-   * copies the stable facet descriptor without retiring the caller.
+   * Whether the storage of a prepared clone is complete: a fresh object has
+   * none to copy, a snapshot clone is complete once the node's fork returned.
    */
   requireCloneStorageComplete(record: EntityRecord): void {
-    this.storageClones.requireComplete(record);
+    this.cloneReceipts.requireComplete(record);
   }
 
   private async assertCloneSourceIdentity(
@@ -5106,6 +4700,16 @@ export class WorkerdManager {
     }
   }
 
+  /**
+   * Clone a DO's storage to a new object key. The clone starts with identical
+   * state, root and facets, as of one committed cut of the source. Used for
+   * channel forking.
+   *
+   * The node exports the source from its own turn, so the source need not be
+   * quiesced and the object that asks for its own clone (`cooperativelyPaused`,
+   * paused on this very call) is not retired. Other callers hold the source's
+   * relays sealed while the cut is taken, so no host-driven write interleaves.
+   */
   async cloneDO(
     ref: DORef,
     newObjectKey: string,
@@ -5116,85 +4720,56 @@ export class WorkerdManager {
     }
   ): Promise<DORef> {
     if (this.shuttingDown) throw new Error("WorkerdManager is shutting down");
-    if (isInternalDOSource(ref.source)) {
-      throw new Error(`cloneDO is not supported for internal DO source "${ref.source}"`);
-    }
+    this.requireUserlandStorage(ref, "cloneDO");
     const target = { ...ref, objectKey: newObjectKey };
     if (options.reservation.key !== newObjectKey)
       throw new Error("Clone reservation target mismatch");
-    await this.storageClones.copy({
-      source: ref,
-      reservation: options.reservation,
-      storageDir: this.universalDoStorageDir(),
-      targetHash: this.universalHostHash(target),
-      snapshot: async (stage) => {
-        const sourceId = this.durableObjectTargetId(ref);
-        const sealOwnerId = `clone:${options.reservation.authoritySessionId}`;
-        try {
-          if (!options.cooperativelyPaused) {
-            await sealAndDrainDurableObjectRelays(sourceId, sealOwnerId, {
-              code: "DO_MAINTENANCE_IN_PROGRESS",
-              message: `Durable Object ${sourceId} is being quiesced for a storage snapshot`,
-              errorData: { operation: "clone-snapshot", ...ref },
-            });
-          }
-          await this.assertCloneSourceIdentity(ref, options.reservation, options.resolveSource);
-          if (!options.cooperativelyPaused) await this.quiesceDurableObjectStorage(ref);
-          await this.assertCloneSourceIdentity(ref, options.reservation, options.resolveSource);
-          const dir = this.universalDoStorageDir();
-          const hash = this.universalHostHash(ref);
-          const files = await fs.promises.readdir(dir);
-          const databases = files.filter(
-            (file) => file.startsWith(`${hash}.`) && file.endsWith(".sqlite")
-          );
-          const descriptor = `${hash}.facets`;
-          if (!databases.length || !files.includes(descriptor)) {
-            throw new Error(
-              `Source DO storage not found: ${ref.className}/${ref.objectKey} (incomplete facet storage)`
-            );
-          }
-          // Both source-release and cooperative snapshots use SQLite's coherent
-          // database backup, never a partial WAL/SHM copy. The exact source actor
-          // is already paused on its authenticated host call on the cooperative path.
-          for (const file of databases) {
-            const database = new DatabaseSync(path.toNamespacedPath(path.join(dir, file)), {
-              readOnly: true,
-            });
-            try {
-              await backup(
-                database,
-                path.toNamespacedPath(path.join(stage, file.slice(hash.length)))
-              );
-            } finally {
-              database.close();
-            }
-          }
-          await fs.promises.copyFile(path.join(dir, descriptor), path.join(stage, ".facets"));
-          await this.assertCloneSourceIdentity(ref, options.reservation, options.resolveSource);
-        } finally {
-          if (!options.cooperativelyPaused) releaseDurableObjectRelaySeal(sourceId, sealOwnerId);
-        }
-      },
-    });
+    const targetId = this.durableObjectTargetId(target);
+    const receipt = this.cloneReceipts.begin(ref, options.reservation);
+    if (receipt === "complete") return target;
+    await this.ensureWorkerdRunning();
+    const sourceId = this.durableObjectTargetId(ref);
+    const sealOwnerId = `clone:${options.reservation.authoritySessionId}`;
+    try {
+      if (!options.cooperativelyPaused) {
+        await sealAndDrainDurableObjectRelays(sourceId, sealOwnerId, {
+          code: "DO_MAINTENANCE_IN_PROGRESS",
+          message: `Durable Object ${sourceId} is being quiesced for a storage snapshot`,
+          errorData: { operation: "clone-snapshot", ...ref },
+        });
+      }
+      await this.assertCloneSourceIdentity(ref, options.reservation, options.resolveSource);
+      try {
+        await this.objectOperation({ op: "fork", from: ref, to: target });
+      } catch (error) {
+        // A retry of a clone whose earlier fork finished before its receipt
+        // was recorded: the target exists and is complete.
+        if (!(receipt === "retry" && errorMessage(error).includes("already exists"))) throw error;
+      }
+      await this.assertCloneSourceIdentity(ref, options.reservation, options.resolveSource);
+      this.cloneReceipts.complete(targetId);
+    } finally {
+      if (!options.cooperativelyPaused) releaseDurableObjectRelaySeal(sourceId, sealOwnerId);
+    }
     return target;
   }
 
   /**
-   * Destroy a userland DO's facet storage — every file prefixed by the host id
-   * hash (main + facet + index + WAL/SHM). Used to clean up orphaned clones on
+   * Destroy a userland DO's cell storage. Used to clean up orphaned clones on
    * fork failure.
    */
   async destroyDO(ref: DORef): Promise<void> {
-    if (isInternalDOSource(ref.source)) {
-      throw new Error(`destroyDO is not supported for internal DO source "${ref.source}"`);
-    }
-    await this.destroyDurableObjectStorageFiles(ref);
+    this.requireUserlandStorage(ref, "destroyDO");
+    await this.ensureWorkerdRunning();
+    this.cloneReceipts.retire(this.durableObjectTargetId(ref));
+    await this.destroyCell(ref);
   }
 
-  /** Journal reclamation after entity retirement. Facet retirement releases
-   * userland execution, but both universal hosts and internal objects keep
-   * process-owned SQLite handles. Physical collection belongs to the stopped
-   * generation, without restarting unrelated live entities. */
+  /**
+   * Journal reclamation after entity retirement. The runtime deletes the
+   * cell's storage when the node runs; a journal row left open (the node was
+   * down, or the call failed) is collected by the next start's recovery.
+   */
   async destroyRetiredDOStorage(ref: DORef): Promise<void> {
     await this.startDurableObjectMaintenance({
       kind: "destroy",
@@ -5202,31 +4777,10 @@ export class WorkerdManager {
       intent: `reclaim storage for retired ${ref.className}/${ref.objectKey}`,
       journalOnly: true,
     });
-    await this.storageClones.retire(this.durableObjectTargetId(ref));
-  }
-
-  /** Delete one exact object's storage files. Maintenance-path primitive:
-   *  callers own quiesce and fencing; internal refs are reachable only through
-   *  the journaled maintenance flow, never the userland destroy surface. */
-  private async destroyDurableObjectStorageFiles(ref: DORef): Promise<void> {
-    await this.storageClones.retire(this.durableObjectTargetId(ref));
-    await this.destroyStorageFiles(this.durableObjectStorageLocation(ref));
-  }
-
-  private async destroyStorageFiles({ dir, hash }: { dir: string; hash: string }): Promise<void> {
-    const files = await fs.promises.readdir(dir).catch((error: NodeJS.ErrnoException) => {
-      if (error.code === "ENOENT") return [] as string[];
-      throw error;
-    });
-    await Promise.all(
-      files
-        .filter((f) => f.startsWith(`${hash}.`))
-        .map((f) =>
-          fs.promises.unlink(path.join(dir, f)).catch((err: NodeJS.ErrnoException) => {
-            if (err.code !== "ENOENT") throw err;
-          })
-        )
-    );
+    this.cloneReceipts.retire(this.durableObjectTargetId(ref));
+    if (this.process && this.process.exitCode === null && !this.shuttingDown) {
+      await this.collectRetiredDurableObjectStorage(this.durableObjectTargetId(ref));
+    }
   }
 
   // =========================================================================
@@ -5258,7 +4812,6 @@ export class WorkerdManager {
     for (const result of preparationResults) {
       if (result.status === "rejected") retainFailure(result.reason);
     }
-    await attempt(() => this.doMaintenanceRecovery);
     const maintenanceResults = await Promise.allSettled([...this.doMaintenanceChains.values()]);
     for (const result of maintenanceResults) {
       if (result.status === "rejected") retainFailure(result.reason);
@@ -5283,23 +4836,12 @@ export class WorkerdManager {
     for (const result of schemaResults) {
       if (result.status === "rejected") retainFailure(result.reason);
     }
-    await attempt(() => this.stopWorkerd("shutdown", "force"));
-    await attempt(() => this.storageClones.join());
-    // stopWorkerd collected retirement journals after reaping the process.
-    // Clean up the remaining schema probe bookkeeping without recovering
-    // failed retirement through a second maintenance owner.
-    if (!(this.process && this.process.exitCode === null)) {
-      for (const [objectKey, probe] of this.schemaProbeBuilds) {
-        await attempt(async () => {
-          const ref = { source: probe.source, className: probe.className, objectKey };
-          await this.destroyStorageFiles({
-            dir: this.universalDoStorageDir(),
-            hash: this.universalHostHash(ref),
-          });
-          this.schemaProbeBuilds.delete(objectKey);
-        });
-      }
-    }
+    // The node stops itself durably: it makes its cells durable and releases
+    // them, so the next start resumes them without waiting for a lease.
+    await attempt(() => this.stopWorkerd("shutdown", "graceful"));
+    // A schema probe's object is retired through the destruction journal, which
+    // the next start collects; only its bookkeeping goes here.
+    this.schemaProbeBuilds.clear();
 
     // Cleanup all instances
     for (const [, instance] of this.instances) {
@@ -5321,10 +4863,6 @@ export class WorkerdManager {
     this.preparedDoExecutables.clear();
     this.latestExecutablePreparation.clear();
     this.reconcileDoCodeUnitOwnership();
-
-    // Clean up config dir
-    await attempt(() => fs.promises.rm(this.configDir, { recursive: true, force: true }));
-    await attempt(() => this.sqliteIntegrityWorker.close());
 
     this.doMaintenanceDb.close();
     this.doSchemaDescriptorDb.close();

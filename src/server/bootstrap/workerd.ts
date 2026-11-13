@@ -41,11 +41,13 @@ export interface WorkerdBootstrapDeps {
   routeRegistry: RouteRegistry;
   egressProxy: Pick<
     EgressProxy,
-    "startForCaller" | "startShared" | "setCallerResolver" | "dropCaller" | "stopShared"
+    "startShared" | "setCallerResolver" | "setHostProgramOrigins" | "dropCaller" | "stopShared"
   >;
   gatewayToken: string;
   gateway: WorkerdGatewayBootstrapConfig;
   getInternalDoEnv(className: string): Record<string, string>;
+  /** Product install root; locates the staged runtime binary. */
+  appRoot?: string;
   runtimeDiagnostics: Pick<RuntimeDiagnosticsStore, "record">;
   eventService: Pick<EventService, "emit">;
   executionPublicationPort?: ExecutionPublicationPort;
@@ -274,10 +276,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
     async start(resolve) {
       const startedAt = performance.now();
       const { WorkerdManager } = await import("../workerdManager.js");
-      const { getWorkerdProgramSources } = await import("../workerdProgramLoader.js");
       const importsReadyAt = performance.now();
-      const workerdPrograms = getWorkerdProgramSources();
-      const programsReadyAt = performance.now();
       const fsService = assertPresent(resolve<FsService>("fsService"));
       const egressSecret = randomBytes(32).toString("hex");
       const manager: WorkerdManager = new WorkerdManager({
@@ -291,7 +290,6 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
           return `http://127.0.0.1:${port}`;
         },
         getServerAliasUrls: () => resolveWorkerdServerAliasUrls(deps.gateway),
-        workerdPrograms,
         workspaceId: deps.workspaceId,
         workspacePath: deps.workspacePath,
         statePath: deps.statePath,
@@ -299,15 +297,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         executionPublicationPort: deps.executionPublicationPort,
         republishStorageOwner: deps.republishStorageOwner,
         routeRegistry: deps.routeRegistry,
-        getProxyPort: async (caller) => {
-          await deps.egressProxy.dropCaller(caller.runtime.id);
-          egressCallers.set(caller.runtime.id, caller);
-          return deps.egressProxy.startForCaller(caller, async () =>
-            egressCallers.get(caller.runtime.id) === caller
-              ? await deps.resolveEgressCaller(caller)
-              : null
-          );
-        },
+        appRoot: deps.appRoot,
         getSharedEgressPort: () => deps.egressProxy.startShared(egressSecret),
         registerEgressCaller: (callerId, caller) => egressCallers.set(callerId, caller),
         unregisterEgressCaller: (callerId) => egressCallers.delete(callerId),
@@ -353,6 +343,12 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         },
       });
       deps.onManagerStarted(manager);
+      // The runtime application's own programs reach the gateway through the
+      // proxy (identity-stamped like every request); nothing else.
+      deps.egressProxy.setHostProgramOrigins(() => {
+        const port = deps.gateway.getPort();
+        return port ? [new URL(`http://127.0.0.1:${port}`).origin] : [];
+      });
       deps.egressProxy.setCallerResolver(async (callerId) => {
         const registered = egressCallers.get(callerId);
         return registered ? await deps.resolveEgressCaller(registered) : null;
@@ -369,8 +365,7 @@ export function wireWorkerdCore(deps: WorkerdBootstrapDeps): void {
         `workerdBootstrapReport=${JSON.stringify({
           totalMs: readyAt - startedAt,
           importsMs: importsReadyAt - startedAt,
-          programSourcesMs: programsReadyAt - importsReadyAt,
-          managerPreparationMs: registrationStartedAt - programsReadyAt,
+          managerPreparationMs: registrationStartedAt - importsReadyAt,
           internalRegistrationMs: readyAt - registrationStartedAt,
           internalClassCount: INTERNAL_DO_CLASSES.length,
         })}`

@@ -89,7 +89,7 @@ const entries = PRODUCT_BUILTINS.map((entry) => {
         }
       : {}),
     durableObject: entry.durableObject,
-    workerd: entry.workerd,
+    runtime: entry.runtime,
     residentCapabilityRequests: entry.residentCapabilityRequests,
     hostCapabilityRequests: entry.hostCapabilityRequests,
     directMethods,

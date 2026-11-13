@@ -131,8 +131,9 @@ import { createPrivateGuestGlobal } from "@vibestudio/shared/evalConfinement";
  *    env bindings — NOTHING workspace-owned is statically bundled here: keeps the
  *    internal bundle lean, lets the volatile engine update without a kernel rebuild,
  *    and keeps host code free of hardcoded workspace unit names),
- *  - compiles via the workerd `UNSAFE_EVAL` binding (`new Function` is blocked in workerd),
- *    passed explicitly into the engine and never published on the isolate global,
+ *  - compiles with the isolate's own `new Function`: the deployment declares `codegen` for this
+ *    class alone (celld `durable_objects.EvalDO.codegen`), so no other class's isolate can generate
+ *    code. The compiler is passed explicitly into the engine and never published on the isolate global,
  *  - persists REPL scope rows in its own SQLite via `SqlScopePersistence` and spills large values
  *    to the workspace blobstore,
  *  - exposes a synchronous in-DO `db` (its SQLite) to eval'd code, with reserved-table guards.
@@ -249,11 +250,6 @@ const fallbackHarden: BoundaryHarden = <T>(value: T): T => {
 function hardenBoundary<T>(value: T): T {
   const sesHarden = (globalThis as { harden?: BoundaryHarden }).harden;
   return (sesHarden ?? fallbackHarden)(value);
-}
-
-interface UnsafeEvalBinding {
-  eval(code: string, name?: string): unknown;
-  newFunction(code: string, name?: string, ...argNames: string[]): (...args: unknown[]) => unknown;
 }
 
 interface SandboxResult {
@@ -3102,6 +3098,8 @@ export class EvalDO extends DurableObjectBase {
         `SELECT name FROM sqlite_master
          WHERE type='table'
            AND name NOT LIKE 'sqlite_%'
+           AND substr(name, 1, 4) <> '_cf_'
+           AND substr(name, 1, 11) <> '_litestream'
            AND name NOT GLOB '_vibestudio_*'`
       )
       .toArray()
@@ -3779,7 +3777,7 @@ export class EvalDO extends DurableObjectBase {
   /**
    * A manifest-declared provider source from an env binding. The server derives
    * these bindings from `workspace/meta/vibestudio.yml`'s `providers.*` slots when
-   * it generates the internal-DO workerd config — the EvalDO itself carries no
+   * it generates the runtime deployment — the EvalDO itself carries no
    * workspace unit names.
    */
   private declaredProviderSource(binding: string): string | null {
@@ -3802,9 +3800,11 @@ export class EvalDO extends DurableObjectBase {
     body: string,
     name = "eval"
   ): (...args: unknown[]) => unknown {
-    const unsafeEval = this.env["UNSAFE_EVAL"] as UnsafeEvalBinding | undefined;
-    if (!unsafeEval) throw new Error("EvalDO: UNSAFE_EVAL binding not configured");
-    return unsafeEval.newFunction(body, name, ...argNames);
+    // Code generation is allowed in this class's isolates only (the node's
+    // per-class `codegen` capability); anywhere else this throws an EvalError.
+    const compiled = new Function(...argNames, body) as (...args: unknown[]) => unknown;
+    Object.defineProperty(compiled, "name", { value: name, configurable: true });
+    return compiled;
   }
 
   private requireIsolateModule = (id: string): unknown => {

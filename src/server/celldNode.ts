@@ -16,7 +16,7 @@
  * The child is spawned in the server's own process group (never detached), so
  * the ownership reaper retires it with its owner.
  */
-import { spawn, type ChildProcess } from "node:child_process";
+import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getPhysicalPathForAsarPath } from "@vibestudio/shared/runtimePaths";
@@ -38,6 +38,8 @@ const INHERITED_TOPOLOGY_ENV = [
   "CELLD_EGRESS_SECRET",
   "CELLD_EGRESS_SECRET_FILE",
   "CELLD_INSPECTOR_ADDR",
+  "CELLD_SECRETS_KEY",
+  "CELLD_SECRETS_KEY_FILE",
   "S3_ENDPOINT",
 ] as const;
 
@@ -88,8 +90,11 @@ export interface CelldNodeOptions {
   readonly blobRoot: string;
   /** Stable per workspace, so a restarted node resumes its own cells. */
   readonly nodeId: string;
-  readonly egressProxyUrl: string;
-  readonly egressSecret: string;
+  /** The proxy every outbound request goes through, with the secret that
+   *  authenticates the node's identity to it. Both or neither: without them
+   *  isolates dial their destinations themselves (fixtures only). */
+  readonly egressProxyUrl?: string;
+  readonly egressSecret?: string;
   readonly onOutput: (stream: "stdout" | "stderr", line: string) => void;
 }
 
@@ -172,7 +177,20 @@ export class CelldNode {
     fs.mkdirSync(this.projectDir, { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.workingDir, { recursive: true, mode: 0o700 });
     fs.mkdirSync(options.blobRoot, { recursive: true });
-    fs.writeFileSync(this.secretFile, options.egressSecret, { mode: 0o600 });
+    if (options.egressSecret !== undefined) {
+      fs.writeFileSync(this.secretFile, options.egressSecret, { mode: 0o600 });
+    }
+    // The key that seals class secrets in the bucket. It lives beside the
+    // node's private state, never in the bucket, so reading the bucket (an
+    // index, a backup) reveals no secret.
+    if (!fs.existsSync(this.secretsKeyFile)) {
+      const key = execFileSync(options.binary, ["secret", "keygen"], { env: this.baseEnv() });
+      fs.writeFileSync(this.secretsKeyFile, key, { mode: 0o600 });
+    }
+  }
+
+  private get secretsKeyFile(): string {
+    return path.join(this.options.stateDir, "secrets.key");
   }
 
   private get projectDir(): string {
@@ -201,11 +219,43 @@ export class CelldNode {
     return env;
   }
 
+  /** `celld secret put`: the value goes in on stdin, never on a command line. */
+  private async putSecret(script: string, name: string, value: string): Promise<void> {
+    const child = spawn(
+      this.options.binary,
+      ["secret", "put", script, name, "--pipe", "--bucket", this.bucket],
+      {
+        stdio: ["pipe", "ignore", "pipe"],
+        env: { ...this.baseEnv(), CELLD_SECRETS_KEY_FILE: this.secretsKeyFile },
+      }
+    );
+    let stderr = "";
+    child.stderr?.on("data", (data: Buffer) => {
+      stderr = (stderr + data.toString()).slice(-2000);
+    });
+    child.stdin?.end(value);
+    const exit = await new Promise<CelldNodeExit>((resolve, reject) => {
+      child.once("error", reject);
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    if (exit.code !== 0) {
+      throw new Error(`celld secret put ${name} failed (code=${exit.code}): ${stderr.trim()}`);
+    }
+  }
+
   /**
    * Publish the runtime application as the bucket's current deployment. The
    * module is prebuilt (`no_bundle`), so deploy needs no esbuild.
    */
-  async deploy(bundle: string, config: CelldDeploymentConfig): Promise<void> {
+  async deploy(
+    bundle: string,
+    config: CelldDeploymentConfig,
+    secrets: Readonly<Record<string, string>> = {}
+  ): Promise<void> {
+    // A deployment that declares secrets is refused until each is stored.
+    for (const [name, value] of Object.entries(secrets)) {
+      await this.putSecret(config.name, name, value);
+    }
     const project = this.projectDir;
     await fs.promises.writeFile(path.join(project, "runtime-app.mjs"), bundle, { mode: 0o600 });
     await fs.promises.writeFile(
@@ -216,7 +266,7 @@ export class CelldNode {
     const output: string[] = [];
     const child = spawn(this.options.binary, ["deploy", project, "--bucket", this.bucket], {
       stdio: ["ignore", "pipe", "pipe"],
-      env: this.baseEnv(),
+      env: { ...this.baseEnv(), CELLD_SECRETS_KEY_FILE: this.secretsKeyFile },
     });
     const collect = (stream: "stdout" | "stderr") => (data: Buffer) => {
       for (const line of data.toString().split(/\r?\n/u)) {
@@ -250,16 +300,16 @@ export class CelldNode {
       "--internal-listen",
       "127.0.0.1:0",
       "--no-implicit-deadlines",
-      "--egress-proxy",
-      this.options.egressProxyUrl,
-      "--egress-secret-file",
-      this.secretFile,
+      ...(this.options.egressProxyUrl !== undefined
+        ? ["--egress-proxy", this.options.egressProxyUrl, "--egress-secret-file", this.secretFile]
+        : []),
       ...(ports.inspector ? ["--inspector-addr", `127.0.0.1:${ports.inspector}`] : []),
     ];
     const child = spawn(this.options.binary, args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...this.baseEnv(),
+        CELLD_SECRETS_KEY_FILE: this.secretsKeyFile,
         CELLD_WATCH: this.workingDir,
         CELLD_NODE: this.options.nodeId,
       },

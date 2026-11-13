@@ -9,6 +9,13 @@
  *   removed by the loaded code. A null identity means "no network".
  */
 
+export {
+  classSecretName,
+  RPC_AUTH_TOKEN,
+  RUNTIME_SCRIPT,
+  UNIVERSAL_DO_LOADER_SECRET,
+} from "../runtimeNames.js";
+
 export interface HostProgramEnv {
   readonly GATEWAY_URL: string;
   readonly WORKERD_LOADER_SECRET: string;

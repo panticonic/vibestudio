@@ -6,14 +6,30 @@ import {
   type DoExecutableAdmission,
 } from "./executableVersion.js";
 import {
+  classSecretName,
   gatewayFetch,
   loadedNetworkPolicy,
+  UNIVERSAL_DO_LOADER_SECRET,
   type CelldWorkerCode,
   type HostProgramEnv,
 } from "./celldRuntime.js";
 
 interface UniversalDoEnv extends HostProgramEnv {
   LOADER: WorkerLoader;
+  UNIVERSAL_DO: DurableObjectNamespace;
+  /** UniversalDO's own loader and lifecycle secret (a class secret). */
+  readonly DO_LOADER_SECRET__UniversalDO: string;
+}
+
+const LOADER_SECRET_BINDING = classSecretName(UNIVERSAL_DO_LOADER_SECRET, "UniversalDO");
+
+/** The class's secret; `ExecutablePreparation` (an entrypoint, not the class)
+ * has none and never fetches code itself. */
+function loaderSecret(env: HostProgramEnv): string {
+  const secret = (env as unknown as Record<string, unknown>)[LOADER_SECRET_BINDING];
+  if (typeof secret !== "string")
+    throw new Error("UniversalDO loader secret is not available to this caller");
+  return secret;
 }
 
 interface DurableObjectCodePayload extends WorkerLoaderWorkerCode {
@@ -35,7 +51,7 @@ async function fetchLoader(
   try {
     return await gatewayFetch(env, path, {
       ...init,
-      headers: { "X-Vibestudio-Loader-Secret": env.WORKERD_LOADER_SECRET },
+      headers: { "X-Vibestudio-Loader-Secret": loaderSecret(env) },
     });
   } catch (error) {
     console.error(
@@ -112,24 +128,37 @@ function loadExecutable(
   });
 }
 
+interface PreparationInput {
+  source: string;
+  className: string;
+  version: string;
+}
+
+/** Marks a call from the script's own entrypoint; the router strips `x-internal-*`. */
+const PREPARATION_HEADER = "x-internal-vibestudio-prepare";
+const PREPARATION_KEY = "__prepare";
+
 /** Prepares the same immutable unit used by normal object dispatch, without
- * constructing a user object or invoking its application request handler. */
+ * constructing a user object or invoking its application request handler. The
+ * code fetch needs UniversalDO's class secret, so the entrypoint hands the
+ * request to a UniversalDO cell of its own. */
 export class ExecutablePreparation extends WorkerEntrypoint<UniversalDoEnv> {
   async fetch(request: Request): Promise<Response> {
     try {
-      const input = (await request.json()) as {
-        source: string;
-        className: string;
-        version: string;
-      };
+      const input = (await request.json()) as PreparationInput;
       if (!input.source || !input.className || !input.version)
         throw new Error("Executable preparation requires a complete immutable identity");
-      const worker = loadExecutable(this.env, input);
-      const receipt = await worker
-        .getEntrypoint("VibestudioExecutable")
-        .fetch(new Request(`http://executable/${encodeURIComponent(input.className)}`));
-      if (!receipt.ok) throw new Error(await receipt.text());
-      return new Response(null, { status: 204 });
+      const namespace = this.env.UNIVERSAL_DO;
+      const stub = namespace.get(
+        namespace.idFromName(`${PREPARATION_KEY}:${input.source}:${input.className}`)
+      );
+      return await stub.fetch(
+        new Request(`http://universal-do/${PREPARATION_KEY}`, {
+          method: "POST",
+          headers: { [PREPARATION_HEADER]: "1" },
+          body: JSON.stringify(input),
+        })
+      );
     } catch (error) {
       return Response.json({ error: serializeRpcFailure(error) }, { status: 500 });
     }
@@ -253,9 +282,24 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     }
   }
 
+  private async prepareExecutable(input: PreparationInput): Promise<Response> {
+    const worker = loadExecutable(this.env, input);
+    const receipt = await worker
+      .getEntrypoint("VibestudioExecutable")
+      .fetch(new Request(`http://executable/${encodeURIComponent(input.className)}`));
+    if (!receipt.ok) throw new Error(await receipt.text());
+    return new Response(null, { status: 204 });
+  }
+
   private async fetchImpl(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const parts = url.pathname.split("/").filter(Boolean);
+    if (parts[0] === PREPARATION_KEY) {
+      if (request.headers.get(PREPARATION_HEADER) !== "1") {
+        return new Response("Forbidden", { status: 403 });
+      }
+      return this.prepareExecutable((await request.json()) as PreparationInput);
+    }
     const encodedKey = parts[0] ? decodeURIComponent(parts[0]) : "";
     if (!encodedKey) {
       return new Response("universal-do: missing key", { status: 400 });
@@ -266,7 +310,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     }
 
     if (parts[1] === "__vibestudio_retire" || parts[1] === "__vibestudio_restart") {
-      if (request.headers.get("X-Vibestudio-Lifecycle-Secret") !== this.env.WORKERD_LOADER_SECRET) {
+      if (request.headers.get("X-Vibestudio-Lifecycle-Secret") !== loaderSecret(this.env)) {
         return new Response("Forbidden", { status: 403 });
       }
       await this.cancelFacetSelection(
@@ -289,7 +333,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     }
 
     if (parts[1] === "__vibestudio_destroy") {
-      if (request.headers.get("X-Vibestudio-Lifecycle-Secret") !== this.env.WORKERD_LOADER_SECRET) {
+      if (request.headers.get("X-Vibestudio-Lifecycle-Secret") !== loaderSecret(this.env)) {
         return new Response("Forbidden", { status: 403 });
       }
       // Storage reclamation of a retired object: the runtime stops the facet
@@ -302,7 +346,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     }
 
     if (parts[1] === "__vibestudio_fault_abort") {
-      if (request.headers.get("X-Vibestudio-Lifecycle-Secret") !== this.env.WORKERD_LOADER_SECRET) {
+      if (request.headers.get("X-Vibestudio-Lifecycle-Secret") !== loaderSecret(this.env)) {
         return new Response("Forbidden", { status: 403 });
       }
       // Abort only the loaded userland object. Its SQLite storage and the

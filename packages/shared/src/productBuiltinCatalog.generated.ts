@@ -1789,9 +1789,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       objectKey: "workspace",
       keyMode: "workspace-scoped",
     },
-    workerd: {
+    runtime: {
       staticAuthorityProjection: true,
-      unsafeEval: false,
+      codegen: false,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],
@@ -4230,9 +4230,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       objectKey: "browser-environment",
       keyMode: "verified-user-workspace",
     },
-    workerd: {
+    runtime: {
       staticAuthorityProjection: true,
-      unsafeEval: false,
+      codegen: false,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],
@@ -4913,9 +4913,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       objectKey: "owner",
       keyMode: "caller-supplied",
     },
-    workerd: {
+    runtime: {
       staticAuthorityProjection: true,
-      unsafeEval: true,
+      codegen: true,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [
@@ -5353,9 +5353,9 @@ export const PRODUCT_BUILTIN_CATALOG = [
       objectKey: "subscription",
       keyMode: "caller-supplied",
     },
-    workerd: {
+    runtime: {
       staticAuthorityProjection: true,
-      unsafeEval: false,
+      codegen: false,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],

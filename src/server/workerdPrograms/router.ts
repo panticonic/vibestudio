@@ -39,6 +39,61 @@ async function fetchDurableObject(stub: DurableObjectStub, request: Request): Pr
   }
 }
 
+/**
+ * Whole-object operations the runtime provides on a namespace (celld
+ * docs/services/object-fork.md): a copy of a cell with its facets, and the
+ * replacement of a quiesced cell's state by another's.
+ */
+interface ForkableNamespace extends DurableObjectNamespace {
+  fork(sourceId: DurableObjectId, options?: { to?: DurableObjectId }): Promise<DurableObjectId>;
+  restore(
+    targetId: DurableObjectId,
+    fromId: DurableObjectId,
+    options?: { stop?: boolean }
+  ): Promise<{ restored: boolean }>;
+}
+
+interface ObjectOperation {
+  op: "fork" | "restore";
+  /** `UNIVERSAL_DO`, or the binding name of a product class. */
+  namespace: string;
+  /** Cell names (`idFromName`). */
+  from: string;
+  to: string;
+  stop?: boolean;
+}
+
+async function objectOperation(env: RouterEnv, request: Request): Promise<Response> {
+  const input = (await request.json()) as ObjectOperation;
+  const bindings = new Set<string>(["UNIVERSAL_DO", ...Object.values(env.WORKERD_DO_BINDINGS)]);
+  const binding = bindings.has(input.namespace) ? env[input.namespace] : undefined;
+  if (!isDurableObjectNamespace(binding)) {
+    return new Response(`Unknown namespace ${input.namespace}`, { status: 404 });
+  }
+  const namespace = binding as ForkableNamespace;
+  try {
+    if (input.op === "fork") {
+      const id = await namespace.fork(namespace.idFromName(input.from), {
+        to: namespace.idFromName(input.to),
+      });
+      return Response.json({ id: id.toString() });
+    }
+    if (input.op === "restore") {
+      await namespace.restore(namespace.idFromName(input.to), namespace.idFromName(input.from), {
+        stop: input.stop === true,
+      });
+      return Response.json({ restored: true });
+    }
+    return new Response(`Unknown operation ${String(input.op)}`, { status: 400 });
+  } catch (error) {
+    const code = (error as { code?: unknown }).code;
+    return new Response(error instanceof Error ? error.message : String(error), {
+      status: 409,
+      headers: typeof code === "string" ? { "X-Vibestudio-Object-Error": code } : {},
+    });
+  }
+}
+
 const router: ExportedHandler<RouterEnv> = {
   async fetch(request, env): Promise<Response> {
     const expectedAuth = `Bearer ${env.WORKERD_GATEWAY_TOKEN}`;
@@ -61,7 +116,10 @@ const router: ExportedHandler<RouterEnv> = {
       return new Response(null, { status: 204 });
     }
     if (
-      (prefix === "_w" || prefix === "_u" || prefix === "_prepare_executable") &&
+      (prefix === "_w" ||
+        prefix === "_u" ||
+        prefix === "_prepare_executable" ||
+        prefix === "_object") &&
       request.headers.get("X-Vibestudio-Dispatch-Secret") !== env.WORKERD_DISPATCH_SECRET
     ) {
       return new Response("Forbidden", { status: 403 });
@@ -69,6 +127,7 @@ const router: ExportedHandler<RouterEnv> = {
     if (prefix === "_w" || prefix === "_u") {
       strippedHeaders.set(DIRECT_AUTHORITY_ACCEPTED_AT_HEADER, String(Date.now()));
     }
+    if (prefix === "_object") return objectOperation(env, request);
     if (prefix === "_prepare_executable") {
       return env.EXECUTABLE_PREPARATION.fetch(new Request(request, { headers: strippedHeaders }));
     }

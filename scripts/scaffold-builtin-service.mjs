@@ -116,9 +116,9 @@ catalog = catalog.replace(
     builtinBecause: "${builtinBecause}",
     methods: ${schemaIdentifier},
     durableObject: { keyVersion: 1, objectKey: "workspace", keyMode: "workspace-scoped" },
-    workerd: {
+    runtime: {
       staticAuthorityProjection: true,
-      unsafeEval: false,
+      codegen: false,
     },
     hostCapabilityRequests: [],
   },

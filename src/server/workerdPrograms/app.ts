@@ -9,11 +9,12 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import router from "./router.js";
 import workerHost from "./workerHost.js";
+import { classSecretName, RPC_AUTH_TOKEN } from "./celldRuntime.js";
 
 export { UniversalDO, ExecutablePreparation } from "./universalDo.js";
 export default router;
 
-export class WorkerHost extends WorkerEntrypoint<Parameters<typeof workerHost.fetch>[1]> {
+export class WorkerHost extends WorkerEntrypoint<Parameters<NonNullable<typeof workerHost.fetch>>[1]> {
   override fetch(request: Request): Promise<Response> {
     return Promise.resolve(
       workerHost.fetch!(
@@ -34,15 +35,21 @@ type InternalEnv = Record<string, unknown> & {
 
 /**
  * The script's environment as one product class sees it. celld gives every
- * class of a script the same env, while each product class has its own
- * identity and credentials: the host deploys them per class in the
+ * class of a script the same variables, while each product class has its own
+ * identity: the host deploys the non-secret part per class in the
  * `INTERNAL_DO_ENV` variable, and this projection hands a class only its own.
+ * The class's credential is a class secret (`RPC_AUTH_TOKEN__<Class>`), which
+ * celld delivers to that class's env alone; it is exposed under its plain name.
  */
 export function internalClassEnv(env: InternalEnv, className: string): Record<string, unknown> {
   const own = env.INTERNAL_DO_ENV?.[className];
   if (!own) throw new Error(`Runtime deployment has no environment for ${className}`);
-  const projected: Record<string, unknown> = { ...env, ...own };
+  const token = env[classSecretName(RPC_AUTH_TOKEN, className)];
+  if (typeof token !== "string")
+    throw new Error(`Runtime deployment has no credential for ${className}`);
+  const projected: Record<string, unknown> = { ...env, ...own, [RPC_AUTH_TOKEN]: token };
   delete projected["INTERNAL_DO_ENV"];
+  delete projected[classSecretName(RPC_AUTH_TOKEN, className)];
   projected["WORKER_SOURCE"] = INTERNAL_DO_SOURCE;
   projected["WORKER_CLASS_NAME"] = className;
   return Object.freeze(projected);

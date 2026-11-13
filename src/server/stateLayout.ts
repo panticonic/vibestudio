@@ -33,7 +33,9 @@ export function stateLayout(statePath: string) {
     gitCheckoutsDir: gitCheckoutsPath(statePath),
     runtimeImagesFile: path.join(statePath, "runtime-images.json"),
     runtimeDiagnosticsDir: path.join(statePath, "runtime-diagnostics"),
-    workerdConfigDir: path.join(statePath, "workerd-config"),
+    /** The workspace's celld node: deployment project, bucket key index,
+     *  local working set. Its bucket's objects live in `blobsDir`. */
+    celldDir: path.join(statePath, "celld"),
     refsDir: path.join(statePath, "refs"),
     blobsDir: path.join(statePath, "blobs"),
     buildSourcesDir: path.join(statePath, "build-sources"),
@@ -68,11 +70,13 @@ export function stateLayout(statePath: string) {
     },
     databases: {
       root: databases,
-      workerdDoDir: path.join(databases, "workerd-do"),
-      workerdUniversalDoDir: path.join(databases, "workerd-universal-do"),
       durableObjectMaintenanceDb: path.join(databases, "do-maintenance.db"),
       durableObjectSchemaDescriptorsDb: path.join(databases, "do-schema-descriptors.db"),
-      durableObjectBackupsDir: path.join(databases, "do-backups"),
+      /** Durable Object state written by the retired workerd runtime. Read
+       *  only by the one-time migration into celld cells. */
+      legacyWorkerdDoDir: path.join(databases, "workerd-do"),
+      legacyWorkerdUniversalDoDir: path.join(databases, "workerd-universal-do"),
+      legacyDurableObjectBackupsDir: path.join(databases, "do-backups"),
     },
   } as const;
 }

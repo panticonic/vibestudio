@@ -10,7 +10,7 @@ export const NATLANG_PROVIDER_HOST_CONTRACT_VERSION = 2 as const;
 
 /** What the host hands the provider once per EvalDO owner. */
 export interface NatlangProviderHost {
-  /** workerd UNSAFE_EVAL newFunction: the same constructor the eval engine uses. */
+  /** `new Function` of the codegen-enabled EvalDO isolate: the same constructor the eval engine uses. */
   newFunction(body: string, name: string, ...argNames: string[]): (...args: unknown[]) => unknown;
   /** The eval's runtime bindings (rpc, workers, fs, vcs, gad, services, credentials, ...). */
   bindings: Readonly<Record<string, unknown>>;

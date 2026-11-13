@@ -7022,6 +7022,7 @@ async function main() {
       configuredAliases: process.env["VIBESTUDIO_GATEWAY_ALIASES"],
     },
     getInternalDoEnv: internalDoProviderEnv,
+    appRoot: process.env["VIBESTUDIO_APP_ROOT"],
     runtimeDiagnostics,
     eventService,
     executionPublicationPort: executionPublicationJournal,
