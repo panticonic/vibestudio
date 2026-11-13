@@ -645,6 +645,9 @@ Not done or not verified:
    `@workspace/speech/transcribe` so both share it) and needs voice input prepared
    once; the control's microphone routes spoken text through the phrase matcher like
    typed text. No realtime voice model is wired.
-4. Proof state is not yet shown in the shell's history UI.
+4. Proof state shows in the desktop shell's title bar: a warning next to Back and
+   Forward when the newest history entry failed, saying whether the page went back
+   to a working version (`historyProofNotice`). Mobile shows nothing yet. The unit
+   test for it has not been run.
 5. Whether the mobile `credentials.deviceId` equals the server's paired device id for
    that client (`deviceOfPrincipal`) is assumed from the code, to be confirmed by H5.
