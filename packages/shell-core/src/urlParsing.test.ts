@@ -12,8 +12,10 @@ describe("isManagedHost()", () => {
     expect(isManagedHost("https://vibestudio.example.com/path", host)).toBe(true);
   });
 
-  it("matches exact host regardless of port", () => {
-    expect(isManagedHost("https://vibestudio.example.com:8080/path", host)).toBe(true);
+  it("treats a portless managed authority as the scheme's default port", () => {
+    expect(isManagedHost("https://vibestudio.example.com:443/path", host)).toBe(true);
+    expect(isManagedHost("http://vibestudio.example.com:80/path", host)).toBe(true);
+    expect(isManagedHost("https://vibestudio.example.com:8080/path", host)).toBe(false);
   });
 
   it("requires the port when the managed authority includes one", () => {
@@ -219,7 +221,7 @@ describe("parsePanelUrl()", () => {
   it("parses a panel URL below a workspace route prefix", () => {
     const result = parsePanelUrl(
       "http://127.0.0.1:43873/_workspace/dev-123/about/server-logs/",
-      "127.0.0.1",
+      "127.0.0.1:43873",
       "/_workspace/dev-123"
     );
 

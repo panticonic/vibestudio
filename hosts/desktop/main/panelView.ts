@@ -234,23 +234,31 @@ export class PanelView implements PanelViewLike {
       const normalized = host.trim().toLowerCase();
       if (normalized) hosts.add(normalized);
     };
+    // Keep the port: another server on the same host (a local dev server, say)
+    // is not this one, and its links must not be treated as panel links.
     const addUrlHost = (value: string | undefined) => {
       if (!value) return;
       try {
-        addHost(new URL(value).hostname);
+        addHost(new URL(value).host);
       } catch {
-        addHost(value.replace(/:\d+$/, ""));
+        addHost(value);
       }
     };
 
     addHost(serverInfo.externalHost);
+    // Panels load from the loopback gateway origin (buildPanelUrl); in remote
+    // mode that is the local asset façade, not the server URL.
+    addHost(`127.0.0.1:${serverInfo.gatewayPort}`);
     addUrlHost(serverInfo.gatewayConfig?.serverUrl);
     for (const alias of serverInfo.gatewayConfig?.aliases ?? []) {
       addUrlHost(alias);
     }
+    // Every loopback name reaches a loopback server, on the same port.
     const loopbackHosts = ["localhost", "127.0.0.1", "0.0.0.0", "[::1]"];
-    if (loopbackHosts.some((host) => hosts.has(host))) {
-      for (const host of loopbackHosts) hosts.add(host);
+    for (const host of [...hosts]) {
+      const match = host.match(/^(\[[^\]]+\]|[^:]+)(:\d+)?$/);
+      if (!match || !loopbackHosts.includes(match[1]!)) continue;
+      for (const loopback of loopbackHosts) hosts.add(`${loopback}${match[2] ?? ""}`);
     }
     return [...hosts];
   }

@@ -595,6 +595,27 @@ describe("PanelView plain panel links", () => {
     expect(event.preventDefault).toHaveBeenCalled();
   });
 
+  it("opens another local server's link as a browser panel, not as a panel link", async () => {
+    const { panelId, panelView, webContents, panelOrchestrator } = createHarness({
+      externalHost: "localhost",
+      gatewayServerUrl: "http://127.0.0.1:1234",
+    });
+    await panelView.createViewForPanel(panelId, "http://127.0.0.1:1234/about/new/", "ctx-current");
+
+    const event = { preventDefault: vi.fn() };
+    webContents.emit("will-navigate", event, "http://localhost:5173/panels/chat/");
+
+    await vi.waitFor(() => {
+      expect(panelOrchestrator.createBrowserUrlPanel).toHaveBeenCalledWith(
+        panelId,
+        "http://localhost:5173/panels/chat/",
+        expect.anything()
+      );
+    });
+    expect(event.preventDefault).toHaveBeenCalled();
+    expect(panelOrchestrator.navigatePanel).not.toHaveBeenCalled();
+  });
+
   it.each(["background-tab", "foreground-tab"] as const)(
     "opens explicit %s links without asking for popup permission",
     async (disposition) => {

@@ -21,6 +21,7 @@ export interface ParsedPanelUrl extends PanelLocation {
 }
 
 interface ParsedUrlLike {
+  scheme: "http" | "https";
   hostname: string;
   port: string;
   pathname: string;
@@ -68,27 +69,32 @@ function parseUrlLike(url: string): ParsedUrlLike | null {
     }
   }
 
+  const scheme = match[1]!.toLowerCase() as "http" | "https";
   return {
+    scheme,
     hostname: authority.hostname,
-    port: authority.port,
+    // An explicit default port names the same origin as none.
+    port: authority.port === (scheme === "https" ? "443" : "80") ? "" : authority.port,
     pathname,
     queryParams,
   };
 }
 
 /**
- * Check if a URL targets the managed host (with or without explicit port).
+ * Check if a URL targets the managed authority: the same host and the same
+ * port, where an authority without a port means the scheme's default port.
  *
  * @param url - The URL to check
- * @param externalHost - The managed host domain (e.g. "vibestudio.example.com")
+ * @param externalHost - The managed authority (e.g. "vibestudio.example.com" or "127.0.0.1:5173")
  */
 export function isManagedHost(url: string, externalHost: string): boolean {
   const parsed = parseUrlLike(url);
   if (!parsed) return false;
   const expected = parseAuthority(externalHost);
   if (!expected) return false;
-  if (parsed.hostname !== expected.hostname) return false;
-  return !expected.port || parsed.port === expected.port;
+  // A managed authority without a port is served on the scheme's default
+  // port; another port on the same host is a different server.
+  return parsed.hostname === expected.hostname && parsed.port === expected.port;
 }
 
 function normalizeBasePath(basePath: string): string {
