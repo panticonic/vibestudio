@@ -99,6 +99,7 @@ credential: {
     tokenUrl: "https://namlu.example/oauth/token", // same origin as the credential's token endpoint
     clientId: "vibestudio",
     scope: "space:rw", // optional
+    retireUrl: "https://namlu.example/oauth/agents/retire", // optional, same origin
   },
   // audience, injection, ...
 }
@@ -115,24 +116,50 @@ grant_type=urn:ietf:params:oauth:grant-type:token-exchange
 client_id=<clientId>
 subject_token=<member's access token, refreshed first if needed>
 subject_token_type=urn:ietf:params:oauth:token-type:access_token
-actor_token={"v":1,"chain":[{"definition","instance","label"}, ...]}   (root agent first)
+actor_token={"v":2,"chain":[{"entity","program","version","label"}, ...]}   (root agent first)
 actor_token_type=urn:vibestudio:params:oauth:token-type:agent-lineage
 scope=<scope>   (when configured)
 ```
 
 The lineage is attested by the host from the entity graph: the agent entities
 (self-bound agent vessels) on the caller's launch-parent chain, root first, so
-a subagent's chain mirrors the real spawn tree. `definition` is the agent's
-version-agnostic program (`repoPath#className`) and `instance` the agent
-entity — a provider can key a durable agent identity on the program and a
-delegation on each running agent. The exchanged token is cached per
+a subagent's chain mirrors the real spawn tree. Each link names the agent
+`entity` (this one agent instance: a provider gives each entity its own agent
+principal and delegation), the `program` it runs (`repoPath#className`) and the
+exact `version` of that program (its effective version); the provider records
+program and version as attested facts about the principal ("agent running
+X@V") and never as an authorization input. The exchanged token is cached per
 (credential, agent entity) until 30 s before the provider's `expires_in` (never
 cached without one). A failed exchange fails the request with
 `agent-exchange-failed` (the provider's error code in the message); a provider
 401 on the agent token triggers one re-exchange. Neither ever falls back to
-the member's own token. Consent is the ordinary agent-scoped use grant on the
-credential. The exchange's `tokenUrl` must share its origin with the
+the member's own token. The exchange's `tokenUrl` must share its origin with the
 credential's own OAuth token endpoint, since it spends the member's token.
+
+**Consent is the host's, per program version by default.** The exchange only
+happens after the ordinary credential-use grant allows the agent. For an
+agent whose identity names a real program version the approval offers once,
+this session, **this agent only** (`agent`), and **every agent running this
+exact program version** (`version`, the highlighted default, as for any code):
+once the user trusts program X at version V, each new agent entity running X@V
+is trusted automatically, gets its own exchange (its own principal at the
+provider, with the credential's reviewed `extraParams` capabilities) and no
+prompt; a new effective version is a new subject and asks again, exactly like
+credential `version` grants. The product-baked eval harness of an inert owner
+and unresolved callers carry no program version of their own, so they are
+offered `agent` but never `version`. The provider keeps no approval state of
+its own: this grant store is the single source of approval truth.
+
+**Retirement.** When an agent entity retires, the entity-retirement cleanup
+calls the credential's `agentExchange.retireUrl` (if declared) for each
+credential of the entity's owner: a form POST of `client_id` and `entity`
+with the member's access token as the bearer. The provider revokes that
+agent's delegation (and its subagents') and retires its principal; `400
+unknown_entity` (never used) counts as done, and a credential that is revoked
+or whose member session the provider no longer honours is skipped. Any other
+failure fails the cleanup, which is retried. The entity's agent-scoped grants
+are dropped in the same step. `retireUrl` must share the token endpoint's
+origin, like `tokenUrl`.
 
 ## Host-Owned OAuth Connection
 

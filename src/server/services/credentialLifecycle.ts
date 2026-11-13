@@ -36,15 +36,17 @@ const AGENT_EXCHANGE_SKEW_MS = 30_000;
 
 export class CredentialLifecycle {
   private readonly refreshes = new Map<string, Promise<Credential & { id: string }>>();
-  /** Exchanged agent tokens by (credential id, leaf agent instance). */
+  /** Exchanged agent tokens by (credential id, leaf agent entity). */
   private readonly agentTokens = new Map<string, AgentExchangeToken>();
   private readonly agentExchanges = new Map<string, Promise<AgentExchangeToken>>();
   constructor(private readonly deps: CredentialLifecycleDeps) {}
 
   /**
    * RFC 8693 exchange of a human-attributed credential's current access token
-   * for a token attributed to the agent at the end of `lineage` (root first),
-   * acting for that human. The host performs it; the agent never holds the
+   * for a token attributed to the agent entity at the end of `lineage` (root
+   * first), acting for that human. The provider gives each entity its own
+   * agent principal; whether the user trusts the entity's program version was
+   * decided by the host's credential-use grant before this is called. The host performs it; the agent never holds the
    * subject token or the delegation authority. Tokens are reused until 30 s
    * before the provider-declared expiry and never beyond it.
    */
@@ -58,7 +60,7 @@ export class CredentialLifecycle {
         new CredentialLifecycleError("invalid_connection_spec", "agent lineage is empty")
       );
     }
-    const key = `${credential.id}\u0000${leaf.instance}`;
+    const key = `${credential.id}\u0000${leaf.entity}`;
     const cached = this.agentTokens.get(key);
     if (cached?.expiresAt !== undefined && cached.expiresAt > Date.now() + AGENT_EXCHANGE_SKEW_MS) {
       return Promise.resolve(cached);
@@ -76,9 +78,53 @@ export class CredentialLifecycle {
     return exchange;
   }
 
+  /**
+   * Report to the provider that agent entity `entityId` was retired, so it
+   * revokes that agent's authority and retires its principal (idempotent; a
+   * provider that never saw the entity answers 400 `unknown_entity`, which is
+   * success). A credential without `agentExchange.retireUrl` has nothing to
+   * report. Spends the owner's access token (refreshed first), so it is only
+   * ever called for the entity's own owner's credential. When the provider no
+   * longer honours that member's session (the refresh material is missing or
+   * rejected) the host can no longer mint agent tokens for it either, so there
+   * is nothing to retire and this returns; a transport failure or a rejected
+   * retirement throws.
+   */
+  async retireAgentEntity(
+    credential: Credential & { id: string },
+    entityId: string
+  ): Promise<void> {
+    this.forgetAgentToken(credential.id, entityId);
+    const exchange = credential.agentExchange;
+    if (credential.actor !== "human" || !exchange?.retireUrl) return;
+    let subject: Credential & { id: string };
+    try {
+      subject = await this.refreshIfNeeded(credential);
+    } catch (error) {
+      if (error instanceof CredentialLifecycleError) return;
+      throw error;
+    }
+    const response = await fetch(exchange.retireUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        authorization: `Bearer ${subject.accessToken}`,
+      },
+      body: new URLSearchParams({ client_id: exchange.clientId, entity: entityId }),
+    });
+    const text = await response.text();
+    if (response.ok) return;
+    const data = parseJsonObject(text, { strict: false });
+    if (data?.["error"] === "unknown_entity") return;
+    throw new CredentialLifecycleError(
+      "token_exchange_failed",
+      `agent retirement failed: ${formatOAuthTokenExchangeError(response.status, data, text)}`
+    );
+  }
+
   /** Drop a cached agent token the provider has since rejected. */
-  forgetAgentToken(credentialId: string, leafInstance: string): void {
-    this.agentTokens.delete(`${credentialId}\u0000${leafInstance}`);
+  forgetAgentToken(credentialId: string, leafEntity: string): void {
+    this.agentTokens.delete(`${credentialId}\u0000${leafEntity}`);
   }
 
   private async performAgentExchange(
@@ -102,10 +148,11 @@ export class CredentialLifecycle {
     body.set(
       "actor_token",
       JSON.stringify({
-        v: 1,
+        v: 2,
         chain: lineage.map((link) => ({
-          definition: link.definition,
-          instance: link.instance,
+          entity: link.entity,
+          program: link.program,
+          version: link.version,
           ...(link.label ? { label: link.label } : {}),
         })),
       })

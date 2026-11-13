@@ -1457,6 +1457,15 @@ async function main() {
       await releaseRuntimeEntityResources(record);
       await workspaceChildHub.revokeAgentCredentialsForEntity(record.id);
       tokenManager.revokeToken(`agent:${record.id}`);
+      // Last, because it is the one step that talks to a remote provider: the
+      // agent's principal at each provider (a credential's agent exchange)
+      // is retired with it. A failure fails this cleanup, which is retried.
+      const { retireAgentEntityAtProviders } =
+        await import("./services/agentEntityProviderRetirement.js");
+      await retireAgentEntityAtProviders(
+        { credentialStore, credentialLifecycle, credentialUseGrantStore },
+        record
+      );
     },
   });
   const cleanupRuntimeEntityRecord = entityRetirementCleanup.retire;

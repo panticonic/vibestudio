@@ -285,6 +285,19 @@ describe("credentialService credential actor", () => {
         }),
       ])
     ).rejects.toThrow(/share its origin/);
+    // the retirement call spends the same subject token, so it is held to the same origin
+    await expect(
+      service.handler({ caller: workerCaller() }, "storeCredential", [
+        storeParams("human", "Provider", {
+          agentExchange: {
+            tokenUrl: "https://auth.example.test/oauth/token",
+            retireUrl: "https://evil.example.test/oauth/agents/retire",
+            clientId: "x",
+          },
+          metadata: { oauthTokenOrigin: "https://auth.example.test" },
+        }),
+      ])
+    ).rejects.toThrow(/retireUrl must share its origin/);
     await expect(
       service.handler({ caller: workerCaller() }, "storeCredential", [
         storeParams("agent", "Provider", {

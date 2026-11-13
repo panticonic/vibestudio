@@ -3,6 +3,7 @@ import { authorityFailureForDecision } from "@vibestudio/shared/authorization";
 import { RpcBoundaryError } from "@vibestudio/rpc";
 import type { Credential } from "@vibestudio/credential-client/types";
 import type { CredentialCallerRefusal } from "@vibestudio/credential-client/credentialActor";
+import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
 
 export function credentialApprovalDeniedError(credentialId: string): RpcBoundaryError {
   const capability = "credentials.use";
@@ -33,8 +34,13 @@ export type CredentialApprovalDecision = Extract<
 
 /**
  * Credential consent has exactly three lifetimes: one request, this session,
- * or the verified durable subject (agent identity for agent-owned eval;
- * otherwise the exact installed code version).
+ * or a verified durable subject: the exact installed code version, which is
+ * the default for everyone, agents included (once the user trusts a program
+ * at a version, each new agent running it is trusted without a prompt, and a
+ * new effective version asks again), or, narrower and only for an agent, that
+ * one agent entity. An agent whose identity names no program version of its
+ * own (the product-baked eval harness of an inert owner, or an unresolved
+ * caller) is never offered `version`: that grant would cover every such caller.
  */
 export function credentialApprovalDecisions(
   identity: CredentialGrantIdentity,
@@ -44,9 +50,18 @@ export function credentialApprovalDecisions(
   return [
     ...(options.preapprovesUse ? [] : (["once"] as const)),
     "session",
-    identity.agentId ? "agent" : "version",
+    ...(identity.agentId ? (["agent"] as const) : []),
+    ...(!identity.agentId || namesProgramVersion(identity) ? (["version"] as const) : []),
     "deny",
   ];
+}
+
+function namesProgramVersion(identity: CredentialGrantIdentity): boolean {
+  return (
+    identity.repoPath !== INTERNAL_DO_SOURCE &&
+    identity.effectiveVersion !== "internal" &&
+    identity.effectiveVersion !== "unknown"
+  );
 }
 
 export function assertCredentialApprovalDecision(

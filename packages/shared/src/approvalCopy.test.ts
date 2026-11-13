@@ -724,6 +724,20 @@ describe("approvalCopy", () => {
     expect(getStandardActionCopy(evalNetworkEgress).version!.label).toBe(
       "Allow all internet access for this agent"
     );
+    // An agent with a real program version is offered both "this agent" and the version.
+    const agentWithVersion = {
+      ...evalCredential,
+      allowedDecisions: ["once", "session", "agent", "version", "deny"] as const,
+    } as Extract<PendingApproval, { kind: "credential" }>;
+    expect(getStandardActionCopy(agentWithVersion).version!.label).toBe(
+      "Remember for agents like this"
+    );
+    expect(getStandardActionCopy(agentWithVersion).version!.description).toContain(
+      "every agent running this exact version"
+    );
+    expect(
+      getStandardApprovalDecisionActions(agentWithVersion).map((action) => action.decision)
+    ).toEqual(["once", "session", "agent", "version", "deny"]);
     expect(getStandardActionCopy(evalCredential).version!.label).toBe("Remember for this agent");
     expect(getStandardActionCopy(evalCredential).version!.description).toContain("this agent");
     expect(getStandardActionCopy(evalCredential).version!.description).toContain(

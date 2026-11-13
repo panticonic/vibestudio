@@ -21,7 +21,7 @@ describe("credentialApprovalDecisions", () => {
     });
   });
 
-  it("offers the exact installed version for code and the stable agent for agent-owned eval", () => {
+  it("offers the exact version for everyone, the default for agents too; an agent may also be trusted as this one agent", () => {
     expect(
       credentialApprovalDecisions({
         repoPath: "extensions/github",
@@ -34,7 +34,20 @@ describe("credentialApprovalDecisions", () => {
         effectiveVersion: "internal",
         agentId: "agent:research",
       })
-    ).toEqual(["once", "session", "agent", "deny"]);
+    ).toEqual(["once", "session", "agent", "deny"]); // the eval harness has no program version of its own
+    expect(
+      credentialApprovalDecisions({
+        repoPath: "workers/agent-worker",
+        effectiveVersion: "ev-agent",
+        agentId: "agent:research",
+      })
+    ).toEqual(["once", "session", "agent", "version", "deny"]);
+    expect(() =>
+      assertCredentialApprovalDecision(
+        { repoPath: "vibestudio/internal", effectiveVersion: "internal", agentId: "agent:x" },
+        "version"
+      )
+    ).toThrow("cannot be represented");
   });
 
   it("keeps destructive credential uses one-shot and rejects unrepresentable scopes", () => {
@@ -61,6 +74,6 @@ describe("credentialApprovalDecisions", () => {
         },
         { preapprovesUse: true }
       )
-    ).toEqual(["session", "agent", "deny"]);
+    ).toEqual(["session", "agent", "version", "deny"]);
   });
 });

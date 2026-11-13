@@ -377,6 +377,7 @@ export const CredentialAgentExchangeSchema = z
     clientId: z.string().min(1).max(512),
     scope: z.string().min(1).max(1024).optional(),
     extraParams: z.record(z.string().max(1024)).optional(),
+    retireUrl: z.string().url().optional(),
   })
   .strict()
   .describe(

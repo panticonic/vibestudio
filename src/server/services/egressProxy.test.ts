@@ -3572,6 +3572,24 @@ describe("EgressProxy credential actor attribution", () => {
         agentBinding: { entityId: agentId, contextId: "ctx", channelId: "chan-child" },
         parentId: "worker-fork",
       },
+      // Another agent running the SAME program version (a new chat, say), and one
+      // running a NEW version of it.
+      {
+        id: "agent-sibling",
+        kind: "do" as const,
+        source: { repoPath: "workers/agent-worker", effectiveVersion: "v2" },
+        className: "AiChatWorker",
+        agentBinding: { entityId: "agent-sibling", contextId: "ctx", channelId: "chan-sib" },
+        parentId: "panel:chat",
+      },
+      {
+        id: "agent-v3",
+        kind: "do" as const,
+        source: { repoPath: "workers/agent-worker", effectiveVersion: "v3" },
+        className: "AiChatWorker",
+        agentBinding: { entityId: "agent-v3", contextId: "ctx", channelId: "chan-v3" },
+        parentId: "panel:chat",
+      },
     ].map((record) => [
       record.id,
       {
@@ -3857,16 +3875,18 @@ describe("EgressProxy credential actor attribution", () => {
         subject_token: "human-token",
         subject_token_type: "urn:ietf:params:oauth:token-type:access_token",
         actor_token: JSON.stringify({
-          v: 1,
+          v: 2,
           chain: [
             {
-              definition: "workers/agent-worker#AiChatWorker",
-              instance: "agent-root",
+              entity: "agent-root",
+              program: "workers/agent-worker#AiChatWorker",
+              version: "v1",
               label: "AiChatWorker",
             },
             {
-              definition: "workers/agent-worker#AiChatWorker",
-              instance: agentId,
+              entity: agentId,
+              program: "workers/agent-worker#AiChatWorker",
+              version: "v2",
               label: "AiChatWorker",
             },
           ],
@@ -3937,6 +3957,86 @@ describe("EgressProxy credential actor attribution", () => {
       expect(exchangeCalls()).toHaveLength(2);
       expect(injectedAuthorization(0)).toBe("Bearer agent-exchanged-1");
       expect(injectedAuthorization(1)).toBe("Bearer agent-exchanged-2");
+    });
+
+    describe("trust per program version (the default for agents)", () => {
+      const leafOf = (body: URLSearchParams) =>
+        (
+          JSON.parse(body.get("actor_token")!) as {
+            chain: { entity: string; program: string; version: string }[];
+          }
+        ).chain.at(-1)!;
+      const get = (caller: ReturnType<typeof evalCaller>) => ({
+        caller: asUser(caller, DARA),
+        url: "https://api.example.test/v1/items",
+        method: "GET",
+      });
+
+      it("offers the program version as well as this one agent, and a version grant covers each later agent running it, each its own principal, no prompt", async () => {
+        const approvalQueue = createApprovalQueueMock("version");
+        const proxy = proxyWith([humanCredential({ agentExchange: exchange })], approvalQueue, {
+          lifecycle: true,
+        });
+        stubFetch();
+
+        await proxy.forwardProxyFetch(get(evalCaller(agentId, "v2")));
+        expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+        expect(vi.mocked(approvalQueue.request).mock.calls[0]![0]).toMatchObject({
+          allowedDecisions: ["once", "session", "agent", "version", "deny"],
+        });
+
+        // A brand-new agent entity of the same program version: trusted, no prompt,
+        // and exchanged as ITS OWN entity (its own principal at the provider).
+        await proxy.forwardProxyFetch(get(evalCaller("agent-sibling", "v2")));
+        expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+        const leaves = exchangeCalls().map(leafOf);
+        expect(leaves).toEqual([
+          {
+            entity: agentId,
+            program: "workers/agent-worker#AiChatWorker",
+            version: "v2",
+            label: "AiChatWorker",
+          },
+          {
+            entity: "agent-sibling",
+            program: "workers/agent-worker#AiChatWorker",
+            version: "v2",
+            label: "AiChatWorker",
+          },
+        ]);
+        expect(injectedAuthorization(0)).toBe("Bearer agent-exchanged-1");
+        expect(injectedAuthorization(1)).toBe("Bearer agent-exchanged-2");
+
+        // A new effective version of the program is a new subject: it asks again.
+        await proxy.forwardProxyFetch(get(evalCaller("agent-v3", "v3")));
+        expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+        expect(leafOf(exchangeCalls()[2]!)).toMatchObject({ entity: "agent-v3", version: "v3" });
+      });
+
+      it("a this-agent-only choice stays narrow: the next agent of the same program version is asked", async () => {
+        const approvalQueue = createApprovalQueueMock("agent");
+        const proxy = proxyWith([humanCredential({ agentExchange: exchange })], approvalQueue, {
+          lifecycle: true,
+        });
+        stubFetch();
+
+        await proxy.forwardProxyFetch(get(evalCaller(agentId, "v2")));
+        await proxy.forwardProxyFetch(get(evalCaller(agentId, "v2")));
+        expect(approvalQueue.request).toHaveBeenCalledTimes(1);
+        await proxy.forwardProxyFetch(get(evalCaller("agent-sibling", "v2")));
+        expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+      });
+
+      it("a once choice is not remembered for the same agent or its siblings", async () => {
+        const approvalQueue = createApprovalQueueMock("once");
+        const proxy = proxyWith([humanCredential({ agentExchange: exchange })], approvalQueue, {
+          lifecycle: true,
+        });
+        stubFetch();
+        await proxy.forwardProxyFetch(get(evalCaller(agentId, "v2")));
+        await proxy.forwardProxyFetch(get(evalCaller("agent-sibling", "v2")));
+        expect(approvalQueue.request).toHaveBeenCalledTimes(2);
+      });
     });
 
     function bobsWithExchange(): Credential {

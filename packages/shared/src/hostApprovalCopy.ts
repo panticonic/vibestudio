@@ -79,6 +79,10 @@ export const HOST_APPROVAL_COPY = {
   trust: {
     versionLabel: "Remember for this version",
     agentIdentityLabel: "Remember for this agent",
+    // A credential request from an agent offers both "this agent" (the `agent`
+    // decision) and the exact program version (the `version` decision, the default).
+    agentProgramLabel: "Remember for agents like this",
+    agentProgramSubject: "every agent running this exact version",
     serviceIdentityLabel: "Remember for this service",
     versionSubject: "this version",
     agentIdentitySubject: "this agent",

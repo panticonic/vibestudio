@@ -2076,10 +2076,10 @@ export class EgressProxy {
 
   /**
    * Host-attested lineage of the agent `agentId`, root agent first: the agent
-   * entities (self-bound agent vessels) on its launch-parent chain. An agent is
-   * a delegation of its program, so `definition` is the version-agnostic code
-   * identity and `instance` the entity; a subagent's chain therefore mirrors
-   * the real spawn tree.
+   * entities (self-bound agent vessels) on its launch-parent chain. Each agent
+   * entity is its own principal at the provider (`entity`), carrying the
+   * program and exact version it runs as attested facts; a subagent's chain
+   * mirrors the real spawn tree.
    */
   private agentLineage(agentId: string): CredentialAgentLineageLink[] {
     const graph = this.deps.entityGraph;
@@ -2093,7 +2093,7 @@ export class EgressProxy {
       if (record.agentBinding?.entityId === record.id) chain.unshift(agentLineageLink(record));
       id = record.parentId;
     }
-    if (chain.at(-1)?.instance !== agentId) {
+    if (chain.at(-1)?.entity !== agentId) {
       throw new ForwardRejection(
         403,
         "agent-exchange-failed: agent lineage is unavailable",
@@ -2118,8 +2118,7 @@ export class EgressProxy {
       // The provider rejected the agent token: exchange again (refreshing the
       // subject first if needed). Never fall back to the human token.
       const leaf = exchanged.lineage.at(-1);
-      if (leaf)
-        this.deps.credentialLifecycle?.forgetAgentToken?.(exchanged.source.id, leaf.instance);
+      if (leaf) this.deps.credentialLifecycle?.forgetAgentToken?.(exchanged.source.id, leaf.entity);
       authorization.credential = (
         await this.exchangeAgentCredential(exchanged.source, exchanged.lineage)
       ).credential;
@@ -3192,8 +3191,9 @@ function agentLineageLink(record: EntityRecord): CredentialAgentLineageLink {
     ? `${record.source.repoPath}#${record.className}`
     : record.source.repoPath;
   return {
-    definition: program,
-    instance: record.id,
+    entity: record.id,
+    program,
+    version: record.source.effectiveVersion,
     label: record.className ?? record.source.repoPath,
   };
 }
@@ -3871,14 +3871,21 @@ function grantForDecision(
     grantedAt,
     grantedBy: decision,
   };
-  return attribution.agentId
-    ? { ...base, scope: "agent", agentId: attribution.agentId }
-    : {
-        ...base,
-        scope: "version",
-        repoPath: attribution.repoPath,
-        effectiveVersion: attribution.effectiveVersion,
-      };
+  // The decision names the scope. An agent may be trusted per exact program
+  // version (the default: every agent running this version, each its own
+  // principal at the provider) or as this one agent only.
+  if (decision === "agent") {
+    if (!attribution.agentId) {
+      throw new Error("An agent-scoped credential grant needs an agent identity");
+    }
+    return { ...base, scope: "agent", agentId: attribution.agentId };
+  }
+  return {
+    ...base,
+    scope: "version",
+    repoPath: attribution.repoPath,
+    effectiveVersion: attribution.effectiveVersion,
+  };
 }
 
 function upsertCredentialUseGrant(

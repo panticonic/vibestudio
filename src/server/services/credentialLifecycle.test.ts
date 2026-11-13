@@ -199,4 +199,79 @@ describe("CredentialLifecycle", () => {
     ).rejects.toMatchObject({ code: "client_config_unavailable" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  describe("retiring an agent entity at the provider", () => {
+    const RETIRE_URL = "https://auth.example.test/oauth/agents/retire";
+    const human = (overrides: Partial<Credential> = {}) =>
+      credential({
+        actor: "human",
+        accessToken: "human-access",
+        expiresAt: Date.now() + 3_600_000,
+        agentExchange: {
+          tokenUrl: "https://auth.example.test/oauth/token",
+          clientId: "vibestudio",
+          retireUrl: RETIRE_URL,
+        },
+        ...overrides,
+      });
+    const lifecycle = () =>
+      new CredentialLifecycle({
+        credentialStore: { saveUrlBound: vi.fn(async () => undefined) },
+        clientConfigStore: { loadVersion: vi.fn() },
+      });
+
+    it("reports the entity to the retire endpoint with the owner's access token, and forgets its cached agent token", async () => {
+      const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
+      vi.stubGlobal("fetch", fetchMock);
+      const subject = lifecycle();
+      const forget = vi.spyOn(subject, "forgetAgentToken");
+
+      await subject.retireAgentEntity(human(), "agent-entity-1");
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(url).toBe(RETIRE_URL);
+      expect(init.method).toBe("POST");
+      expect(new Headers(init.headers).get("authorization")).toBe("Bearer human-access");
+      expect(Object.fromEntries(init.body as URLSearchParams)).toEqual({
+        client_id: "vibestudio",
+        entity: "agent-entity-1",
+      });
+      expect(forget).toHaveBeenCalledWith("credential-1", "agent-entity-1");
+    });
+
+    it("treats an entity the provider never saw as already retired, and fails on any other refusal", async () => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ error: "unknown_entity" }, { status: 400 }))
+      );
+      await expect(lifecycle().retireAgentEntity(human(), "never-used")).resolves.toBeUndefined();
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ error: "invalid_token" }, { status: 401 }))
+      );
+      await expect(lifecycle().retireAgentEntity(human(), "e")).rejects.toMatchObject({
+        code: "token_exchange_failed",
+        message: expect.stringContaining("invalid_token"),
+      });
+    });
+
+    it("has nothing to report without a retire endpoint, and does nothing for a session the provider no longer honours", async () => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      await lifecycle().retireAgentEntity(
+        human({
+          agentExchange: { tokenUrl: "https://auth.example.test/oauth/token", clientId: "v" },
+        }),
+        "e"
+      );
+      // expired with no refresh material: the host cannot mint agent tokens for it either
+      await lifecycle().retireAgentEntity(
+        human({ expiresAt: 1, refreshToken: undefined, oauthRefresh: undefined }),
+        "e"
+      );
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+  });
 });

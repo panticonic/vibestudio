@@ -59,7 +59,21 @@ function identityTrustKind(approval: PendingApproval): "agent" | "service" {
   return category === "agent" || category === "eval" ? "agent" : "service";
 }
 
+/**
+ * A credential request that offers both `agent` (this one agent) and `version`
+ * (every agent running this exact program version, the default): the version
+ * action must not read as the single-agent one.
+ */
+function offersAgentAndVersion(approval: PendingApproval): boolean {
+  return (
+    approval.kind === "credential" &&
+    approval.allowedDecisions.includes("agent") &&
+    approval.allowedDecisions.includes("version")
+  );
+}
+
 function trustVersionLabel(approval: PendingApproval, fallback = "Trust version"): string {
+  if (offersAgentAndVersion(approval)) return HOST_APPROVAL_COPY.trust.agentProgramLabel;
   if (isIdentityScopedVersionApproval(approval)) {
     return identityTrustKind(approval) === "agent"
       ? HOST_APPROVAL_COPY.trust.agentIdentityLabel
@@ -78,6 +92,7 @@ function trustSubject(approval: PendingApproval): string {
 }
 
 function exactTrustSubject(approval: PendingApproval): string {
+  if (offersAgentAndVersion(approval)) return HOST_APPROVAL_COPY.trust.agentProgramSubject;
   if (isIdentityScopedVersionApproval(approval)) {
     return identityTrustKind(approval) === "agent"
       ? HOST_APPROVAL_COPY.trust.exactAgentIdentitySubject

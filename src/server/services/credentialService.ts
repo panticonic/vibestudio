@@ -2173,14 +2173,21 @@ function grantForDecision(
     grantedAt,
     grantedBy: decision,
   };
-  return identity.agentId
-    ? { ...base, scope: "agent", agentId: identity.agentId }
-    : {
-        ...base,
-        scope: "version",
-        repoPath: identity.repoPath,
-        effectiveVersion: identity.effectiveVersion,
-      };
+  // The decision names the scope. An agent may be trusted per exact program
+  // version (the default: every agent running this version, each its own
+  // principal at the provider) or as this one agent only.
+  if (decision === "agent") {
+    if (!identity.agentId) {
+      throw new Error("An agent-scoped credential grant needs an agent identity");
+    }
+    return { ...base, scope: "agent", agentId: identity.agentId };
+  }
+  return {
+    ...base,
+    scope: "version",
+    repoPath: identity.repoPath,
+    effectiveVersion: identity.effectiveVersion,
+  };
 }
 
 function upsertCredentialUseGrant(
@@ -2280,16 +2287,24 @@ function assertAgentExchangeTarget(
   }
   const issuer = request.oauthRefresh?.tokenUrl ?? request.metadata?.["oauthTokenOrigin"];
   let exchangeOrigin: string;
+  let retireOrigin: string | undefined;
   let issuerOrigin: string;
   try {
     exchangeOrigin = new URL(exchange.tokenUrl).origin;
+    retireOrigin = exchange.retireUrl ? new URL(exchange.retireUrl).origin : undefined;
     issuerOrigin = issuer ? new URL(issuer).origin : "";
   } catch {
-    throw new Error("agentExchange tokenUrl must be an absolute URL");
+    throw new Error("agentExchange tokenUrl and retireUrl must be absolute URLs");
   }
   if (!issuerOrigin || exchangeOrigin !== issuerOrigin) {
     throw new Error(
       "agentExchange tokenUrl must share its origin with the credential's OAuth token endpoint"
+    );
+  }
+  // The retire call spends the same subject token, so it gets the same rule.
+  if (retireOrigin !== undefined && retireOrigin !== issuerOrigin) {
+    throw new Error(
+      "agentExchange retireUrl must share its origin with the credential's OAuth token endpoint"
     );
   }
   for (const name of Object.keys(exchange.extraParams ?? {})) {

@@ -48,14 +48,31 @@ export interface CredentialAgentExchange {
   scope?: string;
   /** Additional form parameters; may not override the exchange's own names. */
   extraParams?: Record<string, string>;
+  /**
+   * Where the host reports that an agent entity was retired, so the provider
+   * can revoke that agent's authority and retire its principal (the provider
+   * gives each agent entity its own principal). Optional; same origin rule as
+   * `tokenUrl`. The host POSTs `client_id` and `entity` as a form body with the
+   * owner's access token as the bearer; a provider that has never seen the
+   * entity answers 400 `unknown_entity`, which is success.
+   */
+  retireUrl?: string;
 }
 
-/** One agent in a host-attested lineage, ordered root first. */
+/**
+ * One agent entity in a host-attested lineage, ordered root first. The
+ * provider keys one agent principal (and its delegation) on `entity`, and
+ * records `program` and `version` as attested facts about it. Whether the user
+ * trusts that program version is the host's own decision (the credential-use
+ * grant store); the provider never sees it as an approval.
+ */
 export interface CredentialAgentLineageLink {
-  /** Durable agent identity (the provider keys its agent principal on this). */
-  definition: string;
-  /** This live run of that agent (the provider keys a delegation on this). */
-  instance: string;
+  /** The agent entity: this one agent instance (the provider's principal is per entity). */
+  entity: string;
+  /** What the entity runs: `repoPath#className` (or the repo path for a class-less agent). */
+  program: string;
+  /** The exact effective version of that program the entity runs. */
+  version: string;
   label?: string;
 }
 
