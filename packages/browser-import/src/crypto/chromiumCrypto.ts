@@ -9,7 +9,7 @@ import { BrowserDataError } from "../errors.js";
  * across Linux, macOS, and Windows.
  */
 export class ChromiumCrypto {
-  private keyCache = new Map<string, Buffer>();
+  private keyCache = new Map<string, Promise<Buffer>>();
   private platform: NodeJS.Platform;
 
   constructor(platform?: NodeJS.Platform) {
@@ -152,22 +152,22 @@ export class ChromiumCrypto {
       );
     }
 
-    const { getLinuxDecryptionKey, decryptLinuxValue } = await import("./platforms/linux.js");
+    const { getLinuxDecryptionKey, decryptLinuxValue, deriveKey } =
+      await import("./platforms/linux.js");
 
-    let key: Buffer;
-    try {
-      key = await this.getCachedKey(`linux:v11:${browser}`, () =>
-        getLinuxDecryptionKey(browser, "v11")
-      );
-    } catch (err) {
-      if (err instanceof BrowserDataError && err.code === "KEYRING_UNAVAILABLE") {
-        // Fall back to "peanuts" key
-        const { deriveKey } = await import("./platforms/linux.js");
-        key = deriveKey("peanuts");
-      } else {
+    // The keyring answer, including its absence, is resolved once per crypto
+    // instance (one import read): every v11 value would otherwise re-run the
+    // blocking keyring lookups.
+    const key = await this.getCachedKey(`linux:v11:${browser}`, async () => {
+      try {
+        return await getLinuxDecryptionKey(browser, "v11");
+      } catch (err) {
+        if (err instanceof BrowserDataError && err.code === "KEYRING_UNAVAILABLE") {
+          return deriveKey("peanuts");
+        }
         throw err;
       }
-    }
+    });
 
     return decryptLinuxValue(encrypted, key);
   }
@@ -187,12 +187,14 @@ export class ChromiumCrypto {
 
   // ---- Key caching ----
 
-  private async getCachedKey(cacheKey: string, derive: () => Promise<Buffer>): Promise<Buffer> {
-    const cached = this.keyCache.get(cacheKey);
-    if (cached) return cached;
-
-    const key = await derive();
-    this.keyCache.set(cacheKey, key);
+  private getCachedKey(cacheKey: string, derive: () => Promise<Buffer>): Promise<Buffer> {
+    let key = this.keyCache.get(cacheKey);
+    if (!key) {
+      key = derive();
+      this.keyCache.set(cacheKey, key);
+      // A failed derivation is not an answer; the next value asks again.
+      key.catch(() => this.keyCache.delete(cacheKey));
+    }
     return key;
   }
 }
