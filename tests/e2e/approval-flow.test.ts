@@ -83,6 +83,7 @@ async function createHarness(): Promise<Harness> {
   });
   const metrics = createPushMetrics();
   const pushService = createPushService({
+    deviceOfPrincipal: () => null,
     workspaceId: "ws-test",
     serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
     databasePath: tempDatabasePath(),

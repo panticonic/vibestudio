@@ -43,6 +43,25 @@ describe("BrowserPermissionGrantProjection", () => {
     }
   });
 
+  it("remembers motion grants like any reusable site capability", () => {
+    const { canonical, projection } = createProjection();
+    projection.remember("env", "alice", "epoch-motion-123456789", [
+      {
+        origin: "https://sensors.example",
+        capability: "motion",
+        decision: "allow",
+        scope: "always",
+        updatedAt: 1,
+      },
+    ]);
+    expect(
+      projection.get("env", "alice", "epoch-motion-123456789", "https://sensors.example", "motion")
+    ).toEqual(
+      expect.objectContaining({ capability: "motion", decision: "allow", scope: "always" })
+    );
+    canonical.close();
+  });
+
   it("stores browser decisions as exact user grants scoped by environment and epoch", () => {
     const { canonical, projection } = createProjection();
     projection.remember("environment-a", "alice", "epoch-a-123456789", [

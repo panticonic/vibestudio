@@ -680,6 +680,8 @@ function capabilityLabel(capability: BrowserPermissionCapability): string {
       return "Screen capture";
     case "geolocation":
       return "Location";
+    case "motion":
+      return "Motion and orientation";
     case "notifications":
       return "Notifications";
     case "downloads":

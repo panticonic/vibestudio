@@ -984,6 +984,7 @@ export function createDesktopWorkspaceRuntime(deps: {
           "build:complete",
           "panel-tree-invalidated",
           "panel-presentation-changed",
+          "panel-presentation-requested",
           "panel:runtimeLeaseChanged",
           "panel:executionActivated",
           "panel:executionFailed",

@@ -378,6 +378,31 @@ export function createServerEventBridge(
       deps.notifyError?.(`${source} failed`, message);
     }
 
+    if (bareEvent === "panel-presentation-requested") {
+      const request = payload as { slotId?: unknown; deviceId?: unknown; focus?: unknown };
+      if (
+        panelOrchestrator &&
+        typeof request.slotId === "string" &&
+        typeof request.deviceId === "string"
+      ) {
+        void panelOrchestrator
+          .handlePresentationRequested({
+            slotId: request.slotId,
+            deviceId: request.deviceId,
+            focus: request.focus !== false,
+          })
+          .catch((error: unknown) =>
+            deps.warn(
+              `[panelPresentation] could not present ${request.slotId}: ${
+                error instanceof Error ? error.message : String(error)
+              }`
+            )
+          );
+      }
+      emitNormalized(bareEvent, payload);
+      return;
+    }
+
     if (bareEvent === "panel-tree-invalidated") {
       deps.onPanelTreeInvalidated?.(payload as PanelTreeInvalidation);
       emitNormalized(bareEvent, payload);

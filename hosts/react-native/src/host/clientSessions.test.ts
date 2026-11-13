@@ -56,6 +56,12 @@ function launched(granted: ClientCapability[]): LaunchedClient {
 }
 
 function setup(granted: ClientCapability[] = ["device-session", "hub-control", "panel-hosting"]) {
+  const devicePowers = {
+    setKeepAwake: vi.fn(async (_on: boolean) => undefined),
+    haptic: vi.fn(async (_kind: string) => undefined),
+    speak: vi.fn(async (_request: { text: string; lang?: string }) => undefined),
+    stopSpeaking: vi.fn(async () => undefined),
+  };
   const { openers, opened } = fakeOpeners((kind) =>
     kind === "principal" ? PRINCIPAL : "shell:dev1"
   );
@@ -77,6 +83,7 @@ function setup(granted: ClientCapability[] = ["device-session", "hub-control", "
       setClipboard: vi.fn(async () => undefined),
       openExternal: vi.fn(async () => undefined),
       browserImport: {} as never,
+      devicePowers,
     },
     hooks,
     notifications: {} as never,
@@ -92,7 +99,7 @@ function setup(granted: ClientCapability[] = ["device-session", "hub-control", "
     return decodeRpcJson(outcome.resultJson);
   });
   emit = host.emit;
-  return { instance, channel, opened, hooks, events, state };
+  return { instance, channel, opened, hooks, events, state, devicePowers };
 }
 
 const request = (from: string): RpcEnvelope =>
@@ -355,6 +362,26 @@ describe("state, updates and device calls", () => {
     t.instance.setCapabilities(["device-session", "clipboard"]);
     expect(api.capabilities.has("clipboard")).toBe(true);
     await api.clipboard.setString("x");
+  });
+
+  it("serves device powers only to a client that holds them", async () => {
+    const t = setup(["device-session"]);
+    const api = await createRnClientApi(t.channel);
+    await expect(api.devicePowers.setKeepAwake(true)).rejects.toMatchObject({
+      code: "CAPABILITY_NOT_GRANTED",
+    });
+    t.instance.setCapabilities(["device-session", "device-powers"]);
+    await api.devicePowers.setKeepAwake(true);
+    await api.devicePowers.haptic("success");
+    await api.devicePowers.speak({ text: "Turn left", lang: "en-GB" });
+    await api.devicePowers.stopSpeaking();
+    expect(t.devicePowers.setKeepAwake).toHaveBeenCalledWith(true);
+    expect(t.devicePowers.haptic).toHaveBeenCalledWith("success");
+    expect(t.devicePowers.speak).toHaveBeenCalledWith({ text: "Turn left", lang: "en-GB" });
+    expect(t.devicePowers.stopSpeaking).toHaveBeenCalled();
+    await expect(api.devicePowers.haptic("rumble" as never)).rejects.toMatchObject({
+      code: "BAD_REQUEST",
+    });
   });
 });
 

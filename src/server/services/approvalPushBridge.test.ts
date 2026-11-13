@@ -45,6 +45,7 @@ function createPushMock(): PushServiceInternal & { triggerRegistrationsChanged()
       clientId: "mobile-1",
       platform: "android",
       token: "token-1",
+      deviceId: null,
       registeredAt: 1,
     },
     {
@@ -52,6 +53,7 @@ function createPushMock(): PushServiceInternal & { triggerRegistrationsChanged()
       clientId: "mobile-2",
       platform: "ios",
       token: "token-2",
+      deviceId: null,
       registeredAt: 1,
     },
   ];

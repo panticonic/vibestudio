@@ -402,6 +402,12 @@ export abstract class DurableObjectBase {
               ...(typeof record["callerPanelId"] === "string"
                 ? { callerPanelId: record["callerPanelId"] }
                 : {}),
+              ...(typeof record["callerDeviceId"] === "string"
+                ? { callerDeviceId: record["callerDeviceId"] }
+                : {}),
+              ...(typeof record["callerPanelSource"] === "string"
+                ? { callerPanelSource: record["callerPanelSource"] }
+                : {}),
               ...(typeof record["userId"] === "string" ? { userId: record["userId"] } : {}),
               ...(typeof record["workspaceId"] === "string"
                 ? { workspaceId: record["workspaceId"] }
@@ -452,7 +458,9 @@ export abstract class DurableObjectBase {
       this.constructor.name,
       [...rpcExposedMethodNames(this)].flatMap((name) => {
         const wireMethod = table?.[name];
-        return wireMethod ? [{ name, wireMethod, codeSource: this.rpcSchemaCodeSource(name, wireMethod) }] : [];
+        return wireMethod
+          ? [{ name, wireMethod, codeSource: this.rpcSchemaCodeSource(name, wireMethod) }]
+          : [];
       })
     );
   }
@@ -548,6 +556,8 @@ export abstract class DurableObjectBase {
       callerId: caller.callerId,
       callerKind: caller.callerKind,
       ...(caller.callerPanelId ? { callerPanelId: caller.callerPanelId } : {}),
+      ...(caller.callerDeviceId ? { callerDeviceId: caller.callerDeviceId } : {}),
+      ...(caller.callerPanelSource ? { callerPanelSource: caller.callerPanelSource } : {}),
       ...(caller.userId ? { userId: caller.userId } : {}),
       ...(caller.workspaceId ? { workspaceId: caller.workspaceId } : {}),
     };

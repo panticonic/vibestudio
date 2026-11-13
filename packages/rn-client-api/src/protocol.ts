@@ -26,6 +26,10 @@ import {
   type IntegrationHostMethods,
 } from "./integrationProtocol";
 import {
+  DEVICE_POWERS_METHOD_CAPABILITY,
+  type DevicePowersHostMethods,
+} from "./devicePowersProtocol";
+import {
   NOTIFICATIONS_METHOD_CAPABILITY,
   type NotificationsHostEvent,
   type NotificationsHostMethods,
@@ -105,7 +109,10 @@ export interface UpdateOffer {
   change: SupervisionChange;
 }
 
-export interface ClientHostMethods extends NotificationsHostMethods, IntegrationHostMethods {
+export interface ClientHostMethods
+  extends NotificationsHostMethods,
+    IntegrationHostMethods,
+    DevicePowersHostMethods {
   "client.describe": { args: []; result: ClientDescription };
 
   /**
@@ -242,6 +249,7 @@ export const METHOD_CAPABILITY: Readonly<Record<ClientHostMethod, ClientCapabili
   "device.setDevelopmentMode": "device-session",
   ...NOTIFICATIONS_METHOD_CAPABILITY,
   ...INTEGRATION_METHOD_CAPABILITY,
+  ...DEVICE_POWERS_METHOD_CAPABILITY,
 };
 
 // ---------------------------------------------------------------------------

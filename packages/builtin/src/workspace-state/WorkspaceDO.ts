@@ -3701,6 +3701,22 @@ export class WorkspaceDO extends DurableObjectBase {
     );
   }
 
+  /** A slot's history entries, newest first (bounded). Read-only; used for build-proof reverts. */
+  @schemaRpc()
+  slotHistoryList(slotId: string, limit = 100): DbSlotHistoryRow[] {
+    return this.sql
+      .exec(
+        `SELECT slot_id, cursor, entry_key, entity_id, source, context_id, state_args, options, recorded_at
+           FROM slot_history
+          WHERE slot_id = ?
+          ORDER BY cursor DESC
+          LIMIT ?`,
+        slotId,
+        Math.max(1, Math.min(1000, Math.floor(limit)))
+      )
+      .toArray() as unknown as DbSlotHistoryRow[];
+  }
+
   @schemaRpc()
   slotHistoryEntry(slotId: string, entryKey: string): DbSlotHistoryRow | null {
     return (

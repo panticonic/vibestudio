@@ -14,6 +14,7 @@
     "./protocol": "./src/protocol.ts",
     "./notificationsProtocol": "./src/notificationsProtocol.ts",
     "./integrationProtocol": "./src/integrationProtocol.ts",
+    "./devicePowersProtocol": "./src/devicePowersProtocol.ts",
     "./native": "./src/native.ts",
     "./testing": "./src/testing.ts",
     "./polyfills": {

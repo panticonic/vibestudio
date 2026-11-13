@@ -26,6 +26,8 @@ import type {
   WorkspaceStateClient,
 } from "./workspaceStateClient.js";
 
+const TEST_DEVICE = { label: "Test", platform: "desktop" as const, resolveId: async () => "local:electron-main" };
+
 /**
  * Minimal in-memory simulator for the workspace-state and runtime services.
  * Tracks slots, slot_history, and entity rows just enough for the panel
@@ -495,6 +497,7 @@ function makeManagerDeps(workspacePath: string) {
   return {
     mem,
     deps: {
+      device: TEST_DEVICE,
       workspaceState: mem.workspaceState,
       runtime: mem.runtime,
       // A genuine host metadata adapter: filesystem ownership stays outside
@@ -1921,5 +1924,32 @@ describe("PanelManager", () => {
     expect((await manager.getPanel(oldest))?.id).toBe(oldest);
     expect(detail).toHaveBeenCalledWith(oldest);
     expect(registry.listPanels().length).toBeLessThanOrEqual(256);
+  });
+});
+
+describe("PanelManager.getInfo device (tendrils)", () => {
+  it("reports this shell's device with the server-derived id, resolved once", async () => {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test" });
+    const { deps } = makeManagerDeps("/unused");
+    let lookups = 0;
+    const manager = new PanelManager({
+      registry,
+      ...deps,
+      device: {
+        label: "Kitchen tablet",
+        platform: "mobile",
+        resolveId: async () => {
+          lookups += 1;
+          return "dev-kitchen";
+        },
+      },
+      allowMissingManifests: true,
+    });
+    const panel = await manager.create("panels/chat", { addAsRoot: true, isRoot: true });
+    const info = (await manager.getInfo(panel.panelId)) as { device: unknown; panelId: string };
+    expect(info.panelId).toBe(panel.panelId);
+    expect(info.device).toEqual({ id: "dev-kitchen", label: "Kitchen tablet", platform: "mobile" });
+    await manager.getInfo(panel.panelId);
+    expect(lookups).toBe(1);
   });
 });

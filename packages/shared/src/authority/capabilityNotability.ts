@@ -97,6 +97,8 @@ const REVIEWED_NOTABILITY: readonly NotabilityEntry[] = [
   { key: "global-shortcut", notability: "headline" },
   { key: "devtools", notability: "headline" },
   { key: "integration.install", notability: "everyday" },
+  { key: "device-powers", notability: "everyday" },
+  { key: "motion", notability: "everyday" },
   { key: "notifications.reply", notability: "everyday" },
   { key: "terminal-app-hosting", notability: "headline" },
   { key: "approval-surface", notability: "headline" },

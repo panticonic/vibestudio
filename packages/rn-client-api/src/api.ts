@@ -7,6 +7,7 @@ import type {
   UpdateOffer,
 } from "./protocol";
 import type { InstalledLauncher, InstallLauncherOutcome } from "./integrationProtocol";
+import type { HapticKind } from "./devicePowersProtocol";
 import type {
   DisplayedNotification,
   LocalNotification,
@@ -130,6 +131,13 @@ export interface RnClientApi {
   readonly openExternal: (url: string) => Promise<void>;
   readonly browserImport: ClientBrowserImportApi;
   readonly integration: ClientIntegrationApi;
+  /** `device-powers` (check `capabilities.has("device-powers")`; older hosts lack it). */
+  readonly devicePowers: {
+    setKeepAwake(on: boolean): Promise<void>;
+    haptic(kind: HapticKind): Promise<void>;
+    speak(request: { text: string; lang?: string }): Promise<void>;
+    stopSpeaking(): Promise<void>;
+  };
   readonly device: {
     /** Forget this device's pairing; every client is torn down and the host returns to pairing. */
     reset(): Promise<void>;
@@ -310,6 +318,12 @@ export async function createRnClientApi(channel: BrokerChannel): Promise<RnClien
         launcherListeners.add(listener);
         return () => launcherListeners.delete(listener);
       },
+    },
+    devicePowers: {
+      setKeepAwake: (on) => channel.request("devicePowers.setKeepAwake", on),
+      haptic: (kind) => channel.request("devicePowers.haptic", kind),
+      speak: (request) => channel.request("devicePowers.speak", request),
+      stopSpeaking: () => channel.request("devicePowers.stopSpeaking"),
     },
     device: {
       reset: () => channel.request("device.reset"),

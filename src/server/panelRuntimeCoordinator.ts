@@ -255,6 +255,11 @@ export class PanelRuntimeCoordinator {
     return this.attempts.get(attemptId) ?? attempt;
   }
 
+  /** The attempt with this id in the current epoch, if still known. */
+  attemptById(attemptId: string): PanelAttempt | null {
+    return this.attempts.get(attemptId) ?? null;
+  }
+
   getAttempt(ref: PanelAttemptRef): AwaitPanelAttemptResult {
     if (ref.epoch !== this.epoch) return { kind: "unknown-attempt", ref };
     const attempt = this.attempts.get(ref.attemptId);
@@ -453,6 +458,21 @@ export class PanelRuntimeCoordinator {
       return true;
     }
     return false;
+  }
+
+  /** Registered client sessions (tendrils: presentation targets). */
+  listClientSessions(): ReadonlyArray<{
+    clientSessionId: string;
+    ownerCallerId: string | undefined;
+    label: string;
+    platform: "desktop" | "headless" | "mobile";
+  }> {
+    return [...this.clients.entries()].map(([clientSessionId, client]) => ({
+      clientSessionId,
+      ownerCallerId: client.ownerCallerId,
+      label: client.label,
+      platform: client.platform,
+    }));
   }
 
   ownsClientSession(clientSessionId: string, ownerCallerId: string): boolean {

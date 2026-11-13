@@ -852,6 +852,14 @@ async function main() {
   // fallback store or standalone pairing mode.
   const entryWorkspaceId = childWorkspaceId;
   const identityDb = new IdentityDb({ path: identityDbPath, readOnly: true });
+  /** The device behind a host principal; one derivation for provenance, push and presentation. */
+  const clientPrincipalDevice = (principalId: string): string | null => {
+    const principal = identityDb.getClientPrincipal(principalId);
+    return principal && principal.revokedAt === undefined ? principal.deviceId : null;
+  };
+  const { deviceIdOfHostPrincipal } = await import("./callerDeviceFacts.js");
+  const deviceOfPrincipal = (principalId: string): string | null =>
+    deviceIdOfHostPrincipal(principalId, { clientPrincipalDevice });
   const userStore = new UserStore(identityDb);
   const membershipStore = new MembershipStore(identityDb, userStore);
   /**
@@ -3476,6 +3484,7 @@ async function main() {
   const pushResult = createPushService({
     workspaceId: entryWorkspaceId,
     serverId: deviceAuthStore.getServerId(),
+    deviceOfPrincipal,
   });
   pushForRevocation = pushResult.internal;
   container.registerManaged({
@@ -5843,6 +5852,7 @@ async function main() {
           };
         },
         runtimeCoordinator: panelRuntimeCoordinator,
+        clientPrincipalDevice,
         // The child accepts only identities already issued by the hub: returning
         // devices and workspace-scoped agents. Fresh pairing never enters a child.
         redeemPairingCredential: createWorkspaceCredentialRedeemer({
@@ -6308,6 +6318,143 @@ async function main() {
       dependencies: ["cdpBridge"],
       async start(resolve) {
         const cdpBridge = assertPresent(resolve<import("./cdpBridge.js").CdpBridge>("cdpBridge"));
+        const currentEntityForSlot = async (slotId: string): Promise<string | null> => {
+          const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+          const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
+          const workspaceStateEngineClient = createTypedServiceClient(
+            "workspace-state-engine",
+            workspaceStateEngineMethods,
+            (_service, method, args) =>
+              doDispatch.dispatch(
+                {
+                  source: INTERNAL_DO_SOURCE,
+                  className: "WorkspaceDO",
+                  objectKey: entryWorkspaceId,
+                },
+                method,
+                ...args
+              )
+          );
+          const detail = await workspaceStateEngineClient.panelTreeDetail(slotId);
+          return detail?.entity?.id ?? null;
+        };
+        const panelEngine = () => {
+          const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
+          return import("./internalDOs/internalDoLoader.js").then(({ INTERNAL_DO_SOURCE }) =>
+            createTypedServiceClient(
+              "workspace-state-engine",
+              workspaceStateEngineMethods,
+              (_service, method, args) =>
+                doDispatch.dispatch(
+                  {
+                    source: INTERNAL_DO_SOURCE,
+                    className: "WorkspaceDO",
+                    objectKey: entryWorkspaceId,
+                  },
+                  method,
+                  ...args
+                )
+            )
+          );
+        };
+        const { PanelRuntimeStore } = await import("./panelRuntimeStore.js");
+        const { createPanelPresentation } = await import("./panelPresentation.js");
+        const panelRuntimeStore = new PanelRuntimeStore({ databasePath: layout.panelRuntimeDb });
+        const panelPresentation = createPanelPresentation({
+          store: panelRuntimeStore,
+          coordinator: panelRuntimeCoordinator,
+          deviceOfPrincipal,
+          pairedDevices: (userId) =>
+            identityDb
+              .listDevicesForUser(userId)
+              .filter((device) => device.revokedAt === undefined)
+              .map((device) => ({
+                deviceId: device.deviceId,
+                label: device.label,
+                ...(device.platform ? { platform: device.platform } : {}),
+              })),
+          slotExists: async (slotId) => (await currentEntityForSlot(slotId)) !== null,
+          emit: (request) => eventService.emit("panel-presentation-requested", request),
+          push: async ({ userId, deviceId, slotId, alert }) => {
+            const targets = pushResult.internal
+              .listRegistrations()
+              .filter((r) => r.userId === userId && r.deviceId === deviceId)
+              .map((r) => ({ userId: r.userId, clientId: r.clientId }));
+            if (targets.length === 0) return false;
+            const results = await pushResult.internal.sendToTargets(targets, {
+              title: "A panel is waiting for you",
+              body: "Tap to open it.",
+              category: "panel-present",
+              data: {
+                kind: "panel-present",
+                slotId,
+                title: "A panel is waiting for you",
+                priority: alert === "interrupt" ? "high" : "normal",
+              },
+            });
+            return results.some((result) => result.sent);
+          },
+        });
+        const { createPanelHistoryProof } = await import("./panelHistoryProof.js");
+        const { commitPreparedPanelNavigation } =
+          await import("@vibestudio/shell-core/panelNavigationTransaction");
+        const { panelExecutionForSource } = await import("@vibestudio/shell-core/panelManager");
+        const { createHostCaller } = await import("@vibestudio/shared/serviceDispatcher");
+        const { asPanelSlotId, asPanelEntityId } = await import("@vibestudio/shared/panel/ids");
+        const runtimeInternal = () =>
+          assertPresent(
+            container.get<import("./services/runtimeService.js").RuntimeServiceResult>("runtime")
+          ).internal;
+        const panelHistoryProof = createPanelHistoryProof({
+          store: panelRuntimeStore,
+          coordinator: panelRuntimeCoordinator,
+          slotHistory: async (slotId) => (await panelEngine()).slotHistoryList(slotId),
+          entityBuildKey: async (entityId) =>
+            (await (await panelEngine()).entityResolve(entityId))?.activeBuildKey ?? null,
+          currentEntity: currentEntityForSlot,
+          // The same reactivate-then-commit transaction as history navigation.
+          revertTo: async (slotId, expectedCurrentEntityId, entryKey) => {
+            const engine = await panelEngine();
+            const entry = await engine.slotHistoryEntry(slotId, entryKey);
+            if (!entry) return;
+            const slot = await engine.slotGet(slotId);
+            const owner = slot?.owner_user_id ? identityDb.getUserRow(slot.owner_user_id) : null;
+            const caller = createHostCaller(
+              "server",
+              "server",
+              owner ? { userId: owner.id, handle: owner.handle } : null
+            );
+            const options = entry.options ? (JSON.parse(entry.options) as { ref?: string }) : {};
+            const handle = await runtimeInternal().createEntity(caller, {
+              kind: "panel",
+              execution: panelExecutionForSource(entry.source, options.ref),
+              key: entry.entry_key,
+              contextId: entry.context_id,
+              stateArgs: entry.state_args
+                ? (JSON.parse(entry.state_args) as Record<string, unknown>)
+                : {},
+            });
+            if (handle.id !== entry.entity_id) {
+              throw new Error(
+                `Prepared history entity mismatch: expected ${entry.entity_id}, received ${handle.id}`
+              );
+            }
+            await commitPreparedPanelNavigation(
+              {
+                runtime: { retireEntity: (id) => runtimeInternal().retireEntity(id) },
+                workspaceState: {
+                  commitPreparedNavigation: (input) => engine.slotCommitPreparedNavigation(input),
+                },
+              },
+              {
+                slotId: asPanelSlotId(slotId),
+                expectedCurrentEntityId: asPanelEntityId(expectedCurrentEntityId),
+                mutation: { kind: "select", entryKey },
+              }
+            );
+          },
+          onError: (error, context) => console.warn(`[PanelHistoryProof] ${context}:`, error),
+        });
         panelRuntimeDefinition = createPanelRuntimeService({
           coordinator: panelRuntimeCoordinator,
           ensureExecutable: (slotId, entityId) =>
@@ -6357,26 +6504,7 @@ async function main() {
                 : {}),
             };
           },
-          currentEntityForSlot: async (slotId) => {
-            const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
-            const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
-            const workspaceStateEngineClient = createTypedServiceClient(
-              "workspace-state-engine",
-              workspaceStateEngineMethods,
-              (_service, method, args) =>
-                doDispatch.dispatch(
-                  {
-                    source: INTERNAL_DO_SOURCE,
-                    className: "WorkspaceDO",
-                    objectKey: entryWorkspaceId,
-                  },
-                  method,
-                  ...args
-                )
-            );
-            const detail = await workspaceStateEngineClient.panelTreeDetail(slotId);
-            return detail?.entity?.id ?? null;
-          },
+          currentEntityForSlot,
           browserSourceForSlot: async (slotId) => {
             const doDispatch = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
             const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
@@ -6404,6 +6532,8 @@ async function main() {
             if (!manager) return false;
             return Boolean(await manager.ensureHeadlessHost());
           },
+          presentation: panelPresentation,
+          historyProof: panelHistoryProof,
         });
         return panelRuntimeDefinition;
       },
@@ -7592,6 +7722,7 @@ async function main() {
     container.registerManaged(
       serviceWithHttpRoutes(
         createAuthService({
+          deviceOfPrincipal,
           tokenManager,
           deviceAuthStore,
           roleOf: (userId) => userStore.getUser(userId)?.role ?? null,

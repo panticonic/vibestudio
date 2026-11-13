@@ -141,6 +141,10 @@ export const CLIENT_CAPABILITY_CATALOG = {
     hosts: ["desktop", "terminal", "android", "ios"],
     summary: "ask to add launchers for clients to this device",
   },
+  "device-powers": {
+    hosts: ["android", "ios"],
+    summary: "keep the screen on, tap haptically and speak aloud for pages it shows",
+  },
 } as const satisfies Record<string, ClientCapabilityDescriptor>;
 
 export type ClientCapability = keyof typeof CLIENT_CAPABILITY_CATALOG;

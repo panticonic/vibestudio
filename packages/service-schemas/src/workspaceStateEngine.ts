@@ -15,6 +15,7 @@ import {
   RawPanelTreePathSchema,
   RawSlotRowSchema,
   PanelTreePlacementSchema,
+  SlotHistoryRowSchema,
   SlotCreateInputSchema,
   workspaceStateMethods,
 } from "./workspaceState.js";
@@ -913,6 +914,16 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
   slotGet: { ...workspaceStateMethods["slot.get"], returns: RawSlotRowSchema.nullable() },
   slotHistoryRelative: { ...workspaceStateMethods["slot.historyRelative"] },
   slotHistoryEntry: { ...workspaceStateMethods["slot.historyEntry"] },
+  slotHistoryList: {
+    website: {
+      kind: "closed",
+      reason: "Storage and lifecycle engine entry points are internal implementation authority.",
+    } as const,
+    ...internal("read"),
+    description: "Read a slot's history entries, newest first (bounded).",
+    args: z.tuple([z.string().min(1), z.number().int().positive().max(1000).optional()]),
+    returns: z.array(SlotHistoryRowSchema),
+  },
 });
 
 export const workspaceStateEngineMethods = Object.fromEntries(

@@ -19,6 +19,7 @@ import {
   type WorkspaceApprovalTarget,
 } from "@vibestudio/shared/workspacePushScope";
 import {
+  isPushPanelPresentDataPayload,
   isPushUserInboxDataPayload,
   readUserInboxActions,
   USER_INBOX_REPLY_CATEGORY,
@@ -316,6 +317,8 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
   function openFromMessage(message: RemoteMessage | null): NotificationOpen | null {
     if (!message) return null;
     if (isPushUserInboxDataPayload(message.data)) return { kind: "inbox", payload: message.data };
+    if (isPushPanelPresentDataPayload(message.data))
+      return { kind: "panel-present", payload: message.data };
     const target = readApprovalTarget(message.data);
     return target ? { kind: "approval", target } : null;
   }
@@ -324,6 +327,24 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
   async function displayMessage(message: RemoteMessage): Promise<void> {
     if (isPushUserInboxDataPayload(message.data)) {
       await displayInbox(message.data, message);
+      return;
+    }
+    if (isPushPanelPresentDataPayload(message.data)) {
+      // One notification per panel: a repeated request replaces it.
+      const data = message.data;
+      await notifee.display({
+        id: workspaceNotificationKey(data, `panel-present:${data.slotId}`),
+        title: data.title || message.notification?.title || "A panel is waiting for you",
+        body: data.body ?? message.notification?.body ?? "",
+        data,
+        android: {
+          channelId: INBOX_NOTIFICATION_CHANNEL_ID,
+          pressAction: { id: "open", launchActivity: "default" },
+          // notifee AndroidImportance.HIGH
+          ...(data.priority === "high" ? { importance: 4 } : {}),
+        },
+        ios: data.priority === "high" ? { interruptionLevel: "timeSensitive" } : {},
+      });
       return;
     }
     const data: Partial<PushApprovalDataPayload> = message.data ?? {};
@@ -477,6 +498,10 @@ export function createHostNotifications(ports: HostNotificationsPorts): HostNoti
   async function handleNotificationEvent(event: NotificationEvent): Promise<void> {
     const notification = event.notification;
     const opens = event.kind === "press" || (event.kind === "action" && event.actionId === "open");
+    if (isPushPanelPresentDataPayload(notification?.data)) {
+      if (opens) await open({ kind: "panel-present", payload: notification.data });
+      return;
+    }
     if (isPushUserInboxDataPayload(notification?.data)) {
       if (opens) await open({ kind: "inbox", payload: notification.data });
       else if (event.kind === "action") await replyToInbox(notification.data, event);

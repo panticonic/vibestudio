@@ -6,6 +6,8 @@ export const BrowserPermissionCapabilitySchema = z.enum([
   "microphone",
   "screen-capture",
   "geolocation",
+  /** Device motion and orientation events (iOS asks per origin; Android and desktop never prompt). */
+  "motion",
   "notifications",
   "downloads",
   "clipboard",

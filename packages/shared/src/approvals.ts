@@ -499,6 +499,7 @@ export type BrowserSitePermissionCapability =
   | "microphone"
   | "screen-capture"
   | "geolocation"
+  | "motion"
   | "notifications"
   | "downloads"
   | "clipboard"

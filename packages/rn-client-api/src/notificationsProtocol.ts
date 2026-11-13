@@ -12,7 +12,10 @@
  */
 import type { ClientCapability } from "@vibestudio/workspace-contracts/clients";
 import type { WorkspaceApprovalTarget } from "@vibestudio/shared/workspacePushScope";
-import type { PushUserInboxDataPayload } from "@vibestudio/shared/userNotifications";
+import type {
+  PushPanelPresentDataPayload,
+  PushUserInboxDataPayload,
+} from "@vibestudio/shared/userNotifications";
 
 export interface NotificationsStatus {
   /** Firebase/APNs is configured in this host build. */
@@ -41,7 +44,9 @@ export interface DisplayedNotification {
 /** What the person opened. */
 export type NotificationOpen =
   | { kind: "approval"; target: WorkspaceApprovalTarget }
-  | { kind: "inbox"; payload: PushUserInboxDataPayload };
+  | { kind: "inbox"; payload: PushUserInboxDataPayload }
+  /** An agent asked for a panel on this device (tendrils plan 4.5). */
+  | { kind: "panel-present"; payload: PushPanelPresentDataPayload };
 
 export interface NotificationsHostMethods {
   "notifications.status": { args: []; result: NotificationsStatus };

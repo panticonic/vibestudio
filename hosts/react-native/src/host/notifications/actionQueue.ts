@@ -4,7 +4,10 @@ import {
   sameWorkspacePushScope,
   type WorkspaceApprovalTarget,
 } from "@vibestudio/shared/workspacePushScope";
-import { isPushUserInboxDataPayload } from "@vibestudio/shared/userNotifications";
+import {
+  isPushPanelPresentDataPayload,
+  isPushUserInboxDataPayload,
+} from "@vibestudio/shared/userNotifications";
 import type { NotificationOpen } from "@vibestudio/rn-client-api/notificationsProtocol";
 
 /**
@@ -94,6 +97,9 @@ export function loadOpen(raw: string | null | undefined): NotificationOpen | nul
     }
     if (parsed["kind"] === "inbox" && isPushUserInboxDataPayload(parsed["payload"])) {
       return { kind: "inbox", payload: parsed["payload"] };
+    }
+    if (parsed["kind"] === "panel-present" && isPushPanelPresentDataPayload(parsed["payload"])) {
+      return { kind: "panel-present", payload: parsed["payload"] };
     }
     return null;
   } catch {

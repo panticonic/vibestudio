@@ -2,6 +2,8 @@ import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import { panelRuntimeMethods } from "@vibestudio/service-schemas/panelRuntime";
 import type { PanelRuntimeCoordinator } from "../panelRuntimeCoordinator.js";
+import type { PanelPresentation } from "../panelPresentation.js";
+import type { PanelHistoryProof } from "../panelHistoryProof.js";
 import type { PanelBootProbeResult } from "@vibestudio/shared/panel/observation";
 import { browserUrlFromPanelSource, isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
 
@@ -25,6 +27,10 @@ export function createPanelRuntimeService(deps: {
   isRuntimeRouteReachable?: (runtimeEntityId: string, connectionId: string) => boolean;
   /** Spawn the renderer of last resort before retrying a programmatic lease. */
   ensureDefaultHeadlessHost?: () => Promise<boolean>;
+  /** Tendrils: placing panels on the caller's devices (panelPresentation.ts). */
+  presentation: PanelPresentation;
+  /** Tendrils: build proof per history entry (panelHistoryProof.ts). */
+  historyProof: PanelHistoryProof;
 }): ServiceDefinition {
   const normalizeHostObservation = async (
     slotId: string,
@@ -281,6 +287,19 @@ export function createPanelRuntimeService(deps: {
           ? ("reported" as const)
           : ("stale" as const);
       },
+      listPresentationTargets: (ctx) =>
+        deps.presentation.listTargets(ctx.caller.subject?.userId ?? null),
+      requestPresentation: (ctx, [request]) =>
+        deps.presentation.request(ctx.caller.subject?.userId ?? null, request),
+      listPresentationRequests: async (ctx) =>
+        (await deps.presentation.pendingFor(ctx.caller.runtime.id)).map((request) => ({
+          slotId: request.slotId,
+          deviceId: request.deviceId,
+          focus: request.focus,
+          alert: request.alert,
+          requestedAt: request.requestedAt,
+        })),
+      historyProof: (_ctx, [slotId]) => deps.historyProof.proofForSlot(slotId),
       reportOwnView: (ctx, [observation]) => {
         if (ctx.caller.runtime.kind !== "panel") {
           throw new Error("Panel runtime self-observation requires a panel caller");

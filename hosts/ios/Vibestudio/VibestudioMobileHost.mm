@@ -1,3 +1,4 @@
+#import <AVFoundation/AVFoundation.h>
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
@@ -13,13 +14,16 @@
 // import, Firebase availability). The asset store and workspace cookies a
 // browser panel needs live in `VibestudioPanelHost`, which only a client holding
 // `panel-hosting` can use.
-@interface VibestudioMobileHost : NSObject <RCTBridgeModule, RCTInvalidating, UIDocumentPickerDelegate>
+@interface VibestudioMobileHost : NSObject <RCTBridgeModule, RCTInvalidating, UIDocumentPickerDelegate, AVSpeechSynthesizerDelegate>
 @property(nonatomic, strong) dispatch_queue_t resourceQueue;
 @property(atomic, assign) BOOL invalidated;
 @property(nonatomic, strong) NSMutableDictionary<NSString *, NSMutableDictionary *> *browserImportArchives;
 @property(nonatomic, copy) RCTPromiseResolveBlock browserImportPickerResolve;
 @property(nonatomic, copy) RCTPromiseRejectBlock browserImportPickerReject;
 @property(nonatomic, strong) UIDocumentPickerViewController *browserImportPicker;
+// Device powers for panels (tendrils plan 4.8). Touched on the main queue only.
+@property(nonatomic, strong) AVSpeechSynthesizer *speechSynthesizer;
+@property(nonatomic, strong) NSMapTable<AVSpeechUtterance *, RCTPromiseResolveBlock> *pendingUtterances;
 @end
 
 @implementation VibestudioMobileHost
@@ -39,6 +43,11 @@ RCT_EXPORT_MODULE();
     [self.browserImportArchives removeAllObjects];
   });
   dispatch_async(dispatch_get_main_queue(), ^{
+    [self.speechSynthesizer stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+    self.speechSynthesizer.delegate = nil;
+    self.speechSynthesizer = nil;
+    [self.pendingUtterances removeAllObjects];
+    UIApplication.sharedApplication.idleTimerDisabled = NO;
     [self rejectBrowserImportPicker:@"browser_import_invalidated" message:@"The browser-import runtime was invalidated"];
     self.browserImportPicker.delegate = nil;
     [self.browserImportPicker dismissViewControllerAnimated:NO completion:nil];
@@ -89,6 +98,78 @@ static uint32_t VibestudioReadLE32(const uint8_t *bytes) {
 {
   BOOL firebaseConfigured = [[NSBundle mainBundle] pathForResource:@"GoogleService-Info" ofType:@"plist"] != nil;
   return @{ @"firebaseConfigured": @(firebaseConfigured) };
+}
+
+// Keep the screen on while Vibestudio is in the foreground; iOS resets it when the app leaves.
+RCT_EXPORT_METHOD(setKeepAwake:(BOOL)on
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  if (!VibestudioRequireHostBridge(self.bridge, @"VibestudioMobileHost", reject)) return;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    UIApplication.sharedApplication.idleTimerDisabled = on;
+    resolve(nil);
+  });
+}
+
+// Speak `text`, replacing anything still being spoken; resolves when it ends or is stopped.
+RCT_EXPORT_METHOD(speak:(NSString *)text
+                  language:(NSString *)language
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  if (!VibestudioRequireHostBridge(self.bridge, @"VibestudioMobileHost", reject)) return;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    if (self.invalidated) {
+      reject(@"speak_cancelled", @"The host stopped", nil);
+      return;
+    }
+    if (!self.speechSynthesizer) {
+      self.speechSynthesizer = [AVSpeechSynthesizer new];
+      self.speechSynthesizer.delegate = self;
+      self.pendingUtterances = [NSMapTable strongToStrongObjectsMapTable];
+    }
+    AVSpeechUtterance *utterance = [AVSpeechUtterance speechUtteranceWithString:text];
+    if (language.length > 0) {
+      AVSpeechSynthesisVoice *voice = [AVSpeechSynthesisVoice voiceWithLanguage:language];
+      if (!voice) {
+        reject(@"speak_language_unavailable", [NSString stringWithFormat:@"This device cannot speak %@", language], nil);
+        return;
+      }
+      utterance.voice = voice;
+    }
+    [self.speechSynthesizer stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+    [self.pendingUtterances setObject:resolve forKey:utterance];
+    [self.speechSynthesizer speakUtterance:utterance];
+  });
+}
+
+RCT_EXPORT_METHOD(stopSpeaking:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  if (!VibestudioRequireHostBridge(self.bridge, @"VibestudioMobileHost", reject)) return;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self.speechSynthesizer stopSpeakingAtBoundary:AVSpeechBoundaryImmediate];
+    resolve(nil);
+  });
+}
+
+- (void)settleUtterance:(AVSpeechUtterance *)utterance
+{
+  RCTPromiseResolveBlock resolve = [self.pendingUtterances objectForKey:utterance];
+  if (!resolve) return;
+  [self.pendingUtterances removeObjectForKey:utterance];
+  resolve(nil);
+}
+
+- (void)speechSynthesizer:(AVSpeechSynthesizer *)synthesizer didFinishSpeechUtterance:(AVSpeechUtterance *)utterance
+{
+  [self settleUtterance:utterance];
+}
+
+- (void)speechSynthesizer:(AVSpeechSynthesizer *)synthesizer didCancelSpeechUtterance:(AVSpeechUtterance *)utterance
+{
+  [self settleUtterance:utterance];
 }
 
 RCT_EXPORT_METHOD(openSafariBrowserDataExport:(RCTPromiseResolveBlock)resolve

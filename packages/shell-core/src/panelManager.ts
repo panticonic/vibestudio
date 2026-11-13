@@ -79,7 +79,7 @@ function browserNavigationSource(source: string): string | null {
   return panelSourceFromBrowserUrl(new URL(url).toString());
 }
 
-function panelExecutionForSource(source: string, ref?: string) {
+export function panelExecutionForSource(source: string, ref?: string) {
   const browserUrl = browserUrlFromPanelSource(source);
   if (browserUrl !== null) {
     return { surface: "external" as const, url: browserUrl };
@@ -167,8 +167,17 @@ export interface LocalPanelViewStateStore {
   save(state: LocalPanelViewState): Promise<void> | void;
 }
 
+/** The device this shell presents panels on (tendrils: `panel.getInfo().device`). */
+export interface PanelHostDevice {
+  label: string;
+  platform: "desktop" | "headless" | "mobile";
+  /** The server's id for this device (`deviceIdOfHostPrincipal`), so it matches provenance. */
+  resolveId(): Promise<string | null>;
+}
+
 export interface PanelManagerDeps {
   registry: PanelRegistry;
+  device: PanelHostDevice;
   workspaceState: WorkspaceStateClient;
   runtime: RuntimeClient;
   /** Exact-state panel manifests supplied by the workspace build graph. */
@@ -218,6 +227,8 @@ export class PanelManager {
   private readonly activationClient?: ActivationClient;
   private readonly viewState?: LocalPanelViewStateStore;
   private readonly serverInfo: PanelManagerServerInfo;
+  private readonly device: PanelHostDevice;
+  private deviceId: Promise<string | null> | null = null;
   private readonly workspaceConfig?: WorkspaceConfig;
   private readonly allowMissingManifests: boolean;
   private readonly grantConnectionImpl?: (panelId: PanelEntityId) => Promise<{ token: string }>;
@@ -262,6 +273,7 @@ export class PanelManager {
     this.activationClient = deps.activationClient;
     this.viewState = deps.viewState;
     this.serverInfo = deps.serverInfo;
+    this.device = deps.device;
     this.workspaceConfig = deps.workspaceConfig;
     this.allowMissingManifests = deps.allowMissingManifests ?? false;
     this.grantConnectionImpl = deps.grantConnection;
@@ -797,8 +809,15 @@ export class PanelManager {
   // Mutate (state-args / snapshot / navigate / history)
   // ===========================================================================
 
-  getInfo(slotId: PanelSlotId): unknown {
-    return this.registry.getInfo(slotId);
+  async getInfo(slotId: PanelSlotId): Promise<unknown> {
+    const info = this.registry.getInfo(slotId);
+    // The id is fixed for this shell's authenticated session; a failed lookup is retried next time.
+    this.deviceId ??= this.device.resolveId().catch((error: unknown) => {
+      this.deviceId = null;
+      throw error;
+    });
+    const id = await this.deviceId;
+    return { ...info, device: { id, label: this.device.label, platform: this.device.platform } };
   }
 
   async getPanel(slotId: PanelSlotId): Promise<Panel | null> {

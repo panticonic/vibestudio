@@ -4,7 +4,10 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
 import android.util.Base64
+import android.view.WindowManager
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
@@ -78,6 +81,98 @@ class VibestudioMobileHostModule(
     override fun getConstants(): MutableMap<String, Any> = hashMapOf(
         "firebaseConfigured" to BuildConfig.VIBESTUDIO_HAS_FIREBASE,
     )
+
+    // ---- device powers for panels (tendrils plan 4.8) ----
+
+    /**
+     * Keep the screen on while the resumed activity is shown. The flag belongs
+     * to that activity's window, so it never outlives what the person sees.
+     */
+    @ReactMethod
+    fun setKeepAwake(on: Boolean, promise: Promise) {
+        val activity = ForegroundActivities.current()
+        if (activity == null) {
+            promise.reject("keep_awake_unavailable", "No Vibestudio screen is in the foreground")
+            return
+        }
+        activity.runOnUiThread {
+            if (on) activity.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            else activity.window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            promise.resolve(null)
+        }
+    }
+
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private val ttsWaiting = mutableListOf<(TextToSpeech?) -> Unit>()
+    private val utterances = ConcurrentHashMap<String, Promise>()
+
+    /** Android WebView has no speechSynthesis; panels speak through the system engine. */
+    private fun withTts(use: (TextToSpeech?) -> Unit) {
+        synchronized(this) {
+            if (ttsReady) return use(tts)
+            ttsWaiting += use
+            if (tts != null) return
+            tts = TextToSpeech(reactApplicationContext) { status ->
+                val ready = synchronized(this) {
+                    ttsReady = true
+                    if (status != TextToSpeech.SUCCESS) {
+                        tts?.shutdown()
+                        tts = null
+                    }
+                    ttsWaiting.toList().also { ttsWaiting.clear() }
+                }
+                ready.forEach { it(tts) }
+            }.apply {
+                setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String) = Unit
+                    override fun onDone(utteranceId: String) {
+                        utterances.remove(utteranceId)?.resolve(null)
+                    }
+                    @Deprecated("Superseded by onError(String, Int)")
+                    override fun onError(utteranceId: String) {
+                        utterances.remove(utteranceId)?.reject("speak_failed", "Speech failed")
+                    }
+                    override fun onError(utteranceId: String, errorCode: Int) {
+                        utterances.remove(utteranceId)
+                            ?.reject("speak_failed", "Speech failed (error $errorCode)")
+                    }
+                    override fun onStop(utteranceId: String, interrupted: Boolean) {
+                        utterances.remove(utteranceId)?.resolve(null)
+                    }
+                })
+            }
+        }
+    }
+
+    /** Speak `text`, replacing anything still being spoken; resolves when it ends or is stopped. */
+    @ReactMethod
+    fun speak(text: String, language: String?, promise: Promise) {
+        withTts { engine ->
+            if (engine == null) {
+                promise.reject("speak_unavailable", "This device has no speech engine")
+                return@withTts
+            }
+            if (!language.isNullOrBlank()) {
+                val result = engine.setLanguage(Locale.forLanguageTag(language))
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    promise.reject("speak_language_unavailable", "This device cannot speak $language")
+                    return@withTts
+                }
+            }
+            val id = UUID.randomUUID().toString()
+            utterances[id] = promise
+            if (engine.speak(text, TextToSpeech.QUEUE_FLUSH, null, id) != TextToSpeech.SUCCESS) {
+                utterances.remove(id)?.reject("speak_failed", "The speech engine refused the text")
+            }
+        }
+    }
+
+    @ReactMethod
+    fun stopSpeaking(promise: Promise) {
+        synchronized(this) { tts }?.stop()
+        promise.resolve(null)
+    }
 
     @ReactMethod
     fun openSafariBrowserDataExport(promise: Promise) {
@@ -429,6 +524,14 @@ class VibestudioMobileHostModule(
         browserImportArchives.keys.toList().forEach(::releaseBrowserImportArchiveHandle)
         browserImportExecutor.shutdownNow()
         ForegroundActivities.removeResultListener(browserImportResultListener)
+        synchronized(this) {
+            tts?.shutdown()
+            tts = null
+            ttsReady = false
+            ttsWaiting.clear()
+        }
+        utterances.values.forEach { it.reject("speak_cancelled", "The host stopped") }
+        utterances.clear()
         super.invalidate()
     }
 

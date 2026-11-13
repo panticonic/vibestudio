@@ -130,6 +130,7 @@ describe("workspace child auth clean cutover", () => {
   it("exposes only refresh and runtime credential routes", () => {
     const identity = makeIdentity({ withRoot: true });
     const service = createAuthService({
+      deviceOfPrincipal: () => null,
       resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
       deviceAuthStore: identity.deviceAuthStore,
@@ -179,6 +180,7 @@ describe("workspace child auth clean cutover", () => {
     const tokenManager = new TokenManager();
     const identity = makeIdentity({ withRoot: true });
     const service = createAuthService({
+      deviceOfPrincipal: () => null,
       resolveUser: testResolveUser,
       tokenManager,
       deviceAuthStore: identity.deviceAuthStore,
@@ -238,6 +240,7 @@ describe("auth service connection grants", () => {
     const entityCache = new EntityCache();
     const connectionGrants = new ConnectionGrantService({ entityCache });
     const service = createAuthService({
+      deviceOfPrincipal: () => null,
       resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
       deviceAuthStore: makeAuthStore(),
@@ -262,6 +265,7 @@ describe("auth service connection grants", () => {
     entityCache._onActivate(makePanelRecord("panel:one"));
     const connectionGrants = new ConnectionGrantService({ entityCache });
     const service = createAuthService({
+      deviceOfPrincipal: () => null,
       resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
       deviceAuthStore: makeAuthStore(),
@@ -297,6 +301,7 @@ describe("auth service connection grants", () => {
       return active;
     });
     const service = createAuthService({
+      deviceOfPrincipal: () => null,
       resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
       deviceAuthStore: makeAuthStore(),
@@ -323,6 +328,7 @@ describe("auth service connection grants", () => {
     entityCache._onActivate(makePanelRecord("panel:mobile"));
     const connectionGrants = new ConnectionGrantService({ entityCache });
     const service = createAuthService({
+      deviceOfPrincipal: () => null,
       resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
       deviceAuthStore: makeAuthStore(),
@@ -357,6 +363,7 @@ describe("auth service connection grants", () => {
     entityCache._onActivate(makePanelRecord("panel:mobile"));
     const connectionGrants = new ConnectionGrantService({ entityCache });
     const service = createAuthService({
+      deviceOfPrincipal: () => null,
       resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
       deviceAuthStore: makeAuthStore(),
@@ -414,6 +421,7 @@ describe("auth.grantClientPrincipal", () => {
       })),
     };
     const service = createAuthService({
+      deviceOfPrincipal: () => null,
       resolveUser: testResolveUser,
       tokenManager: new TokenManager(),
       deviceAuthStore: identity.deviceAuthStore,
@@ -540,6 +548,7 @@ describe("auth.mintAgentCredential / revokeAgentCredential policy (§3.2)", () =
     const authStore = makeAuthStore();
     const records = new Map<string, EntityRecord>();
     const authService = createAuthService({
+      deviceOfPrincipal: () => null,
       resolveUser: testResolveUser,
       tokenManager,
       deviceAuthStore: authStore,

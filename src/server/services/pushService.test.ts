@@ -35,6 +35,7 @@ describe("pushService", () => {
         platform: "android",
         token: "token-1",
         userId: PUSH_USER_ID,
+        deviceId: null,
         registeredAt: 1,
       },
       {
@@ -72,6 +73,7 @@ describe("pushService", () => {
         platform: "ios",
         token: "token-2",
         userId: PUSH_USER_ID,
+        deviceId: null,
         registeredAt: 1,
       },
       {
@@ -114,6 +116,7 @@ describe("pushService", () => {
   it("stamps notification routing from the host and verified registration", async () => {
     const send = vi.fn(async () => "message-1");
     const service = createPushService({
+      deviceOfPrincipal: () => null,
       workspaceId: "ws-test",
       serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath: tempDatabasePath(),
@@ -152,6 +155,7 @@ describe("pushService", () => {
       throw { code: "messaging/registration-token-not-registered" };
     });
     const service = createPushService({
+      deviceOfPrincipal: () => null,
       workspaceId: "ws-test",
       serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath,
@@ -191,6 +195,7 @@ describe("pushService", () => {
       return "message-id";
     });
     service = createPushService({
+      deviceOfPrincipal: () => null,
       workspaceId: "ws-test",
       serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath,
@@ -215,6 +220,7 @@ describe("pushService", () => {
   it("notifies internal listeners when registrations change", async () => {
     const databasePath = tempDatabasePath();
     const service = createPushService({
+      deviceOfPrincipal: () => null,
       workspaceId: "ws-test",
       serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath,
@@ -253,6 +259,7 @@ describe("pushService", () => {
       return "message-id";
     });
     const service = createPushService({
+      deviceOfPrincipal: () => null,
       workspaceId: "ws-test",
       serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath,
@@ -301,6 +308,7 @@ describe("pushService", () => {
   it("degrades to log-only delivery when Firebase is unavailable", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
     const service = createPushService({
+      deviceOfPrincipal: () => null,
       workspaceId: "ws-test",
       serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath: tempDatabasePath(),
@@ -326,6 +334,7 @@ describe("pushService", () => {
   it("sends approval-cancel data payloads", async () => {
     const messages: unknown[] = [];
     const service = createPushService({
+      deviceOfPrincipal: () => null,
       workspaceId: "ws-test",
       serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath: tempDatabasePath(),
@@ -359,6 +368,7 @@ describe("pushService", () => {
   it("isolates client ids by verified user and only unregisters the caller's row", async () => {
     const databasePath = tempDatabasePath();
     const service = createPushService({
+      deviceOfPrincipal: () => null,
       workspaceId: "ws-test",
       serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath,
@@ -391,6 +401,7 @@ describe("pushService", () => {
   it("durably removes every revoked-user registration and is idempotent across restart", async () => {
     const databasePath = tempDatabasePath();
     const service = createPushService({
+      deviceOfPrincipal: () => null,
       workspaceId: "ws-test",
       serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath,
@@ -421,6 +432,7 @@ describe("pushService", () => {
     expect(service.internal.unregisterUser(PUSH_USER_ID)).toBe(0);
 
     const restarted = createPushService({
+      deviceOfPrincipal: () => null,
       workspaceId: "ws-test",
       serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath,
@@ -434,12 +446,14 @@ describe("pushService", () => {
   it("preserves independent registrations written through concurrent SQLite handles", async () => {
     const databasePath = tempDatabasePath();
     const first = createPushService({
+      deviceOfPrincipal: () => null,
       workspaceId: "ws-test",
       serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath,
       metrics: createPushMetrics(),
     });
     const second = createPushService({
+      deviceOfPrincipal: () => null,
       workspaceId: "ws-test",
       serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath,
@@ -469,6 +483,7 @@ describe("pushService", () => {
   it("rejects legacy push database structures instead of retaining them", () => {
     const databasePath = tempDatabasePath();
     const first = createPushService({
+      deviceOfPrincipal: () => null,
       workspaceId: "ws-test",
       serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
       databasePath,
@@ -481,12 +496,71 @@ describe("pushService", () => {
 
     expect(() =>
       createPushService({
+        deviceOfPrincipal: () => null,
         workspaceId: "ws-test",
         serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
         databasePath,
         metrics: createPushMetrics(),
       })
     ).toThrow(/Unsupported push schema/);
+  });
+
+  it("stamps the registering caller's device from the verified principal, not the args", async () => {
+    const databasePath = tempDatabasePath();
+    const service = createPushService({
+      deviceOfPrincipal: (principalId) => (principalId === "shell:phone-1" ? "phone-1" : null),
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+      databasePath,
+      metrics: createPushMetrics(),
+    });
+    await service.definition.handler(
+      { caller: createVerifiedCaller("shell:phone-1", "shell", null, null, PUSH_SUBJECT) },
+      "register",
+      [{ clientId: "mobile-1", platform: "android", token: "t1" }]
+    );
+    await service.definition.handler(
+      { caller: createVerifiedCaller("shell", "shell", null, null, PUSH_SUBJECT) },
+      "register",
+      [{ clientId: "mobile-2", platform: "ios", token: "t2" }]
+    );
+    expect(service.internal.listRegistrations().map((r) => [r.clientId, r.deviceId])).toEqual([
+      ["mobile-1", "phone-1"],
+      ["mobile-2", null],
+    ]);
+    service.internal.unregister(PUSH_USER_ID, "mobile-1");
+    expect(service.internal.listRegistrations().map((r) => r.clientId)).toEqual(["mobile-2"]);
+  });
+
+  it("upgrades a v1 database in place and keeps its registrations", () => {
+    const databasePath = tempDatabasePath();
+    const raw = new DatabaseSync(databasePath);
+    raw.exec(`CREATE TABLE push_registrations (
+        user_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        token TEXT NOT NULL UNIQUE,
+        platform TEXT NOT NULL CHECK(platform IN ('ios', 'android', 'web')),
+        registered_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, client_id)
+      )`);
+    raw.exec("CREATE INDEX push_registrations_by_user ON push_registrations(user_id)");
+    raw
+      .prepare(
+        "INSERT INTO push_registrations (user_id, client_id, token, platform, registered_at) VALUES (?, ?, ?, ?, ?)"
+      )
+      .run(PUSH_USER_ID, "old", "keep", "android", 1);
+    raw.exec("PRAGMA user_version = 1");
+    raw.close();
+    const service = createPushService({
+      deviceOfPrincipal: () => null,
+      workspaceId: "ws-test",
+      serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
+      databasePath,
+      metrics: createPushMetrics(),
+    });
+    expect(service.internal.listRegistrations()).toEqual([
+      expect.objectContaining({ clientId: "old", token: "keep", deviceId: null }),
+    ]);
   });
 
   it("rejects and does not mutate a nonempty database with an unsupported schema", () => {
@@ -508,12 +582,13 @@ describe("pushService", () => {
 
     expect(() =>
       createPushService({
+        deviceOfPrincipal: () => null,
         workspaceId: "ws-test",
         serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
         databasePath,
         metrics: createPushMetrics(),
       })
-    ).toThrow(/schema version is 0, expected 1/);
+    ).toThrow(/schema version is 0, expected 2/);
     expect(fs.readFileSync(databasePath)).toEqual(before);
     const unchanged = new DatabaseSync(databasePath);
     expect(unchanged.prepare("SELECT * FROM push_registrations").all()).toEqual([
@@ -547,6 +622,7 @@ describe("pushService", () => {
 
     expect(() =>
       createPushService({
+        deviceOfPrincipal: () => null,
         workspaceId: "ws-test",
         serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
         databasePath,
@@ -563,6 +639,7 @@ describe("pushService", () => {
         platform: "ios",
         token: "token-2",
         userId: PUSH_USER_ID,
+        deviceId: null,
         registeredAt: 1,
       },
       {

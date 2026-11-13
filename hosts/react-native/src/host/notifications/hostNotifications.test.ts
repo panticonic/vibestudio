@@ -408,6 +408,34 @@ describe("host notifications", () => {
     });
   });
 
+  it("shows a panel-present push once per panel and routes its press as a panel-present open", async () => {
+    const h = harness();
+    h.listen(true);
+    await h.host.start();
+    const data = {
+      ...scope,
+      kind: "panel-present",
+      slotId: "panel:tree/trip",
+      title: "A panel is waiting for you",
+      priority: "high",
+    };
+    await h.l.backgroundMessage?.({ data });
+    await h.l.backgroundMessage?.({ data });
+    expect(h.displayed).toHaveLength(2);
+    expect(h.displayed[0]!.id).toBe(h.displayed[1]!.id);
+    expect(h.displayed[0]).toMatchObject({
+      id: keyOf("panel-present:panel:tree/trip"),
+      title: "A panel is waiting for you",
+      android: { importance: 4 },
+      ios: { interruptionLevel: "timeSensitive" },
+    });
+    await h.l.foreground?.({ kind: "press", notification: { data } });
+    expect(h.events[0]).toMatchObject({
+      type: "notification-open",
+      open: { kind: "panel-present", payload: { slotId: "panel:tree/trip" } },
+    });
+  });
+
   it("emits notification-token on refresh and reports the token in status", async () => {
     const h = harness();
     h.listen();

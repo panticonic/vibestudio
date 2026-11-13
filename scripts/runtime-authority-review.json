@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:9ab66ec45ae6551fd7b2ee2507fba0acb16f0d7c99c3e6ff29dfb01ba7b7fb1a",
+  "censusDigest": "sha256:8a68c7f58598676edcc428bbf658086b4cf9b9408d91b1e06e179ad222468366",
   "decisions": {
     "host:terminalApps.launch": {
       "review": "single-prepared-terminal-program-consent",
@@ -1940,6 +1940,22 @@
     "host:workspace-state.slot.purge": {
       "review": "explicit-permanent-delete-of-closed-subtree",
       "change": "Deletes only a closed subtree whose parent is open, pinned to the exact close stamp, behind the same close context boundary as closing it. Destroys only contexts no surviving slot history or live entity references, server-side under this gate, so a delete never needs per-context runtime authority and never reaches a panel still in the tree."
+    },
+    "host:panelRuntime.listPresentationTargets": {
+      "review": "own-devices-read",
+      "change": "Lists only the caller's own paired devices and this machine's consoles as places to show a panel (tendrils). Other users' online clients are filtered out; no panel content or authority is exposed."
+    },
+    "host:panelRuntime.requestPresentation": {
+      "review": "own-device-presentation-request",
+      "change": "Asks one of the caller's own devices to show an existing panel slot. The target must be the caller's device and the slot must exist; nothing about the panel, its build or its authority changes, and the device's client still takes the lease itself."
+    },
+    "host:panelRuntime.listPresentationRequests": {
+      "review": "own-device-pending-read",
+      "change": "A connecting client reads presentation requests addressed to its own verified device (derived from its principal, never from arguments)."
+    },
+    "host:panelRuntime.historyProof": {
+      "review": "build-proof-read",
+      "change": "Reads whether each history entry's build started successfully (tendrils). Returns entry keys, build keys and boot failures only; no panel content or authority."
     }
   },
   "version": 1

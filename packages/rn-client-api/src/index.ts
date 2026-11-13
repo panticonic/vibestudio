@@ -13,6 +13,7 @@ export * from "./channel";
 export * from "./protocol";
 export * from "./notificationsProtocol";
 export * from "./integrationProtocol";
+export * from "./devicePowersProtocol";
 export * from "./remoteConnection";
 export * from "./remoteSession";
 export { openRemoteStream, type RemoteStreamSurface } from "./remoteStream";

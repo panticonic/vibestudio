@@ -45,5 +45,16 @@ describe("workspace-scoped background approval actions", () => {
     expect(loadPendingActions(serializePendingActions([old]))).toEqual([old]);
     const open = { kind: "approval" as const, target };
     expect(loadOpen(serializeOpen(open))).toEqual(open);
+    const present = {
+      kind: "panel-present" as const,
+      payload: {
+        ...scope,
+        kind: "panel-present" as const,
+        slotId: "panel:tree/trip",
+        title: "A panel is waiting for you",
+        priority: "normal" as const,
+      },
+    };
+    expect(loadOpen(serializeOpen(present))).toEqual(present);
   });
 });

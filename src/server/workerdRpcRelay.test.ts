@@ -651,6 +651,8 @@ describe("workerdRpcRelay", () => {
         callerId: "panel:parent-entity",
         callerKind: "panel",
         callerPanelId: "parent-slot",
+        callerDeviceId: "dev_abcdefghijklmnopqrstuvwx",
+        callerPanelSource: "panels/tendril",
         userId: "usr_alice",
       }
     );
@@ -660,6 +662,8 @@ describe("workerdRpcRelay", () => {
       callerId: "panel:parent-entity",
       callerKind: "panel",
       callerPanelId: "parent-slot",
+      callerDeviceId: "dev_abcdefghijklmnopqrstuvwx",
+      callerPanelSource: "panels/tendril",
       userId: "usr_alice",
     });
   });

@@ -219,6 +219,7 @@ import {
 } from "@vibestudio/shared/authority/invocationSnapshot";
 import { describeCapability } from "@vibestudio/shared/authorityPresentation";
 import { resolveHttpRuntimeCaller } from "./httpRuntimeIdentity.js";
+import { resolveCallerDeviceFacts, type CallerDeviceFacts } from "./callerDeviceFacts.js";
 
 const log = createDevLogger("RpcServer");
 /** Native close code for a physical connection retired because its device was revoked. */
@@ -929,6 +930,8 @@ export class RpcServer {
       isCodeApproved?: (code: VerifiedCodeIdentity) => boolean | Promise<boolean>;
       sessionTtlMs?: SessionRegistryOptions["ttlMs"];
       runtimeCoordinator?: PanelRuntimeCoordinator;
+      /** Device of a hub-attested, unrevoked client principal (identity.db). */
+      clientPrincipalDevice?: (principalId: string) => string | null;
       /** Direct event addressing is owned by authenticated transport lifetime. */
       eventService?: EventService;
       /**
@@ -1622,6 +1625,26 @@ export class RpcServer {
    * authority made the routed unary path disagree with HTTP and streaming RPC,
    * both of which already resolve the active entity for every request.
    */
+  /**
+   * Panel slot, device and panel source of a caller crossing into a userland
+   * Durable Object, derived only from host-verified session facts.
+   */
+  private callerDeviceFacts(
+    runtime: VerifiedCaller["runtime"],
+    code: VerifiedCaller["code"]
+  ): CallerDeviceFacts {
+    const coordinator = this.deps.runtimeCoordinator;
+    return resolveCallerDeviceFacts(
+      { runtime, ...(code && code.callerId === runtime.id ? { code } : {}) },
+      {
+        panelIdentityForRuntime: (id) => coordinator?.panelIdentityForRuntime(id),
+        presentationCallerForRuntime: (id) =>
+          coordinator?.resolvePresentationCallerForRuntime(id) ?? null,
+        clientPrincipalDevice: (id) => this.deps.clientPrincipalDevice?.(id) ?? null,
+      }
+    );
+  }
+
   private withLiveRuntimeRelationships(caller: VerifiedCaller): VerifiedCaller {
     // A peer host owns its caller's live relationships. A same-named local
     // entity must never substitute its channel/context onto a foreign caller.
@@ -4884,10 +4907,6 @@ export class RpcServer {
       const workerdUrl = this.workerdUrl;
       const workerdGatewayToken = this.workerdGatewayToken;
       const workerdDispatchSecret = this.workerdDispatchSecret;
-      const callerPanelId =
-        callerKind === "panel"
-          ? this.deps.runtimeCoordinator?.panelIdentityForRuntime(callerId)
-          : undefined;
       const transportCaller = this.withLiveRuntimeRelationships(
         relayCallerScope?.authenticatedCaller ??
           (await this.verifiedCallerFor(callerId, callerKind))
@@ -4897,6 +4916,10 @@ export class RpcServer {
           ? createHostCaller(callerId, "server", SYSTEM_SUBJECT)
           : this.callerWithParentInvocation(transportCaller, relayCallerScope?.authorizingCaller);
       const authenticatedCaller = authenticatedCallerOf(attributedCaller);
+      const deviceFacts = this.callerDeviceFacts(
+        { id: callerId, kind: callerKind },
+        transportCaller.code
+      );
       const authorization = await this.directDOAuthorization({
         caller: attributedCaller,
         authorizingCaller: relayCallerScope?.authorizingCaller,
@@ -4934,7 +4957,7 @@ export class RpcServer {
             ...(workerdDispatchSecret ? { workerdDispatchSecret } : {}),
             callerId,
             callerKind,
-            ...(callerPanelId ? { callerPanelId } : {}),
+            ...deviceFacts,
             ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
             ...(authenticatedCaller.workspaceId
               ? { callerWorkspaceId: authenticatedCaller.workspaceId }
@@ -5044,10 +5067,7 @@ export class RpcServer {
     }
     const { streamFromDurableObject } = await import("./workerdRpcRelay.js");
     const authenticatedCaller = authenticatedCallerOf(caller);
-    const callerPanelId =
-      caller.runtime.kind === "panel"
-        ? this.deps.runtimeCoordinator?.panelIdentityForRuntime(caller.runtime.id)
-        : undefined;
+    const deviceFacts = this.callerDeviceFacts(caller.runtime, caller.code);
     const authorization = await this.directDOAuthorization({
       caller: invocationCaller,
       authorizingCaller: relayCallerScope?.authorizingCaller,
@@ -5083,7 +5103,7 @@ export class RpcServer {
             : {}),
           callerId: caller.runtime.id,
           callerKind: caller.runtime.kind,
-          ...(callerPanelId ? { callerPanelId } : {}),
+          ...deviceFacts,
           ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
           ...(authenticatedCaller.workspaceId
             ? { callerWorkspaceId: authenticatedCaller.workspaceId }
@@ -5273,6 +5293,7 @@ export class RpcServer {
           : {}),
         callerId: fromId,
         callerKind: fromKind,
+        ...this.callerDeviceFacts({ id: fromId, kind: fromKind }, attributedCaller.code),
         ...(authenticatedCaller.userId ? { userId: authenticatedCaller.userId } : {}),
         ...(authenticatedCaller.workspaceId
           ? { callerWorkspaceId: authenticatedCaller.workspaceId }

@@ -50,6 +50,14 @@ export class PanelInitClient {
 
     this.panelManager = new PanelManager({
       registry: new PanelRegistry({ workspaceId }),
+      device: {
+        label: clientLabel,
+        platform: "headless",
+        resolveId: async () =>
+          ((await rpc.call("main", mainRpcMethods["auth.getConnectionInfo"], [])) as {
+            deviceId: string | null;
+          }).deviceId,
+      },
       workspaceState,
       runtime,
       viewState: { load: () => ({ collapsedIds: [] }), save: () => undefined },

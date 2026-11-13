@@ -99,6 +99,7 @@ export type EventName =
   | "panel:executionFailed"
   | "panel:stateArgsChanged"
   | "panel-presentation-changed"
+  | "panel-presentation-requested"
   | "panel-local-presentation-changed"
   | "panel:snapshot"
   | "system-theme-changed"
@@ -352,6 +353,19 @@ export interface EventPayloads {
     stateArgs: Record<string, unknown>;
   };
   "panel-presentation-changed": { revision: number; panelIds: string[] };
+  /**
+   * Tendrils (docs/tendrils-plan.md 4.5): an agent or user asked for a panel
+   * slot to be shown on one paired device. The client whose device matches
+   * takes the slot's lease (which clears the durable request) and focuses it
+   * when `focus`. Clients also list pending requests on connect, so a request
+   * made while the device was away is not lost.
+   */
+  "panel-presentation-requested": {
+    slotId: string;
+    deviceId: string;
+    focus: boolean;
+    alert: "none" | "inbox" | "interrupt";
+  };
   "panel-local-presentation-changed": PanelPresentationSnapshot;
   "panel:snapshot": PanelRecoverySnapshot;
   "open-workspace-switcher":
@@ -648,6 +662,7 @@ export const VALID_EVENT_NAMES: EventName[] = [
   "panel:executionFailed",
   "panel:stateArgsChanged",
   "panel-presentation-changed",
+  "panel-presentation-requested",
   "panel-local-presentation-changed",
   "panel:snapshot",
   "open-workspace-switcher",

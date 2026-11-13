@@ -50,6 +50,8 @@ export function createPanelMetadataClient(callService: ShellServiceCall): PanelM
 export function createShellCore(deps: {
   registry: PanelRegistry;
   call: ShellServiceCall;
+  /** This shell's device as presented to panels; its id comes from the server. */
+  device: { label: string; platform: "desktop" | "headless" | "mobile" };
   viewState?: LocalPanelViewStateStore;
   serverInfo: PanelManagerServerInfo;
   workspaceConfig?: WorkspaceConfig;
@@ -63,6 +65,12 @@ export function createShellCore(deps: {
   return {
     panelManager: new PanelManager({
       registry: deps.registry,
+      device: {
+        ...deps.device,
+        resolveId: async () =>
+          (await callTypedServiceMethod("auth", authMethods, deps.call, "getConnectionInfo", []))
+            .deviceId,
+      },
       workspaceState,
       runtime,
       panelMetadata: createPanelMetadataClient(deps.call),

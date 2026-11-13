@@ -5,7 +5,10 @@ import type { BrowserSitePermissionCapability } from "@vibestudio/shared/approva
 import type { EventService } from "@vibestudio/shared/eventsService";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import { browserPermissionsMethods } from "@vibestudio/service-schemas/browserPermissions";
+import {
+  BrowserPermissionCapabilitySchema,
+  browserPermissionsMethods,
+} from "@vibestudio/service-schemas/browserPermissions";
 import { browserEnvironmentIdentityFromContext } from "../browserEnvironmentIdentity.js";
 import type { ApprovalQueue, BrowserPermissionApprovalDecision } from "./approvalQueue.js";
 import type { CapabilityGrantStore } from "./capabilityGrantStore.js";
@@ -376,15 +379,5 @@ function normalizeWebOrigin(value: string): string {
 }
 
 function isCapability(value: unknown): value is BrowserPermissionCapability {
-  return [
-    "camera",
-    "microphone",
-    "screen-capture",
-    "geolocation",
-    "notifications",
-    "downloads",
-    "clipboard",
-    "autofill",
-    "popups",
-  ].includes(String(value));
+  return BrowserPermissionCapabilitySchema.safeParse(value).success;
 }

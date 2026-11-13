@@ -362,6 +362,8 @@ export function createAuthService(deps: {
     "attestClientPrincipal" | "mintClientCredential"
   >;
   resolveRuntimeEntity?: (id: string) => Promise<EntityRecord | null>;
+  /** `deviceIdOfHostPrincipal`: the caller's device, reported in connection info. */
+  deviceOfPrincipal(principalId: string): string | null;
 }): ServiceWithRoutes {
   const capabilityAuthorizer =
     deps.capabilityAuthorizer ??
@@ -474,6 +476,7 @@ export function createAuthService(deps: {
         ...connectionInfoResponse(deps),
         callerKind: ctx.caller.runtime.kind,
         ...(ctx.caller.agentBinding ? { agentBinding: ctx.caller.agentBinding } : {}),
+        deviceId: deps.deviceOfPrincipal(ctx.caller.runtime.id),
       }),
       grantClientPrincipal: async (ctx, [request]) => {
         const { deviceId } = requireDeviceShell(

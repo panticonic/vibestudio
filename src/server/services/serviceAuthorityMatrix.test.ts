@@ -82,6 +82,7 @@ async function collectAuthorityMatrix(): Promise<AuthorityMatrix> {
   // construction dependency. Include its real definition with an isolated
   // in-memory store instead of letting the census silently skip it.
   const pushDefinition = createPushService({
+    deviceOfPrincipal: () => null,
     workspaceId: "ws-test",
     serverId: "srv_aaaaaaaaaaaaaaaaaaaaaaaa",
     databasePath: ":memory:",

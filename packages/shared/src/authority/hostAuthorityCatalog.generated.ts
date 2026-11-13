@@ -5648,6 +5648,39 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "panelRuntime.historyProof": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale: "Reads whether each history entry's build has started successfully; no content",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "panelRuntime.listPresentationRequests": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale: "A connecting client reads the requests addressed to its own device",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "panelRuntime.listPresentationTargets": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale: "Lists the caller's own paired devices and this machine as places to show a panel",
+    },
+    capability: null,
+    presentation: null,
+  },
   "panelRuntime.observeSlot": {
     tier: {
       tier: "open",
@@ -5702,6 +5735,18 @@ export const HOST_AUTHORITY_METHODS = {
       family: "panelRuntime.control",
       rationale:
         "P-panels: a lease-owning host reports the current panel boot state; ownership is verified server-side and no authority is widened.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "panelRuntime.requestPresentation": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.control",
+      rationale:
+        "Asks one of the caller's own devices to show an existing panel; the device's client decides how, and nothing about the panel or its authority changes",
     },
     capability: null,
     presentation: null,

@@ -4339,6 +4339,31 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
             "kind": "receiver-object"
           }
         }
+      },
+      "slotHistoryList": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
       }
     }
   },

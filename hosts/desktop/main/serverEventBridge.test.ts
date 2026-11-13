@@ -26,6 +26,7 @@ function createHarness(
     applyPanelExecutionFailed: vi.fn(),
     applyServerPanelStateArgsUpdate: vi.fn(),
     refreshPanelPresentations: vi.fn(async () => {}),
+    handlePresentationRequested: vi.fn(async () => {}),
     recoverShellSnapshot: vi.fn(async () => undefined),
     createBrowserUrlPanel: vi.fn(async () => ({ panelId: "panel:tree/browser" })),
   };
@@ -182,6 +183,22 @@ describe("createServerEventBridge", () => {
     await vi.waitFor(() =>
       expect(eventService.emit).toHaveBeenCalledWith("panel-presentation-changed", change)
     );
+  });
+
+  it("hands presentation requests to the panel host and still notifies shell chrome", async () => {
+    const { handle, eventService, panelOrchestrator } = createHarness();
+    const request = { slotId: "panel:tree/trip", deviceId: "desk-1", focus: false, alert: "none" };
+
+    handle("panel-presentation-requested", request);
+
+    await vi.waitFor(() =>
+      expect(panelOrchestrator.handlePresentationRequested).toHaveBeenCalledWith({
+        slotId: "panel:tree/trip",
+        deviceId: "desk-1",
+        focus: false,
+      })
+    );
+    expect(eventService.emit).toHaveBeenCalledWith("panel-presentation-requested", request);
   });
 
   it("normalizes build completion into orchestrator state updates instead of emitting raw events", () => {

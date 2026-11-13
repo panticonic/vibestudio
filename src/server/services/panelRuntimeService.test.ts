@@ -3,6 +3,27 @@ import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { PanelRuntimeCoordinator } from "../panelRuntimeCoordinator.js";
 import { createPanelRuntimeService } from "./panelRuntimeService.js";
 import type { PanelBootProbeResult } from "@vibestudio/shared/panel/observation";
+import type { PanelPresentation } from "../panelPresentation.js";
+import type { PanelHistoryProof } from "../panelHistoryProof.js";
+
+/** Not exercised here (see panelHistoryProof.test.ts). */
+const UNUSED_HISTORY_PROOF: PanelHistoryProof = {
+  proofForSlot: async () => [],
+  idle: async () => {},
+  dispose: () => {},
+};
+
+/** These tests do not exercise presentation (see panelPresentation.test.ts). */
+const UNUSED_PRESENTATION: PanelPresentation = {
+  listTargets: () => {
+    throw new Error("presentation not used in this test");
+  },
+  request: async () => {
+    throw new Error("presentation not used in this test");
+  },
+  pendingFor: async () => [],
+  dispose: () => {},
+};
 
 const desktopCtx = { caller: createVerifiedCaller("shell:desktop", "shell") };
 const rendererCtx = {
@@ -43,6 +64,8 @@ function setup(
     currentEntityForSlot,
     observeHostSlot,
     browserSourceForSlot: async () => input.browserSource ?? null,
+    presentation: UNUSED_PRESENTATION,
+    historyProof: UNUSED_HISTORY_PROOF,
   });
   return {
     coordinator,
@@ -322,6 +345,8 @@ describe("panelRuntimeService attempt waits", () => {
       ensureExecutable: async () => true,
       currentEntityForSlot: async () => current,
       observeHostSlot: async () => null,
+      presentation: UNUSED_PRESENTATION,
+      historyProof: UNUSED_HISTORY_PROOF,
       ensureDefaultHeadlessHost: async () => {
         current = "panel:nav-b";
         coordinator.registerClient({

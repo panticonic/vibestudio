@@ -4899,6 +4899,48 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotHistoryList",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "slotHistoryList",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
       "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotHistoryRelative",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
@@ -25292,6 +25334,143 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:panelRuntime.historyProof",
+      "rpcPlane": "host-service",
+      "owner": "panelRuntime",
+      "method": "historyProof",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "panelRuntime.read",
+      "reviewRationale": "Reads whether each history entry's build has started successfully; no content",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelRuntime.historyProof"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:panelRuntime.historyProof),allOf(capability(user,service:panelRuntime.historyProof),workspace-member),allOf(capability(code,service:panelRuntime.historyProof),workspace-member))",
+      "r3b": {
+        "review": "build-proof-read",
+        "change": "Reads whether each history entry's build started successfully (tendrils). Returns entry keys, build keys and boot failures only; no panel content or authority."
+      },
+      "capability": "service:panelRuntime.historyProof",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:panelRuntime.listPresentationRequests",
+      "rpcPlane": "host-service",
+      "owner": "panelRuntime",
+      "method": "listPresentationRequests",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "panelRuntime.read",
+      "reviewRationale": "A connecting client reads the requests addressed to its own device",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelRuntime.listPresentationRequests"
+      },
+      "authorityPrincipals": [
+        "user",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:panelRuntime.listPresentationRequests),allOf(capability(user,service:panelRuntime.listPresentationRequests),workspace-member))",
+      "r3b": {
+        "review": "own-device-pending-read",
+        "change": "A connecting client reads presentation requests addressed to its own verified device (derived from its principal, never from arguments)."
+      },
+      "capability": "service:panelRuntime.listPresentationRequests",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:panelRuntime.listPresentationTargets",
+      "rpcPlane": "host-service",
+      "owner": "panelRuntime",
+      "method": "listPresentationTargets",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "panelRuntime.read",
+      "reviewRationale": "Lists the caller's own paired devices and this machine as places to show a panel",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelRuntime.listPresentationTargets"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "read",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:panelRuntime.listPresentationTargets),allOf(capability(user,service:panelRuntime.listPresentationTargets),workspace-member),allOf(capability(code,service:panelRuntime.listPresentationTargets),workspace-member))",
+      "r3b": {
+        "review": "own-devices-read",
+        "change": "Lists only the caller's own paired devices and this machine's consoles as places to show a panel (tendrils). Other users' online clients are filtered out; no panel content or authority is exposed."
+      },
+      "capability": "service:panelRuntime.listPresentationTargets",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:panelRuntime.observeSlot",
       "rpcPlane": "host-service",
       "owner": "panelRuntime",
@@ -25514,6 +25693,52 @@
         "change": null
       },
       "capability": "service:panelRuntime.reportView",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:panelRuntime.requestPresentation",
+      "rpcPlane": "host-service",
+      "owner": "panelRuntime",
+      "method": "requestPresentation",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "supervision",
+      "mechanismFamily": "panelRuntime.control",
+      "reviewRationale": "Asks one of the caller's own devices to show an existing panel; the device's client decides how, and nothing about the panel or its authority changes",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:panelRuntime.requestPresentation"
+      },
+      "authorityPrincipals": [
+        "user",
+        "code",
+        "host"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:panelRuntime.requestPresentation),allOf(capability(user,service:panelRuntime.requestPresentation),workspace-member),allOf(capability(code,service:panelRuntime.requestPresentation),workspace-member))",
+      "r3b": {
+        "review": "own-device-presentation-request",
+        "change": "Asks one of the caller's own devices to show an existing panel slot. The target must be the caller's device and the slot must exist; nothing about the panel, its build or its authority changes, and the device's client still takes the lease itself."
+      },
+      "capability": "service:panelRuntime.requestPresentation",
       "parityAssertion": "generated-census:host-authority"
     },
     {

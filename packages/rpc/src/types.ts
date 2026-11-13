@@ -289,6 +289,18 @@ export interface AuthenticatedCaller {
    */
   callerPanelId?: string;
   /**
+   * The paired device this caller acts from: the device of a host session, or
+   * of the host session that holds a panel caller's runtime lease. Derived by
+   * the trusted server from its authenticated session facts, never from a
+   * payload. Attribution only, not authority.
+   */
+  callerDeviceId?: string;
+  /**
+   * Verified code identity source (workspace repo path) of a panel caller.
+   * Only the trusted server stamps this field. Attribution only.
+   */
+  callerPanelSource?: string;
+  /**
    * Owning user (WP4 §2.4), mirrored from the host-verified
    * `VerifiedCaller.subject.userId` when this caller crosses into userland (DO
    * dispatch, worker, bridge). ATTRIBUTION ONLY — the receiver treats it as

@@ -125,6 +125,30 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
     initiatedByFrame:(WKFrameInfo *)frame
     type:(WKMediaCaptureType)type
     decisionHandler:(void (^)(WKPermissionDecision))decisionHandler {
+  NSArray *capabilities;
+  switch (type) {
+    case WKMediaCaptureTypeCamera: capabilities = @[@"camera"]; break;
+    case WKMediaCaptureTypeMicrophone: capabilities = @[@"microphone"]; break;
+    case WKMediaCaptureTypeCameraAndMicrophone: capabilities = @[@"camera", @"microphone"]; break;
+    default: decisionHandler(WKPermissionDecisionDeny); return;
+  }
+  [self requestWorkspacePermission:capabilities webView:webView origin:origin frame:frame decisionHandler:decisionHandler];
+}
+
+// DeviceMotionEvent/DeviceOrientationEvent.requestPermission() (iOS 15+): the
+// same per-origin workspace approval as camera and microphone, as "motion".
+- (void)webView:(WKWebView *)webView
+    requestDeviceOrientationAndMotionPermissionForOrigin:(WKSecurityOrigin *)origin
+    initiatedByFrame:(WKFrameInfo *)frame
+    decisionHandler:(void (^)(WKPermissionDecision))decisionHandler API_AVAILABLE(ios(15.0)) {
+  [self requestWorkspacePermission:@[@"motion"] webView:webView origin:origin frame:frame decisionHandler:decisionHandler];
+}
+
+- (void)requestWorkspacePermission:(NSArray *)capabilities
+                           webView:(WKWebView *)webView
+                            origin:(WKSecurityOrigin *)origin
+                             frame:(WKFrameInfo *)frame
+                   decisionHandler:(void (^)(WKPermissionDecision))decisionHandler {
   NSURL *url = webView.URL;
   NSInteger defaultPort = [url.scheme.lowercaseString isEqualToString:@"https"] ? 443 : 80;
   NSInteger urlPort = url.port ? url.port.integerValue : defaultPort;
@@ -135,13 +159,6 @@ WKWebsiteDataStore *VibestudioWorkspaceDataStore(NSString *scope) {
       ![origin.host.lowercaseString isEqualToString:url.host.lowercaseString] || originPort != urlPort) {
     decisionHandler(WKPermissionDecisionDeny);
     return;
-  }
-  NSArray *capabilities;
-  switch (type) {
-    case WKMediaCaptureTypeCamera: capabilities = @[@"camera"]; break;
-    case WKMediaCaptureTypeMicrophone: capabilities = @[@"microphone"]; break;
-    case WKMediaCaptureTypeCameraAndMicrophone: capabilities = @[@"camera", @"microphone"]; break;
-    default: decisionHandler(WKPermissionDecisionDeny); return;
   }
   if (!_permissionRequests) _permissionRequests = [NSMutableDictionary new];
   NSString *requestId = NSUUID.UUID.UUIDString;

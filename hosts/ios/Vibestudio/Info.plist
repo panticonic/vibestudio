@@ -24,6 +24,8 @@
 	<true/>
 	<key>NSCameraUsageDescription</key>
 	<string>Vibestudio can use the camera for workspace apps that request camera access.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Pages you open in Vibestudio, such as a trip dashboard, can show where you are while you use them.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Vibestudio can use the microphone for workspace apps that request audio access.</string>
 	<key>VibestudioAppGroup</key>

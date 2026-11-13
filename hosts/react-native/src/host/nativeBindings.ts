@@ -1,4 +1,5 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import HapticFeedback from "react-native-haptic-feedback";
 import Clipboard from "@react-native-clipboard/clipboard";
 import { AppState, Linking, NativeEventEmitter, NativeModules, Platform } from "react-native";
 import {
@@ -35,7 +36,19 @@ interface MobileHostNative {
   pickBrowserImportArchive: DeviceCapabilityPorts["browserImport"]["pickArchive"];
   readBrowserImportEntry: DeviceCapabilityPorts["browserImport"]["readEntry"];
   releaseBrowserImportArchive: DeviceCapabilityPorts["browserImport"]["releaseArchive"];
+  setKeepAwake(on: boolean): Promise<void>;
+  speak(text: string, language: string | null): Promise<void>;
+  stopSpeaking(): Promise<void>;
 }
+
+const HAPTIC_TYPES = {
+  light: "impactLight",
+  medium: "impactMedium",
+  heavy: "impactHeavy",
+  success: "notificationSuccess",
+  warning: "notificationWarning",
+  error: "notificationError",
+} as const;
 
 function requireModule<T>(name: string): T {
   const module = NativeModules[name] as T | undefined;
@@ -95,6 +108,14 @@ export function startMobileHost(options: {
       readEntry: (handle, name, offset, maxBytes) =>
         mobileHost.readBrowserImportEntry(handle, name, offset, maxBytes),
       releaseArchive: (handle) => mobileHost.releaseBrowserImportArchive(handle),
+    },
+    devicePowers: {
+      setKeepAwake: (on) => mobileHost.setKeepAwake(on),
+      haptic: async (kind) => {
+        HapticFeedback.trigger(HAPTIC_TYPES[kind], { enableVibrateFallback: true });
+      },
+      speak: ({ text, lang }) => mobileHost.speak(text, lang ?? null),
+      stopSpeaking: () => mobileHost.stopSpeaking(),
     },
   };
 

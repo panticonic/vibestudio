@@ -247,3 +247,31 @@ export function channelInviteFromNotification(
   const parsed = ChannelInviteSchema.safeParse(value);
   return parsed.success ? parsed.data : null;
 }
+
+/**
+ * FCM data payload asking a device to show a panel (tendrils,
+ * docs/tendrils-plan.md 4.5). Values are strings (FCM data maps are
+ * string-only). Opening it activates the workspace and shows `slotId`; the
+ * durable presentation request is what the client then fulfils.
+ */
+export type PushPanelPresentDataPayload = import("./workspacePushScope.js").WorkspacePushScope & {
+  kind: "panel-present";
+  slotId: string;
+  title: string;
+  body?: string;
+  priority: "normal" | "high";
+};
+
+export function isPushPanelPresentDataPayload(
+  value: unknown
+): value is PushPanelPresentDataPayload {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return (
+    readWorkspacePushScope(record) !== null &&
+    record["kind"] === "panel-present" &&
+    typeof record["slotId"] === "string" &&
+    record["slotId"].trim().length > 0 &&
+    typeof record["title"] === "string"
+  );
+}

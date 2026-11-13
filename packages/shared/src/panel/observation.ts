@@ -43,6 +43,27 @@ export type PanelFailureCode =
   | "panel_not_found"
   | "unknown_failure";
 
+/** Failures that the panel's own code or build must fix (a retry with the same input won't help). */
+export const PANEL_CODE_FAILURE_CODES: ReadonlySet<PanelFailureCode> = new Set<PanelFailureCode>([
+  "unit_not_found",
+  "ref_not_found",
+  "manifest_invalid",
+  "dependency_resolution_failed",
+  "compile_failed",
+  "build_identity_invalid",
+  "asset_unavailable",
+  "entry_threw",
+]);
+
+/**
+ * Boot failures that disprove an update: the panel's own code failed, hung or
+ * crashed before ever starting. Network, host and lease failures are not
+ * evidence against the build (tendrils, docs/tendrils-plan.md 4.4).
+ */
+export function disprovesBuild(code: PanelFailureCode): boolean {
+  return PANEL_CODE_FAILURE_CODES.has(code) || code === "boot_stalled" || code === "render_crashed";
+}
+
 export interface PanelFailureProvenance {
   panelId?: string;
   runtimeEntityId?: string | null;
@@ -419,16 +440,7 @@ export class PanelOperationError extends Error {
   ) {
     super(`${failure.stage}: ${failure.message}`);
     this.name = "PanelOperationError";
-    const repairRequired = new Set<PanelFailureCode>([
-      "unit_not_found",
-      "ref_not_found",
-      "manifest_invalid",
-      "dependency_resolution_failed",
-      "compile_failed",
-      "build_identity_invalid",
-      "asset_unavailable",
-      "entry_threw",
-    ]).has(failure.code);
+    const repairRequired = PANEL_CODE_FAILURE_CODES.has(failure.code);
     this.errorData = {
       ...failure,
       failureKind: repairRequired ? "user-code" : "infrastructure",

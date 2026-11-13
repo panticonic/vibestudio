@@ -446,6 +446,70 @@ describe("PanelOrchestrator.closePanel", () => {
   });
 });
 
+describe("PanelOrchestrator presentation requests", () => {
+  function setup(pending: unknown[] = []) {
+    const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });
+    const f = createOrchestrator(registry, vi.fn());
+    const original = f.serverClient.call.getMockImplementation()!;
+    f.serverClient.call.mockImplementation((async (
+      service: string,
+      method: string,
+      args?: unknown[]
+    ) => {
+      if (service === "auth" && method === "getConnectionInfo") return { deviceId: "desk-1" };
+      if (method === "listPresentationRequests") return pending;
+      return original(service, method, args);
+    }) as never);
+    const takeOver = vi
+      .spyOn(f.orchestrator, "takeOverPanel")
+      .mockResolvedValue({ focused: true } as never);
+    const load = vi
+      .spyOn(
+        (f.orchestrator as unknown as { runtime: { loadPanelIntoView: () => Promise<void> } })
+          .runtime,
+        "loadPanelIntoView"
+      )
+      .mockResolvedValue();
+    return { ...f, takeOver, load };
+  }
+
+  it("takes over and focuses a slot requested on this device", async () => {
+    const { orchestrator, takeOver, load } = setup();
+    await orchestrator.handlePresentationRequested({
+      slotId: "trip",
+      deviceId: "desk-1",
+      focus: true,
+    });
+    expect(takeOver).toHaveBeenCalledWith("trip");
+    await orchestrator.handlePresentationRequested({
+      slotId: "map",
+      deviceId: "desk-1",
+      focus: false,
+    });
+    expect(load).toHaveBeenCalledWith("map", "takeOver");
+    expect(takeOver).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores requests for other devices", async () => {
+    const { orchestrator, takeOver, load } = setup();
+    await orchestrator.handlePresentationRequested({
+      slotId: "trip",
+      deviceId: "phone-1",
+      focus: true,
+    });
+    expect(takeOver).not.toHaveBeenCalled();
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it("applies requests that arrived while this device was away", async () => {
+    const { orchestrator, takeOver } = setup([
+      { slotId: "trip", deviceId: "desk-1", focus: true, alert: "inbox", requestedAt: 1 },
+    ]);
+    await orchestrator.applyPendingPresentationRequests();
+    expect(takeOver).toHaveBeenCalledWith("trip");
+  });
+});
+
 describe("PanelOrchestrator.updatePanelTitle", () => {
   it("routes native page titles through workspace-state so every tree projection is invalidated", async () => {
     const registry = new PanelRegistry({ workspaceId: "workspace-test", onTreeUpdated: vi.fn() });

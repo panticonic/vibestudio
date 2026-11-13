@@ -452,6 +452,10 @@ Authority principals: `host`, `user`
 | `panelRuntime.unloadSlot` | Release the active presentation lease for a panel slot while preserving its runtime entity and topology. |
 | `panelRuntime.release` | Release the lease for a panel entity held by the given connection id. No-op unless the connection matches the current holder. |
 | `panelRuntime.reportView` | Report the current page and boot observation for a leased panel from a host without an inspection transport. Returns stale when the lease was superseded before publication. |
+| `panelRuntime.listPresentationTargets` | List the devices a panel can be shown on: the caller's paired devices and this machine, with whether each is online. |
+| `panelRuntime.requestPresentation` | Ask one of the caller's devices to show a panel slot. Durable: an away device shows it when it next connects, and is notified when alert is not none. |
+| `panelRuntime.listPresentationRequests` | List pending presentation requests for the calling client's own device (clients read these on connect). |
+| `panelRuntime.historyProof` | Build proof of a panel slot's history entries, newest first: proven (started successfully), failed (failed by its own code before ever starting; with the failure), or unproven. |
 
 ## `permissions`
 

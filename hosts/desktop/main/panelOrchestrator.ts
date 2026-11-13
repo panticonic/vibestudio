@@ -920,6 +920,13 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
       );
     });
     log.verbose("[initializePanelTree] Synchronized runtime lease snapshot");
+    await this.applyPendingPresentationRequests().catch((error: unknown) => {
+      log.warn(
+        `[initializePanelTree] Failed to read presentation requests: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
+    });
 
     log.info("[initializePanelTree] Query-first panel tree initialized");
   }
@@ -1050,6 +1057,58 @@ export class PanelOrchestrator implements BridgePanelLifecycle, PanelHost {
   async takeOverPanel(panelId: string): Promise<PanelFocusResult> {
     await this.runtime.loadPanelIntoView(panelId, "takeOver");
     return this.focusPanel(panelId);
+  }
+
+  private presentationDevice: Promise<string | null> | null = null;
+
+  /** This host's paired device, as the server names it in presentation requests. */
+  private presentationDeviceId(): Promise<string | null> {
+    this.presentationDevice ??= (
+      this.callServer("auth", "getConnectionInfo", []) as Promise<{ deviceId: string | null }>
+    ).then(
+      (info) => info.deviceId,
+      (error: unknown) => {
+        this.presentationDevice = null; // retry on the next request
+        throw error;
+      }
+    );
+    return this.presentationDevice;
+  }
+
+  /**
+   * A presentation request (tendrils plan 4.5): when it names this device,
+   * run the slot here, taking its runtime from wherever it is, and bring it
+   * forward if asked. Running it here fulfils the request on the server.
+   */
+  async handlePresentationRequested(request: {
+    slotId: string;
+    deviceId: string;
+    focus: boolean;
+  }): Promise<void> {
+    if (request.deviceId !== (await this.presentationDeviceId())) return;
+    if (request.focus) {
+      await this.takeOverPanel(request.slotId);
+      return;
+    }
+    await this.runtime.loadPanelIntoView(request.slotId, "takeOver");
+  }
+
+  /** Requests addressed to this device while it was away. */
+  async applyPendingPresentationRequests(): Promise<void> {
+    const pending = (await this.callServer("panelRuntime", "listPresentationRequests", [])) as {
+      slotId: string;
+      deviceId: string;
+      focus: boolean;
+    }[];
+    for (const request of pending) {
+      await this.handlePresentationRequested(request).catch((error: unknown) =>
+        log.warn(
+          `[presentation] could not present ${request.slotId}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        )
+      );
+    }
   }
 
   async syncRuntimeLeaseSnapshot(): Promise<void> {

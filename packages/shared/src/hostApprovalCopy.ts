@@ -1114,6 +1114,22 @@ const HOST_SEMANTIC_CAPABILITY_DEFS: readonly SemanticCapabilityRow[] = [
     group: "host",
   },
   {
+    prefix: "device-powers",
+    authorityCategory: { domain: "computer", verb: "act" },
+    title: "Keep the screen on, tap and speak",
+    action: "keep the screen on, tap haptically and speak aloud for pages it shows",
+    description: "Keep the screen on, tap haptically and speak aloud for pages it shows",
+    group: "host",
+  },
+  {
+    prefix: "motion",
+    authorityCategory: { domain: "computer", verb: "see" },
+    title: "Sense how your device moves",
+    action: "read your device's motion and orientation",
+    description: "Read how this device moves and which way it faces",
+    group: "host",
+  },
+  {
     prefix: "integration.install",
     authorityCategory: { domain: "computer", verb: "act" },
     title: "Add launchers to this device",

@@ -1,4 +1,8 @@
 import type { LaunchedClient } from "@vibestudio/client-host-core";
+import {
+  HAPTIC_KINDS,
+  type HapticKind,
+} from "@vibestudio/rn-client-api/devicePowersProtocol";
 import type {
   InstalledLauncher,
   InstallLauncherOutcome,
@@ -34,6 +38,13 @@ export interface DeviceCapabilityPorts {
       maxBytes: number
     ): Promise<{ dataBase64: string; eof: boolean }>;
     releaseArchive(handle: string): Promise<void>;
+  };
+  /** `device-powers`: what pages need from the phone beyond the WebView. */
+  devicePowers: {
+    setKeepAwake(on: boolean): Promise<void>;
+    haptic(kind: HapticKind): Promise<void>;
+    speak(request: { text: string; lang?: string }): Promise<void>;
+    stopSpeaking(): Promise<void>;
   };
 }
 
@@ -220,6 +231,15 @@ export class ClientInstance {
       "browserImport.readEntry": (handle, name, offset, maxBytes) =>
         device.browserImport.readEntry(handle, name, offset, maxBytes),
       "browserImport.releaseArchive": (handle) => device.browserImport.releaseArchive(handle),
+      "devicePowers.setKeepAwake": (on) => device.devicePowers.setKeepAwake(on),
+      "devicePowers.haptic": (kind) => {
+        if (!HAPTIC_KINDS.includes(kind)) {
+          throw new BrokerError("BAD_REQUEST", `Unknown haptic kind: ${String(kind)}`);
+        }
+        return device.devicePowers.haptic(kind);
+      },
+      "devicePowers.speak": (request) => device.devicePowers.speak(request),
+      "devicePowers.stopSpeaking": () => device.devicePowers.stopSpeaking(),
       "integration.install": ({ id }) => integration.install(id),
       "integration.list": () => integration.list(),
       "integration.remove": ({ id }) => integration.remove(id),

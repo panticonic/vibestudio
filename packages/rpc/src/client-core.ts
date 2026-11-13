@@ -228,6 +228,8 @@ function publicCaller(caller: AuthenticatedCaller): AuthenticatedCaller {
     callerId: caller.callerId,
     callerKind: caller.callerKind,
     ...(caller.callerPanelId ? { callerPanelId: caller.callerPanelId } : {}),
+    ...(caller.callerDeviceId ? { callerDeviceId: caller.callerDeviceId } : {}),
+    ...(caller.callerPanelSource ? { callerPanelSource: caller.callerPanelSource } : {}),
     ...(caller.userId ? { userId: caller.userId } : {}),
     ...(caller.workspaceId ? { workspaceId: caller.workspaceId } : {}),
   };

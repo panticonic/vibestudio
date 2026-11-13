@@ -380,6 +380,7 @@ export const PANEL_TREE_MEMBERS = [
   "closed",
   "reopen",
   "deleteClosed",
+  "listPresentationTargets",
 ];
 
 const PANEL_TREE_GROUP_SCHEMA = {
@@ -713,6 +714,13 @@ export const PANEL_TREE_METHOD_CATALOG = {
       minItems: 2,
       maxItems: 3,
     },
+  },
+  listPresentationTargets: {
+    signature: "listPresentationTargets(): Promise<PanelPresentationTarget[]>",
+    description:
+      "List the devices a panel can be shown on: the user's paired devices and this machine, each with deviceId, label, platform and whether it is online. Pass a deviceId to handle.requestPresentation({ deviceId, focus?, alert? }) to put a panel on that device; an away device shows it when it next connects and is notified unless alert is \"none\". For tendrils, append updates with handle.rebuild({ history: \"append\" }): an update that fails by its own code before ever starting reverts to the last build that started.",
+    argumentNames: [],
+    argsSchema: { type: "array", prefixItems: [], minItems: 0, maxItems: 0 },
   },
   navigateHistory: {
     signature:

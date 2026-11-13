@@ -45,6 +45,8 @@ export function stateLayout(statePath: string) {
       buildTrashDir: path.join(statePath, "execution-retention", "build-trash"),
     },
     ownerPanelSeedsDir: path.join(statePath, "panel-tree", "seeded-owners"),
+    /** Build proof and presentation requests (tendrils; `panelRuntimeStore.ts`). */
+    panelRuntimeDb: path.join(statePath, "panel-tree", "panel-runtime.db"),
     authority: {
       root: authority,
       grantsDb: path.join(authority, "grants.db"),

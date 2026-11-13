@@ -91,6 +91,11 @@ export const ConnectionInfoResponseSchema = z
     ]),
     /** Host-verified entity/context binding, present only for an agent caller. */
     agentBinding: AgentBindingSchema.optional(),
+    /**
+     * The caller's device as the host derives it (`deviceIdOfHostPrincipal`):
+     * a paired device id, `local:<console>` for this machine, or null.
+     */
+    deviceId: z.string().min(1).nullable(),
   })
   .strict();
 

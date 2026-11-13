@@ -15,6 +15,7 @@ export function createElectronShellCore(deps: {
     call: (service, method, args) => deps.serverClient.call(service, method, args),
     allowMissingManifests: deps.allowMissingManifests,
     workspaceConfig: deps.workspaceConfig,
+    device: { label: "This computer", platform: "desktop" },
     serverInfo: {
       gatewayConfig: deps.gatewayConfig,
     },

@@ -175,9 +175,53 @@ export const panelRuntimeAcquireResultSchema = z.union([
 
 export const panelRuntimeViewReportResultSchema = z.enum(["reported", "stale"]);
 
+// ── Tendrils: putting a panel on a chosen device (docs/tendrils-plan.md 4.5) ────────────────────
+export const presentationAlertSchema = z.enum(["none", "inbox", "interrupt"]);
+
+export const presentationTargetSchema = z
+  .object({
+    deviceId: z.string().min(1).describe("Paired device id (or local:<console> for this machine)."),
+    label: z.string().describe("Human-readable device name."),
+    platform: clientPlatformSchema,
+    online: z.boolean().describe("Whether the device has a client session connected now."),
+    clientSessionId: z.string().min(1).nullable(),
+  })
+  .strict();
+export type PresentationTarget = z.infer<typeof presentationTargetSchema>;
+
+export const presentationRequestInputSchema = z
+  .object({
+    slotId: z.string().min(1).describe("Panel slot to show."),
+    deviceId: z.string().min(1).describe("Target device from listPresentationTargets."),
+    focus: z.boolean().describe("Bring the panel to the front on that device."),
+    alert: presentationAlertSchema.describe(
+      "none: show quietly; inbox: also notify; interrupt: notify with high priority."
+    ),
+  })
+  .strict();
+
+export const presentResultSchema = z
+  .object({
+    state: z
+      .enum(["presented", "pending-device", "pushed"])
+      .describe(
+        "presented: the online device was asked to show it; pushed: the device is away and was notified; pending-device: it will be shown when the device next connects."
+      ),
+  })
+  .strict();
+export type PresentResult = z.infer<typeof presentResultSchema>;
+
+export const presentationRequestSchema = presentationRequestInputSchema
+  .extend({ requestedAt: z.number() })
+  .strict();
+
 export const panelRuntimeMethods = defineServiceMethods({
   registerClient: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -192,7 +236,11 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: REGISTER_ACCESS,
   },
   unregisterClient: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -207,7 +255,11 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   getSnapshot: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -222,7 +274,11 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   observeSlot: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -238,7 +294,11 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   getAttempt: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -253,7 +313,11 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   awaitAttempt: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -273,7 +337,11 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   awaitSlot: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -288,7 +356,11 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: READ_ACCESS,
   },
   acquire: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -303,7 +375,11 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   takeOver: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -318,7 +394,11 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   ensureSlot: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -340,7 +420,11 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   unloadSlot: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -357,7 +441,11 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   takeOverSlot: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -382,7 +470,11 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   release: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -397,7 +489,11 @@ export const panelRuntimeMethods = defineServiceMethods({
     access: LEASE_ACCESS,
   },
   reportView: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",
@@ -412,8 +508,103 @@ export const panelRuntimeMethods = defineServiceMethods({
     returns: panelRuntimeViewReportResultSchema,
     access: LEASE_ACCESS,
   },
+  listPresentationTargets: {
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale: "Lists the caller's own paired devices and this machine as places to show a panel",
+    },
+    description:
+      "List the devices a panel can be shown on: the caller's paired devices and this machine, with whether each is online.",
+    args: z.tuple([]),
+    returns: z.array(presentationTargetSchema),
+    authority: USERLAND_READ_POLICY,
+    access: READ_ACCESS,
+  },
+  requestPresentation: {
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.control",
+      rationale:
+        "Asks one of the caller's own devices to show an existing panel; the device's client decides how, and nothing about the panel or its authority changes",
+    },
+    description:
+      "Ask one of the caller's devices to show a panel slot. Durable: an away device shows it when it next connects, and is notified when alert is not none.",
+    args: z.tuple([presentationRequestInputSchema]),
+    returns: presentResultSchema,
+    authority: { principals: ["user", "code", "host"] },
+    access: LEASE_ACCESS,
+  },
+  listPresentationRequests: {
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale: "A connecting client reads the requests addressed to its own device",
+    },
+    description:
+      "List pending presentation requests for the calling client's own device (clients read these on connect).",
+    args: z.tuple([]),
+    returns: z.array(presentationRequestSchema),
+    authority: { principals: ["user", "host"] },
+    access: READ_ACCESS,
+  },
+  historyProof: {
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "supervision",
+      family: "panelRuntime.read",
+      rationale: "Reads whether each history entry's build has started successfully; no content",
+    },
+    description:
+      "Build proof of a panel slot's history entries, newest first: proven (started successfully), failed (failed by its own code before ever starting; with the failure), or unproven.",
+    args: z.tuple([z.string().min(1)]),
+    returns: z.array(
+      z
+        .object({
+          entryKey: z.string(),
+          entityId: z.string(),
+          buildKey: z.string().nullable(),
+          state: z.enum(["unproven", "proven", "failed"]),
+          failure: z.unknown(),
+        })
+        .strict()
+    ),
+    authority: USERLAND_READ_POLICY,
+    access: READ_ACCESS,
+  },
   reportOwnView: {
-    website: {"kind":"closed","reason":"The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations."} as const,
+    website: {
+      kind: "closed",
+      reason:
+        "The panelRuntime receiver controls workspace implementation or trusted host UI; websites use its reviewed public operations.",
+    } as const,
     tier: {
       tier: "open",
       session: "family",

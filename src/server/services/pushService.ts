@@ -30,6 +30,13 @@ export interface PushRegistration {
    * approval reaches only member devices, never every device on the machine.
    */
   userId: string;
+  /**
+   * The paired device that registered, from the host-verified caller principal
+   * (`deviceIdOfHostPrincipal`), never from `register` args. Lets the host
+   * notify one device (tendrils: presentation requests). Null for callers
+   * without a device.
+   */
+  deviceId: string | null;
   registeredAt: number;
 }
 
@@ -107,6 +114,8 @@ interface PushServiceDeps {
   env?: NodeJS.ProcessEnv;
   firebaseAdminLoader?: FirebaseAdminLoader;
   metrics?: PushMetrics;
+  /** `deviceIdOfHostPrincipal`: the registering caller's paired device. */
+  deviceOfPrincipal(principalId: string): string | null;
 }
 
 export const pushServiceDocumentation = {
@@ -116,8 +125,21 @@ export const pushServiceDocumentation = {
   methods: pushMethods,
 } satisfies Omit<ServiceDefinition, "handler">;
 
+/** v2 links registrations to their paired device; additive over v1. */
+const PUSH_REGISTRATION_DEVICES_TABLE = `CREATE TABLE push_registration_devices (
+        user_id TEXT NOT NULL,
+        client_id TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        PRIMARY KEY (user_id, client_id)
+      )`;
+const PUSH_REGISTRATION_DEVICES_DELETE = `CREATE TRIGGER push_registration_devices_delete
+      AFTER DELETE ON push_registrations BEGIN
+        DELETE FROM push_registration_devices
+         WHERE user_id = OLD.user_id AND client_id = OLD.client_id;
+      END`;
+
 const PUSH_DATABASE_SCHEMA: CanonicalSqliteSchema = {
-  version: 1,
+  version: 2,
   objects: [
     {
       type: "table",
@@ -136,6 +158,12 @@ const PUSH_DATABASE_SCHEMA: CanonicalSqliteSchema = {
       name: "push_registrations_by_user",
       sql: "CREATE INDEX push_registrations_by_user ON push_registrations(user_id)",
     },
+    { type: "table", name: "push_registration_devices", sql: PUSH_REGISTRATION_DEVICES_TABLE },
+    {
+      type: "trigger",
+      name: "push_registration_devices_delete",
+      sql: PUSH_REGISTRATION_DEVICES_DELETE,
+    },
   ],
 };
 
@@ -149,9 +177,13 @@ function rowToRegistration(row: Record<string, SQLOutputValue>): PushRegistratio
     clientId: row["client_id"] as string,
     token: row["token"] as string,
     platform: row["platform"] as PushRegistration["platform"],
+    deviceId: (row["device_id"] as string | null) ?? null,
     registeredAt: row["registered_at"] as number,
   };
 }
+
+const REGISTRATION_SELECT = `SELECT r.*, d.device_id FROM push_registrations r
+  LEFT JOIN push_registration_devices d ON d.user_id = r.user_id AND d.client_id = r.client_id`;
 
 class PushRegistrationStore {
   private readonly db: DatabaseSync;
@@ -163,6 +195,16 @@ class PushRegistrationStore {
     try {
       openCanonicalSqliteDatabase(this.db, PUSH_DATABASE_SCHEMA, {
         description: `push schema in ${databasePath}`,
+        migrations: [
+          {
+            fromVersion: 1,
+            toVersion: 2,
+            migrate: (db) => {
+              db.exec(PUSH_REGISTRATION_DEVICES_TABLE);
+              db.exec(PUSH_REGISTRATION_DEVICES_DELETE);
+            },
+          },
+        ],
       });
       this.db.exec("PRAGMA journal_mode = WAL");
     } catch (error) {
@@ -173,14 +215,14 @@ class PushRegistrationStore {
 
   list(): PushRegistration[] {
     return this.db
-      .prepare("SELECT * FROM push_registrations ORDER BY registered_at, user_id, client_id")
+      .prepare(`${REGISTRATION_SELECT} ORDER BY r.registered_at, r.user_id, r.client_id`)
       .all()
       .map(rowToRegistration);
   }
 
   get(userId: string, clientId: string): PushRegistration | null {
     const row = this.db
-      .prepare("SELECT * FROM push_registrations WHERE user_id = ? AND client_id = ?")
+      .prepare(`${REGISTRATION_SELECT} WHERE r.user_id = ? AND r.client_id = ?`)
       .get(userId, clientId);
     return row ? rowToRegistration(row) : null;
   }
@@ -208,6 +250,18 @@ class PushRegistrationStore {
           registration.platform,
           registration.registeredAt
         );
+      if (registration.deviceId) {
+        this.db
+          .prepare(
+            `INSERT INTO push_registration_devices (user_id, client_id, device_id) VALUES (?, ?, ?)
+             ON CONFLICT(user_id, client_id) DO UPDATE SET device_id = excluded.device_id`
+          )
+          .run(registration.userId, registration.clientId, registration.deviceId);
+      } else {
+        this.db
+          .prepare("DELETE FROM push_registration_devices WHERE user_id = ? AND client_id = ?")
+          .run(registration.userId, registration.clientId);
+      }
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -572,6 +626,7 @@ export function createPushService(deps: PushServiceDeps): PushServiceResult {
           platform: opts.platform,
           clientId: opts.clientId,
           userId,
+          deviceId: deps.deviceOfPrincipal(ctx.caller.runtime.id),
           registeredAt: now(),
         };
         store.upsert(registration);

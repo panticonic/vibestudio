@@ -474,6 +474,10 @@ export interface DurableObjectRelayDeps {
   callerId?: string;
   callerKind?: string;
   callerPanelId?: string;
+  /** Host-derived device of the caller (see `resolveCallerDeviceFacts`). */
+  callerDeviceId?: string;
+  /** Host-verified code identity source of a panel caller. */
+  callerPanelSource?: string;
   /** Host-verified owning account projected into the userland caller envelope. */
   userId?: string;
   callerWorkspaceId?: string;
@@ -501,6 +505,8 @@ function callerFromDeps(deps: DurableObjectRelayDeps): AttestedCaller {
     callerId: deps.callerId ?? "main",
     callerKind: (deps.callerKind as CallerKind | undefined) ?? "server",
     ...(deps.callerPanelId ? { callerPanelId: deps.callerPanelId } : {}),
+    ...(deps.callerDeviceId ? { callerDeviceId: deps.callerDeviceId } : {}),
+    ...(deps.callerPanelSource ? { callerPanelSource: deps.callerPanelSource } : {}),
     ...(deps.userId ? { userId: deps.userId } : {}),
     ...(deps.callerWorkspaceId ? { workspaceId: deps.callerWorkspaceId } : {}),
     ...(deps.authorization ? { authorization: deps.authorization } : {}),
