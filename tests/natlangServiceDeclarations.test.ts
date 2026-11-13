@@ -46,16 +46,15 @@ describe("natlang service declarations", () => {
           "  const next: number = (await web.read({ digest: page.digest })).nextOffset;",
           '  const recalled = await memory.recall({ query: "x", kinds: ["file"] });',
           "  const who: string = recalled.results[0]!.where;",
-          "  const rows = await addressees.list();",
-          "  const ref: string = rows[0]!.ref;",
           "  const tail = await serverLog.tail(10);",
           "  const boot: string = tail.serverBootId;",
-          "  const state = await vcs.status({});",
-          "  const clean: boolean = state.clean;",
+          '  const hits = await docs.search("store a blob", { limit: 5 });',
+          "  const entry = await docs.describe(hits[0]!.id);",
+          "  const title: string | undefined = entry?.title;",
           "  const models = await localModels.listModels();",
           '  const ready: boolean = models.some((m) => m.state === "ready");',
           '  const packet = await systemTests.inspect("do:runner", "run-1");',
-          "  return [next, who, ref, boot, clean, ready, packet];",
+          "  return [next, who, boot, title, ready, packet];",
           "}",
         ].join("\n")
       );
@@ -107,7 +106,7 @@ describe("json schema declaration renderer", () => {
     );
   });
 
-  it("makes tuple arguments positional, optional where zod made them optional, and fills bound fields", () => {
+  it("makes tuple arguments positional and optional where zod made them optional", () => {
     const args = {
       type: "array",
       minItems: 1,
@@ -126,13 +125,12 @@ describe("json schema declaration renderer", () => {
       argsSchema: args,
       returnsSchema: { type: "string" },
       params: ["input", "limit"],
-      bound: ["contextId"],
     });
     expect(text).toBe(
       [
         "/** Go. */",
         "export function go(input: {",
-        "  contextId?: string;",
+        "  contextId: string;",
         "  name: string;",
         "}, limit?: number): Promise<string>;",
       ].join("\n")

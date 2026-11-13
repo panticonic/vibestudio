@@ -161,7 +161,6 @@ function argumentTuple(argsSchema, arm) {
  * @param {object} [method.returnsSchema]
  * @param {string[]} [method.params] positional parameter names
  * @param {number} [method.argsArm] which tuple of a union to document
- * @param {string[]} [method.bound] input fields the runtime fills in when omitted
  */
 export function renderMethod(method) {
   const tuple = argumentTuple(method.argsSchema, method.argsArm);
@@ -173,16 +172,9 @@ export function renderMethod(method) {
       `${method.name}: ${items.length} argument(s) in the contract, ${names.length} parameter name(s) declared`
     );
   }
-  const bound = new Set(method.bound ?? []);
   const params = items.map((item, index) => {
-    let schema = item;
-    if (bound.size > 0 && item.type === "object" && item.properties) {
-      const optionalized = new Set(item.required ?? []);
-      for (const key of bound) optionalized.delete(key);
-      schema = { ...item, required: [...optionalized] };
-    }
     const optional = index >= required || isOptionalItem(item);
-    return `${names[index]}${optional ? "?" : ""}: ${schemaToType(schema)}`;
+    return `${names[index]}${optional ? "?" : ""}: ${schemaToType(item)}`;
   });
   const returns = method.returnsSchema ? schemaToType(method.returnsSchema) : "void";
   const doc = method.description ? `${docComment(method.description)}\n` : "";

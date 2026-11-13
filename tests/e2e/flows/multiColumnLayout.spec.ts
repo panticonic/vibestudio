@@ -781,7 +781,9 @@ test.describe("Multi-column panel layout", () => {
                 testApp!,
                 wcId,
                 `(() => {
-                   const button = document.querySelector('button[aria-label="Undo"]');
+                   const button = [...document.querySelectorAll('button')].find(
+                     (candidate) => candidate.textContent?.trim() === 'Undo'
+                   );
                    if (!(button instanceof HTMLElement)) return false;
                    button.click();
                    return true;
@@ -799,7 +801,9 @@ test.describe("Multi-column panel layout", () => {
               shellEval<number>(
                 testApp!,
                 wcId,
-                `document.querySelectorAll('button[aria-label="Undo"]').length`
+                `[...document.querySelectorAll('button')].filter(
+                   (candidate) => candidate.textContent?.trim() === 'Undo'
+                 ).length`
               ),
             POLL
           )

@@ -60,10 +60,8 @@ async function loadTable(contract, userlandRoot) {
 
 function renderService(entry, table) {
   const declarations = entry.methods.map((method) => {
-    const contractName = method.contractMethod ?? method.name;
-    const contract = table[contractName];
-    if (!contract)
-      throw new Error(`${entry.name}.${method.name}: no contract entry ${contractName}`);
+    const contract = table[method.name];
+    if (!contract) throw new Error(`${entry.name}.${method.name}: no contract entry ${method.name}`);
     const returns = contract.returns ?? contract.result;
     const description = contract.description ?? method.description;
     if (!description)
@@ -75,7 +73,6 @@ function renderService(entry, table) {
       returnsSchema: returns ? toJsonSchema(returns) : undefined,
       params: method.params,
       argsArm: method.argsArm,
-      bound: method.bound,
     });
   });
   return `${docComment(entry.summary)}\n\n${declarations.join("\n\n")}`;
