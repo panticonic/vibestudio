@@ -1512,6 +1512,34 @@ describe("FsService", () => {
       ])) as GlobResult;
       expect(second).toEqual({ files: ["/c.ts"], truncated: false });
     });
+
+    it("pages the merged source and scratch roots without skipping unlisted source files", async () => {
+      const ctx = makeWorkerCtx("do:src:class:key");
+      registerContext(ctx.caller.runtime.id, "do", "ctx-glob-merge");
+      // Top-level source-root files outside the canonical source dirs are not
+      // projected, but they still fill that root's bounded page.
+      const source = path.join(tmpRoot, "ctx-glob-merge");
+      mkdirSync(path.join(source, "panels"), { recursive: true });
+      for (const name of ["a.ts", "b.ts"]) writeFileSync(path.join(source, name), "");
+      writeFileSync(path.join(source, "panels", "p.ts"), "");
+      const scratch = path.join(tmpRoot, "ctx-glob-merge-scratch");
+      mkdirSync(scratch, { recursive: true });
+      writeFileSync(path.join(scratch, "z.ts"), "");
+
+      const seen: string[] = [];
+      let after: string | undefined;
+      for (;;) {
+        const page = (await service.handleCall(ctx, "glob", [
+          "**/*.ts",
+          { limit: 2, ...(after ? { after } : {}) },
+        ])) as GlobResult;
+        seen.push(...page.files);
+        if (!page.truncated) break;
+        expect(page.nextCursor).toBeDefined();
+        after = page.nextCursor;
+      }
+      expect(seen).toEqual(["/panels/p.ts", "/z.ts"]);
+    });
   });
 
   function registerContext(callerId: string, kind: EntityKind, contextId: string): void {

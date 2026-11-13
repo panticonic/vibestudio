@@ -2227,14 +2227,27 @@ export class FsService {
         };
       }
       const [managed, scratch] = results as [GlobResult, GlobResult];
+      // A truncated root has listed nothing beyond its own cursor, and the
+      // projection filter may have dropped part of that page. The merged page
+      // therefore ends at the earliest truncated root's cursor: an entry after
+      // it could skip files that root has not yet listed.
+      const bound = [managed, scratch]
+        .flatMap((result) => (result.truncated && result.nextCursor ? [result.nextCursor] : []))
+        .sort(compareUtf16CodeUnits)[0];
       const files = [
         ...managed.files.filter((file) => requiresSemanticAuthority(file)),
         ...scratch.files.filter((file) => !requiresSemanticAuthority(file)),
-      ].sort(compareUtf16CodeUnits);
+      ]
+        .filter((file) => bound === undefined || compareUtf16CodeUnits(file, bound) <= 0)
+        .sort(compareUtf16CodeUnits);
       const limit = (args[1] as GlobOptions | undefined)?.limit ?? 1000;
       const selected = files.slice(0, limit);
-      const truncated = managed.truncated || scratch.truncated || files.length > limit;
-      return { files: selected, truncated, ...(truncated ? { nextCursor: selected.at(-1) } : {}) };
+      const nextCursor = files.length > limit ? selected.at(-1) : bound;
+      return {
+        files: selected,
+        truncated: nextCursor !== undefined,
+        ...(nextCursor !== undefined ? { nextCursor } : {}),
+      };
     }
     const operationStartedAt = Date.now();
     let result: unknown;
