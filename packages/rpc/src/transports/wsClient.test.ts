@@ -34,7 +34,6 @@ class FakeSocket implements WsLike {
     contractVersion: number = RPC_CONTRACT_VERSION,
     extras: {
       serverBootId?: string;
-      sessionDirty?: boolean;
       transportCapabilities?: Array<typeof WS_STREAM_REQUEST_BODY_CAPABILITY>;
     } = {}
   ): void {

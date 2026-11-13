@@ -98,7 +98,6 @@ interface WsAuthResultBase {
   callerKind?: CallerKind | string;
   connectionId?: string;
   serverBootId?: string;
-  sessionDirty?: boolean;
   /**
    * Present only when this session authenticated by redeeming a one-time pairing
    * code: the freshly issued device credential the client must persist to

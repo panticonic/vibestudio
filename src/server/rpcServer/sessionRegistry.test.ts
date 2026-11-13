@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { envelopeFromMessage } from "@vibestudio/rpc";
 import { SessionRegistry } from "./sessionRegistry.js";
 
 describe("SessionRegistry", () => {
@@ -12,7 +11,7 @@ describe("SessionRegistry", () => {
         onSessionExpire,
       });
 
-      expect(sessions.markConnected("panel-a", "panel")).toEqual({ sessionDirty: false });
+      sessions.markConnected("panel-a", "panel");
       sessions.markDisconnected("panel-a", "panel");
 
       vi.advanceTimersByTime(99);
@@ -45,51 +44,6 @@ describe("SessionRegistry", () => {
     } finally {
       vi.useRealTimers();
     }
-  });
-
-  it("marks a session dirty when the inbox overflows and reports dirty on reconnect", () => {
-    const sessions = new SessionRegistry({ inboxCapacity: 1 });
-    sessions.markConnected("panel-b", "panel");
-    sessions.markDisconnected("panel-b", "panel");
-
-    expect(
-      sessions.enqueue(
-        "panel-b",
-        envelopeFromMessage({
-          selfId: "panel-a",
-          from: "panel-a",
-          target: "panel-b",
-          callerKind: "panel",
-          message: {
-            type: "event",
-            fromId: "panel-a",
-            event: "one",
-            payload: null,
-          },
-        })
-      )
-    ).toBe(true);
-    expect(
-      sessions.enqueue(
-        "panel-b",
-        envelopeFromMessage({
-          selfId: "panel-a",
-          from: "panel-a",
-          target: "panel-b",
-          callerKind: "panel",
-          message: {
-            type: "event",
-            fromId: "panel-a",
-            event: "two",
-            payload: null,
-          },
-        })
-      )
-    ).toBe(false);
-
-    expect(sessions.markConnected("panel-b", "panel")).toEqual({ sessionDirty: true });
-    sessions.clearInbox("panel-b");
-    expect(sessions.markConnected("panel-b", "panel")).toEqual({ sessionDirty: false });
   });
 
   it("records and consumes pending response origins", () => {

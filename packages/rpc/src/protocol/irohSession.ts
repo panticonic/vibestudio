@@ -53,22 +53,20 @@ export interface IrohSessionOpenResultFrame {
   callerKind?: CallerKind;
   connectionId?: string;
   serverBootId?: string;
-  sessionDirty?: boolean;
   deviceCredential?: DeviceCredential;
   error?: string;
   errorCode?: RpcAuthenticationFailureCode;
   terminal?: boolean;
 }
 
-export type IrohRecoveryReceipt = Pick<IrohSessionOpenResultFrame, "serverBootId" | "sessionDirty">;
+export type IrohRecoveryReceipt = Pick<IrohSessionOpenResultFrame, "serverBootId">;
 
 /** Boot history belongs to the session lifetime that survives reconnects. */
 export function irohRecoveryKind(
   previousBootId: string | null,
   receipt: IrohRecoveryReceipt
 ): RecoveryKind {
-  return (previousBootId !== null && previousBootId !== receipt.serverBootId) ||
-    receipt.sessionDirty
+  return previousBootId !== null && previousBootId !== receipt.serverBootId
     ? "cold-recover"
     : "resubscribe";
 }

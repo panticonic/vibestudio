@@ -531,7 +531,6 @@ class ClientSession implements IrohClientSession {
     }
     const receipt: IrohRecoveryReceipt = {
       serverBootId: result.serverBootId,
-      sessionDirty: result.sessionDirty,
     };
     const recovery = irohRecoveryKind(this.lastServerBootId, receipt);
     this.lastServerBootId = result.serverBootId ?? this.lastServerBootId;

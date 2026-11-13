@@ -352,7 +352,6 @@ export class IrohRpcSessionChannel implements RpcSessionChannel {
                 ...(message.callerKind ? { callerKind: message.callerKind as never } : {}),
                 ...(message.connectionId ? { connectionId: message.connectionId } : {}),
                 ...(message.serverBootId ? { serverBootId: message.serverBootId } : {}),
-                ...(message.sessionDirty ? { sessionDirty: true } : {}),
                 ...(message.deviceCredential ? { deviceCredential: message.deviceCredential } : {}),
               }
             : {

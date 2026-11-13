@@ -927,7 +927,6 @@ export class RpcServer {
        * authority until the reviewed version has been admitted.
        */
       isCodeApproved?: (code: VerifiedCodeIdentity) => boolean | Promise<boolean>;
-      sessionInboxCapacity?: SessionRegistryOptions["inboxCapacity"];
       sessionTtlMs?: SessionRegistryOptions["ttlMs"];
       runtimeCoordinator?: PanelRuntimeCoordinator;
       /** Direct event addressing is owned by authenticated transport lifetime. */
@@ -1023,7 +1022,6 @@ export class RpcServer {
       this.connections.closeConnection(panelId, connectionId, code, reason);
     });
     this.sessions = new SessionRegistry({
-      inboxCapacity: deps.sessionInboxCapacity,
       ttlMs: deps.sessionTtlMs,
       onSessionExpire: (callerId, callerKind) => {
         void this.retireCaller(callerId, callerKind);
@@ -2214,7 +2212,7 @@ export class RpcServer {
       ws.close(4006, "Unattributed caller");
       return;
     }
-    const { sessionDirty } = this.sessions.markConnected(callerId, callerKind);
+    this.sessions.markConnected(callerId, callerKind);
 
     const client: WsClientState = {
       ws,
@@ -2341,21 +2339,9 @@ export class RpcServer {
       callerKind,
       connectionId,
       serverBootId: this.bootId,
-      sessionDirty,
       ...(deviceCredential ? { deviceCredential } : {}),
     };
     ws.sendMessage(authResult);
-
-    if (sessionDirty) {
-      this.sessions.clearInbox(callerId);
-    } else {
-      for (const queued of this.sessions.takeInbox(callerId)) {
-        this.sendToSession(ws, {
-          type: "ws:routed",
-          envelope: queued.envelope,
-        });
-      }
-    }
   }
 
   private abortFailedAuthentication(ws: RpcSessionChannel, error: unknown): void {

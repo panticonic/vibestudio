@@ -413,10 +413,7 @@ export function wsClientTransport(config: WsClientTransportConfig): EnvelopeRpcT
         reconnectAttempt = 0;
         setStatus("connected");
         config.onAuthResult?.(msg);
-        if (
-          msg.sessionDirty === true ||
-          (isReconnect && previousBootId && nextBootId && previousBootId !== nextBootId)
-        ) {
+        if (isReconnect && previousBootId && nextBootId && previousBootId !== nextBootId) {
           emitRecovery("cold-recover");
         } else {
           emitRecovery("resubscribe");

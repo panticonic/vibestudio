@@ -1,9 +1,4 @@
-import type { RpcEnvelope, RpcResponse } from "@vibestudio/rpc";
 import type { CallerKind } from "@vibestudio/shared/serviceDispatcher";
-
-export type RelayInboxMessage = {
-  envelope: RpcEnvelope;
-};
 
 export type RelayCallContext = {
   callerId: string;
@@ -13,7 +8,6 @@ export type RelayCallContext = {
 export type SessionTtlMs = Partial<Record<CallerKind, number>>;
 
 export type SessionRegistryOptions = {
-  inboxCapacity?: number;
   ttlMs?: SessionTtlMs;
   onSessionExpire?: (callerId: string, callerKind: CallerKind) => void;
 };
@@ -25,9 +19,7 @@ class CallerSession {
   lastConnectedAt = Date.now();
   disconnectedAt: number | undefined;
   liveConnectionCount = 0;
-  dirty = false;
   expireTimer: ReturnType<typeof setTimeout> | undefined;
-  readonly inbox: RelayInboxMessage[] = [];
   readonly pendingResponses = new Map<string, RelayCallContext>();
 
   constructor(callerId: string, callerKind: CallerKind) {
@@ -49,12 +41,10 @@ const DEFAULT_TTL_MS: Required<SessionTtlMs> = {
 
 export class SessionRegistry {
   private readonly sessions = new Map<string, CallerSession>();
-  private readonly inboxCapacity: number;
   private readonly ttlMs: Required<SessionTtlMs>;
   private readonly onSessionExpire?: (callerId: string, callerKind: CallerKind) => void;
 
   constructor(options: SessionRegistryOptions = {}) {
-    this.inboxCapacity = options.inboxCapacity ?? 256;
     this.ttlMs = { ...DEFAULT_TTL_MS, ...options.ttlMs };
     this.onSessionExpire = options.onSessionExpire;
   }
@@ -74,7 +64,7 @@ export class SessionRegistry {
     return session;
   }
 
-  markConnected(callerId: string, callerKind: CallerKind): { sessionDirty: boolean } {
+  markConnected(callerId: string, callerKind: CallerKind): void {
     const session = this.getOrCreate(callerId, callerKind);
     if (session.expireTimer) {
       clearTimeout(session.expireTimer);
@@ -83,7 +73,6 @@ export class SessionRegistry {
     session.liveConnectionCount += 1;
     session.lastConnectedAt = Date.now();
     session.disconnectedAt = undefined;
-    return { sessionDirty: session.dirty };
   }
 
   markDisconnected(callerId: string, callerKind: CallerKind): void {
@@ -99,41 +88,6 @@ export class SessionRegistry {
       this.sessions.delete(callerId);
       this.onSessionExpire?.(callerId, current.callerKind);
     }, this.ttlMs[callerKind]);
-  }
-
-  enqueue(callerId: string, envelope: RpcEnvelope): boolean {
-    const session = this.sessions.get(callerId);
-    if (!session) return false;
-    if (session.inbox.length >= this.inboxCapacity) {
-      session.inbox.shift();
-      session.dirty = true;
-      return false;
-    }
-    session.inbox.push({ envelope });
-    return true;
-  }
-
-  enqueueResponse(callerId: string, fromId: string, response: RpcResponse): boolean {
-    return this.enqueue(callerId, {
-      from: fromId,
-      target: callerId,
-      delivery: { caller: { callerId: fromId, callerKind: "unknown" } },
-      provenance: [{ callerId: fromId, callerKind: "unknown" }],
-      message: response,
-    });
-  }
-
-  takeInbox(callerId: string): RelayInboxMessage[] {
-    const session = this.sessions.get(callerId);
-    if (!session || session.inbox.length === 0) return [];
-    return session.inbox.splice(0, session.inbox.length);
-  }
-
-  clearInbox(callerId: string): void {
-    const session = this.sessions.get(callerId);
-    if (!session) return;
-    session.inbox.length = 0;
-    session.dirty = false;
   }
 
   recordPendingResponse(

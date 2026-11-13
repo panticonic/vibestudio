@@ -137,7 +137,7 @@ describe("reconnecting Iroh client", () => {
       const inner = open(options);
       inner.ready = async () => {
         await authentication;
-        await options.onRecovery?.("cold-recover", { sessionDirty: true });
+        await options.onRecovery?.("cold-recover", { serverBootId: "boot-2" });
       };
       return inner;
     });

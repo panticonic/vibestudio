@@ -121,7 +121,6 @@ async function startRpcHarness() {
               callerKind,
               connectionId: "conn",
               serverBootId: "boot",
-              sessionDirty: false,
               ...(pairing
                 ? {
                     deviceCredential: {
