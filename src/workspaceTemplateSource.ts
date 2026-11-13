@@ -13,7 +13,7 @@ import {
 import type { WorkspaceTemplatePin } from "@vibestudio/workspace-contracts/types";
 import { WorkspaceTemplatePinSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { WorkspaceSource } from "@vibestudio/workspace/workspaceSources";
-import { checkpointWorkspaceSource } from "./workspaceTemplateCheckpoint.js";
+import { CHECKPOINT_GIT_CONFIG, checkpointWorkspaceSource } from "./workspaceTemplateCheckpoint.js";
 import { discoverRepos } from "@vibestudio/shared/runtime/repoDiscovery";
 
 export interface WorkspaceSourceInspection extends WorkspaceSource {
@@ -74,12 +74,25 @@ function declareCheckpointDependency(checkout: string, url: string): void {
   if (dependencies.some((dependency) => dependency?.url === url)) return;
   template.dependencies = [...dependencies, { url }];
   fs.writeFileSync(manifestPath, YAML.stringify(document));
-  execFileSync("git", ["-C", checkout, "add", "meta/vibestudio.yml"], { stdio: "ignore" });
+  // The checkpoint's writers own its repository: no detached auto-maintenance
+  // may rewrite packs under the exact snapshot reader that follows.
+  execFileSync("git", [...CHECKPOINT_GIT_CONFIG, "-C", checkout, "add", "meta/vibestudio.yml"], {
+    // Piped stderr becomes part of a failure's message.
+    stdio: ["ignore", "ignore", "pipe"],
+  });
   execFileSync(
     "git",
-    ["-C", checkout, "commit", "--no-gpg-sign", "-m", "Declare development template dependency"],
+    [
+      ...CHECKPOINT_GIT_CONFIG,
+      "-C",
+      checkout,
+      "commit",
+      "--no-gpg-sign",
+      "-m",
+      "Declare development template dependency",
+    ],
     {
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
       env: {
         ...process.env,
         GIT_AUTHOR_NAME: "Vibestudio Development",
