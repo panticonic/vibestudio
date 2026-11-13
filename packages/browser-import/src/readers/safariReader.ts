@@ -41,28 +41,32 @@ function readNullTerminatedString(buf: Buffer, offset: number): string {
 }
 
 function parseCookieRecord(buf: Buffer): RawCookie {
-  // Cookie record layout (all little-endian unless noted):
-  // 0: size (4 bytes LE)
-  // 4: flags (4 bytes LE)
-  // 8: url/domain offset (4 bytes LE)
-  // 12: name offset (4 bytes LE)
-  // 16: path offset (4 bytes LE)
-  // 20: value offset (4 bytes LE)
-  // 24: comment (8 bytes, skip)
-  // 32: expiry date (8 bytes LE double, Mac epoch)
-  // 40: creation date (8 bytes LE double, Mac epoch)
-  const flags = buf.readUInt32LE(4);
-  const domainOffset = buf.readUInt32LE(8);
-  const nameOffset = buf.readUInt32LE(12);
-  const pathOffset = buf.readUInt32LE(16);
-  const valueOffset = buf.readUInt32LE(20);
-  const expirationDate = buf.readDoubleLE(32);
-  const creationDate = buf.readDoubleLE(40);
+  // Cookie record layout (little-endian):
+  // 0: size (4 bytes)
+  // 4: unknown (4 bytes)
+  // 8: flags (4 bytes)
+  // 12: unknown (4 bytes)
+  // 16: url/domain offset (4 bytes)
+  // 20: name offset (4 bytes)
+  // 24: path offset (4 bytes)
+  // 28: value offset (4 bytes)
+  // 32: comment / end marker (8 bytes, skip)
+  // 40: expiry date (8-byte double, Mac epoch)
+  // 48: creation date (8-byte double, Mac epoch)
+  const size = buf.readUInt32LE(0);
+  const record = buf.subarray(0, size);
+  const flags = record.readUInt32LE(8);
+  const domainOffset = record.readUInt32LE(16);
+  const nameOffset = record.readUInt32LE(20);
+  const pathOffset = record.readUInt32LE(24);
+  const valueOffset = record.readUInt32LE(28);
+  const expirationDate = record.readDoubleLE(40);
+  const creationDate = record.readDoubleLE(48);
 
-  const domain = readNullTerminatedString(buf, domainOffset);
-  const name = readNullTerminatedString(buf, nameOffset);
-  const cookiePath = readNullTerminatedString(buf, pathOffset);
-  const value = readNullTerminatedString(buf, valueOffset);
+  const domain = readNullTerminatedString(record, domainOffset);
+  const name = readNullTerminatedString(record, nameOffset);
+  const cookiePath = readNullTerminatedString(record, pathOffset);
+  const value = readNullTerminatedString(record, valueOffset);
 
   return {
     name,
@@ -145,10 +149,10 @@ export function parseBinaryCookies(data: Buffer): RawCookie[] {
  * Expected columns: Title,URL,Username,Password,Notes,OTPAuth
  */
 export function parseSafariPasswordCsv(content: string): ImportedPassword[] {
-  const lines = content.split("\n");
-  if (lines.length < 2) return [];
+  const records = parseCsv(content);
+  if (records.length < 2) return [];
 
-  const header = parseCSVLine(lines[0]!);
+  const header = records[0]!.map((h) => h.trim());
   const urlIdx = header.findIndex((h) => h.toLowerCase() === "url");
   const usernameIdx = header.findIndex((h) => h.toLowerCase() === "username");
   const passwordIdx = header.findIndex((h) => h.toLowerCase() === "password");
@@ -160,11 +164,8 @@ export function parseSafariPasswordCsv(content: string): ImportedPassword[] {
 
   const passwords: ImportedPassword[] = [];
 
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i]!.trim();
-    if (!line) continue;
-
-    const fields = parseCSVLine(line);
+  for (const fields of records.slice(1)) {
+    if (fields.length === 1 && fields[0]!.trim() === "") continue;
     const url = fields[urlIdx] ?? "";
     const username = fields[usernameIdx] ?? "";
     const password = fields[passwordIdx] ?? "";
@@ -182,45 +183,44 @@ export function parseSafariPasswordCsv(content: string): ImportedPassword[] {
   return passwords;
 }
 
-function parseCSVLine(line: string): string[] {
-  const fields: string[] = [];
+/**
+ * Parse RFC 4180 CSV into records. Quoted fields may contain commas, doubled
+ * quotes and line breaks (Safari exports multi-line notes); CRLF and LF both
+ * end a record.
+ */
+function parseCsv(content: string): string[][] {
+  const records: string[][] = [];
+  let fields: string[] = [];
   let current = "";
   let inQuotes = false;
-  let i = 0;
+  const endField = () => {
+    fields.push(current);
+    current = "";
+  };
+  const endRecord = () => {
+    endField();
+    records.push(fields);
+    fields = [];
+  };
 
-  while (i < line.length) {
-    const ch = line[i];
-
+  for (let i = 0; i < content.length; i++) {
+    const ch = content[i];
     if (inQuotes) {
-      if (ch === '"') {
-        if (i + 1 < line.length && line[i + 1] === '"') {
-          current += '"';
-          i += 2;
-        } else {
-          inQuotes = false;
-          i++;
-        }
-      } else {
-        current += ch;
+      if (ch !== '"') current += ch;
+      else if (content[i + 1] === '"') {
+        current += '"';
         i++;
-      }
-    } else {
-      if (ch === '"') {
-        inQuotes = true;
-        i++;
-      } else if (ch === ",") {
-        fields.push(current);
-        current = "";
-        i++;
-      } else {
-        current += ch;
-        i++;
-      }
-    }
+      } else inQuotes = false;
+    } else if (ch === '"') inQuotes = true;
+    else if (ch === ",") endField();
+    else if (ch === "\n") endRecord();
+    else if (ch === "\r" && content[i + 1] === "\n") {
+      endRecord();
+      i++;
+    } else current += ch;
   }
-
-  fields.push(current);
-  return fields;
+  if (current !== "" || fields.length > 0) endRecord();
+  return records;
 }
 
 // ---- Bookmark plist traversal ----
@@ -389,23 +389,39 @@ export class SafariReader implements BrowserDataReader {
   }
 
   async readCookies(_profilePath: string): Promise<ImportedCookie[]> {
-    // Safari cookies are stored at ~/Library/Cookies/Cookies.binarycookies
-    const cookiePath = path.join(os.homedir(), "Library", "Cookies", "Cookies.binarycookies");
+    // Sandboxed Safari (macOS 10.15+) keeps cookies in its container; older
+    // releases used ~/Library/Cookies. Read rather than probe: without Full
+    // Disk Access the container looks absent to existsSync, and that must
+    // surface as an access error, not as "no cookies".
+    const candidates = [
+      path.join(
+        os.homedir(),
+        "Library",
+        "Containers",
+        "com.apple.Safari",
+        "Data",
+        "Library",
+        "Cookies",
+        "Cookies.binarycookies"
+      ),
+      path.join(os.homedir(), "Library", "Cookies", "Cookies.binarycookies"),
+    ];
 
-    if (!fs.existsSync(cookiePath)) {
-      return [];
-    }
-
-    let data: Buffer;
-    try {
-      data = fs.readFileSync(cookiePath);
-    } catch (err: unknown) {
-      const error = err as NodeJS.ErrnoException;
-      if (error.code === "EPERM" || error.code === "EACCES") {
-        handleAccessError(err, "Safari cookies");
+    let data: Buffer | undefined;
+    for (const cookiePath of candidates) {
+      try {
+        data = fs.readFileSync(cookiePath);
+        break;
+      } catch (err: unknown) {
+        const error = err as NodeJS.ErrnoException;
+        if (error.code === "ENOENT") continue;
+        if (error.code === "EPERM" || error.code === "EACCES") {
+          handleAccessError(err, "Safari cookies");
+        }
+        throw err;
       }
-      throw err;
     }
+    if (!data) return [];
 
     const rawCookies = parseBinaryCookies(data);
 
