@@ -30,8 +30,10 @@ is proposal):
 - **GAD as decentralized work over one Dolt database**: participants on their
   own forks, merging back with Dolt fetch, push and merge (§5);
 - channel and agent cells, with native forks at a commit (§6);
-- eval kernels as owner facets, which deletes `EvalDO`, the lease and
-  `UNSAFE_EVAL` (§7);
+- dynamic code as a general system: one hosting helper any entity uses (code
+  loaded as a Dolt facet with codegen and residency grants), one per-run
+  admission step, pull delivery, and eval as an ordinary kernel class, which
+  deletes `EvalDO`, `evalService`, the lease and `UNSAFE_EVAL` (§7);
 - Chronolog as the cross-workspace capability (§8);
 - the migration order after the SQLite cutover (§9);
 - the phases and gates (§10).
@@ -107,7 +109,7 @@ Consequences:
   `eval-kernel-lease-close` stage, the three lease methods and their rows, the
   `registerLifecycleRelease({ kind: "eval-kernel" })` declaration.
 - The owner-to-kernel path and the confinement probe, on the real fork
-  (`ownerKernelPathCelld.test.ts`, `universalDoHost.test.ts`): §7.1 and §7.7.
+  (`ownerKernelPathCelld.test.ts`, `universalDoHost.test.ts`): §7.2.
 
 - **P3 Durable services** (§4.6): the workspace state is a Dolt cell
   (`WorkspaceStateDO`) with the retired SQLite `WorkspaceDO` kept one release
@@ -115,11 +117,14 @@ Consequences:
   maintenance journal and `cloneDO` are deleted (`DurableObjectStorage`,
   `forkObjectStorage`). What P3 did not do, and why, is §4.6 too.
 
-**Not done:** P2b, the structural move (the kernel as a facet of the owner's
-root, `evalService` and the `evalEngine` host schemas deleted). §7.7 records
-why it is not a local change and the decisions it needs. `UNSAFE_EVAL` is
-already gone (the cutover replaced it with `new Function` under the class's
-`codegen` declaration), so only its documentation remains. P3 onward.
+**P2b, the general dynamic-code system (§7), is designed (2026-11-14
+decisions) and partly built:** the per-call nonce cost is fixed (§4.2), the
+admission function exists (§7.3, §7.12 step 2), and the D4 question is answered
+on the real fork (§7.8). **Not done:** the hosting helper, session entities, the
+kernel class in Base, pull delivery and the deletion of `evalService` and the
+`evalEngine` host schemas (§7.12 steps 3 to 6). `UNSAFE_EVAL` is already gone
+(the cutover replaced it with `new Function` under the class's `codegen`
+declaration), so only its documentation remains.
 
 This document re-derives GAD, the agent system, eval, the durable base and
 Chronolog integration for a runtime in which a Durable Object's state is a
@@ -1472,225 +1477,310 @@ The model is unchanged: one invocation plus one task channel.
 
 ---
 
-## 7. Eval kernels
+## 7. Dynamic code: one hosting helper, one admission step
 
-### 7.1 Where a kernel lives
+The first draft of this section moved `EvalDO` into the owner's root as an
+"eval kernel" and kept a special path for it. The user's decision of
+2026-11-14 replaces that with a **general system for dynamic code** that any
+entity can host, built from the two real consumers: the eval kernels, and the
+dynamic workers that the Worker Loader serves through `loadExecutable`. Eval is
+ordinary code on that system. Nothing below is eval-shaped except the kernel
+class itself.
 
-A kernel is a Dolt facet of its owner's root cell:
+### 7.1 Decisions (user, 2026-11-14, binding)
+
+1. **Any entity hosts code**, through one helper on the durable base. It loads
+   code as a facet of the entity, with Dolt storage, a codegen grant and a
+   residency hold. The entity's root handles drains in `onrevoked` (a facet's
+   own `onrevoked` does not run, §7.4). Agents, workers, panels and sessions
+   all use it. Panels, the CLI and the system-test runner become **session
+   entities**, registered through the existing `runtime.createEntity` path, and
+   host their kernels through the same helper.
+2. **One admission step for all dynamic code.** `evalService` shrinks to one
+   per-run admission function named for dynamic code (§7.3). Owner resolution,
+   `ensureEvalDO`, token minting, dispatch, the liveness supervisor and the
+   lease go.
+3. **Eval is ordinary code.** The REPL engine is one kernel class hosted through
+   (1). It has no special identity, no host-only schemas and no product-builtin
+   catalog entry. A manifest declares it with the `codegen` and `residency`
+   grants.
+4. **Pull, not push.** A caller awaits the call or re-queries by run id; the
+   result is a committed row in the kernel's Dolt storage. Progress goes
+   through an events stream. `resultReceiver`, `onEvalComplete`,
+   `onEvalProgress`, the event-sink push routes, `acknowledge` and
+   `eval_result_redeliveries` are deleted.
+5. **Legacy `EvalDO` state is dropped** at migration (D5). The restart report
+   says what is lost (§7.9).
+6. **D4.** `recoverUnresponsiveSandbox` stays as a node-level watchdog call. The
+   per-run liveness supervisor is dropped only after celld's per-isolate limit
+   is shown to cover a CPU-starved loaded worker (§7.8, shown, with one gap).
+
+### 7.2 Hosting code in any entity
+
+**What the runtime forces (each measured on the real fork).**
+- A facet is created by its **root** (`ctx.facets.get(name, () => ({ class,
+  celld }))`) and cannot be reached from outside it. Ownership of a hosted
+  instance is therefore structural.
+- A Worker Loader's `env` supports **only service bindings** (`DataCloneError:
+  Worker Loader env supports only Service Binding capabilities`). An entity's own
+  code (a loaded worker, the root's `do` facet) cannot load code or grant
+  itself `codegen`: `ownerKernelPathCelld.test.ts`.
+- The `codegen` and `residency` grants are per isolate, and a loader cannot grant
+  more than it holds. The UniversalDO root holds both and never runs guest code
+  itself. A userland object in the product root cannot compile code
+  (`universalDoHost.test.ts`, "confines code generation").
+- A facet's `onrevoked` does not run; the root's does
+  (`doltEvalKernelCelld.test.ts`).
+
+**The helper.** `UniversalDO` (`src/server/workerdPrograms/universalDo.ts`)
+exports a `CodeHost` entrypoint and binds one per entity into that entity's
+`env` with `ctx.exports.CodeHost({ props: { name } })`, a service binding whose
+props the entity cannot change (the `KernelGateway` of the first draft,
+generalised). The durable bases (`DurableObjectBase` in `packages/durable` and
+Base's `durable-base.ts`) wrap it:
 
 ```ts
-// inside the owner's UniversalDO root, on the owner's request:
-const kernel = ctx.facets.get(`eval:${scopeKey}`, () => ({
-  class: loader.get(kernelSource).getDurableObjectClass("EvalKernel"),
-  celld: { storage: "dolt", doltLocal: ["local_%", "vsl_%", "state"] },
-}));
+// in any entity class
+const kernel = await this.hostCode({
+  name: `repl:${scopeKey}`,          // names the facet inside this entity
+  executable: { source, className }, // resolved by the host, like loadExecutable
+});
+const run = await kernel.call("start", input);   // a call to the hosted class
 ```
 
-- **The kernel class** is ordinary template code. `EvalDO`'s engine is
-  already workspace-owned (`providers.evalEngine`, `packages/eval`), so the
-  class moves next to it.
-- **It is loaded with `celld: { codegen: true, residency: true }`**, granted
-  because the owner's manifest declares the `runtime.code-execution`
-  capability. That is an ordinary manifest capability with an approval, not
-  a builtin flag. The UniversalDO root holds `codegen` and `residency`, so
-  it can grant them (codegen.md: "A loader cannot grant more than it
-  holds"). The root never runs guest code itself.
-- **A facet cannot be reached from outside its root.** Ownership is
-  therefore structural: no other owner can name the kernel, and no host
-  check is involved. The owner's own code is a loaded worker (the `do` facet)
-  that can reach nothing but what the root binds into it: measured on the
-  fork (`ownerKernelPathCelld.test.ts`), a Worker Loader's `env` supports
-  **only service bindings** (a namespace or the loader itself is refused with
-  `DataCloneError: Worker Loader env supports only Service Binding
-  capabilities`), so the owner can neither load a kernel nor grant itself
-  `codegen`. The root exports a `KernelGateway` entrypoint and binds one per
-  owner with `ctx.exports.KernelGateway({ props: { name } })`; its `fetch`
-  forwards to the root named in its props, which the owner cannot change.
-  Another owner's root is unaddressable from the first.
-- **Callers without a cell** (a user's shell, the CLI) get kernels in that
-  principal's session cell. That cell is an ordinary UniversalDO root keyed
-  by the principal.
+- **The entity does not choose grants.** `hostCode` asks the root, and the root
+  asks the host's executable admission (`/_doadmission`, the step that already
+  returns `props` for the `do` facet) what the entity's manifest permits for
+  that class. A manifest declares `codegen` and `residency` the way it declares
+  any capability, with an approval. The root passes what admission returned to
+  `ctx.facets.get`.
+- **Dolt storage and the local tables** are part of the same declaration
+  (`storage: "dolt"`, `doltLocal`), so a hosted class is a transactional class
+  (§4.2) with its own commit history.
+- **The residency hold** is taken by the root on `hostCode` and released on
+  `release`, `reset`, the entity's retirement or a revocation. A hold pins the
+  root, and facets are part of the root (C7), so a held kernel keeps its entity
+  resident; a notebook heap is entity state, so that is honest.
+- **The root's `onrevoked`** relays a drain or swap to each hosted facet's
+  `persist` method (the scope snapshot). The hosted class sees one
+  `onRevoked({ reason })` callback, the same shape on every entity.
+- **Calls** are `entity -> its CodeHost binding -> the root -> the facet`, one
+  extra hop (measured). Another entity's root is unaddressable from the first.
+- **Callers without a root** (a panel, the CLI, the system-test runner) were
+  served by `ensureEvalDO`, which registered an entity by hand
+  (`store.activate`/`advanceExecution`: lineage `parentId`, `ownerUserId`,
+  `agentBinding`, `stateArgs`, a finite or persistent lifecycle). They become
+  **session entities**: a UniversalDO keyed `session:<principal>:<scope>`
+  created through the existing `runtime.createEntity` path, with a lifecycle
+  (finite or persistent), a context binding and the `parentId` link that
+  `resolveParentPanel` walks. The caller hosts its kernels in it with
+  `hostCode`, like any other entity. No new identity mechanism exists.
 
-### 7.2 Calls
+### 7.3 One admission step for all dynamic code
 
-- **The owner calls its kernel directly**, through the root: owner code ->
-  its `KernelGateway` binding -> the root's `/kernel/<method>` handler ->
-  the kernel facet (verified end to end on the real fork, one extra hop):
-  `start`, `get`, `receipt`, `events`, `cancel`, `reset`,
-  `readScopeTextPage` and `deleteScopeValue`.
-- **Receipts are pulled.** The owner and the kernel share a cell and fail
-  together, so after a restart the owner reads the kernel's `runs` row by
-  `runId`.
-- **This deletes the push and redelivery machinery:**
-  `eval_result_redeliveries`, its 5 s to 5 min backoff, the redelivery
-  alarm, and `acknowledgeRunResult`.
+A kernel cannot mint its own execution session, so "no host check" holds for
+**reachability** (§7.2), not for **authority**. The per-run admission is one
+host function, `admitDynamicCode`
+(`src/server/services/dynamicCodeAdmission.ts`), called once for every run of
+dynamic code, eval or not:
 
-### 7.3 Kernel state on Dolt
+| Part of the admission | Source today |
+|---|---|
+| the run's authority **intent** and `normalizeAuthorityManifest` (`effects`, requested capabilities, the allowlist) | `evalService.prepareRun`, `normalizeAuthorityManifest` |
+| `preauthorize` of exact prospective operations through the dispatcher's authorization-only path | `prepareRun`, `deps.preauthorize` |
+| **execution-session** admission and **task-authority** registration (`executionSessions.admitWhenAvailable`, `taskAuthorities.bind*`), including the mission, test policy, attached-host and parent-session facts | `prepareRun` |
+| the **causal parent** an agent-bound run must carry, and the check that it belongs to the relay's host-bound trajectory | `prepareRun` |
 
-- **Versioned:** `runs`, `run_events`, `run_checkpoints`, `run_progress`,
-  `run_result_artifacts`, `repl_scopes`, the user's `db` tables, and
-  `eval_execution_roots`.
-- **Commits.** The kernel is a transactional class (§4.2), committing once per
-  finished run (`eval: <runId> <status>`). That gives "scope and db as of
-  run R" for free, and `reset` becomes `reset({ hard: true, to: <schema
-  commit> })`.
-- **Local:** in-flight cancellation bookkeeping, and the resident channel
-  memberships.
-- **Forks.** A forked agent forks its kernels' durable state with it (F3).
-  Heap state is never forked: it is not durable.
+It takes the verified caller, the hosting entity (the session's `runtimeId`) and
+the run's intent, and returns the **session nonce** that the kernel call
+carries, with a `release` that closes the session. Every dynamic-code run goes
+through it, so `eval-exact-authority`, `eval-pregranted-only` and
+`eval-preauthorization` keep one path. The caller (the entity, or the CLI's
+service handler for a session entity) calls it, then calls the kernel with the
+nonce.
+
+What leaves `evalService` and is **not** part of the admission: owner
+resolution for four caller kinds (the entity now names itself), `ensureEvalDO`,
+the per-owner gateway token (the kernel authenticates as its root), dispatch,
+`activity` leases and `resolveContextSource`'s consumer wiring (the entity
+resolves exact source by the host service it already calls).
 
 ### 7.4 Heap residency
 
-- **The heap is held explicitly.** A kernel takes `ctx.residency.hold()` for
-  its heap and releases it at `dispose`, at `reset`, or when its owner
-  releases it. celld never ends a hold by timer.
-- **Revocation.** On drain, swap or operator revocation, `onrevoked`
-  persists the scope snapshot (the existing `scopeManager` persistence).
-  The next run reports `[kernel] Restarted` with the exact restored and lost
-  keys, which is today's restart contract.
-  - **The handler is registered by the owner's root, not by the kernel.** The
-    kernel is a loaded-worker facet in its own isolate, and the fork does not
-    run an `onrevoked` registered there (`residency.md`, "Facets"). The probe
-    confirms it on `fcc7268` (`doltEvalKernelCelld.test.ts`): a drain ran the
-    root's handler, which called the kernel facet to persist and commit
-    (`root onrevoked: drain`), and did not run the kernel's own. The hold
-    itself may be taken by the kernel's `ctx.residency.hold()` (it pins the
-    root) or by the root; only the handler placement matters.
-- **When the node's budget refuses a hold** (`ERR_RESIDENCY_BUDGET`), the
-  run proceeds without one. The heap may be lost at eviction, and the
-  restart contract reports it. This refusal is explicit, never a silent
-  break.
-- **Consequence.** A held kernel keeps its owner's root resident, because
-  facets are part of the root (C7). A notebook heap is owner state, so this
-  is honest.
+- **The heap is held explicitly.** A hosted class takes a hold when `hostCode`
+  starts it and releases it at `release`, at `reset`, at retirement of the
+  entity, or when its owner releases it. celld never ends a hold by timer.
+- **Revocation.** On drain, swap or operator revocation the **root's**
+  `onrevoked` persists each hosted class's scope snapshot (the existing
+  `scopeManager` persistence) through its `persist` method. The next run reports
+  `[kernel] Restarted` with the exact restored and lost keys, which is today's
+  restart contract.
+  - The handler is registered by the root, not by the hosted class. The
+    hosted class is in its own isolate, and the fork does not run an `onrevoked`
+    registered there (`residency.md`, "Facets"). Probed on the fork
+    (`doltEvalKernelCelld.test.ts`): a drain ran the root's handler, which
+    called the facet to persist and commit, and did not run the facet's own.
+- **When the node's budget refuses a hold** (`ERR_RESIDENCY_BUDGET`), the run
+  proceeds without one. The heap may be lost at eviction, and the restart
+  report states it. The refusal is explicit, never silent.
 - **There is no idle policy (Q3, decided).** A heap is held until an explicit
-  end: `dispose`, `reset`, the owner releasing the kernel (the conversation
-  is archived, or a user action), a drain, or an operator revocation. The
-  node's residency budget bounds the total, and refuses a hold explicitly. The
-  `[kernel] Restarted` report covers every loss. The 30-minute idle TTL
-  that `EvalDO` has today is deleted, not ported.
+  end. The node's residency budget bounds the total. The 30-minute idle TTL of
+  `EvalDO` is deleted, not ported (P2a did this).
 
-### 7.5 Trust model
+### 7.5 Calls: pull, with an events stream
 
-- **Codegen confinement is now enforced by the runtime, per isolate.** Only
-  the kernel's loaded-worker isolate can compile. The agent, the
-  UniversalDO root's facets from other sources, and every other isolate
-  refuse `eval`, `new Function` and WebAssembly compile. The audit verified
-  this (codegen probes).
-- **SES `lockdown()` stays in the kernel isolate.** Kernels of different
-  owners share one loaded-worker isolate (one per kernel class version), so
-  frozen intrinsics still prevent cross-owner prototype pollution. The
-  guest facade (`evalConfinement.ts`, 387 lines) stays, so guest code
-  cannot reach the kernel's journal. `UNSAFE_EVAL.newFunction` becomes
-  `new Function(...)` inside the confined realm (audit V7).
+- **A caller awaits the call or re-queries by run id.** The kernel's `start`
+  returns once the run is durably accepted; `await(runId)` blocks until the
+  terminal row and returns it; `get(runId)` and `receipt(runId)` re-read it.
+  The result is a committed row in the kernel's Dolt storage (`eval: <runId>
+  <status>`), so a restart of the caller, the entity or the node loses nothing
+  that was committed, and a caller that comes back reads the row.
+- **Progress** (console, tool-call and state events) goes through the kernel's
+  `events(runId, afterSeq)` stream, paged by sequence number. A live consumer
+  tails it; a late one reads from the row.
+- **The kernel and its entity share a cell** (a facet is part of its root, C7)
+  and fail together, so there is no redelivery protocol to keep.
+- **Deleted with the push model:** `resultReceiver` and its contract check,
+  `onEvalComplete`, `onEvalProgress`, the event-sink push routes
+  (`evalEventIngress`, `eventSinks`), `acknowledge`, `eval_result_redeliveries`
+  with its 5 s to 5 min backoff and its alarm.
+- **Consumers of the push model today:** Base's `agentic-do`
+  (`native-eval-tool.ts`, `native-agent-owner.ts`, `agent-vessel.ts`,
+  `rpc-contract.ts`), `harness/src/tools/eval.ts`, the CLI (`evalCommand.ts`),
+  and the system-test runner. About 51 files in Base reference the eval client.
+  They move to `await`.
+
+### 7.6 Eval is ordinary code
+
+- **The kernel class** (`EvalKernel`) lives next to the engine in Base
+  (`packages/eval`; `EvalDO`'s engine is already workspace-owned through
+  `providers.evalEngine`). It is a class like any other: no
+  `internalDOExecutionIdentity`, no `hostOnly` method authority, no entry in the
+  product-builtin catalog, no host-only schema in
+  `packages/service-schemas/src/evalEngine.ts`. Its methods are ordinary
+  `@rpc`/schema methods callable by the hosting entity.
+- **A manifest declares it.** The hosting entity's manifest names the kernel
+  executable and the `codegen` and `residency` grants (D5 mechanics: the
+  `celld` options flow through `loadExecutable`'s admission). The product
+  builtin flag `runtime.code-execution.manage` and the 18 `direct:...EvalDO...`
+  ledger rows go; an ordinary capability with an approval replaces them.
+- **The engine and runtime providers** (`INTERNAL_DO_ENV` today) become the
+  manifest's provider bindings, as any dynamic worker's are.
+- **SES `lockdown()` stays in the kernel isolate.** Kernels of every entity that
+  uses the same executable share one loaded-worker isolate per version, so
+  frozen intrinsics still prevent cross-entity prototype pollution. The guest
+  facade (`evalConfinement.ts`, 387 lines) stays, so guest code cannot reach the
+  kernel's journal. `new Function` runs inside the confined realm.
+
+### 7.7 What a kernel's state is (Dolt)
+
+- **Versioned:** `runs`, `run_events`, `run_checkpoints`, `run_progress`,
+  `run_result_artifacts`, `repl_scopes`, the user's `db` tables and
+  `eval_execution_roots`. The kernel is a transactional class (§4.2): one commit
+  per finished run (`eval: <runId> <status>`). That gives "scope and db as of run
+  R", and `reset` is `reset({ hard: true, to: <schema commit> })`.
+- **Local:** in-flight cancellation bookkeeping, and the replay-nonce ledger.
+- **Forks.** A forked entity forks its hosted classes' durable state with it
+  (F3). Heap state is never forked.
+
+### 7.8 Host-process safety (D4): measured
+
+The host's per-run liveness supervisor exists because a synchronous guest loop
+starves a whole isolate, and the only recourse was to have the host replace the
+node (`recoverUnresponsiveSandbox`), which kills every object. Probed on the
+real fork (`src/server/celldCpuWatchdogCelld.test.ts`, a Dolt facet in a loaded
+worker, one object):
+
+| Setup | Result |
+|---|---|
+| `limits: { cpuMs: 1000 }` on the loaded worker, a call that spins | the call fails after **1004 ms** with `Worker exceeded CPU limit of 1000 ms`; the owner's root answers in 2 ms; a sibling object's kernel answers; **the same kernel serves the next calls and keeps its heap** |
+| the same limit, three calls of 200 ms CPU each | all succeed: the limit is **per invocation**, not cumulative |
+| no limit, a call that spins | **never ends** (the probe's 8 s window); a sibling object is unaffected, only that isolate is starved |
+
+So celld's per-isolate limit **covers a CPU-starved loaded worker** and ends only
+the starving call, which is strictly better than replacing the node. One gap:
+`getDurableObjectClass` takes only `props` (`dynamic-workers.md`), so the limit
+is the **loaded unit's** `WorkerCode.limits`, fixed at load, and cannot be a
+run's `timeoutMs`. A starving run with `timeoutMs: 5000` is therefore ended at
+the unit's `cpuMs`, not at 5 s. The decision:
+- the executable admission sets `limits.cpuMs` for every unit that holds
+  `codegen` (a bounded CPU budget per invocation, a manifest value);
+- the per-run liveness supervisor (the 5 s probe, `superviseIsolateLiveness`) is
+  **deleted**, with its `activity` lease;
+- `recoverUnresponsiveSandbox` stays as a node-level watchdog call for what the
+  limit cannot see (a hung runtime that burns no CPU). The root's or the node's
+  watchdog calls it, not a per-run loop.
+A per-run CPU budget needs `limits` on `getDurableObjectClass`, which is a fork
+request (recorded in the handoff), not a Vibestudio change.
+
+### 7.9 Trust model
+
+- **Codegen confinement is enforced by the runtime, per isolate** (§7.2). Only
+  the hosted class's loaded-worker isolate can compile. The entity, the root's
+  other facets and every other isolate refuse `eval`, `new Function` and
+  WebAssembly compile.
 - **Authority.**
-  - The kernel calls host services as its root's entity, carrying the run's
-    execution session as today.
-  - Egress from guest code goes through the egress hook. The loaded
-    worker's identity names the kernel class and root, and the proxy
-    attributes it to the owner. This depends on A1, which is fixed.
+  - The kernel calls host services as its hosting entity (its root's entity
+    identity), carrying the run's execution session nonce from §7.3.
+  - Egress from guest code goes through the egress hook. The loaded worker's
+    identity names the class and the root, and the proxy attributes it to the
+    entity (A1, fixed).
   - The owner-scoped gateway token minted by `evalService` goes.
-  - The host never needs to authorize "may this caller reach that kernel",
-    because only the owner can reach it.
+  - The host never authorizes "may this caller reach that kernel": only the
+    entity can. It still authorizes **what the run may do** (§7.3).
 
-### 7.6 What eval deletes
+### 7.10 Migration (D5)
+
+Legacy `EvalDO` objects are **not** migrated into a Dolt kernel (a cell's engine
+is fixed at creation, and `celldMigration` imports product objects into SQLite
+cells). Scope state is soft (the restart report states what is lost), and a run
+receipt of the previous generation is not needed once pull delivery exists. The
+restart report names what is dropped: the notebook scopes of every legacy
+`EvalDO`, and the receipts of runs that had not been acknowledged when the
+workspace migrated. The retired cells are deleted by a later release, as
+`WorkspaceDO`'s are.
+
+### 7.11 What this deletes
 
 | Removed | Lines |
 |---|---|
-| `src/server/services/evalService.ts` (owner resolution, `ensureEvalDO`, token minting, liveness supervision with its 5 s probe, kernel lease touch) | 1,262 |
-| `evalKernelLease.ts`, `evalKernelAuthority.ts`, `evalAuthorityEventJournal.ts`, `evalExecutionRootsService.ts`, `evalEventIngressService.ts` | 163 + 38 + 82 + 95 + 182 |
-| `EvalDO.ts`: kernel lease (1096–1215, 3125–3176), host-only RPC wiring, redelivery (1552–1672), host-settlement paths (`appendAuthorityEvent`, `failPendingRun`), identity pinning, internal-DO packaging | ~1,300 of 4,632. The remaining ~3,300 (run, cancel, return budget, scopes, natlang, panels) move into the template kernel class |
-| `packages/service-schemas/src/evalEngine.ts` (18 host-only method schemas), and the `evalEventIngress` and `evalExecutionRoots` schemas | ~420 |
-| Authority ledger rows: 18 `direct:…EvalDO…` rows, 10 `host:eval.*` rows, 2 kernel callback rows, and the `runtime.code-execution.manage` review entries | generated |
-| `UNSAFE_EVAL`: the `workerd.unsafeEval` catalog flag and the binding in `workerdManager.ts` | ~20 |
-| Tests of removed paths (`evalService.test.ts` 2,133, `evalKernelLease.test.ts` 321, ingress and roots tests 376, plus part of `EvalDO.redelivery.test.ts` 295) | ~3,100 |
-| **Total, production code** | **~3,600**, with ~3,300 moved |
+| `src/server/services/evalService.ts` (owner resolution, `ensureEvalDO`, token minting, liveness supervision, kernel lease touch); about a quarter remains as `admitDynamicCode` | 1,247, ~300 kept |
+| `evalKernelLease.ts` (done in P2a), `evalKernelAuthority.ts`, `evalAuthorityEventJournal.ts`, `evalExecutionRootsService.ts`, `evalEventIngressService.ts` | 163 + 38 + 82 + 95 + 182 |
+| `EvalDO.ts`: host-only RPC wiring, redelivery, host-settlement paths (`appendAuthorityEvent`, `failPendingRun`), identity pinning, internal-DO packaging; the rest (~3,300 lines) moves to the Base kernel class | ~1,300 of 4,632 |
+| `packages/service-schemas/src/evalEngine.ts` (18 host-only methods), the `evalEventIngress` and `evalExecutionRoots` schemas | ~420 |
+| authority ledger rows: 18 `direct:...EvalDO...`, 10 `host:eval.*`, 2 kernel callback rows, the `runtime.code-execution.manage` review entries | generated |
+| `UNSAFE_EVAL` (already gone, P2a/cutover) | 0 |
+| tests of removed paths (`evalService.test.ts`, ingress and roots tests, part of `EvalDO.redelivery.test.ts`) | ~3,100 |
+| the per-run liveness supervisor and its `activity` lease (D4, §7.8) | ~110 |
 
-The 20 host-only methods are the 18 `EvalDO` schema methods plus 2 kernel
-callbacks.
-- **Deleted outright:** `acquireKernelLease`, `attachKernelLeaseHolder`,
-  `holdKernelLease`, `appendAuthorityEvent`, `failPendingRun`,
-  `acknowledgeRunResult`, `retainExecutionRoot`,
-  `listRetainedExecutionRoots`, and the callbacks
-  `evalEventIngress.publish` and `evalExecutionRoots.retain`.
-- **Kept as the kernel's ordinary facet methods**, callable only by the
-  owner: `run`, `startRun`, `executeRun`, `getRun`, `getRunReceipt`,
-  `getRunEvents`, `readScopeTextPage`, `deleteScopeValue`, `reset` and
-  `cancel`.
+Deleted outright: `appendAuthorityEvent`, `failPendingRun`,
+`acknowledgeRunResult`, `retainExecutionRoot`, `listRetainedExecutionRoots`, the
+callbacks `evalEventIngress.publish` and `evalExecutionRoots.retain`, and the
+three lease methods (P2a). Kept as the kernel's ordinary methods: `start`,
+`await`, `get`, `receipt`, `events`, `cancel`, `reset`, `readScopeTextPage`,
+`deleteScopeValue`.
 
-### 7.6a What changed in the table above (as of P2a)
+### 7.12 Order, and where P2b stands
 
-- The three lease methods, `evalKernelLease.ts` and its test, the lease touch,
-  the shutdown stage and the `idleExpiresAt` field are **deleted** (P2a,
-  `7611524ef`), together with 126 lines of authority ledger.
-- `UNSAFE_EVAL` was **already gone**: the cutover replaced the binding with
-  `new Function` under the class's `codegen` declaration (§1),
-  and `rg UNSAFE_EVAL src packages` is empty. Only the plans in `docs/`
-  mention it.
-- Everything else in the table is P2b.
-
-### 7.7 What the structural move needs (P2b): found by starting it
-
-Reading `evalService.ts` (1,262 lines), `EvalDO.ts` (4,600) and their
-consumers shows that the "owner calls its kernel directly" cut is not a
-move of one class. The host `eval` service is the **admission layer** for
-every execution, and §7.6 counted its lines but not these duties, each of
-which needs a new home or an explicit decision to drop:
-
-| Duty today (in `evalService` unless noted) | Needed in P2b |
-|---|---|
-| Owner resolution for four caller kinds: an agent (the host-verified entity binding is the owner), a shell or server naming an `owner-session`, a panel, and a worker or DO. A client-supplied owner is never honoured for an agent | **D1** The principal of a kernel call. §7.5 says "the root's entity", which is right for a DO owner. A panel, the CLI and the system-test runner have no root: §7.1's "session cell" needs an entity registration, a context binding and a lifecycle (`ensureEvalDO` does that now with `store.activate` / `advanceExecution`: lineage `parentId`, `ownerUserId`, `agentBinding`, `stateArgs`, finite or persistent lifecycle) |
-| Authority admission per run: the run's `authority` intent, `normalizeAuthorityManifest`, `preauthorize` of exact operations, `executionSessions` and `taskAuthorities` registration, the causal parent an agent-bound run must carry | **D2** Where the per-run admission lives once the host does not see the call. The capability `runtime.code-execution` gives the kernel the codegen grant (a *workspace* decision); it does not replace the per-run allowlist and approvals that `eval-exact-authority`, `eval-pregranted-only` and `eval-preauthorization` test. `runtime.code-execution.manage` is a host-only builtin capability today; no Base manifest declares a `runtime.code-execution` capability yet |
-| Exact source resolution (`resolveContextSource`), the panel parent (`resolveParentPanel`, panel-slot bindings), the gateway token minted per owner | Stay host services the kernel calls; the token goes (the kernel authenticates as its root) |
-| Result delivery: `resultReceiver`, `onEvalComplete`, `onEvalProgress`, event-sink routes, `acknowledge` | **D3** Pull instead of push (§7.2) changes the Base agent loop: 51 files in Base reference the eval client, among them `agentic-do` (`native-eval-tool.ts`, `native-agent-owner.ts`, `agent-vessel.ts`, `rpc-contract.ts`) and `harness/src/tools/eval.ts`; the CLI (`evalCommand.ts`), panels and the system-test runner call `eval.start` through the host |
-| Host-process safety: `recoverUnresponsiveSandbox` (a sandbox that starves the CPU makes the host replace the node), the liveness probe, `activity` leases for idle exit, shutdown cancellation | **D4** Each needs an owner in a world with no host service. The node's own watchdog may replace some; this has not been checked |
-| `EvalDO` is a **product builtin** with `hostOnly` method authority, an internal-DO identity (`internalDOExecutionIdentity`) and an `INTERNAL_DO_ENV` provider binding for the eval engine and runtime units | **D5** The kernel class in Base (a template worker) needs the same admitted identity, the engine and runtime provider bindings, and a way to be declared Dolt and `codegen` per class by a manifest (§7.1). `celldMigration` imports legacy product objects into SQLite cells, which a Dolt kernel cannot open ("the storage engine is fixed when it is created") |
-
-Mechanics verified on the real fork, for P2b to build on:
-- a facet loaded with `celld: { codegen, residency }` and `storage: "dolt"`
-  compiles, commits per run, survives a kill, holds the root resident without
-  a timer, and is released by the root; its own `onrevoked` does not run, the
-  root's does (`doltEvalKernelCelld.test.ts`);
-- an owner's loaded worker reaches only a service binding the root gives it
-  (`KernelGateway`); it cannot load a kernel or name another root
-  (`ownerKernelPathCelld.test.ts`);
-- a userland object in the product's UniversalDO cannot compile code
-  (`universalDoHost.test.ts`, "confines code generation"). The cross-owner
-  probe of §10 P2 is the second half of the gateway test.
-
-Recommended answers (a proposal for the user to confirm, not a decision):
-- **D1.** A DO owner: its own root's entity. A panel, the CLI or the
-  system-test runner: a session cell, a UniversalDO keyed `session:<principal>`
-  and registered through the existing `runtime.createEntity` path (what
-  `ensureEvalDO` does by hand today), so no new identity mechanism exists.
-- **D2.** `evalService` shrinks to an **admission function** instead of being
-  deleted: authority intent, `preauthorize`, execution-session and task
-  authority registration, returning the session nonce that the kernel call
-  carries (about a quarter of the file). Owner resolution, `ensureEvalDO`,
-  token minting, liveness supervision, dispatch and the lease are what goes.
-  A kernel cannot mint its own execution session, so "no host check" holds for
-  *reachability* (§7.1), not for *authority*.
-- **D3.** Pull for the agent loop, with `events` as the progress channel; the
-  push callbacks and `eval_result_redeliveries` go with it (§7.2).
-- **D4.** Keep `recoverUnresponsiveSandbox` as a node-level watchdog call the
-  gateway makes; drop the per-run liveness supervisor only after a celld
-  per-isolate watchdog is shown to cover a CPU-starved loaded worker.
-- **D5.** Do not migrate legacy `EvalDO` objects into the Dolt kernel: scope
-  state is soft (the restart report states what is lost), and run receipts of
-  a previous generation are not needed after acknowledgement. This is a
-  product decision (it drops unacknowledged receipts of migrated workspaces).
-
-Suggested order for P2b, each a complete cut that keeps the system working:
-1. D1 and D2 first, as a design decision (they decide whether `evalService`
-   shrinks to an admission function, as recommended, or is replaced by a
-   manifest-level capability), because every later step depends on them.
-2. The kernel class as a Base worker and its manifest declaration (D5), served
-   by the existing UniversalDO as an ordinary userland class on its `do` facet
-   with the `codegen` and `residency` grants (the `celld` options flow through
-   `loadExecutable`), replacing the product `EvalDO`. This removes the
-   host-only schemas and the product catalog entry.
-3. The owner path (D3), one caller kind at a time, with `evalService` deleted
-   when the last caller kind has moved.
+Each step is a complete cut that keeps the system working.
+1. **This section** (the design), its own commit. **Done.**
+2. **The admission function** (§7.3): `admitDynamicCode` extracted from
+   `evalService.prepareRun` with a general signature and its own tests;
+   `evalService` calls it. **Done** (this pass).
+3. **The hosting helper** (§7.2): the `CodeHost` entrypoint on `UniversalDO`,
+   `hostCode` on both durable bases (Base's `durable-base.ts` also needs the
+   Dolt awareness it lacks: `committedTransaction`, the local nonce table, the
+   call-nonce gate of §4.2), the manifest grants through admission, and the
+   root's `onrevoked`. Then the session entities for panels, the CLI and the
+   runner.
+4. **The kernel class in Base** hosted through (3), replacing the product
+   `EvalDO`; the host-only schemas and the catalog entry go with it.
+5. **Pull** (§7.5) for each consumer in turn (agent loop, harness tool, CLI,
+   runner), with the push machinery deleted when the last has moved.
+6. **The liveness supervisor** goes with step 4 (§7.8); `evalService` is
+   deleted when the last caller has moved.
+Steps 3 to 6 are **not done**; `HANDOFF-dolt-redesign.md` records where each
+stands.
 
 ---
 
@@ -1858,7 +1948,7 @@ is **done**: F1 to F7 ship in `fcc7268`, and `9440c29` (pinned) fixes the hard r
 |---|---|---|---|---|
 | **P0 Foundations** (`feat/dolt-p0`) | `@vibestudio/durable/dolt` typed surface of the whole `ctx.storage.dolt` API (merge with resolver, `doltLocal`, remotes); `committedTransaction` on F2 (no roll-forward); schema install commits on Dolt (checkpoint before an upgrade, `schema:` commits); schema-guard filter (`_cf_`, `_litestream`, `dolt_`, `doltlite_`); framework tables local on Dolt; a `FakeDoltStorage` test double with its divergences documented | none (the fork is delivered) | `vitest packages/durable`: commit points, `committedTransaction` atomicity (a throw leaves no rows and no commit), checkpoint before upgrade, failed upgrade commits nothing, filter, merge with resolver, local tables, remotes between fakes. Then a real-celld probe (`doltDurableCelld.test.ts`): a Dolt root class installs its schema, commits through `committedTransaction`, and survives a process kill and restart with `dolt.log()` correct | 3 |
 | **P1 Runtime** (fork side) | Dolt facets; F1 merge resolver; F2 commit in a transaction; F3 forks carrying facets; F4 local tables; F5 checkout cost; F6 history reads; F7 remotes | fork | **Done** (`fcc7268`; `9440c29` adds the durable hard reset and `ondoltpush`). Open for P5: a Vibestudio-side test of the facet relay and `ondoltpush`, and the checkout budget below | done |
-| **P2 Eval kernels** | **P2a (done):** `ctx.residency.hold()` for the heap until an explicit end (Q3, no idle timer), revocation through `onrevoked`, the host lease and its three methods deleted. **P2b (open, §7.7):** the kernel class in Base as a Dolt facet of the owner's root with the `codegen` and `residency` grants; the owner calls it through its `KernelGateway`; delete `EvalDO`, `evalService` and the `evalEngine` host schemas | cutover, P0 | `pnpm test` for eval packages; system tests `eval-*` (heap retained across turns, cancel, restart report, large return) compared with the cutover numbers; a confinement probe (a userland object's `eval` throws, the kernel's works); a cross-owner probe (owner A cannot address B's kernel); `rg 'EvalDO\|evalService' src packages` is empty (`UNSAFE_EVAL` already is) | 8 (P2a about 1) |
+| **P2 Eval kernels** | **P2a (done):** `ctx.residency.hold()` for the heap until an explicit end (Q3, no idle timer), revocation through `onrevoked`, the host lease and its three methods deleted. **P2b (open, §7.12):** general dynamic code. The hosting helper (`hostCode`, any entity, Dolt facet with `codegen` and `residency` from the manifest), session entities for panels, the CLI and the runner, one admission function (`admitDynamicCode`, built), pull delivery, the kernel class in Base with no special identity; delete `EvalDO`, `evalService`, the push machinery and the `evalEngine` host schemas | cutover, P0 | `pnpm test` for eval packages; system tests `eval-*` (heap retained across turns, cancel, restart report, large return) compared with the cutover numbers; a confinement probe (a userland object's `eval` throws, the kernel's works); a cross-owner probe (owner A cannot address B's kernel); `rg 'EvalDO\|evalService' src packages` is empty (`UNSAFE_EVAL` already is) | 8 (P2a about 1) |
 | **P3 Durable services (done, §4.6)** | `WorkspaceDO` on Dolt; panel undo by reverse patch; backup, restore, reset and clone via Dolt; delete the maintenance journal, `cloneDO`, `durableObjectStorageClone.ts` and `computeWorkerdObjectIdHash`, and the lifecycle tables and driver if the cutover kept them | P2 (facet machinery proven) | `WorkspaceDO.test.ts` against `FakeDoltStorage`; system tests for panel close and reopen, `workers.resetStorage`, and a restore round trip; a fork-idempotency test (the same target id twice gives one object); `rg cloneDO\|do_maintenance` is empty | 6 |
 | **P4 Agent system** | Channel and agent cells on Dolt with local tables; Pi local document tables; native conversation fork; delete the hash chain, knowledge export and import, and the clone paths | P0 | Fork-and-subagents acceptance (§E3): edit-and-fork, a multi-agent fork, a subagent `mode: "fork"`, crash-resume of a fork op (kill between phases); hibernation tests (evict between turns, redelivery deduplicated); a fork at sequence N equals the parent's state at N (ledger, participants, agent anchors) | 12 |
 | **P5 GAD, decentralized** | Canonical Dolt database and participant work cells (§5.1); the state model, contexts as branches; integration by F1 merge, `pull` and `push` (§5.5); grants and approval as grant issuance (§5.6); work-cell create, retire (§5.7); a derived `commit_index`, `content_roots`; replay migration (Q2); delete the fact-map, radix and frontier machinery | P0, P4 (agent forks), the two *to verify* items | The provenance plan's acceptance matrix (§14), re-expressed over commit hashes and passing in full; the decentralization gates of §5.13; replay equivalence: for each real workspace snapshot available, every legacy event's materialized tree hash equals the replayed commit's, and blame answers match on a sampled set; the **size gate** (a replayed workspace database and the fork latency at that size, recorded); checkout and merge benchmarks: checkout **p95 within 20 ms with `fsync` and 10k local rows** (the fork measured 14 to 16 ms), a context switch batched per participant turn | 20 |
