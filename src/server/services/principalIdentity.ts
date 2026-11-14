@@ -50,6 +50,27 @@ export interface ResolvedCodeIdentity {
 }
 
 /**
+ * The entity whose sealed image a resolved code identity names. A run of dynamic
+ * code carries its owner in `evalOrigin`, and the identity is the owner's own
+ * code when it has some. An owner with none (a user or CLI session) is mediated by
+ * its session entity's image (the identity then names the session entity, with the
+ * owner still in `evalOrigin` for attribution), so the entity is the one whose
+ * execution digest the identity carries, not simply the owner.
+ */
+export function entityOfCodeIdentity(
+  entityCache: Pick<EntityCache, "resolveActive">,
+  code: { callerId: string; executionDigest?: string; evalOrigin?: { ownerId: string } }
+) {
+  for (const id of [code.evalOrigin?.ownerId, code.callerId]) {
+    if (!id) continue;
+    const record = entityCache.resolveActive(id);
+    if (record?.activeExecutionDigest && record.activeExecutionDigest === code.executionDigest)
+      return record;
+  }
+  return entityCache.resolveActive(code.evalOrigin?.ownerId ?? code.callerId);
+}
+
+/**
  * Resolve the code/source identity for a runtime caller, used at trust-boundary
  * hand-offs (RPC verify, capability grants, audit). Reads from the Node-side
  * `EntityCache` mirror of `WorkspaceDO`. Returns null for callers without an

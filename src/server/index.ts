@@ -146,6 +146,7 @@ import {
   evalHostObjectKeyOf,
   isEvalHostRecord,
 } from "@vibestudio/shared/evalRuntimeIdentity";
+import { entityOfCodeIdentity } from "./services/principalIdentity.js";
 import {
   resolveHistoricalWorkspaceHost,
   requireCompatibleTransitionHost,
@@ -1321,7 +1322,7 @@ async function main() {
         admissionStore: unitAdmissionStore,
       });
     }
-    const entity = entityCache.resolveActive(code.evalOrigin?.ownerId ?? code.callerId);
+    const entity = entityOfCodeIdentity(entityCache, code);
     if (
       !entity?.activeBuildKey ||
       !code.executionDigest ||
@@ -4204,7 +4205,7 @@ async function main() {
                 ) ?? null
               );
             }
-            const entity = entityCache.resolveActive(code.evalOrigin?.ownerId ?? code.callerId);
+            const entity = entityOfCodeIdentity(entityCache, code);
             if (
               !entity?.activeBuildKey ||
               !code.executionDigest ||

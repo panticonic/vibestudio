@@ -597,7 +597,8 @@ export function createEvalService(deps: {
       throw new ServiceError(
         "eval",
         "start",
-        "The live harness has no matching sealed execution artifact",
+        "The live harness has no matching sealed execution artifact" +
+          ` (${!harnessIdentity ? `no code identity for ${ownerHarness ? ownerId : evalRuntimeId}` : !harnessCandidate ? `no build recorded for ${harnessIdentity.callerId} at ${harnessIdentity.executionDigest.slice(0, 12)}` : "the artifact's version differs from the live entity's"})`,
         "EEXECUTION_IDENTITY",
         undefined,
         "service"
