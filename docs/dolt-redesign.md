@@ -2059,8 +2059,13 @@ Each step is a complete cut that keeps the system working.
 6. **The liveness supervisor** went with step 4 (the kernel's unit carries
    `limits.cpuMs`; the unit-wide limit is the fork gap of §7.8); `evalService`
    is deleted when the last caller has moved.
-   Steps 5 and 6 are **not done**; `HANDOFF-dolt-redesign.md` records where
-   each stands.
+   Steps 5 and 6 are **not done**. Done since: a run's `timeoutMs` bounds its CPU (§7.8,
+   celld `ec0d6f5`), the D5 restart report is a message (§7.10), the cost of a kernel run
+   is measured (§7.7). Found and still open: the kernel's entity stops answering after the
+   CPU limit ends a run (§7.8, a fork gap without a minimal repro). `HANDOFF-dolt-redesign.md`
+   records where each step stands and what the callers' pull needs decided first (a host
+   admission service, the replacement of the live-event, authority-event and execution-root
+   pushes).
 
 ---
 
