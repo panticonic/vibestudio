@@ -381,6 +381,25 @@ wall that would otherwise have forced a workaround in Vibestudio. All are in
   cannot be local by pattern (§4.3). `AUTOINCREMENT` is forbidden in a local
   table (`sqlite_sequence` is one tracked table). A rule added by a redeploy is
   an uncommitted change to `dolt_ignore` until the branch commits.
+- **An acknowledged `reset({ hard: true })` is lost by a SIGKILL** (found by
+  P0's probe on `fcc7268`; a durable stop keeps it). Repro: commit twice,
+  `dolt.reset({ hard: true, to: "HEAD~1" })`, answer a request, `kill -9` the
+  node, restart over the same bucket: `dolt.log()` and the rows are back at
+  the pre-reset head. `commit`, `branch.create` and `delete`, `checkout`,
+  `merge` (with and without a resolver), soft `reset` and `gc` all survive the
+  same kill. Canary: `src/server/doltDurableCelld.test.ts`, the
+  `it.fails` test "an acknowledged hard reset survives a kill". Until it is
+  fixed, backup restore (`reset --hard` to `backup/<op>`), GAD `discard` and
+  schema rollback must follow the reset with a `committedTransaction` that
+  writes a row (any commit makes the head durable), or use a fork.
+- **`sqlite_master.sql` is re-rendered once the creating transaction ends**
+  (P0 probe): `CREATE TABLE notes (id` becomes `notes(id`, `CHECK (` becomes
+  `CHECK(`, `ON notes (body)` becomes `ON notes(body)`. A fingerprint taken
+  inside the install transaction therefore differs from the next activation's.
+  The schema guard compares Dolt stores ignoring that spacing (§4.3). Also
+  seen: `dolt_ignore` and the `sqlite_autoindex_*` of `_cf_*`, `dolt_ignore`
+  and `state` are listed in `sqlite_master`, and a rowid is not reused after a
+  hard reset (L10: no meaning in `INTEGER PRIMARY KEY`).
 - **`dolt_revert`, `dolt_cherry_pick` and `dolt_rebase` are not exposed.**
   Undo of one commit is the reverse patch from `diff({ from, to })` applied
   with SQL (§4.5).
@@ -416,9 +435,16 @@ classes use it: the host's `DurableObjectBase` and the template's
   `transactionSync` and `transaction` accept the F2 `{ commit }` option.
 - `@vibestudio/durable/test-dolt` exports `FakeDoltStorage`, a `sql.js`
   snapshot double for unit tests. It is faithful for commit, branch,
-  checkout, reset, merge with a resolver, local tables, `dolt_at_<t>`, and
-  remotes between fakes. It does not model replication, the output gate,
-  `execute` or the history tables other than those listed in its header.
+  checkout, reset, merge with a resolver (cell-wise three-way merge,
+  `UNIQUE` index violations, rollback on a throw), `{ commit }`
+  transactions, local tables, forks that clear remotes, restarts,
+  `dolt_at_<t>`, `dolt_log`, and remotes between fakes over a byte wire (grants,
+  fast-forward-only push, the `ERR_DOLT_*` codes, custom transports). It also
+  reproduces the engine's schema-text re-rendering. It does not model
+  replication, durability (so not the hard-reset gap of §3.2), the output gate,
+  `execute`, or the `dolt_history_*`, `dolt_diff_*`, `dolt_blame_*` and
+  `dolt_conflicts_*` tables, which throw instead of answering. Its header
+  lists every divergence.
 
 There is no adapter layer and no second engine abstraction. A SQLite cell
 simply has no `dolt`.
@@ -502,15 +528,21 @@ writes made after it, and saying so is the honest cost. The guard can name
 the checkpoint as an extra safe action (`restore-schema-checkpoint`) when an
 older build meets a newer schema.
 
-**Framework tables on a Dolt store.** The base's own operational tables
-(`_vibestudio_direct_rpc_nonces`, and the `state` table that holds durable
-work readiness) are identity-bound, so L3 says they are local. A `doltLocal`
-pattern cannot start with `_` (§3.2), so on a Dolt store the base creates the
-nonce ledger under a name that can match (`vsl_direct_rpc_nonces`), and a Dolt
-class declares `doltLocal: ["vsl_%", …]`. `state` is declared local by exact
-name unless the class keeps versioned facts in it (a class that does must move
-them to its own table first). *Both are P0 follow-ups, listed in the P0
-handoff where not done.*
+**Fingerprints on a Dolt store.** The engine re-renders table text after the
+creating transaction (§3.2), so on a Dolt store every shape comparison (the
+persisted shape, the trusted fingerprint, the upgrade sources and targets)
+ignores whitespace around `(`, `)` and `,`. SQLite stores keep the exact
+text, so no persisted shape changes meaning. Index definitions are compared
+loosely on both engines (the declared text is code).
+
+**Framework tables on a Dolt store.** The base's own operational tables are
+identity-bound, so L3 says they are local. A `doltLocal` pattern cannot start
+with `_` (§3.2), so on a Dolt store the base creates the nonce ledger as
+`vsl_direct_rpc_nonces` (on SQLite it stays `_vibestudio_direct_rpc_nonces`),
+and a Dolt class declares `doltLocal: doltLocalPatterns([...])`, which adds
+the framework patterns `vsl_%` and `state` to its own. `state` is local by
+exact name: a class that keeps versioned facts in it must move them to its own
+table first. P0 implements both (`@vibestudio/durable/dolt`).
 
 ### 4.4 Backup, restore, reset and clone
 
