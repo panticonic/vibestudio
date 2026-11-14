@@ -1738,6 +1738,68 @@ resolves exact source by the host service it already calls).
   and the system-test runner. About 51 files in Base reference the eval client.
   They move to `await`.
 
+#### 7.5.1 The kernel call contract (decided 2026-11-14, before step 3c and 4)
+
+A kernel is a hosted class (§7.2). Nothing but its hosting entity's root can
+name it, so **reachability is structural** and the host does not check it. This
+subsection fixes what the kernel itself accepts. The methods are ordinary
+`@rpc` methods of the class, reached through `hostCode(...).call(method, ...args)`;
+every argument and result uses the RPC JSON codec.
+
+| Method                                                                                            | Contract                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| ------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start(input, caller)`                                                                            | Durably accepts one run and returns `{ runId, runDigest, status, existing, scopeInputRevision }`. It returns **after** the accepted row is committed (`eval: <runId> accepted`) and **before** the cell runs: the run executes in the kernel's own lifetime (`waitUntil`), never inside this call. Idempotent on `runId`: a replay with the same input returns the existing row; the same `runId` with different input is refused (`EINVAL`). |
+| `await(runId, { waitMs? }, caller)`                                                               | Blocks until the run is terminal or `waitMs` (default 30 s, at most 120 s) passes, and returns `{ status, result?, progress? }`. A timeout is not a failure: the status is non-terminal and the caller calls again. The terminal result is the committed row, so a call that arrives after a restart of the caller, the entity or the node reads the same value.                                                                              |
+| `events(runId, { after, limit }, caller)`                                                         | Pages the run's event log (console, tool-call, state, checkpoint and diagnostic events) by sequence number: `{ events, next, hasMore }`, 256 per page at most. A retention gap is reported as a `diagnostic` event with the sequence to re-read from. A live consumer re-calls with `next`; a late one reads the log from 0.                                                                                                                  |
+| `cancel(runId, caller)`                                                                           | Ends the run through the kernel's abort path and returns `{ ok, forcedReset }`. A terminal run answers its terminal state (it is not an error); an unknown run is `ENOTFOUND`.                                                                                                                                                                                                                                                                |
+| `get(runId, caller)`, `receipt(runId, caller)`                                                    | Re-read the row and its result receipt.                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `reset(caller)`, `readScopeTextPage(key, offset, limit, caller)`, `deleteScopeValue(key, caller)` | Scope-level controls; they name no run.                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `persist({ reason })`                                                                             | Not callable by an entity: the root's `onrevoked` handler calls it on a drain or swap (§7.4).                                                                                                                                                                                                                                                                                                                                                 |
+
+**`caller`, and the kernel's own check.** Every control method takes one
+argument that says who the hosting entity is acting for:
+
+```ts
+type KernelCaller =
+  | { kind: "host" } // the hosting entity acting for itself
+  | { kind: "session"; admissionNonce: string }; // a session entity acting for the principal it serves
+```
+
+- **The hosting entity itself (`host`).** The kernel can only be reached through
+  the root of the entity that hosts it, by that entity's own `CODE_HOST`
+  binding. A call that arrives is therefore from the hosting entity, and the
+  kernel serves it for every method. An agent, a worker or any other entity that
+  hosts its own kernel calls it this way; it needs no nonce, because it is the
+  only principal the kernel has.
+- **A session entity acting for its principal (`session`).** A session entity
+  (§7.2) serves a principal that is not itself: a panel, the CLI, the
+  system-test runner. The session class authenticates that principal first (its
+  own `stateArgs` name it, and its caller must be it or the host service acting
+  for it). It then relays with the **admission nonce** that the one admission
+  function (§7.3) returned for the run. The kernel stores a digest of that nonce
+  in the run's row at `start` and checks it on every run-scoped method
+  (`await`, `events`, `cancel`, `get`, `receipt`) with a constant-time
+  comparison; a replayed `start` whose nonce differs from the row's is refused
+  (`EACCES`). Scope-level methods take the nonce of any run of this kernel.
+  The nonce is a host-minted, per-run secret that the execution-session registry
+  already binds to the run's principal, so a session class that holds a nonce
+  for one run cannot name another run it did not admit. After the run has ended
+  the registry no longer honours the nonce for effects, and the kernel still
+  accepts its digest for **reading** the committed row; the session keeps
+  `(runId, nonce)` in its own local table so a principal that comes back after a
+  restart can pull.
+- **What the check does not do.** It is a second, independent check behind the
+  session's own, not a defence against a compromised session class: that class
+  can claim `host`. The session class is part of the reviewed Base template, and
+  the manifests (`hosts`, `hosted`) bound what it can host.
+- **Authority is separate.** None of this says what the run may do. Outbound
+  calls from the kernel carry the nonce (`bindExecutionSession`); the host
+  authorizes each one against the admitted session (§7.3).
+
+Events and progress are rows, not pushes: `run_events` is appended in the same
+transaction as the state it describes, and a consumer that wants "as it
+happens" polls `events` or issues `await` with a short `waitMs`.
+
 ### 7.6 Eval is ordinary code
 
 - **The kernel class** (`EvalKernel`) lives next to the engine in Base
