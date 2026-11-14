@@ -1748,11 +1748,15 @@ export default { fetch() { return new Response("chunked host"); } };`;
       await bindConfiguredObject(manager, a, {});
       await code(dispatch, a, hostKernel);
       await code(dispatch, a, callKernel("run", "1"));
+      const restarted = Date.now();
       await (manager as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
       // The kernel's Dolt store holds the commit its root asked it to make.
-      // (The first call after a planned restart waits about a minute in this harness, for any object.)
+      // A swap revokes the hold at once (celld ec0d6f5), so this takes about two seconds, not the
+      // 60 s of CELLD_DEPLOY_MAX_AGE_S that the cell waited out before.
       await code(dispatch, a, hostKernel);
       const info = JSON.parse((await code(dispatch, a, callKernel("info"))).body).result;
+      // The restart did not wait out CELLD_DEPLOY_MAX_AGE_S (60 s; it took 63 s before celld ec0d6f5).
+      expect(Date.now() - restarted).toBeLessThan(20_000);
       expect(info.log.some((message: string) => /^revoked: (drain|swap)/.test(message))).toBe(true);
       // The code is hosted again, and the committed history is intact.
       expect(JSON.parse((await code(dispatch, a, callKernel("run", "5"))).body).result.result).toBe(
@@ -1790,5 +1794,25 @@ export default { fetch() { return new Response("chunked host"); } };`;
         runs: 2,
       });
     }, 60_000);
+
+    it("a limit on one call (a run's timeoutMs) ends that call when the class has none of its own, and a bad limit is refused", async () => {
+      active = await createHarness(builds, { manifests });
+      const { manager, dispatch } = active;
+      await manager.ensureDOClass(HOST, "HostDO");
+      const a = hostRef("entity-a");
+      await bindConfiguredObject(manager, a, {});
+      await code(dispatch, a, hostKernel);
+      await code(dispatch, a, callKernel("run", "1"));
+      const started = Date.now();
+      const spun = await code(dispatch, a, { ...callKernel("spin"), limits: { cpuMs: 1500 } });
+      expect(spun.body).toMatch(/CPU limit of 1500/);
+      expect(Date.now() - started).toBeLessThan(10_000);
+      expect(JSON.parse((await code(dispatch, a, callKernel("run", "3"))).body).result).toEqual({
+        result: 3,
+        runs: 2,
+      });
+      const refused = await code(dispatch, a, { ...callKernel("run", "1"), limits: { cpuMs: -5 } });
+      expect(refused.body).toMatch(/limits.cpuMs must be a positive integer/);
+    }, 90_000);
   });
 });

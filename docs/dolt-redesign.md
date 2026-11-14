@@ -1654,9 +1654,17 @@ code in an entity"):
   `DirectCallNonceGate` of §4.2, so a Base class can be a Dolt class.
   A product class has no `ctx.props`; both bases read it defensively (the first
   version did not, and the product DOs failed on `undefined.host`).
-- **Measured, not caused by this**: after a planned restart of the node, the first
-  call to any object in this harness waits about a minute (a plain `HostDO` call
-  too), so the drain test takes 63 s.
+- **A planned restart does not wait for a held cell** (celld `ec0d6f5`). Before it,
+  a cell with a residency hold was not at a swap safe point, was quiesced, and waited
+  for `CELLD_DEPLOY_MAX_AGE_S` (60 s) before the age rule revoked the hold, so the
+  drain test took 63 s. A swap now revokes the holds of a cell that is otherwise at
+  a safe point at once (`onrevoked` runs with reason `"swap"`), so the test takes
+  about 2 s. A cell with a request in flight or an open WebSocket still waits, as it
+  must. No `CELLD_DEPLOY_MAX_AGE_S` setting is needed (none was ever committed).
+- **A call can carry a CPU limit** (celld `ec0d6f5`, third argument of
+  `ctx.facets.get`). `hostCode(...).limited({ cpuMs })` returns the same hosted
+  class whose calls carry the limit through the root (`CodeHostInput.limits`,
+  validated as positive integers). §7.8 has what it bounds.
 - **Session entities (step 3c, as built).** `SessionDO` (Base `workers/session`)
   is a plain SQLite entity that hosts one kernel with `hostCode` (its manifest
   declares `hosts: [workers/eval-kernel:EvalKernel]`). It is created by
@@ -1865,21 +1873,32 @@ worker, one object):
 | no limit, a call that spins                                       | **never ends** (the probe's 8 s window); a sibling object is unaffected, only that isolate is starved                                                                                                           |
 
 So celld's per-isolate limit **covers a CPU-starved loaded worker** and ends only
-the starving call, which is strictly better than replacing the node. One gap:
-`getDurableObjectClass` takes only `props` (`dynamic-workers.md`), so the limit
-is the **loaded unit's** `WorkerCode.limits`, fixed at load, and cannot be a
-run's `timeoutMs`. A starving run with `timeoutMs: 5000` is therefore ended at
-the unit's `cpuMs`, not at 5 s. The decision:
+the starving call, which is strictly better than replacing the node. The one gap
+of the first measurement, that the limit was the loaded unit's `limits.cpuMs`,
+fixed at load, and not a run's `timeoutMs`, is closed by celld `ec0d6f5`: a
+limit on **one call**, the third argument of `ctx.facets.get(name, startup, { limits })`.
+The root takes the stub for each call, so the facet is not restarted and the
+kernel keeps its heap. Measured (same probe, no unit limit):
+
+| Setup                                                                                              | Result                                                                                                                              |
+| -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| no limit at all, a call that spins                                                                 | never ends (the 6 s window)                                                                                                         |
+| the same call through a stub with `limits: { cpuMs: 1500 }`                                        | fails after **1658 ms** with `Worker exceeded CPU limit of 1500 ms`; the same kernel answers the next call with its heap           |
+| a call that answers at once and spins under `ctx.waitUntil` (what a kernel's `start` does), same limit | `start` answers in 130 ms; the next call to the kernel is answered after **1472 ms**: the limit of the call bounds the work it left |
+
+So `start` carries the run's `timeoutMs` as its CPU limit
+(`kernelStartLimits`, Base `workers/eval-kernel/contract.ts`, applied by
+`hostCode(...).limited`), and a run's own timeout timer, already due when the
+spin is ended, settles it. The decision:
 
 - the executable admission sets `limits.cpuMs` for every unit that holds
-  `codegen` (a bounded CPU budget per invocation, a manifest value);
+  `codegen` (a bounded CPU budget per invocation, a manifest value; the kernel's
+  is 600000 ms): it is the ceiling, and a run's `timeoutMs` is the lower limit;
 - the per-run liveness supervisor (the 5 s probe, `superviseIsolateLiveness`) is
   **deleted**, with its `activity` lease;
 - `recoverUnresponsiveSandbox` stays as a node-level watchdog call for what the
   limit cannot see (a hung runtime that burns no CPU). The root's or the node's
   watchdog calls it, not a per-run loop.
-  A per-run CPU budget needs `limits` on `getDurableObjectClass`, which is a fork
-  request (recorded in the handoff), not a Vibestudio change.
 
 ### 7.9 Trust model
 

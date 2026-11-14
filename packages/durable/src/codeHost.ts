@@ -38,6 +38,19 @@ export interface HostedCode {
   call<T = unknown>(method: string, ...args: unknown[]): Promise<T>;
   /** Ends the residency hold. The class's storage stays; the heap may now be evicted. */
   release(): Promise<void>;
+  /**
+   * The same hosted class, with a limit for each call made through the result:
+   * `cpuMs` is the CPU one call (and the work it leaves running under
+   * `waitUntil`) may use, lower-wins against the class's own limit. A run's
+   * `timeoutMs` bounds its CPU through this. The heap and the storage are the
+   * same; only the call carries the limit.
+   */
+  limited(limits: HostedCallLimits): HostedCode;
+}
+
+export interface HostedCallLimits {
+  readonly cpuMs?: number;
+  readonly subRequests?: number;
 }
 
 /** What the facet's props carry for the entity's own code (`ctx.props`). */
@@ -98,8 +111,9 @@ export function createCodeHostClient(input: {
     const hosted = await request({ op: "host", name: spec.name, executable: spec.executable });
     if (!hosted.ok) await failure(hosted);
     await hosted.arrayBuffer();
-    return {
+    const handle = (limits: HostedCallLimits | undefined): HostedCode => ({
       name: spec.name,
+      limited: (more) => handle({ ...limits, ...more }),
       async call<T>(method: string, ...args: unknown[]): Promise<T> {
         const response = await request({
           op: "call",
@@ -107,6 +121,7 @@ export function createCodeHostClient(input: {
           executable: spec.executable,
           method,
           args: JSON.parse(encodeRpcJson(args)) as unknown[],
+          ...(limits ? { limits } : {}),
         });
         const text = await response.text();
         const decoded = decodeRpcJson(text) as { result?: T; error?: unknown };
@@ -124,7 +139,8 @@ export function createCodeHostClient(input: {
         });
         await response.arrayBuffer();
       },
-    };
+    });
+    return handle(undefined);
   };
 }
 

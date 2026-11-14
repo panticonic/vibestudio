@@ -168,6 +168,20 @@ function loadExecutable(
   });
 }
 
+/** A per-call limit is a positive integer of the keys celld knows; anything else is refused at the call. */
+function callLimits(limits: CodeHostInput["limits"]): CodeHostInput["limits"] | undefined {
+  if (!limits) return undefined;
+  const out: { cpuMs?: number; subRequests?: number } = {};
+  for (const key of ["cpuMs", "subRequests"] as const) {
+    const value = limits[key];
+    if (value === undefined) continue;
+    if (!Number.isSafeInteger(value) || value < 1)
+      throw new Error(`code host: limits.${key} must be a positive integer`);
+    out[key] = value;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 /** Marks a call from `CodeHost`; the router strips `x-internal-*`, so no outside caller can set it. */
 const CODE_HOST_HEADER = "x-internal-vibestudio-codehost";
 const CODE_HOST_KEY = "__codehost";
@@ -249,6 +263,8 @@ interface CodeHostInput {
   executable: { source: string; className: string };
   method?: string;
   args?: unknown[];
+  /** A CPU limit for this one call, lower-wins against the class's own (celld's per-call limit). */
+  limits?: { cpuMs?: number; subRequests?: number };
 }
 
 interface HostedInstance {
@@ -434,7 +450,18 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     return instance;
   }
 
-  private hostedFacet(name: string, instance: HostedInstance): Fetcher {
+  /**
+   * The stub of a hosted facet. `limits` is a limit for each call made through
+   * the stub this returns (celld's third argument of `ctx.facets.get`: the lower
+   * of it and the unit's `cpuMs` applies, and it covers work the call leaves
+   * running under `waitUntil`). A run's `timeoutMs` bounds its CPU this way
+   * without restarting the facet, which would lose the kernel's heap.
+   */
+  private hostedFacet(
+    name: string,
+    instance: HostedInstance,
+    limits?: CodeHostInput["limits"]
+  ): Fetcher {
     const facetOptions: CelldFacetOptions | null =
       instance.admission.grants.storage === "dolt"
         ? {
@@ -448,13 +475,18 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       this.ctx.facets as unknown as {
         get(
           name: string,
-          init: () => { class: DurableObjectClass; celld?: CelldFacetOptions }
+          init: () => { class: DurableObjectClass; celld?: CelldFacetOptions },
+          options?: { limits: { cpuMs?: number; subRequests?: number } }
         ): Fetcher;
       }
-    ).get(instance.facetName, () => ({
-      class: instance.class,
-      ...(facetOptions ? { celld: facetOptions } : {}),
-    }));
+    ).get(
+      instance.facetName,
+      () => ({
+        class: instance.class,
+        ...(facetOptions ? { celld: facetOptions } : {}),
+      }),
+      ...(limits ? [{ limits }] : [])
+    );
   }
 
   private hostedRequest(name: string, method: string, body: unknown): Request {
@@ -482,7 +514,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     if (input.op === "host") return Response.json({ hosted: true });
     if (typeof input.method !== "string" || input.method.length === 0)
       throw new Error("code host: a call names a method");
-    return this.hostedFacet(input.name, instance).fetch(
+    return this.hostedFacet(input.name, instance, callLimits(input.limits)).fetch(
       this.hostedRequest(input.name, input.method, { args: input.args ?? [] })
     );
   }
