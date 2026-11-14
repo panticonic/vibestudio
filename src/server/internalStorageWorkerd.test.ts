@@ -510,36 +510,6 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
     cleanupStoredBuildFixtures();
   });
 
-  it("reopens retained EvalDO storage using the descriptor of its native executable", async () => {
-    const workspaceRef = {
-      source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceStateDO",
-      objectKey: "eval-reopen-workspace",
-    };
-    const harness = await createWorkerdHarness({
-      mainRpc: async (method, args) => {
-        if (method !== "workspace-state.alarmClear") {
-          throw new Error(`Unexpected storage host callback ${method}`);
-        }
-        return harness.callDurableObject(workspaceRef, "alarmClear", ...args);
-      },
-    });
-    manager = harness.manager;
-    await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" },
-      { source: INTERNAL_DO_SOURCE, className: "EvalDO" },
-    ]);
-    const ref = { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey: "retained-eval" };
-    // The first activation creates the class's schema in the cell's storage.
-    expect(await harness.callDurableObject(ref, "getRunReceipt", "retained")).toBeNull();
-    // A replaced node reopens that retained storage under the executable's own
-    // schema descriptor: validation accepts it, nothing is rebuilt.
-    const generation = manager.getBootGeneration();
-    await manager.recoverUnresponsiveSandbox("test: replace the node");
-    expect(manager.getBootGeneration()).toBe(generation + 1);
-    expect(await harness.callDurableObject(ref, "getRunReceipt", "retained")).toBeNull();
-  }, 60_000);
-
   it("keeps internal DO storage across a node replacement and leaves its maintenance to the class", async () => {
     // BrowserVaultDO writes are host-capability attested, which requires the
     // installed product identity; synthesize one for this process the same way
@@ -768,117 +738,25 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
   }, 240_000);
 
   it("starts internal workerd before a workspace provider is attached", async () => {
-    // Regression: the whole runtime failed to boot once EvalDO was registered
-    // (its binding was malformed). Other tests register only
-    // WorkspaceDO/BrowserVaultDO, so they never exercised EvalDO's registration.
+    // Regression: the whole runtime failed to boot once a product class was registered
+    // with a malformed binding. Other tests register only WorkspaceDO/BrowserVaultDO,
+    // so they never exercised the other classes' registration.
     const harness = await createWorkerdHarness({ bindWorkspaceProvider: false });
     manager = harness.manager;
     // registerAllDOClasses writes the capnp config and (re)starts workerd; a
     // malformed config makes workerd exit before accepting HTTP and this rejects.
     await expect(
-      manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "EvalDO" }])
+      manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "WebhookStoreDO" }])
     ).resolves.not.toThrow();
     expect(manager.getBootGeneration()).toBeGreaterThanOrEqual(1);
   });
 
-  it("EvalDO durable job queue: startRun schedules, remains idempotent, and persists a terminal", async () => {
-    // With no eval engine declared, background execution fails immediately. That is useful here:
-    // the real workerd test proves startRun acknowledges the durable row, schedules under the DO
-    // lifetime, and makes the terminal failure observable without a held host request.
-    const workspaceRef = {
-      source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceStateDO",
-      objectKey: "job-queue-workspace",
-    };
-    const harness = await createWorkerdHarness({
-      mainRpc: async (method, args): Promise<unknown> => {
-        // Eval owns its delivery schedule through the host workspace service,
-        // even when this run has no result receiver. Exercise that real store.
-        if (method !== "workspace-state.alarmClear") {
-          throw new Error(`Unexpected job queue host callback ${method}`);
-        }
-        return harness.callDurableObject(workspaceRef, "alarmClear", ...args);
-      },
-    });
-    manager = harness.manager;
-    await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "EvalDO" },
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" },
-    ]);
-    const ref = { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey: "job-queue-test" };
-
-    // The first call acknowledges the newly inserted row before background guest work runs.
-    expect(
-      await harness.callDurableObject(ref, "startRun", {
-        runId: "run-1",
-        code: "1+1",
-        gatewayToken: "gateway-job-queue-test",
-      })
-    ).toMatchObject({
-      runId: "run-1",
-      status: "pending",
-      existing: false,
-      scopeInputRevision: "scope:initial",
-      runDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
-    });
-
-    // Idempotent on runId and exact input: replay returns the same row in whichever durable state
-    // it has reached, while different work cannot alias the identity.
-    const replay = (await harness.callDurableObject(ref, "startRun", {
-      runId: "run-1",
-      code: "1+1",
-      gatewayToken: "gateway-job-queue-test",
-    })) as { runId: string; status: string };
-    expect(replay.runId).toBe("run-1");
-    expect(["pending", "running", "done"]).toContain(replay.status);
-    await expect(
-      harness.callDurableObject(ref, "startRun", {
-        runId: "run-1",
-        code: "DIFFERENT",
-        gatewayToken: "gateway-job-queue-test",
-      })
-    ).rejects.toThrow("runId run-1 was reused with different input");
-
-    // getRun reaches the canonical terminal without relying on a held executeRun response.
-    let observed = (await harness.callDurableObject(ref, "getRun", "run-1")) as {
-      status: string;
-      result?: { success?: boolean; error?: RpcFailure };
-    };
-    for (let attempt = 0; attempt < 20 && observed.status !== "done"; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      observed = (await harness.callDurableObject(ref, "getRun", "run-1")) as typeof observed;
-    }
-    expect(observed).toMatchObject({ status: "done", result: { success: false } });
-    expect(observed.result?.error).toMatchObject({
-      name: "Error",
-      errorKind: "application",
-      message: expect.stringContaining("no `providers.evalEngine` is declared"),
-      stack: expect.stringContaining("requireDeclaredProviderSource"),
-    });
-    const terminal = observed.result;
-    expect(await harness.callDurableObject(ref, "getRun", "nope")).toEqual({ status: "unknown" });
-
-    // Reset preserves terminal history.
-    expect(await harness.callDurableObject(ref, "reset")).toEqual({ ok: true });
-    expect(await harness.callDurableObject(ref, "getRun", "run-1")).toMatchObject({
-      status: "done",
-      result: terminal,
-    });
-
-    // A fresh run after reset is independent.
-    expect(
-      await harness.callDurableObject(ref, "startRun", {
-        runId: "run-2",
-        code: "2+2",
-        gatewayToken: "gateway-job-queue-test",
-      })
-    ).toMatchObject({ runId: "run-2" });
-  }, 30_000);
-
   it("round-trips entity activate / resolve / retire / gc through WorkspaceDO under workerd", async () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
-    await manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" }]);
+    await manager.registerAllDOClasses([
+      { source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" },
+    ]);
     const ref = {
       source: INTERNAL_DO_SOURCE,
       className: "WorkspaceStateDO",
