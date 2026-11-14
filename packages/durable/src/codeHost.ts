@@ -134,8 +134,11 @@ export async function callOrRestart<T>(
   try {
     return await Promise.race([call, unresponsive]);
   } catch (error) {
-    if (error instanceof CodeHostError && error.code === "EUNRESPONSIVE")
-      await hosted.restart().catch(() => undefined);
+    if (error instanceof CodeHostError && error.code === "EUNRESPONSIVE") {
+      // The restart is asked for, not waited on: if the cell's own event loop is what stopped,
+      // the request never returns either, and the caller must still get its answer.
+      void hosted.restart().catch(() => undefined);
+    }
     throw error;
   } finally {
     clearTimeout(timer);

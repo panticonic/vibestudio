@@ -146,6 +146,7 @@ describe("createCodeHostClient", () => {
     });
     expect(await callOrRestart(kernel, 1000, "get", "r1")).toBe("ok");
     await expect(callOrRestart(kernel, 30, "hang")).rejects.toMatchObject({ code: "EUNRESPONSIVE" });
+    await new Promise((resolve) => setTimeout(resolve, 10));
     expect(seen).toEqual(["host", "call:get", "call:hang", "restart"]);
     // An application failure is not an unresponsive instance: no restart.
     answer = () =>
