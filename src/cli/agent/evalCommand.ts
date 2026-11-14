@@ -2,7 +2,9 @@ import { schemaRpcCaller } from "@vibestudio/rpc/internal";
 import { deserializeRpcFailure, formatRpcFailure } from "@vibestudio/rpc";
 /**
  * `vibestudio eval ...` — run TypeScript/JavaScript server-side in the CLI
- * session's EvalDO, via the `eval` service. The paired shell credential is the
+ * session's hosted kernel: the host admits the run (`dynamicCode.admit`), the CLI
+ * starts it on the session entity and pulls its events and result from there
+ * (docs/dolt-redesign.md §7.5). The paired shell credential is the
  * transport identity, but the eval owner is the selected agent session entity
  * so persistent REPL scope + fs/git/vcs are bound to that session's context.
  *
@@ -11,7 +13,11 @@ import { deserializeRpcFailure, formatRpcFailure } from "@vibestudio/rpc";
  */
 import * as fs from "node:fs";
 import { randomUUID } from "node:crypto";
-import { createEvalExecutor, evalMethods } from "@vibestudio/service-schemas/eval";
+import {
+  createDynamicCodeExecutor,
+  dynamicCodeMethods,
+} from "@vibestudio/service-schemas/dynamicCode";
+import type { EvalRunEvent } from "@vibestudio/service-schemas/eval";
 import { EventsClient } from "@vibestudio/service-schemas/clients/eventsClient";
 import { shellApprovalMethods } from "@vibestudio/service-schemas/shellApproval";
 import { evalRuntimeId } from "@vibestudio/shared/evalRuntimeIdentity";
@@ -168,6 +174,7 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
     let activeAuthorityDiagnostic = "";
     let authorityDiagnosticTimer: ReturnType<typeof setTimeout> | undefined;
     let stopLiveEvents: (() => Promise<void>) | undefined;
+    let observeRunEvent: (event: EvalRunEvent) => void = () => undefined;
     let rejectAutoApproval!: (error: unknown) => void;
     const autoApprovalFailure = new Promise<never>((_resolve, reject) => {
       rejectAutoApproval = reject;
@@ -221,12 +228,12 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
           process.stderr.write(`${diagnostic}\n`);
         }
       });
-      const removeListener = events.on("eval:run-event", (payload) => {
-        if (payload.runId !== runArgs.runId || payload.scopeKey !== scopeKey) return;
-        if (payload.event.kind === "authority-requested") {
+      /** One pulled event of this run: authority waits, then console output. */
+      observeRunEvent = (event: EvalRunEvent) => {
+        if (event.kind === "authority-requested") {
           const detail =
-            payload.event.payload && typeof payload.event.payload === "object"
-              ? (payload.event.payload as Record<string, unknown>)
+            event.payload && typeof event.payload === "object"
+              ? (event.payload as Record<string, unknown>)
               : {};
           autoApprover.observeAuthorityRequested(detail);
           const capability =
@@ -242,8 +249,8 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
           authorityDiagnosticTimer.unref?.();
           return;
         }
-        if (payload.event.kind === "authority-decided") {
-          autoApprover.observeAuthorityDecided(payload.event.payload);
+        if (event.kind === "authority-decided") {
+          autoApprover.observeAuthorityDecided(event.payload);
           if (authorityDiagnosticTimer) clearTimeout(authorityDiagnosticTimer);
           authorityDiagnosticTimer = undefined;
           if (activeAuthorityDiagnostic) {
@@ -252,8 +259,8 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
           }
           return;
         }
-        if (json || payload.event.kind !== "console") return;
-        const eventPayload = payload.event.payload;
+        if (json || event.kind !== "console") return;
+        const eventPayload = event.payload;
         const text =
           eventPayload && typeof eventPayload === "object" && !Array.isArray(eventPayload)
             ? (eventPayload as Record<string, unknown>)["text"]
@@ -261,12 +268,11 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
         if (typeof text !== "string" || text.length === 0) return;
         streamedConsole += text;
         process.stderr.write(text.endsWith("\n") ? text : `${text}\n`);
-      });
+      };
       try {
-        await events.subscribeAll(["eval:run-event", "shell-approval:pending-changed"]);
+        await events.subscribeAll(["shell-approval:pending-changed"]);
         if (approvalLevel > 0) autoApprover.observePending(await approvals.listPending());
         stopLiveEvents = async () => {
-          removeListener();
           removeApprovalListener();
           if (authorityDiagnosticTimer) clearTimeout(authorityDiagnosticTimer);
           const unsubscribe = events.unsubscribeAll();
@@ -274,14 +280,24 @@ async function evalRun(inv: ParsedInvocation): Promise<number> {
           await unsubscribe;
         };
       } catch {
-        // Live observation is an ergonomic accelerator. The durable executor
-        // remains authoritative if a watch cannot be established.
-        removeListener();
+        // Approval observation is an ergonomic accelerator. The pulled events and the
+        // committed result stay authoritative if a watch cannot be established.
         removeApprovalListener();
       }
     }
     const abort = new AbortController();
-    const executeEval = createEvalExecutor(client.mainCall, { signal: abort.signal });
+    const executeEval = createDynamicCodeExecutor(
+      {
+        call: (targetId, method, args, options) =>
+          client.callTarget(targetId, method.name, args, options) as never,
+      },
+      {
+        signal: abort.signal,
+        onEvents: (events) => {
+          for (const event of events) observeRunEvent(event);
+        },
+      }
+    );
     let result;
     try {
       const execution = executeEval(runArgs);
@@ -331,7 +347,7 @@ async function evalReplReset(inv: ParsedInvocation): Promise<number> {
   const json = jsonMode(inv.flags["json"] === true);
   try {
     const { client, session } = resolveSessionScope(inv);
-    const evalClient = typedClient("eval", evalMethods, client);
+    const evalClient = typedClient("dynamicCode", dynamicCodeMethods, client);
     const result = await evalClient.reset({
       target: { kind: "owner-session", sessionId: session.entityId },
       scopeKey: session.scopeKey,
