@@ -6,6 +6,12 @@ import { defineServiceMethods, type MethodSchema } from "@vibestudio/shared/type
 import type { ServiceAuthorityPolicy } from "@vibestudio/shared/serviceAuthority";
 import { AuthorityResourceScopeSchema, UnitAuthorityManifestSchema } from "./build.js";
 import {
+  LegacyImportTableSchema,
+  LegacyManifestSchema,
+  LegacyRowSchema,
+  legacyInternal,
+} from "./workspaceStateLegacy.js";
+import {
   LifecycleKeySchema,
   LifecycleLeaseSchema,
   PanelReopenResultSchema,
@@ -322,6 +328,17 @@ const childEdgeSchema = z
     ownerEntityId: z.string().nullable(),
     cloneDefinition: contextCloneDefinitionSchema.optional(),
     cloneCompletion: contextCloneCompletionSchema.optional(),
+  })
+  .strict();
+
+const legacyImportStatusSchema = z
+  .object({
+    /** `none`: nothing recorded; `settled` phases never import again. */
+    phase: z.enum(["none", "staging", "replaying", "verified", "skipped", "adopted"]),
+    staged: z.record(z.string(), z.number().int().nonnegative()),
+    applied: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+    manifestDigest: z.string().nullable(),
   })
   .strict();
 
@@ -923,6 +940,61 @@ const rawWorkspaceStateEngineMethods = defineServiceMethods({
     description: "Read a slot's history entries, newest first (bounded).",
     args: z.tuple([z.string().min(1), z.number().int().positive().max(1000).optional()]),
     returns: z.array(SlotHistoryRowSchema),
+  },
+  legacyImportStatus: {
+    ...legacyInternal("read"),
+    description: "Where the move of the retired SQLite workspace store into this cell stands.",
+    args: z.tuple([]),
+    returns: legacyImportStatusSchema,
+  },
+  legacyImportBegin: {
+    ...legacyInternal("write"),
+    description:
+      "Start (or restart, when the source changed) the import of the retired store described by a manifest.",
+    args: z.tuple([LegacyManifestSchema]),
+    returns: legacyImportStatusSchema,
+  },
+  legacyImportStage: {
+    ...legacyInternal("write"),
+    description: "Stage a page of retired-store rows, idempotently by their legacy rowid.",
+    args: z.tuple([
+      z
+        .object({
+          table: LegacyImportTableSchema,
+          rows: z.array(z.object({ rowid: z.number().int(), row: LegacyRowSchema }).strict()),
+        })
+        .strict(),
+    ]),
+    returns: z.number().int().nonnegative(),
+  },
+  legacyImportReplay: {
+    ...legacyInternal("write"),
+    description: "Plan (once) and replay staged history into commits, within a time budget.",
+    args: z.tuple([
+      z
+        .object({
+          budgetMs: z.number().int().positive().max(60_000),
+          /** At most this many events in the call, whatever the budget. */
+          maxEvents: z.number().int().positive().optional(),
+        })
+        .strict(),
+    ]),
+    returns: z
+      .object({ applied: z.number().int(), total: z.number().int(), done: z.boolean() })
+      .strict(),
+  },
+  legacyImportFinish: {
+    ...legacyInternal("write"),
+    description:
+      "Copy the operational tables, prove every table equals the retired store, and settle the import.",
+    args: z.tuple([LegacyManifestSchema]),
+    returns: legacyImportStatusSchema,
+  },
+  legacyImportSkip: {
+    ...legacyInternal("write"),
+    description: "Record that there is no retired store to move.",
+    args: z.tuple([]),
+    returns: legacyImportStatusSchema,
   },
 });
 

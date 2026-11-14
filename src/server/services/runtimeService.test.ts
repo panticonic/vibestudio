@@ -6,7 +6,6 @@ import { serializeRpcFailure } from "@vibestudio/rpc";
 import type { LifecyclePrepareInput } from "@vibestudio/shared/doDispatcher";
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
 
-import { createTestDO } from "@vibestudio/durable/test-utils";
 import { CapabilityGrantStore } from "./capabilityGrantStore.js";
 import { AcquisitionCoordinator } from "./acquisitionCoordinator.js";
 import { createEntityRetirementCleanup } from "./entityRetirementCleanup.js";
@@ -35,8 +34,8 @@ import {
 } from "@vibestudio/shared/serviceDispatcherTestUtils";
 import type { DODispatch } from "../doDispatch.js";
 import type { DORef } from "@vibestudio/shared/doDispatcher";
-import { WorkspaceDO } from "@panticonic/builtin/workspace-state";
-import { WorkspaceDOTestable } from "@panticonic/builtin/workspace-state/test-fixture";
+import type { WorkspaceStateDO } from "@panticonic/builtin/workspace-state";
+import { createWorkspaceStateTestDO } from "@panticonic/builtin/workspace-state/test-fixture";
 import { UnitSupervisor } from "./unitSupervisor.js";
 import { authoritySessionIdForCaller } from "./callerAuthoritySession.js";
 import { createPanelAccessPermissionDeps } from "./createPanelAccessPermissionDeps.js";
@@ -77,7 +76,7 @@ function approvalQueueMock(
 }
 
 /** Wrap a WorkspaceDO instance into a DODispatch-compatible mock. */
-function makeDODispatch(instance: WorkspaceDO): {
+function makeDODispatch(instance: WorkspaceStateDO): {
   dispatch: DODispatch;
   spy: ReturnType<typeof vi.fn>;
 } {
@@ -168,7 +167,7 @@ function contextFoldersFake() {
 }
 
 async function buildDeps(opts: BuildDepsOptions = {}) {
-  const { instance } = await createTestDO(WorkspaceDOTestable);
+  const { instance } = await createWorkspaceStateTestDO();
   const { dispatch, spy } = makeDODispatch(instance);
   const entityCache = new EntityCache();
   const approvalQueue = approvalQueueMock(opts.approvalDecision ?? "session");

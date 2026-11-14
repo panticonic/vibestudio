@@ -1,5 +1,14 @@
+export { WorkspaceDO } from "./WorkspaceDO.js";
 export {
-  WorkspaceDO,
+  WorkspaceStateDO,
+  WORKSPACE_STATE_DOLT_LOCAL,
   type LifecycleKey,
   type LifecycleOp,
-} from "./WorkspaceDO.js";
+} from "./WorkspaceStateDO.js";
+export {
+  importLegacyWorkspaceState,
+  type LegacyImportOutcome,
+  type LegacyImportStatus,
+  type LegacyStoreImporter,
+  type LegacyStoreReader,
+} from "./legacyImportDriver.js";

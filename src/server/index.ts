@@ -1085,7 +1085,7 @@ async function main() {
   const { createAcquisitionOwnerNotifier } = await import("./services/acquisitionOwnerDelivery.js");
   const authorityWakeWorkspaceRef: import("@vibestudio/shared/doDispatcher").DORef = {
     source: (await import("./internalDOs/internalDoLoader.js")).INTERNAL_DO_SOURCE,
-    className: "WorkspaceDO",
+    className: "WorkspaceStateDO",
     objectKey: workspaceId,
   };
   const acquisitionCoordinator = new AcquisitionCoordinator({
@@ -5494,7 +5494,7 @@ async function main() {
             );
           }
           const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
-          if (source !== INTERNAL_DO_SOURCE || className !== "WorkspaceDO") {
+          if (source !== INTERNAL_DO_SOURCE || className !== "WorkspaceStateDO") {
             throw new Error(`Context-boundary preparation is not valid for ${source}:${className}`);
           }
           const selectPath = (root: unknown, path: readonly (string | number)[]): unknown => {
@@ -6324,7 +6324,7 @@ async function main() {
               doDispatch.dispatch(
                 {
                   source: INTERNAL_DO_SOURCE,
-                  className: "WorkspaceDO",
+                  className: "WorkspaceStateDO",
                   objectKey: entryWorkspaceId,
                 },
                 method,
@@ -6344,7 +6344,7 @@ async function main() {
                 doDispatch.dispatch(
                   {
                     source: INTERNAL_DO_SOURCE,
-                    className: "WorkspaceDO",
+                    className: "WorkspaceStateDO",
                     objectKey: entryWorkspaceId,
                   },
                   method,
@@ -6511,7 +6511,7 @@ async function main() {
                 doDispatch.dispatch(
                   {
                     source: INTERNAL_DO_SOURCE,
-                    className: "WorkspaceDO",
+                    className: "WorkspaceStateDO",
                     objectKey: entryWorkspaceId,
                   },
                   method,
@@ -7297,7 +7297,7 @@ async function main() {
           await import("./services/durableWorkDriver.js");
         const workspaceOwner: import("@vibestudio/shared/doDispatcher").DORef = {
           source: (await import("./internalDOs/internalDoLoader.js")).INTERNAL_DO_SOURCE,
-          className: "WorkspaceDO",
+          className: "WorkspaceStateDO",
           objectKey: workspaceId,
         };
         const workerId = `durable-work-driver:${serverBootId}:${randomUUID()}`;
@@ -7979,7 +7979,7 @@ async function main() {
   const initialPanels = (await initialPanelDispatch.dispatch(
     {
       source: (await import("./internalDOs/internalDoLoader.js")).INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
+      className: "WorkspaceStateDO",
       objectKey: workspaceId,
     },
     "initializePanels",
@@ -8057,7 +8057,7 @@ async function main() {
   const doDispatchForBootstrap = container.get<import("./doDispatch.js").DODispatch>("doDispatch");
   const workspaceDORefForBootstrap: import("@vibestudio/shared/doDispatcher").DORef = {
     source: (await import("./internalDOs/internalDoLoader.js")).INTERNAL_DO_SOURCE,
-    className: "WorkspaceDO",
+    className: "WorkspaceStateDO",
     objectKey: workspaceId,
   };
   const { createCleanupReaper } = await import("./services/cleanupReaper.js");

@@ -28,7 +28,7 @@ export const runtimeFoundationEvidence = Object.freeze({
       path: "src/server/clients/clientRegistry.test.ts",
     },
     "execution.vcs-store": {
-      path: "packages/builtin/src/workspace-state/WorkspaceDO.test.ts",
+      path: "packages/builtin/src/workspace-state/WorkspaceStateDO.test.ts",
     },
     "execution.worker-push-rebuild": {
       path: "src/server/runtimeManager.test.ts",

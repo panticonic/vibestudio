@@ -4,6 +4,7 @@
  * with it. A pure function of its inputs, so the manager and the tests that
  * stand a node up on the real application deploy the same thing.
  */
+import { doltLocalPatterns } from "@vibestudio/durable/dolt";
 import {
   classSecretName,
   LIFECYCLE_SECRET,
@@ -34,6 +35,13 @@ export interface RuntimeDeploymentInput {
     readonly codegen: boolean;
     /** Whether the class may keep an object resident (`ctx.residency.hold()`). */
     readonly residency: boolean;
+    /**
+     * The class's storage engine, fixed when the class is created: a Dolt class
+     * is named in `new_dolt_classes` and keeps `doltLocal` tables out of every
+     * commit, fork and reset (the framework's own tables are added here).
+     */
+    readonly storage?: "dolt";
+    readonly doltLocal?: readonly string[];
   }>;
   /** UniversalDO's loader and lifecycle secret: a class secret of that class. */
   readonly doLoaderSecret: string;
@@ -50,7 +58,11 @@ export function buildRuntimeDeployment(input: RuntimeDeploymentInput): RuntimeDe
     { name: "UNIVERSAL_DO", class_name: "UniversalDO" },
   ];
   const internalEnv: Record<string, Readonly<Record<string, string>>> = {};
-  const classes: Record<string, { codegen?: true; residency?: true; secrets: string[] }> = {};
+  const classes: Record<
+    string,
+    { codegen?: true; residency?: true; doltLocal?: string[]; secrets: string[] }
+  > = {};
+  const doltClasses: string[] = [];
   const secrets: Record<string, string> = {};
   // Credentials a single class holds are class secrets: sealed in the bucket,
   // opened by the node for that class only, never in the deployment manifest
@@ -78,8 +90,14 @@ export function buildRuntimeDeployment(input: RuntimeDeploymentInput): RuntimeDe
     // resident by an explicit hold; celld ends it only on a drain, a swap or an
     // operator revocation (celld docs/services/residency.md).
     if (cls.residency) (classes[cls.className] ??= { secrets: [] }).residency = true;
+    if (cls.storage === "dolt") {
+      doltClasses.push(cls.className);
+      (classes[cls.className] ??= { secrets: [] }).doltLocal = doltLocalPatterns(cls.doltLocal ?? []);
+    }
   }
-  const classNames = input.classes.map((cls) => cls.className);
+  const classNames = input.classes
+    .filter((cls) => cls.storage !== "dolt")
+    .map((cls) => cls.className);
   return {
     secrets,
     config: {
@@ -88,7 +106,11 @@ export function buildRuntimeDeployment(input: RuntimeDeploymentInput): RuntimeDe
       compatibility_flags: [...input.compatibility.compatibilityFlags],
       worker_loaders: [{ binding: "LOADER" }],
       durable_objects: { bindings },
-      migrations: [{ tag: "v1", new_sqlite_classes: ["UniversalDO", ...classNames] }],
+      migrations: [
+        { tag: "v1", new_sqlite_classes: ["UniversalDO", ...classNames] },
+        // A class's engine is fixed when it is created, so a Dolt class is a new class.
+        ...(doltClasses.length > 0 ? [{ tag: "dolt-v1", new_dolt_classes: doltClasses }] : []),
+      ],
       services: [
         { binding: "WORKER_HOST", service: RUNTIME_SCRIPT, entrypoint: "WorkerHost" },
         {

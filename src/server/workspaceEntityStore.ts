@@ -53,7 +53,7 @@ import {
 } from "@vibestudio/shared/execution/retention";
 import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 
-const WORKSPACE_DO_CLASS = "WorkspaceDO";
+const WORKSPACE_DO_CLASS = "WorkspaceStateDO";
 
 /** Input accepted by `WorkspaceDO.entityActivate` (built by the write-owners). */
 export type EntityActivateInput = EntityActivationInput;

@@ -36,7 +36,7 @@ import { preparePanelAccessAuthority } from "./panelAccessPermission.js";
 import { verifiedInitiatingUserId } from "@vibestudio/shared/serviceDispatcher";
 import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 
-export const WORKSPACE_DO_CLASS = "WorkspaceDO";
+export const WORKSPACE_DO_CLASS = "WorkspaceStateDO";
 
 export type SlotStateChange =
   | {

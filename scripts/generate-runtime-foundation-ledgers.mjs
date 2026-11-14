@@ -237,7 +237,7 @@ const directCapability = (source, method, sensitivity, declaration = "") => {
 };
 const builtinClassForFile = (file) => {
   if (!file.startsWith(path.join(root, "packages", "builtin"))) return null;
-  for (const className of ["WorkspaceDO", "BrowserDataDO", "EvalDO", "WebhookStoreDO"]) {
+  for (const className of ["WorkspaceStateDO", "WorkspaceDO", "BrowserDataDO", "EvalDO", "WebhookStoreDO"]) {
     if (
       path.basename(file) === `${className}.ts` &&
       productBuiltinByIdentity("vibestudio/internal", className)

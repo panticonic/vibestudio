@@ -1,11 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../../../tests/helpers/ledgerTest.js";
-import initSqlJs from "sql.js";
 
-import { createTestDO } from "@vibestudio/durable/test-utils";
 import { canonicalEntityId, type EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import { WorkspaceDO } from "./WorkspaceDO.js";
-import { WorkspaceDOTestable } from "./testFixture.js";
+import { WORKSPACE_STATE_DOLT_LOCAL, WorkspaceStateDO } from "./WorkspaceStateDO.js";
+import { FakeDoltStorage } from "@vibestudio/durable/test-dolt";
+import { createWorkspaceStateTestDO, type WorkspaceDOTestable } from "./testFixture.js";
 import type { UnitAuthorityManifest } from "@vibestudio/shared/authorityManifest";
 
 const SOURCE = "panels/example";
@@ -25,7 +24,7 @@ const WORKSPACE_TABLES = [
   "durable_work_owners",
   "context_edges",
 ];
-const CURRENT_SCHEMA_VERSION = WorkspaceDO.schemaVersion;
+const CURRENT_SCHEMA_VERSION = WorkspaceStateDO.schemaVersion;
 const ACTIVE_AUTHORITY: UnitAuthorityManifest = {
   provides: [],
   requests: [
@@ -41,15 +40,7 @@ const ACTIVE_AUTHORITY: UnitAuthorityManifest = {
   serviceRequests: [],
 };
 
-async function createPreEngineDatabase() {
-  const SQL = await initSqlJs();
-  const db = new SQL.Database();
-  db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-  db.run(`INSERT INTO state (key, value) VALUES ('application_marker', 'preserved')`);
-  return db;
-}
-
-function panelInput(overrides: Partial<Parameters<WorkspaceDO["entityReserve"]>[0]> = {}) {
+function panelInput(overrides: Partial<Parameters<WorkspaceStateDO["entityReserve"]>[0]> = {}) {
   return {
     nativeOwner: null,
     durableWorkQueues: [],
@@ -61,7 +52,7 @@ function panelInput(overrides: Partial<Parameters<WorkspaceDO["entityReserve"]>[
   };
 }
 
-function preparedPanelInput(overrides: Partial<Parameters<WorkspaceDO["entityActivate"]>[0]> = {}) {
+function preparedPanelInput(overrides: Partial<Parameters<WorkspaceStateDO["entityActivate"]>[0]> = {}) {
   return panelInput({
     activeBuildKey: "b".repeat(64),
     activeExecutionDigest: "a".repeat(64),
@@ -70,7 +61,7 @@ function preparedPanelInput(overrides: Partial<Parameters<WorkspaceDO["entityAct
   });
 }
 
-function doInput(overrides: Partial<Parameters<WorkspaceDO["entityActivate"]>[0]> = {}) {
+function doInput(overrides: Partial<Parameters<WorkspaceStateDO["entityActivate"]>[0]> = {}) {
   return {
     nativeOwner: null,
     durableWorkQueues: [],
@@ -84,7 +75,7 @@ function doInput(overrides: Partial<Parameters<WorkspaceDO["entityActivate"]>[0]
 }
 
 function activateAlarmKey(
-  instance: WorkspaceDO,
+  instance: WorkspaceStateDO,
   key: { source: string; className: string; objectKey: string }
 ): EntityRecord {
   return instance.entityActivate(
@@ -100,7 +91,7 @@ describe("workspace template panel initialization", () => {
   const seeds = [{ source: SOURCE, stateArgs: { mode: "initial" } }, { source: "panels/second" }];
 
   it("commits one durable set of preparing roots and resumes after restart without duplicates", async () => {
-    const { instance, db } = await createTestDO(WorkspaceDOTestable);
+    const { instance, fake } = await createWorkspaceStateTestDO();
     const first = instance.initializePanels(seeds);
     expect(first).toHaveLength(2);
     expect(first.map((detail) => detail.entity.status)).toEqual(["preparing", "preparing"]);
@@ -115,7 +106,7 @@ describe("workspace template panel initialization", () => {
         (detail) => detail.slot.parent_slot_id === null && detail.slot.owner_user_id === null
       )
     ).toBe(true);
-    const restarted = await createTestDO(WorkspaceDOTestable, undefined, { db });
+    const restarted = await createWorkspaceStateTestDO({ fake: await fake.restart() });
     expect(restarted.instance.initializePanels([{ source: "panels/changed-template" }])).toEqual(
       first
     );
@@ -126,19 +117,19 @@ describe("workspace template panel initialization", () => {
     // The seed is a panel principal, not just a slot: everything it launches
     // inherits this stamp, and an ownerless principal attributes a person's
     // effects to nobody.
-    const { instance } = await createTestDO(WorkspaceDOTestable);
+    const { instance } = await createWorkspaceStateTestDO();
     const seeded = instance.initializePanels([{ source: "panels/chat" }], "alice");
     expect(seeded).toHaveLength(1);
     expect(seeded[0]?.entity.ownerUserId).toBe("alice");
     expect(seeded[0]?.slot.owner_user_id).toBe("alice");
 
-    const { instance: shared } = await createTestDO(WorkspaceDOTestable);
+    const { instance: shared } = await createWorkspaceStateTestDO();
     const sharedSeed = shared.initializePanels([{ source: "panels/chat" }]);
     expect(sharedSeed[0]?.entity.ownerUserId).toBeUndefined();
   });
 
   it("never places a terminal app in a panel slot", async () => {
-    const { instance } = await createTestDO(WorkspaceDOTestable);
+    const { instance } = await createWorkspaceStateTestDO();
     expect(() =>
       instance.slotCreate({
         slotId: "terminal-root",
@@ -154,7 +145,7 @@ describe("workspace template panel initialization", () => {
   });
 
   it("seeds and migrates a private workspace into one durable owner tree", async () => {
-    const { instance } = await createTestDO(WorkspaceDOTestable);
+    const { instance } = await createWorkspaceStateTestDO();
     instance.slotCreate({ slotId: "seeded-root", parentSlotId: null });
     instance.slotCreate({
       slotId: "seeded-child",
@@ -194,7 +185,7 @@ describe("workspace template panel initialization", () => {
   });
 
   it("assigns private ownership while creating template roots", async () => {
-    const { instance } = await createTestDO(WorkspaceDOTestable);
+    const { instance } = await createWorkspaceStateTestDO();
     const initialized = instance.initializePanels(seeds, "alice");
     expect(initialized).toHaveLength(2);
     expect(initialized.every((detail) => detail.slot.owner_user_id === "alice")).toBe(true);
@@ -204,7 +195,7 @@ describe("workspace template panel initialization", () => {
   });
 
   it("rolls reservations, slots, history and initialization back together on a partial failure", async () => {
-    const { instance, sql } = await createTestDO(WorkspaceDOTestable);
+    const { instance, sql } = await createWorkspaceStateTestDO();
     const create = instance.slotCreate.bind(instance);
     const failure = vi
       .spyOn(instance, "slotCreate")
@@ -224,15 +215,15 @@ describe("workspace template panel initialization", () => {
   });
 
   it("preserves seed deletions on retry and after restart", async () => {
-    const { instance, db } = await createTestDO(WorkspaceDOTestable);
+    const { instance, fake } = await createWorkspaceStateTestDO();
     for (const detail of instance.initializePanels(seeds)) instance.slotClose(detail.slot.slot_id);
-    const restarted = await createTestDO(WorkspaceDOTestable, undefined, { db });
+    const restarted = await createWorkspaceStateTestDO({ fake: await fake.restart() });
     expect(restarted.instance.initializePanels(seeds)).toEqual([]);
     expect(restarted.instance.panelTreeRootGroups({ limit: 10 }).groups).toEqual([]);
   });
 
   it("adopts previous client initialization including closed roots", async () => {
-    const { instance } = await createTestDO(WorkspaceDOTestable);
+    const { instance } = await createWorkspaceStateTestDO();
     instance.slotCreate({ slotId: "old-root", parentSlotId: null });
     instance.slotClose("old-root");
     expect(instance.initializePanels(seeds)).toEqual([]);
@@ -240,22 +231,25 @@ describe("workspace template panel initialization", () => {
   });
 
   it("records an empty template as initialized", async () => {
-    const { instance } = await createTestDO(WorkspaceDOTestable);
+    const { instance } = await createWorkspaceStateTestDO();
     expect(instance.initializePanels([])).toEqual([]);
     expect(instance.initializePanels(seeds)).toEqual([]);
   });
 });
 
-describe("WorkspaceDO schema", () => {
+describe("WorkspaceStateDO schema", () => {
   it("requires a fresh database for the current topology schema", async () => {
-    const db = await createPreEngineDatabase();
-    await expect(createTestDO(WorkspaceDOTestable, undefined, { db })).rejects.toThrow(
+    const fake = await FakeDoltStorage.create({ doltLocal: WORKSPACE_STATE_DOLT_LOCAL });
+    const sql = fake.storage.sql;
+    sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    sql.exec(`INSERT INTO state (key, value) VALUES ('application_marker', 'preserved')`);
+    await expect(createWorkspaceStateTestDO({ fake })).rejects.toThrow(
       /no current schema identity/u
     );
   });
 
   ledgerTest("execution.vcs-store", async () => {
-    const { sql } = await createTestDO(WorkspaceDOTestable);
+    const { sql } = await createWorkspaceStateTestDO();
     for (const table of WORKSPACE_TABLES) {
       expect(
         sql.exec(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).one()
@@ -289,23 +283,21 @@ describe("WorkspaceDO schema", () => {
   });
 
   it("rejects drift in a stamped current schema", async () => {
-    const SQL = await initSqlJs();
-    const db = new SQL.Database();
-    db.run(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-    db.run(`CREATE TABLE _vibestudio_schema (singleton INTEGER PRIMARY KEY, version INTEGER)`);
-    db.run(`INSERT INTO _vibestudio_schema (singleton, version) VALUES (1, ?)`, [
-      CURRENT_SCHEMA_VERSION,
-    ]);
-    await expect(createTestDO(WorkspaceDOTestable, undefined, { db })).rejects.toThrow(
+    const fake = await FakeDoltStorage.create({ doltLocal: WORKSPACE_STATE_DOLT_LOCAL });
+    const sql = fake.storage.sql;
+    sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    sql.exec(`CREATE TABLE _vibestudio_schema (singleton INTEGER PRIMARY KEY, version INTEGER)`);
+    sql.exec(`INSERT INTO _vibestudio_schema (singleton, version) VALUES (1, ?)`, CURRENT_SCHEMA_VERSION);
+    await expect(createWorkspaceStateTestDO({ fake })).rejects.toThrow(
       /schema identity table is malformed/
     );
   });
 });
 
-describe("WorkspaceDO.entityActivate", () => {
-  let instance: WorkspaceDO;
+describe("WorkspaceStateDO.entityActivate", () => {
+  let instance: WorkspaceStateDO;
   beforeEach(async () => {
-    ({ instance } = await createTestDO(WorkspaceDOTestable));
+    ({ instance } = await createWorkspaceStateTestDO());
   });
 
   it("inserts a new active record when no prior row exists", () => {
@@ -356,10 +348,10 @@ describe("WorkspaceDO.entityActivate", () => {
   });
 
   it("restores the complete active executable incarnation after restart", async () => {
-    const first = await createTestDO(WorkspaceDOTestable);
+    const first = await createWorkspaceStateTestDO();
     const activated = first.instance.entityActivate(preparedPanelInput());
 
-    const restarted = await createTestDO(WorkspaceDOTestable, undefined, { db: first.db });
+    const restarted = await createWorkspaceStateTestDO({ fake: await first.fake.restart() });
     expect(restarted.instance.entityResolveActive(activated.id)).toMatchObject({
       id: activated.id,
       status: "active",
@@ -654,7 +646,7 @@ describe("WorkspaceDO.entityActivate", () => {
   });
 
   it("normalizes agent bindings into only the non-derivable entity edge and channel", async () => {
-    const { instance: isolated, sql } = await createTestDO(WorkspaceDOTestable);
+    const { instance: isolated, sql } = await createWorkspaceStateTestDO();
     const sessionId = canonicalEntityId({ kind: "session", key: "external" });
     const session = isolated.entityActivate({
       nativeOwner: null,
@@ -783,7 +775,7 @@ describe("WorkspaceDO.entityActivate", () => {
   });
 
   it("rolls back failed lifetime renewal without making the retired owner executable", async () => {
-    const { instance: owner, sql } = await createTestDO(WorkspaceDOTestable);
+    const { instance: owner, sql } = await createWorkspaceStateTestDO();
     const initial = owner.entityActivate(doInput());
     owner.entityRetire(initial.id);
     owner.entityCleanupComplete(initial.id, initial.authoritySessionId!);
@@ -838,10 +830,10 @@ describe("WorkspaceDO.entityActivate", () => {
   });
 });
 
-describe("WorkspaceDO.entityRetire", () => {
-  let instance: WorkspaceDO;
+describe("WorkspaceStateDO.entityRetire", () => {
+  let instance: WorkspaceStateDO;
   beforeEach(async () => {
-    ({ instance } = await createTestDO(WorkspaceDOTestable));
+    ({ instance } = await createWorkspaceStateTestDO());
   });
 
   it("is idempotent on already-retired rows", () => {
@@ -858,10 +850,10 @@ describe("WorkspaceDO.entityRetire", () => {
   });
 });
 
-describe("WorkspaceDO runtime resource bindings", () => {
-  let instance: WorkspaceDO;
+describe("WorkspaceStateDO runtime resource bindings", () => {
+  let instance: WorkspaceStateDO;
   beforeEach(async () => {
-    ({ instance } = await createTestDO(WorkspaceDOTestable));
+    ({ instance } = await createWorkspaceStateTestDO());
   });
 
   const binding = (slotId: string) => ({
@@ -902,10 +894,10 @@ describe("WorkspaceDO runtime resource bindings", () => {
   });
 });
 
-describe("WorkspaceDO.entityGc", () => {
-  let instance: WorkspaceDO;
+describe("WorkspaceStateDO.entityGc", () => {
+  let instance: WorkspaceStateDO;
   beforeEach(async () => {
-    ({ instance } = await createTestDO(WorkspaceDOTestable));
+    ({ instance } = await createWorkspaceStateTestDO());
   });
 
   it("with {all:true, graceMs:0} deletes retired rows", () => {
@@ -950,10 +942,10 @@ describe("WorkspaceDO.entityGc", () => {
   });
 });
 
-describe("WorkspaceDO slot operations", () => {
+describe("WorkspaceStateDO slot operations", () => {
   let instance: WorkspaceDOTestable;
   beforeEach(async () => {
-    ({ instance } = await createTestDO(WorkspaceDOTestable));
+    ({ instance } = await createWorkspaceStateTestDO());
   });
 
   it("resumes an identical slot creation without duplicating history", () => {
@@ -1878,10 +1870,10 @@ describe("WorkspaceDO slot operations", () => {
   });
 });
 
-describe("WorkspaceDO entity reads", () => {
-  let instance: WorkspaceDO;
+describe("WorkspaceStateDO entity reads", () => {
+  let instance: WorkspaceStateDO;
   beforeEach(async () => {
-    ({ instance } = await createTestDO(WorkspaceDOTestable));
+    ({ instance } = await createWorkspaceStateTestDO());
   });
 
   it("entityResolveActive returns null after retire and a record while active", () => {
@@ -1902,10 +1894,10 @@ describe("WorkspaceDO entity reads", () => {
   });
 });
 
-describe("WorkspaceDO lifecycle registry", () => {
-  let instance: WorkspaceDO;
+describe("WorkspaceStateDO lifecycle registry", () => {
+  let instance: WorkspaceStateDO;
   beforeEach(async () => {
-    ({ instance } = await createTestDO(WorkspaceDOTestable));
+    ({ instance } = await createWorkspaceStateTestDO());
     instance.alarmAdoptWorker("driver-1");
   });
 
@@ -2059,7 +2051,7 @@ describe("WorkspaceDO lifecycle registry", () => {
   });
 
   it("a SQL failure after receipt-wake acknowledgement rolls back both debt and scheduling for exact retry", async () => {
-    const { instance: owner, sql } = await createTestDO(WorkspaceDOTestable);
+    const { instance: owner, sql } = await createWorkspaceStateTestDO();
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
     owner.entityActivate(
       doInput({
@@ -2538,7 +2530,7 @@ describe("WorkspaceDO lifecycle registry", () => {
   });
 
   it("repairs a persisted retired-entity alarm during startup", async () => {
-    const first = await createTestDO(WorkspaceDOTestable);
+    const first = await createWorkspaceStateTestDO();
     first.instance.alarmAdoptWorker("driver-1");
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
     const rec = first.instance.entityActivate(
@@ -2566,7 +2558,7 @@ describe("WorkspaceDO lifecycle registry", () => {
       })
     ).toEqual([{ ...key, wakeAt: 2_000, dispatchGeneration: 1 }]);
 
-    const restarted = await createTestDO(WorkspaceDOTestable, undefined, { db: first.db });
+    const restarted = await createWorkspaceStateTestDO({ fake: await first.fake.restart() });
     restarted.instance.alarmAdoptWorker("driver-2");
     expect(
       restarted.instance.alarmClaimDue({

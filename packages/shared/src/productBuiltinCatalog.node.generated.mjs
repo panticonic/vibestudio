@@ -4,10 +4,10 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
     "kind": "service",
     "name": "workspace.state",
     "source": "vibestudio/internal",
-    "className": "WorkspaceDO",
+    "className": "WorkspaceStateDO",
     "durableWorkQueues": [],
     "implementation": "@panticonic/builtin/workspace-state",
-    "sourceFile": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+    "sourceFile": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
     "builtinBecause": "feeds-authority",
     "title": "Workspace state",
     "description": "Use the product-owned durable workspace state service.",
@@ -1879,7 +1879,18 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
     "runtime": {
       "staticAuthorityProjection": true,
       "codegen": false,
-      "residency": false
+      "residency": false,
+      "storage": "dolt",
+      "doltLocal": [
+        "panel_close_cleanup",
+        "local_%",
+        "lifecycle_epochs",
+        "lifecycle_leases",
+        "lifecycle_ops",
+        "do_alarms",
+        "do_alarm_test_policies",
+        "durable_work_owners"
+      ]
     },
     "residentCapabilityRequests": [],
     "hostCapabilityRequests": [],
@@ -4359,6 +4370,230 @@ export const PRODUCT_BUILTIN_CATALOG = Object.freeze([
           "website": {
             "kind": "closed",
             "reason": "Storage and lifecycle engine entry points are internal implementation authority."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "legacyImportStatus": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage import entry points are internal implementation authority."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage import entry points are internal implementation authority."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "legacyImportBegin": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage import entry points are internal implementation authority."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage import entry points are internal implementation authority."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "legacyImportStage": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage import entry points are internal implementation authority."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage import entry points are internal implementation authority."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "legacyImportReplay": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage import entry points are internal implementation authority."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage import entry points are internal implementation authority."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "legacyImportFinish": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage import entry points are internal implementation authority."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage import entry points are internal implementation authority."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "legacyImportSkip": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage import entry points are internal implementation authority."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "write",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage import entry points are internal implementation authority."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      }
+    }
+  },
+  {
+    "kind": "engine",
+    "name": "workspace.state.legacy",
+    "source": "vibestudio/internal",
+    "className": "WorkspaceDO",
+    "durableWorkQueues": [],
+    "implementation": "@panticonic/builtin/workspace-state",
+    "sourceFile": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+    "builtinBecause": "durable-data",
+    "durableObject": {
+      "keyVersion": 1,
+      "objectKey": "workspace",
+      "keyMode": "workspace-scoped"
+    },
+    "runtime": {
+      "staticAuthorityProjection": true,
+      "codegen": false,
+      "residency": false
+    },
+    "residentCapabilityRequests": [],
+    "hostCapabilityRequests": [],
+    "directMethods": {
+      "legacyManifest": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage import entry points are internal implementation authority."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage import entry points are internal implementation authority."
+          },
+          "capability": "workspace.runtime-state.manage",
+          "resource": {
+            "kind": "receiver-object"
+          }
+        }
+      },
+      "legacyReadRows": {
+        "website": {
+          "kind": "closed",
+          "reason": "Storage import entry points are internal implementation authority."
+        },
+        "capability": "workspace.runtime-state.manage",
+        "tier": "gated",
+        "session": "family",
+        "sensitivity": "read",
+        "principals": [
+          "host"
+        ],
+        "presentation": null,
+        "effect": {
+          "kind": "host-capability",
+          "website": {
+            "kind": "closed",
+            "reason": "Storage import entry points are internal implementation authority."
           },
           "capability": "workspace.runtime-state.manage",
           "resource": {

@@ -418,6 +418,17 @@ export function wireRuntimeCore(deps: WorkerdBootstrapDeps): void {
           resourceHandles: deps.userlandResourceHandles,
         })
       );
+      // The workspace state moved from a SQLite cell to a Dolt cell: the first
+      // call to the new store carries out the one-time import, and every call
+      // waits for it (docs/dolt-redesign.md §9.2).
+      const { createWorkspaceStateMigration } = await import("../workspaceStateMigration.js");
+      const workspaceStateMigration = createWorkspaceStateMigration({
+        workspaceId: deps.workspaceId,
+        dispatch: (ref, method, ...args) =>
+          dispatch.withoutInternalReadiness(() => dispatch.dispatch(ref, method, ...args)),
+        log: (message) => console.info(`[WorkspaceState] ${message}`),
+      });
+      dispatch.setInternalTargetReadiness((ref) => workspaceStateMigration.readyFor(ref));
       dispatch.setAuthorityResultTransform((ref, authorization, result) => {
         const production = authorization.handleProduction;
         if (!production) return result;

@@ -8,8 +8,7 @@ import type {
 import { asPanelEntityId, asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { PanelRuntimeCoordinator } from "./panelRuntimeCoordinator.js";
 import { PanelExecutionReconciler } from "./panelExecutionReconciler.js";
-import { createTestDO } from "@vibestudio/durable/test-utils";
-import { WorkspaceDOTestable } from "@panticonic/builtin/workspace-state/test-fixture";
+import { createWorkspaceStateTestDO } from "@panticonic/builtin/workspace-state/test-fixture";
 
 it.each([
   { source: "about/new", stateArgs: { welcome: true } },
@@ -25,7 +24,7 @@ it.each([
 ])(
   "activates durable $source template seeds through ordinary preparing-panel recovery",
   async (initialPanel) => {
-    const { instance } = await createTestDO(WorkspaceDOTestable);
+    const { instance } = await createWorkspaceStateTestDO();
     const [seed] = instance.initializePanels([initialPanel]);
     const activate = vi.fn(async (spec: RuntimeCodePanelEntityCreateSpec) => {
       const active = instance.entityAdvanceExecution({

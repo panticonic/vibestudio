@@ -2454,6 +2454,12 @@ export class RuntimeManager {
         env: { ...this.deps.getInternalDoEnv(className) },
         codegen: builtin.runtime.codegen,
         residency: builtin.runtime.residency,
+        ...("storage" in builtin.runtime && builtin.runtime.storage === "dolt"
+          ? {
+              storage: "dolt" as const,
+              doltLocal: "doltLocal" in builtin.runtime ? builtin.runtime.doltLocal : [],
+            }
+          : {}),
       };
     });
     return buildRuntimeDeployment({

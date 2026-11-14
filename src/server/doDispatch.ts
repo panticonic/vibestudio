@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 /**
  * DODispatch -- source-scoped HTTP dispatch to Durable Objects.
@@ -545,6 +546,8 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
   private preparingTargetReady:
     | ((ref: DORef, witness: LifecycleCloneInput) => Promise<void>)
     | null = null;
+  private internalTargetReadiness: ((ref: DORef) => Promise<unknown> | undefined) | null = null;
+  private readonly readinessBypass = new AsyncLocalStorage<true>();
   private withdrawDecisionWaits: ((callerId: string, reason: unknown) => void) | null = null;
   constructor(private readonly ensureUserlandTargetReady: (ref: DORef) => Promise<void>) {
     if (typeof ensureUserlandTargetReady !== "function") {
@@ -653,6 +656,20 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     this.preparingTargetReady = fn;
   }
 
+  /**
+   * A barrier for internal objects whose store is still being moved (the
+   * workspace state's one-time import). Every dispatch to such an object waits
+   * for what this returns, except the work running under
+   * {@link withoutInternalReadiness}, which is the move itself.
+   */
+  setInternalTargetReadiness(fn: (ref: DORef) => Promise<unknown> | undefined): void {
+    this.internalTargetReadiness = fn;
+  }
+
+  withoutInternalReadiness<T>(run: () => Promise<T>): Promise<T> {
+    return this.readinessBypass.run(true, run);
+  }
+
   private requireWorkerdUrl(): string {
     try {
       return assertPresent(this.getWorkerdUrl)();
@@ -667,7 +684,10 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       throw new Error("DODispatch requires token-backed workerd configuration");
     }
     if (this.runtimeRestartingProbe?.()) throw runtimeRestartingError();
-    if (isInternalDOSource(ref.source)) return;
+    if (isInternalDOSource(ref.source)) {
+      if (!this.readinessBypass.getStore()) await this.internalTargetReadiness?.(ref);
+      return;
+    }
     await this.ensureUserlandTargetReady(ref);
   }
 

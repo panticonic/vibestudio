@@ -1,6 +1,13 @@
 {
   "version": 2,
   "classes": {
+    "WorkspaceStateDO": {
+      "implementation": "@panticonic/builtin/workspace-state",
+      "durableWorkQueues": [],
+      "provides": [],
+      "requests": [],
+      "methodScopedRequests": []
+    },
     "WorkspaceDO": {
       "implementation": "@panticonic/builtin/workspace-state",
       "durableWorkQueues": [],

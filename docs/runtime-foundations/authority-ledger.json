@@ -2186,14 +2186,98 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmAdoptWorker",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:legacyManifest",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "legacyManifest",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:legacyReadRows",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "source": "vibestudio/internal",
+      "method": "legacyReadRows",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmAdoptWorker",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmAdoptWorker",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2228,14 +2312,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmClaimDue",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmClaimDue",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmClaimDue",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2270,14 +2354,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmClear",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmClear",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmClear",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2312,14 +2396,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmComplete",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmComplete",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmComplete",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2354,14 +2438,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmListScheduled",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmListScheduled",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmListScheduled",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2396,14 +2480,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmNextWakeAt",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmNextWakeAt",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmNextWakeAt",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2438,14 +2522,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSet",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSet",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmSet",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2480,14 +2564,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourceList",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSourceList",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmSourceList",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2522,14 +2606,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourcePublish",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSourcePublish",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmSourcePublish",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -2565,14 +2649,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourceRequest",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSourceRequest",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "alarmSourceRequest",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2607,14 +2691,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:contextEdgeDeleteByChild",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:contextEdgeDeleteByChild",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "contextEdgeDeleteByChild",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2649,14 +2733,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:contextEdgeListByChild",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:contextEdgeListByChild",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "contextEdgeListByChild",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2691,14 +2775,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:contextEdgeListByOwner",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:contextEdgeListByOwner",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "contextEdgeListByOwner",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2733,14 +2817,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:contextEdgeUpsert",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:contextEdgeUpsert",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "contextEdgeUpsert",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2775,14 +2859,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:durableWorkOwnerList",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:durableWorkOwnerList",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "durableWorkOwnerList",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2817,14 +2901,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityActivate",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityActivate",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityActivate",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2859,14 +2943,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityAdvanceExecution",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityAdvanceExecution",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityAdvanceExecution",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2901,14 +2985,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityAdvanceExecutions",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityAdvanceExecutions",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityAdvanceExecutions",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2943,14 +3027,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityCleanupComplete",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityCleanupComplete",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityCleanupComplete",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -2985,14 +3069,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityFindIncompleteCleanups",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityFindIncompleteCleanups",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityFindIncompleteCleanups",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3027,14 +3111,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityGc",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityGc",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityGc",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3069,14 +3153,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListActive",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListActive",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityListActive",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3111,14 +3195,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListActiveByKind",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListActiveByKind",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityListActiveByKind",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3153,14 +3237,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListByContext",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListByContext",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityListByContext",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3195,14 +3279,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListExecutionRoots",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListExecutionRoots",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityListExecutionRoots",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3237,14 +3321,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListPreparing",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListPreparing",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityListPreparing",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3279,14 +3363,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListPreparingByKind",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListPreparingByKind",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityListPreparingByKind",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3321,14 +3405,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityPatchStateArgs",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityPatchStateArgs",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityPatchStateArgs",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3363,14 +3447,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityPrepareExecution",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityPrepareExecution",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityPrepareExecution",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3405,14 +3489,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityRebindAgentChannel",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityRebindAgentChannel",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityRebindAgentChannel",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3447,14 +3531,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityReserve",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityReserve",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityReserve",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3489,14 +3573,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityResolve",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityResolve",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityResolve",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3531,14 +3615,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityResolveActive",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityResolveActive",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityResolveActive",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3573,14 +3657,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityResolveContext",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityResolveContext",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityResolveContext",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3615,14 +3699,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityRetire",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityRetire",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "entityRetire",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3657,14 +3741,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:initializePanels",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:initializePanels",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "initializePanels",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3699,14 +3783,266 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleCompleteEpoch",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:legacyImportBegin",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
+      "source": "vibestudio/internal",
+      "method": "legacyImportBegin",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:legacyImportFinish",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
+      "source": "vibestudio/internal",
+      "method": "legacyImportFinish",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:legacyImportReplay",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
+      "source": "vibestudio/internal",
+      "method": "legacyImportReplay",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:legacyImportSkip",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
+      "source": "vibestudio/internal",
+      "method": "legacyImportSkip",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:legacyImportStage",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
+      "source": "vibestudio/internal",
+      "method": "legacyImportStage",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "write",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:legacyImportStatus",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
+      "source": "vibestudio/internal",
+      "method": "legacyImportStatus",
+      "resourceDerivation": {
+        "kind": "direct-target",
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
+      },
+      "authorityPrincipals": [
+        "host"
+      ],
+      "sensitivity": "read",
+      "tier": "gated",
+      "sessionAdmission": "family",
+      "capability": "workspace.runtime-state.manage",
+      "authenticatedFacts": [
+        "session",
+        "acting-user-relay",
+        "runtime-entity",
+        "exact-code-artifact",
+        "owner-chain",
+        "agent-binding",
+        "audience-bound-attestation"
+      ],
+      "currentOutcomes": {
+        "allowed": "schema-declared direct-RPC requirement satisfied",
+        "denied": "missing attested facts or requirement failure is EACCES"
+      },
+      "predicates": [
+        "live-owner-service-relationship",
+        "exact-resource-scope",
+        "next-dispatch-revocation"
+      ],
+      "r3aRequirement": "catalog-schema",
+      "r3b": {
+        "review": "schema-authority",
+        "change": null
+      },
+      "parityAssertion": "generated-census:direct-authority"
+    },
+    {
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleCompleteEpoch",
+      "rpcPlane": "workspace-do",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleCompleteEpoch",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3741,14 +4077,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleLeaseClear",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleLeaseClear",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleLeaseClear",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3783,14 +4119,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleLeaseUpsert",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleLeaseUpsert",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleLeaseUpsert",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3825,14 +4161,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleListLeases",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleListLeases",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleListLeases",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3867,14 +4203,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleListOps",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleListOps",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleListOps",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3909,14 +4245,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleListResumeTargets",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleListResumeTargets",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleListResumeTargets",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3951,14 +4287,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleOpenEpoch",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleOpenEpoch",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleOpenEpoch",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -3993,14 +4329,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:lifecycleRecordOp",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:lifecycleRecordOp",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "lifecycleRecordOp",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4035,14 +4371,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:panelTreeDetail",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:panelTreeDetail",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "panelTreeDetail",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4079,14 +4415,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:panelTreePage",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:panelTreePage",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "panelTreePage",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4123,14 +4459,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:panelTreePath",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:panelTreePath",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "panelTreePath",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4167,14 +4503,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:panelTreeRootGroups",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:panelTreeRootGroups",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "panelTreeRootGroups",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4211,14 +4547,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingEntities",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingEntities",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "runtimeResourceBindingEntities",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4253,14 +4589,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsForEntity",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingsForEntity",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "runtimeResourceBindingsForEntity",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4295,14 +4631,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsRelease",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingsRelease",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "runtimeResourceBindingsRelease",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4337,14 +4673,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsReplace",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingsReplace",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "runtimeResourceBindingsReplace",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4379,14 +4715,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotClose",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotClose",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotClose",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4423,14 +4759,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotCloseCleanupAck",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotCloseCleanupAck",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotCloseCleanupAck",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4467,14 +4803,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotCloseCleanupPage",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotCloseCleanupPage",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotCloseCleanupPage",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4511,14 +4847,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotClosedRoots",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotClosedRoots",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotClosedRoots",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4555,14 +4891,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotCloseOwnedRoots",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotCloseOwnedRoots",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotCloseOwnedRoots",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4597,14 +4933,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotCommitPreparedNavigation",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotCommitPreparedNavigation",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotCommitPreparedNavigation",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4641,14 +4977,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotCreate",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotCreate",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotCreate",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4685,14 +5021,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotGet",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotGet",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotGet",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4729,14 +5065,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotHistoryEntry",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotHistoryEntry",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotHistoryEntry",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4773,14 +5109,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotHistoryList",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotHistoryList",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotHistoryList",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "host"
@@ -4815,14 +5151,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotHistoryRelative",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotHistoryRelative",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotHistoryRelative",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4859,14 +5195,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotMove",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotMove",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotMove",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4903,14 +5239,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotPatchCurrentStateArgs",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotPatchCurrentStateArgs",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotPatchCurrentStateArgs",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4947,14 +5283,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotPurge",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotPurge",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotPurge",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -4991,14 +5327,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotPurgePlan",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotPurgePlan",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotPurgePlan",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -5035,14 +5371,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotReopen",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotReopen",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotReopen",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -5079,14 +5415,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotReopenPlan",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotReopenPlan",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotReopenPlan",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",
@@ -5123,14 +5459,14 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotResolveByEntity",
+      "id": "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotResolveByEntity",
       "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+      "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
       "source": "vibestudio/internal",
       "method": "slotResolveByEntity",
       "resourceDerivation": {
         "kind": "direct-target",
-        "owner": "packages/builtin/src/workspace-state/WorkspaceDO.ts"
+        "owner": "packages/builtin/src/workspace-state/WorkspaceStateDO.ts"
       },
       "authorityPrincipals": [
         "code",

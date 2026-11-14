@@ -1,0 +1,4581 @@
+import { isTerminalAppLocation } from "@vibestudio/workspace-contracts/sourceDirs";
+import type {
+  ContextCloneDefinition,
+  ContextCloneCompletion,
+} from "@vibestudio/shared/runtime/contextEdges";
+import { WakePublicationStore, type WakePublication, type WakeRequest } from "@vibestudio/durable";
+/**
+ * WorkspaceStateDO — durable workspace state store, on a Dolt cell.
+ *
+ * Replaces PanelStoreDO with a unified entity/slot model. Entity rows are
+ * immutable in their identity columns (write-once) and mutable in their
+ * lifecycle columns (status, retired_at, cleanup_complete). Slot rows hold
+ * the panel-tree position; slot_history holds the navigation history.
+ *
+ * Two kinds of table (docs/dolt-redesign.md, L3):
+ * - Versioned: entities, runtime_resource_bindings, slots, slot_history,
+ *   context_edges and workspace_meta (the template-seeding marker). Every
+ *   mutation is one `committedTransaction`: the rows and their Dolt commit are
+ *   one durable step, and a mutation that changes no versioned row makes no
+ *   commit. A closed panel stays a row state (`slots.closed_at`) because the
+ *   closed-panel list, its paging and purge are queries over rows (L2); the
+ *   close and the reopen are each one commit, so history records both.
+ * - Local (`DOLT_LOCAL_PATTERNS`): the close-cleanup outbox, the panel-tree
+ *   revision counter, the lifecycle registry, the alarm schedule, the durable
+ *   work owners and the framework tables. A reset does not rewind them, a fork
+ *   does not copy them, a commit does not carry them. Rewinding a scheduler's
+ *   claims or an outbox would be wrong.
+ *
+ * It replaces `WorkspaceDO`, whose SQLite cells are read once by the importer
+ * (`legacyImport.ts`) and then left alone.
+ */
+
+import { DurableObjectBase, schemaRpc, type DurableObjectContext } from "@vibestudio/durable";
+import {
+  doltLocalPatterns,
+  type DoltCommitOptions,
+  type DoltStorage,
+} from "@vibestudio/durable/dolt";
+import { workspaceStateEngineMethods } from "@vibestudio/service-schemas/workspaceStateEngine";
+import { WORKSPACE_STATE_LOCAL_TABLES } from "@vibestudio/service-schemas/workspaceStateStorage";
+import type { SchemaSqlStorage } from "@vibestudio/durable/schema";
+import type { AgentExecutionTestPolicy } from "@vibestudio/rpc";
+import {
+  IdentityCollisionError,
+  canonicalEntityId,
+  type EntityActivationCommand,
+  type EntityActivationInput,
+  type EntityKind,
+  type EntityRecord,
+  type EntityReservationInput,
+  type RuntimeResourceBindingInput,
+} from "@vibestudio/shared/runtime/entitySpec";
+import {
+  parseUnitAuthorityManifest,
+  type UnitAuthorityManifest,
+} from "@vibestudio/shared/authorityManifest";
+import { mintHistoryEntryKey } from "@vibestudio/shared/panel/idValues";
+import {
+  decodePanelStateArgs,
+  PanelStateArgsConflictError,
+} from "@vibestudio/shared/panelStateArgs";
+import { mergeValidateStateArgs } from "@vibestudio/shared/stateArgsValidator";
+import type { StateArgsSchema } from "@vibestudio/shared/stateArgs";
+import { isBrowserPanelSource } from "@vibestudio/shared/panelChrome";
+import { computePanelId, SlotIdentityCollisionError } from "@vibestudio/shared/panelIdUtils";
+import type { WorkspaceConfig } from "@vibestudio/workspace-contracts/types";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import {
+  LEGACY_COLUMNS,
+  LEGACY_IMPORT_TABLES,
+  PANEL_TREE_REVISION_META_KEY,
+  REPLAYED_TABLES,
+  digestRows,
+  planReplay,
+  stagedKey,
+  type LegacyImportTable,
+  type LegacyManifest,
+  type LegacyRow,
+  type ReplayEvent,
+  type StagedRows,
+} from "./legacyImport.js";
+import {
+  DURABLE_WORK_QUEUES,
+  type DurableWorkQueue,
+  type DurableWorkReadyHint,
+} from "@vibestudio/shared/durableWork";
+import type {
+  WorkspacePanelDetail,
+  WorkspacePanelCloseCleanupPage,
+  WorkspacePanelCloseCleanupPageInput,
+  WorkspacePanelCloseResult,
+  WorkspaceClosedPanel,
+  WorkspacePanelPurgePlan,
+  WorkspacePanelReopenPlan,
+  WorkspacePanelReopenResult,
+  WorkspacePanelTreeHistoryRow,
+  WorkspacePanelTopologyPage,
+  WorkspacePanelTreePageInput,
+  WorkspacePanelTopologyPath,
+  WorkspacePanelTreePlacement,
+  WorkspacePanelTreeRootGroupPage,
+  WorkspacePanelTreeRootGroupPageInput,
+} from "@vibestudio/shared/panel/workspaceStateSnapshot";
+import { closedPanelCursor } from "@vibestudio/shared/panel/workspaceStateSnapshot";
+
+const PANEL_TREE_ORDER_STEP = 1_024;
+
+interface DbEntityRow {
+  id: string;
+  kind: EntityKind;
+  source_repo_path: string;
+  source_effective_version: string;
+  active_build_key: string | null;
+  active_execution_digest: string | null;
+  active_authority: string | null;
+  execution_authority: string | null;
+  context_id: string;
+  class_name: string | null;
+  key: string;
+  state_args: string | null;
+  native_owner: string | null;
+  /** NULL means a self binding when agent_channel_id is present. */
+  agent_entity_id: string | null;
+  agent_channel_id: string | null;
+  parent_id: string | null;
+  owner_user_id: string | null;
+  authority_session_id: string;
+  clone_provenance: string | null;
+  created_at: number;
+  status: "preparing" | "active" | "retired";
+  retired_at: number | null;
+  cleanup_complete: number; // SQLite stores boolean as 0/1
+  error: string | null;
+}
+
+interface DbContextEdgeRow {
+  clone_definition: string | null;
+  clone_completion: string | null;
+  context_id: string;
+  owner_context_id: string;
+  kind: "lifecycle" | "lineage";
+  owner_entity_id: string | null;
+  created_at: number;
+}
+
+interface DbSlotRow {
+  slot_id: string;
+  parent_slot_id: string | null;
+  current_entity_id: string | null;
+  current_entry_key: string | null;
+  current_history_cursor?: number | null;
+  history_count?: number;
+  sort_key: number;
+  /**
+   * Owning-user id (WP3) — the user whose tree this slot belongs to. Stamped at
+   * slot creation from the creating caller's `subject.userId`; re-stamped for a
+   * whole subtree on a cross-owner move (WP3 §10.1). NULL for pre-identity /
+   * system-seeded slots. Attribution only — never an isolation boundary.
+   */
+  owner_user_id: string | null;
+  created_at: number;
+  closed_at: number | null;
+}
+
+interface DbSlotHistoryRow {
+  slot_id: string;
+  cursor: number;
+  entry_key: string;
+  entity_id: string;
+  source: string;
+  context_id: string;
+  state_args: string | null;
+  options: string | null;
+  recorded_at: number;
+}
+
+export interface LifecycleKey {
+  source: string;
+  className: string;
+  objectKey: string;
+}
+
+export interface LifecycleLeaseInput extends LifecycleKey {
+  detail?: unknown;
+}
+
+export interface LifecycleEpochInput {
+  kind: "planned" | "crash" | "server_restart";
+  reason: string;
+  generation: number;
+}
+
+export interface LifecycleOpInput {
+  epochId: string;
+  key: LifecycleKey;
+  opKind: "prepare" | "resume";
+  status: "pending" | "ready" | "timed_out" | "failed" | "resumed";
+  detail?: unknown;
+}
+
+export interface LifecycleLease extends LifecycleKey {
+  detail: unknown | null;
+  createdAt: number;
+  refreshedAt: number;
+}
+
+export interface LifecycleOp extends LifecycleKey {
+  epochId: string;
+  opKind: "prepare" | "resume";
+  status: "pending" | "ready" | "timed_out" | "failed" | "resumed";
+  detail: unknown | null;
+  updatedAt: number;
+}
+
+export type EntityActivateInput = EntityActivationCommand;
+
+/**
+ * Slots present panels in views. A terminal app is a panel hosted by
+ * terminals (`terminal-apps/<name>`, a Node program in a workspace PTY), so it
+ * is opened by a terminal, never placed in a slot.
+ */
+function assertViewHostedSource(source: string): void {
+  if (isTerminalAppLocation(source)) {
+    throw Object.assign(
+      new Error(
+        `${source} is a terminal app: open it from a terminal (vibestudio terminal) or the terminal panel, not as a panel`
+      ),
+      { code: "ETERMINALAPP" }
+    );
+  }
+}
+
+export interface SlotCreateInput {
+  slotId: string;
+  parentSlotId: string | null;
+  /** Host-verified owner for a root slot. Child slots inherit their root owner. */
+  ownerUserId?: string;
+  placement?: WorkspacePanelTreePlacement;
+  initialEntry?: {
+    entryKey: string;
+    entityId: string;
+    source: string;
+    contextId: string;
+    stateArgs?: unknown;
+    options?: unknown;
+  };
+}
+
+export interface SlotHistoryEntryInput {
+  entryKey: string;
+  entityId: string;
+  source: string;
+  contextId: string;
+  stateArgs?: unknown;
+  /** Per-entry navigation options (env/ref) so any client/host reconstructs them. */
+  options?: unknown;
+}
+
+export interface SlotCommitPreparedNavigationInput {
+  slotId: string;
+  expectedCurrentEntityId: string;
+  mutation:
+    | { kind: "append"; entry: SlotHistoryEntryInput }
+    | { kind: "replace"; entry: SlotHistoryEntryInput }
+    | { kind: "select"; entryKey: string };
+}
+
+export interface SlotCommitPreparedNavigationResult {
+  previousEntityId: string;
+  currentEntityId: string;
+  currentEntryKey: string;
+  cursor: number;
+}
+
+export interface GcOptions {
+  /** Sweep all rows. If false (default), caller must scope by slotId. */
+  all?: boolean;
+  /** Only sweep entities tied to this slot's history. */
+  slotId?: string;
+  /** Don't delete rows newer than (now - graceMs). Default: 1 hour. */
+  graceMs?: number;
+}
+
+const DEFAULT_GRACE_MS = 60 * 60 * 1000;
+const PANEL_TREE_REVISION_KEY = "panel_tree_revision";
+const WORKSPACE_REQUIRED_TABLES = [
+  "entities",
+  "runtime_resource_bindings",
+  "slots",
+  "panel_close_cleanup",
+  "slot_history",
+  "workspace_meta",
+  "local_workspace_meta",
+  "lifecycle_epochs",
+  "lifecycle_leases",
+  "lifecycle_ops",
+  "do_alarms",
+  "do_alarm_test_policies",
+  "durable_work_owners",
+  "context_edges",
+] as const;
+
+function serializeActiveAuthority(authority: UnitAuthorityManifest | undefined): string | null {
+  if (authority === undefined) return null;
+  // Parse at the durable boundary so records can only contain the canonical,
+  // closed authority shape regardless of which host writer supplied it.
+  return JSON.stringify(parseUnitAuthorityManifest(authority, "entity activeAuthority"));
+}
+
+function validateActiveExecutionDigest(digest: string | undefined): string | null {
+  if (digest === undefined) return null;
+  if (!/^[0-9a-f]{64}$/.test(digest)) {
+    throw new Error("entity activeExecutionDigest must be a lowercase SHA-256 digest");
+  }
+  return digest;
+}
+
+function validateActiveBuildKey(buildKey: string | undefined): string | null {
+  if (buildKey === undefined) return null;
+  if (!/^[0-9a-f]{64}$/.test(buildKey)) {
+    throw new Error("entity activeBuildKey must be a lowercase SHA-256 build key");
+  }
+  return buildKey;
+}
+
+const WORKSPACE_ENTITY_COLUMNS = [
+  "id",
+  "kind",
+  "source_repo_path",
+  "source_effective_version",
+  "active_build_key",
+  "active_execution_digest",
+  "active_authority",
+  "execution_authority",
+  "context_id",
+  "class_name",
+  "key",
+  "state_args",
+  "native_owner",
+  "agent_entity_id",
+  "agent_channel_id",
+  "parent_id",
+  "owner_user_id",
+  "authority_session_id",
+  "clone_provenance",
+  "created_at",
+  "status",
+  "retired_at",
+  "cleanup_complete",
+  "error",
+] as const;
+const WORKSPACE_ALARM_COLUMNS = [
+  "source",
+  "class_name",
+  "object_key",
+  "wake_at",
+  "dispatch_generation",
+  "dispatch_owner",
+] as const;
+
+function assertWorkspaceEntityColumns(sql: SchemaSqlStorage, label: string): void {
+  const columns = sql
+    .exec(`PRAGMA table_info(entities)`)
+    .toArray()
+    .map((column) => String(column["name"]));
+  if (JSON.stringify(columns) !== JSON.stringify(WORKSPACE_ENTITY_COLUMNS)) {
+    throw new Error(`${label} entities schema is unknown: ${JSON.stringify(columns)}`);
+  }
+}
+
+function assertWorkspaceEntityStatuses(
+  sql: SchemaSqlStorage,
+  allowed: readonly string[],
+  label: string
+): void {
+  const placeholders = allowed.map(() => "?").join(", ");
+  const unknown = sql
+    .exec(`SELECT status FROM entities WHERE status NOT IN (${placeholders}) LIMIT 1`, ...allowed)
+    .toArray()[0];
+  if (unknown) {
+    throw new Error(`${label} contains unknown entity status ${String(unknown["status"])}`);
+  }
+}
+
+function assertWorkspaceAlarmColumns(sql: SchemaSqlStorage, label: string): void {
+  const columns = sql
+    .exec(`PRAGMA table_info(do_alarms)`)
+    .toArray()
+    .map((column) => String(column["name"]));
+  if (JSON.stringify(columns) !== JSON.stringify(WORKSPACE_ALARM_COLUMNS)) {
+    throw new Error(`${label} do_alarms schema is unknown: ${JSON.stringify(columns)}`);
+  }
+}
+
+/** The class's `doltLocal` patterns, framework tables included (the deployment declares the same). */
+export const WORKSPACE_STATE_DOLT_LOCAL = doltLocalPatterns([...WORKSPACE_STATE_LOCAL_TABLES]);
+
+export class WorkspaceStateDO extends DurableObjectBase {
+  static override readonly durableWorkQueues = [] as const;
+  static override rpcMethods = workspaceStateEngineMethods;
+  static override schemaVersion = 1;
+
+  constructor(ctx: DurableObjectContext, env: unknown) {
+    super(ctx, env);
+  }
+
+  protected override restoreActivationState(): undefined {
+    this.repairLifecycleInvariants();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Schema
+  // ─────────────────────────────────────────────────────────────
+
+  protected createTables(): void {
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS entities (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        source_repo_path TEXT NOT NULL,
+        source_effective_version TEXT NOT NULL,
+        active_build_key TEXT,
+        active_execution_digest TEXT,
+        active_authority TEXT,
+        execution_authority TEXT,
+        context_id TEXT NOT NULL,
+        class_name TEXT,
+        key TEXT NOT NULL,
+        state_args TEXT,
+        native_owner TEXT,
+        agent_entity_id TEXT REFERENCES entities(id),
+        agent_channel_id TEXT,
+        parent_id TEXT,
+        owner_user_id TEXT,
+        authority_session_id TEXT NOT NULL,
+        clone_provenance TEXT,
+        created_at INTEGER NOT NULL,
+        status TEXT NOT NULL DEFAULT 'active',
+        retired_at INTEGER,
+        cleanup_complete INTEGER NOT NULL DEFAULT 1,
+        error TEXT,
+        CHECK (agent_entity_id IS NULL OR agent_channel_id IS NOT NULL)
+      )
+    `);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_entities_status ON entities(status, retired_at)`);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_entities_kind_source ON entities(kind, source_repo_path, class_name)`
+    );
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_entities_cleanup
+        ON entities(cleanup_complete, retired_at) WHERE cleanup_complete = 0`
+    );
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_entities_agent_entity
+        ON entities(agent_entity_id) WHERE agent_entity_id IS NOT NULL`
+    );
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS runtime_resource_bindings (
+        entity_id TEXT NOT NULL REFERENCES entities(id),
+        resource_kind TEXT NOT NULL,
+        resource_id TEXT NOT NULL,
+        capabilities TEXT NOT NULL,
+        scope_kind TEXT NOT NULL,
+        scope_channel_id TEXT,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY (entity_id, resource_kind, resource_id)
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_runtime_resource_bindings_resource
+         ON runtime_resource_bindings(resource_kind, resource_id)`
+    );
+
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS slots (
+        slot_id TEXT PRIMARY KEY,
+        parent_slot_id TEXT REFERENCES slots(slot_id),
+        current_entity_id TEXT REFERENCES entities(id),
+        current_entry_key TEXT,
+        sort_key INTEGER NOT NULL,
+        owner_user_id TEXT,
+        created_at INTEGER NOT NULL,
+        closed_at INTEGER
+      )
+    `);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_slots_parent ON slots(parent_slot_id)`);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_slots_sibling_page
+         ON slots(parent_slot_id, sort_key, created_at DESC, slot_id)
+         WHERE closed_at IS NULL`
+    );
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_slots_owner_root_page
+         ON slots(owner_user_id, sort_key, created_at DESC, slot_id)
+         WHERE closed_at IS NULL AND parent_slot_id IS NULL`
+    );
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_slots_current ON slots(current_entity_id)`);
+    // Owner-scoped "just my tree" lookups (WP3). Partial: only open slots — a
+    // closed slot's owner is dead weight. The default forest read is still ALL
+    // open slots (mutual visibility); this index only backs the optional filter.
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_slots_owner ON slots(owner_user_id) WHERE closed_at IS NULL`
+    );
+
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS panel_close_cleanup (
+        slot_id TEXT PRIMARY KEY,
+        close_id TEXT NOT NULL,
+        owner_user_id TEXT,
+        entity_id TEXT,
+        queued_at INTEGER NOT NULL
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_panel_close_cleanup_page
+         ON panel_close_cleanup(close_id, slot_id)`
+    );
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_panel_close_cleanup_owner_page
+         ON panel_close_cleanup(owner_user_id, slot_id)`
+    );
+
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS slot_history (
+        slot_id TEXT NOT NULL REFERENCES slots(slot_id),
+        cursor INTEGER NOT NULL,
+        entry_key TEXT NOT NULL,
+        entity_id TEXT NOT NULL REFERENCES entities(id),
+        source TEXT NOT NULL,
+        context_id TEXT NOT NULL,
+        state_args TEXT,
+        options TEXT,
+        recorded_at INTEGER NOT NULL,
+        PRIMARY KEY (slot_id, cursor)
+      )
+    `);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_history_entity ON slot_history(entity_id)`);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_history_entry ON slot_history(entry_key)`);
+
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS workspace_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS local_workspace_meta (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
+    this.createPanelTreeRevisionTracking();
+    this.createLegacyImportTables();
+    // context_edges — the context-relationship registry. Two edge kinds:
+    // 'lifecycle' (subagent contexts — cascaded on destroy, cloned on recursive
+    // clone) and 'lineage' (conversation-fork provenance — access-only, never
+    // cascaded or cloned-followed). Keyed on kind so a context may carry both a
+    // lineage edge (forked from X) and lifecycle edges from other owners.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS context_edges (
+        context_id       TEXT NOT NULL,
+        owner_context_id TEXT NOT NULL,
+        kind             TEXT NOT NULL,
+        owner_entity_id  TEXT,
+        clone_definition TEXT,
+        clone_completion TEXT,
+        created_at       INTEGER NOT NULL,
+        PRIMARY KEY (context_id, owner_context_id, kind)
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_context_edges_owner ON context_edges(owner_context_id, kind)`
+    );
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_context_edges_child ON context_edges(context_id)`
+    );
+    this.createLifecycleTables();
+  }
+
+  /**
+   * The panel-tree revision is a change counter for cached readers, so it is
+   * local: a reset must not move it back, or a reader would see a changed tree
+   * under the revision it already holds. It is bumped by every mutation that
+   * changed a versioned row (see `commit`), inside that mutation's transaction.
+   */
+  protected createPanelTreeRevisionTracking(): void {
+    this.sql.exec(
+      `INSERT OR IGNORE INTO local_workspace_meta (key, value) VALUES ('${PANEL_TREE_REVISION_KEY}', '0')`
+    );
+  }
+
+  private bumpPanelTreeRevision(): void {
+    this.sql.exec(
+      `INSERT INTO local_workspace_meta (key, value)
+       VALUES ('${PANEL_TREE_REVISION_KEY}', '1')
+       ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1`
+    );
+  }
+
+  /** Mutations in flight on this activation: a nested mutation joins the outer commit. */
+  private commitDepth = 0;
+
+  /**
+   * One mutation as one durable step (L2, §4.2): the writes, the revision bump
+   * and the Dolt commit are one root record. The commit exists only when a
+   * versioned row changed, so an idempotent retry leaves no empty commit, and a
+   * mutation that touched only local tables (the alarm schedule) leaves none.
+   * `describe` renders the message from the facts the mutation wrote.
+   */
+  private commit<T>(describe: (result: T) => string | DoltCommitOptions, fn: () => T): T {
+    if (this.commitDepth > 0) return this.ctx.storage.transactionSync(fn);
+    let changed = false;
+    this.commitDepth += 1;
+    try {
+      return this.committedTransaction(
+        (result) => (changed ? describe(result) : null),
+        () => {
+          const result = fn();
+          changed = this.versionedRowsChanged();
+          if (changed) this.bumpPanelTreeRevision();
+          return result;
+        }
+      );
+    } finally {
+      this.commitDepth -= 1;
+    }
+  }
+
+  /** Whether the working set differs from HEAD in an application table (`dolt_status`, readable inside a transaction). */
+  private versionedRowsChanged(): boolean {
+    return (
+      this.sql
+        .exec(
+          `SELECT 1 AS changed FROM dolt_status
+            WHERE table_name NOT LIKE 'dolt\\_%' ESCAPE '\\'
+              AND table_name NOT LIKE '\\_cf\\_%' ESCAPE '\\'
+            LIMIT 1`
+        )
+        .toArray().length > 0
+    );
+  }
+
+  protected override requiredTables(): readonly string[] {
+    return WORKSPACE_REQUIRED_TABLES;
+  }
+
+  protected override schemaIndexDefinitions(): readonly string[] {
+    return [
+      `CREATE INDEX idx_entities_status ON entities(status, retired_at)`,
+      `CREATE INDEX idx_entities_kind_source ON entities(kind, source_repo_path, class_name)`,
+      `CREATE INDEX idx_entities_cleanup
+        ON entities(cleanup_complete, retired_at) WHERE cleanup_complete = 0`,
+      `CREATE INDEX idx_entities_agent_entity
+        ON entities(agent_entity_id) WHERE agent_entity_id IS NOT NULL`,
+      `CREATE INDEX idx_runtime_resource_bindings_resource
+         ON runtime_resource_bindings(resource_kind, resource_id)`,
+      `CREATE INDEX idx_slots_parent ON slots(parent_slot_id)`,
+      `CREATE INDEX idx_slots_sibling_page
+         ON slots(parent_slot_id, sort_key, created_at DESC, slot_id)
+         WHERE closed_at IS NULL`,
+      `CREATE INDEX idx_slots_owner_root_page
+         ON slots(owner_user_id, sort_key, created_at DESC, slot_id)
+         WHERE closed_at IS NULL AND parent_slot_id IS NULL`,
+      `CREATE INDEX idx_slots_current ON slots(current_entity_id)`,
+      `CREATE INDEX idx_slots_owner ON slots(owner_user_id) WHERE closed_at IS NULL`,
+      `CREATE INDEX idx_panel_close_cleanup_page
+         ON panel_close_cleanup(close_id, slot_id)`,
+      `CREATE INDEX idx_panel_close_cleanup_owner_page
+         ON panel_close_cleanup(owner_user_id, slot_id)`,
+      `CREATE INDEX idx_history_entity ON slot_history(entity_id)`,
+      `CREATE INDEX idx_history_entry ON slot_history(entry_key)`,
+      `CREATE INDEX idx_context_edges_owner ON context_edges(owner_context_id, kind)`,
+      `CREATE INDEX idx_context_edges_child ON context_edges(context_id)`,
+      `CREATE INDEX idx_lifecycle_leases_refreshed ON lifecycle_leases(refreshed_at)`,
+      `CREATE INDEX idx_lifecycle_ops_resume
+       ON lifecycle_ops(op_kind, status, source, class_name, object_key)`,
+      `CREATE INDEX idx_do_alarms_wake ON do_alarms(wake_at)`,
+    ];
+  }
+
+  protected override validateSchema(): void {
+    super.validateSchema();
+    assertWorkspaceEntityColumns(
+      this.sql,
+      `${this.constructor.name} v${WorkspaceStateDO.schemaVersion}`
+    );
+    assertWorkspaceEntityStatuses(
+      this.sql,
+      ["preparing", "active", "retired"],
+      `${this.constructor.name} v28`
+    );
+    assertWorkspaceAlarmColumns(this.sql, `${this.constructor.name} v29`);
+  }
+
+  getWorkspaceId(): string {
+    return this.objectKey;
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // entity.* operations
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Three-way upsert keyed by canonical id derived from identity columns.
+   * - No prior row → insert with status='active'.
+   * - Prior 'active' row with identical identity → idempotent no-op.
+   * - Prior 'retired' row with identical identity → reactivate (flip status).
+   * - Prior row with mismatched identity → throw IDENTITY_COLLISION.
+   */
+  @schemaRpc()
+  entityActivate(input: EntityActivateInput): EntityRecord {
+    const nextBuildKey = validateActiveBuildKey(input.activeBuildKey);
+    const nextExecutionDigest = validateActiveExecutionDigest(input.activeExecutionDigest);
+    const nextAuthority = serializeActiveAuthority(input.activeAuthority);
+    if (nextBuildKey !== null && nextExecutionDigest === null) {
+      throw new Error("entity activeBuildKey requires an activeExecutionDigest");
+    }
+    if (nextAuthority !== null && nextExecutionDigest === null) {
+      throw new Error("entity activeAuthority requires an activeExecutionDigest");
+    }
+    return this.commit((entity) => `activate ${entity.kind} ${entity.id}`, () => {
+      this.publishDurableWorkOwner(input);
+      const id = canonicalEntityId({
+        kind: input.kind,
+        source: input.source.repoPath,
+        className: input.className,
+        key: input.key,
+      });
+
+      const existing = this.readEntityRow(id);
+      if (existing) {
+        this.assertIdentityMatches(id, existing, input);
+        if (existing.status === "retired" && existing.cleanup_complete !== 1) {
+          throw new Error(`Cannot reactivate entity ${id} before retirement cleanup completes`);
+        }
+        if (existing.active_build_key && existing.active_build_key !== nextBuildKey) {
+          throw new IdentityCollisionError(id, {
+            field: "activeBuildKey",
+            existing: existing.active_build_key,
+            attempted: nextBuildKey,
+          });
+        }
+        if (
+          existing.active_build_key !== nextBuildKey ||
+          existing.active_execution_digest !== nextExecutionDigest ||
+          existing.active_authority !== nextAuthority
+        ) {
+          this.sql.exec(
+            `UPDATE entities
+                SET active_build_key = ?, active_execution_digest = ?, active_authority = ?
+              WHERE id = ?`,
+            nextBuildKey,
+            nextExecutionDigest,
+            nextAuthority,
+            id
+          );
+          existing.active_build_key = nextBuildKey;
+          existing.active_execution_digest = nextExecutionDigest;
+          existing.active_authority = nextAuthority;
+        }
+        const nextAgentEntityId =
+          input.agentBinding === undefined || input.agentBinding.entityId === id
+            ? null
+            : input.agentBinding.entityId;
+        const nextAgentChannelId = input.agentBinding?.channelId ?? null;
+        if (input.agentBinding !== undefined && input.agentBinding.contextId !== input.contextId) {
+          throw new IdentityCollisionError(id, {
+            field: "agentBinding.contextId",
+            existing: input.contextId,
+            attempted: input.agentBinding.contextId,
+          });
+        }
+        if (
+          existing.agent_entity_id !== nextAgentEntityId ||
+          existing.agent_channel_id !== nextAgentChannelId
+        ) {
+          throw new IdentityCollisionError(id, {
+            field: "agentBinding",
+            existing: {
+              entityId: existing.agent_entity_id ?? id,
+              contextId: existing.context_id,
+              channelId: existing.agent_channel_id,
+            },
+            attempted: input.agentBinding ?? null,
+          });
+        }
+        const nextOwnerUserId = input.ownerUserId ?? null;
+        if (existing.owner_user_id !== nextOwnerUserId) {
+          throw new IdentityCollisionError(id, {
+            field: "ownerUserId",
+            existing: existing.owner_user_id,
+            attempted: nextOwnerUserId,
+          });
+        }
+        if (existing.status === "active") {
+          this.publishNativeOwner(input, id);
+          return this.rowToEntity(this.readEntityRow(id)!);
+        }
+        // Preparing -> active preserves its reserved lifetime; completed
+        // retirement -> active creates a new authority owner over retained data.
+        const authoritySessionId =
+          existing.status === "retired" ? crypto.randomUUID() : existing.authority_session_id;
+        this.sql.exec(
+          `UPDATE entities SET status = 'active', retired_at = NULL, cleanup_complete = 1, error = NULL, authority_session_id = ? WHERE id = ?`,
+          authoritySessionId,
+          id
+        );
+        this.publishNativeOwner(input, id);
+        return this.rowToEntity({
+          ...existing,
+          native_owner: input.nativeOwner === null ? null : JSON.stringify(input.nativeOwner),
+          agent_entity_id: existing.agent_entity_id,
+          agent_channel_id: existing.agent_channel_id,
+          authority_session_id: authoritySessionId,
+          status: "active",
+          retired_at: null,
+          cleanup_complete: 1,
+          error: null,
+        });
+      }
+
+      const now = Date.now();
+      this.sql.exec(
+        `INSERT INTO entities (
+          id, kind, source_repo_path, source_effective_version, active_build_key,
+          active_execution_digest,
+          active_authority, execution_authority,
+          context_id, class_name, key, state_args, agent_entity_id, agent_channel_id,
+          parent_id, owner_user_id, authority_session_id, created_at,
+          status, retired_at, cleanup_complete, error
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
+        id,
+        input.kind,
+        input.source.repoPath,
+        input.source.effectiveVersion,
+        nextBuildKey,
+        nextExecutionDigest,
+        nextAuthority,
+        input.executionAuthority ? canonicalJson(input.executionAuthority) : null,
+        input.contextId,
+        input.className ?? null,
+        input.key,
+        input.stateArgs === undefined ? null : JSON.stringify(input.stateArgs),
+        input.agentBinding === undefined || input.agentBinding.entityId === id
+          ? null
+          : input.agentBinding.entityId,
+        input.agentBinding?.channelId ?? null,
+        input.parentId ?? null,
+        input.ownerUserId ?? null,
+        crypto.randomUUID(),
+        now
+      );
+      const row = this.readEntityRow(id);
+      if (!row) throw new Error(`entityActivate: failed to read row after insert: ${id}`);
+      this.publishNativeOwner(input, id);
+      return this.rowToEntity(this.readEntityRow(id)!);
+    });
+  }
+
+  /**
+   * Reserve a code-backed incarnation before its immutable execution image is
+   * ready. The `preparing` status keeps it out of active-principal queries.
+   */
+  @schemaRpc()
+  entityReserve(input: EntityReservationInput): EntityRecord {
+    if (!["panel", "app", "worker", "do"].includes(input.kind)) {
+      throw new Error("entityReserve only accepts code-backed entity kinds");
+    }
+    if (input.activeBuildKey || input.activeExecutionDigest || input.activeAuthority) {
+      throw new Error("An entity reservation cannot carry an execution identity");
+    }
+    return this.commit((entity) => `reserve ${entity.kind} ${entity.id}`, () => {
+      const id = canonicalEntityId({
+        kind: input.kind,
+        source: input.source.repoPath,
+        className: input.className,
+        key: input.key,
+      });
+      const existing = this.readEntityRow(id);
+      if (existing) {
+        if (
+          existing.clone_provenance !==
+          (input.cloneProvenance ? canonicalJson(input.cloneProvenance) : null)
+        ) {
+          throw new IdentityCollisionError(id, {
+            field: "cloneProvenance",
+            existing: existing.clone_provenance,
+            attempted: input.cloneProvenance ?? null,
+          });
+        }
+        this.assertIdentityMatches(id, existing, input);
+        if (existing.status === "retired") {
+          throw new Error(`Cannot reserve retired entity ${id}`);
+        }
+        if (input.lifecycleOwner) {
+          this.upsertContextEdge({
+            contextId: input.contextId,
+            ownerContextId: input.lifecycleOwner.contextId,
+            kind: "lifecycle",
+            ownerEntityId: input.lifecycleOwner.entityId,
+          });
+        }
+        return this.rowToEntity(existing);
+      }
+
+      const now = Date.now();
+      this.sql.exec(
+        `INSERT INTO entities (
+          id, kind, source_repo_path, source_effective_version, active_build_key,
+          active_execution_digest, active_authority, execution_authority, context_id, class_name, key,
+          state_args, agent_entity_id, agent_channel_id, parent_id, owner_user_id, authority_session_id,
+          clone_provenance, created_at, status, retired_at, cleanup_complete, error
+        ) VALUES (?, ?, ?, '', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', NULL, 1, NULL)`,
+        id,
+        input.kind,
+        input.source.repoPath,
+        input.executionAuthority ? canonicalJson(input.executionAuthority) : null,
+        input.contextId,
+        input.className ?? null,
+        input.key,
+        input.stateArgs === undefined ? null : JSON.stringify(input.stateArgs),
+        input.agentBinding === undefined || input.agentBinding.entityId === id
+          ? null
+          : input.agentBinding.entityId,
+        input.agentBinding?.channelId ?? null,
+        input.parentId ?? null,
+        input.ownerUserId ?? null,
+        crypto.randomUUID(),
+        input.cloneProvenance ? canonicalJson(input.cloneProvenance) : null,
+        now
+      );
+      if (input.lifecycleOwner) {
+        this.upsertContextEdge({
+          contextId: input.contextId,
+          ownerContextId: input.lifecycleOwner.contextId,
+          kind: "lifecycle",
+          ownerEntityId: input.lifecycleOwner.entityId,
+        });
+      }
+      const row = this.readEntityRow(id);
+      if (!row) throw new Error(`entityReserve: failed to read row after insert: ${id}`);
+      return this.rowToEntity(row);
+    });
+  }
+
+  /**
+   * Advance the executable version of one live durable identity without
+   * replacing its storage identity. Stable coordinates (kind/source path,
+   * context, class, key, owner) remain immutable; only the exact reviewed
+   * source version and its sealed execution tuple move together.
+   */
+  @schemaRpc()
+  entityAdvanceExecution(input: EntityActivateInput): EntityRecord {
+    return this.commit((entity) => `advance execution of ${entity.id}`, () => {
+      const record = this.advanceEntityExecution(input);
+      this.publishDurableWorkOwner(input);
+      this.publishNativeOwner(input, record.id);
+      return this.rowToEntity(this.readEntityRow(record.id)!);
+    });
+  }
+
+  /**
+   * Publish one source build to every affected durable identity in one SQLite
+   * transaction. Either every entity names the new incarnation or none do.
+   */
+  @schemaRpc()
+  entityAdvanceExecutions(inputs: EntityActivateInput[]): EntityRecord[] {
+    if (inputs.length === 0) return [];
+    return this.commit((entities) => `advance execution of ${entities.length} entities`, () =>
+      inputs.map((input) => {
+        const record = this.advanceEntityExecution(input);
+        this.publishDurableWorkOwner(input);
+        this.publishNativeOwner(input, record.id);
+        return this.rowToEntity(this.readEntityRow(record.id)!);
+      })
+    );
+  }
+
+  @schemaRpc()
+  entityPrepareExecution(input: EntityActivationInput): EntityRecord {
+    return this.commit((entity) => `prepare execution of ${entity.id}`, () => {
+      const id = canonicalEntityId({
+        kind: input.kind,
+        source: input.source.repoPath,
+        className: input.className,
+        key: input.key,
+      });
+      const existing = this.readEntityRow(id);
+      if (!existing || existing.status !== "preparing") {
+        throw new Error(`entityPrepareExecution: ${id} is not a reserved incarnation`);
+      }
+      if (existing.active_build_key !== null) {
+        this.assertIdentityMatches(id, existing, input);
+        if (
+          existing.active_build_key !== input.activeBuildKey ||
+          existing.active_execution_digest !== input.activeExecutionDigest ||
+          existing.active_authority !== serializeActiveAuthority(input.activeAuthority) ||
+          existing.owner_user_id !== (input.ownerUserId ?? null)
+        ) {
+          throw new Error(`entityPrepareExecution: sealed preparation changed for ${id}`);
+        }
+        return this.rowToEntity(existing);
+      }
+      const record = this.advanceEntityExecution(input, "preparing");
+      return record;
+    });
+  }
+
+  private advanceEntityExecution(
+    input: EntityActivationInput,
+    status: "active" | "preparing" = "active"
+  ): EntityRecord {
+    const nextBuildKey = validateActiveBuildKey(input.activeBuildKey);
+    const nextExecutionDigest = validateActiveExecutionDigest(input.activeExecutionDigest);
+    const nextAuthority = serializeActiveAuthority(input.activeAuthority);
+    if (nextBuildKey === null || nextExecutionDigest === null || nextAuthority === null) {
+      throw new Error(
+        "entity execution advance requires a complete build key, execution digest, and authority manifest"
+      );
+    }
+    const id = canonicalEntityId({
+      kind: input.kind,
+      source: input.source.repoPath,
+      className: input.className,
+      key: input.key,
+    });
+    const existing = this.readEntityRow(id);
+    if (!existing) throw new Error(`entityAdvanceExecution: unknown entity ${id}`);
+    if (existing.status !== "active" && existing.status !== "preparing") {
+      throw new Error(`entityAdvanceExecution: entity ${id} is ${existing.status}`);
+    }
+    this.assertStableIdentityMatches(id, existing, input);
+    const nextOwnerUserId = input.ownerUserId ?? null;
+    if (existing.owner_user_id !== nextOwnerUserId) {
+      throw new IdentityCollisionError(id, {
+        field: "ownerUserId",
+        existing: existing.owner_user_id,
+        attempted: nextOwnerUserId,
+      });
+    }
+    this.sql.exec(
+      `UPDATE entities
+          SET source_effective_version = ?, active_build_key = ?,
+              active_execution_digest = ?, active_authority = ?,
+              status = ?, error = NULL
+        WHERE id = ?`,
+      input.source.effectiveVersion,
+      nextBuildKey,
+      nextExecutionDigest,
+      nextAuthority,
+      status,
+      id
+    );
+    const row = this.readEntityRow(id);
+    if (!row) throw new Error(`entityAdvanceExecution: failed to read ${id} after update`);
+    return this.rowToEntity(row);
+  }
+
+  /**
+   * Move a self-hosted agent entity to the channel it now serves. A conversation
+   * fork creates the entity before the child channel is known to its runtime;
+   * this is the single durable identity transition that joins those two halves.
+   * External relay bindings remain immutable and cannot be converted here.
+   */
+  @schemaRpc()
+  entityRebindAgentChannel(id: string, channelId: string): EntityRecord {
+    return this.commit((entity) => `bind ${entity.id} to channel ${channelId}`, () => {
+      const row = this.readEntityRow(id);
+      if (!row || row.status !== "active") {
+        throw new Error(`agent channel binding target is not active: ${id}`);
+      }
+      if (!channelId) throw new Error("agent channel binding requires a channel id");
+      if (!["do", "worker", "session"].includes(row.kind)) {
+        throw new Error(`entity ${id} cannot serve an agent channel`);
+      }
+      if (row.agent_entity_id !== null && row.agent_entity_id !== id) {
+        throw new Error(`entity ${id} relays another agent and cannot be rebound as self-hosted`);
+      }
+      if (row.agent_channel_id !== channelId || row.agent_entity_id !== null) {
+        this.sql.exec(
+          `UPDATE entities SET agent_entity_id = NULL, agent_channel_id = ? WHERE id = ?`,
+          channelId,
+          id
+        );
+      }
+      const updated = this.readEntityRow(id);
+      if (!updated) throw new Error(`entityRebindAgentChannel: failed to read ${id} after update`);
+      return this.rowToEntity(updated);
+    });
+  }
+
+  /**
+   * Patch the stateArgs of a slotless panel entity (a terminal app hosted in a
+   * workspace PTY): the per-instance state a slot's history entry holds for a
+   * panel presented in a view. Read, merge, validate and write happen in one
+   * transaction, so concurrent patches compose.
+   */
+  @schemaRpc()
+  entityPatchStateArgs(
+    id: string,
+    patch: Record<string, unknown>,
+    expected: { activeBuildKey: string; schema?: StateArgsSchema }
+  ): EntityRecord {
+    return this.commit((entity) => `patch state arguments of ${entity.id}`, () => {
+      const row = this.readEntityRow(id);
+      if (!row || row.status !== "active") throw new Error(`Entity is not active: ${id}`);
+      if (row.kind !== "panel") throw new Error(`Entity ${id} is not a panel`);
+      if (row.active_build_key !== expected.activeBuildKey) {
+        throw new PanelStateArgsConflictError(id, {
+          field: "activeBuildKey",
+          expected: expected.activeBuildKey,
+          actual: row.active_build_key,
+        });
+      }
+      const next = mergeValidateStateArgs(
+        decodePanelStateArgs(row.state_args),
+        patch,
+        expected.schema
+      );
+      this.sql.exec(`UPDATE entities SET state_args = ? WHERE id = ?`, JSON.stringify(next), id);
+      const updated = this.readEntityRow(id);
+      if (!updated) throw new Error(`entityPatchStateArgs: failed to read ${id} after update`);
+      return this.rowToEntity(updated);
+    });
+  }
+
+  /** Mark a single entity as retired. Idempotent. Returns the retired record (or null if not found). */
+  @schemaRpc()
+  entityRetire(id: string): EntityRecord | null {
+    return this.commit((entity) => `retire ${entity?.id ?? id}`, () => {
+      const row = this.readEntityRow(id);
+      if (!row) return null;
+      if (row.status === "retired") {
+        this.sql.exec(`DELETE FROM runtime_resource_bindings WHERE entity_id = ?`, id);
+        this.clearEntityDoLifecycle(row);
+        return this.rowToEntity(row);
+      }
+      const now = Date.now();
+      this.sql.exec(
+        `UPDATE entities SET status = 'retired', retired_at = ?, cleanup_complete = 0 WHERE id = ?`,
+        now,
+        id
+      );
+      this.sql.exec(`DELETE FROM runtime_resource_bindings WHERE entity_id = ?`, id);
+      this.clearEntityDoLifecycle(row);
+      const updated = this.readEntityRow(id);
+      return updated ? this.rowToEntity(updated) : null;
+    });
+  }
+
+  @schemaRpc()
+  runtimeResourceBindingsReplace(entityId: string, bindings: RuntimeResourceBindingInput[]): void {
+    this.commit(() => `replace resource bindings of ${entityId}`, () => {
+      const entity = this.readEntityRow(entityId);
+      if (!entity || entity.status !== "active") {
+        throw new Error(`runtime resource binding target is not active: ${entityId}`);
+      }
+      this.sql.exec(`DELETE FROM runtime_resource_bindings WHERE entity_id = ?`, entityId);
+      const createdAt = Date.now();
+      for (const binding of bindings) {
+        this.sql.exec(
+          `INSERT INTO runtime_resource_bindings
+             (entity_id, resource_kind, resource_id, capabilities,
+              scope_kind, scope_channel_id, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          entityId,
+          binding.resource.kind,
+          binding.resource.id,
+          JSON.stringify(binding.capabilities),
+          binding.scope.kind,
+          binding.scope.kind === "agent-channel" ? binding.scope.channelId : null,
+          createdAt
+        );
+      }
+    });
+  }
+
+  @schemaRpc()
+  runtimeResourceBindingsRelease(entityId: string): void {
+    this.commit(
+      () => `release resource bindings of ${entityId}`,
+      () => {
+        this.sql.exec(`DELETE FROM runtime_resource_bindings WHERE entity_id = ?`, entityId);
+      }
+    );
+  }
+
+  @schemaRpc()
+  runtimeResourceBindingEntities(resourceKind: string, resourceIds: string[]): string[] {
+    if (resourceIds.length === 0) return [];
+    const placeholders = resourceIds.map(() => "?").join(", ");
+    return this.sql
+      .exec<{ entity_id: string }>(
+        `SELECT DISTINCT binding.entity_id
+           FROM runtime_resource_bindings binding
+           JOIN entities entity ON entity.id = binding.entity_id
+          WHERE binding.resource_kind = ?
+            AND binding.resource_id IN (${placeholders})
+            AND entity.status = 'active'
+          ORDER BY binding.entity_id`,
+        resourceKind,
+        ...resourceIds
+      )
+      .toArray()
+      .map((row) => row.entity_id);
+  }
+
+  @schemaRpc()
+  runtimeResourceBindingsForEntity(entityId: string): RuntimeResourceBindingInput[] {
+    return this.sql
+      .exec<{
+        resource_kind: string;
+        resource_id: string;
+        capabilities: string;
+        scope_kind: "entity" | "agent-channel";
+        scope_channel_id: string | null;
+      }>(
+        `SELECT resource_kind, resource_id, capabilities, scope_kind, scope_channel_id
+           FROM runtime_resource_bindings
+          WHERE entity_id = ?
+          ORDER BY resource_kind, resource_id`,
+        entityId
+      )
+      .toArray()
+      .map((row) => ({
+        resource: { kind: row.resource_kind, id: row.resource_id },
+        capabilities: JSON.parse(row.capabilities) as string[],
+        scope:
+          row.scope_kind === "agent-channel"
+            ? { kind: "agent-channel" as const, channelId: row.scope_channel_id! }
+            : { kind: "entity" as const },
+      }));
+  }
+
+  /** A retired DO cannot retain runnable lifecycle work: its principal is no
+   * longer active, so either row would only create an authorization retry loop. */
+  private clearEntityDoLifecycle(row: DbEntityRow): void {
+    if (row.kind !== "do" || !row.class_name) return;
+    const key = {
+      source: row.source_repo_path,
+      className: row.class_name,
+      objectKey: row.key,
+    };
+    this.lifecycleLeaseClear(key);
+    this.alarmClear(key);
+    this.wakePublications().unregister(key);
+    this.sql.exec("UPDATE entities SET native_owner = NULL WHERE id = ?", row.id);
+    this.sql.exec(
+      `DELETE FROM durable_work_owners
+        WHERE source = ? AND class_name = ? AND object_key = ?`,
+      key.source,
+      key.className,
+      key.objectKey
+    );
+  }
+
+  /** Complete only the retired lifetime whose owned cleanup has joined. */
+  @schemaRpc()
+  entityCleanupComplete(id: string, authoritySessionId: string): void {
+    if (!authoritySessionId)
+      throw new Error("Entity cleanup requires its exact authority lifetime");
+    this.commit(
+      () => `complete cleanup of ${id}`,
+      () => {
+        this.sql.exec(
+          `UPDATE entities SET cleanup_complete = 1
+            WHERE id = ? AND status = 'retired' AND authority_session_id = ?`,
+          id,
+          authoritySessionId
+        );
+      }
+    );
+  }
+
+  /** Find rows whose cleanup hooks need retrying. */
+  @schemaRpc()
+  entityFindIncompleteCleanups(): EntityRecord[] {
+    const rows = this.sql
+      .exec(`SELECT * FROM entities WHERE retired_at IS NOT NULL AND cleanup_complete = 0`)
+      .toArray() as unknown as DbEntityRow[];
+    return rows.map((row) => this.rowToEntity(row));
+  }
+
+  /**
+   * Hard-delete retired rows older than the grace window and unreferenced by slot_history.
+   * Never deletes active rows; never deletes history-referenced rows. Fires no hooks.
+   */
+  @schemaRpc()
+  entityGc(opts: GcOptions = {}): string[] {
+    const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
+    const cutoff = Date.now() - graceMs;
+    return this.commit((ids) => `collect ${ids.length} retired entities`, () => {
+      let candidates: Array<{ id: string }>;
+      if (opts.all) {
+        candidates = this.sql
+          .exec(
+            `SELECT id FROM entities
+             WHERE status = 'retired' AND retired_at IS NOT NULL AND retired_at <= ?
+               AND id NOT IN (SELECT entity_id FROM slot_history)`,
+            cutoff
+          )
+          .toArray() as Array<{ id: string }>;
+      } else if (opts.slotId) {
+        candidates = this.sql
+          .exec(
+            `SELECT e.id FROM entities e
+             WHERE e.status = 'retired' AND e.retired_at IS NOT NULL AND e.retired_at <= ?
+               AND e.id IN (SELECT entity_id FROM slot_history WHERE slot_id = ?)
+               AND e.id NOT IN (SELECT entity_id FROM slot_history WHERE slot_id != ?)`,
+            cutoff,
+            opts.slotId,
+            opts.slotId
+          )
+          .toArray() as Array<{ id: string }>;
+      } else {
+        return [];
+      }
+
+      const ids = candidates.map((row) => row.id);
+      for (const id of ids) {
+        this.sql.exec(`DELETE FROM entities WHERE id = ?`, id);
+      }
+      return ids;
+    });
+  }
+
+  // ── Entity reads ──
+
+  @schemaRpc()
+  entityResolve(id: string): EntityRecord | null {
+    const row = this.readEntityRow(id);
+    return row ? this.rowToEntity(row) : null;
+  }
+
+  @schemaRpc()
+  entityResolveActive(id: string): EntityRecord | null {
+    const row = this.readEntityRow(id);
+    if (!row || row.status !== "active") return null;
+    return this.rowToEntity(row);
+  }
+
+  @schemaRpc()
+  entityResolveContext(id: string): string | null {
+    const row = this.readEntityRow(id);
+    return row ? row.context_id : null;
+  }
+
+  /**
+   * Durable nav→slot mapping: the OPEN slot id whose current runtime entity is
+   * `entityId`, or null. Backed by `idx_slots_current`. This is the authoritative,
+   * lease-independent way to find the tree slot a panel's runtime entity belongs to.
+   */
+  @schemaRpc()
+  slotResolveByEntity(entityId: string): string | null {
+    const row = this.sql
+      .exec(`SELECT slot_id FROM slots WHERE current_entity_id = ? AND closed_at IS NULL`, entityId)
+      .toArray()[0];
+    return row && typeof row["slot_id"] === "string" ? row["slot_id"] : null;
+  }
+
+  entityResolveSource(id: string): { repoPath: string; effectiveVersion: string } | null {
+    const row = this.readEntityRow(id);
+    if (!row) return null;
+    return { repoPath: row.source_repo_path, effectiveVersion: row.source_effective_version };
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // lifecycle.* operations
+  // ─────────────────────────────────────────────────────────────
+
+  @schemaRpc()
+  lifecycleLeaseUpsert(input: LifecycleLeaseInput): void {
+    this.assertLifecycleKey(input);
+    const now = Date.now();
+    this.sql.exec(
+      `INSERT INTO lifecycle_leases (
+        source, class_name, object_key, detail, created_at, refreshed_at
+      ) VALUES (?, ?, ?, ?, ?, ?)
+      ON CONFLICT(source, class_name, object_key) DO UPDATE SET
+        detail = excluded.detail,
+        refreshed_at = excluded.refreshed_at`,
+      input.source,
+      input.className,
+      input.objectKey,
+      input.detail === undefined ? null : JSON.stringify(input.detail),
+      now,
+      now
+    );
+  }
+
+  @schemaRpc()
+  lifecycleLeaseClear(input: LifecycleKey): void {
+    this.assertLifecycleKey(input);
+    this.sql.exec(
+      `DELETE FROM lifecycle_leases WHERE source = ? AND class_name = ? AND object_key = ?`,
+      input.source,
+      input.className,
+      input.objectKey
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // do alarms (server-driven; see do_alarms table comment)
+  // ─────────────────────────────────────────────────────────────
+
+  /** Native resources belong to the active entity lifetime, including dormant connections. */
+  private publishNativeOwner(input: EntityActivateInput, id: string): void {
+    if (
+      input.nativeOwner !== null &&
+      (input.kind !== "do" || !input.className || !input.activeExecutionDigest)
+    )
+      throw new Error("Native ownership requires an exact sealed Durable Object");
+    if (input.kind !== "do" || !input.className) return;
+    const key = { source: input.source.repoPath, className: input.className, objectKey: input.key };
+    if (input.nativeOwner === null) {
+      const previous = this.readEntityRow(id);
+      if (previous?.native_owner) {
+        this.wakePublications().unregister(key);
+        this.lifecycleLeaseClear(key);
+      }
+    } else {
+      this.wakePublications().register(key, input.nativeOwner);
+      this.lifecycleLeaseUpsert({ ...key, detail: { owner: "pi" } });
+    }
+    this.sql.exec(
+      "UPDATE entities SET native_owner = ? WHERE id = ?",
+      input.nativeOwner === null ? null : JSON.stringify(input.nativeOwner),
+      id
+    );
+  }
+
+  private publishDurableWorkOwner(input: EntityActivateInput): void {
+    const queues = [...new Set(input.durableWorkQueues)].sort();
+    if (queues.some((queue) => !DURABLE_WORK_QUEUES.includes(queue))) {
+      throw new Error("Entity publication contains an unknown durable work queue");
+    }
+    if (input.kind !== "do") {
+      if (queues.length > 0) throw new Error("Only Durable Objects may own durable work queues");
+      return;
+    }
+    if (!input.className) throw new Error("Durable work publication requires a class");
+    if (queues.length > 0 && !input.activeExecutionDigest) {
+      throw new Error("Durable work publication requires a sealed executable");
+    }
+    if (queues.length === 0) {
+      this.sql.exec(
+        `DELETE FROM durable_work_owners WHERE source = ? AND class_name = ? AND object_key = ?`,
+        input.source.repoPath,
+        input.className,
+        input.key
+      );
+      return;
+    }
+    this.sql.exec(
+      `INSERT INTO durable_work_owners (source, class_name, object_key, queues_json, registered_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(source, class_name, object_key) DO UPDATE SET queues_json = excluded.queues_json`,
+      input.source.repoPath,
+      input.className,
+      input.key,
+      JSON.stringify(queues),
+      Date.now()
+    );
+  }
+
+  @schemaRpc()
+  durableWorkOwnerList(): DurableWorkReadyHint[] {
+    return (
+      this.sql
+        .exec(
+          `SELECT source, class_name, object_key, queues_json
+             FROM durable_work_owners
+            ORDER BY source, class_name, object_key`
+        )
+        .toArray() as Array<{
+        source: string;
+        class_name: string;
+        object_key: string;
+        queues_json: string;
+      }>
+    ).map((row) => ({
+      owner: {
+        source: row.source,
+        className: row.class_name,
+        objectKey: row.object_key,
+      },
+      queues: JSON.parse(row.queues_json) as DurableWorkQueue[],
+    }));
+  }
+
+  private wakePublications(): WakePublicationStore {
+    return new WakePublicationStore(this.ctx.storage, (key) => {
+      this.assertLifecycleKey(key);
+      const entity = this.readEntityRow(
+        canonicalEntityId({
+          kind: "do",
+          source: key.source,
+          className: key.className,
+          key: key.objectKey,
+        })
+      );
+      if (!entity || entity.status !== "active")
+        throw new Error("Wake source is not an active Durable Object");
+    });
+  }
+
+  @schemaRpc()
+  alarmSourcePublish(input: LifecycleKey & WakePublication): "accepted" | "duplicate" | "stale" {
+    return this.wakePublications().publish(input, input);
+  }
+
+  /** Host-owned receipt/readiness hints cannot overwrite a source schedule revision. */
+  @schemaRpc()
+  alarmSourceRequest(input: LifecycleKey & { incarnation: string }): "accepted" | "stale" {
+    return this.wakePublications().request(input, input.incarnation);
+  }
+
+  @schemaRpc()
+  alarmSourceList(): LifecycleKey[] {
+    return this.wakePublications()
+      .owners()
+      .filter(
+        (key) =>
+          this.readEntityRow(
+            canonicalEntityId({
+              kind: "do",
+              source: key.source,
+              className: key.className,
+              key: key.objectKey,
+            })
+          )?.status === "active"
+      );
+  }
+
+  /** Register/replace a DO's wake time (absolute epoch ms).
+   *
+   * Calls without a dispatch claim are fresh scheduling decisions. They fence
+   * any in-flight handler by advancing the generation and releasing its claim.
+   * Calls carrying a claim are handler acknowledgements and may update only
+   * the exact generation owned by that driver activation.
+   */
+  @schemaRpc()
+  alarmSet(
+    input: LifecycleKey & {
+      wakeAt: number;
+      testPolicy?: AgentExecutionTestPolicy;
+      dispatchOwner?: string;
+      dispatchGeneration?: number;
+    }
+  ): "accepted" | "stale" {
+    this.assertLifecycleKey(input);
+    return this.ctx.storage.transactionSync(() => {
+      const entityId = canonicalEntityId({
+        kind: "do",
+        source: input.source,
+        className: input.className,
+        key: input.objectKey,
+      });
+      const entity = this.readEntityRow(entityId);
+      if (!entity || entity.status !== "active") {
+        throw new Error(
+          `alarmSet: Durable Object ${input.source}:${input.className}:${input.objectKey} is not active`
+        );
+      }
+      const hasOwner = input.dispatchOwner !== undefined;
+      const hasGeneration = input.dispatchGeneration !== undefined;
+      if (hasOwner !== hasGeneration) {
+        throw new Error("alarmSet: dispatchOwner and dispatchGeneration must be provided together");
+      }
+      if (hasOwner) {
+        if (
+          !input.dispatchOwner?.trim() ||
+          !Number.isSafeInteger(input.dispatchGeneration) ||
+          input.dispatchGeneration! < 1
+        ) {
+          throw new Error("alarmSet: invalid dispatch claim");
+        }
+        this.sql.exec(
+          `UPDATE do_alarms
+              SET wake_at = ?,
+                  dispatch_owner = NULL
+            WHERE source = ? AND class_name = ? AND object_key = ?
+              AND dispatch_owner = ? AND dispatch_generation = ?`,
+          Math.round(input.wakeAt),
+          input.source,
+          input.className,
+          input.objectKey,
+          input.dispatchOwner,
+          input.dispatchGeneration
+        );
+        if (this.sql.exec(`SELECT changes() AS count`).one()["count"] !== 1) return "stale";
+      } else {
+        this.sql.exec(
+          `INSERT INTO do_alarms (
+             source, class_name, object_key, wake_at,
+             dispatch_generation, dispatch_owner
+           )
+           VALUES (?, ?, ?, ?, 0, NULL)
+           ON CONFLICT(source, class_name, object_key) DO UPDATE SET
+             wake_at = excluded.wake_at,
+             dispatch_owner = NULL`,
+          input.source,
+          input.className,
+          input.objectKey,
+          Math.round(input.wakeAt)
+        );
+        this.wakePublications().ensureRequestedAlarm(input);
+      }
+      if (input.testPolicy) {
+        this.sql.exec(
+          `INSERT INTO do_alarm_test_policies
+             (source, class_name, object_key, test_policy_json)
+           VALUES (?, ?, ?, ?)
+           ON CONFLICT(source, class_name, object_key)
+             DO UPDATE SET test_policy_json = excluded.test_policy_json`,
+          input.source,
+          input.className,
+          input.objectKey,
+          JSON.stringify(input.testPolicy)
+        );
+      }
+      return "accepted";
+    });
+  }
+
+  /** Clear a DO's pending alarm. A claimed acknowledgement is generation-fenced. */
+  @schemaRpc()
+  alarmClear(
+    input: LifecycleKey & { dispatchOwner?: string; dispatchGeneration?: number }
+  ): "accepted" | "stale" {
+    this.assertLifecycleKey(input);
+    return this.ctx.storage.transactionSync(() => {
+      const hasOwner = input.dispatchOwner !== undefined;
+      const hasGeneration = input.dispatchGeneration !== undefined;
+      if (hasOwner !== hasGeneration) {
+        throw new Error(
+          "alarmClear: dispatchOwner and dispatchGeneration must be provided together"
+        );
+      }
+      if (hasOwner) {
+        if (
+          !input.dispatchOwner?.trim() ||
+          !Number.isSafeInteger(input.dispatchGeneration) ||
+          input.dispatchGeneration! < 1
+        ) {
+          throw new Error("alarmClear: invalid dispatch claim");
+        }
+        this.sql.exec(
+          `DELETE FROM do_alarms
+            WHERE source = ? AND class_name = ? AND object_key = ?
+              AND dispatch_owner = ? AND dispatch_generation = ?`,
+          input.source,
+          input.className,
+          input.objectKey,
+          input.dispatchOwner,
+          input.dispatchGeneration
+        );
+        if (this.sql.exec(`SELECT changes() AS count`).one()["count"] !== 1) return "stale";
+      } else {
+        this.sql.exec(
+          `DELETE FROM do_alarms WHERE source = ? AND class_name = ? AND object_key = ?`,
+          input.source,
+          input.className,
+          input.objectKey
+        );
+      }
+      const entity = this.readEntityRow(
+        canonicalEntityId({
+          kind: "do",
+          source: input.source,
+          className: input.className,
+          key: input.objectKey,
+        })
+      );
+      if (entity?.status === "active") this.wakePublications().ensureRequestedAlarm(input);
+      else this.wakePublications().forgetRequest(input);
+      this.sql.exec(
+        `DELETE FROM do_alarm_test_policies
+          WHERE source = ? AND class_name = ? AND object_key = ?`,
+        input.source,
+        input.className,
+        input.objectKey
+      );
+      return "accepted";
+    });
+  }
+
+  /** A successful pass consumes only its captured events; failures use alarmSet to retain debt. */
+  @schemaRpc()
+  alarmComplete(
+    input: LifecycleKey & {
+      dispatchOwner: string;
+      dispatchGeneration: number;
+      wakeRequest?: WakeRequest;
+      nextAlarm: { wakeAt: number; testPolicy?: AgentExecutionTestPolicy } | null;
+    }
+  ): { status: "accepted"; wakeAt: number | null } | { status: "stale" } {
+    return this.ctx.storage.transactionSync(() => {
+      if (
+        !input.dispatchOwner?.trim() ||
+        !Number.isSafeInteger(input.dispatchGeneration) ||
+        input.dispatchGeneration < 1
+      )
+        throw new Error("alarmComplete: invalid dispatch claim");
+      const claim = this.sql
+        .exec(
+          "SELECT 1 AS owned FROM do_alarms WHERE source = ? AND class_name = ? AND object_key = ? AND dispatch_owner = ? AND dispatch_generation = ?",
+          input.source,
+          input.className,
+          input.objectKey,
+          input.dispatchOwner,
+          input.dispatchGeneration
+        )
+        .toArray()[0];
+      if (!claim) return { status: "stale" };
+      if (input.wakeRequest)
+        this.wakePublications().acknowledgeRequest(
+          input,
+          input.wakeRequest,
+          input.dispatchGeneration
+        );
+      const result = input.nextAlarm
+        ? this.alarmSet({ ...input, ...input.nextAlarm })
+        : this.alarmClear(input);
+      if (result === "stale")
+        throw new Error("Alarm claim changed inside its completion transaction");
+      this.wakePublications().ensureRequestedAlarm(input);
+      return {
+        status: "accepted",
+        wakeAt: this.wakePublications().hasPendingRequest(input)
+          ? 0
+          : (input.nextAlarm?.wakeAt ?? null),
+      };
+    });
+  }
+
+  /** Soonest unclaimed wake. Claimed rows remain owned until generation adoption. */
+  @schemaRpc()
+  alarmNextWakeAt(now: number, exclude: LifecycleKey[] = []): number | null {
+    if (!Number.isSafeInteger(now) || now < 0) throw new Error("alarmNextWakeAt: invalid now");
+    const excluded = new Set(
+      exclude.map((key) => {
+        this.assertLifecycleKey(key);
+        return `${key.source}\u0000${key.className}\u0000${key.objectKey}`;
+      })
+    );
+    const rows = this.sql
+      .exec(
+        `SELECT source, class_name, object_key, wake_at, dispatch_owner
+           FROM do_alarms`
+      )
+      .toArray() as Array<{
+      source: string;
+      class_name: string;
+      object_key: string;
+      wake_at: number;
+      dispatch_owner: string | null;
+    }>;
+    const wakes = rows
+      .filter(
+        (row) =>
+          row.dispatch_owner === null &&
+          !excluded.has(`${row.source}\u0000${row.class_name}\u0000${row.object_key}`)
+      )
+      .map((row) => row.wake_at);
+    return wakes.length === 0 ? null : Math.min(...wakes);
+  }
+
+  /**
+   * Install the one scheduler generation allowed to claim alarms. Adoption is
+   * positive evidence that earlier in-process executors were superseded, so
+   * their claims are released atomically. Wall-clock age is irrelevant.
+   */
+  @schemaRpc()
+  alarmAdoptWorker(workerId: string): { previousWorkerId: string | null } {
+    if (typeof workerId !== "string" || workerId.length < 8 || workerId.length > 512) {
+      throw new Error("alarmAdoptWorker: invalid workerId");
+    }
+    return this.ctx.storage.transactionSync(() => {
+      const previousWorkerId = this.getStateValue("alarm-active-worker");
+      this.sql.exec(
+        `UPDATE do_alarms
+            SET dispatch_owner = NULL
+          WHERE dispatch_owner IS NOT NULL`
+      );
+      this.setStateValue("alarm-active-worker", workerId);
+      // Registration precedes source admission. A generation recovery pass
+      // must include sources whose first/newest publication never arrived.
+      // This is one recovery opportunity, not a source scheduling decision:
+      // the pass republishes its canonical projection and parks if ineligible.
+      for (const key of this.alarmSourceList()) {
+        this.sql.exec(
+          `INSERT INTO do_alarms (source, class_name, object_key, wake_at, dispatch_generation, dispatch_owner)
+           VALUES (?, ?, ?, 0, 0, NULL)
+           ON CONFLICT(source, class_name, object_key) DO UPDATE SET wake_at = 0`,
+          key.source,
+          key.className,
+          key.objectKey
+        );
+      }
+      return { previousWorkerId };
+    });
+  }
+
+  /** Read-only startup census. The AlarmDriver itself admits work exclusively
+   * through alarmClaimDue. */
+  @schemaRpc()
+  alarmListScheduled(): LifecycleKey[] {
+    return (
+      this.sql
+        .exec(
+          `SELECT source, class_name, object_key
+             FROM do_alarms
+            ORDER BY source, class_name, object_key`
+        )
+        .toArray() as Array<{ source: string; class_name: string; object_key: string }>
+    ).map((row) => ({
+      source: row.source,
+      className: row.class_name,
+      objectKey: row.object_key,
+    }));
+  }
+
+  /** Atomically claim due alarms. Rows survive until a generation-fenced
+   * handler acknowledgement replaces or clears them. */
+  @schemaRpc()
+  alarmClaimDue(input: {
+    now: number;
+    workerId: string;
+    limit: number;
+    exclude?: LifecycleKey[];
+  }): Array<
+    LifecycleKey & {
+      wakeAt: number;
+      dispatchGeneration: number;
+      wakeRequest?: WakeRequest;
+      testPolicy?: AgentExecutionTestPolicy;
+    }
+  > {
+    if (!Number.isSafeInteger(input.now) || input.now < 0) {
+      throw new Error("alarmClaimDue: invalid now");
+    }
+    if (!input.workerId.trim()) throw new Error("alarmClaimDue: invalid workerId");
+    if (!Number.isSafeInteger(input.limit) || input.limit < 1 || input.limit > 1_000) {
+      throw new Error("alarmClaimDue: invalid limit");
+    }
+    if (this.getStateValue("alarm-active-worker") !== input.workerId) {
+      throw new Error("alarmClaimDue: worker generation is not active");
+    }
+    const excluded = new Set(
+      (input.exclude ?? []).map((key) => {
+        this.assertLifecycleKey(key);
+        return `${key.source}\u0000${key.className}\u0000${key.objectKey}`;
+      })
+    );
+    return this.ctx.storage.transactionSync(() => {
+      const candidates = this.sql
+        .exec(
+          `SELECT a.source, a.class_name, a.object_key, a.wake_at, p.test_policy_json
+             FROM do_alarms AS a
+             LEFT JOIN do_alarm_test_policies AS p
+               ON p.source = a.source
+              AND p.class_name = a.class_name
+              AND p.object_key = a.object_key
+            WHERE a.wake_at <= ?
+              AND a.dispatch_owner IS NULL
+            ORDER BY a.wake_at, a.source, a.class_name, a.object_key`,
+          input.now
+        )
+        .toArray() as Array<{
+        source: string;
+        class_name: string;
+        object_key: string;
+        wake_at: number;
+        test_policy_json: string | null;
+      }>;
+      const selected = candidates
+        .filter(
+          (row) => !excluded.has(`${row.source}\u0000${row.class_name}\u0000${row.object_key}`)
+        )
+        .slice(0, input.limit);
+      return selected.map((row) => {
+        const nextGeneration = this.wakePublications().nextClaimGeneration({
+          source: row.source,
+          className: row.class_name,
+          objectKey: row.object_key,
+        });
+        this.sql.exec(
+          `UPDATE do_alarms
+              SET dispatch_owner = ?,
+                  dispatch_generation = ?
+            WHERE source = ? AND class_name = ? AND object_key = ?
+              AND dispatch_owner IS NULL`,
+          input.workerId,
+          nextGeneration,
+          row.source,
+          row.class_name,
+          row.object_key
+        );
+        const generation = this.sql
+          .exec(
+            `SELECT dispatch_generation AS generation
+               FROM do_alarms
+              WHERE source = ? AND class_name = ? AND object_key = ?`,
+            row.source,
+            row.class_name,
+            row.object_key
+          )
+          .one()["generation"];
+        const wakeRequest = this.wakePublications().claimRequest(
+          { source: row.source, className: row.class_name, objectKey: row.object_key },
+          Number(generation)
+        );
+        return {
+          source: row.source,
+          className: row.class_name,
+          objectKey: row.object_key,
+          wakeAt: row.wake_at,
+          dispatchGeneration: Number(generation),
+          ...(wakeRequest ? { wakeRequest } : {}),
+          ...(row.test_policy_json
+            ? { testPolicy: JSON.parse(row.test_policy_json) as AgentExecutionTestPolicy }
+            : {}),
+        };
+      });
+    });
+  }
+
+  @schemaRpc()
+  lifecycleListLeases(): LifecycleLease[] {
+    const rows = this.sql
+      .exec(
+        `SELECT source, class_name, object_key, detail, created_at, refreshed_at
+         FROM lifecycle_leases
+         ORDER BY refreshed_at, source, class_name, object_key`
+      )
+      .toArray() as Array<{
+      source: string;
+      class_name: string;
+      object_key: string;
+      detail: string | null;
+      created_at: number;
+      refreshed_at: number;
+    }>;
+    return rows.map((row) => ({
+      source: row.source,
+      className: row.class_name,
+      objectKey: row.object_key,
+      detail: this.parseJsonOrNull(row.detail),
+      createdAt: row.created_at,
+      refreshedAt: row.refreshed_at,
+    }));
+  }
+
+  @schemaRpc()
+  lifecycleOpenEpoch(input: LifecycleEpochInput): string {
+    return this.ctx.storage.transactionSync(() => {
+      const seqRow = this.sql
+        .exec(
+          `SELECT COALESCE(MAX(CAST(substr(epoch_id, 7) AS INTEGER)), 0) + 1 AS seq
+           FROM lifecycle_epochs
+           WHERE epoch_id LIKE 'epoch-%'`
+        )
+        .toArray()[0] as { seq: number } | undefined;
+      const epochId = `epoch-${String(seqRow?.seq ?? 1).padStart(12, "0")}`;
+      const now = Date.now();
+      this.sql.exec(
+        `INSERT INTO lifecycle_epochs (epoch_id, kind, reason, created_at, generation, status)
+         VALUES (?, ?, ?, ?, ?, 'open')`,
+        epochId,
+        input.kind,
+        input.reason,
+        now,
+        input.generation
+      );
+      const leases = this.lifecycleListLeases();
+      for (const lease of leases) {
+        this.insertLifecycleOp(epochId, lease, "prepare", "pending", null, now);
+        this.insertLifecycleOp(epochId, lease, "resume", "pending", null, now);
+      }
+      return epochId;
+    });
+  }
+
+  @schemaRpc()
+  lifecycleRecordOp(input: LifecycleOpInput): void {
+    this.assertLifecycleKey(input.key);
+    this.insertLifecycleOp(
+      input.epochId,
+      input.key,
+      input.opKind,
+      input.status,
+      input.detail === undefined ? null : JSON.stringify(input.detail),
+      Date.now()
+    );
+  }
+
+  @schemaRpc()
+  lifecycleListOps(epochId: string): LifecycleOp[] {
+    const rows = this.sql
+      .exec(
+        `SELECT epoch_id, source, class_name, object_key, op_kind, status, detail, updated_at
+         FROM lifecycle_ops
+         WHERE epoch_id = ?
+         ORDER BY source, class_name, object_key, op_kind`,
+        epochId
+      )
+      .toArray() as Array<{
+      epoch_id: string;
+      source: string;
+      class_name: string;
+      object_key: string;
+      op_kind: "prepare" | "resume";
+      status: "pending" | "ready" | "timed_out" | "failed" | "resumed";
+      detail: string | null;
+      updated_at: number;
+    }>;
+    return rows.map((row) => ({
+      epochId: row.epoch_id,
+      source: row.source,
+      className: row.class_name,
+      objectKey: row.object_key,
+      opKind: row.op_kind,
+      status: row.status,
+      detail: this.parseJsonOrNull(row.detail),
+      updatedAt: row.updated_at,
+    }));
+  }
+
+  @schemaRpc()
+  lifecycleCompleteEpoch(epochId: string): void {
+    this.sql.exec(`UPDATE lifecycle_epochs SET status = 'completed' WHERE epoch_id = ?`, epochId);
+  }
+
+  @schemaRpc()
+  lifecycleListResumeTargets(): LifecycleKey[] {
+    const rows = this.sql
+      .exec(
+        `SELECT source, class_name, object_key FROM lifecycle_leases
+         UNION
+         SELECT source, class_name, object_key FROM lifecycle_ops
+         WHERE op_kind = 'resume' AND status IN ('pending', 'ready', 'timed_out', 'failed')
+         ORDER BY source, class_name, object_key`
+      )
+      .toArray() as Array<{ source: string; class_name: string; object_key: string }>;
+    return rows.map((row) => ({
+      source: row.source,
+      className: row.class_name,
+      objectKey: row.object_key,
+    }));
+  }
+
+  /** Return all active entities (used by restart revival to re-attach runtime). */
+  @schemaRpc()
+  entityListActive(): EntityRecord[] {
+    const rows = this.sql
+      .exec(`SELECT * FROM entities WHERE status = 'active' ORDER BY created_at`)
+      .toArray() as unknown as DbEntityRow[];
+    return rows.map((row) => this.rowToEntity(row));
+  }
+
+  /** Return active entities of a given kind (used by singleton reconciliation). */
+  @schemaRpc()
+  entityListActiveByKind(kind: EntityKind): EntityRecord[] {
+    const rows = this.sql
+      .exec(`SELECT * FROM entities WHERE status = 'active' AND kind = ? ORDER BY created_at`, kind)
+      .toArray() as unknown as DbEntityRow[];
+    return rows.map((row) => this.rowToEntity(row));
+  }
+
+  /** Return durable reservations that still need their runtime image activated. */
+  @schemaRpc()
+  entityListPreparing(): EntityRecord[] {
+    const rows = this.sql
+      .exec(`SELECT * FROM entities WHERE status = 'preparing' ORDER BY created_at`)
+      .toArray() as unknown as DbEntityRow[];
+    return rows.map((row) => this.rowToEntity(row));
+  }
+
+  /** Return preparing reservations of one runtime kind. */
+  @schemaRpc()
+  entityListPreparingByKind(kind: EntityKind): EntityRecord[] {
+    const rows = this.sql
+      .exec(
+        `SELECT * FROM entities WHERE status = 'preparing' AND kind = ? ORDER BY created_at`,
+        kind
+      )
+      .toArray() as unknown as DbEntityRow[];
+    return rows.map((row) => this.rowToEntity(row));
+  }
+
+  /**
+   * Sealed execution records retained by preparing/active entities or panel history.
+   * Retention does not admit a preparing or retired entity to execution.
+   * Retired rows with no slot-history reference are deliberately excluded.
+   */
+  @schemaRpc()
+  entityListExecutionRoots(): EntityRecord[] {
+    return this.sql
+      .exec(
+        `SELECT e.*
+           FROM entities e
+          WHERE e.active_build_key IS NOT NULL
+            AND (
+              e.status IN ('preparing', 'active')
+              OR EXISTS (SELECT 1 FROM slot_history h WHERE h.entity_id = e.id)
+            )
+          ORDER BY e.id`
+      )
+      .toArray()
+      .map((row) => this.rowToEntity(row as unknown as DbEntityRow));
+  }
+
+  /**
+   * Return every entity record attached to a context, including retired rows.
+   * Context ownership must survive entity retirement long enough for the
+   * creator to reclaim the now-empty context without acquiring foreign-state
+   * authority.
+   */
+  @schemaRpc()
+  entityListByContext(contextId: string): EntityRecord[] {
+    const rows = this.sql
+      .exec(`SELECT * FROM entities WHERE context_id = ? ORDER BY created_at`, contextId)
+      .toArray() as unknown as DbEntityRow[];
+    return rows.map((row) => this.rowToEntity(row));
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // context_edges.* — context-relationship registry
+  // ─────────────────────────────────────────────────────────────
+
+  /**
+   * Idempotently upsert a context-relationship edge. Keyed on
+   * (context_id, owner_context_id, kind); `created_at` is preserved on conflict,
+   * `owner_entity_id` refreshed.
+   */
+  @schemaRpc()
+  contextEdgeUpsert(input: {
+    contextId: string;
+    ownerContextId: string;
+    kind: "lifecycle" | "lineage";
+    ownerEntityId?: string;
+    cloneDefinition?: ContextCloneDefinition;
+    cloneCompletion?: ContextCloneCompletion;
+  }): void {
+    this.commit(
+      () => `context edge ${input.kind} ${input.ownerContextId} to ${input.contextId}`,
+      () => this.upsertContextEdge(input)
+    );
+  }
+
+  private upsertContextEdge(input: {
+    contextId: string;
+    ownerContextId: string;
+    kind: "lifecycle" | "lineage";
+    ownerEntityId?: string;
+    cloneDefinition?: ContextCloneDefinition;
+    cloneCompletion?: ContextCloneCompletion;
+  }): void {
+    if (input.contextId === input.ownerContextId) {
+      throw new Error(`A context cannot be its own ${input.kind} owner: ${input.contextId}`);
+    }
+    if (input.kind === "lifecycle") {
+      const owners = this.sql
+        .exec(
+          `SELECT owner_context_id FROM context_edges
+           WHERE context_id = ? AND kind = 'lifecycle'`,
+          input.contextId
+        )
+        .toArray() as unknown as Array<{ owner_context_id: string }>;
+      const conflictingOwner = owners.find(
+        ({ owner_context_id }) => owner_context_id !== input.ownerContextId
+      );
+      if (conflictingOwner) {
+        throw new Error(
+          `Context ${input.contextId} already belongs to lifecycle owner ${conflictingOwner.owner_context_id}; cannot re-parent it to ${input.ownerContextId}`
+        );
+      }
+    }
+    const existing = this.sql
+      .exec(
+        `SELECT clone_definition, clone_completion, owner_entity_id FROM context_edges WHERE context_id = ? AND owner_context_id = ? AND kind = ?`,
+        input.contextId,
+        input.ownerContextId,
+        input.kind
+      )
+      .toArray()[0] as unknown as DbContextEdgeRow | undefined;
+    if (input.cloneDefinition) {
+      if (input.kind !== "lineage")
+        throw new Error("Clone definitions belong to root lineage owners");
+      const root = input.cloneDefinition.contexts[0];
+      if (
+        input.cloneDefinition.request.sourceContextId !== input.ownerContextId ||
+        root?.sourceContextId !== input.ownerContextId ||
+        root.targetContextId !== input.contextId
+      ) {
+        throw new Error(
+          `Clone definition does not match lineage ${input.ownerContextId} -> ${input.contextId}`
+        );
+      }
+      const other = this.sql
+        .exec(
+          `SELECT owner_context_id FROM context_edges WHERE context_id = ? AND clone_definition IS NOT NULL AND owner_context_id != ?`,
+          input.contextId,
+          input.ownerContextId
+        )
+        .toArray()[0] as unknown as DbContextEdgeRow | undefined;
+      if (other)
+        throw new IdentityCollisionError(input.contextId, {
+          field: "cloneOwnerContext",
+          existing: other.owner_context_id,
+          attempted: input.ownerContextId,
+        });
+      const requestedContexts = new Set(
+        input.cloneDefinition.contexts.map((context) => context.targetContextId)
+      );
+      const owners = this.sql
+        .exec(
+          `SELECT context_id, clone_definition FROM context_edges WHERE clone_definition IS NOT NULL AND context_id != ?`,
+          input.contextId
+        )
+        .toArray() as unknown as DbContextEdgeRow[];
+      for (const owner of owners) {
+        const capture = JSON.parse(owner.clone_definition!) as ContextCloneDefinition;
+        const collision = capture.contexts.find((context) =>
+          requestedContexts.has(context.targetContextId)
+        );
+        if (collision)
+          throw new IdentityCollisionError(collision.targetContextId, {
+            field: "cloneContextOwner",
+            existing: owner.context_id,
+            attempted: input.contextId,
+          });
+      }
+      if (existing && existing.clone_definition !== canonicalJson(input.cloneDefinition)) {
+        throw new IdentityCollisionError(input.contextId, {
+          field: "cloneDefinition",
+          existing: existing.clone_definition ? JSON.parse(existing.clone_definition) : null,
+          attempted: input.cloneDefinition,
+        });
+      }
+    }
+    if (
+      input.cloneCompletion &&
+      (!existing?.clone_definition ||
+        !input.cloneDefinition ||
+        input.cloneCompletion.result.contextId !== input.contextId ||
+        (existing.clone_completion &&
+          existing.clone_completion !== canonicalJson(input.cloneCompletion)))
+    ) {
+      throw new IdentityCollisionError(input.contextId, {
+        field: "cloneCompletion",
+        existing: existing?.clone_completion ?? null,
+        attempted: input.cloneCompletion,
+      });
+    }
+    this.sql.exec(
+      `INSERT INTO context_edges (context_id, owner_context_id, kind, owner_entity_id, clone_definition, clone_completion, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(context_id, owner_context_id, kind)
+       DO UPDATE SET owner_entity_id = CASE WHEN context_edges.clone_definition IS NOT NULL
+         THEN context_edges.owner_entity_id ELSE excluded.owner_entity_id END,
+         clone_completion = COALESCE(context_edges.clone_completion, excluded.clone_completion)`,
+      input.contextId,
+      input.ownerContextId,
+      input.kind,
+      input.ownerEntityId ?? null,
+      input.cloneDefinition ? canonicalJson(input.cloneDefinition) : null,
+      input.cloneCompletion ? canonicalJson(input.cloneCompletion) : null,
+      Date.now()
+    );
+  }
+
+  /** List edges owned BY a context (the owner side), optionally scoped to one kind. */
+  @schemaRpc()
+  contextEdgeListByOwner(input: { ownerContextId: string; kind?: "lifecycle" | "lineage" }): Array<{
+    contextId: string;
+    kind: "lifecycle" | "lineage";
+    ownerEntityId: string | null;
+    cloneDefinition?: ContextCloneDefinition;
+    cloneCompletion?: ContextCloneCompletion;
+  }> {
+    const rows = (input.kind
+      ? this.sql.exec(
+          `SELECT context_id, kind, owner_entity_id, clone_definition, clone_completion FROM context_edges
+             WHERE owner_context_id = ? AND kind = ? ORDER BY created_at`,
+          input.ownerContextId,
+          input.kind
+        )
+      : this.sql.exec(
+          `SELECT context_id, kind, owner_entity_id, clone_definition, clone_completion FROM context_edges
+             WHERE owner_context_id = ? ORDER BY created_at`,
+          input.ownerContextId
+        )
+    ).toArray() as unknown as DbContextEdgeRow[];
+    return rows.map((row) => ({
+      contextId: row.context_id,
+      kind: row.kind,
+      ownerEntityId: row.owner_entity_id ?? null,
+      ...(row.clone_completion
+        ? { cloneCompletion: JSON.parse(row.clone_completion) as ContextCloneCompletion }
+        : {}),
+      ...(row.clone_definition
+        ? { cloneDefinition: JSON.parse(row.clone_definition) as ContextCloneDefinition }
+        : {}),
+    }));
+  }
+
+  /** List edges INTO a context (the child side) — walk up for authz/teardown. */
+  @schemaRpc()
+  contextEdgeListByChild(contextId: string): Array<{
+    ownerContextId: string;
+    kind: "lifecycle" | "lineage";
+    ownerEntityId: string | null;
+    cloneDefinition?: ContextCloneDefinition;
+    cloneCompletion?: ContextCloneCompletion;
+  }> {
+    const rows = this.sql
+      .exec(
+        `SELECT owner_context_id, kind, owner_entity_id, clone_definition, clone_completion FROM context_edges
+         WHERE context_id = ? ORDER BY created_at`,
+        contextId
+      )
+      .toArray() as unknown as DbContextEdgeRow[];
+    return rows.map((row) => ({
+      ownerContextId: row.owner_context_id,
+      kind: row.kind,
+      ownerEntityId: row.owner_entity_id ?? null,
+      ...(row.clone_completion
+        ? { cloneCompletion: JSON.parse(row.clone_completion) as ContextCloneCompletion }
+        : {}),
+      ...(row.clone_definition
+        ? { cloneDefinition: JSON.parse(row.clone_definition) as ContextCloneDefinition }
+        : {}),
+    }));
+  }
+
+  /** Delete every inbound edge of a context (called on teardown). */
+  @schemaRpc()
+  contextEdgeDeleteByChild(contextId: string): void {
+    this.commit(
+      () => `delete context edges into ${contextId}`,
+      () => {
+        this.sql.exec(`DELETE FROM context_edges WHERE context_id = ?`, contextId);
+      }
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // slot.* operations
+  // ─────────────────────────────────────────────────────────────
+
+  private queryPanelTreePage(input: WorkspacePanelTreePageInput): WorkspacePanelTopologyPage {
+    const limit = Math.max(1, Math.min(200, input.limit ?? 50));
+    let cursor: [number, number, string] | null = null;
+    if (input.cursor) {
+      try {
+        const parsed = JSON.parse(input.cursor) as unknown;
+        if (
+          !Array.isArray(parsed) ||
+          parsed.length !== 3 ||
+          typeof parsed[0] !== "number" ||
+          !Number.isSafeInteger(parsed[0]) ||
+          typeof parsed[1] !== "number" ||
+          !Number.isSafeInteger(parsed[1]) ||
+          typeof parsed[2] !== "string"
+        ) {
+          throw new Error("invalid shape");
+        }
+        cursor = [parsed[0], parsed[1], parsed[2]];
+      } catch {
+        throw new Error("Invalid panel-tree page cursor");
+      }
+    }
+
+    return this.ctx.storage.transactionSync(() => {
+      const revision = this.panelTreeRevision();
+
+      const clauses = ["s.closed_at IS NULL"];
+      const values: Array<string | number> = [];
+      if (input.group.kind === "roots") {
+        clauses.push("s.parent_slot_id IS NULL");
+        if (input.group.ownerUserId === null) {
+          clauses.push("s.owner_user_id IS NULL");
+        } else {
+          clauses.push("s.owner_user_id = ?");
+          values.push(input.group.ownerUserId);
+        }
+      } else {
+        clauses.push("s.parent_slot_id = ?");
+        values.push(input.group.parentSlotId);
+      }
+      if (cursor) {
+        clauses.push(
+          `(s.sort_key > ?
+            OR (s.sort_key = ? AND s.created_at < ?)
+            OR (s.sort_key = ? AND s.created_at = ? AND s.slot_id > ?))`
+        );
+        values.push(cursor[0], cursor[0], cursor[1], cursor[0], cursor[1], cursor[2]);
+      }
+
+      const rows = this.sql
+        .exec(
+          `SELECT s.slot_id, s.parent_slot_id, s.owner_user_id, s.sort_key, s.created_at,
+                  history.options,
+                  history.source AS source,
+                  e.context_id,
+                  e.id AS runtime_entity_id,
+                  e.source_effective_version AS effective_version,
+                  e.active_build_key AS build_key,
+                  (SELECT COUNT(*)
+                     FROM slots child
+                    WHERE child.parent_slot_id = s.slot_id AND child.closed_at IS NULL) AS child_count
+             FROM slots s
+             LEFT JOIN entities e ON e.id = s.current_entity_id
+             LEFT JOIN slot_history history
+               ON history.slot_id = s.slot_id AND history.entry_key = s.current_entry_key
+            WHERE ${clauses.join(" AND ")}
+            ORDER BY s.sort_key ASC, s.created_at DESC, s.slot_id ASC
+            LIMIT ?`,
+          ...values,
+          limit + 1
+        )
+        .toArray() as Array<{
+        slot_id: string;
+        parent_slot_id: string | null;
+        owner_user_id: string | null;
+        sort_key: number;
+        created_at: number;
+        child_count: number;
+        options: string | null;
+        source: string | null;
+        context_id: string | null;
+        runtime_entity_id: string | null;
+        effective_version: string | null;
+        build_key: string | null;
+      }>;
+      const hasMore = rows.length > limit;
+      const visible = hasMore ? rows.slice(0, limit) : rows;
+      const last = visible.at(-1);
+      return {
+        revision,
+        group: input.group,
+        nodes: visible.map((row) => {
+          return {
+            slotId: row.slot_id as WorkspacePanelTopologyPage["nodes"][number]["slotId"],
+            parentSlotId:
+              row.parent_slot_id as WorkspacePanelTopologyPage["nodes"][number]["parentSlotId"],
+            ownerUserId: row.owner_user_id,
+            createdAt: row.created_at,
+            childCount: row.child_count,
+            ...(row.source === null ? {} : { source: row.source }),
+            ...(row.options === null ? {} : { options: row.options }),
+            ...(row.context_id === null ? {} : { contextId: row.context_id }),
+            ...(row.runtime_entity_id === null ? {} : { runtimeEntityId: row.runtime_entity_id }),
+            ...(row.effective_version === null ? {} : { effectiveVersion: row.effective_version }),
+            ...(row.build_key === null ? {} : { buildKey: row.build_key }),
+          };
+        }),
+        nextCursor:
+          hasMore && last ? JSON.stringify([last.sort_key, last.created_at, last.slot_id]) : null,
+      };
+    });
+  }
+
+  /**
+   * The revision a reader sees: the stored counter, plus one while a mutation
+   * has changed versioned rows it has not committed yet (`commit` bumps the
+   * counter at the end of that same transaction). So a result built inside the
+   * mutation carries the revision the tree has once the mutation lands.
+   */
+  private panelTreeRevision(): number {
+    const value = Number(
+      this.sql
+        .exec(`SELECT value FROM local_workspace_meta WHERE key = ?`, PANEL_TREE_REVISION_KEY)
+        .one()["value"]
+    );
+    if (!Number.isSafeInteger(value) || value < 0) {
+      throw new Error(`Invalid panel tree revision: ${String(value)}`);
+    }
+    return this.commitDepth > 0 && this.versionedRowsChanged() ? value + 1 : value;
+  }
+
+  @schemaRpc()
+  panelTreeRootGroups(
+    input: WorkspacePanelTreeRootGroupPageInput
+  ): WorkspacePanelTreeRootGroupPage {
+    const limit = Math.max(1, Math.min(200, input.limit ?? 50));
+    const cursor = input.cursor === undefined ? null : JSON.parse(input.cursor);
+    if (
+      cursor !== null &&
+      (!Array.isArray(cursor) ||
+        cursor.length !== 2 ||
+        typeof cursor[0] !== "string" ||
+        typeof cursor[1] !== "string")
+    ) {
+      throw new Error("Invalid panel-tree root-group cursor");
+    }
+    const cursorNull = cursor?.[0] === "0";
+    const cursorOwner = cursor?.[1] ?? "";
+    const rows = this.sql
+      .exec(
+        `SELECT owner_user_id, COUNT(*) AS root_count
+           FROM slots
+          WHERE closed_at IS NULL AND parent_slot_id IS NULL
+            AND (? IS NULL OR
+              (owner_user_id IS NOT NULL AND ? = 1) OR
+              (owner_user_id IS NOT NULL AND owner_user_id > ?))
+          GROUP BY owner_user_id
+          ORDER BY owner_user_id IS NOT NULL, owner_user_id
+          LIMIT ?`,
+        cursor === null ? null : 1,
+        cursorNull ? 1 : 0,
+        cursorOwner,
+        limit + 1
+      )
+      .toArray() as Array<{ owner_user_id: string | null; root_count: number }>;
+    const hasMore = rows.length > limit;
+    const visible = hasMore ? rows.slice(0, limit) : rows;
+    const last = visible.at(-1);
+    return {
+      revision: this.panelTreeRevision(),
+      groups: visible.map((row) => ({
+        ownerUserId: row.owner_user_id,
+        rootCount: row.root_count,
+      })),
+      nextCursor:
+        hasMore && last
+          ? JSON.stringify([last.owner_user_id === null ? "0" : "1", last.owner_user_id ?? ""])
+          : null,
+    };
+  }
+
+  @schemaRpc()
+  panelTreePage(input: WorkspacePanelTreePageInput): WorkspacePanelTopologyPage {
+    return this.queryPanelTreePage(input);
+  }
+
+  @schemaRpc()
+  panelTreePath(slotId: string): WorkspacePanelTopologyPath | null {
+    const rows = this.sql
+      .exec(
+        `WITH RECURSIVE path(slot_id, parent_slot_id, owner_user_id, created_at, depth) AS (
+           SELECT slot_id, parent_slot_id, owner_user_id, created_at, 0
+             FROM slots WHERE slot_id = ? AND closed_at IS NULL
+           UNION ALL
+           SELECT parent.slot_id, parent.parent_slot_id, parent.owner_user_id,
+                  parent.created_at, path.depth + 1
+             FROM slots parent JOIN path ON parent.slot_id = path.parent_slot_id
+            WHERE parent.closed_at IS NULL
+         )
+         SELECT path.slot_id, path.parent_slot_id, path.owner_user_id, path.created_at,
+                path.depth,
+                history.options, history.source,
+                entity.context_id, entity.id AS runtime_entity_id,
+                entity.source_effective_version AS effective_version,
+                entity.active_build_key AS build_key,
+                (SELECT COUNT(*) FROM slots child
+                  WHERE child.parent_slot_id = path.slot_id AND child.closed_at IS NULL)
+                  AS child_count
+           FROM path
+           LEFT JOIN slots slot ON slot.slot_id = path.slot_id
+           LEFT JOIN entities entity ON entity.id = slot.current_entity_id
+           LEFT JOIN slot_history history
+             ON history.slot_id = slot.slot_id AND history.entry_key = slot.current_entry_key
+          ORDER BY path.depth DESC`,
+        slotId
+      )
+      .toArray() as Array<{
+      slot_id: string;
+      parent_slot_id: string | null;
+      owner_user_id: string | null;
+      created_at: number;
+      child_count: number;
+      options: string | null;
+      source: string | null;
+      context_id: string | null;
+      runtime_entity_id: string | null;
+      effective_version: string | null;
+      build_key: string | null;
+    }>;
+    if (rows.length === 0) return null;
+    return {
+      revision: this.panelTreeRevision(),
+      nodes: rows.map((row) => {
+        return {
+          slotId: row.slot_id as WorkspacePanelTopologyPath["nodes"][number]["slotId"],
+          parentSlotId:
+            row.parent_slot_id as WorkspacePanelTopologyPath["nodes"][number]["parentSlotId"],
+          ownerUserId: row.owner_user_id,
+          createdAt: row.created_at,
+          childCount: row.child_count,
+          ...(row.source === null ? {} : { source: row.source }),
+          ...(row.options === null ? {} : { options: row.options }),
+          ...(row.context_id === null ? {} : { contextId: row.context_id }),
+          ...(row.runtime_entity_id === null ? {} : { runtimeEntityId: row.runtime_entity_id }),
+          ...(row.effective_version === null ? {} : { effectiveVersion: row.effective_version }),
+          ...(row.build_key === null ? {} : { buildKey: row.build_key }),
+        };
+      }),
+    };
+  }
+
+  @schemaRpc()
+  panelTreeDetail(slotId: string): WorkspacePanelDetail | null {
+    return this.ctx.storage.transactionSync(() => {
+      const slot = this.sql
+        .exec(
+          `SELECT s.*, history.cursor AS current_history_cursor,
+                  (SELECT COUNT(*) FROM slot_history all_history
+                    WHERE all_history.slot_id = s.slot_id) AS history_count
+             FROM slots s
+             JOIN slot_history history
+               ON history.slot_id = s.slot_id AND history.entry_key = s.current_entry_key
+             JOIN entities entity ON entity.id = s.current_entity_id
+            WHERE s.slot_id = ? AND s.closed_at IS NULL`,
+          slotId
+        )
+        .toArray()[0] as DbSlotRow | undefined;
+      if (!slot?.current_entry_key || !slot.current_entity_id) return null;
+      const history = this.sql
+        .exec(
+          `SELECT * FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
+          slotId,
+          slot.current_entry_key
+        )
+        .toArray()[0] as DbSlotHistoryRow | undefined;
+      const entity = this.sql
+        .exec(`SELECT * FROM entities WHERE id = ?`, slot.current_entity_id)
+        .toArray()[0] as DbEntityRow | undefined;
+      if (!history || !entity) return null;
+      return {
+        revision: this.panelTreeRevision(),
+        slot: slot as unknown as WorkspacePanelDetail["slot"],
+        currentHistory: history as unknown as WorkspacePanelDetail["currentHistory"],
+        entity: this.rowToEntity(entity),
+      };
+    });
+  }
+
+  private allocatePanelTreeOrderKey(
+    parentSlotId: string | null,
+    ownerUserId: string | null,
+    placement: WorkspacePanelTreePlacement | undefined,
+    excludeSlotId?: string
+  ): number {
+    const anchor = (slotId: string | null | undefined): DbSlotRow | null => {
+      if (!slotId) return null;
+      const row = this.requireSlot(slotId);
+      if (row.closed_at !== null || row.slot_id === excludeSlotId) {
+        throw new Error(`Invalid panel-tree placement anchor: ${slotId}`);
+      }
+      const sameGroup =
+        parentSlotId === null
+          ? row.parent_slot_id === null && row.owner_user_id === ownerUserId
+          : row.parent_slot_id === parentSlotId;
+      if (!sameGroup) {
+        throw new Error(`Panel-tree placement anchor is not a destination sibling: ${slotId}`);
+      }
+      return row;
+    };
+    const before = anchor(placement?.beforeSlotId);
+    const after = anchor(placement?.afterSlotId);
+    if (before && after && before.sort_key >= after.sort_key) {
+      throw new Error("Panel-tree placement anchors are reversed");
+    }
+    if (before && after) {
+      const between = this.sql
+        .exec(
+          `SELECT slot_id FROM slots
+            WHERE closed_at IS NULL
+              AND slot_id != ?
+              AND sort_key > ? AND sort_key < ?
+              AND ((${
+                parentSlotId === null
+                  ? "parent_slot_id IS NULL AND owner_user_id IS ?"
+                  : "parent_slot_id = ?"
+              }))
+            LIMIT 1`,
+          excludeSlotId ?? "",
+          before.sort_key,
+          after.sort_key,
+          parentSlotId === null ? ownerUserId : parentSlotId
+        )
+        .toArray()[0];
+      if (between) throw new Error("Panel-tree placement anchors are not adjacent");
+    }
+
+    if (!before && !after) {
+      const row = this.sql
+        .exec(
+          `SELECT MIN(sort_key) AS edge FROM slots
+            WHERE closed_at IS NULL
+              AND slot_id != ?
+              AND ${
+                parentSlotId === null
+                  ? "parent_slot_id IS NULL AND owner_user_id IS ?"
+                  : "parent_slot_id = ?"
+              }`,
+          excludeSlotId ?? "",
+          parentSlotId === null ? ownerUserId : parentSlotId
+        )
+        .one() as { edge: number | null };
+      return (row.edge ?? PANEL_TREE_ORDER_STEP) - PANEL_TREE_ORDER_STEP;
+    }
+    if (!before) return after!.sort_key - PANEL_TREE_ORDER_STEP;
+    if (!after) return before.sort_key + PANEL_TREE_ORDER_STEP;
+    const gap = after.sort_key - before.sort_key;
+    if (gap > 1) return before.sort_key + Math.floor(gap / 2);
+
+    this.rebalancePanelTreeGroup(parentSlotId, ownerUserId, excludeSlotId);
+    return this.allocatePanelTreeOrderKey(parentSlotId, ownerUserId, placement, excludeSlotId);
+  }
+
+  private rebalancePanelTreeGroup(
+    parentSlotId: string | null,
+    ownerUserId: string | null,
+    excludeSlotId?: string
+  ): void {
+    this.sql.exec(
+      `WITH ranked AS (
+         SELECT slot_id,
+                ROW_NUMBER() OVER (ORDER BY sort_key, created_at DESC, slot_id) * ? AS next_key
+           FROM slots
+          WHERE closed_at IS NULL
+            AND slot_id != ?
+            AND ${
+              parentSlotId === null
+                ? "parent_slot_id IS NULL AND owner_user_id IS ?"
+                : "parent_slot_id = ?"
+            }
+       )
+       UPDATE slots
+          SET sort_key = (SELECT next_key FROM ranked WHERE ranked.slot_id = slots.slot_id)
+        WHERE slot_id IN (SELECT slot_id FROM ranked)`,
+      PANEL_TREE_ORDER_STEP,
+      excludeSlotId ?? "",
+      parentSlotId === null ? ownerUserId : parentSlotId
+    );
+  }
+
+  @schemaRpc()
+  initializePanels(
+    inputs: NonNullable<WorkspaceConfig["initPanels"]>,
+    privateOwnerUserId?: string
+  ): WorkspacePanelDetail[] {
+    return this.commit((details) => `initialize ${details.length} template panels`, () => {
+      // A private workspace has one immutable human owner. Older template
+      // seeds predate authenticated panel creation and were stored ownerless;
+      // normalize the durable tree here, before any client can page or mutate
+      // it, so private workspaces have one real root group rather than a UI-only
+      // merge of incompatible placement groups.
+      if (privateOwnerUserId) {
+        const needsNormalization =
+          this.sql
+            .exec(
+              "SELECT 1 AS found FROM slots WHERE owner_user_id IS NOT ? LIMIT 1",
+              privateOwnerUserId
+            )
+            .toArray().length > 0;
+        if (needsNormalization)
+          this.sql.exec(
+            `WITH ranked_roots AS MATERIALIZED (
+             SELECT slot_id,
+                    ROW_NUMBER() OVER (
+                      ORDER BY CASE
+                                 WHEN owner_user_id IS ? THEN 0
+                                 WHEN owner_user_id IS NULL THEN 1
+                                 ELSE 2
+                               END,
+                               owner_user_id,
+                               sort_key, created_at DESC, slot_id
+                    ) * ? AS next_key
+               FROM slots
+              WHERE parent_slot_id IS NULL AND closed_at IS NULL
+           )
+           UPDATE slots
+              SET owner_user_id = ?,
+                  sort_key = COALESCE(
+                    (SELECT next_key FROM ranked_roots WHERE ranked_roots.slot_id = slots.slot_id),
+                    sort_key
+                  )
+            WHERE owner_user_id IS NOT ?
+               OR (parent_slot_id IS NULL AND closed_at IS NULL)`,
+            privateOwnerUserId,
+            PANEL_TREE_ORDER_STEP,
+            privateOwnerUserId,
+            privateOwnerUserId
+          );
+        if (needsNormalization) {
+          this.sql.exec(
+            "UPDATE panel_close_cleanup SET owner_user_id = ? WHERE owner_user_id IS NOT ?",
+            privateOwnerUserId,
+            privateOwnerUserId
+          );
+        }
+      }
+      const markerKey = "initial-panels";
+      const prior = this.sql
+        .exec("SELECT value FROM workspace_meta WHERE key = ?", markerKey)
+        .toArray()[0];
+      let slotIds: string[];
+      if (prior) {
+        slotIds = JSON.parse(String(prior["value"])) as string[];
+      } else {
+        slotIds = [];
+        // Earlier clients owned template seeding. Any durable tree use,
+        // including closed slots, means that presentation is already adopted.
+        // An empty live tree is never permission to recreate deleted panels.
+        if (
+          this.panelTreeRevision() === 0 &&
+          !this.sql.exec("SELECT 1 FROM slots LIMIT 1").toArray().length
+        ) {
+          for (const input of inputs) {
+            const slotId = computePanelId({ relativePath: input.source, isRoot: true });
+            const key = mintHistoryEntryKey();
+            const entity = this.entityReserve({
+              kind: "panel",
+              source: { repoPath: input.source, effectiveVersion: "" },
+              key,
+              contextId: globalThis.crypto.randomUUID(),
+              stateArgs: input.stateArgs ?? {},
+              parentId: "server",
+              // A seeded panel is a runtime principal, not just a slot. In a
+              // private workspace its one human owner is known here, so stamp
+              // it: an ownerless principal attributes every effect it launches
+              // to nobody, and anything downstream that needs the human — a
+              // private approval, user-owned state — has no answer. A shared
+              // workspace has no such owner and seeds an unowned panel.
+              ...(privateOwnerUserId ? { ownerUserId: privateOwnerUserId } : {}),
+            });
+            this.slotCreate({
+              slotId,
+              parentSlotId: null,
+              ...(privateOwnerUserId ? { ownerUserId: privateOwnerUserId } : {}),
+              ...(slotIds.length
+                ? { placement: { beforeSlotId: slotIds[slotIds.length - 1]! } }
+                : {}),
+              initialEntry: {
+                entryKey: key,
+                entityId: entity.id,
+                source: input.source,
+                contextId: entity.contextId,
+                stateArgs: input.stateArgs ?? {},
+              },
+            });
+            slotIds.push(slotId);
+          }
+        }
+        this.sql.exec(
+          "INSERT INTO workspace_meta (key, value) VALUES (?, ?)",
+          markerKey,
+          JSON.stringify(slotIds)
+        );
+      }
+      // Return live seed slots on retries too: derived presentation binding can
+      // then recover a crash after this commit without recreating any slot.
+      return slotIds.flatMap((slotId) => {
+        const detail = this.panelTreeDetail(slotId);
+        return detail ? [detail] : [];
+      });
+    });
+  }
+
+  @schemaRpc()
+  slotCreate(input: SlotCreateInput): void {
+    if (input.initialEntry) assertViewHostedSource(input.initialEntry.source);
+    this.commit(() => `create slot ${input.slotId}`, () => {
+      const existing = this.sql
+        .exec(
+          `SELECT s.slot_id, s.parent_slot_id, s.current_entity_id, s.current_entry_key,
+                  s.owner_user_id, s.closed_at, h.source, h.context_id, h.state_args, h.options
+             FROM slots s
+             LEFT JOIN slot_history h
+               ON h.slot_id = s.slot_id AND h.entry_key = s.current_entry_key
+            WHERE s.slot_id = ?`,
+          input.slotId
+        )
+        .toArray()[0] as
+        | {
+            slot_id: string;
+            parent_slot_id: string | null;
+            current_entity_id: string | null;
+            current_entry_key: string | null;
+            owner_user_id: string | null;
+            closed_at: number | null;
+            source: string | null;
+            context_id: string | null;
+            state_args: string | null;
+            options: string | null;
+          }
+        | undefined;
+      if (existing) {
+        // Idempotent resume: a retried creation carrying the identical durable
+        // identity (slot id, entry key, entity id) converges on the live slot.
+        // Any divergence is a typed collision — never a silent overwrite, and
+        // distinguishable from transport failure so the caller does not roll
+        // back state it did not create.
+        this.assertSlotCreateResumable(existing, input);
+        return;
+      }
+      const now = Date.now();
+      const ownerUserId =
+        input.parentSlotId === null
+          ? (input.ownerUserId ?? null)
+          : this.rootOwnerOf(input.parentSlotId);
+      const sortKey = this.allocatePanelTreeOrderKey(
+        input.parentSlotId,
+        ownerUserId,
+        input.placement
+      );
+      this.sql.exec(
+        `INSERT INTO slots (slot_id, parent_slot_id, current_entity_id, current_entry_key, sort_key, owner_user_id, created_at, closed_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
+        input.slotId,
+        input.parentSlotId,
+        input.initialEntry?.entityId ?? null,
+        input.initialEntry?.entryKey ?? null,
+        sortKey,
+        ownerUserId,
+        now
+      );
+      if (input.initialEntry) {
+        this.appendHistoryRow(input.slotId, 0, input.initialEntry, now);
+      }
+    });
+  }
+
+  private assertSlotCreateResumable(
+    existing: {
+      parent_slot_id: string | null;
+      current_entity_id: string | null;
+      current_entry_key: string | null;
+      owner_user_id: string | null;
+      closed_at: number | null;
+      source: string | null;
+      context_id: string | null;
+      state_args: string | null;
+      options: string | null;
+    },
+    input: SlotCreateInput
+  ): void {
+    const slotId = input.slotId;
+    if (existing.closed_at !== null) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "closed",
+        existing: existing.closed_at,
+        attempted: null,
+      });
+    }
+    if (existing.parent_slot_id !== input.parentSlotId) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "parentSlotId",
+        existing: existing.parent_slot_id,
+        attempted: input.parentSlotId,
+      });
+    }
+    if (input.parentSlotId === null && existing.owner_user_id !== (input.ownerUserId ?? null)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "ownerUserId",
+        existing: existing.owner_user_id,
+        attempted: input.ownerUserId ?? null,
+      });
+    }
+    if (existing.current_entry_key !== (input.initialEntry?.entryKey ?? null)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "entryKey",
+        existing: existing.current_entry_key,
+        attempted: input.initialEntry?.entryKey ?? null,
+      });
+    }
+    if (existing.current_entity_id !== (input.initialEntry?.entityId ?? null)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "entityId",
+        existing: existing.current_entity_id,
+        attempted: input.initialEntry?.entityId ?? null,
+      });
+    }
+    if (existing.source !== (input.initialEntry?.source ?? null)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "source",
+        existing: existing.source,
+        attempted: input.initialEntry?.source ?? null,
+      });
+    }
+    if (existing.context_id !== (input.initialEntry?.contextId ?? null)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "contextId",
+        existing: existing.context_id,
+        attempted: input.initialEntry?.contextId ?? null,
+      });
+    }
+    const attemptedStateArgs = input.initialEntry?.stateArgs;
+    const existingStateArgs =
+      existing.state_args === null ? undefined : JSON.parse(existing.state_args);
+    if (!this.sameOptionalJson(existingStateArgs, attemptedStateArgs)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "stateArgs",
+        existing: existingStateArgs,
+        attempted: attemptedStateArgs,
+      });
+    }
+    const attemptedOptions = input.initialEntry?.options;
+    const existingOptions = existing.options === null ? undefined : JSON.parse(existing.options);
+    if (!this.sameOptionalJson(existingOptions, attemptedOptions)) {
+      throw new SlotIdentityCollisionError(slotId, {
+        field: "options",
+        existing: existingOptions,
+        attempted: attemptedOptions,
+      });
+    }
+  }
+
+  private sameOptionalJson(existing: unknown, attempted: unknown): boolean {
+    if (existing === undefined || attempted === undefined) {
+      return existing === attempted;
+    }
+    return canonicalJson(existing) === canonicalJson(attempted);
+  }
+
+  /**
+   * Commit the durable half of panel navigation after runtime.createEntity has
+   * fully prepared and activated the destination incarnation. History and the
+   * slot pointer change in one transaction; the old incarnation remains active
+   * until the caller observes this commit and retires it.
+   */
+  @schemaRpc()
+  slotCommitPreparedNavigation(
+    input: SlotCommitPreparedNavigationInput
+  ): SlotCommitPreparedNavigationResult {
+    if (input.mutation.kind !== "select") assertViewHostedSource(input.mutation.entry.source);
+    return this.commit(() => `navigate slot ${input.slotId} (${input.mutation.kind})`, () => {
+      const slot = this.requireSlot(input.slotId);
+      if (slot.closed_at !== null) {
+        throw new Error(`Cannot navigate closed slot: ${input.slotId}`);
+      }
+      if (
+        slot.current_entity_id !== input.expectedCurrentEntityId ||
+        slot.current_entry_key === null
+      ) {
+        throw new Error(
+          `Slot navigation conflict: ${input.slotId} current entity changed during preparation`
+        );
+      }
+
+      const previousEntityId = slot.current_entity_id;
+      const currentRow = this.sql
+        .exec(
+          `SELECT cursor FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
+          input.slotId,
+          slot.current_entry_key
+        )
+        .toArray()[0] as { cursor: number } | undefined;
+      if (!currentRow) {
+        throw new Error(
+          `Slot ${input.slotId} current entry is missing from history: ${slot.current_entry_key}`
+        );
+      }
+
+      let target: SlotHistoryEntryInput;
+      let cursor: number;
+      if (input.mutation.kind === "select") {
+        const selected = this.sql
+          .exec(
+            `SELECT cursor, entry_key, entity_id, source, context_id, state_args, options
+               FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
+            input.slotId,
+            input.mutation.entryKey
+          )
+          .toArray()[0] as DbSlotHistoryRow | undefined;
+        if (!selected) {
+          throw new Error(
+            `History entry not found: slot=${input.slotId} entry=${input.mutation.entryKey}`
+          );
+        }
+        cursor = selected.cursor;
+        target = {
+          entryKey: selected.entry_key,
+          entityId: selected.entity_id,
+          source: selected.source,
+          contextId: selected.context_id,
+          ...(selected.state_args === null
+            ? {}
+            : { stateArgs: this.parseJsonOrNull(selected.state_args) }),
+          ...(selected.options === null ? {} : { options: this.parseJsonOrNull(selected.options) }),
+        };
+      } else {
+        target = input.mutation.entry;
+        if (input.mutation.kind === "append") {
+          cursor = currentRow.cursor + 1;
+          // Browser-style navigation from a back-history position abandons the
+          // forward branch before appending the new destination.
+          this.sql.exec(
+            `DELETE FROM slot_history WHERE slot_id = ? AND cursor > ?`,
+            input.slotId,
+            currentRow.cursor
+          );
+          this.appendHistoryRow(input.slotId, cursor, target, Date.now());
+        } else {
+          cursor = currentRow.cursor;
+          this.sql.exec(
+            `DELETE FROM slot_history WHERE slot_id = ? AND cursor = ?`,
+            input.slotId,
+            cursor
+          );
+          this.appendHistoryRow(input.slotId, cursor, target, Date.now());
+        }
+      }
+
+      this.assertCompleteActivePanelIncarnation(target);
+      this.sql.exec(
+        `UPDATE slots SET current_entity_id = ?, current_entry_key = ? WHERE slot_id = ?`,
+        target.entityId,
+        target.entryKey,
+        input.slotId
+      );
+      return {
+        previousEntityId,
+        currentEntityId: target.entityId,
+        currentEntryKey: target.entryKey,
+        cursor,
+      };
+    });
+  }
+
+  @schemaRpc()
+  slotPatchCurrentStateArgs(
+    slotId: string,
+    patch: Record<string, unknown>,
+    expected: { entryKey: string; activeBuildKey: string | null; schema?: StateArgsSchema }
+  ): Record<string, unknown> {
+    // The owner serializes every patch: read, merge, validate, and write happen
+    // in one transaction, so concurrent patches compose instead of losing keys.
+    return this.commit(() => `patch state arguments of slot ${slotId}`, () => {
+      const slot = this.requireSlot(slotId);
+      if (slot.closed_at !== null) {
+        throw new Error(`Cannot patch state of closed slot: ${slotId}`);
+      }
+      if (!slot.current_entry_key) {
+        throw new Error(`Slot ${slotId} has no current history entry`);
+      }
+      if (slot.current_entry_key !== expected.entryKey) {
+        throw new PanelStateArgsConflictError(slotId, {
+          field: "entryKey",
+          expected: expected.entryKey,
+          actual: slot.current_entry_key,
+        });
+      }
+      const entity = slot.current_entity_id ? this.readEntityRow(slot.current_entity_id) : null;
+      const activeBuildKey = entity?.active_build_key ?? null;
+      if (activeBuildKey !== expected.activeBuildKey) {
+        throw new PanelStateArgsConflictError(slotId, {
+          field: "activeBuildKey",
+          expected: expected.activeBuildKey,
+          actual: activeBuildKey,
+        });
+      }
+      const history = this.sql
+        .exec(
+          `SELECT state_args FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
+          slotId,
+          slot.current_entry_key
+        )
+        .toArray()[0] as Pick<DbSlotHistoryRow, "state_args"> | undefined;
+      if (!history) throw new Error(`Slot ${slotId} current history entry is missing`);
+      const next = mergeValidateStateArgs(
+        decodePanelStateArgs(history.state_args),
+        patch,
+        expected.schema
+      );
+      const serialized = JSON.stringify(next);
+      this.sql.exec(
+        `UPDATE slot_history SET state_args = ? WHERE slot_id = ? AND entry_key = ?`,
+        serialized,
+        slotId,
+        slot.current_entry_key
+      );
+      if (slot.current_entity_id) {
+        this.sql.exec(
+          `UPDATE entities SET state_args = ? WHERE id = ?`,
+          serialized,
+          slot.current_entity_id
+        );
+      }
+      return next;
+    });
+  }
+
+  /**
+   * Move a slot under a new parent (or to root) and re-position it. Per WP3
+   * §10.1, the moved subtree **re-owns** to the destination root's owner — the
+   * tree it now lives in — so a panel dragged into another user's tree becomes
+   * part of that tree. Moving to root (parentSlotId === null) promotes the
+   * subtree to a new top-level tree owned by the acting mover (`ownerUserId`),
+   * or keeps its current owner when no mover subject is supplied. Authorization
+   * is permissive (any member may restructure any tree); only attribution moves.
+   */
+  @schemaRpc()
+  slotMove(
+    slotId: string,
+    parentSlotId: string | null,
+    placement: WorkspacePanelTreePlacement | undefined,
+    ownerUserId?: string
+  ): void {
+    this.commit(() => `move slot ${slotId}`, () => {
+      const slot = this.requireSlot(slotId);
+      if (slot.closed_at !== null) {
+        throw new Error(`Cannot move closed slot: ${slotId}`);
+      }
+
+      // Resolve and validate the destination before mutating parent links. In
+      // particular, persisting a move below one's own descendant would create
+      // a cycle before the in-memory registry gets a chance to reject it.
+      let destOwner: string | null;
+      if (parentSlotId !== null) {
+        const parent = this.requireSlot(parentSlotId);
+        if (parent.closed_at !== null) {
+          throw new Error(`Cannot move slot under closed parent: ${parentSlotId}`);
+        }
+        const destinationInsideSubtree = this.sql
+          .exec(
+            `WITH RECURSIVE subtree(slot_id) AS (
+               SELECT slot_id FROM slots WHERE slot_id = ?
+               UNION ALL
+               SELECT child.slot_id
+                 FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
+             )
+             SELECT 1 AS found FROM subtree WHERE slot_id = ? LIMIT 1`,
+            slotId,
+            parentSlotId
+          )
+          .toArray()[0];
+        if (destinationInsideSubtree) {
+          throw new Error(`Cannot move slot ${slotId} under its own subtree`);
+        }
+        destOwner = this.rootOwnerOf(parentSlotId);
+      } else {
+        destOwner = ownerUserId ?? slot.owner_user_id ?? null;
+      }
+
+      const sortKey = this.allocatePanelTreeOrderKey(parentSlotId, destOwner, placement, slotId);
+      this.sql.exec(
+        `UPDATE slots SET parent_slot_id = ?, sort_key = ? WHERE slot_id = ?`,
+        parentSlotId,
+        sortKey,
+        slotId
+      );
+      // Re-stamp the subtree inside SQLite; application memory stays constant
+      // regardless of subtree size.
+      this.sql.exec(
+        `WITH RECURSIVE subtree(slot_id) AS (
+           SELECT slot_id FROM slots WHERE slot_id = ?
+           UNION ALL
+           SELECT child.slot_id
+             FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
+         )
+         UPDATE slots SET owner_user_id = ? WHERE slot_id IN (SELECT slot_id FROM subtree)`,
+        slotId,
+        destOwner
+      );
+    });
+  }
+
+  /**
+   * Walk up the parent chain from `slotId` to its root and return that root's
+   * `owner_user_id`. Cycle-guarded (the tree shouldn't contain cycles, but a
+   * bad move must not spin). Returns null if a chain link is missing.
+   */
+  private rootOwnerOf(slotId: string): string | null {
+    const seen = new Set<string>();
+    let cur: string | null = slotId;
+    let owner: string | null = null;
+    while (cur && !seen.has(cur)) {
+      seen.add(cur);
+      const row = this.sql
+        .exec(`SELECT parent_slot_id, owner_user_id FROM slots WHERE slot_id = ?`, cur)
+        .toArray()[0] as
+        | { parent_slot_id: string | null; owner_user_id: string | null }
+        | undefined;
+      if (!row) break;
+      owner = row.owner_user_id ?? null;
+      if (row.parent_slot_id === null) break;
+      cur = row.parent_slot_id;
+    }
+    return owner;
+  }
+
+  @schemaRpc()
+  slotClose(slotId: string): WorkspacePanelCloseResult {
+    return this.commit((closed) => `close panel ${slotId} (${closed.closedCount} slots)`, () => {
+      const root = this.requireSlot(slotId);
+      const closeId = slotId;
+      if (root.closed_at !== null) {
+        const pending = Number(
+          (
+            this.sql
+              .exec(`SELECT COUNT(*) AS count FROM panel_close_cleanup WHERE close_id = ?`, closeId)
+              .one() as { count: number }
+          ).count
+        );
+        return { closeId, closedCount: pending };
+      }
+      // A close stamp identifies its close: every slot one close takes down
+      // shares it, and no other close reuses it. Reopen relies on this to
+      // reverse exactly one close without disturbing descendants that were
+      // closed on their own before it.
+      const now = this.nextCloseStamp();
+      this.sql.exec(
+        `WITH RECURSIVE subtree(slot_id, current_entity_id) AS (
+           SELECT slot_id, current_entity_id FROM slots
+            WHERE slot_id = ? AND closed_at IS NULL
+           UNION ALL
+           SELECT child.slot_id, child.current_entity_id
+             FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
+            WHERE child.closed_at IS NULL
+         )
+         INSERT OR IGNORE INTO panel_close_cleanup
+           (slot_id, close_id, owner_user_id, entity_id, queued_at)
+         SELECT subtree.slot_id, ?, slot.owner_user_id, subtree.current_entity_id, ?
+           FROM subtree JOIN slots slot ON slot.slot_id = subtree.slot_id`,
+        slotId,
+        closeId,
+        now
+      );
+      const closedCount = Number(
+        (
+          this.sql
+            .exec(`SELECT COUNT(*) AS count FROM panel_close_cleanup WHERE close_id = ?`, closeId)
+            .one() as { count: number }
+        ).count
+      );
+      this.sql.exec(
+        `WITH RECURSIVE subtree(slot_id) AS (
+           SELECT slot_id FROM slots WHERE slot_id = ? AND closed_at IS NULL
+           UNION ALL
+           SELECT child.slot_id
+             FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
+            WHERE child.closed_at IS NULL
+         )
+         UPDATE slots
+            SET closed_at = ?, current_entity_id = NULL
+          WHERE slot_id IN (SELECT slot_id FROM subtree)`,
+        slotId,
+        now
+      );
+      return { closeId, closedCount };
+    });
+  }
+
+  private nextCloseStamp(): number {
+    const latest = this.sql.exec(`SELECT MAX(closed_at) AS latest FROM slots`).one()["latest"] as
+      | number
+      | null;
+    return Math.max(Date.now(), (latest ?? 0) + 1);
+  }
+
+  /**
+   * The slots one close took down: its root and every descendant reached
+   * through slots carrying the same close stamp. A descendant closed earlier
+   * on its own carries an earlier stamp and stays closed.
+   */
+  private closedSubtree(slotId: string, closedAt: number): string[] {
+    return this.sql
+      .exec(
+        `WITH RECURSIVE subtree(slot_id, depth) AS (
+           SELECT slot_id, 0 FROM slots WHERE slot_id = ? AND closed_at = ?
+           UNION ALL
+           SELECT child.slot_id, subtree.depth + 1
+             FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
+            WHERE child.closed_at = ?
+         )
+         SELECT slot_id FROM subtree ORDER BY depth, slot_id`,
+        slotId,
+        closedAt,
+        closedAt
+      )
+      .toArray()
+      .map((row) => String((row as { slot_id: string }).slot_id));
+  }
+
+  /** Throw unless `slotId` roots a close that can be reversed now. */
+  private requireReopenableRoot(
+    slotId: string,
+    closedAt?: number
+  ): DbSlotRow & { closed_at: number } {
+    const slot = this.requireSlot(slotId);
+    if (slot.closed_at === null) throw new Error(`Slot is not closed: ${slotId}`);
+    if (closedAt !== undefined && slot.closed_at !== closedAt) {
+      throw new Error(`Slot ${slotId} was closed again after the close being reopened`);
+    }
+    if (slot.parent_slot_id !== null) {
+      const parent = this.requireSlot(slot.parent_slot_id);
+      if (parent.closed_at !== null) {
+        throw new Error(`Cannot reopen ${slotId} while its parent ${parent.slot_id} is closed`);
+      }
+    }
+    return slot as DbSlotRow & { closed_at: number };
+  }
+
+  /**
+   * Closes that can be reversed now, most recent first: closed roots whose
+   * parent is open, that retained their current entry, and whose runtime
+   * cleanup has finished. Keyset-paged by (closed_at DESC, slot_id); the
+   * service matches titles, which the presentation owner holds.
+   */
+  @schemaRpc()
+  slotClosedRoots(input: { ownerUserId?: string | null; limit?: number; cursor?: string }): {
+    items: WorkspaceClosedPanel[];
+    nextCursor: string | null;
+  } {
+    const limit = Math.max(1, Math.min(50, input.limit ?? 20));
+    const clauses = [
+      "s.closed_at IS NOT NULL",
+      "(s.parent_slot_id IS NULL OR parent.closed_at IS NULL)",
+      "NOT EXISTS (SELECT 1 FROM panel_close_cleanup c WHERE c.close_id = s.slot_id)",
+    ];
+    const values: Array<string | number | null> = [];
+    if (Object.prototype.hasOwnProperty.call(input, "ownerUserId")) {
+      clauses.push("s.owner_user_id IS ?");
+      values.push(input.ownerUserId ?? null);
+    }
+    if (input.cursor !== undefined) {
+      let cursor: [number, string];
+      try {
+        const parsed = JSON.parse(input.cursor) as unknown;
+        if (
+          !Array.isArray(parsed) ||
+          parsed.length !== 2 ||
+          !Number.isSafeInteger(parsed[0]) ||
+          typeof parsed[1] !== "string"
+        ) {
+          throw new Error("invalid shape");
+        }
+        cursor = [parsed[0], parsed[1]];
+      } catch {
+        throw new Error("Invalid closed-panel cursor");
+      }
+      clauses.push("(s.closed_at < ? OR (s.closed_at = ? AND s.slot_id > ?))");
+      values.push(cursor[0], cursor[0], cursor[1]);
+    }
+    const rows = this.sql
+      .exec(
+        `SELECT s.slot_id, s.parent_slot_id, s.closed_at, h.entity_id, h.source
+           FROM slots s
+           JOIN slot_history h
+             ON h.slot_id = s.slot_id AND h.entry_key = s.current_entry_key
+           LEFT JOIN slots parent ON parent.slot_id = s.parent_slot_id
+          WHERE ${clauses.join(" AND ")}
+          ORDER BY s.closed_at DESC, s.slot_id ASC
+          LIMIT ?`,
+        ...values,
+        limit + 1
+      )
+      .toArray() as Array<{
+      slot_id: string;
+      parent_slot_id: string | null;
+      closed_at: number;
+      entity_id: string;
+      source: string;
+    }>;
+    const hasMore = rows.length > limit;
+    const visible = hasMore ? rows.slice(0, limit) : rows;
+    const last = visible.at(-1);
+    return {
+      items: visible.map((row) => ({
+        slotId: row.slot_id as WorkspaceClosedPanel["slotId"],
+        parentSlotId: row.parent_slot_id as WorkspaceClosedPanel["parentSlotId"],
+        closedAt: row.closed_at,
+        closedCount: this.closedSubtree(row.slot_id, row.closed_at).length,
+        entityId: row.entity_id as WorkspaceClosedPanel["entityId"],
+        source: row.source,
+      })),
+      nextCursor:
+        hasMore && last
+          ? closedPanelCursor({ closedAt: last.closed_at, slotId: last.slot_id })
+          : null,
+    };
+  }
+
+  /** Every slot under a closed root, whatever close took each down; deepest first. */
+  private closedTree(slotId: string): string[] {
+    return this.sql
+      .exec(
+        `WITH RECURSIVE subtree(slot_id, depth) AS (
+           SELECT slot_id, 0 FROM slots WHERE slot_id = ?
+           UNION ALL
+           SELECT child.slot_id, subtree.depth + 1
+             FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
+         )
+         SELECT slot_id FROM subtree ORDER BY depth DESC, slot_id`,
+        slotId
+      )
+      .toArray()
+      .map((row) => String((row as { slot_id: string }).slot_id));
+  }
+
+  /**
+   * What permanently deleting a close removes: the closed root's whole
+   * subtree (including descendants closed earlier on their own) and the
+   * contexts that no surviving history entry or active entity still uses.
+   */
+  @schemaRpc()
+  slotPurgePlan(slotId: string): WorkspacePanelPurgePlan {
+    return this.ctx.storage.transactionSync(() => {
+      const root = this.requireReopenableRoot(slotId);
+      const pending = this.sql
+        .exec(`SELECT 1 FROM panel_close_cleanup WHERE close_id = ? LIMIT 1`, slotId)
+        .toArray()[0];
+      if (pending) throw new Error(`Close of ${slotId} is still retiring its runtimes`);
+      const slotIds = this.closedTree(slotId);
+      const placeholders = slotIds.map(() => "?").join(", ");
+      const orphanContextIds = this.sql
+        .exec(
+          `SELECT DISTINCT h.context_id FROM slot_history h
+            WHERE h.slot_id IN (${placeholders})
+              AND NOT EXISTS (
+                SELECT 1 FROM slot_history other
+                 WHERE other.context_id = h.context_id
+                   AND other.slot_id NOT IN (${placeholders}))
+              AND NOT EXISTS (
+                SELECT 1 FROM entities e
+                 WHERE e.context_id = h.context_id AND e.status != 'retired')
+            ORDER BY h.context_id`,
+          ...slotIds,
+          ...slotIds
+        )
+        .toArray()
+        .map((row) => String((row as { context_id: string }).context_id));
+      return {
+        slotId: slotId as WorkspacePanelPurgePlan["slotId"],
+        closedAt: root.closed_at,
+        slotIds: slotIds as WorkspacePanelPurgePlan["slotIds"],
+        orphanContextIds,
+      };
+    });
+  }
+
+  /**
+   * Permanently delete one close: its slots and their history. Run after the
+   * plan's orphaned contexts were destroyed; retired entity rows are then
+   * unreferenced and fall to entityGc.
+   */
+  @schemaRpc()
+  slotPurge(input: { slotId: string; closedAt: number }): {
+    deletedCount: number;
+    entityIds: string[];
+  } {
+    return this.commit((purged) => `purge close of ${input.slotId} (${purged.deletedCount} slots)`, () => {
+      this.requireReopenableRoot(input.slotId, input.closedAt);
+      const slotIds = this.closedTree(input.slotId);
+      const placeholders = slotIds.map(() => "?").join(", ");
+      const entityIds = this.sql
+        .exec(
+          `SELECT DISTINCT entity_id FROM slot_history WHERE slot_id IN (${placeholders})
+            ORDER BY entity_id`,
+          ...slotIds
+        )
+        .toArray()
+        .map((row) => String((row as { entity_id: string }).entity_id));
+      this.sql.exec(`DELETE FROM slot_history WHERE slot_id IN (${placeholders})`, ...slotIds);
+      for (const memberId of slotIds) {
+        this.sql.exec(`DELETE FROM slots WHERE slot_id = ?`, memberId);
+      }
+      return { deletedCount: slotIds.length, entityIds };
+    });
+  }
+
+  /** The current history entries a reopen of `slotId`'s close must reactivate. */
+  @schemaRpc()
+  slotReopenPlan(slotId: string): WorkspacePanelReopenPlan {
+    return this.ctx.storage.transactionSync(() => {
+      const root = this.requireReopenableRoot(slotId);
+      const pending = this.sql
+        .exec(`SELECT 1 FROM panel_close_cleanup WHERE close_id = ? LIMIT 1`, slotId)
+        .toArray()[0];
+      if (pending) throw new Error(`Close of ${slotId} is still retiring its runtimes`);
+      const slots = this.closedSubtree(slotId, root.closed_at).map((memberId) => {
+        const entry = this.sql
+          .exec(
+            `SELECT h.* FROM slots s
+               JOIN slot_history h ON h.slot_id = s.slot_id AND h.entry_key = s.current_entry_key
+              WHERE s.slot_id = ?`,
+            memberId
+          )
+          .toArray()[0] as DbSlotHistoryRow | undefined;
+        if (!entry) {
+          throw new Error(`Closed slot ${memberId} retained no current entry and cannot reopen`);
+        }
+        return {
+          slotId: memberId as WorkspacePanelReopenPlan["slotId"],
+          entry: entry as WorkspacePanelTreeHistoryRow,
+        };
+      });
+      return {
+        slotId: slotId as WorkspacePanelReopenPlan["slotId"],
+        closedAt: root.closed_at,
+        slots,
+      };
+    });
+  }
+
+  /**
+   * Reverse one close. Every slot it took down must already have its current
+   * entry's incarnation reactivated (runtime.createEntity with the entry key);
+   * the slots then rejoin the tree in one transaction, in their old positions.
+   */
+  @schemaRpc()
+  slotReopen(input: { slotId: string; closedAt: number }): WorkspacePanelReopenResult & {
+    slots: Array<{ slotId: string; entityId: string; source: string }>;
+  } {
+    return this.commit((reopened) => `reopen panel ${input.slotId} (${reopened.reopenedCount} slots)`, () => {
+      const root = this.requireReopenableRoot(input.slotId, input.closedAt);
+      const members = this.closedSubtree(input.slotId, root.closed_at);
+      const slots: Array<{ slotId: string; entityId: string; source: string }> = [];
+      for (const memberId of members) {
+        const entry = this.sql
+          .exec(
+            `SELECT h.* FROM slots s
+               JOIN slot_history h ON h.slot_id = s.slot_id AND h.entry_key = s.current_entry_key
+              WHERE s.slot_id = ?`,
+            memberId
+          )
+          .toArray()[0] as DbSlotHistoryRow | undefined;
+        if (!entry) {
+          throw new Error(`Closed slot ${memberId} retained no current entry and cannot reopen`);
+        }
+        this.assertCompleteActivePanelIncarnation({
+          entryKey: entry.entry_key,
+          entityId: entry.entity_id,
+          source: entry.source,
+          contextId: entry.context_id,
+        });
+        this.sql.exec(
+          `UPDATE slots SET closed_at = NULL, current_entity_id = ? WHERE slot_id = ?`,
+          entry.entity_id,
+          memberId
+        );
+        slots.push({ slotId: memberId, entityId: entry.entity_id, source: entry.source });
+      }
+      return {
+        slotId: input.slotId as WorkspacePanelReopenResult["slotId"],
+        reopenedCount: members.length,
+        slots,
+      };
+    });
+  }
+
+  @schemaRpc()
+  slotCloseOwnedRoots(ownerUserId: string): { rootIds: string[]; closedIds: string[] } {
+    if (!ownerUserId || ownerUserId === "system") {
+      throw new Error("A revocable workspace user id is required");
+    }
+    const rootIds = this.sql
+      .exec(
+        `SELECT slot_id
+           FROM slots
+          WHERE parent_slot_id IS NULL
+            AND owner_user_id = ?
+            AND closed_at IS NULL
+          ORDER BY slot_id`,
+        ownerUserId
+      )
+      .toArray()
+      .map((row) => String((row as { slot_id: string }).slot_id));
+    for (const slotId of rootIds) this.slotClose(slotId);
+    const closedIds = this.sql
+      .exec(
+        `SELECT slot_id
+           FROM panel_close_cleanup
+          WHERE owner_user_id = ?
+          ORDER BY slot_id`,
+        ownerUserId
+      )
+      .toArray()
+      .map((row) => String((row as { slot_id: string }).slot_id));
+    return { rootIds, closedIds };
+  }
+
+  @schemaRpc()
+  slotCloseCleanupPage(input: WorkspacePanelCloseCleanupPageInput): WorkspacePanelCloseCleanupPage {
+    const limit = Math.max(1, Math.min(200, input.limit ?? 100));
+    const ownerFiltered = Object.prototype.hasOwnProperty.call(input, "ownerUserId");
+    const clauses: string[] = [];
+    const bindings: Array<string | number | null> = [];
+    if (input.closeId !== undefined) {
+      clauses.push("close_id = ?");
+      bindings.push(input.closeId);
+    }
+    if (ownerFiltered) {
+      clauses.push("owner_user_id IS ?");
+      bindings.push(input.ownerUserId ?? null);
+    }
+    if (input.cursor !== undefined) {
+      clauses.push("slot_id > ?");
+      bindings.push(input.cursor);
+    }
+    const rows = this.sql
+      .exec(
+        `SELECT slot_id, entity_id
+           FROM panel_close_cleanup
+          ${clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : ""}
+          ORDER BY slot_id
+          LIMIT ?`,
+        ...bindings,
+        limit + 1
+      )
+      .toArray() as Array<{ slot_id: string; entity_id: string | null }>;
+    const hasMore = rows.length > limit;
+    const visible = hasMore ? rows.slice(0, limit) : rows;
+    return {
+      items: visible.map((row) => ({
+        slotId: row.slot_id as WorkspacePanelCloseCleanupPage["items"][number]["slotId"],
+        entityId: row.entity_id as WorkspacePanelCloseCleanupPage["items"][number]["entityId"],
+      })),
+      nextCursor: hasMore ? (visible.at(-1)?.slot_id ?? null) : null,
+    };
+  }
+
+  @schemaRpc()
+  slotCloseCleanupAck(slotIds: string[]): void {
+    if (slotIds.length === 0) return;
+    if (slotIds.length > 200) throw new Error("Close cleanup acknowledgement exceeds 200 items");
+    this.sql.exec(
+      `DELETE FROM panel_close_cleanup WHERE slot_id IN (${slotIds.map(() => "?").join(", ")})`,
+      ...slotIds
+    );
+  }
+
+  @schemaRpc()
+  slotGet(slotId: string): DbSlotRow | null {
+    const row = this.sql
+      .exec(
+        `SELECT s.*
+         FROM slots s
+         WHERE s.slot_id = ?`,
+        slotId
+      )
+      .toArray()[0] as DbSlotRow | undefined;
+    return row ?? null;
+  }
+
+  @schemaRpc()
+  slotHistoryRelative(slotId: string, delta: -1 | 1): DbSlotHistoryRow | null {
+    return (
+      (this.sql
+        .exec(
+          `SELECT target.*
+             FROM slots slot
+             JOIN slot_history current
+               ON current.slot_id = slot.slot_id AND current.entry_key = slot.current_entry_key
+             JOIN slot_history target
+               ON target.slot_id = slot.slot_id AND target.cursor = current.cursor + ?
+            WHERE slot.slot_id = ? AND slot.closed_at IS NULL`,
+          delta,
+          slotId
+        )
+        .toArray()[0] as DbSlotHistoryRow | undefined) ?? null
+    );
+  }
+
+  /** A slot's history entries, newest first (bounded). Read-only; used for build-proof reverts. */
+  @schemaRpc()
+  slotHistoryList(slotId: string, limit = 100): DbSlotHistoryRow[] {
+    return this.sql
+      .exec(
+        `SELECT slot_id, cursor, entry_key, entity_id, source, context_id, state_args, options, recorded_at
+           FROM slot_history
+          WHERE slot_id = ?
+          ORDER BY cursor DESC
+          LIMIT ?`,
+        slotId,
+        Math.max(1, Math.min(1000, Math.floor(limit)))
+      )
+      .toArray() as unknown as DbSlotHistoryRow[];
+  }
+
+  @schemaRpc()
+  slotHistoryEntry(slotId: string, entryKey: string): DbSlotHistoryRow | null {
+    return (
+      (this.sql
+        .exec(
+          `SELECT cursor, entry_key, entity_id, source, context_id, state_args, options
+             FROM slot_history
+            WHERE slot_id = ? AND entry_key = ?`,
+          slotId,
+          entryKey
+        )
+        .toArray()[0] as DbSlotHistoryRow | undefined) ?? null
+    );
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // legacy import: the retired SQLite store -> this cell (legacyImport.ts)
+  // ─────────────────────────────────────────────────────────────
+
+  private createLegacyImportTables(): void {
+    // Local tables (`local_%`): the import's own bookkeeping and staging are
+    // not workspace state, so no commit carries them and no reset rewinds them.
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS local_legacy_import (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS local_legacy_rows (
+        tbl TEXT NOT NULL,
+        ord INTEGER NOT NULL,
+        key TEXT NOT NULL,
+        grp TEXT,
+        data TEXT NOT NULL,
+        PRIMARY KEY (tbl, ord)
+      )
+    `);
+    this.sql.exec(
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_local_legacy_rows_key ON local_legacy_rows(tbl, key)`
+    );
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_local_legacy_rows_group ON local_legacy_rows(tbl, grp)`
+    );
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS local_legacy_events (
+        ord INTEGER PRIMARY KEY,
+        time INTEGER NOT NULL,
+        kind TEXT NOT NULL,
+        key TEXT NOT NULL,
+        entity_id TEXT,
+        entry_key TEXT
+      )
+    `);
+  }
+
+  private importValue(key: string): string | null {
+    const row = this.sql.exec(`SELECT value FROM local_legacy_import WHERE key = ?`, key).toArray()[0];
+    return row ? String(row["value"]) : null;
+  }
+
+  private requireImportValue(key: string): string {
+    const value = this.importValue(key);
+    if (value === null) throw new Error(`The legacy import has no ${key}`);
+    return value;
+  }
+
+  private requireDolt(): DoltStorage {
+    const dolt = this.dolt;
+    if (!dolt) throw new Error("WorkspaceStateDO runs only on a Dolt cell");
+    return dolt;
+  }
+
+  private setImportValue(key: string, value: string): void {
+    this.sql.exec(
+      `INSERT INTO local_legacy_import (key, value) VALUES (?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+      key,
+      value
+    );
+  }
+
+  private importStatus(): {
+    phase: "none" | "staging" | "replaying" | "verified" | "skipped" | "adopted";
+    staged: Record<string, number>;
+    applied: number;
+    total: number;
+    manifestDigest: string | null;
+  } {
+    let phase = (this.importValue("phase") ?? "none") as ReturnType<
+      WorkspaceStateDO["importStatus"]
+    >["phase"];
+    if (phase === "none" && this.hasWorkspaceData()) phase = "adopted";
+    const staged: Record<string, number> = {};
+    for (const row of this.sql
+      .exec(`SELECT tbl, COUNT(*) AS n FROM local_legacy_rows GROUP BY tbl`)
+      .toArray()) {
+      staged[String(row["tbl"])] = Number(row["n"]);
+    }
+    const manifest = this.importValue("manifest");
+    return {
+      phase,
+      staged,
+      applied: Number(this.importValue("applied") ?? 0),
+      total: Number(this.importValue("total") ?? 0),
+      manifestDigest: manifest ? (JSON.parse(manifest) as LegacyManifest).digest : null,
+    };
+  }
+
+  /** A cell that already holds workspace rows is never imported into (a restored object, say). */
+  private hasWorkspaceData(): boolean {
+    return (
+      this.sql.exec(`SELECT 1 AS present FROM entities LIMIT 1`).toArray().length > 0 ||
+      this.sql.exec(`SELECT 1 AS present FROM slots LIMIT 1`).toArray().length > 0
+    );
+  }
+
+  @schemaRpc()
+  legacyImportStatus(): ReturnType<WorkspaceStateDO["importStatus"]> {
+    return this.importStatus();
+  }
+
+  /** There is no retired store (a fresh workspace): the import is settled with nothing to move. */
+  @schemaRpc()
+  legacyImportSkip(): ReturnType<WorkspaceStateDO["importStatus"]> {
+    const phase = this.importStatus().phase;
+    if (phase === "none") this.setImportValue("phase", "skipped");
+    else if (phase !== "skipped" && phase !== "adopted" && phase !== "verified") {
+      throw new Error(`Cannot skip a legacy import that is ${phase}`);
+    }
+    return this.importStatus();
+  }
+
+  /**
+   * Start the import of the store the manifest describes. Resuming is the same
+   * call: the same source continues where it stopped, a source that changed
+   * since staging began (the retired store was written again) starts over from
+   * the empty schema, so a replay never mixes two sources.
+   */
+  @schemaRpc()
+  legacyImportBegin(manifest: LegacyManifest): ReturnType<WorkspaceStateDO["importStatus"]> {
+    const status = this.importStatus();
+    if (status.phase === "verified" || status.phase === "skipped" || status.phase === "adopted") {
+      return status;
+    }
+    if (!manifest.present) throw new Error("There is no retired workspace store to import");
+    if (status.phase !== "none") {
+      if (status.manifestDigest === manifest.digest) return status;
+      // The source changed: discard what was staged and replayed, and start over.
+      const base = this.importValue("base_commit");
+      if (!base) throw new Error("The legacy import has no base commit to restart from");
+      this.sql.exec(`DELETE FROM local_legacy_rows`);
+      this.sql.exec(`DELETE FROM local_legacy_events`);
+      this.sql.exec(`DELETE FROM local_legacy_import`);
+      this.requireDolt().reset({ hard: true, to: base });
+    }
+    // Dolt operations cannot run inside a transaction, so the base is read first.
+    const baseCommit = this.requireDolt().hashOf("HEAD");
+    this.ctx.storage.transactionSync(() => {
+      this.setImportValue("base_commit", baseCommit);
+      this.setImportValue("manifest", JSON.stringify(manifest));
+      this.setImportValue("applied", "0");
+      this.setImportValue("total", "0");
+      this.setImportValue("phase", "staging");
+    });
+    return this.importStatus();
+  }
+
+  /** Stage a page of retired-store rows. Idempotent by the legacy rowid. */
+  @schemaRpc()
+  legacyImportStage(input: {
+    table: LegacyImportTable;
+    rows: Array<{ rowid: number; row: LegacyRow }>;
+  }): number {
+    if (this.importValue("phase") !== "staging") {
+      throw new Error("Legacy rows are staged only while the import is staging");
+    }
+    if (!(LEGACY_IMPORT_TABLES as readonly string[]).includes(input.table)) {
+      throw new Error(`Unknown legacy table: ${input.table}`);
+    }
+    const known = new Set(LEGACY_COLUMNS[input.table]);
+    this.ctx.storage.transactionSync(() => {
+      for (const { rowid, row } of input.rows) {
+        for (const column of Object.keys(row)) {
+          if (!known.has(column)) throw new Error(`Unknown column ${input.table}.${column}`);
+        }
+        this.sql.exec(
+          `INSERT OR IGNORE INTO local_legacy_rows (tbl, ord, key, grp, data) VALUES (?, ?, ?, ?, ?)`,
+          input.table,
+          rowid,
+          stagedKey(input.table, row),
+          input.table === "slots" && typeof row["closed_at"] === "number"
+            ? String(row["closed_at"])
+            : null,
+          JSON.stringify(row)
+        );
+      }
+    });
+    return Number(
+      this.sql
+        .exec(`SELECT COUNT(*) AS n FROM local_legacy_rows WHERE tbl = ?`, input.table)
+        .one()["n"]
+    );
+  }
+
+  private stagedRows(table: LegacyImportTable): LegacyRow[] {
+    return this.sql
+      .exec(`SELECT data FROM local_legacy_rows WHERE tbl = ? ORDER BY ord`, table)
+      .toArray()
+      .map((row) => JSON.parse(String(row["data"])) as LegacyRow);
+  }
+
+  private stagedRow(table: LegacyImportTable, key: string): LegacyRow {
+    const row = this.sql
+      .exec(`SELECT data FROM local_legacy_rows WHERE tbl = ? AND key = ?`, table, key)
+      .toArray()[0];
+    if (!row) throw new Error(`Legacy import: no staged ${table} row ${JSON.stringify(key)}`);
+    return JSON.parse(String(row["data"])) as LegacyRow;
+  }
+
+  /** The plan, written once: the sequence of commits that rebuilds the replayed tables. */
+  private planLegacyReplay(): void {
+    const manifest = JSON.parse(this.requireImportValue("manifest")) as LegacyManifest;
+    for (const table of manifest.tables) {
+      const staged = Number(
+        this.sql
+          .exec(`SELECT COUNT(*) AS n FROM local_legacy_rows WHERE tbl = ?`, table.name)
+          .one()["n"]
+      );
+      if (staged !== table.rows) {
+        throw new Error(
+          `Legacy import staged ${staged} of ${table.rows} rows of ${table.name}; stage it completely first`
+        );
+      }
+    }
+    const rows = Object.fromEntries(
+      REPLAYED_TABLES.map((table) => [table, this.stagedRows(table)])
+    ) as unknown as StagedRows;
+    const events = planReplay(rows);
+    this.sql.exec(`DELETE FROM local_legacy_events`);
+    const CHUNK = 2_000;
+    for (let start = 0; start < events.length; start += CHUNK) {
+      this.ctx.storage.transactionSync(() => {
+        events.slice(start, start + CHUNK).forEach((event, offset) => {
+          this.sql.exec(
+            `INSERT INTO local_legacy_events (ord, time, kind, key, entity_id, entry_key)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            start + offset,
+            event.time,
+            event.kind,
+            event.key,
+            event.entityId ?? null,
+            event.entryKey ?? null
+          );
+        });
+      });
+    }
+    this.ctx.storage.transactionSync(() => {
+      this.setImportValue("total", String(events.length));
+      this.setImportValue("applied", "0");
+      this.setImportValue("phase", "replaying");
+    });
+  }
+
+  /** Apply events, one commit each with the event's own time, until the budget runs out. */
+  @schemaRpc()
+  legacyImportReplay(input: { budgetMs: number; maxEvents?: number }): {
+    applied: number;
+    total: number;
+    done: boolean;
+  } {
+    const phase = this.importValue("phase");
+    if (phase === "staging") this.planLegacyReplay();
+    else if (phase !== "replaying") throw new Error(`Cannot replay a legacy import that is ${phase}`);
+    const total = Number(this.importValue("total") ?? 0);
+    const startedAt = Date.now();
+    let applied = Number(this.importValue("applied") ?? 0);
+    let budgetEvents = input.maxEvents ?? Number.POSITIVE_INFINITY;
+    while (applied < total && budgetEvents > 0 && Date.now() - startedAt < input.budgetMs) {
+      budgetEvents -= 1;
+      const event = this.sql
+        .exec(
+          `SELECT time, kind, key, entity_id, entry_key FROM local_legacy_events WHERE ord = ?`,
+          applied
+        )
+        .one() as {
+        time: number;
+        kind: ReplayEvent["kind"];
+        key: string;
+        entity_id: string | null;
+        entry_key: string | null;
+      };
+      this.commit(
+        () => ({ message: this.replayMessage(event), date: event.time }),
+        () => {
+          this.applyReplayEvent(event);
+          this.setImportValue("applied", String(applied + 1));
+        }
+      );
+      applied += 1;
+    }
+    return { applied, total, done: applied >= total };
+  }
+
+  private replayMessage(event: { kind: string; key: string }): string {
+    const label = event.key.replaceAll("\u001f", " ");
+    switch (event.kind) {
+      case "meta":
+        return `replay: record ${label}`;
+      case "close":
+        return `replay: close panel group ${label}`;
+      default:
+        return `replay: ${event.kind} ${label}`;
+    }
+  }
+
+  private insertStaged(table: LegacyImportTable, row: LegacyRow, override: LegacyRow = {}): void {
+    const columns = LEGACY_COLUMNS[table];
+    this.sql.exec(
+      `INSERT INTO ${table} (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
+      ...columns.map((column) => (column in override ? override[column] : (row[column] ?? null)))
+    );
+  }
+
+  private applyReplayEvent(event: {
+    kind: ReplayEvent["kind"];
+    key: string;
+    entity_id: string | null;
+    entry_key: string | null;
+  }): void {
+    switch (event.kind) {
+      case "meta": {
+        this.insertStaged("workspace_meta", this.stagedRow("workspace_meta", event.key));
+        return;
+      }
+      case "entity": {
+        const row = this.stagedRow("entities", event.key);
+        // A retired entity first arrives as the live row it was; its `retire` event
+        // closes it at `retired_at`.
+        this.insertStaged(
+          "entities",
+          row,
+          row["status"] === "retired"
+            ? { status: "active", retired_at: null, cleanup_complete: 1, error: null }
+            : {}
+        );
+        return;
+      }
+      case "retire": {
+        const row = this.stagedRow("entities", event.key);
+        this.sql.exec(
+          `UPDATE entities SET status = ?, retired_at = ?, cleanup_complete = ?, error = ? WHERE id = ?`,
+          row["status"],
+          row["retired_at"],
+          row["cleanup_complete"],
+          row["error"],
+          event.key
+        );
+        return;
+      }
+      case "slot": {
+        const row = this.stagedRow("slots", event.key);
+        // Open, on its first entry, as it arrived; later entries move it and the
+        // `close` event takes it down.
+        this.insertStaged("slots", row, {
+          closed_at: null,
+          current_entity_id: event.entity_id,
+          current_entry_key: event.entry_key,
+        });
+        return;
+      }
+      case "history": {
+        const row = this.stagedRow("slot_history", event.key);
+        this.insertStaged("slot_history", row);
+        this.sql.exec(
+          `UPDATE slots SET current_entity_id = ?, current_entry_key = ? WHERE slot_id = ?`,
+          event.entity_id,
+          event.entry_key,
+          row["slot_id"]
+        );
+        return;
+      }
+      case "binding":
+        this.insertStaged(
+          "runtime_resource_bindings",
+          this.stagedRow("runtime_resource_bindings", event.key)
+        );
+        return;
+      case "edge":
+        this.insertStaged("context_edges", this.stagedRow("context_edges", event.key));
+        return;
+      case "close":
+        this.sql.exec(
+          `UPDATE slots SET closed_at = ?, current_entity_id = NULL
+            WHERE slot_id IN (SELECT key FROM local_legacy_rows WHERE tbl = 'slots' AND grp = ?)`,
+          Number(event.key),
+          event.key
+        );
+        return;
+    }
+  }
+
+  /** The rows this cell holds for one legacy table, in the legacy shape. */
+  private importedRows(table: LegacyImportTable): LegacyRow[] {
+    const columns = LEGACY_COLUMNS[table].join(", ");
+    if (table === "workspace_meta") {
+      return this.sql
+        .exec(
+          `SELECT ${columns} FROM workspace_meta UNION ALL SELECT ${columns} FROM local_workspace_meta`
+        )
+        .toArray() as unknown as LegacyRow[];
+    }
+    return this.sql.exec(`SELECT ${columns} FROM ${table}`).toArray() as unknown as LegacyRow[];
+  }
+
+  /**
+   * Copy the operational tables, then prove every legacy table equals what this
+   * cell holds. `state` is checked as a subset: the base writes its own rows.
+   */
+  @schemaRpc()
+  async legacyImportFinish(
+    manifest: LegacyManifest
+  ): Promise<ReturnType<WorkspaceStateDO["importStatus"]>> {
+    const status = this.importStatus();
+    if (status.phase === "verified") return status;
+    if (status.phase !== "replaying") {
+      throw new Error(`Cannot finish a legacy import that is ${status.phase}`);
+    }
+    if (status.applied < status.total) {
+      throw new Error(`Legacy import replayed ${status.applied} of ${status.total} events`);
+    }
+    if (status.manifestDigest !== manifest.digest) {
+      throw new Error("The retired store changed while it was being imported; import again");
+    }
+    // Operational state is moved as it is. It is local, so it is never committed.
+    this.ctx.storage.transactionSync(() => {
+      for (const table of LEGACY_IMPORT_TABLES) {
+        if (REPLAYED_TABLES.includes(table)) continue;
+        if (table !== "state") this.sql.exec(`DELETE FROM ${table}`);
+        const columns = LEGACY_COLUMNS[table];
+        for (const row of this.stagedRows(table)) {
+          this.sql.exec(
+            `INSERT OR REPLACE INTO ${table} (${columns.join(", ")}) VALUES (${columns
+              .map(() => "?")
+              .join(", ")})`,
+            ...columns.map((column) => row[column] ?? null)
+          );
+        }
+      }
+      const revision = this.stagedRows("workspace_meta").find(
+        (row) => row["key"] === PANEL_TREE_REVISION_META_KEY
+      );
+      if (revision) {
+        this.sql.exec(
+          `INSERT OR REPLACE INTO local_workspace_meta (key, value) VALUES (?, ?)`,
+          PANEL_TREE_REVISION_META_KEY,
+          revision["value"]
+        );
+      }
+    });
+    const mismatched: string[] = [];
+    for (const expected of manifest.tables) {
+      const rows = this.importedRows(expected.name);
+      if (expected.name === "state") {
+        const held = new Set(rows.map((row) => `${String(row["key"])}\u001f${String(row["value"])}`));
+        const missing = this.stagedRows("state").filter(
+          (row) => !held.has(`${String(row["key"])}\u001f${String(row["value"])}`)
+        );
+        if (missing.length > 0) mismatched.push(`state (${missing.length} rows missing)`);
+        continue;
+      }
+      if (rows.length !== expected.rows || (await digestRows(expected.name, rows)) !== expected.digest) {
+        mismatched.push(`${expected.name} (${rows.length} of ${expected.rows} rows)`);
+      }
+    }
+    if (mismatched.length > 0) {
+      throw new Error(`Legacy import does not equal the retired store: ${mismatched.join(", ")}`);
+    }
+    // One empty commit marks the verified move in the history; the staging goes with it.
+    this.committedTransaction(
+      () => ({
+        message: `import: workspace state from the retired SQLite store (${manifest.digest.slice(0, 12)}, ${status.total} events)`,
+        allowEmpty: true,
+      }),
+      () => {
+        this.sql.exec(`DELETE FROM local_legacy_rows`);
+        this.sql.exec(`DELETE FROM local_legacy_events`);
+        this.setImportValue("phase", "verified");
+      }
+    );
+    return this.importStatus();
+  }
+
+  // ─────────────────────────────────────────────────────────────
+  // Helpers
+  // ─────────────────────────────────────────────────────────────
+
+  private createLifecycleTables(): void {
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS lifecycle_epochs (
+        epoch_id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        reason TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        generation INTEGER NOT NULL,
+        status TEXT NOT NULL
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS lifecycle_leases (
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        detail TEXT,
+        created_at INTEGER NOT NULL,
+        refreshed_at INTEGER NOT NULL,
+        PRIMARY KEY (source, class_name, object_key)
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_lifecycle_leases_refreshed ON lifecycle_leases(refreshed_at)`
+    );
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS lifecycle_ops (
+        epoch_id TEXT NOT NULL,
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        op_kind TEXT NOT NULL,
+        status TEXT NOT NULL,
+        detail TEXT,
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (epoch_id, source, class_name, object_key, op_kind)
+      )
+    `);
+    this.sql.exec(
+      `CREATE INDEX IF NOT EXISTS idx_lifecycle_ops_resume
+       ON lifecycle_ops(op_kind, status, source, class_name, object_key)`
+    );
+    // Durable DO alarm schedule. workerd does not implement alarms for
+    // SQLite-backed DOs (and never for facets), so the server drives them: a DO
+    // registers its wake time here, and the AlarmDriver fires `__alarm` on
+    // schedule. Survives server/workerd restart (durable workspace state storage).
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS do_alarms (
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        wake_at INTEGER NOT NULL,
+        dispatch_generation INTEGER NOT NULL DEFAULT 0,
+        dispatch_owner TEXT,
+        PRIMARY KEY (source, class_name, object_key)
+      )
+    `);
+    this.sql.exec(`CREATE INDEX IF NOT EXISTS idx_do_alarms_wake ON do_alarms(wake_at)`);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS do_alarm_test_policies (
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        test_policy_json TEXT NOT NULL,
+        PRIMARY KEY (source, class_name, object_key)
+      )
+    `);
+    this.sql.exec(`
+      CREATE TABLE IF NOT EXISTS durable_work_owners (
+        source TEXT NOT NULL,
+        class_name TEXT NOT NULL,
+        object_key TEXT NOT NULL,
+        queues_json TEXT NOT NULL,
+        registered_at INTEGER NOT NULL,
+        PRIMARY KEY (source, class_name, object_key)
+      )
+    `);
+  }
+
+  /** Recover cross-table lifecycle invariants independently of schema setup. */
+  private repairLifecycleInvariants(): void {
+    this.sql.exec(`
+      DELETE FROM do_alarms
+       WHERE EXISTS (
+         SELECT 1 FROM entities
+          WHERE entities.kind = 'do'
+            AND entities.status = 'retired'
+            AND entities.source_repo_path = do_alarms.source
+            AND entities.class_name = do_alarms.class_name
+            AND entities.key = do_alarms.object_key
+       )
+    `);
+    this.sql.exec(`
+      DELETE FROM do_alarm_test_policies
+       WHERE NOT EXISTS (
+         SELECT 1 FROM do_alarms
+          WHERE do_alarms.source = do_alarm_test_policies.source
+            AND do_alarms.class_name = do_alarm_test_policies.class_name
+            AND do_alarms.object_key = do_alarm_test_policies.object_key
+       )
+    `);
+    this.sql.exec(`
+      DELETE FROM durable_work_owners
+       WHERE NOT EXISTS (
+         SELECT 1 FROM entities
+          WHERE entities.kind = 'do'
+            AND entities.status = 'active'
+            AND entities.source_repo_path = durable_work_owners.source
+            AND entities.class_name = durable_work_owners.class_name
+            AND entities.key = durable_work_owners.object_key
+       )
+    `);
+  }
+
+  private insertLifecycleOp(
+    epochId: string,
+    key: LifecycleKey,
+    opKind: "prepare" | "resume",
+    status: LifecycleOpInput["status"],
+    detail: string | null,
+    updatedAt: number
+  ): void {
+    this.sql.exec(
+      `INSERT INTO lifecycle_ops (
+        epoch_id, source, class_name, object_key, op_kind, status, detail, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(epoch_id, source, class_name, object_key, op_kind) DO UPDATE SET
+        status = excluded.status,
+        detail = excluded.detail,
+        updated_at = excluded.updated_at`,
+      epochId,
+      key.source,
+      key.className,
+      key.objectKey,
+      opKind,
+      status,
+      detail,
+      updatedAt
+    );
+  }
+
+  private assertLifecycleKey(key: LifecycleKey): void {
+    if (!key.source || !key.className || !key.objectKey) {
+      throw new Error("lifecycle key requires source, className, and objectKey");
+    }
+  }
+
+  private parseJsonOrNull(value: string | null): unknown | null {
+    if (value === null) return null;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return value;
+    }
+  }
+
+  private readEntityRow(id: string): DbEntityRow | null {
+    const row = this.sql.exec(`SELECT * FROM entities WHERE id = ?`, id).toArray()[0] as unknown as
+      | DbEntityRow
+      | undefined;
+    return row ?? null;
+  }
+
+  private rowToEntity(row: DbEntityRow): EntityRecord {
+    const record: EntityRecord = {
+      id: row.id,
+      kind: row.kind,
+      source: {
+        repoPath: row.source_repo_path,
+        effectiveVersion: row.source_effective_version,
+      },
+      ...(row.active_build_key ? { activeBuildKey: row.active_build_key } : {}),
+      ...(row.active_execution_digest
+        ? { activeExecutionDigest: row.active_execution_digest }
+        : {}),
+      ...(row.active_authority
+        ? {
+            activeAuthority: parseUnitAuthorityManifest(
+              JSON.parse(row.active_authority),
+              `entity ${row.id} active authority`
+            ),
+          }
+        : {}),
+      contextId: row.context_id,
+      key: row.key,
+      authoritySessionId: row.authority_session_id,
+      createdAt: row.created_at,
+      status: row.status,
+      cleanupComplete: row.cleanup_complete === 1,
+    };
+    if (row.native_owner) record.nativeOwner = JSON.parse(row.native_owner);
+    if (row.clone_provenance) record.cloneProvenance = JSON.parse(row.clone_provenance);
+    if (row.class_name) record.className = row.class_name;
+    if (row.state_args !== null) record.stateArgs = JSON.parse(row.state_args);
+    if (row.agent_channel_id !== null) {
+      record.agentBinding = {
+        entityId: row.agent_entity_id ?? row.id,
+        contextId: row.context_id,
+        channelId: row.agent_channel_id,
+      };
+    }
+    if (row.execution_authority !== null)
+      record.executionAuthority = JSON.parse(row.execution_authority);
+    if (row.parent_id !== null) record.parentId = row.parent_id;
+    // Mirror the owning-user stamp onto the cache record so lineage-inheriting
+    // callers resolve it synchronously (WP0 §6, principalIdentity.resolveUserSubject).
+    if (row.owner_user_id !== null) record.ownerUserId = row.owner_user_id;
+    if (row.retired_at !== null) record.retiredAt = row.retired_at;
+    if (row.error !== null) record.error = row.error;
+    return record;
+  }
+
+  private assertIdentityMatches(
+    id: string,
+    existing: DbEntityRow,
+    input: EntityActivationInput
+  ): void {
+    this.assertStableIdentityMatches(id, existing, input);
+    if (existing.source_effective_version !== input.source.effectiveVersion) {
+      throw new IdentityCollisionError(id, {
+        field: "source.effectiveVersion",
+        existing: existing.source_effective_version,
+        attempted: input.source.effectiveVersion,
+      });
+    }
+  }
+
+  private assertStableIdentityMatches(
+    id: string,
+    existing: DbEntityRow,
+    input: EntityActivationInput
+  ): void {
+    const checks: Array<{ field: string; existing: unknown; attempted: unknown }> = [
+      {
+        field: "executionAuthority",
+        existing: existing.execution_authority,
+        attempted: input.executionAuthority ? canonicalJson(input.executionAuthority) : null,
+      },
+      { field: "kind", existing: existing.kind, attempted: input.kind },
+      {
+        field: "source.repoPath",
+        existing: existing.source_repo_path,
+        attempted: input.source.repoPath,
+      },
+      { field: "contextId", existing: existing.context_id, attempted: input.contextId },
+      { field: "className", existing: existing.class_name, attempted: input.className ?? null },
+      { field: "key", existing: existing.key, attempted: input.key },
+    ];
+    for (const check of checks) {
+      if (check.existing !== check.attempted) {
+        throw new IdentityCollisionError(id, check);
+      }
+    }
+  }
+
+  private appendHistoryRow(
+    slotId: string,
+    cursor: number,
+    entry: SlotHistoryEntryInput,
+    now: number
+  ): void {
+    this.sql.exec(
+      `INSERT INTO slot_history (slot_id, cursor, entry_key, entity_id, source, context_id, state_args, options, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      slotId,
+      cursor,
+      entry.entryKey,
+      entry.entityId,
+      entry.source,
+      entry.contextId,
+      entry.stateArgs === undefined ? null : JSON.stringify(entry.stateArgs),
+      entry.options === undefined ? null : JSON.stringify(entry.options),
+      now
+    );
+  }
+
+  private assertCompleteActivePanelIncarnation(entry: SlotHistoryEntryInput): void {
+    const entity = this.readEntityRow(entry.entityId);
+    const requiresExecutableImage = entity ? !isBrowserPanelSource(entity.source_repo_path) : true;
+    if (
+      !entity ||
+      entity.kind !== "panel" ||
+      entity.status !== "active" ||
+      entity.retired_at !== null ||
+      entity.cleanup_complete !== 1 ||
+      entity.error !== null ||
+      (requiresExecutableImage &&
+        (entity.active_build_key === null ||
+          entity.active_execution_digest === null ||
+          entity.active_authority === null))
+    ) {
+      throw new Error(`Prepared panel incarnation is not active and complete: ${entry.entityId}`);
+    }
+    if (
+      entity.key !== entry.entryKey ||
+      entity.source_repo_path !== entry.source ||
+      entity.context_id !== entry.contextId
+    ) {
+      throw new Error(`Prepared panel incarnation does not match history entry: ${entry.entityId}`);
+    }
+  }
+
+  private requireSlot(slotId: string): DbSlotRow {
+    const row = this.slotGet(slotId);
+    if (!row) throw new Error(`Slot not found: ${slotId}`);
+    return row;
+  }
+}

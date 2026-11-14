@@ -39,7 +39,7 @@ export class LifecycleDriver {
     this.deps = deps;
     this.workspaceRef = {
       source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
+      className: "WorkspaceStateDO",
       objectKey: deps.workspaceId,
     };
     this.workspaceState = createTypedServiceClient(

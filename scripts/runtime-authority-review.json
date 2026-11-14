@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:43f8bf4a0e2687f072caa4a7961476df9c086218739949c6830b6d0e9f234df1",
+  "censusDigest": "sha256:264544810a496181cd3d2644deffe02014c5ed1c25006640e2f2982f370ce8e8",
   "decisions": {
     "host:terminalApps.launch": {
       "review": "single-prepared-terminal-program-consent",
@@ -49,75 +49,75 @@
       "review": "host-only-exact-eval-execution-retention",
       "change": "Adds a host-only write of one validated immutable execution artifact reference joined to its exact eval run. It cannot fabricate an artifact, widen executable authority, or delete retention."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmAdoptWorker": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmAdoptWorker": {
       "review": "host-only-alarm-worker-generation-adoption",
       "change": "Adds the explicit host scheduler generation boundary. It atomically fences prior scheduler claims and installs one exact active worker identity; elapsed time cannot transfer alarm ownership."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmClaimDue": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmClaimDue": {
       "review": "host-only-generation-fenced-alarm-claim",
       "change": "Replaces the unfenced due-alarm listing path with a bounded host-only atomic claim carrying an adopted worker identity and claim generation. Claims never expire by elapsed time."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmComplete": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmComplete": {
       "review": "exact-native-wake-claim-completion",
       "change": "Settles only the authenticated claimed alarm generation and combines acknowledgement with the actual remaining wake. Stale completion cannot erase a newer durable hint."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmListScheduled": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmListScheduled": {
       "review": "host-only-bounded-alarm-census",
       "change": "Replaces the prior due-alarm execution feed with a read-only startup census of exact scheduled Durable Object targets. It exposes no alarm payload and grants no claim or execution authority."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourceList": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSourceList": {
       "review": "host-owned-native-wake-recovery-inventory",
       "change": "Lists retained source registrations for the existing host-owned alarm recovery path. It creates no registration, execution authority, or scheduler policy."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourcePublish": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSourcePublish": {
       "review": "exact-native-source-schedule-publication",
       "change": "Accepts schedules only for the authenticated registered source incarnation and increasing publication generation. Null source schedules do not erase independent host wake hints."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:alarmSourceRequest": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmSourceRequest": {
       "review": "host-owned-native-source-checkup-hint",
       "change": "Records an independently retained checkup hint for the exact registered source. It asks the source to inspect canonical native work; it cannot supply a task outcome or acquire authority."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:durableWorkOwnerList": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:durableWorkOwnerList": {
       "review": "host-only-bounded-durable-owner-scan",
       "change": "Adds the host recovery driver's bounded read of registered durable-work owners; owner-local state remains readiness authority."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityListExecutionRoots": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityListExecutionRoots": {
       "review": "host-only-sealed-entity-execution-root-census",
       "change": "Returns host-only EntityRecord execution roots retained by active entities, sealed preparing entities, and panel-history references for the mandatory retention provider. It performs no lifecycle mutation and retention grants no ordinary execution admission or outbound authority."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityPrepareExecution": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityPrepareExecution": {
       "review": "host-only-exact-preactive-clone-execution-seal",
       "change": "Seals one already reserved preparing entity to its exact runtime image and authority lifetime before receiver-owned clone initialization. Only host principals may invoke this gated internal write; preparing image retention does not admit ordinary incoming calls, outbound code authority, activation, or queue publication."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityRebindAgentChannel": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityRebindAgentChannel": {
       "review": "host-only-cloned-agent-binding-persistence",
       "change": "Adds a typed host-only write that moves one active local agent entity to an exact channel and atomically replaces its self agent-binding. The receiver accepts only Durable Object, worker, or session entities, rejects external relay identities, and grants no channel membership or caller-selected authority."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:entityReserve": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:entityReserve": {
       "review": "host-only-generic-entity-reservation",
       "change": "Generalizes the WorkspaceDO reservation write from panels to the enumerated buildable entity kinds. The host supplies the already validated immutable identity fields, and the receiver atomically creates or returns the exact reserved entity without executing code or widening caller authority."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:initializePanels": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:initializePanels": {
       "review": "host-owned-once-only-template-panel-initialization",
       "change": "Adds a host-only workspace.runtime-state.manage write that reserves template initial panels and creates their slots with one durable initialization marker in the same workspace transaction. Existing panel history is adopted without recreating user-deleted panels. The host supplies the workspace configuration; the receiver grants no user identity or execution authority, and existing sealed execution reconciliation activates the reserved panels. Hosted panel connections still require the current authenticated viewer and exact runtime lease."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingEntities": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingEntities": {
       "review": "host-only-runtime-resource-binding-lookup",
       "change": "Returns active entity ids bound to an exact resource kind and bounded id list so the runtime can apply resource-owned lifecycle events. It is a host-only read and exposes no user content or capability grant material."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsForEntity": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingsForEntity": {
       "review": "host-only-entity-resource-binding-lookup",
       "change": "Returns the durable host-validated resource relationships already owned by one exact runtime entity so eval can recover structural panel parentage when an orchestrator, rather than the bound panel, owns the lifecycle lineage. The method is a host-only read; it creates no relationship, grants no capability, and supplies no caller-authored parent identity."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsRelease": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingsRelease": {
       "review": "host-only-runtime-resource-binding-release",
       "change": "Deletes every durable resource relationship owned by one runtime entity. This removes authority and lifecycle coupling only; it cannot create a relationship or grant a capability."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:runtimeResourceBindingsReplace": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:runtimeResourceBindingsReplace": {
       "review": "host-only-runtime-resource-binding-commit",
       "change": "Commits the generic resource relationships already validated by runtime.createEntity into the workspace runtime registry. The method is host-only, requires runtime-state authority, accepts no executable policy, and records only entity, resource, capability, and agent-channel coordinates."
     },
-    "direct:packages/builtin/src/workspace-state/WorkspaceDO.ts:slotPatchCurrentStateArgs": {
+    "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:slotPatchCurrentStateArgs": {
       "review": "owner-serialized-current-panel-state-patch",
       "change": "Replaces whole stateArgs updates with an RFC 7386 merge patch serialized and schema-validated by the Workspace owner. Preserves runtime-state.manage and the prepared context boundary, rejects an entry or active-build conflict, and grants no navigation, cross-owner access, or website authority."
     },

@@ -4,6 +4,8 @@ import { workspaceStateMethods } from "./workspaceState.js";
 import { webhookEngineMethods } from "./webhookEngine.js";
 import { evalEngineMethods } from "./evalEngine.js";
 import { workspaceStateEngineMethods } from "./workspaceStateEngine.js";
+import { workspaceStateLegacyMethods } from "./workspaceStateLegacy.js";
+import { WORKSPACE_STATE_LOCAL_TABLES } from "./workspaceStateStorage.js";
 // BUILTIN_SCAFFOLD_IMPORTS
 
 export type BuiltinBecause = "feeds-authority" | "durable-data" | "recovery-path";
@@ -25,6 +27,10 @@ interface BuiltinBase {
     codegen: boolean;
     /** The class keeps an object resident through `ctx.residency.hold()` (celld residency holds). */
     residency: boolean;
+    /** The cell's storage engine, fixed when its class is created. Absent means SQLite. */
+    storage?: "dolt";
+    /** Tables a reset does not rewind and a fork does not copy (Dolt classes; the framework adds its own). */
+    doltLocal?: readonly string[];
   };
   /** Static authority ceiling for work that has no inbound RPC authority
    * parent, notably durable-object alarms. Direct RPC execution is narrowed
@@ -74,12 +80,34 @@ export const PRODUCT_BUILTINS = [
     presentation: { domain: "computer", verb: "manage" },
     principals: ["host"],
     protocols: ["vibestudio.workspace-state.v1"],
-    className: "WorkspaceDO",
+    className: "WorkspaceStateDO",
     implementation: "@panticonic/builtin/workspace-state",
-    sourceFile: "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+    sourceFile: "packages/builtin/src/workspace-state/WorkspaceStateDO.ts",
     builtinBecause: "feeds-authority",
     methods: workspaceStateMethods,
     directMethods: workspaceStateEngineMethods,
+    durableObject: { keyVersion: 1, objectKey: "workspace", keyMode: "workspace-scoped" },
+    runtime: {
+      staticAuthorityProjection: true,
+      codegen: false,
+      residency: false,
+      storage: "dolt",
+      doltLocal: WORKSPACE_STATE_LOCAL_TABLES,
+    },
+    residentCapabilityRequests: [],
+    hostCapabilityRequests: [],
+  },
+  {
+    // The SQLite store `WorkspaceStateDO` replaced. Deployed for one release,
+    // read-only, as the source of the one-time import (docs/dolt-redesign.md §9.2).
+    kind: "engine",
+    source: "vibestudio/internal",
+    name: "workspace.state.legacy",
+    className: "WorkspaceDO",
+    implementation: "@panticonic/builtin/workspace-state",
+    sourceFile: "packages/builtin/src/workspace-state/WorkspaceDO.ts",
+    builtinBecause: "durable-data",
+    directMethods: workspaceStateLegacyMethods,
     durableObject: { keyVersion: 1, objectKey: "workspace", keyMode: "workspace-scoped" },
     runtime: {
       staticAuthorityProjection: true,
