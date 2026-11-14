@@ -489,7 +489,7 @@ describe("workerService workspace service resolution", () => {
           protocols: ["vibestudio.workspace-state.v1"],
           source: "vibestudio/internal",
           kind: "durable-object",
-          className: "WorkspaceDO",
+          className: "WorkspaceStateDO",
           defaultObjectKey: null,
         },
         {
@@ -554,9 +554,9 @@ describe("workerService workspace service resolution", () => {
       kind: "durable-object",
       name: "workspace.state",
       source: "vibestudio/internal",
-      className: "WorkspaceDO",
+      className: "WorkspaceStateDO",
       objectKey: "workspace-test",
-      targetId: "do:vibestudio/internal:WorkspaceDO:workspace-test",
+      targetId: "do:vibestudio/internal:WorkspaceStateDO:workspace-test",
     });
 
     await expect(
@@ -955,7 +955,7 @@ describe("workerService workspace service resolution", () => {
     await expect(
       dispatcher.dispatch({ caller: user }, "workers", "resolveDurableObject", [
         "vibestudio/internal",
-        "WorkspaceDO",
+        "WorkspaceStateDO",
         "workspace-test",
       ])
     ).rejects.toThrow("No Durable Object class registered");

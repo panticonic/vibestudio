@@ -395,6 +395,26 @@ afterEach(async () => {
  * `/_object` (fork, restore through the router) and a UniversalDO cell's
  * `__vibestudio_destroy`. Everything else answers as the default fetch does.
  */
+/** The host's outbox of retired objects whose storage the node has not yet deleted. */
+function retiredOutbox(
+  mgr: RuntimeManager
+): Array<{ source: string; class_name: string; object_key: string }> {
+  return (
+    mgr as unknown as { doStorageDb: { prepare(sql: string): { all(): unknown[] } } }
+  ).doStorageDb
+    .prepare(`SELECT source, class_name, object_key FROM do_storage_retired`)
+    .all() as Array<{ source: string; class_name: string; object_key: string }>;
+}
+
+/** Backups whose fork never finished (their operation ids). */
+function unfinishedBackups(mgr: RuntimeManager): string[] {
+  return (
+    (mgr as unknown as { doStorageDb: { prepare(sql: string): { all(): unknown[] } } }).doStorageDb
+      .prepare(`SELECT operation_id FROM do_storage_backups WHERE ready = 0`)
+      .all() as Array<{ operation_id: string }>
+  ).map((row) => row.operation_id);
+}
+
 function fakeNode(options: { failFork?: boolean | string; failDestroy?: boolean } = {}) {
   const state = {
     failFork: options.failFork ?? false,
@@ -896,7 +916,30 @@ describe("RuntimeManager", () => {
         durable_objects: { bindings: Array<{ name: string; class_name: string }> };
       };
       expect(deployed.durable_objects.bindings.map((binding) => binding.class_name).sort()).toEqual(
-        ["BrowserVaultDO", "EvalDO", "UniversalDO", "WebhookStoreDO", "WorkspaceDO"]
+        [
+          "BrowserVaultDO",
+          "EvalDO",
+          "UniversalDO",
+          "WebhookStoreDO",
+          "WorkspaceDO",
+          "WorkspaceStateDO",
+        ]
+      );
+      // The workspace state is a Dolt class (a class's engine is fixed when it is
+      // created, so the retired SQLite class stays beside it for the import), and
+      // its local tables are declared with it.
+      const config = celldDeployments.at(-1)!.config as unknown as {
+        migrations: Array<{ new_sqlite_classes?: string[]; new_dolt_classes?: string[] }>;
+        celld: { durable_objects: Record<string, { doltLocal?: string[] }> };
+      };
+      expect(config.migrations.flatMap((migration) => migration.new_dolt_classes ?? [])).toEqual([
+        "WorkspaceStateDO",
+      ]);
+      expect(
+        config.migrations.flatMap((migration) => migration.new_sqlite_classes ?? [])
+      ).toContain("WorkspaceDO");
+      expect(config.celld.durable_objects["WorkspaceStateDO"]?.doltLocal).toEqual(
+        expect.arrayContaining(["do_alarms", "lifecycle_leases", "local_%", "vsl_%", "state"])
       );
       await manager.shutdown();
     });
@@ -1035,9 +1078,6 @@ describe("RuntimeManager", () => {
       const mgr = new RuntimeManager(createMockDeps());
       await mgr.startWorker(startArgs());
       const node = fakeNode();
-      const internals = mgr as unknown as {
-        readOpenDurableObjectMaintenance(): Array<{ kind: string; objectKey: string }>;
-      };
       try {
         await expect(
           mgr.probeDurableObjectSchema("workers/runtime-fixture", "BoardDO", mockWorkerBuild())
@@ -1046,32 +1086,28 @@ describe("RuntimeManager", () => {
         expect(node.destroyed).toHaveLength(1);
         expect(decodeURIComponent(node.destroyed[0]!.key)).toContain("__vibestudio_schema_probe");
         expect(node.destroyed[0]!.secret).toBe(mgr.getDoLoaderSecret());
-        expect(internals.readOpenDurableObjectMaintenance()).toEqual([]);
+        expect(retiredOutbox(mgr)).toEqual([]);
       } finally {
         await mgr.shutdown();
       }
     });
 
-    it("keeps a retirement the node refused journaled and collects it at the next start", async () => {
+    it("keeps a retirement the node refused in the outbox and collects it at the next start", async () => {
       const mgr = new RuntimeManager(createMockDeps());
       await mgr.startWorker(startArgs());
       const node = fakeNode({ failDestroy: true });
-      const internals = mgr as unknown as {
-        readOpenDurableObjectMaintenance(): Array<{ kind: string; objectKey: string }>;
-      };
       try {
         await mgr.probeDurableObjectSchema("workers/runtime-fixture", "BoardDO", mockWorkerBuild());
-        expect(internals.readOpenDurableObjectMaintenance()).toContainEqual(
+        expect(retiredOutbox(mgr)).toContainEqual(
           expect.objectContaining({
-            kind: "destroy",
-            objectKey: expect.stringContaining("__vibestudio_schema_probe:"),
+            object_key: expect.stringContaining("__vibestudio_schema_probe:"),
           })
         );
         node.failDestroy = false;
-        // A replaced node's start owes the journal's retirements.
-        await mgr.recoverUnresponsiveSandbox("test: collect journaled retirements");
+        // A replaced node's start owes the outbox's retirements.
+        await mgr.recoverUnresponsiveSandbox("test: collect retired storage");
         expect(node.destroyed).toHaveLength(1);
-        expect(internals.readOpenDurableObjectMaintenance()).toEqual([]);
+        expect(retiredOutbox(mgr)).toEqual([]);
       } finally {
         await mgr.shutdown();
       }
@@ -1266,30 +1302,30 @@ describe("RuntimeManager", () => {
     });
   });
 
-  it("resumes a failed maintenance journal and hides its backup until completion", async () => {
+  it("hides a backup until its fork finished, and the next operation sweeps the unfinished one", async () => {
     const mgr = new RuntimeManager(createMockDeps());
     await mgr.startWorker(startArgs());
     const node = fakeNode({ failFork: true });
     const ref = { source: "workers/board", className: "BoardDO", objectKey: "main" };
-    const internals = mgr as unknown as {
-      readOpenDurableObjectMaintenance(): Array<{ operationId: string }>;
-    };
 
-    await expect(mgr.resetDOStorage(ref, "test resumable reset")).rejects.toThrow(
+    await expect(mgr.resetDOStorage(ref, "test failing reset")).rejects.toThrow(
       "injected fork failure"
     );
-    const operationId = internals.readOpenDurableObjectMaintenance()[0]!.operationId;
+    // The object was not touched, and the failed backup is not listed.
     await expect(mgr.listDOStorageBackups(ref)).resolves.toEqual([]);
+    expect(node.destroyed).toEqual([]);
+    const unfinished = unfinishedBackups(mgr);
+    expect(unfinished).toHaveLength(1);
 
     node.failFork = false;
-    await expect(mgr.resetDOStorage(ref, "retry resumable reset")).resolves.toEqual({
-      operationId,
-    });
+    const { operationId } = await mgr.resetDOStorage(ref, "retry reset");
     await expect(mgr.listDOStorageBackups(ref)).resolves.toEqual([
       expect.objectContaining({ operationId }),
     ]);
+    expect(unfinishedBackups(mgr)).toEqual([]);
     // The backup is a fork of the object into a hidden cell; the reset then
-    // deletes the object's cell (root, facet index and facets).
+    // deletes the object's cell (root, facet index and facets). The unfinished
+    // backup's cell was deleted first.
     expect(node.objects.at(-1)).toMatchObject({
       op: "fork",
       namespace: "UNIVERSAL_DO",
@@ -1299,6 +1335,7 @@ describe("RuntimeManager", () => {
       replaceUnfinished: true,
     });
     expect(node.destroyed.map((entry) => decodeURIComponent(entry.key))).toEqual([
+      encodeUniversalKey({ ...ref, objectKey: `__vibestudio_backup:${unfinished[0]}` }),
       encodeUniversalKey(ref),
     ]);
     await mgr.shutdown();
@@ -1343,90 +1380,72 @@ describe("RuntimeManager", () => {
     }
   });
 
-  it("rotates canonical storage identity atomically with journal progress and preserves it across journal recovery", async () => {
+  it("rotates the storage identity before it replaces anything, and keeps it across a restart", async () => {
     const deps = createMockDeps();
     const mgr = new RuntimeManager(deps);
     await mgr.startWorker(startArgs());
-    fakeNode();
-    const ref = { source: "workers/agent", className: "Agent", objectKey: "journal-identity" };
+    const node = fakeNode({ failDestroy: true });
+    const ref = { source: "workers/agent", className: "Agent", objectKey: "identity" };
     const before = mgr.durableObjectStorageIncarnation(ref);
     expect(mgr.durableObjectStorageIncarnation(ref)).toEqual(before);
-    const internals = mgr as unknown as {
-      doMaintenanceDb: { exec(sql: string): void };
-      readOpenDurableObjectMaintenance(): Array<{ operationId: string }>;
-    };
-    internals.doMaintenanceDb
-      .exec(`CREATE TRIGGER refuse_identity_acceptance BEFORE UPDATE ON do_maintenance
-      WHEN NEW.step = 'replaced' BEGIN SELECT RAISE(ABORT, 'injected journal acceptance failure'); END`);
+    // A replacement the node refuses has already rotated the identity: a host
+    // authority granted on the old storage never outlives the data it was for.
     await expect(mgr.resetDOStorage(ref, "rotate identity")).rejects.toThrow(
-      "injected journal acceptance failure"
+      "injected destroy failure"
     );
-    expect(mgr.durableObjectStorageIncarnation(ref)).toEqual(before);
-    const operationId = internals.readOpenDurableObjectMaintenance()[0]!.operationId;
-    internals.doMaintenanceDb.exec("DROP TRIGGER refuse_identity_acceptance");
-    await expect(mgr.resetDOStorage(ref, "resume identity rotation")).resolves.toEqual({
-      operationId,
-    });
+    const rotated = mgr.durableObjectStorageIncarnation(ref);
+    expect(rotated.generation).toBe(before.generation + 1);
+    expect(rotated.incarnation).not.toBe(before.incarnation);
+    node.failDestroy = false;
+    const { operationId } = await mgr.resetDOStorage(ref, "replace it");
     const current = mgr.durableObjectStorageIncarnation(ref);
-    expect(current).toEqual({ incarnation: operationId, generation: before.generation + 1 });
+    expect(current.generation).toBe(rotated.generation + 1);
     await mgr.shutdown();
+
     const reopened = new RuntimeManager(deps);
     await reopened.startWorker(startArgs());
     fakeNode();
     expect(reopened.durableObjectStorageIncarnation(ref)).toEqual(current);
-    const restored = await reopened.restoreDOStorageBackup(
-      ref,
-      operationId,
-      "restore earlier data without reviving its identity"
-    );
+    await reopened.restoreDOStorageBackup(ref, operationId, "restore earlier data");
+    // Restoring earlier data does not revive its identity.
     expect(reopened.durableObjectStorageIncarnation(ref)).toEqual({
-      incarnation: restored.operationId,
+      incarnation: expect.not.stringMatching(
+        new RegExp(`^(${before.incarnation}|${current.incarnation})$`)
+      ),
       generation: current.generation + 1,
     });
     await reopened.shutdown();
   });
 
-  it("retains the replacement fence until incarnation publication succeeds and replays a lost acknowledgement without rotating storage again", async () => {
+  it("publishes the object's authority on its rotated identity after a replacement", async () => {
     const deps = createMockDeps();
-    const ref = { source: "workers/agent", className: "Agent", objectKey: "publication-debt" };
+    const ref = { source: "workers/agent", className: "Agent", objectKey: "publication" };
     const published: Array<{ incarnation: string; generation: number }> = [];
-    let failReply = true;
     const manager = new RuntimeManager({
       ...deps,
       republishStorageOwner: async (target) => {
         expect(target).toEqual(ref);
         published.push(manager.durableObjectStorageIncarnation(target));
-        if (failReply) throw new Error("original publication reply failure");
       },
     });
     await manager.startWorker(startArgs());
     fakeNode();
     try {
       const before = manager.durableObjectStorageIncarnation(ref);
-      await expect(manager.resetDOStorage(ref, "replace native storage")).rejects.toThrow(
-        "original publication reply failure"
-      );
-      const internals = manager as unknown as {
-        readOpenDurableObjectMaintenance(): Array<{ operationId: string; step: string }>;
-      };
-      const [debt] = internals.readOpenDurableObjectMaintenance();
-      expect(debt?.step).toBe("replaced");
+      await manager.resetDOStorage(ref, "replace native storage");
       expect(published).toEqual([
-        { incarnation: debt!.operationId, generation: before.generation + 1 },
+        {
+          incarnation: expect.not.stringMatching(before.incarnation),
+          generation: before.generation + 1,
+        },
       ]);
-      failReply = false;
-      await expect(manager.resetDOStorage(ref, "join retained publication")).resolves.toEqual({
-        operationId: debt!.operationId,
-      });
-      expect(published[1]).toEqual(published[0]);
-      expect(internals.readOpenDurableObjectMaintenance()).toEqual([]);
       expect(manager.durableObjectStorageIncarnation(ref)).toEqual(published[0]);
     } finally {
       await manager.shutdown();
     }
   });
 
-  it("resumes after replacement failure and retains only the five newest backups", async () => {
+  it("keeps a backup of an object whose replacement failed, and retains only the five newest", async () => {
     const mgr = new RuntimeManager(createMockDeps());
     await mgr.startWorker(startArgs());
     const node = fakeNode({ failDestroy: true });
@@ -1434,17 +1453,19 @@ describe("RuntimeManager", () => {
     await expect(mgr.resetDOStorage(ref, "first attempt")).rejects.toThrow(
       "injected destroy failure"
     );
+    // The backup was taken and the object was not replaced: the backup is valid.
+    const [first] = await mgr.listDOStorageBackups(ref);
+    expect(first?.intent).toBe("first attempt");
     node.failDestroy = false;
-    const resumed = await mgr.resetDOStorage(ref, "resume replacement");
     for (let index = 0; index < 5; index += 1) {
       await mgr.resetDOStorage(ref, `retention ${index}`);
     }
     const backups = await mgr.listDOStorageBackups(ref);
     expect(backups).toHaveLength(5);
-    expect(backups.some((backup) => backup.operationId === resumed.operationId)).toBe(false);
+    expect(backups.some((backup) => backup.operationId === first!.operationId)).toBe(false);
     // The swept backup's cell was deleted along with its record.
     expect(
-      node.destroyed.some((entry) => decodeURIComponent(entry.key).includes(resumed.operationId))
+      node.destroyed.some((entry) => decodeURIComponent(entry.key).includes(first!.operationId))
     ).toBe(true);
     await mgr.shutdown();
   });
@@ -1453,15 +1474,16 @@ describe("RuntimeManager", () => {
     const deps = createMockDeps();
     const ref = { source: "workers/board", className: "BoardDO", objectKey: "retired" };
     const down = new RuntimeManager(deps);
-    type Internals = {
-      readOpenDurableObjectMaintenance(): Array<{ kind: string; objectKey: string }>;
-    };
-    // No node is running: the retirement is journaled and nothing is destroyed.
+    // No node is running: the retirement is recorded and nothing is destroyed.
     const quiet = fakeNode();
     await down.destroyRetiredDOStorage(ref);
     expect(quiet.destroyed).toEqual([]);
-    expect((down as unknown as Internals).readOpenDurableObjectMaintenance()).toContainEqual(
-      expect.objectContaining({ kind: "destroy", ...ref })
+    expect(retiredOutbox(down)).toContainEqual(
+      expect.objectContaining({
+        source: ref.source,
+        class_name: ref.className,
+        object_key: ref.objectKey,
+      })
     );
     await down.shutdown();
 
@@ -1473,7 +1495,7 @@ describe("RuntimeManager", () => {
       expect(node.destroyed.map((entry) => decodeURIComponent(entry.key))).toEqual([
         encodeUniversalKey(ref),
       ]);
-      expect((reopened as unknown as Internals).readOpenDurableObjectMaintenance()).toEqual([]);
+      expect(retiredOutbox(reopened)).toEqual([]);
       // With the node running, a retirement is collected in the same call.
       await reopened.destroyRetiredDOStorage({ ...ref, objectKey: "retired-live" });
       expect(node.destroyed).toHaveLength(2);
@@ -1555,7 +1577,7 @@ describe("RuntimeManager", () => {
       try {
         const record = reservation();
         expect(() => mgr.requireCloneStorageComplete(record)).toThrow("completion does not match");
-        const target = await mgr.cloneDO(ref, "copy", {
+        const target = await mgr.forkObjectStorage(ref, "copy", {
           reservation: record,
           resolveSource: async () => null,
         });
@@ -1571,7 +1593,10 @@ describe("RuntimeManager", () => {
         ]);
         expect(() => mgr.requireCloneStorageComplete(record)).not.toThrow();
         // A repeated clone of the same reservation is a no-op.
-        await mgr.cloneDO(ref, "copy", { reservation: record, resolveSource: async () => null });
+        await mgr.forkObjectStorage(ref, "copy", {
+          reservation: record,
+          resolveSource: async () => null,
+        });
         expect(node.objects).toHaveLength(1);
         // Fresh storage has nothing to copy.
         expect(() =>
@@ -1592,15 +1617,21 @@ describe("RuntimeManager", () => {
         const record = reservation();
         // First attempt: the fork fails; the receipt is left open.
         await expect(
-          mgr.cloneDO(ref, "copy", { reservation: record, resolveSource: async () => null })
+          mgr.forkObjectStorage(ref, "copy", {
+            reservation: record,
+            resolveSource: async () => null,
+          })
         ).rejects.toThrow("already exists");
         expect(() => mgr.requireCloneStorageComplete(record)).toThrow();
         // A retry whose fork finds the target already exists took its own earlier fork.
-        await mgr.cloneDO(ref, "copy", { reservation: record, resolveSource: async () => null });
+        await mgr.forkObjectStorage(ref, "copy", {
+          reservation: record,
+          resolveSource: async () => null,
+        });
         expect(() => mgr.requireCloneStorageComplete(record)).not.toThrow();
         // Another object's reservation is not a reserved owner of this copy.
         await expect(
-          mgr.cloneDO(ref, "copy", {
+          mgr.forkObjectStorage(ref, "copy", {
             reservation: reservation({ status: "active" }),
             resolveSource: async () => null,
           })

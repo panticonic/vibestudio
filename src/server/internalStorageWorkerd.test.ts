@@ -513,7 +513,7 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
   it("reopens retained EvalDO storage using the descriptor of its native executable", async () => {
     const workspaceRef = {
       source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
+      className: "WorkspaceStateDO",
       objectKey: "eval-reopen-workspace",
     };
     const harness = await createWorkerdHarness({
@@ -526,7 +526,7 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
     });
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
+      { source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" },
       { source: INTERNAL_DO_SOURCE, className: "EvalDO" },
     ]);
     const ref = { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey: "retained-eval" };
@@ -787,7 +787,7 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
     // lifetime, and makes the terminal failure observable without a held host request.
     const workspaceRef = {
       source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
+      className: "WorkspaceStateDO",
       objectKey: "job-queue-workspace",
     };
     const harness = await createWorkerdHarness({
@@ -803,7 +803,7 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
     manager = harness.manager;
     await manager.registerAllDOClasses([
       { source: INTERNAL_DO_SOURCE, className: "EvalDO" },
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
+      { source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" },
     ]);
     const ref = { source: INTERNAL_DO_SOURCE, className: "EvalDO", objectKey: "job-queue-test" };
 
@@ -878,10 +878,10 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
   it("round-trips entity activate / resolve / retire / gc through WorkspaceDO under workerd", async () => {
     const harness = await createWorkerdHarness();
     manager = harness.manager;
-    await manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" }]);
+    await manager.registerAllDOClasses([{ source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" }]);
     const ref = {
       source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
+      className: "WorkspaceStateDO",
       objectKey: "workspace-test",
     };
 
@@ -1023,7 +1023,7 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
     });
     manager = harness.manager;
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
+      { source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" },
       { source: probeRef.source, className: probeRef.className },
     ]);
     dispatch = createDODispatch(manager, harness.tokenManager, harness.attachDurableObject);
@@ -1228,7 +1228,7 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
     });
     const workspaceRef = {
       source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
+      className: "WorkspaceStateDO",
       objectKey: "workspace-lifecycle",
     };
     const probeRef = {
@@ -1238,7 +1238,7 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
     };
 
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
+      { source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" },
       { source: "workers/lifecycle-probe", className: "LifecycleProbeDO" },
     ]);
     lifecycleDriver.start();
@@ -1323,7 +1323,7 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
     const alarmDriver = new AlarmDriver({ doDispatch, workspaceId: "workspace-alarm" });
     const workspaceRef = {
       source: INTERNAL_DO_SOURCE,
-      className: "WorkspaceDO",
+      className: "WorkspaceStateDO",
       objectKey: "workspace-alarm",
     };
     const probeRef = {
@@ -1333,7 +1333,7 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
     };
 
     await manager.registerAllDOClasses([
-      { source: INTERNAL_DO_SOURCE, className: "WorkspaceDO" },
+      { source: INTERNAL_DO_SOURCE, className: "WorkspaceStateDO" },
       { source: "workers/lifecycle-probe", className: "LifecycleProbeDO" },
     ]);
 

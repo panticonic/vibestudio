@@ -540,7 +540,7 @@ describe("DurableWorkDriver", () => {
       { dispatchHeldWithSignal } as never,
       {
         source: "vibestudio/internal",
-        className: "WorkspaceDO",
+        className: "WorkspaceStateDO",
         objectKey: "workspace",
       },
       "driver-generation-1"
@@ -595,7 +595,7 @@ describe("DurableWorkDriver", () => {
       { dispatchHeldWithSignal } as never,
       {
         source: "vibestudio/internal",
-        className: "WorkspaceDO",
+        className: "WorkspaceStateDO",
         objectKey: "workspace",
       },
       "driver-generation-1"
@@ -623,7 +623,7 @@ describe("DurableWorkDriver", () => {
       { dispatchHeldWithSignal } as never,
       {
         source: "vibestudio/internal",
-        className: "WorkspaceDO",
+        className: "WorkspaceStateDO",
         objectKey: "workspace",
       },
       "driver-generation-1"
@@ -678,7 +678,7 @@ describe("DurableWorkDriver", () => {
       { dispatchHeldWithSignal } as never,
       {
         source: "vibestudio/internal",
-        className: "WorkspaceDO",
+        className: "WorkspaceStateDO",
         objectKey: "workspace",
       },
       "driver-generation-1",
@@ -716,7 +716,7 @@ describe("DurableWorkDriver", () => {
       { dispatchHeldWithSignal } as never,
       {
         source: "vibestudio/internal",
-        className: "WorkspaceDO",
+        className: "WorkspaceStateDO",
         objectKey: "workspace",
       },
       "driver-generation-1"

@@ -1189,7 +1189,7 @@ describe.skipIf(!celldBinary)("UniversalDO facet host (real celld)", () => {
     expect(await dispatch(src, "get")).toMatchObject({ count: 2 });
 
     const boot = manager.getBootGeneration();
-    const cloned = await manager.cloneDO(src, "fork", {
+    const cloned = await manager.forkObjectStorage(src, "fork", {
       reservation,
       resolveSource: async () => sourceOwner(reservation),
     });
@@ -1205,6 +1205,54 @@ describe.skipIf(!celldBinary)("UniversalDO facet host (real celld)", () => {
 
     // destroyDO removes the fork's facet storage.
     await manager.destroyDO(cloned);
+  }, 30_000);
+
+  it("forks to a target id once: repeating the fork, or retrying it after a lost receipt, leaves the one object", async () => {
+    active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
+    const { manager, dispatch } = active;
+    await manager.ensureDOClass("workers/counter", "CounterDO");
+    const src = { source: "workers/counter", className: "CounterDO", objectKey: "once-source" };
+    const prepared = await manager.ensureDurableObjectEntity({
+      source: src.source,
+      className: src.className,
+      key: src.objectKey,
+      contextId: "source-context",
+    });
+    const reservation = cloneReservation(src, "once", manager);
+    await manager.restoreDurableObjectEntity({
+      ...sourceOwner(reservation),
+      source: { repoPath: src.source, effectiveVersion: prepared.effectiveVersion },
+      activeAuthority: prepared.authority,
+    });
+    await dispatch(src, "incr");
+    const fork = () =>
+      manager.forkObjectStorage(src, "once", {
+        reservation,
+        resolveSource: async () => sourceOwner(reservation),
+      });
+    const first = await fork();
+    // The target takes its own writes after the fork.
+    await dispatch(first, "incr");
+    await dispatch(first, "incr");
+    expect(await dispatch(first, "get")).toMatchObject({ count: 3 });
+
+    // The same fork again: the receipt says it finished, and nothing is copied over the target.
+    await expect(fork()).resolves.toEqual(first);
+    expect(await dispatch(first, "get")).toMatchObject({ count: 3 });
+
+    // A retry after the node finished the fork and the host did not hear (the
+    // receipt still says it began): the node answers ERR_OBJECT_EXISTS, which
+    // the host takes as done. The one object keeps its state; the source is untouched.
+    const receipts = (
+      manager as unknown as {
+        doStorageDb: { prepare(sql: string): { run(...values: unknown[]): unknown } };
+      }
+    ).doStorageDb;
+    receipts.prepare(`UPDATE do_storage_clones SET phase = 'cloning'`).run();
+    await expect(fork()).resolves.toEqual(first);
+    expect(await dispatch(first, "get")).toMatchObject({ count: 3 });
+    expect(await dispatch(src, "get")).toMatchObject({ count: 1 });
+    await manager.destroyDO(first);
   }, 30_000);
 
   it("refuses a snapshot whose source image differs from its reserved provenance", async () => {
@@ -1230,7 +1278,7 @@ describe.skipIf(!celldBinary)("UniversalDO facet host (real celld)", () => {
       sourceExecutionDigest: "f".repeat(64),
     };
     await expect(
-      manager.cloneDO(src, "drift-child", {
+      manager.forkObjectStorage(src, "drift-child", {
         reservation,
         resolveSource: async () => sourceOwner(reservation),
       })
@@ -1265,7 +1313,7 @@ describe.skipIf(!celldBinary)("UniversalDO facet host (real celld)", () => {
     );
     let cloned: typeof src | null = null;
     try {
-      cloned = await manager.cloneDO(src, "self-fork", {
+      cloned = await manager.forkObjectStorage(src, "self-fork", {
         reservation,
         resolveSource: async () => sourceOwner(reservation),
         cooperativelyPaused: true,

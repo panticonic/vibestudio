@@ -8,7 +8,7 @@ describe("product builtin direct authority", () => {
       expect(
         productBuiltinDirectAuthority({
           source: "vibestudio/internal",
-          className: "WorkspaceDO",
+          className: "WorkspaceStateDO",
           method,
         })
       ).toMatchObject({
@@ -22,7 +22,7 @@ describe("product builtin direct authority", () => {
     expect(
       productBuiltinDirectAuthority({
         source: "vibestudio/internal",
-        className: "WorkspaceDO",
+        className: "WorkspaceStateDO",
         method: "slotCreate",
       })
     ).toMatchObject({
@@ -42,7 +42,7 @@ describe("product builtin direct authority", () => {
     expect(
       productBuiltinDirectAuthority({
         source: "vibestudio/internal",
-        className: "WorkspaceDO",
+        className: "WorkspaceStateDO",
         method: "notAWorkspaceMethod",
       })
     ).toBeNull();

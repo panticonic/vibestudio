@@ -11,6 +11,7 @@ describe("generated product builtin catalog", () => {
   const source = "vibestudio/internal";
   it("catalogs every product-owned internal Durable Object", () => {
     expect(INTERNAL_DO_CLASSES).toEqual([
+      "WorkspaceStateDO",
       "WorkspaceDO",
       "BrowserVaultDO",
       "EvalDO",
@@ -22,9 +23,9 @@ describe("generated product builtin catalog", () => {
     expect(productBuiltinMethodCapability(source, "BrowserVaultDO", "listPasswordSummaries")).toBe(
       "browser-data.read"
     );
-    expect(productBuiltinMethodCapability(source, "WorkspaceDO", "entityListExecutionRoots")).toBe(
-      "workspace.runtime-state.inspect"
-    );
+    expect(
+      productBuiltinMethodCapability(source, "WorkspaceStateDO", "entityListExecutionRoots")
+    ).toBe("workspace.runtime-state.inspect");
     expect(productBuiltinMethodCapability(source, "EvalDO", "listRetainedExecutionRoots")).toBe(
       "runtime.code-execution.manage"
     );
@@ -32,7 +33,11 @@ describe("generated product builtin catalog", () => {
       "webhooks.manage"
     );
     expect(productBuiltinMethodPolicy(source, "BrowserVaultDO", "listPasswordSummaries")).toEqual({
-      website: { kind: "closed", reason: "Browser profile data requires the browser privacy UI and cannot be exported to websites." },
+      website: {
+        kind: "closed",
+        reason:
+          "Browser profile data requires the browser privacy UI and cannot be exported to websites.",
+      },
       capability: "browser-data.read",
       tier: "gated",
       session: "family",

@@ -61,7 +61,7 @@ function activatedEntity(input: unknown): EntityRecord {
 
 const WORKSPACE_REF = {
   source: INTERNAL_DO_SOURCE,
-  className: "WorkspaceDO",
+  className: "WorkspaceStateDO",
   objectKey: "ws_1",
 };
 const EVAL_EXECUTION_IDENTITY = internalDOExecutionIdentity(getInternalDOPrograms(), "EvalDO");

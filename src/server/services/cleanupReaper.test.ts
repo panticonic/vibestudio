@@ -21,7 +21,7 @@ function makeRecord(id: string): EntityRecord {
 
 const workspaceDORef: DORef = {
   source: "vibestudio/internal",
-  className: "WorkspaceDO",
+  className: "WorkspaceStateDO",
   objectKey: "workspace-main",
 };
 

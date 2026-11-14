@@ -58,6 +58,11 @@ import { migrateLegacyWorkerdStorage } from "./celldMigration.js";
 import { buildRuntimeDeployment, type RuntimeDeployment } from "./runtimeDeployment.js";
 import { DESTROY_METHOD } from "./runtimeNames.js";
 import {
+  DurableObjectStorage,
+  type DurableObjectStorageBackup,
+  type DurableObjectStorageIncarnation,
+} from "./durableObjectStorage.js";
+import {
   destroyWorkerdConnections,
   getWorkerdConnectionDispatcher,
   releaseDurableObjectRelaySeal,
@@ -235,30 +240,10 @@ interface DORef {
   objectKey: string;
 }
 
-export interface DurableObjectStorageBackup {
-  operationId: string;
-  target: DORef;
-  intent: string;
-  createdAt: number;
-}
-
-export interface DurableObjectStorageIncarnation {
-  incarnation: string;
-  generation: number;
-}
-
-interface DurableObjectMaintenanceRow {
-  operationId: string;
-  kind: "reset" | "restore" | "destroy";
-  targetId: string;
-  source: string;
-  className: string;
-  objectKey: string;
-  intent: string;
-  backupOperationId: string | null;
-  step: string;
-  createdAt: number;
-}
+export type {
+  DurableObjectStorageBackup,
+  DurableObjectStorageIncarnation,
+} from "./durableObjectStorage.js";
 
 interface DOService {
   buildKey: string;
@@ -755,7 +740,8 @@ export class RuntimeManager {
    *  the shared egress listener trusts the `X-Vibestudio-Egress-Caller` header. */
   private readonly egressSecret: string;
   private workspaceProvider: WorkerdWorkspaceProvider | null = null;
-  private readonly doMaintenanceDb: DatabaseSync;
+  private readonly doStorageDb: DatabaseSync;
+  private readonly storage: DurableObjectStorage;
   private readonly doSchemaDescriptorDb: DatabaseSync;
   private readonly schemaProbeBuilds = new Map<string, SchemaProbeBuild>();
   private readonly schemaAdmissionLifetime = new AbortController();
@@ -768,7 +754,6 @@ export class RuntimeManager {
     { code: "ECANCELLED" }
   );
   private readonly schemaAdmissions = new Map<string, Promise<void>>();
-  private readonly doMaintenanceChains = new Map<string, Promise<unknown>>();
   private readonly cloneReceipts: DurableObjectCloneReceipts;
   /** A graceful `stop` ran with live services: the next start owes a
    *  crash-style restart-ready so released lifecycle leases resume. */
@@ -782,53 +767,20 @@ export class RuntimeManager {
     this.bootGeneration = this.readBootGeneration();
     const layout = stateLayout(this.deps.statePath).databases;
     fs.mkdirSync(layout.root, { recursive: true });
-    this.doMaintenanceDb = new DatabaseSync(
-      path.toNamespacedPath(layout.durableObjectMaintenanceDb)
-    );
-    this.doMaintenanceDb.exec(`
-      PRAGMA journal_mode = WAL;
-      CREATE TABLE IF NOT EXISTS do_maintenance (
-        operation_id TEXT PRIMARY KEY,
-        kind TEXT NOT NULL CHECK (kind IN ('reset', 'restore', 'destroy')),
-        target_id TEXT NOT NULL,
-        source TEXT NOT NULL,
-        class_name TEXT NOT NULL,
-        object_key TEXT NOT NULL,
-        intent TEXT NOT NULL,
-        backup_operation_id TEXT,
-        step TEXT NOT NULL,
-        status TEXT NOT NULL CHECK (status IN ('open', 'complete')),
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-      CREATE UNIQUE INDEX IF NOT EXISTS do_maintenance_one_open_target
-        ON do_maintenance(target_id) WHERE status = 'open';
-      CREATE TABLE IF NOT EXISTS do_storage_incarnations (
-        target_id TEXT PRIMARY KEY,
-        incarnation TEXT NOT NULL UNIQUE,
-        generation INTEGER NOT NULL CHECK(generation > 0)
-      );
-      -- A backup is a cell of the runtime node under a hidden name (backup_id).
-      CREATE TABLE IF NOT EXISTS do_storage_backups (
-        operation_id TEXT PRIMARY KEY,
-        backup_id TEXT NOT NULL,
-        target_id TEXT NOT NULL,
-        source TEXT NOT NULL,
-        class_name TEXT NOT NULL,
-        object_key TEXT NOT NULL,
-        intent TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      );
-    `);
-    this.cloneReceipts = new DurableObjectCloneReceipts(this.doMaintenanceDb);
-    const maintenanceSchema = this.doMaintenanceDb
-      .prepare(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'do_maintenance'`)
-      .get() as { sql?: string } | undefined;
-    if (!maintenanceSchema?.sql?.includes("'destroy'")) {
-      throw new Error(
-        "Durable Object maintenance state is not from the current system epoch; recreate this pre-release instance"
-      );
-    }
+    this.doStorageDb = new DatabaseSync(path.toNamespacedPath(layout.durableObjectMaintenanceDb));
+    this.cloneReceipts = new DurableObjectCloneReceipts(this.doStorageDb);
+    this.storage = new DurableObjectStorage({
+      db: this.doStorageDb,
+      objectOperation: (input) => this.objectOperation(input),
+      destroyCell: (ref) => this.destroyCell(ref),
+      abortFacet: (ref) => this.abortUserlandDOFacet(ref, "__vibestudio_retire"),
+      ensureNodeRunning: () => this.ensureWorkerdRunning(),
+      nodeRunning: () =>
+        Boolean(this.process && this.process.exitCode === null && !this.shuttingDown),
+      republishOwner: (ref) => this.republishStorageOwner(ref),
+      seal: (targetId, ownerId, error) => sealAndDrainDurableObjectRelays(targetId, ownerId, error),
+      release: (targetId, ownerId) => releaseDurableObjectRelaySeal(targetId, ownerId),
+    });
     this.doSchemaDescriptorDb = new DatabaseSync(
       path.toNamespacedPath(layout.durableObjectSchemaDescriptorsDb)
     );
@@ -878,11 +830,6 @@ export class RuntimeManager {
       this.doSchemaDescriptorDb.exec("ROLLBACK");
       this.doSchemaDescriptorDb.close();
       throw error;
-    }
-    // Maintenance a crash interrupted stays fenced from the first instant;
-    // the node completes it once it runs (recoverDurableObjectMaintenance).
-    for (const row of this.readOpenDurableObjectMaintenance()) {
-      void this.fenceDurableObjectMaintenance(row);
     }
   }
 
@@ -3089,7 +3036,7 @@ export class RuntimeManager {
           spawnToHttpReadyMs: readyAt - deployedAt,
         })}`
     );
-    await this.recoverDurableObjectMaintenance();
+    await this.storage.recover();
   }
 
   /**
@@ -4103,7 +4050,7 @@ export class RuntimeManager {
     }
     try {
       // Retire the facet now; its universal host keeps a SQLite connection
-      // until the shared process exits. The durable destruction journal owns
+      // until the shared process exits. The storage outbox owns
       // physical collection across that process boundary and host crashes.
       await this.abortUserlandDOFacet(ref, "__vibestudio_retire");
       await this.destroyRetiredDOStorage(ref);
@@ -4187,117 +4134,32 @@ export class RuntimeManager {
   // Durable Object storage
   //
   // A userland object is a cell of the runtime node: a UniversalDO named by
-  // its encoded key, whose userland class is its facet `do`. Cloning, backup
-  // and restore are the node's object fork and restore (celld
+  // its encoded key, whose userland class is its facet `do`. Fork, backup and
+  // restore are the node's object fork and restore (celld
   // docs/services/object-fork.md), which copy the cell's root and every facet
-  // together; the host copies no files. Backups are cells too, under a hidden
-  // name derived from the maintenance operation.
+  // together; the host copies no files. `DurableObjectStorage` holds the
+  // operations (backup, restore, reset, retirement) and the few rows the host
+  // owes; this class supplies the node's side of them.
   // =========================================================================
 
   private durableObjectTargetId(ref: DORef): string {
-    return canonicalEntityId({
-      kind: "do",
-      source: ref.source,
-      className: ref.className,
-      key: ref.objectKey,
-    });
+    return DurableObjectStorage.targetId(ref);
   }
 
-  private durableObjectMaintenanceError(row: DurableObjectMaintenanceRow) {
-    return {
-      code: "DO_MAINTENANCE_IN_PROGRESS",
-      message:
-        `${row.className} (${row.source}/${row.objectKey}) storage maintenance ` +
-        `${row.operationId} is in progress`,
-      errorData: {
-        operationId: row.operationId,
-        operation: row.kind,
-        source: row.source,
-        className: row.className,
-        objectKey: row.objectKey,
-      },
-    };
-  }
-
-  private readOpenDurableObjectMaintenance(): DurableObjectMaintenanceRow[] {
-    return this.doMaintenanceDb
-      .prepare(
-        `SELECT operation_id, kind, target_id, source, class_name, object_key,
-                intent, backup_operation_id, step, created_at
-         FROM do_maintenance WHERE status = 'open' ORDER BY created_at`
-      )
-      .all()
-      .map((raw) => {
-        const row = raw as Record<string, unknown>;
-        return {
-          operationId: String(row["operation_id"]),
-          kind: row["kind"] as "reset" | "restore" | "destroy",
-          targetId: String(row["target_id"]),
-          source: String(row["source"]),
-          className: String(row["class_name"]),
-          objectKey: String(row["object_key"]),
-          intent: String(row["intent"]),
-          backupOperationId:
-            row["backup_operation_id"] === null ? null : String(row["backup_operation_id"]),
-          step: String(row["step"]),
-          createdAt: Number(row["created_at"]),
-        };
-      });
-  }
-
-  /** Host authority survives restoring either an agent database or WorkspaceDO's derived registry. */
-  durableObjectStorageIncarnation(ref: DORef): DurableObjectStorageIncarnation {
-    const targetId = this.durableObjectTargetId(ref);
-    this.doMaintenanceDb
-      .prepare(
-        `INSERT OR IGNORE INTO do_storage_incarnations(target_id, incarnation, generation) VALUES (?, ?, 1)`
-      )
-      .run(targetId, crypto.randomUUID());
-    const row = this.doMaintenanceDb
-      .prepare(`SELECT incarnation, generation FROM do_storage_incarnations WHERE target_id = ?`)
-      .get(targetId) as { incarnation: string; generation: number };
-    return { incarnation: row.incarnation, generation: row.generation };
-  }
-
-  /** Replacement is idempotent; identity rotation and its journal cursor commit together. */
-  private acceptDurableObjectStorageReplacement(row: DurableObjectMaintenanceRow): void {
-    this.doMaintenanceDb.exec("BEGIN IMMEDIATE");
-    try {
-      this.doMaintenanceDb
-        .prepare(
-          `INSERT INTO do_storage_incarnations(target_id, incarnation, generation) VALUES (?, ?, 1)
-         ON CONFLICT(target_id) DO UPDATE SET incarnation = excluded.incarnation, generation = generation + 1`
-        )
-        .run(row.targetId, row.operationId);
-      this.updateDurableObjectMaintenance(row.operationId, "replaced");
-      this.doMaintenanceDb.exec("COMMIT");
-    } catch (error) {
-      this.doMaintenanceDb.exec("ROLLBACK");
-      throw error;
+  /** After a replacement, the object's host authority is published again on its new storage identity. */
+  private async republishStorageOwner(ref: DORef): Promise<void> {
+    if (this.deps.republishStorageOwner) return this.deps.republishStorageOwner(ref);
+    const binding = this.doObjectBuilds.get(
+      doObjectBuildKey(ref.source, ref.className, ref.objectKey)
+    );
+    if (binding?.admission.props.nativeOwner) {
+      throw new Error("Native storage replacement has no publication owner");
     }
   }
 
-  private updateDurableObjectMaintenance(operationId: string, step: string): void {
-    this.doMaintenanceDb
-      .prepare(`UPDATE do_maintenance SET step = ?, updated_at = ? WHERE operation_id = ?`)
-      .run(step, Date.now(), operationId);
-  }
-
-  private completeDurableObjectMaintenance(operationId: string): void {
-    this.doMaintenanceDb
-      .prepare(
-        `UPDATE do_maintenance SET status = 'complete', step = 'complete', updated_at = ?
-         WHERE operation_id = ?`
-      )
-      .run(Date.now(), operationId);
-  }
-
-  private async fenceDurableObjectMaintenance(row: DurableObjectMaintenanceRow): Promise<void> {
-    await sealAndDrainDurableObjectRelays(
-      row.targetId,
-      row.operationId,
-      this.durableObjectMaintenanceError(row)
-    );
+  /** Host authority survives restoring either an agent database or the workspace registry. */
+  durableObjectStorageIncarnation(ref: DORef): DurableObjectStorageIncarnation {
+    return this.storage.incarnation(ref);
   }
 
   /** The node's cell name of a userland object (its UniversalDO host). */
@@ -4390,259 +4252,9 @@ export class RuntimeManager {
     await response.arrayBuffer();
   }
 
-  private backupRef(ref: DORef, backupId: string): DORef {
-    return { ...ref, objectKey: `__vibestudio_backup:${backupId}` };
-  }
-
-  /**
-   * Fork the target into a backup cell named by the operation. A fork that
-   * already completed (a retry after a crash) answers `ERR_OBJECT_EXISTS`; one
-   * that stopped before completing is taken over (`replaceUnfinished`).
-   */
-  private async backUpDurableObject(row: DurableObjectMaintenanceRow, ref: DORef): Promise<void> {
-    const recorded = this.doMaintenanceDb
-      .prepare(`SELECT 1 AS present FROM do_storage_backups WHERE operation_id = ?`)
-      .get(row.operationId);
-    if (recorded) return;
-    const backupId = row.operationId;
-    try {
-      await this.objectOperation({
-        op: "fork",
-        from: ref,
-        to: this.backupRef(ref, backupId),
-        replaceUnfinished: true,
-      });
-    } catch (error) {
-      if (objectErrorCode(error) !== "ERR_OBJECT_EXISTS") throw error;
-    }
-    this.doMaintenanceDb
-      .prepare(
-        `INSERT OR REPLACE INTO do_storage_backups
-           (operation_id, backup_id, target_id, source, class_name, object_key, intent, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-      )
-      .run(
-        row.operationId,
-        backupId,
-        row.targetId,
-        ref.source,
-        ref.className,
-        ref.objectKey,
-        row.intent,
-        row.createdAt
-      );
-  }
-
-  private backupRow(operationId: string): { backup_id: string; target_id: string } | undefined {
-    return this.doMaintenanceDb
-      .prepare(`SELECT backup_id, target_id FROM do_storage_backups WHERE operation_id = ?`)
-      .get(operationId) as { backup_id: string; target_id: string } | undefined;
-  }
-
-  /**
-   * Collect the storage of retired objects (journal rows of kind `destroy`),
-   * all of them or one target's. A row that fails stays open and is retried at
-   * the next start; collection never fails the caller.
-   */
-  private async collectRetiredDurableObjectStorage(only?: string): Promise<void> {
-    for (const row of this.readOpenDurableObjectMaintenance()) {
-      if (row.kind !== "destroy" || (only !== undefined && row.targetId !== only)) continue;
-      try {
-        await this.fenceDurableObjectMaintenance(row);
-        await this.destroyCell({
-          source: row.source,
-          className: row.className,
-          objectKey: row.objectKey,
-        });
-        this.acceptDurableObjectStorageReplacement(row);
-        this.completeDurableObjectMaintenance(row.operationId);
-        releaseDurableObjectRelaySeal(row.targetId, row.operationId);
-      } catch (error) {
-        log.warn(`Retired storage ${row.targetId} awaits the next collection`, error);
-      }
-    }
-  }
-
-  /**
-   * After a node start: the node can finally act on what the journal owes,
-   * the retirements and the maintenance a crash interrupted.
-   */
-  private async recoverDurableObjectMaintenance(): Promise<void> {
-    await this.collectRetiredDurableObjectStorage();
-    for (const row of this.readOpenDurableObjectMaintenance()) {
-      if (row.kind === "destroy") continue;
-      try {
-        await this.resumeDurableObjectMaintenance(row);
-      } catch (error) {
-        log.warn(`Durable Object storage ${row.kind} ${row.operationId} is still open`, error);
-      }
-    }
-  }
-
-  private async resumeDurableObjectMaintenance(row: DurableObjectMaintenanceRow): Promise<void> {
-    if (row.kind === "destroy") {
-      throw new Error(`Retired storage ${row.targetId} is collected by the node recovery`);
-    }
-    const ref = { source: row.source, className: row.className, objectKey: row.objectKey };
-    this.requireUserlandStorage(ref, `Durable Object storage ${row.kind}`);
-    await this.fenceDurableObjectMaintenance(row);
-    try {
-      if (row.step === "journaled") {
-        this.updateDurableObjectMaintenance(row.operationId, "fenced");
-        row.step = "fenced";
-      }
-      if (row.step === "fenced") {
-        // Retire the loaded facet so nothing writes while the copy is cut.
-        await this.abortUserlandDOFacet(ref, "__vibestudio_retire");
-        this.updateDurableObjectMaintenance(row.operationId, "retired");
-        row.step = "retired";
-      }
-      if (row.step === "retired") {
-        // Both reset and restore keep what they replace.
-        await this.backUpDurableObject(row, ref);
-        this.updateDurableObjectMaintenance(row.operationId, "backed-up");
-        row.step = "backed-up";
-      }
-      if (row.step === "backed-up") {
-        if (row.kind === "reset") {
-          await this.destroyCell(ref);
-        } else {
-          const chosen = this.backupRow(assertPresent(row.backupOperationId));
-          if (!chosen || chosen.target_id !== row.targetId) {
-            throw new Error(
-              `Backup ${row.backupOperationId} does not belong to the exact requested target`
-            );
-          }
-          await this.objectOperation({
-            op: "restore",
-            from: this.backupRef(ref, chosen.backup_id),
-            to: ref,
-            stop: true,
-          });
-        }
-        this.acceptDurableObjectStorageReplacement(row);
-        row.step = "replaced";
-      }
-      if (row.step === "replaced") {
-        if (this.deps.republishStorageOwner) await this.deps.republishStorageOwner(ref);
-        else {
-          const binding = this.doObjectBuilds.get(
-            doObjectBuildKey(ref.source, ref.className, ref.objectKey)
-          );
-          if (binding?.admission.props.nativeOwner)
-            throw new Error("Native storage replacement has no publication owner");
-        }
-        this.updateDurableObjectMaintenance(row.operationId, "published");
-        row.step = "published";
-      }
-      if (row.step === "published") this.completeDurableObjectMaintenance(row.operationId);
-    } finally {
-      const stillOpen = this.doMaintenanceDb
-        .prepare(`SELECT 1 AS open FROM do_maintenance WHERE operation_id = ? AND status = 'open'`)
-        .get(row.operationId);
-      if (!stillOpen) releaseDurableObjectRelaySeal(row.targetId, row.operationId);
-    }
-  }
-
-  private async startDurableObjectMaintenance(input: {
-    kind: "reset" | "restore" | "destroy";
-    ref: DORef;
-    intent: string;
-    backupOperationId?: string;
-    journalOnly?: boolean;
-  }): Promise<string> {
-    if (!input.intent.trim()) throw new Error("Durable Object storage maintenance requires intent");
-    // A product class owns its storage: only its retirement is the host's.
-    if (input.kind !== "destroy") {
-      this.requireUserlandStorage(input.ref, `Durable Object storage ${input.kind}`);
-    }
-    if (!input.journalOnly) await this.ensureWorkerdRunning();
-    const targetId = this.durableObjectTargetId(input.ref);
-    const previous = this.doMaintenanceChains.get(targetId);
-    if (previous) await previous;
-    const open = this.readOpenDurableObjectMaintenance().find((row) => row.targetId === targetId);
-    if (open) {
-      if (input.journalOnly) {
-        if (
-          open.kind === input.kind &&
-          open.backupOperationId === (input.backupOperationId ?? null)
-        ) {
-          return open.operationId;
-        }
-        throw new Error(
-          `Durable Object storage maintenance ${open.operationId} is already open for ${targetId}`
-        );
-      }
-      if (open.kind === "destroy") {
-        throw new Error(`Durable Object ${targetId} is retired and awaits storage collection`);
-      }
-      await this.resumeDurableObjectMaintenance(open);
-      if (
-        open.kind === input.kind &&
-        open.backupOperationId === (input.backupOperationId ?? null)
-      ) {
-        return open.operationId;
-      }
-    }
-    if (input.kind === "restore") {
-      const chosen = this.backupRow(assertPresent(input.backupOperationId));
-      if (!chosen || chosen.target_id !== targetId) {
-        throw new Error(
-          `Backup ${input.backupOperationId} does not belong to the exact requested target`
-        );
-      }
-    }
-    const operationId = crypto.randomUUID();
-    const createdAt = Date.now();
-    const row: DurableObjectMaintenanceRow = {
-      operationId,
-      kind: input.kind,
-      targetId,
-      ...input.ref,
-      intent: input.intent.trim(),
-      backupOperationId: input.backupOperationId ?? null,
-      step: "journaled",
-      createdAt,
-    };
-    this.doMaintenanceDb
-      .prepare(
-        `INSERT INTO do_maintenance (
-           operation_id, kind, target_id, source, class_name, object_key, intent,
-           backup_operation_id, step, status, created_at, updated_at
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'journaled', 'open', ?, ?)`
-      )
-      .run(
-        operationId,
-        input.kind,
-        targetId,
-        input.ref.source,
-        input.ref.className,
-        input.ref.objectKey,
-        input.intent.trim(),
-        input.backupOperationId ?? null,
-        createdAt,
-        createdAt
-      );
-    if (input.journalOnly) {
-      await this.fenceDurableObjectMaintenance(row);
-      return operationId;
-    }
-    const execute = () =>
-      this.resumeDurableObjectMaintenance(row).then(async () => {
-        if (input.kind !== "destroy") await this.sweepDurableObjectBackups(input.ref, 5);
-      });
-    const run = execute().finally(() => {
-      if (this.doMaintenanceChains.get(targetId) === run) this.doMaintenanceChains.delete(targetId);
-    });
-    this.doMaintenanceChains.set(targetId, run);
-    await run;
-    return operationId;
-  }
-
   async resetDOStorage(ref: DORef, intent: string): Promise<{ operationId: string }> {
-    return {
-      operationId: await this.startDurableObjectMaintenance({ kind: "reset", ref, intent }),
-    };
+    this.requireUserlandStorage(ref, "Durable Object storage reset");
+    return this.storage.reset(ref, intent);
   }
 
   async restoreDOStorageBackup(
@@ -4650,45 +4262,12 @@ export class RuntimeManager {
     backupOperationId: string,
     intent: string
   ): Promise<{ operationId: string }> {
-    return {
-      operationId: await this.startDurableObjectMaintenance({
-        kind: "restore",
-        ref,
-        intent,
-        backupOperationId,
-      }),
-    };
+    this.requireUserlandStorage(ref, "Durable Object storage restore");
+    return this.storage.restore(ref, backupOperationId, intent);
   }
 
   async listDOStorageBackups(ref: DORef): Promise<DurableObjectStorageBackup[]> {
-    return this.doMaintenanceDb
-      .prepare(
-        `SELECT b.operation_id, b.intent, b.created_at
-         FROM do_storage_backups b
-         JOIN do_maintenance m ON m.operation_id = b.operation_id AND m.status = 'complete'
-         WHERE b.target_id = ? ORDER BY b.created_at DESC`
-      )
-      .all(this.durableObjectTargetId(ref))
-      .map((raw) => {
-        const row = raw as Record<string, unknown>;
-        return {
-          operationId: String(row["operation_id"]),
-          target: { ...ref },
-          intent: String(row["intent"]),
-          createdAt: Number(row["created_at"]),
-        };
-      });
-  }
-
-  private async sweepDurableObjectBackups(ref: DORef, retain: number): Promise<void> {
-    for (const backup of (await this.listDOStorageBackups(ref)).slice(retain)) {
-      const row = this.backupRow(backup.operationId);
-      if (!row) continue;
-      await this.destroyCell(this.backupRef(ref, row.backup_id));
-      this.doMaintenanceDb
-        .prepare(`DELETE FROM do_storage_backups WHERE operation_id = ?`)
-        .run(backup.operationId);
-    }
+    return this.storage.list(ref);
   }
 
   /**
@@ -4756,16 +4335,22 @@ export class RuntimeManager {
   }
 
   /**
-   * Clone a DO's storage to a new object key. The clone starts with identical
+   * Fork a DO's storage into a new object key. The fork starts with identical
    * state, root and facets, as of one committed cut of the source. Used for
    * channel forking.
+   *
+   * Idempotent by the target key: the node never overwrites an object, so a
+   * second fork of the same target answers `ERR_OBJECT_EXISTS` and leaves the
+   * one object it holds; an interrupted fork is taken over
+   * (`replaceUnfinished`). The reservation's receipt says whether the earlier
+   * attempt was this reservation's own.
    *
    * The node exports the source from its own turn, so the source need not be
    * quiesced and the object that asks for its own clone (`cooperativelyPaused`,
    * paused on this very call) is not retired. Other callers hold the source's
    * relays sealed while the cut is taken, so no host-driven write interleaves.
    */
-  async cloneDO(
+  async forkObjectStorage(
     ref: DORef,
     newObjectKey: string,
     options: {
@@ -4775,7 +4360,7 @@ export class RuntimeManager {
     }
   ): Promise<DORef> {
     if (this.shuttingDown) throw new Error("RuntimeManager is shutting down");
-    this.requireUserlandStorage(ref, "cloneDO");
+    this.requireUserlandStorage(ref, "forkObjectStorage");
     const target = { ...ref, objectKey: newObjectKey };
     if (options.reservation.key !== newObjectKey)
       throw new Error("Clone reservation target mismatch");
@@ -4827,21 +4412,13 @@ export class RuntimeManager {
   }
 
   /**
-   * Journal reclamation after entity retirement. The runtime deletes the
-   * cell's storage when the node runs; a journal row left open (the node was
-   * down, or the call failed) is collected by the next start's recovery.
+   * Reclamation after entity retirement. The obligation is recorded first; the
+   * node deletes the cell's storage when it runs, and an attempt that could not
+   * (the node was down, or refused) is collected by the next start's recovery.
    */
   async destroyRetiredDOStorage(ref: DORef): Promise<void> {
-    await this.startDurableObjectMaintenance({
-      kind: "destroy",
-      ref,
-      intent: `reclaim storage for retired ${ref.className}/${ref.objectKey}`,
-      journalOnly: true,
-    });
     this.cloneReceipts.retire(this.durableObjectTargetId(ref));
-    if (this.process && this.process.exitCode === null && !this.shuttingDown) {
-      await this.collectRetiredDurableObjectStorage(this.durableObjectTargetId(ref));
-    }
+    await this.storage.destroyRetired(ref);
   }
 
   // =========================================================================
@@ -4873,10 +4450,7 @@ export class RuntimeManager {
     for (const result of preparationResults) {
       if (result.status === "rejected") retainFailure(result.reason);
     }
-    const maintenanceResults = await Promise.allSettled([...this.doMaintenanceChains.values()]);
-    for (const result of maintenanceResults) {
-      if (result.status === "rejected") retainFailure(result.reason);
-    }
+    await attempt(() => this.storage.settled());
     if (this.activeTransition) await attempt(() => this.activeTransition!.promise);
     if (this.process) {
       // Shutdown is a generation-closing edge just like replacement and idle
@@ -4925,7 +4499,7 @@ export class RuntimeManager {
     this.latestExecutablePreparation.clear();
     this.reconcileDoCodeUnitOwnership();
 
-    this.doMaintenanceDb.close();
+    this.doStorageDb.close();
     this.doSchemaDescriptorDb.close();
 
     log.info("RuntimeManager shut down");

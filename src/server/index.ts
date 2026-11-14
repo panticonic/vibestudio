@@ -4855,7 +4855,7 @@ async function main() {
             initializeDurableClone: (input) =>
               doDispatch.dispatchLifecycle(input.target, "initializeClone", input),
             // Server-internal DO-storage primitives for cloneContext/destroyContext.
-            // cloneDO/destroyDO are NOT exposed to userland — only the runtime
+            // forkObjectStorage/destroyDO are NOT exposed to userland — only the runtime
             // service (here) drives them, behind the context-boundary gate.
             cloneDurableStorage: async ({
               source,
@@ -4865,7 +4865,7 @@ async function main() {
               reservation,
               cooperativelyPaused,
             }) => {
-              await runtimeManager.cloneDO({ source, className, objectKey: fromKey }, toKey, {
+              await runtimeManager.forkObjectStorage({ source, className, objectKey: fromKey }, toKey, {
                 cooperativelyPaused,
                 reservation,
                 resolveSource: () =>

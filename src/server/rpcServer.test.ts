@@ -3616,7 +3616,7 @@ describe("RpcServer relay behavior", () => {
         caller,
         ref: {
           source: "vibestudio/internal",
-          className: "WorkspaceDO",
+          className: "WorkspaceStateDO",
           objectKey: "workspace",
         },
         method: "slotMove",
@@ -3626,7 +3626,7 @@ describe("RpcServer relay behavior", () => {
     expect(resolveProductBuiltinPreparedAuthority).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "vibestudio/internal",
-        className: "WorkspaceDO",
+        className: "WorkspaceStateDO",
         method: "slotMove",
         contextBoundary: { operation: "movePanel", targetArgument: 0 },
       })
@@ -3668,7 +3668,7 @@ describe("RpcServer relay behavior", () => {
     await testServer(server).directDOAuthorization({
       caller: extension,
       authorizingCaller: initiator,
-      ref: { source: "vibestudio/internal", className: "WorkspaceDO", objectKey: "workspace" },
+      ref: { source: "vibestudio/internal", className: "WorkspaceStateDO", objectKey: "workspace" },
       method: "slotMove",
       args: ["slot-a", "slot-b"],
     });

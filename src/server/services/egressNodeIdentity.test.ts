@@ -99,11 +99,11 @@ describe("the node's identity at the egress proxy", () => {
     });
     const port = await proxy.startShared(SECRET);
     try {
-      await send(port, "http://example.invalid/", { loaded: false, class: "WorkspaceDO" });
+      await send(port, "http://example.invalid/", { loaded: false, class: "WorkspaceStateDO" });
       await send(port, "http://example.invalid/", { loaded: true, egressIdentity: ["worker:w", "x"] });
       // Unattributed identities never reach a resolver.
       await send(port, "http://example.invalid/", { loaded: true, egressIdentity: [] });
-      expect(asked).toEqual(["do-service:vibestudio/internal:WorkspaceDO", "worker:w"]);
+      expect(asked).toEqual(["do-service:vibestudio/internal:WorkspaceStateDO", "worker:w"]);
       void workerCaller;
     } finally {
       await proxy.stop();

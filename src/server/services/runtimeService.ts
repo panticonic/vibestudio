@@ -1780,7 +1780,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
 
   /**
    * Clone a whole context's durable substrate into a fresh, isolated context:
-   * generic DO storage (server-internal cloneDO) + a VCS snapshot of the
+   * generic DO storage (server-internal object fork) + a VCS snapshot of the
    * source's working files. Returns the new contextId + source→clone map.
    * Prepares copied receiver storage through authenticated lifecycle control before
    * admitting execution. Callers then apply domain semantics (the fork's `postClone`).
