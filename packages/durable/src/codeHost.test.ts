@@ -3,6 +3,7 @@ import { serializeRpcFailure } from "@vibestudio/rpc";
 import { DurableObjectBase } from "./index.js";
 import { createTestDO } from "./test-utils.js";
 import {
+  callOrRestart,
   cpuLimitForTimeout,
   createCodeHostClient,
   isHostedCall,
@@ -121,6 +122,36 @@ describe("createCodeHostClient", () => {
     expect(calls[0]!["limits"]).toEqual({ cpuMs: 5000 });
     expect(calls[1]).not.toHaveProperty("limits");
     expect(calls[2]!["limits"]).toEqual({ cpuMs: 5000, subRequests: 3 });
+  });
+
+  it("restarts an instance whose call overruns its budget, and passes an answer through untouched", async () => {
+    const seen: string[] = [];
+    let answer: (() => Response) | null = null;
+    const env = {
+      CODE_HOST: {
+        fetch: async (_url: string, init: RequestInit) => {
+          const body = JSON.parse(String(init.body)) as { op: string; method?: string };
+          seen.push(body.op === "call" ? `call:${body.method}` : body.op);
+          if (body.op === "call") {
+            if (body.method === "hang") return new Promise<Response>(() => undefined);
+            return (answer ?? (() => Response.json({ result: "ok" })))();
+          }
+          return body.op === "restart" ? Response.json({ restarted: true }) : Response.json({ hosted: true });
+        },
+      },
+    };
+    const kernel = await createCodeHostClient({ env, props })({
+      name: "repl",
+      executable: { source: "w/k", className: "K" },
+    });
+    expect(await callOrRestart(kernel, 1000, "get", "r1")).toBe("ok");
+    await expect(callOrRestart(kernel, 30, "hang")).rejects.toMatchObject({ code: "EUNRESPONSIVE" });
+    expect(seen).toEqual(["host", "call:get", "call:hang", "restart"]);
+    // An application failure is not an unresponsive instance: no restart.
+    answer = () =>
+      Response.json({ error: serializeRpcFailure(new Error("nope")) }, { status: 500 });
+    await expect(callOrRestart(kernel, 1000, "get", "r1")).rejects.toThrow("nope");
+    expect(seen.filter((entry) => entry === "restart")).toHaveLength(1);
   });
 
   it("derives a call's CPU limit from a run's timeoutMs, and none without a usable one", () => {

@@ -1795,6 +1795,33 @@ export default { fetch() { return new Response("chunked host"); } };`;
       });
     }, 60_000);
 
+    it("a restart ends the hosted instance's heap and keeps its storage; the next call starts the class again", async () => {
+      active = await createHarness(builds, { manifests });
+      const { manager, dispatch } = active;
+      await manager.ensureDOClass(HOST, "HostDO");
+      const a = hostRef("entity-a");
+      await bindConfiguredObject(manager, a, {});
+      await code(dispatch, a, hostKernel);
+      await code(dispatch, a, callKernel("run", "1"));
+      await code(dispatch, a, callKernel("run", "2"));
+      const restarted = JSON.parse(
+        (await code(dispatch, a, { op: "restart", name: "repl:default", executable: hostKernel.executable })).body
+      );
+      expect(restarted).toEqual({ restarted: true });
+      // The heap is new (the run counter starts over) and the committed history is intact.
+      const info = JSON.parse((await code(dispatch, a, callKernel("info"))).body).result;
+      expect(info.runs).toBe(0);
+      expect(info.log.filter((message: string) => message.startsWith("eval: run"))).toHaveLength(2);
+      // Restarting what is not hosted is not an error.
+      expect(
+        JSON.parse(
+          (
+            await code(dispatch, a, { op: "restart", name: "repl:other", executable: hostKernel.executable })
+          ).body
+        )
+      ).toEqual({ restarted: false });
+    }, 60_000);
+
     it("a limit on one call (a run's timeoutMs) ends that call when the class has none of its own, and a bad limit is refused", async () => {
       active = await createHarness(builds, { manifests });
       const { manager, dispatch } = active;

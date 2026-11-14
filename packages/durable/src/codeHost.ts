@@ -46,6 +46,13 @@ export interface HostedCode {
    * same; only the call carries the limit.
    */
   limited(limits: HostedCallLimits): HostedCode;
+  /**
+   * Ends the running hosted instance without ending its storage: the heap goes,
+   * the committed state stays, and the next call starts the class again. The
+   * recovery for an instance that stopped answering (docs/dolt-redesign.md §7.8):
+   * the hosted class sees an ordinary restart and settles what it left running.
+   */
+  restart(): Promise<void>;
 }
 
 export interface HostedCallLimits {
@@ -89,6 +96,49 @@ export class CodeHostError extends Error {
   ) {
     super(message);
     this.name = "CodeHostError";
+  }
+}
+
+/**
+ * One call to a hosted class that must answer within `budgetMs`. A hosted instance
+ * whose isolate was ended by its CPU limit while it held work stops answering any
+ * call (celld leaves the cell with an event that never completes; probed with a
+ * real kernel, docs/dolt-redesign.md §7.8), and a pull that waits on it waits
+ * forever. A call that overruns its budget is therefore not slow: the instance is
+ * restarted (heap gone, storage kept) and the caller gets `EUNRESPONSIVE`, so the
+ * next call reaches a fresh instance whose own restart handling settles what the
+ * old one left running. Budgets must be generous: a restart discards the heap.
+ */
+export async function callOrRestart<T>(
+  hosted: HostedCode,
+  budgetMs: number,
+  method: string,
+  ...args: unknown[]
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const unresponsive = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new CodeHostError(
+            `hosted call ${method} did not answer within ${budgetMs}ms; the instance was restarted`,
+            "EUNRESPONSIVE"
+          )
+        ),
+      budgetMs
+    );
+  });
+  const call = hosted.call<T>(method, ...args);
+  // The abandoned call may still settle (or never); nothing may escape from it.
+  call.catch(() => undefined);
+  try {
+    return await Promise.race([call, unresponsive]);
+  } catch (error) {
+    if (error instanceof CodeHostError && error.code === "EUNRESPONSIVE")
+      await hosted.restart().catch(() => undefined);
+    throw error;
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -152,6 +202,15 @@ export function createCodeHostClient(input: {
           name: spec.name,
           executable: spec.executable,
         });
+        await response.arrayBuffer();
+      },
+      async restart(): Promise<void> {
+        const response = await request({
+          op: "restart",
+          name: spec.name,
+          executable: spec.executable,
+        });
+        if (!response.ok) await failure(response);
         await response.arrayBuffer();
       },
     });

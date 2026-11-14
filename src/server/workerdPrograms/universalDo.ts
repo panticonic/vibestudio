@@ -257,7 +257,7 @@ export class CodeHost extends WorkerEntrypoint<UniversalDoEnv> {
 }
 
 interface CodeHostInput {
-  op: "host" | "call" | "release";
+  op: "host" | "call" | "release" | "restart";
   /** Names the hosted instance inside the calling entity. */
   name: string;
   executable: { source: string; className: string };
@@ -501,6 +501,12 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
   }
 
   private async codeHostOp(input: CodeHostInput): Promise<Response> {
+    if (input.op === "restart") {
+      // The heap goes and the storage stays: the next call loads the class again.
+      const had = this.hosted.has(input.name);
+      this.endHosted(input.name, new Error("Hosted code restarted"));
+      return Response.json({ restarted: had });
+    }
     if (input.op === "release") {
       const instance = this.hosted.get(input.name);
       instance?.hold?.release();
