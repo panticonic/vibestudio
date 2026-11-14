@@ -8,7 +8,6 @@ import {
   type ExecutionArtifactRefV1,
 } from "@vibestudio/shared/execution/retention";
 import type { VerifiedCodeIdentity } from "@vibestudio/shared/serviceDispatcher";
-import { executionAuthorityForCaller, retainExecutionAuthority } from "./executionAuthority.js";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
@@ -30,13 +29,11 @@ import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createHash, randomUUID } from "node:crypto";
 import { evalRuntimeId } from "@vibestudio/shared/evalRuntimeIdentity";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
-import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
-import { capabilityPatternCovers } from "@vibestudio/shared/authorityManifest";
-import { resourceScopeContains } from "@vibestudio/shared/authorization";
 import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
-import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
-import { taskAuthorityPrincipal, type TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
+import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
+import type { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
+import { assertAgentCausalParent, createDynamicCodeAdmission } from "./dynamicCodeAdmission.js";
 import { resolveCodeIdentity } from "./principalIdentity.js";
 
 type EvalEngineClient = TypedServiceClient<typeof evalEngineMethods>;
@@ -191,49 +188,6 @@ async function superviseIsolateLiveness(input: {
 
 const EVAL_DO_CLASS = "EvalDO";
 
-function normalizeAuthorityManifest(
-  runArgs: EvalStartInput,
-  initiatingRequests: readonly import("@vibestudio/rpc").CapabilityScope[]
-): import("@vibestudio/rpc").EvalAuthorityManifest {
-  const intent = normalizeEvalAuthorityIntent(runArgs.authority);
-  const requests = [...(intent.requests ?? [])]
-    .map((request) => ({
-      capability: request.capability,
-      resource: { ...request.resource },
-    }))
-    .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)));
-  for (const request of requests) {
-    if (
-      request.capability.endsWith("*") &&
-      !initiatingRequests.some(
-        (sealed) =>
-          capabilityPatternCovers(sealed.capability, request.capability.slice(0, -1)) &&
-          resourceScopeContains(sealed.resource, request.resource)
-      )
-    ) {
-      throw new ServiceError(
-        "eval",
-        "start",
-        `Wildcard run request ${request.capability} is not bounded by an equivalent sealed request`,
-        "ERUNMANIFEST",
-        undefined,
-        "access"
-      );
-    }
-  }
-  const normalized = {
-    mode: intent.requests === undefined ? ("adaptive" as const) : ("strict" as const),
-    effects: intent.effects,
-    approvals: intent.approvals,
-    requests,
-  };
-  return Object.freeze({
-    ...normalized,
-    requests: Object.freeze(requests),
-    digest: sha256Canonical(normalized),
-  });
-}
-
 interface EvalOwner {
   ownerId: string;
   contextId: string;
@@ -318,6 +272,15 @@ export function createEvalService(deps: {
   }>;
 }): ServiceDefinition {
   const store = deps.entityStore;
+  // The one admission step every run of dynamic code goes through (§7.3).
+  const admission = createDynamicCodeAdmission({
+    executionSessions: deps.executionSessions,
+    taskAuthorities: deps.taskAuthorities,
+    entityCache: store.cache,
+    workspaceId: deps.workspaceId,
+    ...(deps.isSystemTestHarness ? { isSystemTestHarness: deps.isSystemTestHarness } : {}),
+    ...(deps.preauthorize ? { preauthorize: deps.preauthorize } : {}),
+  });
   const activeRuns = new Map<string, ActiveEvalRun>();
   /**
    * One liveness supervisor per admitted timed run. Replayed starts for the
@@ -690,29 +653,7 @@ export function createEvalService(deps: {
               );
             })();
     const agentBinding = trustedAgentRelay(ctx);
-    if (agentBinding && !ctx.causalParent) {
-      throw new ServiceError(
-        "eval",
-        "start",
-        "Agent-bound eval execution requires an exact causal tool invocation",
-        "EACCES",
-        undefined,
-        "access"
-      );
-    }
-    if (agentBinding && ctx.causalParent) {
-      const expected = channelTrajectoryFor(agentBinding.channelId);
-      if (ctx.causalParent.logId !== expected.logId || ctx.causalParent.head !== expected.head) {
-        throw new ServiceError(
-          "eval",
-          "start",
-          "Agent eval cause does not belong to the relay's host-bound trajectory",
-          "EACCES",
-          undefined,
-          "access"
-        );
-      }
-    }
+    assertAgentCausalParent(ctx, agentBinding);
     // Refuse an unscoped or trajectory-drifting agent relay before activating
     // an EvalDO or exposing any presenter authority ceiling.
     const { objectKey } = await ensureEvalDO(
@@ -782,110 +723,38 @@ export function createEvalService(deps: {
       );
     }
 
-    if (!ctx.caller.subject) {
-      throw new ServiceError(
-        "eval",
-        "start",
-        "Evaluated execution requires an authenticated user",
-        "EACCES",
-        undefined,
-        "access"
-      );
-    }
-    const parentAdmission = ctx.caller.executionSession ?? null;
-    const mission = parentAdmission?.mission ?? null;
-    const inheritedTestPolicy = deps.executionSessions.testPolicyForContext(owner.contextId);
-    const testPolicy =
-      !mission &&
-      (inheritedTestPolicy ??
-        (deps.isSystemTestHarness?.(ctx.caller, runId)
-          ? deps.executionSessions.createTestPolicy(runId)
-          : null));
     const eventSinkNonce = randomUUID();
-    const taskRef = agentBinding?.channelId ?? `eval:${ownerId}:${runId}`;
-    const ownerUser = `user:${ctx.caller.subject.userId}` as const;
-    const inheritedTaskAuthority = deps.taskAuthorities.resolveCaller(ctx.caller, store.cache);
-    const taskBinding = {
-      workspaceId: deps.workspaceId,
+    const admitted = await admission.admit(ctx, {
+      runId,
+      hostRuntimeId: evalRuntimeId,
+      ownerId,
       contextId: owner.contextId,
-      channelId: taskRef,
-    };
-    const taskAuthority = inheritedTaskAuthority ?? taskAuthorityPrincipal(taskBinding);
-    if (!inheritedTaskAuthority) {
-      deps.taskAuthorities.bindPrincipal(taskAuthority, taskBinding);
-    }
-    const executionSession = await deps.executionSessions.admitWhenAvailable(
-      {
-        authorityOrigin: retainExecutionAuthority(
-          executionAuthorityForCaller(ctx.caller, store.cache),
-          ctx.authorizingCaller
-            ? executionAuthorityForCaller(ctx.authorizingCaller, store.cache)
-            : undefined
-        ),
-        controllerRuntimeId: ctx.caller.runtime.id,
-        mode: mission ? "mission" : testPolicy ? "test" : "interactive",
-        ownerUser,
-        workspaceId: deps.workspaceId,
-        contextId: owner.contextId,
-        agentBinding: agentBinding
-          ? {
-              entityId: agentBinding.entityId,
-              channelId: agentBinding.channelId,
-              bindingId: `${agentBinding.entityId}@${agentBinding.contextId}`,
-            }
-          : null,
-        taskRef,
-        taskAuthority,
-        admissionKey: `eval:${evalRuntimeId}:${runId}`,
-        executionImage: {
-          principal: codePrincipal(harness),
-          repoPath: harness.repoPath,
-          ref: sourceRoot.stateHash as `state:${string}`,
-          effectiveVersion: harness.effectiveVersion,
-          executionDigest: harness.executionDigest,
-        },
-        executor: {
-          kind: "eval",
-          runtimeId: evalRuntimeId,
-          evalRunId: runId,
-          authorityManifest: normalizeAuthorityManifest(runArgs, ctx.caller.code?.requested ?? []),
-          eventSinkNonce,
-        },
-        ...(mission ? { mission } : {}),
-        ...(parentAdmission?.authorityPlanDigest
-          ? { authorityPlanDigest: parentAdmission.authorityPlanDigest }
-          : {}),
-        parent: parentAdmission
-          ? { authoritySessionId: parentAdmission.authoritySessionId, nonce: parentAdmission.nonce }
-          : null,
-        ...(ctx.attachedHost ? { attachedHost: ctx.attachedHost } : {}),
-        causalParent: ctx.causalParent
-          ? {
-              logId: ctx.causalParent.logId,
-              head: ctx.causalParent.head,
-              invocationId: ctx.causalParent.invocationId,
-            }
-          : null,
-        ...(testPolicy ? { testPolicy } : {}),
+      authority: runArgs.authority,
+      executionImage: {
+        repoPath: harness.repoPath,
+        effectiveVersion: harness.effectiveVersion,
+        executionDigest: harness.executionDigest,
+        stateHash: sourceRoot.stateHash as `state:${string}`,
+        requested: ownerHarness?.requested ?? [],
       },
-      ctx.signal
-    );
+      ...(agentBinding ? { agentBinding } : {}),
+      admissionKey: `eval:${evalRuntimeId}:${runId}`,
+      taskRefFallback: `eval:${ownerId}:${runId}`,
+      eventSinkNonce,
+    });
+    const { executionSession } = admitted;
     const activityId =
       deps.activity && deps.eventSinks ? `eval:${evalRuntimeId}:${runId}` : undefined;
     const discardPreparedAdmission = () => {
-      deps.executionSessions.discard(evalRuntimeId, runId);
+      admitted.discard();
       deps.eventSinks?.close(eventSinkNonce);
       if (activityId) deps.activity?.end(activityId);
     };
     // Every resource acquired after admission belongs to one preparation transaction.
     try {
-      deps.taskAuthorities.bindExecution(executionSession);
       const evalExecutor = executionSession.executor;
-      if (evalExecutor.kind !== "eval" || !evalExecutor.eventSinkNonce) {
-        throw new Error("Evaluated execution admission has no live event sink");
-      }
       deps.eventSinks?.register({
-        nonce: evalExecutor.eventSinkNonce,
+        nonce: eventSinkNonce,
         runtimeId: evalRuntimeId,
         runId,
         contextId: owner.contextId,
@@ -899,7 +768,7 @@ export function createEvalService(deps: {
         },
       });
       if (activityId) deps.activity?.begin(activityId);
-      const authorityManifestDigest = evalExecutor.authorityManifest.digest;
+      const authorityManifestDigest = admitted.authorityManifestDigest;
       const runDigest = sha256Canonical({
         runId,
         ownerRuntimeId: ownerId,
@@ -943,42 +812,6 @@ export function createEvalService(deps: {
           ctx.caller.code?.executionDigest ? codePrincipal(ctx.caller.code) : null,
         ].filter((value): value is string => value !== null),
       });
-      if (normalizeEvalAuthorityIntent(runArgs.authority).preauthorize?.length) {
-        if (!deps.preauthorize) {
-          throw new ServiceError(
-            "eval",
-            "start",
-            "Exact eval preauthorization is unavailable",
-            "EUNAVAILABLE",
-            undefined,
-            "service"
-          );
-        }
-        const principalDigest = executionSession.executionImage.executionDigest;
-        const prospectiveCtx: ServiceContext = {
-          ...(ctx.signal ? { signal: ctx.signal } : {}),
-          caller: {
-            runtime: { id: evalRuntimeId, kind: "do" },
-            code: {
-              callerId: evalRuntimeId,
-              callerKind: "do",
-              repoPath: executionSession.executionImage.repoPath,
-              effectiveVersion: executionSession.executionImage.effectiveVersion,
-              executionDigest: principalDigest,
-              requested: ownerHarness?.requested ?? [],
-            },
-            ...(agentBinding ? { agentBinding } : {}),
-            executionSession,
-            ...(ctx.caller.subject ? { subject: ctx.caller.subject } : {}),
-          },
-          ...(ctx.causalParent ? { causalParent: ctx.causalParent } : {}),
-          ...(evalExecutor.authorityManifest.effects === "read-only" ? { readOnly: true } : {}),
-        };
-        for (const operation of normalizeEvalAuthorityIntent(runArgs.authority).preauthorize ??
-          []) {
-          await deps.preauthorize(prospectiveCtx, operation);
-        }
-      }
       const evalDoRef = { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
       return {
         evalDoRef,
@@ -1004,7 +837,7 @@ export function createEvalService(deps: {
           readOnly: evalExecutor.authorityManifest.effects === "read-only",
           authorityManifestDigest,
           intentDigest: runDigest,
-          eventSinkNonce: evalExecutor.eventSinkNonce,
+          eventSinkNonce,
           resultReceiverRef: runArgs.resultReceiver ? ownerId : undefined,
           ...chatBinding,
         },
@@ -1012,7 +845,7 @@ export function createEvalService(deps: {
         channelId: isAgentDo ? agentBinding.channelId : undefined,
         runDigest,
         authorityManifestDigest,
-        eventSinkNonce: evalExecutor.eventSinkNonce,
+        eventSinkNonce,
         activityId,
       };
     } catch (error) {
