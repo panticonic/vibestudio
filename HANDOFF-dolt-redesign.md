@@ -1,4 +1,4 @@
-# Handoff: Vibestudio Dolt redesign, P0, P2a and P3 (P2b open)
+# Handoff: Vibestudio Dolt redesign, P0, P2a, P3 and the first cuts of P2b
 
 Branch `feat/dolt-p0` (worktree `/home/werg/vibestudio-worktrees/dolt-p0`), cut from
 `feat/celld-runtime` `db8e365fd`. Not pushed. Base template branch `feat/dolt-p2`
@@ -15,7 +15,7 @@ Branch `feat/dolt-p0` (worktree `/home/werg/vibestudio-worktrees/dolt-p0`), cut 
 | 1. Design doc revised to the fork as shipped, GAD decentralized | done |
 | 2. P0 Foundations | done and verified |
 | 3. P2a: heap residency by a hold; the host kernel lease deleted | **done and gated** (below) |
-| 4. P2b: the kernel as a facet of the owner's root; `evalService` and the `evalEngine` host schemas deleted | **not implemented**; probes verified, decisions D1 to D5 needed (`docs/dolt-redesign.md` §7.7) |
+| 4. P2b: general dynamic code (§7 rewritten 2026-11-14 to the user's decisions) | **partly done**: step 0 (per-call nonce) done and measured; §7 rewritten; the admission function (`admitDynamicCode`) built; D4 answered on the real fork; **not done:** the hosting helper, session entities, the kernel class in Base, pull delivery, deletion of `evalService`/`EvalDO` (§7.12 steps 3 to 6, "P2b: what remains" below) |
 | 5. P3 Durable services: `WorkspaceStateDO` (Dolt), the replaying import, the maintenance journal and `cloneDO` deleted | **done and gated**; the `panel-tree-navigation` "regression" was a pre-P3 gap in browser-panel agent calls ("P3 follow-up" below), and every call to a Dolt object costs about three flushes (measured, a decision for the user) |
 | 6. P4 onward | not started |
 
@@ -31,7 +31,11 @@ vibestudio `feat/dolt-p0` (this pass, newest last):
 7. `a1d39adf9` storage: backup, restore, reset and retirement without a maintenance journal; `cloneDO` is `forkObjectStorage` (P3)
 8. P3 results, §4.6 as built, the fresh-workspace legacy cell, the real-fork reverse-patch check (`7e106506a`, `5697de08c`, `fb63135ac`)
 9. `132c51b48` panel execution: log an activation only when one happens; `VIBESTUDIO_DO_CALL_TRACE` (P3 follow-up)
-10. (this handoff and §4.2/§4.6 of the design doc) the follow-up's measurements and results
+10. `27b24c549` the follow-up's measurements and results
+11. `083f47ec4` durable: a Dolt object admits a call from memory and records a mutating call's nonce in its own transaction (P2b step 0)
+12. `9a8a8cc44` docs: §7 is a general dynamic-code system; the CPU-limit probe `celldCpuWatchdogCelld.test.ts` (D4)
+13. `1f61b1447` dynamic code: one admission function (`dynamicCodeAdmission.ts`), called by `evalService`
+14. (this handoff)
 
 Earlier: `72b682e86`, `1ca22c6f8`, `4a81ab2c7`, `7d5bc1775`, `01ef6ffe9`, `0019b6d35`.
 
@@ -134,21 +138,76 @@ No test in these lanes showed a hang, an input-gate error, or an eval residency 
 do not prove the hold in the product beyond `eval-live-kernel-continuity`; a product-level census of
 holds does not exist (fork finding 4).
 
-## P2b: what remains (`docs/dolt-redesign.md` §7.7)
+## P2b so far (`docs/dolt-redesign.md` §4.2 and §7)
 
-The structural move is not one class moving. `evalService` is the admission layer of every execution
-(owner resolution for four caller kinds, entity activation with lineage, per-run authority admission,
-execution sessions, preauthorization, parent-panel resolution, result push, liveness supervision), and 51
-Base files reference the eval client (the agent loop in `agentic-do`, `harness/src/tools/eval.ts`, the CLI,
-the system-test runner). Decisions needed before code: D1 the principal of a kernel call and the session
-cell for callers without a root; D2 where per-run authority admission lives (recommended: `evalService`
-shrinks to an admission function instead of being deleted); D3 pull instead of push for the agent loop;
-D4 the CPU-starvation watchdog; D5 not migrating legacy EvalDO objects into a Dolt kernel. The doc has
-recommended answers and an order of three cuts. `UNSAFE_EVAL` was already removed by the cutover (only
-`docs/` plans mention it). The `UniversalDO` root is Vibestudio code
-(`src/server/workerdPrograms/universalDo.ts`), not Base; Base holds the engine (`packages/eval`), the
-provider bindings in `meta/vibestudio.yml` and the agent loop, and declares no `runtime.code-execution`
-capability yet.
+### Step 0: the per-call nonce (commit `083f47ec4`)
+
+Every call to a Dolt object wrote a replay nonce (a root record and about three flushes). Now
+(`DirectCallNonceGate`, `packages/shared/src/directRpcEnforcement.ts`; used by `packages/durable/src/index.ts`):
+- every call on a Dolt object is admitted from a bounded in-memory set and a **floor** (the object's activation, raised when
+  the set is full); an attestation issued at or before the floor is refused `ERR_ATTESTATION_STALE` *before anything runs*;
+- the **host re-stamps and resends** such a refusal (same nonce, fresh `issuedAt`, same lifetime), in
+  `workerdRpcRelay.postToDurableObject` / `streamFromDurableObject` and `DODispatch.dispatchImpl`
+  (`retryOnStaleAttestation`). Retries did not re-sign before: the relay is deliberately not a retry unit, which is sound here
+  only because the refusal is a pre-execution admission failure. It happens once per object activation;
+- a mutating call (declared sensitivity other than `read`) also checks the durable ledger and records its nonce in **its own first
+  transaction** (`committedTransaction`, or the new base `transactionSync` for local state, which `WorkspaceStateDO` now uses
+  instead of `ctx.storage.transactionSync`); a call that changed no storage (`total_changes()`) records nothing; a call that changed
+  storage outside a base transaction records it when it ends. Events, alarms and SQLite objects are unchanged.
+- Soundness check: the attestation is host-minted with `issuedAt`, `expiresAt` (60 s) and a UUID nonce (`attestDirectRpc`); the
+  receiver cannot be given an old `issuedAt` by a replayer. Two caveats recorded in §4.2: a clock stepping backwards across a
+  restart (the durable record for mutating calls covers it, reads are 60 s replays of a read), and a write outside a base
+  transaction. I found no unsound case, so nothing was weakened. **Base's `durable-base.ts` has no Dolt awareness at all**
+  (no `committedTransaction`, no `dolt` getter, the nonce table is the versioned name), so the same change is not applied there
+  and must come with the Base durable base's Dolt support (§7.12 step 3).
+- Tests: `directRpcEnforcement.test.ts` (the gate), `dolt-base.test.ts` (piggyback, no-change call), `workerdRpcRelay.test.ts` (the re-stamp).
+
+**Measured** (`VIBESTUDIO_DO_CALL_TRACE=all`; the model-free navigation of "P3 follow-up" on a fresh instance each, one warm-up run
+and five measured runs; mean ms per call, before the change then after): `panelTreeDetail` 44 to 8, `entityResolve` 47 to 6,
+`contextEdgeListByChild` 42 to 6, `alarmNextWakeAt` 47 to 8, `alarmClear` 48 to 14; per run `openPanel` 2.1 s to 0.9 s, `navigate`
+2.0 s to 0.85 s, state and tree 1.1 s to 0.6 s. (A first intermediate build, with the plain nonce piggyback but no "nothing
+changed" test, left `alarmClear` at 50 ms; the change counter fixed it.) Script and traces: the session scratchpad `p2b/` (`nav.ts`,
+`runnav.sh`, `trace.py`).
+
+### The design, and D4 (commit `9a8a8cc44`)
+
+§7 now describes one hosting helper for any entity (`hostCode`, a `CodeHost` service binding the UniversalDO root gives each entity,
+the manifest decides `codegen`/`residency` through the executable admission), session entities, one admission function, pull
+delivery, eval as an ordinary Base class, and what is deleted. **D4, measured** (`celldCpuWatchdogCelld.test.ts`, real fork):
+`WorkerCode.limits.cpuMs` ends a spinning call in about `cpuMs` (1004 ms for 1000), per invocation, leaves the root, siblings and the
+same kernel (heap kept) answerable; with no limit the call never ends. So the per-run liveness supervisor can go **once kernels are
+loaded workers with `limits.cpuMs`**, not before (today's `EvalDO` is a product DO, not shown to be covered). **Fork gap:**
+`getDurableObjectClass` accepts only `props`, so the limit is per loaded unit, not per run; a starving run is ended at the unit's
+`cpuMs`, not at its `timeoutMs`. A `limits` option on `getDurableObjectClass` (or a per-call limit on a facet fetch) is the request.
+
+### The admission function (commit `1f61b1447`)
+
+`src/server/services/dynamicCodeAdmission.ts`: `createDynamicCodeAdmission(deps).admit(ctx, input)` returns the session, its nonce, the
+normalized manifest and a `discard`; `assertAgentCausalParent`, `normalizeAuthorityManifest` moved here. `evalService.prepareRun`
+calls it (44 `evalService` tests pass unchanged; 7 new tests). Known naming debt: the executor fact is still `kind: "eval"`, with
+`evalRunId` and `eventSinkNonce` (wire types in `packages/rpc/src/authority.ts` and four consumers); renaming it and deleting the
+event-sink nonce go with pull delivery.
+
+### P2b: what remains (`docs/dolt-redesign.md` §7.12, steps 3 to 6)
+
+Not started, and why each is more than one step:
+- **Hosting helper.** `UniversalDO` (`workerdPrograms/universalDo.ts`, 430 lines) creates only the `do` facet with
+  `ctx.facets.get("do", () => ({ class }))`. It needs a `CodeHost` entrypoint per entity (`ctx.exports`, props the entity cannot change),
+  the executable admission (`/_doadmission`) returning the entity's permitted `celld` grants (`codegen`, `residency`, `storage: "dolt"`,
+  `doltLocal`, `limits.cpuMs`) from its manifest, the root's `onrevoked` relay, and `hostCode` on both durable bases. Base's
+  `durable-base.ts` also needs Dolt support first (`committedTransaction`, a `dolt` getter, `vsl_` local nonce table, the call-nonce gate).
+  The probes for the mechanics exist (`doltEvalKernelCelld.test.ts`, `ownerKernelPathCelld.test.ts`).
+- **Session entities** for panels, the CLI and the runner: `ensureEvalDO`'s hand registration (`store.activate`/`advanceExecution`:
+  `parentId`, `ownerUserId`, `agentBinding`, `stateArgs`, finite or persistent) becomes `runtime.createEntity` of a `session:<principal>:<scope>`
+  UniversalDO. `resolveParentPanel` walks the lineage, so `parentId` must be preserved.
+- **The kernel class in Base** (`EvalDO.ts` is 4,6k lines in `packages/builtin/src/eval-engine/`, the engine is workspace-owned): no
+  `internalDOExecutionIdentity`, `hostOnly` schemas (`service-schemas/evalEngine.ts`), catalog entry or `INTERNAL_DO_ENV`.
+  D5: legacy objects are not imported; the restart report must say it.
+- **Pull** (D3): `resultReceiver`, `onEvalComplete`, `onEvalProgress`, the event-sink routes, `acknowledge`, `eval_result_redeliveries`
+  go; the consumers are Base's `agentic-do` (`native-eval-tool.ts`, `native-agent-owner.ts`, `agent-vessel.ts`, `rpc-contract.ts`),
+  `harness/src/tools/eval.ts`, the CLI `evalCommand.ts`, the system-test runner (about 51 Base files reference the eval client).
+- `rg 'evalService|EvalDO|UNSAFE_EVAL|resultReceiver|eval_result_redeliveries'` therefore still has every hit it had; none is new, and
+  `UNSAFE_EVAL` has docs-only hits (plans). The authority-ledger rows are unchanged.
 
 ## P3 Durable services: what was built (`docs/dolt-redesign.md` §4.6 has the design and the deviations)
 
