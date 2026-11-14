@@ -1,4 +1,5 @@
 import { requireEvalKernel } from "./evalKernelAuthority.js";
+import { isEvalHostRecord } from "@vibestudio/shared/evalRuntimeIdentity";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceAccessError } from "@vibestudio/shared/serviceDispatcher";
@@ -135,9 +136,8 @@ export function createEvalEventIngressService(deps: {
             ? (entity.stateArgs as Record<string, unknown>)
             : null;
         if (
-          entity?.kind !== "do" ||
-          entity.className !== "EvalDO" ||
-          entity.source.repoPath !== "vibestudio/internal" ||
+          !entity ||
+          !isEvalHostRecord(entity) ||
           entity.contextId !== route.contextId ||
           typeof entity.parentId !== "string" ||
           entityState?.["ownerPrincipalId"] !== route.ownerCallerId ||

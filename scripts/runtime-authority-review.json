@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:264544810a496181cd3d2644deffe02014c5ed1c25006640e2f2982f370ce8e8",
+  "censusDigest": "sha256:96c8b67eef9dcf3b7fe1cb6649d6dbb3cc6e960a5003d1b9b0dad8f01fad9628",
   "decisions": {
     "host:terminalApps.launch": {
       "review": "single-prepared-terminal-program-consent",
@@ -24,30 +24,6 @@
     "direct:packages/builtin/src/browser-data/BrowserVaultDO.ts:listPasswordSummaries": {
       "review": "host-only-protected-password-inventory",
       "change": "The vault receiver now admits only host principals. Workspace code cannot enumerate even password metadata; Electron uses this method only behind its host-owned credential UI and origin-bound autofill controller."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:acknowledgeRunResult": {
-      "review": "exact-owned-eval-terminal-acknowledgement",
-      "change": "Acknowledges only the exact retained run and result digests through the existing owner relationship. Commits acknowledgement before removing redelivery debt, preserves result history, and grants no execution or reset authority."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:appendAuthorityEvent": {
-      "review": "host-only-eval-authority-event-ingress",
-      "change": "Adds the typed host-only write used to append one already receiver-bound authority lifecycle event to an exact eval run. It cannot choose another owner, execute code, or grant authority."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:getRunEvents": {
-      "review": "host-only-bounded-eval-event-page",
-      "change": "Adds a host-only bounded cursor read of durable events for an exact EvalDO run. It performs no execution, mutation, or authority acquisition."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:getRunReceipt": {
-      "review": "exact-owned-eval-terminal-receipt",
-      "change": "Returns the retained terminal result and immutable run/result digests for the authenticated Eval owner. A delivery hint supplies no result or authority. Nonterminal cancellation remains owned until actual cleanup ends."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:listRetainedExecutionRoots": {
-      "review": "host-only-eval-execution-root-census",
-      "change": "Adds a host-only bounded read of immutable execution roots already retained by one EvalDO so the mandatory retention provider can fail closed. It exposes no eval source, result, credential, or mutation path."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:retainExecutionRoot": {
-      "review": "host-only-exact-eval-execution-retention",
-      "change": "Adds a host-only write of one validated immutable execution artifact reference joined to its exact eval run. It cannot fabricate an artifact, widen executable authority, or delete retention."
     },
     "direct:packages/builtin/src/workspace-state/WorkspaceStateDO.ts:alarmAdoptWorker": {
       "review": "host-only-alarm-worker-generation-adoption",

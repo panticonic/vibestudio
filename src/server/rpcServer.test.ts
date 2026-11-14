@@ -1197,7 +1197,7 @@ describe("RpcServer relay behavior", () => {
   it("retains the immediate artifact author separately from the root initiator in one live parent", () => {
     const { server } = createServer();
     const root = createVerifiedCaller("agent:root", "agent");
-    const immediate = createVerifiedCaller("do:vibestudio/internal:EvalDO:one", "do");
+    const immediate = createVerifiedCaller("do:workers/session:SessionDO:one", "do");
     const receiver = createVerifiedCaller("do:workers/missions:MissionsDO:workspace", "do");
     const nonce = "verified-parent-artifact-author";
     const release = testServer(server).beginAuthorityParent(
@@ -1238,7 +1238,7 @@ describe("RpcServer relay behavior", () => {
   it("preserves the exact invoking author at the HTTP unary dispatch boundary", async () => {
     const { server, entityCache } = createServer();
     const root = createVerifiedCaller("agent:root", "agent");
-    const immediate = createVerifiedCaller("do:vibestudio/internal:EvalDO:author", "do");
+    const immediate = createVerifiedCaller("do:workers/session:SessionDO:author", "do");
     const receiverId = "do:workers/missions:MissionsDO:workspace";
     entityCache._onActivate(makeRecord(receiverId, "do", { repoPath: "workers/missions" }));
     const nonce = "http-unary-artifact-author-parent";
@@ -4952,30 +4952,18 @@ describe("RpcServer relay behavior", () => {
 
   it("binds a builtin's outbound request ceiling to the exact active method", () => {
     const { server } = createServer();
-    const receiver = "do:vibestudio/internal:EvalDO:owner";
+    const receiver = "do:vibestudio/internal:WorkspaceStateDO:ws";
 
-    const admittedNonce = "host-minted-eval-execute-run-nonce";
-    const releaseAdmitted = testServer(server).beginAuthorityParent(receiver, {
-      nonce: admittedNonce,
-      method: "executeRun",
+    // A product class declares no method-scoped request today (eval, which did, is hosted code):
+    // the ceiling is the empty list, not the absence of one.
+    const nonce = "host-minted-builtin-method-nonce";
+    const release = testServer(server).beginAuthorityParent(receiver, {
+      nonce,
+      method: "entityResolve",
       context: {},
     } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation);
-    expect(testServer(server).authorityParentFor(receiver, admittedNonce)?.requested).toEqual([
-      {
-        capability: "external.open",
-        resource: { kind: "prefix", prefix: "" },
-      },
-    ]);
-    releaseAdmitted();
-
-    const deniedNonce = "host-minted-eval-inspection-nonce";
-    const releaseDenied = testServer(server).beginAuthorityParent(receiver, {
-      nonce: deniedNonce,
-      method: "listRetainedExecutionRoots",
-      context: {},
-    } as import("@vibestudio/rpc/internal").DirectAuthorityAttestation);
-    expect(testServer(server).authorityParentFor(receiver, deniedNonce)?.requested).toEqual([]);
-    releaseDenied();
+    expect(testServer(server).authorityParentFor(receiver, nonce)?.requested).toEqual([]);
+    release();
   });
 
   it("does not inherit builtin requests for a userland class-name collision", () => {

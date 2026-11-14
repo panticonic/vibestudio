@@ -107,7 +107,7 @@ describe("resolveCodeIdentity", () => {
     expect(resolveCodeIdentity(cache, record.id)).toBeNull();
   });
 
-  it("attributes a host-admitted EvalDO to its exact harness without inheriting requests", () => {
+  it("attributes a host-admitted session entity to its exact harness without inheriting requests", () => {
     const cache = new EntityCache();
     const owner = makeDoRecord(
       "do:workers/agent-worker:AiChatWorker:owner",
@@ -116,13 +116,13 @@ describe("resolveCodeIdentity", () => {
     );
     owner.activeAuthority = { requests: [], provides: [] };
     cache._onActivate(owner);
-    const evalId = "do:vibestudio/internal:EvalDO:eval-owner";
+    const evalId = "do:workers/session:SessionDO:eval-owner";
     cache._onActivate({
       id: evalId,
       kind: "do",
-      source: { repoPath: "vibestudio/internal", effectiveVersion: "internal" },
+      source: { repoPath: "workers/session", effectiveVersion: "internal" },
       contextId: owner.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: "eval-owner",
       parentId: owner.id,
       stateArgs: {
@@ -146,7 +146,7 @@ describe("resolveCodeIdentity", () => {
     });
   });
 
-  it("rejects an EvalDO without the exact host admission and owner link", () => {
+  it("rejects a session entity without the exact host admission and owner link", () => {
     const cache = new EntityCache();
     const owner = makeDoRecord(
       "do:workers/agent-worker:AiChatWorker:owner",
@@ -155,13 +155,13 @@ describe("resolveCodeIdentity", () => {
     );
     owner.activeAuthority = { requests: [], provides: [] };
     cache._onActivate(owner);
-    const evalId = "do:vibestudio/internal:EvalDO:forged";
+    const evalId = "do:workers/session:SessionDO:forged";
     const evalRecord: EntityRecord = {
       id: evalId,
       kind: "do",
-      source: { repoPath: "vibestudio/internal", effectiveVersion: "internal" },
+      source: { repoPath: "workers/session", effectiveVersion: "internal" },
       contextId: owner.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: "forged",
       parentId: "do:workers/agent-worker:AiChatWorker:other",
       stateArgs: {

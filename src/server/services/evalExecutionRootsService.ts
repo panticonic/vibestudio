@@ -1,4 +1,11 @@
 import { requireEvalKernel } from "./evalKernelAuthority.js";
+import {
+  EVAL_HOST_CLASS,
+  EVAL_HOST_SOURCE,
+  evalHostObjectKeyOf,
+  isEvalHostRecord,
+  isEvalHostRuntimeId,
+} from "@vibestudio/shared/evalRuntimeIdentity";
 import type { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceAccessError } from "@vibestudio/shared/serviceDispatcher";
@@ -45,10 +52,9 @@ export function createEvalExecutionRootsService(deps: {
           execution.executor.kind !== "eval" ||
           execution.executor.runtimeId !== ctx.caller.runtime.id ||
           execution.executor.evalRunId !== runId ||
-          !ctx.caller.runtime.id.startsWith("do:vibestudio/internal:EvalDO:") ||
-          entity?.kind !== "do" ||
-          entity.source.repoPath !== "vibestudio/internal" ||
-          entity.className !== "EvalDO" ||
+          !isEvalHostRuntimeId(ctx.caller.runtime.id) ||
+          !entity ||
+          !isEvalHostRecord(entity) ||
           entity.contextId !== execution.contextId
         ) {
           throw new ServiceAccessError(
@@ -59,7 +65,7 @@ export function createEvalExecutionRootsService(deps: {
           );
         }
         const artifact = verifyExecutionArtifactRef(artifactInput);
-        const objectKey = ctx.caller.runtime.id.slice("do:vibestudio/internal:EvalDO:".length);
+        const objectKey = evalHostObjectKeyOf(ctx.caller.runtime.id)!;
         const ownerId = `${ctx.caller.runtime.id}:${runId}:${moduleSpecifier}`;
         await publishExecutionOwnerAsync(
           deps.publicationPort,
@@ -76,15 +82,10 @@ export function createEvalExecutionRootsService(deps: {
           () =>
             deps.doDispatch
               .dispatch(
-                {
-                  source: "vibestudio/internal",
-                  className: "EvalDO",
-                  objectKey,
-                },
+                { source: EVAL_HOST_SOURCE, className: EVAL_HOST_CLASS, objectKey },
+                "settle",
                 "retainExecutionRoot",
-                runId,
-                moduleSpecifier,
-                artifact
+                [runId, moduleSpecifier, artifact]
               )
               .then(() => undefined)
         );

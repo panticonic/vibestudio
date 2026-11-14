@@ -491,7 +491,12 @@ export class EgressProxy {
       },
       upgrade: (req, socket, head) => {
         void this.resolveAttributedCaller(req, "websocket").then((subject) =>
-          this.handleWebSocketUpgrade(req, socket, head, subject === "host-program" ? null : subject)
+          this.handleWebSocketUpgrade(
+            req,
+            socket,
+            head,
+            subject === "host-program" ? null : subject
+          )
         );
       },
     });

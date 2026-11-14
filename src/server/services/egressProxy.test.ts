@@ -352,7 +352,12 @@ function requestThroughHttpProxy(params: {
         path: params.targetUrl,
         headers: {
           ...(params.body ? { "Content-Length": Buffer.byteLength(params.body) } : {}),
-          ...attributeAsNode(params.headers ?? {}, "fetch", params.method ?? "GET", params.targetUrl),
+          ...attributeAsNode(
+            params.headers ?? {},
+            "fetch",
+            params.method ?? "GET",
+            params.targetUrl
+          ),
         },
       },
       (response) => {
@@ -1602,7 +1607,10 @@ describe("EgressProxy", () => {
 
       const res = await requestThroughHttpProxy({
         proxyPort,
-        headers: { "X-Vibestudio-Egress-Caller": caller.runtime.id, "X-Vibestudio-Egress-Secret": "secret" },
+        headers: {
+          "X-Vibestudio-Egress-Caller": caller.runtime.id,
+          "X-Vibestudio-Egress-Secret": "secret",
+        },
         targetUrl: `http://127.0.0.1:${targetPort}/raw`,
       });
 
@@ -1747,7 +1755,10 @@ describe("EgressProxy", () => {
       for (const path of ["/one", "/two"]) {
         const res = await requestThroughHttpProxy({
           proxyPort,
-          headers: { "X-Vibestudio-Egress-Caller": caller.runtime.id, "X-Vibestudio-Egress-Secret": "secret" },
+          headers: {
+            "X-Vibestudio-Egress-Caller": caller.runtime.id,
+            "X-Vibestudio-Egress-Secret": "secret",
+          },
           targetUrl: `http://127.0.0.1:${targetPort}${path}`,
         });
         expect(res.status).toBe(403);
@@ -3077,7 +3088,10 @@ describe("EgressProxy", () => {
       for (let index = 0; index < 5; index += 1) {
         const result = await requestThroughHttpProxy({
           proxyPort,
-          headers: { "X-Vibestudio-Egress-Caller": caller.runtime.id, "X-Vibestudio-Egress-Secret": "secret" },
+          headers: {
+            "X-Vibestudio-Egress-Caller": caller.runtime.id,
+            "X-Vibestudio-Egress-Secret": "secret",
+          },
           targetUrl: `${origin}/v1/items`,
           method: "POST",
         });
@@ -3085,7 +3099,10 @@ describe("EgressProxy", () => {
       }
       const blocked = await requestThroughHttpProxy({
         proxyPort,
-        headers: { "X-Vibestudio-Egress-Caller": caller.runtime.id, "X-Vibestudio-Egress-Secret": "secret" },
+        headers: {
+          "X-Vibestudio-Egress-Caller": caller.runtime.id,
+          "X-Vibestudio-Egress-Secret": "secret",
+        },
         targetUrl: `${origin}/v1/items`,
         method: "POST",
       });
@@ -3131,7 +3148,10 @@ describe("EgressProxy", () => {
       for (let index = 0; index < 5; index += 1) {
         const failure = await requestThroughHttpProxy({
           proxyPort,
-          headers: { "X-Vibestudio-Egress-Caller": caller.runtime.id, "X-Vibestudio-Egress-Secret": "secret" },
+          headers: {
+            "X-Vibestudio-Egress-Caller": caller.runtime.id,
+            "X-Vibestudio-Egress-Secret": "secret",
+          },
           targetUrl: `${origin}/v1/items`,
           method: "POST",
         });
@@ -3149,7 +3169,10 @@ describe("EgressProxy", () => {
       }
       const blocked = await requestThroughHttpProxy({
         proxyPort,
-        headers: { "X-Vibestudio-Egress-Caller": caller.runtime.id, "X-Vibestudio-Egress-Secret": "secret" },
+        headers: {
+          "X-Vibestudio-Egress-Caller": caller.runtime.id,
+          "X-Vibestudio-Egress-Secret": "secret",
+        },
         targetUrl: `${origin}/v1/items`,
         method: "POST",
       });

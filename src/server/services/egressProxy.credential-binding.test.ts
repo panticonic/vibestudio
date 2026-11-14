@@ -117,7 +117,8 @@ async function fixture(options: { approvalQueue?: ReturnType<typeof createApprov
             kind: websocket ? "websocket" : "fetch",
             method: "GET",
             target:
-              extra.path ?? `${websocket ? "ws" : "http"}://127.0.0.1:${address.port}/model/responses`,
+              extra.path ??
+              `${websocket ? "ws" : "http"}://127.0.0.1:${address.port}/model/responses`,
             identity: { loaded: true, egressIdentity: [extra.callerId ?? caller.runtime.id] },
           }),
           ...(selection === undefined ? {} : { [EGRESS_CREDENTIAL_HEADER]: selection }),

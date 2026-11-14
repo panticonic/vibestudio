@@ -14,7 +14,6 @@ describe("generated product builtin catalog", () => {
       "WorkspaceStateDO",
       "WorkspaceDO",
       "BrowserVaultDO",
-      "EvalDO",
       "WebhookStoreDO",
     ]);
   });
@@ -26,9 +25,6 @@ describe("generated product builtin catalog", () => {
     expect(
       productBuiltinMethodCapability(source, "WorkspaceStateDO", "entityListExecutionRoots")
     ).toBe("workspace.runtime-state.inspect");
-    expect(productBuiltinMethodCapability(source, "EvalDO", "listRetainedExecutionRoots")).toBe(
-      "runtime.code-execution.manage"
-    );
     expect(productBuiltinMethodCapability(source, "WebhookStoreDO", "create")).toBe(
       "webhooks.manage"
     );
@@ -59,15 +55,9 @@ describe("generated product builtin catalog", () => {
     expect(productBuiltinMethodRequests("workers/untrusted", "EvalDO", "executeRun")).toEqual([]);
   });
 
-  it("projects outbound authority only for the active builtin method", () => {
-    expect(productBuiltinMethodRequests(source, "EvalDO", "executeRun")).toEqual([
-      {
-        capability: "external.open",
-        resource: { kind: "prefix", prefix: "" },
-      },
-    ]);
-    expect(productBuiltinMethodRequests(source, "EvalDO", "listRetainedExecutionRoots")).toEqual(
-      []
-    );
+  it("projects no outbound authority for a product method: eval is hosted code, not a product class", () => {
+    expect(productBuiltinMethodRequests(source, "EvalDO", "executeRun")).toEqual([]);
+    expect(productBuiltinByIdentity(source, "EvalDO")).toBeNull();
+    expect(productBuiltinMethodRequests(source, "WorkspaceStateDO", "entityResolve")).toEqual([]);
   });
 });

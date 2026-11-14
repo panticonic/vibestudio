@@ -3,7 +3,7 @@ import type { ExecutionAdmissionFact } from "@vibestudio/rpc";
 import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { createEvalEventIngressService, EvalEventSinkRegistry } from "./evalEventIngressService.js";
 
-const runtimeId = "do:vibestudio/internal:EvalDO:object-one";
+const runtimeId = "do:workers/session:SessionDO:object-one";
 const runId = "run:one";
 const sinkNonce = "sink-nonce-0000000000000001";
 
@@ -22,8 +22,8 @@ function execution(): ExecutionAdmissionFact {
     taskRef: "task:one",
     taskAuthority: "task:one",
     executionImage: {
-      principal: `code:vibestudio/internal@one`,
-      repoPath: "vibestudio/internal",
+      principal: `code:workers/session@one`,
+      repoPath: "workers/session",
       ref: "state:one",
       effectiveVersion: "one",
       executionDigest: "a".repeat(64),
@@ -56,7 +56,7 @@ function context(): ServiceContext {
       code: {
         callerId: runtimeId,
         callerKind: "do",
-        repoPath: "vibestudio/internal",
+        repoPath: "workers/session",
         effectiveVersion: "one",
         executionDigest: "d".repeat(64),
         requested: [],
@@ -88,8 +88,8 @@ function setup(input: { owner: string; initiator: string }) {
         resolveActive: () => ({
           id: runtimeId,
           kind: "do",
-          className: "EvalDO",
-          source: { repoPath: "vibestudio/internal", effectiveVersion: "one" },
+          className: "SessionDO",
+          source: { repoPath: "workers/session", effectiveVersion: "one" },
           contextId: "context:one",
           activeExecutionDigest: "d".repeat(64),
           parentId: input.owner,

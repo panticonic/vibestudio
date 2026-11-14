@@ -2,5 +2,4 @@
 export { WorkspaceStateDO } from "@panticonic/builtin/workspace-state";
 export { WorkspaceDO } from "@panticonic/builtin/workspace-state";
 export { BrowserVaultDO } from "@panticonic/builtin/browser-data";
-export { EvalDO } from "@panticonic/builtin/eval-engine";
 export { WebhookStoreDO } from "@panticonic/builtin/webhook-engine";

@@ -9,7 +9,7 @@ import {
 } from "@vibestudio/shared/execution/retention";
 import { createEvalExecutionRootsService } from "./evalExecutionRootsService.js";
 
-const runtimeId = "do:vibestudio/internal:EvalDO:object-one";
+const runtimeId = "do:workers/session:SessionDO:object-one";
 const runId = "run:one";
 
 function artifact(): ExecutionArtifactRefV1 {
@@ -56,8 +56,8 @@ function execution(): ExecutionAdmissionFact {
     taskRef: "task:one",
     taskAuthority: "task:one",
     executionImage: {
-      principal: `code:vibestudio/internal@one`,
-      repoPath: "vibestudio/internal",
+      principal: `code:workers/session@one`,
+      repoPath: "workers/session",
       ref: "state:one",
       effectiveVersion: "one",
       executionDigest: "d".repeat(64),
@@ -89,7 +89,7 @@ function context(): ServiceContext {
       code: {
         callerId: runtimeId,
         callerKind: "do",
-        repoPath: "vibestudio/internal",
+        repoPath: "workers/session",
         effectiveVersion: "one",
         executionDigest: "d".repeat(64),
         requested: [],
@@ -115,8 +115,8 @@ describe("eval execution root publication ingress", () => {
             resolveActive: () => ({
               id: runtimeId,
               kind: "do",
-              className: "EvalDO",
-              source: { repoPath: "vibestudio/internal", effectiveVersion: "one" },
+              className: "SessionDO",
+              source: { repoPath: "workers/session", effectiveVersion: "one" },
               contextId: "context:one",
               activeExecutionDigest: "d".repeat(64),
             }),
@@ -143,11 +143,10 @@ describe("eval execution root publication ingress", () => {
         artifacts: [{ buildKey: ref.buildKey, executionDigest: ref.executionDigest }],
       });
       expect(dispatch).toHaveBeenCalledWith(
-        { source: "vibestudio/internal", className: "EvalDO", objectKey: "object-one" },
+        { source: "workers/session", className: "SessionDO", objectKey: "object-one" },
+        "settle",
         "retainExecutionRoot",
-        runId,
-        "@workspace/example",
-        ref
+        [runId, "@workspace/example", ref]
       );
       expect(finalize).toHaveBeenCalledWith({ reservationId: "reservation:one", epoch: 1 });
     }
@@ -165,9 +164,9 @@ describe("eval execution root publication ingress", () => {
             resolveActive: () => ({
               id: runtimeId,
               kind: "do",
-              className: "EvalDO",
+              className: "SessionDO",
               source: {
-                repoPath: kind === "wrong-kernel" ? "workers/forged" : "vibestudio/internal",
+                repoPath: kind === "wrong-kernel" ? "workers/forged" : "workers/session",
                 effectiveVersion: "one",
               },
               contextId: "context:one",

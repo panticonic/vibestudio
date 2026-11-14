@@ -1,13 +1,11 @@
 import { evalEngineMethods } from "@vibestudio/service-schemas/evalEngine";
-import {
-  createTypedServiceClient,
-  type TypedServiceClient,
-} from "@vibestudio/shared/typedServiceClient";
+import type { TypedServiceClient } from "@vibestudio/shared/typedServiceClient";
 import {
   verifyExecutionArtifactRef,
   type ExecutionArtifactRefV1,
 } from "@vibestudio/shared/execution/retention";
-import type { VerifiedCodeIdentity } from "@vibestudio/shared/serviceDispatcher";
+import type { VerifiedCaller, VerifiedCodeIdentity } from "@vibestudio/shared/serviceDispatcher";
+import type { RuntimeEntityCreateSpec } from "@vibestudio/shared/runtime/entitySpec";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceError, type ServiceContext } from "@vibestudio/shared/serviceDispatcher";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
@@ -16,18 +14,17 @@ import {
   normalizeEvalAuthorityIntent,
   type EvalStartInput,
 } from "@vibestudio/service-schemas/eval";
-import {
-  getInternalDOPrograms,
-  internalDOExecutionIdentity,
-  INTERNAL_DO_SOURCE,
-} from "../internalDOs/internalDoLoader.js";
 import { AmbiguousDoDispatchError, type HeldDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot";
 import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
-import type { TokenManager } from "@vibestudio/shared/tokenManager";
 import { createHash, randomUUID } from "node:crypto";
-import { evalRuntimeId } from "@vibestudio/shared/evalRuntimeIdentity";
+import {
+  EVAL_HOST_CLASS,
+  EVAL_HOST_SOURCE,
+  evalHostObjectKey,
+  isEvalHostRecord,
+} from "@vibestudio/shared/evalRuntimeIdentity";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
 import type { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
@@ -36,157 +33,83 @@ import type { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 import { assertAgentCausalParent, createDynamicCodeAdmission } from "./dynamicCodeAdmission.js";
 import { resolveCodeIdentity } from "./principalIdentity.js";
 
-type EvalEngineClient = TypedServiceClient<typeof evalEngineMethods>;
-function evalEngineClient(
-  dispatch: HeldDoDispatcher,
-  ref: ActiveEvalRun["evalDoRef"]
-): EvalEngineClient {
-  return createTypedServiceClient("eval-engine", evalEngineMethods, (_service, method, args) =>
-    dispatch.dispatch(ref, method, ...args)
-  );
-}
+type EvalEngineSchemaClient = TypedServiceClient<typeof evalEngineMethods>;
+
+type SessionRef = { source: string; className: string; objectKey: string };
 
 /**
- * A deadline is not evidence that workerd is unhealthy. This is only the
- * irreducible external bound on a side-effect-free liveness probe after the
- * EvalDO has had its own opportunity to abort and settle the run.
+ * The calls this service makes on an eval kernel, through the session entity that
+ * hosts it (docs/dolt-redesign.md §7.5.1). The host does not reach a kernel
+ * itself: only its hosting entity can, so every call is a call on the session.
+ * Run-scoped calls carry no nonce here; the session holds the nonce each run was
+ * admitted under and presents it to the kernel.
  */
+type EvalStartArgs = Omit<
+  Parameters<EvalEngineSchemaClient["startRun"]>[0],
+  "gatewayToken" | "resultReceiverRef"
+>;
 
-const DEFAULT_EVAL_LIVENESS_PROBE_MS = 5_000;
+interface EvalEngineClient {
+  startRun(args: EvalStartArgs): ReturnType<EvalEngineSchemaClient["startRun"]>;
+  getRun(runId: string): ReturnType<EvalEngineSchemaClient["getRun"]>;
+  getRunReceipt(runId: string): ReturnType<EvalEngineSchemaClient["getRunReceipt"]>;
+  acknowledgeRunResult(
+    runId: string,
+    identity: Parameters<EvalEngineSchemaClient["acknowledgeRunResult"]>[1]
+  ): ReturnType<EvalEngineSchemaClient["acknowledgeRunResult"]>;
+  getRunEvents(
+    runId: string,
+    after: number,
+    limit: number
+  ): ReturnType<EvalEngineSchemaClient["getRunEvents"]>;
+  readScopeTextPage(
+    key: string,
+    offset: number,
+    limit: number
+  ): ReturnType<EvalEngineSchemaClient["readScopeTextPage"]>;
+  deleteScopeValue(key: string): ReturnType<EvalEngineSchemaClient["deleteScopeValue"]>;
+  reset(): ReturnType<EvalEngineSchemaClient["reset"]>;
+  cancel(runId: string): ReturnType<EvalEngineSchemaClient["cancel"]>;
+  /** Blocks (a held request) until the run is terminal or `waitMs` passes. */
+  await(runId: string, waitMs: number): Promise<{ status: string }>;
+}
 
-/** One quick retry absorbs a transient transport blip before recovery. */
-const PROBE_REJECTION_RETRY_MS = 250;
-
-interface EvalSandboxRecoveryInput {
-  runId: string;
-  timeoutMs: number;
-  evalDoRef: { source: string; className: string; objectKey: string };
+function evalEngineClient(dispatch: HeldDoDispatcher, ref: SessionRef): EvalEngineClient {
+  const call = (method: string, ...args: unknown[]) => dispatch.dispatch(ref, method, ...args);
+  const typed = <T>(value: Promise<unknown>) => value as Promise<T>;
+  return {
+    startRun: (args) =>
+      typed(call("start", args, args.executionSessionNonce)) as ReturnType<
+        EvalEngineClient["startRun"]
+      >,
+    getRun: (runId) => typed(call("get", runId)),
+    getRunReceipt: (runId) => typed(call("receipt", runId)),
+    acknowledgeRunResult: (runId, identity) =>
+      typed(call("settle", "acknowledgeRunResult", [runId, identity])),
+    getRunEvents: (runId, after, limit) => typed(call("events", runId, { after, limit })),
+    readScopeTextPage: (key, offset, limit) => typed(call("readScopeTextPage", key, offset, limit)),
+    deleteScopeValue: (key) => typed(call("deleteScopeValue", key)),
+    reset: () => typed(call("reset")),
+    cancel: (runId) => typed(call("cancel", runId)),
+    await: (runId, waitMs) =>
+      typed(dispatch.dispatchHeld(ref, "await", runId, { waitMs })) as Promise<{ status: string }>,
+  };
 }
 
 export type EvalShutdown = () => Promise<void>;
 
 export const evalServiceDocumentation = {
   name: "eval",
-  description: "Owner-scoped sandbox eval backed by a per-owner internal EvalDO",
+  description: "Owner-scoped sandbox eval backed by a kernel hosted in a per-owner session entity",
   authority: { principals: ["code", "user", "host", "website"] },
   methods: evalMethods,
 } satisfies Omit<ServiceDefinition, "handler">;
 
 interface ActiveEvalRun {
-  evalDoRef: { source: string; className: string; objectKey: string };
+  evalDoRef: SessionRef;
   runId: string;
   closeAdmission: () => void;
 }
-
-type LivenessObservation =
-  | { kind: "live"; terminal: boolean }
-  | { kind: "unresponsive" }
-  | { kind: "rejected"; error: unknown };
-
-function supervisorDelay(delayMs: number, signal: AbortSignal): Promise<void> {
-  return new Promise<void>((resolve) => {
-    if (signal.aborted) {
-      resolve();
-      return;
-    }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", onAbort);
-      resolve();
-    }, delayMs);
-    timer.unref?.();
-    const onAbort = () => {
-      clearTimeout(timer);
-      resolve();
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-/**
- * One side-effect-free probe of the canonical run record, bounded by
- * `probeBoundMs`. Any response proves the isolate can still execute host work;
- * a response that cannot arrive (hang past the bound, or transport rejection)
- * is the only evidence this supervisor acts on.
- */
-async function observeRunLiveness(
-  doDispatch: HeldDoDispatcher,
-  evalDoRef: { source: string; className: string; objectKey: string },
-  runId: string,
-  probeBoundMs: number
-): Promise<LivenessObservation> {
-  const unresponsive = Symbol("eval-liveness-probe-unresponsive");
-  let probeTimer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    const outcome = await Promise.race([
-      evalEngineClient(doDispatch, evalDoRef)
-        .getRun(runId)
-        .then(
-          (snapshot) => ({ kind: "live" as const, snapshot }),
-          (error: unknown) => ({ kind: "rejected" as const, error })
-        ),
-      new Promise<typeof unresponsive>((resolve) => {
-        probeTimer = setTimeout(() => resolve(unresponsive), probeBoundMs);
-        probeTimer.unref?.();
-      }),
-    ]);
-    if (outcome === unresponsive) return { kind: "unresponsive" };
-    if (outcome.kind === "rejected") return outcome;
-    const status = outcome.snapshot.status;
-    return {
-      kind: "live",
-      terminal:
-        status === "done" ||
-        status === "cancelled" ||
-        status === "approval-route-lost" ||
-        status === "unknown",
-    };
-  } finally {
-    if (probeTimer !== undefined) clearTimeout(probeTimer);
-  }
-}
-
-/**
- * Isolate liveness supervisor for one explicitly timed run.
- *
- * A synchronous CPU loop can prevent the EvalDO's own AbortSignal timer from
- * firing, so after the caller's deadline the host probes the canonical run.
- * Probes are side-effect-free and exist only to enforce that opt-in deadline.
- *
- * A live response does not disarm supervision because the isolate may wedge
- * during post-abort cleanup. Disposal is terminal status or admission close.
- */
-async function superviseIsolateLiveness(input: {
-  doDispatch: HeldDoDispatcher;
-  evalDoRef: { source: string; className: string; objectKey: string };
-  runId: string;
-  timeoutMs: number;
-  livenessProbeMs: number;
-  recoverUnresponsiveSandbox: (input: EvalSandboxRecoveryInput) => Promise<void>;
-  signal: AbortSignal;
-}): Promise<void> {
-  const { doDispatch, evalDoRef, runId, timeoutMs, livenessProbeMs, signal } = input;
-  await supervisorDelay(timeoutMs, signal);
-  let retriedRejection = false;
-  while (!signal.aborted) {
-    const observation = await observeRunLiveness(doDispatch, evalDoRef, runId, livenessProbeMs);
-    if (signal.aborted) return;
-    if (observation.kind === "live") {
-      if (observation.terminal) return;
-      retriedRejection = false;
-      await supervisorDelay(livenessProbeMs, signal);
-      continue;
-    }
-    if (observation.kind === "rejected" && !retriedRejection) {
-      retriedRejection = true;
-      await supervisorDelay(Math.min(PROBE_REJECTION_RETRY_MS, livenessProbeMs), signal);
-      continue;
-    }
-    await input.recoverUnresponsiveSandbox({ runId, timeoutMs, evalDoRef });
-    return;
-  }
-}
-
-const EVAL_DO_CLASS = "EvalDO";
 
 interface EvalOwner {
   ownerId: string;
@@ -203,26 +126,26 @@ interface EvalParentMeta {
 /**
  * Owner-scoped sandbox eval service — replaces the `scope` service. Any entity-principal
  * (panel/app/worker/do/shell) calls `eval.start`/`eval.reset`; the owner is the verified
- * `ctx.caller` unless a privileged shell/server caller selects a live session owner. The EvalDO
- * `objectKey` is derived (hashed) from the owner id + subKey, so unprivileged callers can
- * only address their own EvalDO. The EvalDO entity is registered with the owner's context so
- * the kernel's own fs/git/vcs resolve the owner's workspace.
+ * `ctx.caller` unless a privileged shell/server caller selects a live session owner. The
+ * session entity that hosts the owner's kernel is keyed (hashed) by owner id + subKey, so
+ * unprivileged callers can only address their own. It is created through
+ * `runtime.createEntity` with the owner as its parent (the lineage `resolveParentPanel`
+ * walks) and registered with the owner's context so the kernel's own fs/git/vcs resolve
+ * the owner's workspace (docs/dolt-redesign.md §7.2, §7.3).
  */
 export function createEvalService(deps: {
-  /** Generic DO dispatcher — used to invoke `run`/`reset` on the per-owner EvalDO. */
+  /** Generic DO dispatcher: reaches the session entity that hosts the owner's kernel. */
   doDispatch: HeldDoDispatcher;
-  /**
-   * The single owner of WorkspaceDO entity state. Eval registers the EvalDO
-   * entity via `store.activate`, which pairs the durable write with the server
-   * hot-cache mirror. Bypassing it (dispatching `entityActivate` directly) is
-   * exactly what caused every EvalDO→main RPC to 403 with "Unknown principal
-   * kind" — the cache never learned the EvalDO's identity.
-   */
+  /** Hot-cache and durable reads of entity state. */
   entityStore: WorkspaceEntityStore;
-  /** Host lifecycle owner used to retire a disposed EvalDO through the normal
+  /**
+   * `runtime.internal.createEntity`: creates the session entity, with the
+   * lifecycle caller as its parent and owner.
+   */
+  createEntity: (caller: VerifiedCaller, spec: RuntimeEntityCreateSpec) => Promise<{ id: string }>;
+  /** Host lifecycle owner used to retire a disposed session through the normal
    * release, relay-drain, cleanup, and durable-reaper path. */
   retireEntity: (id: string) => Promise<void>;
-  tokenManager: TokenManager;
   workspaceId: string;
   /** Resolve the actual sealed artifact, including source provenance, for a live code identity. */
   resolveExecutionArtifact: (
@@ -233,14 +156,9 @@ export function createEvalService(deps: {
   isSystemTestHarness?: (caller: ServiceContext["caller"], runId: string) => boolean;
   /**
    * Host-wide background-work registry (idle-exit monitor). Every admitted run
-   * holds a lease until its trusted terminal event; explicit timeout watchdogs
-   * hold a second lease while host recovery is still in flight.
+   * holds a lease until its trusted terminal event.
    */
   activity?: import("./activityRegistry.js").ActivityRegistry;
-  /** Host-process safety boundary for synchronous sandbox CPU starvation. */
-  recoverUnresponsiveSandbox?: (input: EvalSandboxRecoveryInput) => Promise<void>;
-  /** Bound on one side-effect-free liveness probe (and the interval between probes). */
-  livenessProbeMs?: number;
   /** Receives the shared eval admission drain used by ordered server shutdown. */
   onShutdown?: (shutdown: EvalShutdown) => void;
   /** Canonical dispatcher authorization-only path for exact prospective calls. */
@@ -282,22 +200,14 @@ export function createEvalService(deps: {
     ...(deps.preauthorize ? { preauthorize: deps.preauthorize } : {}),
   });
   const activeRuns = new Map<string, ActiveEvalRun>();
-  /**
-   * One liveness supervisor per admitted timed run. Replayed starts for the
-   * same runId join the existing supervision instead of arming another loop
-   * (which would also restart the deadline wait against a shifted clock).
-   */
-  const runSupervisions = new Map<string, { dispose: () => void }>();
   let shutdownRequested = false;
   let shutdownPromise: Promise<void> | null = null;
-  const evalExecutionIdentity = internalDOExecutionIdentity(getInternalDOPrograms(), EVAL_DO_CLASS);
 
-  const evalDoKey = (ownerId: string, subKey: string): string =>
-    evalRuntimeId(ownerId, subKey).slice(`do:${INTERNAL_DO_SOURCE}:${EVAL_DO_CLASS}:`.length);
+  const evalDoKey = (ownerId: string, subKey: string): string => evalHostObjectKey(ownerId, subKey);
 
-  /** The EvalDO identity and object-key derivation share one canonical helper. */
+  /** The session entity's identity and object-key derivation share one canonical helper. */
   const evalDoEntityId = (objectKey: string): string =>
-    `do:${INTERNAL_DO_SOURCE}:${EVAL_DO_CLASS}:${objectKey}`;
+    `do:${EVAL_HOST_SOURCE}:${EVAL_HOST_CLASS}:${objectKey}`;
 
   const activeRunKey = (evalRuntimeId: string, runId: string): string =>
     `${evalRuntimeId}\0${runId}`;
@@ -333,20 +243,6 @@ export function createEvalService(deps: {
     return shutdownPromise;
   };
   deps.onShutdown?.(shutdown);
-
-  /**
-   * Owner-scoped gateway token for THIS EvalDO. Pinned to the concrete
-   * `do:vibestudio/internal:EvalDO:<objectKey>` identity (kind `do`), NOT the
-   * shared `do-service:*` bearer — so the kernel's `gatewayFetch` resolves the
-   * owner's context and a leak's blast radius is the owner alone (eval code can
-   * read `gatewayConfig.token`, but it IS the owner's own authority). Minted
-   * here (server-internal, owner already verified) and handed to `EvalDO.run`
-   * over the authenticated server→DO dispatch — no new callable token-issuing
-   * surface, so nothing rides the worker→do policy fallthrough. `ensureToken`
-   * is idempotent per callerId, so it's a stable per-owner token.
-   */
-  const mintGatewayToken = (objectKey: string): string =>
-    deps.tokenManager.ensureToken(evalDoEntityId(objectKey), "do");
 
   async function resolveRegisteredContext(ownerId: string): Promise<string | null> {
     return store.resolveContext(ownerId);
@@ -435,11 +331,26 @@ export function createEvalService(deps: {
     return { ownerId: callerId, contextId };
   }
 
-  async function ensureEvalDO(
+  /**
+   * The caller that owns the session entity's lifecycle and is its parent: the
+   * owner. When the verified caller is the owner it is passed as it is; an agent
+   * relay or a shell selecting a live session owner acts for an owner that is
+   * another entity, whose record gives the runtime coordinates.
+   */
+  async function ownerCaller(caller: VerifiedCaller, ownerId: string): Promise<VerifiedCaller> {
+    if (caller.runtime.id === ownerId) return caller;
+    const record = store.cache.resolveActive(ownerId) ?? (await store.resolveRecord(ownerId));
+    if (!record) throw new Error(`eval: owner ${ownerId} is not a known entity`);
+    return {
+      ...caller,
+      runtime: { id: ownerId, kind: record.kind as VerifiedCaller["runtime"]["kind"] },
+    };
+  }
+
+  async function ensureSession(
+    ctx: ServiceContext,
     owner: EvalOwner,
     subKey: string,
-    ownerUserId: string | undefined,
-    agentBinding: RuntimeAgentBinding | undefined,
     requestedLifecycle: "finite" | "persistent"
   ): Promise<{ objectKey: string }> {
     const { ownerId, contextId } = owner;
@@ -479,59 +390,35 @@ export function createEvalService(deps: {
         "application"
       );
     }
-    // Only execution admission creates or refreshes a scope. Controls resolve
-    // existing durable ownership without changing lifecycle or code identity.
-    const effectiveLifecycle = requestedLifecycle;
     if (
       active &&
       active.contextId === contextId &&
-      JSON.stringify(active.agentBinding ?? null) === JSON.stringify(agentBinding ?? null) &&
+      isEvalHostRecord(active) &&
       activeStateArgs?.["ownerPrincipalId"] === ownerId &&
-      typeof activeStateArgs["agentExecutionAdmission"] === "object" &&
-      active.activeBuildKey === evalExecutionIdentity.buildKey &&
-      active.activeExecutionDigest === evalExecutionIdentity.executionDigest
+      typeof activeStateArgs["agentExecutionAdmission"] === "object"
     ) {
       return { objectKey };
     }
-    // Register/refresh the EvalDO entity with the owner's context so the kernel's
-    // own fs/git/vcs calls resolve the owner's workspace. The store pairs the
-    // durable upsert with the server hot-cache mirror, so the server can resolve
-    // THIS EvalDO's principal when it calls back to `main`. Idempotent.
-    const activation = {
+    // Create the session entity through the ordinary path, with the owner as its
+    // parent and its context as the owner's, so the kernel's own fs/git/vcs
+    // resolve the owner's workspace. An entity spawned FROM an eval (a headless
+    // sub-agent the orchestrator's eval creates via runtime.createEntity) records
+    // THIS session as its parentId: the lineage continues owner -> owner's panel,
+    // so the sub-agent's panels nest under the owner's panel.
+    await deps.createEntity(await ownerCaller(ctx.caller, ownerId), {
       kind: "do",
-      source: {
-        repoPath: INTERNAL_DO_SOURCE,
-        effectiveVersion: evalExecutionIdentity.effectiveVersion,
-      },
-      contextId,
-      className: EVAL_DO_CLASS,
       key: objectKey,
-      activeBuildKey: evalExecutionIdentity.buildKey,
-      activeExecutionDigest: evalExecutionIdentity.executionDigest,
-      activeAuthority: evalExecutionIdentity.authority,
-      // The EvalDO's launch parent IS its owner. An entity spawned FROM an eval (e.g. a headless
-      // sub-agent the orchestrator's eval creates via runtime.createEntity) records THIS EvalDO as its
-      // parentId — so without this link the lineage dead-ends at the EvalDO and the sub-agent's panels
-      // resolve to root. With it, the walk continues owner → owner's panel, so the sub-agent's panels
-      // nest under the owner's panel. ownerId is stable; the panel is re-resolved live at walk time.
-      parentId: ownerId,
-      // Attribute the EvalDO to the human whose subject launched this run (WP0
-      // §6). Write-once, so the first activation's owner sticks; undefined for a
-      // bootstrap caller with no subject.
-      ownerUserId,
-      agentBinding,
+      contextId,
+      className: EVAL_HOST_CLASS,
+      execution: { surface: "code", source: EVAL_HOST_SOURCE },
       stateArgs: {
+        principalId: ownerId,
         ownerPrincipalId: ownerId,
         subKey,
         agentExecutionAdmission: { v: 1, ownerId },
-        ...(effectiveLifecycle === "finite" ? { lifecycle: "finite" as const } : {}),
+        ...(requestedLifecycle === "finite" ? { lifecycle: "finite" as const } : {}),
       },
-    } as const;
-    if (active) {
-      await store.advanceExecution(activation);
-    } else {
-      await store.activate(activation);
-    }
+    });
     return { objectKey };
   }
 
@@ -600,7 +487,7 @@ export function createEvalService(deps: {
         "access"
       );
     }
-    return { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
+    return { source: EVAL_HOST_SOURCE, className: EVAL_HOST_CLASS, objectKey };
   }
 
   async function evalDoRefFor(ctx: ServiceContext, route: EvalRoute, method: string) {
@@ -654,13 +541,12 @@ export function createEvalService(deps: {
             })();
     const agentBinding = trustedAgentRelay(ctx);
     assertAgentCausalParent(ctx, agentBinding);
-    // Refuse an unscoped or trajectory-drifting agent relay before activating
-    // an EvalDO or exposing any presenter authority ceiling.
-    const { objectKey } = await ensureEvalDO(
+    // Refuse an unscoped or trajectory-drifting agent relay before creating
+    // a session or exposing any presenter authority ceiling.
+    const { objectKey } = await ensureSession(
+      ctx,
       owner,
       runArgs.scope?.key ?? "default",
-      ctx.caller.subject?.userId,
-      agentBinding,
       runArgs.scope?.lifecycle ?? "persistent"
     );
     const isAgentDo = ctx.caller.runtime.kind === "do" && agentBinding !== undefined;
@@ -678,32 +564,31 @@ export function createEvalService(deps: {
     const chatBinding = isAgentDo ? { channelId: agentBinding.channelId, agentRef: ownerId } : {};
     const parent = (await resolveParentPanel(ownerId)) ?? undefined;
     const evalRuntimeId = evalDoEntityId(objectKey);
+    // The harness is the owner's own sealed code when it has one; an owner with
+    // none (a user or CLI session) is mediated by the session entity's sealed image.
     const ownerHarness = resolveCodeIdentity(store.cache, ownerId);
-    const ownerArtifact = ownerHarness ? await deps.resolveExecutionArtifact(ownerHarness) : null;
-    const harnessArtifact = verifyExecutionArtifactRef(
-      ownerHarness
-        ? (() => {
-            const artifact = ownerArtifact;
-            if (
-              !artifact ||
-              artifact.executionDigest !== ownerHarness.executionDigest ||
-              artifact.sourceState.effectiveVersion !== ownerHarness.effectiveVersion
-            ) {
-              throw new ServiceError(
-                "eval",
-                "start",
-                "The live harness has no matching sealed execution artifact",
-                "EEXECUTION_IDENTITY",
-                undefined,
-                "service"
-              );
-            }
-            return artifact;
-          })()
-        : evalExecutionIdentity.artifact
-    );
+    const harnessIdentity = ownerHarness ?? resolveCodeIdentity(store.cache, evalRuntimeId);
+    const harnessCandidate = harnessIdentity
+      ? await deps.resolveExecutionArtifact(harnessIdentity)
+      : null;
+    if (
+      !harnessIdentity ||
+      !harnessCandidate ||
+      harnessCandidate.executionDigest !== harnessIdentity.executionDigest ||
+      harnessCandidate.sourceState.effectiveVersion !== harnessIdentity.effectiveVersion
+    ) {
+      throw new ServiceError(
+        "eval",
+        "start",
+        "The live harness has no matching sealed execution artifact",
+        "EEXECUTION_IDENTITY",
+        undefined,
+        "service"
+      );
+    }
+    const harnessArtifact = verifyExecutionArtifactRef(harnessCandidate);
     const harness = {
-      repoPath: ownerHarness?.repoPath ?? evalExecutionIdentity.source,
+      repoPath: harnessIdentity.repoPath,
       effectiveVersion: harnessArtifact.sourceState.effectiveVersion,
       executionDigest: harnessArtifact.executionDigest,
     };
@@ -812,7 +697,7 @@ export function createEvalService(deps: {
           ctx.caller.code?.executionDigest ? codePrincipal(ctx.caller.code) : null,
         ].filter((value): value is string => value !== null),
       });
-      const evalDoRef = { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
+      const evalDoRef = { source: EVAL_HOST_SOURCE, className: EVAL_HOST_CLASS, objectKey };
       return {
         evalDoRef,
         assembledArgs: {
@@ -828,7 +713,6 @@ export function createEvalService(deps: {
           syntax: runArgs.source.syntax,
           imports: runArgs.imports,
           contextId: owner.contextId,
-          gatewayToken: mintGatewayToken(objectKey),
           executionSessionNonce: executionSession.nonce,
           causalParent: ctx.causalParent,
           agentInvocationId: ctx.causalParent?.invocationId,
@@ -838,7 +722,6 @@ export function createEvalService(deps: {
           authorityManifestDigest,
           intentDigest: runDigest,
           eventSinkNonce,
-          resultReceiverRef: runArgs.resultReceiver ? ownerId : undefined,
           ...chatBinding,
         },
         agentRef: isAgentDo ? ownerId : undefined,
@@ -852,6 +735,44 @@ export function createEvalService(deps: {
       discardPreparedAdmission();
       throw error;
     }
+  }
+
+  /**
+   * Compatibility with the push model, until pull replaces it per consumer
+   * (docs/dolt-redesign.md §7.12 step 5). The kernel keeps no redelivery index;
+   * the host pulls the terminal row with `await`, tells the receiver, and repeats
+   * with backoff until the receiver's exact acknowledgement is recorded. Nothing
+   * here survives a restart of the host: that gap is the one this step accepts.
+   */
+  function deliverTerminalToReceiver(ref: SessionRef, runId: string, receiverId: string): void {
+    const client = evalEngineClient(deps.doDispatch, ref);
+    const receiver = doRefOfEntityId(receiverId);
+    if (!receiver) return;
+    void (async () => {
+      let delay = RESULT_REDELIVERY_BASE_DELAY_MS;
+      let terminal = false;
+      while (!shutdownRequested) {
+        try {
+          if (!terminal) {
+            const snapshot = await client.await(runId, 30_000);
+            terminal = ["done", "cancelled", "approval-route-lost", "unknown"].includes(
+              snapshot.status
+            );
+            if (!terminal) continue;
+          }
+          const receipt = await client.getRunReceipt(runId);
+          if (!receipt || receipt.acknowledged) return;
+          await deps.doDispatch.dispatch(receiver, "onEvalComplete", { runId });
+        } catch (error) {
+          console.warn(
+            `[eval] terminal hint for ${runId} not delivered yet:`,
+            error instanceof Error ? error.message : error
+          );
+        }
+        await sleep(delay);
+        delay = Math.min(delay * 2, RESULT_REDELIVERY_MAX_DELAY_MS);
+      }
+    })();
   }
 
   return {
@@ -885,9 +806,6 @@ export function createEvalService(deps: {
           if (admissionClosed) return;
           admissionClosed = true;
           if (activeRuns.get(activeKey)?.runId === runId) activeRuns.delete(activeKey);
-          // Supervision must not outlive the admitted run: the terminal event
-          // (or shutdown/cancel) is the lifecycle fact that disposes it.
-          runSupervisions.get(activeKey)?.dispose();
           deps.executionSessions.close(evalRuntimeId, runId);
           deps.eventSinks?.close(eventSinkNonce);
           if (activityId) deps.activity?.end(activityId);
@@ -935,6 +853,9 @@ export function createEvalService(deps: {
         ) {
           const snapshot = await evalEngineClient(deps.doDispatch, evalDoRef).getRun(runId);
           closeAdmission();
+          if (runArgs.resultReceiver) {
+            deliverTerminalToReceiver(evalDoRef, runId, ctx.caller.runtime.id);
+          }
           return {
             runId,
             runDigest: acceptedRunDigest,
@@ -943,40 +864,11 @@ export function createEvalService(deps: {
             snapshot,
           };
         }
-        const timeoutMs = assembledArgs["timeoutMs"];
-        if (
-          !admissionClosed &&
-          typeof timeoutMs === "number" &&
-          deps.recoverUnresponsiveSandbox &&
-          !runSupervisions.has(activeKey)
-        ) {
-          const recoverUnresponsiveSandbox = deps.recoverUnresponsiveSandbox;
-          const controller = new AbortController();
-          const supervision = { dispose: () => controller.abort() };
-          runSupervisions.set(activeKey, supervision);
-          const watchdogActivityId = `eval-watchdog:${runId}`;
-          deps.activity?.begin(watchdogActivityId);
-          void superviseIsolateLiveness({
-            doDispatch: deps.doDispatch,
-            evalDoRef,
-            runId,
-            timeoutMs,
-            livenessProbeMs: deps.livenessProbeMs ?? DEFAULT_EVAL_LIVENESS_PROBE_MS,
-            recoverUnresponsiveSandbox,
-            signal: controller.signal,
-          })
-            .catch((error) => {
-              console.warn(
-                `[eval] liveness supervision for timed run ${runId} failed:`,
-                error instanceof Error ? error.message : error
-              );
-            })
-            .finally(() => {
-              deps.activity?.end(watchdogActivityId);
-              if (runSupervisions.get(activeKey) === supervision) {
-                runSupervisions.delete(activeKey);
-              }
-            });
+        // A caller that asked for the terminal hint (an agent) is told when the
+        // run ends. The kernel does not push it: the host pulls the committed
+        // row and delivers (docs/dolt-redesign.md §7.5; deleted with step 5).
+        if (runArgs.resultReceiver) {
+          deliverTerminalToReceiver(evalDoRef, runId, ctx.caller.runtime.id);
         }
         return {
           runId,
@@ -1056,9 +948,26 @@ export function createEvalService(deps: {
   };
 }
 
+const RESULT_REDELIVERY_BASE_DELAY_MS = 1_000;
+const RESULT_REDELIVERY_MAX_DELAY_MS = 5 * 60_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    timer.unref?.();
+  });
+}
+
+/** `do:<source>:<Class>:<key>` as a dispatch coordinate. */
+function doRefOfEntityId(id: string): SessionRef | null {
+  const parts = id.split(":");
+  if (parts[0] !== "do" || parts.length < 4) return null;
+  return { source: parts[1]!, className: parts[2]!, objectKey: parts.slice(3).join(":") };
+}
+
 async function reconcileAmbiguousStart(
   dispatch: HeldDoDispatcher,
-  ref: { source: string; className: string; objectKey: string },
+  ref: SessionRef,
   startArgs: Parameters<EvalEngineClient["startRun"]>[0]
 ): Promise<void> {
   for (;;) {

@@ -134,7 +134,9 @@ describe("CONNECT egress boundary", () => {
           const stamped = Object.entries(nodeHeaders("example.com:443"))
             .map(([name, value]) => `${name}: ${value}\r\n`)
             .join("");
-          socket.write(`CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n${stamped}\r\n`);
+          socket.write(
+            `CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n${stamped}\r\n`
+          );
           resolve();
         });
         socket.once("error", reject);

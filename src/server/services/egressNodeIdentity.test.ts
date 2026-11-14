@@ -35,7 +35,11 @@ async function listen(handler: (req: IncomingMessage) => void) {
   };
 }
 
-function send(proxyPort: number, target: string, identity: Parameters<typeof signCelldEgress>[0]["identity"]) {
+function send(
+  proxyPort: number,
+  target: string,
+  identity: Parameters<typeof signCelldEgress>[0]["identity"]
+) {
   return new Promise<{ status: number; body: string }>((resolve, reject) => {
     const req = request(
       {
@@ -43,12 +47,20 @@ function send(proxyPort: number, target: string, identity: Parameters<typeof sig
         port: proxyPort,
         method: "GET",
         path: target,
-        headers: signCelldEgress({ secret: SECRET, kind: "fetch", method: "GET", target, identity }),
+        headers: signCelldEgress({
+          secret: SECRET,
+          kind: "fetch",
+          method: "GET",
+          target,
+          identity,
+        }),
       },
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString() }));
+        res.on("end", () =>
+          resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString() })
+        );
       }
     );
     req.on("error", reject);
@@ -77,7 +89,11 @@ describe("the node's identity at the egress proxy", () => {
         expect(refused.status).toBe(403);
       }
       expect(other.seen).toHaveLength(0);
-      for (const name of ["x-celld-egress-identity", "x-celld-egress-nonce", "x-celld-egress-mac"]) {
+      for (const name of [
+        "x-celld-egress-identity",
+        "x-celld-egress-nonce",
+        "x-celld-egress-mac",
+      ]) {
         expect(gateway.seen[0]).not.toHaveProperty(name);
       }
     } finally {
@@ -100,7 +116,10 @@ describe("the node's identity at the egress proxy", () => {
     const port = await proxy.startShared(SECRET);
     try {
       await send(port, "http://example.invalid/", { loaded: false, class: "WorkspaceStateDO" });
-      await send(port, "http://example.invalid/", { loaded: true, egressIdentity: ["worker:w", "x"] });
+      await send(port, "http://example.invalid/", {
+        loaded: true,
+        egressIdentity: ["worker:w", "x"],
+      });
       // Unattributed identities never reach a resolver.
       await send(port, "http://example.invalid/", { loaded: true, egressIdentity: [] });
       expect(asked).toEqual(["do-service:vibestudio/internal:WorkspaceStateDO", "worker:w"]);

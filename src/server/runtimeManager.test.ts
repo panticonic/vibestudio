@@ -464,7 +464,7 @@ describe("RuntimeManager", () => {
     celldDeployments.length = 0;
     const deps = createMockDeps({
       getInternalDoEnv: (className): Record<string, string> =>
-        className === "EvalDO" ? { EVAL_ENGINE_SOURCE: "units/eval" } : {},
+        className === "WebhookStoreDO" ? { STORE_SOURCE: "units/store" } : {},
     });
     const manager = new RuntimeManager(deps);
     try {
@@ -478,15 +478,15 @@ describe("RuntimeManager", () => {
           durable_objects: Record<string, { secrets: string[]; codegen?: true; residency?: true }>;
         }
       ).durable_objects;
-      // Every product class holds its own credential, and only EvalDO (until the kernel is
-      // hosted code) may generate code and keep its heap resident.
+      // Every product class holds its own credential and none may generate code or keep its
+      // heap resident: eval is hosted code, whose grants the entity's root holds (§7.2).
       for (const className of INTERNAL_DO_CLASSES) {
         expect(classes[className]!.secrets).toEqual([
           `RPC_AUTH_TOKEN__${className}`,
           `LIFECYCLE_SECRET__${className}`,
         ]);
-        expect(classes[className]!.codegen).toBe(className === "EvalDO" ? true : undefined);
-        expect(classes[className]!.residency).toBe(className === "EvalDO" ? true : undefined);
+        expect(classes[className]!.codegen).toBeUndefined();
+        expect(classes[className]!.residency).toBeUndefined();
       }
       // The root of every entity holds the grants it may give hosted code (§7.2).
       expect(classes["UniversalDO"]).toEqual({
@@ -504,7 +504,7 @@ describe("RuntimeManager", () => {
       const manifest = JSON.stringify(config);
       for (const value of Object.values(secrets)) expect(manifest).not.toContain(value);
       expect((config["vars"] as Record<string, unknown>)["INTERNAL_DO_ENV"]).toMatchObject({
-        EvalDO: { EVAL_ENGINE_SOURCE: "units/eval" },
+        WebhookStoreDO: { STORE_SOURCE: "units/store" },
       });
       // The deployed module is the build artifact's own bytes.
       expect(celldDeployments[0]!.bundle).toBe(deps.internalDOPrograms!.app().bundle);
@@ -892,14 +892,14 @@ describe("RuntimeManager", () => {
       const before = vi.mocked(spawn).mock.calls.length;
       const schemas = vi.spyOn(manager, "probeDurableObjectSchema");
       await manager.registerAllDOClasses(
-        ["WorkspaceDO", "BrowserVaultDO", "EvalDO", "WebhookStoreDO"].map((className) => ({
+        ["WorkspaceDO", "BrowserVaultDO", "WebhookStoreDO"].map((className) => ({
           source: INTERNAL_DO_SOURCE,
           className,
         }))
       );
       expect(vi.mocked(spawn).mock.calls.length - before).toBe(1);
       await manager.registerAllDOClasses(
-        ["WorkspaceDO", "BrowserVaultDO", "EvalDO", "WebhookStoreDO"].map((className) => ({
+        ["WorkspaceDO", "BrowserVaultDO", "WebhookStoreDO"].map((className) => ({
           source: INTERNAL_DO_SOURCE,
           className,
         }))
@@ -921,14 +921,7 @@ describe("RuntimeManager", () => {
         durable_objects: { bindings: Array<{ name: string; class_name: string }> };
       };
       expect(deployed.durable_objects.bindings.map((binding) => binding.class_name).sort()).toEqual(
-        [
-          "BrowserVaultDO",
-          "EvalDO",
-          "UniversalDO",
-          "WebhookStoreDO",
-          "WorkspaceDO",
-          "WorkspaceStateDO",
-        ]
+        ["BrowserVaultDO", "UniversalDO", "WebhookStoreDO", "WorkspaceDO", "WorkspaceStateDO"]
       );
       // The workspace state is a Dolt class (a class's engine is fixed when it is
       // created, so the retired SQLite class stays beside it for the import), and
@@ -1376,7 +1369,7 @@ describe("RuntimeManager", () => {
       // Product objects are owned by their classes, not by this surface.
       await expect(
         mgr.resetDOStorage(
-          { source: "vibestudio/internal", className: "EvalDO", objectKey: "owner" },
+          { source: "vibestudio/internal", className: "WebhookStoreDO", objectKey: "owner" },
           "not allowed"
         )
       ).rejects.toThrow("not supported for internal DO source");
@@ -1516,13 +1509,13 @@ describe("RuntimeManager", () => {
     try {
       await mgr.destroyRetiredDOStorage({
         source: "vibestudio/internal",
-        className: "EvalDO",
+        className: "WebhookStoreDO",
         objectKey: "ctx/run 1",
       });
       expect(node.destroyed).toEqual([
         {
           key: expect.any(String),
-          path: "/_w/vibestudio/internal/EvalDO/ctx%2Frun%201/__vibestudio_destroy",
+          path: "/_w/vibestudio/internal/WebhookStoreDO/ctx%2Frun%201/__vibestudio_destroy",
           secret: mgr.getDoLoaderSecret(),
         },
       ]);

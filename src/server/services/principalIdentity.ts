@@ -6,18 +6,16 @@ import {
 } from "@vibestudio/shared/principalKinds";
 import type { UserSubject } from "@vibestudio/identity/types";
 
-const INTERNAL_DO_SOURCE = "vibestudio/internal";
-const EVAL_DO_CLASS = "EvalDO";
+import { isEvalHostRecord } from "@vibestudio/shared/evalRuntimeIdentity";
 
 function evalOwner(record: {
+  kind?: string;
   source: { repoPath: string };
   className?: string;
   parentId?: string;
   stateArgs?: unknown;
 }): { ownerId: string } | null {
-  if (record.source.repoPath !== INTERNAL_DO_SOURCE || record.className !== EVAL_DO_CLASS) {
-    return null;
-  }
+  if (!isEvalHostRecord(record)) return null;
   if (
     !record.stateArgs ||
     typeof record.stateArgs !== "object" ||
@@ -78,12 +76,12 @@ export function resolveCodeIdentity(
       !owner.activeAuthority
     ) {
       // An inert user/session owner has no code identity by design. In that
-      // case the exact product-baked EvalDO is the mediating harness. Continue
-      // through the ordinary record validation below; forged/unsealed EvalDO
-      // records still fail closed because they lack a sealed execution image.
+      // case the session entity's own sealed image is the mediating harness.
+      // Continue through the ordinary record validation below; a forged or
+      // unsealed record still fails closed because it lacks a sealed image.
     } else {
       return {
-        // Runtime attribution remains the concrete EvalDO. The exact harness
+        // Runtime attribution remains the concrete session entity. The exact harness
         // identity comes from its immutable host-recorded owner chain; it is not
         // a request list for dynamic execution.
         callerId,

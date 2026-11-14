@@ -2,7 +2,6 @@ import type { ServiceMethodSchemas } from "@vibestudio/shared/typedServiceClient
 import { browserVaultMethods } from "./browserData.js";
 import { workspaceStateMethods } from "./workspaceState.js";
 import { webhookEngineMethods } from "./webhookEngine.js";
-import { evalEngineMethods } from "./evalEngine.js";
 import { workspaceStateEngineMethods } from "./workspaceStateEngine.js";
 import { workspaceStateLegacyMethods } from "./workspaceStateLegacy.js";
 import { WORKSPACE_STATE_LOCAL_TABLES } from "./workspaceStateStorage.js";
@@ -138,32 +137,6 @@ export const PRODUCT_BUILTINS = [
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],
-  },
-  {
-    kind: "engine",
-    source: "vibestudio/internal",
-    name: "eval.engine",
-    className: "EvalDO",
-    implementation: "@panticonic/builtin/eval-engine",
-    sourceFile: "packages/builtin/src/eval-engine/EvalDO.ts",
-    builtinBecause: "feeds-authority",
-    durableObject: { keyVersion: 1, objectKey: "owner", keyMode: "caller-supplied" },
-    runtime: {
-      staticAuthorityProjection: true,
-      codegen: true,
-      residency: true,
-    },
-    residentCapabilityRequests: [],
-    hostCapabilityRequests: [
-      {
-        capability: "external.open",
-        methods: ["executeRun", "run", "startRun"],
-        resource: { kind: "prefix", prefix: "" },
-        tier: "gated",
-        evidence: "intentional-broad",
-      },
-    ],
-    directMethods: evalEngineMethods,
   },
   {
     kind: "engine",

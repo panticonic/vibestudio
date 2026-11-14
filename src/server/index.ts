@@ -140,7 +140,12 @@ import {
 } from "@vibestudio/workspace/configParser";
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { getCentralDataPath } from "@vibestudio/env-paths";
-import { evalDoProviderEnv } from "./evalProviderEnv.js";
+import {
+  EVAL_HOST_CLASS,
+  EVAL_HOST_SOURCE,
+  evalHostObjectKeyOf,
+  isEvalHostRecord,
+} from "@vibestudio/shared/evalRuntimeIdentity";
 import {
   resolveHistoricalWorkspaceHost,
   requireCompatibleTransitionHost,
@@ -663,10 +668,7 @@ async function main() {
     }
   };
   /** Manifest `providers.*` env bindings for internal DO classes (runtimeManager). */
-  const internalDoProviderEnv = (className: string): Record<string, string> => {
-    if (className === "EvalDO") return evalDoProviderEnv(workspaceConfig.providers);
-    return {};
-  };
+  const internalDoProviderEnv = (): Record<string, string> => ({});
   // ===========================================================================
   // App node_modules resolution (for @vibestudio/* platform packages)
   // ===========================================================================
@@ -4111,9 +4113,6 @@ async function main() {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
         );
-        const runtimeManager = assertPresent(
-          resolve<import("./runtimeManager.js").RuntimeManager>("runtimeManager")
-        );
         const runtime = assertPresent(
           resolve<import("./services/runtimeService.js").RuntimeServiceResult>("runtime")
         );
@@ -4143,20 +4142,15 @@ async function main() {
           mandatory: true,
           async snapshotRoots() {
             const entities = (await evalEntityStore.listActive("do")).filter(
-              (entity) =>
-                entity.source.repoPath === "vibestudio/internal" &&
-                entity.className === "EvalDO" &&
-                typeof entity.key === "string"
+              (entity) => isEvalHostRecord(entity) && typeof entity.key === "string"
             );
             const roots = [];
             for (const entity of entities) {
               const retained = (await doDispatch.dispatch(
-                {
-                  source: "vibestudio/internal",
-                  className: "EvalDO",
-                  objectKey: entity.key!,
-                },
-                "listRetainedExecutionRoots"
+                { source: EVAL_HOST_SOURCE, className: EVAL_HOST_CLASS, objectKey: entity.key! },
+                "settle",
+                "listRetainedExecutionRoots",
+                []
               )) as Array<{
                 runId: string;
                 moduleSpecifier: string;
@@ -4179,11 +4173,12 @@ async function main() {
         const authorityEvents = new EvalAuthorityEventJournal(doDispatch);
         closeEvalAuthorityEvents = () => authorityEvents.close();
         dispatcher.setAuthorityObserver(({ executionSession, kind, payload }) => {
-          const prefix = "do:vibestudio/internal:EvalDO:";
           const executor = executionSession.executor;
-          if (executor.kind !== "eval" || !executor.runtimeId.startsWith(prefix)) return;
+          if (executor.kind !== "eval") return;
+          const objectKey = evalHostObjectKeyOf(executor.runtimeId);
+          if (!objectKey) return;
           authorityEvents.append({
-            objectKey: executor.runtimeId.slice(prefix.length),
+            objectKey,
             runId: executor.evalRunId,
             kind,
             payload: {
@@ -4197,8 +4192,8 @@ async function main() {
         evalDefinition = createEvalService({
           doDispatch,
           entityStore: evalEntityStore,
+          createEntity: (caller, spec) => runtime.internal.createEntity(caller, spec),
           retireEntity: (id) => runtime.internal.retireEntity(id),
-          tokenManager,
           workspaceId,
           resolveExecutionArtifact: async (code) => {
             if (code.repoPath === "vibestudio/internal") {
@@ -4228,10 +4223,6 @@ async function main() {
           isSystemTestHarness: (_caller, runId) =>
             systemTestInstance && runId.startsWith("system-test-runner:"),
           activity: activityRegistry,
-          recoverUnresponsiveSandbox: ({ runId, timeoutMs }) =>
-            runtimeManager.recoverUnresponsiveSandbox(
-              `eval ${runId} remained unresponsive after ${timeoutMs}ms`
-            ),
           onShutdown: (shutdown) => {
             closeActiveEvalRuns = shutdown;
           },
@@ -4865,14 +4856,18 @@ async function main() {
               reservation,
               cooperativelyPaused,
             }) => {
-              await runtimeManager.forkObjectStorage({ source, className, objectKey: fromKey }, toKey, {
-                cooperativelyPaused,
-                reservation,
-                resolveSource: () =>
-                  ensureEntityStore(doDispatch).resolveActiveRecord(
-                    reservation.cloneProvenance!.sourceEntityId
-                  ),
-              });
+              await runtimeManager.forkObjectStorage(
+                { source, className, objectKey: fromKey },
+                toKey,
+                {
+                  cooperativelyPaused,
+                  reservation,
+                  resolveSource: () =>
+                    ensureEntityStore(doDispatch).resolveActiveRecord(
+                      reservation.cloneProvenance!.sourceEntityId
+                    ),
+                }
+              );
             },
             destroyDurableStorage: async ({ source, className, key }) => {
               await runtimeManager.destroyRetiredDOStorage({
@@ -5085,7 +5080,6 @@ async function main() {
   {
     const { createWebhookIngressService, resolveWebhookDirectMaxBodyBytes } =
       await import("./services/webhookIngressService.js");
-    const { INTERNAL_DO_SOURCE } = await import("./internalDOs/internalDoLoader.js");
     let webhookIngress: ReturnType<typeof createWebhookIngressService> | null = null;
     container.registerManaged({
       name: "webhookIngress",
@@ -5115,12 +5109,13 @@ async function main() {
                 ? (record.stateArgs as Record<string, unknown>)
                 : null;
             const ownerPrincipalId = stateArgs?.["ownerPrincipalId"];
-            // Only the host-created, owner-scoped internal EvalDO delegates its
-            // ergonomic runtime calls. Both the class/source and owner lineage
-            // are server-authored entity state; no request value participates.
+            // Only the host-created, owner-scoped session entity that hosts an
+            // eval kernel delegates its ergonomic runtime calls. Both the
+            // class/source and owner lineage are server-authored entity state;
+            // no request value participates.
             if (
-              record?.source.repoPath !== INTERNAL_DO_SOURCE ||
-              record.className !== "EvalDO" ||
+              !record ||
+              !isEvalHostRecord(record) ||
               typeof ownerPrincipalId !== "string" ||
               record.parentId !== ownerPrincipalId
             ) {

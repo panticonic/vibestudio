@@ -53,7 +53,16 @@ describe("celld egress identity", () => {
   it("refuses an identity edited after it was stamped", () => {
     const headers = stamp({ loaded: true, egressIdentity: ["worker:a"] });
     const forged = Buffer.from(
-      JSON.stringify({ v: 1, deployment: "d", script: "s", loaded: true, class: null, cell: null, root: null, egressIdentity: ["worker:admin"] })
+      JSON.stringify({
+        v: 1,
+        deployment: "d",
+        script: "s",
+        loaded: true,
+        class: null,
+        cell: null,
+        root: null,
+        egressIdentity: ["worker:admin"],
+      })
     ).toString("base64url");
     expect(verify({ ...headers, "x-celld-egress-identity": forged })).toBeNull();
   });

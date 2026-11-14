@@ -1,10 +1,11 @@
 import { ServiceAccessError, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
+import { isEvalHostRecord } from "@vibestudio/shared/evalRuntimeIdentity";
 
-/** Kernel bookkeeping is code-owned. Evaluated effects cannot use this ingress,
+/** The kernel acts as the session entity that hosts it. Kernel bookkeeping is code-owned. Evaluated effects cannot use this ingress,
  * even when they run in the same DO: their host-bound admission remains present
  * on every guest RPC. The authenticated runtime and its active kernel image
- * are the control identity. caller.code may intentionally attribute an EvalDO
+ * are the control identity. caller.code may intentionally attribute an eval host
  * to its immutable code owner; it is not the resident kernel identity. */
 export function requireEvalKernel(
   caller: VerifiedCaller,
@@ -19,9 +20,7 @@ export function requireEvalKernel(
       ? "website execution"
       : !entity
         ? "inactive runtime"
-        : entity.kind !== "do" ||
-            entity.source.repoPath !== "vibestudio/internal" ||
-            entity.className !== "EvalDO"
+        : !isEvalHostRecord(entity)
           ? "non-kernel runtime"
           : !entity.activeExecutionDigest
             ? "missing active image"

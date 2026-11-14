@@ -22,21 +22,6 @@
       "requests": [],
       "methodScopedRequests": []
     },
-    "EvalDO": {
-      "implementation": "@panticonic/builtin/eval-engine",
-      "durableWorkQueues": [],
-      "provides": [],
-      "requests": [],
-      "methodScopedRequests": [
-        {
-          "capability": "external.open",
-          "methods": ["executeRun", "run", "startRun"],
-          "resource": { "kind": "prefix", "prefix": "" },
-          "tier": "gated",
-          "evidence": "intentional-broad"
-        }
-      ]
-    },
     "WebhookStoreDO": {
       "implementation": "@panticonic/builtin/webhook-engine",
       "durableWorkQueues": [],

@@ -51,10 +51,11 @@ describe("EvalAuthorityEventJournal", () => {
     await journal.close();
 
     expect(dispatch).toHaveBeenCalledTimes(3);
+    // Through the session entity that hosts the kernel, on its host-only settlement path.
     expect(dispatch.mock.calls[2]?.slice(1, 4)).toEqual([
+      "settle",
       "appendAuthorityEvent",
-      "run-1",
-      "authority-decided",
+      ["run-1", "authority-decided", expect.anything()],
     ]);
   });
 

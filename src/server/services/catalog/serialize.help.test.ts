@@ -7,7 +7,6 @@
 import { describe, it, expect } from "vitest";
 import { docsMethods, serializedServiceMethodSchema } from "@vibestudio/service-schemas/docs";
 import { serializeMethod } from "./serialize.js";
-import { describeEvalMethod } from "../../../../packages/builtin/src/eval-engine/evalSurfaceHelp.js";
 import { permissionsMethods } from "@vibestudio/service-schemas/permissions";
 import { fsMethods } from "@vibestudio/service-schemas/fs";
 
@@ -15,34 +14,17 @@ describe("help('docs.search') via the canonical serializer", () => {
   it("preserves the receiver's declared capability through serialization and help", () => {
     const wire = serializedServiceMethodSchema.parse(serializeMethod(permissionsMethods.list));
     expect(wire.access).toMatchObject({ capability: "permissions.read", sensitivity: "read" });
-    expect(describeEvalMethod("permissions.list", wire).access).toMatchObject({
-      capability: "permissions.read",
-    });
   });
   it("names parameters from argumentNames and keeps the worked example executable", () => {
     const wire = serializedServiceMethodSchema.parse(serializeMethod(docsMethods.search));
     expect(wire.argumentNames).toEqual(["query", "options"]);
 
-    const description = describeEvalMethod("docs.search", wire);
-    expect(description.call).toBe("await docs.search(query, options)");
-    expect(description.parameters!.map((parameter) => parameter.name)).toEqual([
-      "query",
-      "options",
-    ]);
-    expect(description.examples?.[0]).toEqual({
-      call: 'await docs.search("store a blob and get a digest", {"limit":5})',
-    });
-    expect(JSON.stringify(description)).not.toContain("arg0");
+    expect(JSON.stringify(wire)).not.toContain("arg0");
   });
   it("renders native byte schemas as Uint8Array", () => {
     const writeFile = serializedServiceMethodSchema.parse(serializeMethod(fsMethods.writeFile));
     expect(JSON.stringify(writeFile.argsSchema)).toContain('"format":"binary"');
-    expect(describeEvalMethod("fs.writeFile", writeFile).parameters?.[1]?.type).toContain(
-      "Uint8Array"
-    );
     const handleRead = serializedServiceMethodSchema.parse(serializeMethod(fsMethods.handleRead));
-    expect(describeEvalMethod("fs.handleRead", handleRead).returns).toBe(
-      "{ bytesRead: number; buffer: Uint8Array }"
-    );
+    expect(JSON.stringify(handleRead.returnsSchema)).toContain('"format":"binary"');
   });
 });

@@ -1,4 +1,5 @@
 import type { DORef, HeldDoDispatcher } from "@vibestudio/shared/doDispatcher";
+import { EVAL_HOST_CLASS, EVAL_HOST_SOURCE } from "@vibestudio/shared/evalRuntimeIdentity";
 
 export type EvalAuthorityEventKind = "authority-requested" | "authority-decided";
 
@@ -10,7 +11,8 @@ export interface EvalAuthorityEvent {
 }
 
 /**
- * Ordered delivery of host-observed authority lifecycle events to EvalDO.
+ * Ordered delivery of host-observed authority lifecycle events to the eval kernel,
+ * through the session entity that hosts it.
  *
  * An EvalDO calls the host while executing a sandbox operation. Authority is
  * evaluated on that outbound call, so the observer must never await a call
@@ -37,13 +39,11 @@ export class EvalAuthorityEventJournal {
     const previous = this.tails.get(event.objectKey) ?? Promise.resolve();
     const current = previous
       .then(async () => {
-        await this.dispatcher.dispatch(
-          refFor(event.objectKey),
-          "appendAuthorityEvent",
+        await this.dispatcher.dispatch(refFor(event.objectKey), "settle", "appendAuthorityEvent", [
           event.runId,
           event.kind,
-          event.payload
-        );
+          event.payload,
+        ]);
       })
       .catch((error) => {
         try {
@@ -67,11 +67,7 @@ export class EvalAuthorityEventJournal {
 }
 
 function refFor(objectKey: string): DORef {
-  return {
-    source: "vibestudio/internal",
-    className: "EvalDO",
-    objectKey,
-  };
+  return { source: EVAL_HOST_SOURCE, className: EVAL_HOST_CLASS, objectKey };
 }
 
 function defaultReporter(event: EvalAuthorityEvent, error: unknown): void {
