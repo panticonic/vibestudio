@@ -424,6 +424,11 @@ export class AgentExecutionSessionRegistry {
     return null;
   }
 
+  /** The run that holds the runtime's one live admission, if any. */
+  activeRunId(runtimeId: string): string | undefined {
+    return this.activeRunByRuntime.get(runtimeId);
+  }
+
   close(runtimeId: string, runId?: string): boolean {
     const fact = this.byRuntime.get(runtimeId);
     const activeRunId = this.activeRunByRuntime.get(runtimeId);

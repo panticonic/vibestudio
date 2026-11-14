@@ -73,6 +73,7 @@ import { phoneNativeEndpointMethods } from "./phoneNativeEndpoint.js";
 import { remoteCredMethods } from "./remoteCred.js";
 import { runtimeMethods } from "./runtime.js";
 import { evalMethods } from "./eval.js";
+import { dynamicCodeMethods } from "./dynamicCode.js";
 import { evalEngineMethods } from "./evalEngine.js";
 import { evalEventIngressMethods } from "./evalEventIngress.js";
 import { evalExecutionRootsMethods } from "./evalExecutionRoots.js";
@@ -213,6 +214,7 @@ const serviceTables: ServiceTable[] = [
   { service: "remoteCred", file: "remoteCred.ts", methods: remoteCredMethods },
   { service: "runtime", file: "runtime.ts", methods: runtimeMethods },
   { service: "eval", file: "eval.ts", methods: evalMethods },
+  { service: "dynamicCode", file: "dynamicCode.ts", methods: dynamicCodeMethods },
   { service: "evalEngine", file: "evalEngine.ts", methods: evalEngineMethods },
   {
     service: "evalEventIngress",

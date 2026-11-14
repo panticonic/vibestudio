@@ -3372,6 +3372,61 @@ export const HOST_AUTHORITY_METHODS = {
     capability: null,
     presentation: null,
   },
+  "dynamicCode.admit": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.create",
+      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "dynamicCode.dispose": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.control",
+      rationale:
+        "Owned-resource release: the host admits disposal only when this caller declared the scope finite at its immutable first activation",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "dynamicCode.release": {
+    tier: {
+      tier: "open",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.retire",
+      rationale: "Owned-resource release of the caller's own admission.",
+    },
+    capability: null,
+    presentation: null,
+  },
+  "dynamicCode.reset": {
+    tier: {
+      tier: "critical",
+      session: "family",
+      residency: "untrusted-execution",
+      family: "eval.control",
+      rationale:
+        "C3: irreversible destruction outside VCS protection; §2 default {code, session} family",
+    },
+    capability: "code-runner.reset",
+    presentation: {
+      title: "Reset the code runner",
+      action: "reset the code runner",
+      description: "Clear the code runner and start fresh.",
+      group: "runtime",
+      authorityCategory: {
+        domain: "automation",
+        verb: "act",
+      },
+    },
+  },
   "eval.acknowledge": {
     tier: {
       tier: "open",

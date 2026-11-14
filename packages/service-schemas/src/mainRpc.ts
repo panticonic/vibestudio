@@ -65,6 +65,7 @@ import type { browserVaultNativeMethods } from "./browserVaultNative.js";
 import type { evalEventIngressMethods } from "./evalEventIngress.js";
 import type { autofillMethods } from "./autofill.js";
 import type { evalMethods } from "./eval.js";
+import type { dynamicCodeMethods } from "./dynamicCode.js";
 import type { browserEnvironmentMethods } from "./browserEnvironment.js";
 import type { hostPerformanceMethods } from "./hostPerformance.js";
 import type { problemReportsMethods } from "./problemReports.js";
@@ -144,6 +145,7 @@ export type MainRpcMethods = Methods<"governance", typeof governanceMethods> &
   Methods<"evalEventIngress", typeof evalEventIngressMethods> &
   Methods<"autofill", typeof autofillMethods> &
   Methods<"eval", typeof evalMethods> &
+  Methods<"dynamicCode", typeof dynamicCodeMethods> &
   Methods<"browserEnvironment", typeof browserEnvironmentMethods> &
   Methods<"hostPerformance", typeof hostPerformanceMethods> &
   Methods<"problemReports", typeof problemReportsMethods> &
@@ -237,6 +239,7 @@ const loaders = {
   evalEventIngress: async () => (await import("./evalEventIngress.js")).evalEventIngressMethods,
   autofill: async () => (await import("./autofill.js")).autofillMethods,
   eval: async () => (await import("./eval.js")).evalMethods,
+  dynamicCode: async () => (await import("./dynamicCode.js")).dynamicCodeMethods,
   browserEnvironment: async () =>
     (await import("./browserEnvironment.js")).browserEnvironmentMethods,
   hostPerformance: async () => (await import("./hostPerformance.js")).hostPerformanceMethods,

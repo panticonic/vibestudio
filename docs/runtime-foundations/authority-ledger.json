@@ -16604,6 +16604,194 @@
       "parityAssertion": "generated-census:host-authority"
     },
     {
+      "id": "host:dynamicCode.admit",
+      "rpcPlane": "host-service",
+      "owner": "dynamicCode",
+      "method": "admit",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "eval.create",
+      "reviewRationale": "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:dynamicCode.admit"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host",
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:dynamicCode.admit),allOf(capability(user,service:dynamicCode.admit),workspace-member),allOf(capability(code,service:dynamicCode.admit),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:dynamicCode.admit",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:dynamicCode.dispose",
+      "rpcPlane": "host-service",
+      "owner": "dynamicCode",
+      "method": "dispose",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "eval.control",
+      "reviewRationale": "Owned-resource release: the host admits disposal only when this caller declared the scope finite at its immutable first activation",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:dynamicCode.dispose"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host",
+        "website"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:dynamicCode.dispose),allOf(capability(user,service:dynamicCode.dispose),workspace-member),allOf(capability(code,service:dynamicCode.dispose),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:dynamicCode.dispose",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:dynamicCode.release",
+      "rpcPlane": "host-service",
+      "owner": "dynamicCode",
+      "method": "release",
+      "tier": "open",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "eval.retire",
+      "reviewRationale": "Owned-resource release of the caller's own admission.",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:dynamicCode.release"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host",
+        "website"
+      ],
+      "sensitivity": "write",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:dynamicCode.release),allOf(capability(user,service:dynamicCode.release),workspace-member),allOf(capability(code,service:dynamicCode.release),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:dynamicCode.release",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
+      "id": "host:dynamicCode.reset",
+      "rpcPlane": "host-service",
+      "owner": "dynamicCode",
+      "method": "reset",
+      "tier": "critical",
+      "sessionAdmission": "family",
+      "residency": "untrusted-execution",
+      "mechanismFamily": "eval.control",
+      "reviewRationale": "C3: irreversible destruction outside VCS protection; §2 default {code, session} family",
+      "resourceDerivation": {
+        "kind": "literal",
+        "key": "service:dynamicCode.reset"
+      },
+      "authorityPrincipals": [
+        "code",
+        "user",
+        "host",
+        "website"
+      ],
+      "sensitivity": "destructive",
+      "authenticatedFacts": [
+        "session",
+        "acting-user",
+        "device",
+        "runtime-entity",
+        "exact-code-artifact-when-code-originated",
+        "workspace-membership",
+        "agent-binding-when-agent-originated"
+      ],
+      "currentOutcomes": {
+        "allowed": "declared caller scenarios retain their existing allow/approval flow",
+        "denied": "undeclared or unauthenticated scenarios fail with EACCES"
+      },
+      "predicates": [
+        "live-session",
+        "live-workspace-membership",
+        "exact-resource-scope"
+      ],
+      "r3aRequirement": "anyOf(capability(host,service:dynamicCode.reset),allOf(capability(user,service:dynamicCode.reset),workspace-member),allOf(capability(code,service:dynamicCode.reset),workspace-member))",
+      "r3b": {
+        "review": "unchanged-parity",
+        "change": null
+      },
+      "capability": "service:dynamicCode.reset",
+      "parityAssertion": "generated-census:host-authority"
+    },
+    {
       "id": "host:eval.acknowledge",
       "rpcPlane": "host-service",
       "owner": "eval",

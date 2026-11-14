@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:96c8b67eef9dcf3b7fe1cb6649d6dbb3cc6e960a5003d1b9b0dad8f01fad9628",
+  "censusDigest": "sha256:c9f2fdc1266acbec10ca68aae44d33db46bb5818f4577357844f26c41675e637",
   "decisions": {
     "host:terminalApps.launch": {
       "review": "single-prepared-terminal-program-consent",

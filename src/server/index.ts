@@ -4104,7 +4104,7 @@ async function main() {
   let closeActiveEvalRuns: (() => Promise<void>) | null = null;
   let closeEvalAuthorityEvents: (() => Promise<void>) | null = null;
   {
-    const { createEvalService } = await import("./services/evalService.js");
+    const { createEvalServices } = await import("./services/evalService.js");
     let evalDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition | null =
       null;
     container.registerManaged({
@@ -4190,7 +4190,7 @@ async function main() {
             },
           });
         });
-        evalDefinition = createEvalService({
+        const evalServices = createEvalServices({
           doDispatch,
           entityStore: evalEntityStore,
           createEntity: (caller, spec, trusted) =>
@@ -4257,6 +4257,8 @@ async function main() {
             };
           },
         });
+        evalDefinition = evalServices.eval;
+        dispatcher.registerService(evalServices.dynamicCode);
       },
       getServiceDefinition() {
         if (!evalDefinition) throw new Error("eval service not initialized");

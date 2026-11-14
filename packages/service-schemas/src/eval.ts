@@ -1180,7 +1180,7 @@ export function createDeferredEvalExecutor(
   };
 }
 
-function settledResult(
+export function settledResult(
   snapshot: z.infer<typeof evalRunStatusSchema> | undefined
 ): z.infer<typeof evalRunResultSchema> | undefined {
   if (snapshot?.status === "done" || snapshot?.status === "approval-route-lost") {
@@ -1212,7 +1212,7 @@ function defaultEvalPollDelay(attempt: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
-function abortReason(signal: AbortSignal | undefined): Error {
+export function abortReason(signal: AbortSignal | undefined): Error {
   if (signal?.reason instanceof Error) return signal.reason;
   return AbortSignal.abort().reason;
 }

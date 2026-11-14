@@ -27,7 +27,7 @@ import {
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { DODispatch } from "../doDispatch.js";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
-import { createEvalService } from "./evalService.js";
+import { createEvalService, createEvalServices } from "./evalService.js";
 import { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
 import { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 import { createActivityRegistry } from "./activityRegistry.js";
@@ -230,6 +230,8 @@ function createHarness(
     finiteEvalEntityIds?: ReadonlySet<string>;
     retiredEvalEntityIds?: ReadonlySet<string>;
     preauthorize?: Parameters<typeof createEvalService>[0]["preauthorize"];
+    /** The session entity's `get` fails with this (a run it never heard of). */
+    getRunError?: Error;
     systemTestHarness?: boolean;
     executeRunPending?: boolean;
     cancel?: (runId: string) => Promise<void>;
@@ -368,6 +370,7 @@ function createHarness(
         return { success: true, console: "ok", scopeKeys: [] };
       }
       if (method === "getRun") {
+        if (options.getRunError) throw options.getRunError;
         if (options.evalDomain) return options.evalDomain.getRun(String(args[0]));
         if (options.rejectFirstGetRun && !rejectedGetRun) {
           rejectedGetRun = true;
@@ -498,7 +501,7 @@ function createHarness(
     }
   );
   let shutdown: (() => Promise<void>) | null = null;
-  const service = createEvalService({
+  const services = createEvalServices({
     resolveExecutionArtifact: () =>
       options.ownerArtifact === undefined
         ? EVAL_EXECUTION_IDENTITY.artifact
@@ -524,9 +527,12 @@ function createHarness(
       contentStateHash: `state:${"c".repeat(64)}`,
     }),
   });
+  const service = services.eval;
   return {
     service,
+    dynamicCode: services.dynamicCode,
     calls,
+    eventSinkRegistrations: eventSinkTerminal,
     executionSessions,
     taskAuthorities,
     activity,
@@ -1587,9 +1593,16 @@ describe("createEvalService", () => {
     for (const legacyNotebook of [true, false]) {
       const { service, calls } = createHarness({ [ownerId]: "ctx_agent" }, { legacyNotebook });
       await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
-        inlineEvalStart({ scopeKey: "chan_1", runId: `run:legacy:${legacyNotebook}`, code: "return 1;" }),
+        inlineEvalStart({
+          scopeKey: "chan_1",
+          runId: `run:legacy:${legacyNotebook}`,
+          code: "return 1;",
+        }),
       ]);
-      const started = calls.find((c) => c.method === "startRun")?.args[0] as Record<string, unknown>;
+      const started = calls.find((c) => c.method === "startRun")?.args[0] as Record<
+        string,
+        unknown
+      >;
       if (legacyNotebook) expect(started).toMatchObject({ legacyNotebookDropped: true });
       else expect(started).not.toHaveProperty("legacyNotebookDropped");
     }
@@ -1968,5 +1981,152 @@ describe("createEvalService — agent bindings", () => {
         ]
       )
     ).rejects.toThrow(/must match the connection's entity binding/);
+  });
+});
+
+describe("dynamicCode (the pull model's host service)", () => {
+  const shell = () => authenticatedCaller("shell:dev_cli", "shell");
+  const admitInput = (runId: string, extra: Record<string, unknown> = {}) => ({
+    runId,
+    target: { kind: "owner-session" as const, sessionId: "session:default" },
+    scope: { key: "default" },
+    source: { kind: "inline" as const, code: "return 1;" },
+    ...extra,
+  });
+
+  it("admits a run without starting it, without an event sink, and returns what the caller starts it with", async () => {
+    const h = createHarness({ "session:default": "ctx_1" });
+    const admission = (await h.dynamicCode.handler({ caller: shell() }, "admit", [
+      admitInput("run:admit"),
+    ])) as {
+      runId: string;
+      hostId: string;
+      host: { source: string; className: string; objectKey: string };
+      nonce: string;
+      start: Record<string, unknown>;
+      runDigest: string;
+    };
+    const objectKey = evalKey("session:default", "default");
+    expect(admission.host).toEqual({
+      source: SESSION_SOURCE,
+      className: SESSION_CLASS,
+      objectKey,
+    });
+    expect(admission.hostId).toBe(`do:${SESSION_SOURCE}:${SESSION_CLASS}:${objectKey}`);
+    expect(admission.start).toMatchObject({
+      runId: "run:admit",
+      code: "return 1;",
+      contextId: "ctx_1",
+      executionSessionNonce: admission.nonce,
+    });
+    // A caller that pulls has no push route for the run's events.
+    expect(admission.start).not.toHaveProperty("eventSinkNonce");
+    expect(h.eventSinkRegistrations.size).toBe(0);
+    // The host starts nothing: the caller starts the run on the session entity.
+    expect(h.calls.filter((call) => call.method === "startRun")).toEqual([]);
+    expect(h.activity.getActivity().activeRuns).toBe(1);
+    expect(h.executionSessions.activeRunId(admission.hostId)).toBe("run:admit");
+    const executor = h.executionSessions.resolve(admission.hostId)?.executor;
+    expect(executor?.kind === "eval" && executor.eventSinkNonce).toBeFalsy();
+  });
+
+  it("releases an admission for its caller only, and a released slot admits the next run", async () => {
+    const h = createHarness({ "session:default": "ctx_1" });
+    const admission = (await h.dynamicCode.handler({ caller: shell() }, "admit", [
+      admitInput("run:one"),
+    ])) as { hostId: string };
+    const other = authenticatedCaller("shell:dev_other", "shell");
+    await expect(
+      h.dynamicCode.handler({ caller: other }, "release", [
+        { runId: "run:one", hostId: admission.hostId },
+      ])
+    ).rejects.toMatchObject({ code: "EACCES" });
+    await expect(
+      h.dynamicCode.handler({ caller: shell() }, "release", [
+        { runId: "run:one", hostId: admission.hostId },
+      ])
+    ).resolves.toEqual({ released: true });
+    await expect(
+      h.dynamicCode.handler({ caller: shell() }, "release", [
+        { runId: "run:one", hostId: admission.hostId },
+      ])
+    ).resolves.toEqual({ released: false });
+    expect(h.executionSessions.activeRunId(admission.hostId)).toBeUndefined();
+    expect(h.activity.getActivity().activeRuns).toBe(0);
+    await expect(
+      h.dynamicCode.handler({ caller: shell() }, "admit", [admitInput("run:two")])
+    ).resolves.toMatchObject({ runId: "run:two" });
+  });
+
+  it("releases the slot of a run that ended while its caller was gone, when the next run waits for it", async () => {
+    vi.useFakeTimers();
+    try {
+      // The session entity answers `get` with a terminal row: the first caller never released.
+      const h = createHarness({ "session:default": "ctx_1" });
+      await h.dynamicCode.handler({ caller: shell() }, "admit", [admitInput("run:abandoned")]);
+      const next = h.dynamicCode.handler({ caller: shell() }, "admit", [admitInput("run:next")]);
+      let settled = false;
+      void next.then(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1_000);
+      await expect(next).resolves.toMatchObject({ runId: "run:next" });
+      expect(h.calls.filter((call) => call.method === "getRun")[0]!.args).toEqual([
+        "run:abandoned",
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the slot of a run that is still executing, and of a fresh admission that was not started yet", async () => {
+    vi.useFakeTimers();
+    try {
+      const running = createHarness(
+        { "session:default": "ctx_1" },
+        { getRunSequence: [{ status: "running" }] }
+      );
+      await running.dynamicCode.handler({ caller: shell() }, "admit", [admitInput("run:long")]);
+      const next = running.dynamicCode.handler({ caller: shell() }, "admit", [
+        admitInput("run:waiting"),
+      ]);
+      let settled = false;
+      void next.then(() => (settled = true));
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(settled).toBe(false);
+      expect(
+        running.executionSessions.activeRunId(
+          `do:${SESSION_SOURCE}:${SESSION_CLASS}:${evalKey("session:default", "default")}`
+        )
+      ).toBe("run:long");
+
+      // The entity never heard of the run (the caller died before `start`): released after a grace.
+      const unstarted = createHarness(
+        { "session:default": "ctx_1" },
+        { getRunError: Object.assign(new Error("not found"), { code: "ENOTFOUND" }) }
+      );
+      await unstarted.dynamicCode.handler({ caller: shell() }, "admit", [admitInput("run:dead")]);
+      const after = unstarted.dynamicCode.handler({ caller: shell() }, "admit", [
+        admitInput("run:after"),
+      ]);
+      let afterSettled = false;
+      void after.then(() => (afterSettled = true));
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(afterSettled).toBe(false);
+      await vi.advanceTimersByTimeAsync(20_000);
+      await expect(after).resolves.toMatchObject({ runId: "run:after" });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resets the caller's hosted scope through the host (the kernel is reset by the session, host only)", async () => {
+    const h = createHarness({ "session:default": "ctx_1" });
+    await expect(
+      h.dynamicCode.handler({ caller: shell() }, "reset", [
+        { target: { kind: "owner-session", sessionId: "session:default" } },
+      ])
+    ).resolves.toEqual({ ok: true });
+    expect(h.calls.some((call) => call.method === "reset")).toBe(false);
   });
 });

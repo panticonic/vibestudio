@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { ExtensionHost } from "@vibestudio/extension-host";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
-import { createEvalService } from "./evalService.js";
+import { createEvalServices } from "./evalService.js";
 import { createPushService } from "./pushService.js";
 import { createMobileNativeService } from "./mobileNativeService.js";
 import { createWebhookIngressService } from "./webhookIngressService.js";
@@ -76,8 +76,9 @@ async function collectAuthorityMatrix(): Promise<AuthorityMatrix> {
   // Eval's required host integrations are only touched by method handlers.
   // Construct it explicitly so the complete census cannot depend on whether
   // the generic callable proxy happens to satisfy a newly added dependency.
-  const evalDefinition = createEvalService(inertDeps() as Parameters<typeof createEvalService>[0]);
-  definitions.set(evalDefinition.name, evalDefinition);
+  const evalServices = createEvalServices(inertDeps() as Parameters<typeof createEvalServices>[0]);
+  definitions.set(evalServices.eval.name, evalServices.eval);
+  definitions.set(evalServices.dynamicCode.name, evalServices.dynamicCode);
   // Push owns a SQLite store, so the generic callable proxy is not a valid
   // construction dependency. Include its real definition with an isolated
   // in-memory store instead of letting the census silently skip it.

@@ -79,8 +79,11 @@ export interface DynamicCodeRunInput {
   /** Opaque ids the caller keeps stable across a replay of the same run. */
   admissionKey: string;
   taskRefFallback: string;
-  /** Today's push route for the run's events; deleted with push delivery (§7.5). */
-  eventSinkNonce: string;
+  /**
+   * The push route of the run's live events. Only a caller that still receives events by push
+   * (§7.5, deleted with the last of them) has one; a caller that pulls `events` has none.
+   */
+  eventSinkNonce?: string;
   /** The retired `EvalDO` entity of this owner and scope, when the run belongs to a notebook. */
   legacyHostRuntimeId?: string;
   /** Names the runtime kind of the executor fact (`eval` until the wire type is renamed). */
@@ -256,7 +259,7 @@ export function createDynamicCodeAdmission(deps: DynamicCodeAdmissionDeps) {
               input.authority,
               ctx.caller.code?.requested ?? []
             ),
-            eventSinkNonce: input.eventSinkNonce,
+            ...(input.eventSinkNonce ? { eventSinkNonce: input.eventSinkNonce } : {}),
           },
           ...(mission ? { mission } : {}),
           ...(parentAdmission?.authorityPlanDigest
@@ -284,8 +287,8 @@ export function createDynamicCodeAdmission(deps: DynamicCodeAdmissionDeps) {
       try {
         deps.taskAuthorities.bindExecution(executionSession);
         const executor = executionSession.executor;
-        if (executor.kind !== "eval" || !executor.eventSinkNonce) {
-          throw new Error("Dynamic-code admission has no live event sink");
+        if (executor.kind !== "eval") {
+          throw new Error("Dynamic-code admission did not produce an eval executor");
         }
         const intent = normalizeEvalAuthorityIntent(input.authority);
         if (intent.preauthorize?.length) {

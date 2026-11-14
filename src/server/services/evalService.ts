@@ -20,6 +20,10 @@ import { resolveOwningPanelSlot } from "@vibestudio/shared/panel/owningPanelSlot
 import { asPanelSlotId } from "@vibestudio/shared/panel/ids";
 import { createHash, randomUUID } from "node:crypto";
 import {
+  dynamicCodeMethods,
+  type DynamicCodeAdmission,
+} from "@vibestudio/service-schemas/dynamicCode";
+import {
   EVAL_HOST_CLASS,
   EVAL_HOST_SOURCE,
   evalHostObjectKey,
@@ -110,6 +114,11 @@ interface ActiveEvalRun {
   evalDoRef: SessionRef;
   runId: string;
   closeAdmission: () => void;
+  /** The caller that admitted the run; only it (or the host) releases it. */
+  initiatorId: string;
+  admittedAt: number;
+  /** A pull caller releases the admission itself; the host reconciles one that never did. */
+  pull: boolean;
 }
 
 interface EvalOwner {
@@ -134,7 +143,7 @@ interface EvalParentMeta {
  * walks) and registered with the owner's context so the kernel's own fs/git/vcs resolve
  * the owner's workspace (docs/dolt-redesign.md §7.2, §7.3).
  */
-export function createEvalService(deps: {
+export function createEvalServices(deps: {
   /** Generic DO dispatcher: reaches the session entity that hosts the owner's kernel. */
   doDispatch: HeldDoDispatcher;
   /** Hot-cache and durable reads of entity state. */
@@ -193,7 +202,7 @@ export function createEvalService(deps: {
     sourceState: import("@vibestudio/service-schemas/vcs").VcsStateNodeRef;
     contentStateHash: string;
   }>;
-}): ServiceDefinition {
+}): { eval: ServiceDefinition; dynamicCode: ServiceDefinition } {
   const store = deps.entityStore;
   // The one admission step every run of dynamic code goes through (§7.3).
   const admission = createDynamicCodeAdmission({
@@ -231,6 +240,9 @@ export function createEvalService(deps: {
         entries.map(async (entry) => {
           try {
             await evalEngineClient(deps.doDispatch, entry.evalDoRef).cancel(entry.runId);
+          } catch (error) {
+            // A pull caller that was admitted but never started its run has nothing to cancel.
+            if ((error as { code?: unknown }).code !== "ENOTFOUND") throw error;
           } finally {
             // The durable EvalDO owns terminal truth. Once cancellation has
             // either completed or failed, remove the host admission so a
@@ -438,6 +450,78 @@ export function createEvalService(deps: {
     return { objectKey };
   }
 
+  /**
+   * Register an admitted run: its admission is closed once, by `closeAdmission`, whoever
+   * ends it (the terminal push, a release, a reconciliation, a failed start, shutdown).
+   */
+  function trackAdmission(input: {
+    evalDoRef: SessionRef;
+    runId: string;
+    ctx: ServiceContext;
+    eventSinkNonce: string | undefined;
+    activityId: string | undefined;
+    pull: boolean;
+  }): () => void {
+    const evalRuntimeId = evalDoEntityId(input.evalDoRef.objectKey);
+    const activeKey = activeRunKey(evalRuntimeId, input.runId);
+    let admissionClosed = false;
+    const closeAdmission = () => {
+      if (admissionClosed) return;
+      admissionClosed = true;
+      if (activeRuns.get(activeKey)?.runId === input.runId) activeRuns.delete(activeKey);
+      deps.executionSessions.close(evalRuntimeId, input.runId);
+      if (input.eventSinkNonce) deps.eventSinks?.close(input.eventSinkNonce);
+      if (input.activityId) deps.activity?.end(input.activityId);
+    };
+    activeRuns.set(activeKey, {
+      evalDoRef: input.evalDoRef,
+      runId: input.runId,
+      closeAdmission,
+      initiatorId: input.ctx.caller.runtime.id,
+      admittedAt: Date.now(),
+      pull: input.pull,
+    });
+    return closeAdmission;
+  }
+
+  const TERMINAL_STATUSES = new Set(["done", "cancelled", "approval-route-lost", "unknown"]);
+  /** A pull caller that was admitted but never started the run has until this to do so. */
+  const UNSTARTED_ADMISSION_GRACE_MS = 30_000;
+
+  /**
+   * A pull caller releases its admission itself, but a caller that dies between `admit` and
+   * `release` must not hold the hosting entity's one live admission for the rest of the
+   * session's life. So admission asks the hosting entity (a pull of its own) whether the run
+   * that holds the slot has ended, and releases it when it has, or when it was never started.
+   */
+  async function reconcileHolder(
+    runtimeId: string,
+    ref: SessionRef,
+    requestingRunId: string
+  ): Promise<void> {
+    const holder = deps.executionSessions.activeRunId(runtimeId);
+    if (!holder || holder === requestingRunId) return;
+    const tracked = activeRuns.get(activeRunKey(runtimeId, holder));
+    if (!tracked?.pull) return;
+    try {
+      const snapshot = await evalEngineClient(deps.doDispatch, ref).getRun(holder);
+      if (TERMINAL_STATUSES.has(snapshot.status)) tracked.closeAdmission();
+    } catch (error) {
+      const code = (error as { code?: unknown }).code;
+      if (code === "ENOTFOUND" && Date.now() - tracked.admittedAt > UNSTARTED_ADMISSION_GRACE_MS)
+        tracked.closeAdmission();
+    }
+  }
+
+  /** Reconcile on an interval while an admission waits for the entity's slot; returns the stop. */
+  function reconcileWhileWaiting(runtimeId: string, ref: SessionRef, runId: string): () => void {
+    const timer = setInterval(() => {
+      void reconcileHolder(runtimeId, ref, runId).catch(() => undefined);
+    }, 2_000);
+    timer.unref?.();
+    return () => clearInterval(timer);
+  }
+
   type EvalRoute = {
     target?: { kind: "caller" } | { kind: "owner-session"; sessionId: string };
     scopeKey?: string;
@@ -522,7 +606,8 @@ export function createEvalService(deps: {
   async function prepareRun(
     ctx: ServiceContext,
     runArgs: EvalStartInput,
-    runId: string
+    runId: string,
+    mode: { pull: boolean } = { pull: false }
   ): Promise<{
     evalDoRef: { source: string; className: string; objectKey: string };
     assembledArgs: Parameters<EvalEngineClient["startRun"]>[0];
@@ -530,7 +615,7 @@ export function createEvalService(deps: {
     channelId: string | undefined;
     runDigest: string;
     authorityManifestDigest: string;
-    eventSinkNonce: string;
+    eventSinkNonce: string | undefined;
     activityId: string | undefined;
   }> {
     const owner = await resolveOwnerForCaller(ctx, runArgs);
@@ -626,51 +711,62 @@ export function createEvalService(deps: {
       );
     }
 
-    const eventSinkNonce = randomUUID();
-    const admitted = await admission.admit(ctx, {
-      runId,
-      hostRuntimeId: evalRuntimeId,
-      ownerId,
-      contextId: owner.contextId,
-      authority: runArgs.authority,
-      executionImage: {
-        repoPath: harness.repoPath,
-        effectiveVersion: harness.effectiveVersion,
-        executionDigest: harness.executionDigest,
-        stateHash: sourceRoot.stateHash as `state:${string}`,
-        requested: ownerHarness?.requested ?? [],
-      },
-      ...(agentBinding ? { agentBinding } : {}),
-      admissionKey: `eval:${evalRuntimeId}:${runId}`,
-      taskRefFallback: `eval:${ownerId}:${runId}`,
-      eventSinkNonce,
-      legacyHostRuntimeId: legacyEvalDoRuntimeId(ownerId, runArgs.scope?.key ?? "default"),
-    });
+    // A caller that pulls `events` has no push route for them (§7.5).
+    const eventSinkNonce = mode.pull ? undefined : randomUUID();
+    const hostRef = { source: EVAL_HOST_SOURCE, className: EVAL_HOST_CLASS, objectKey };
+    const stopReconcile = reconcileWhileWaiting(evalRuntimeId, hostRef, runId);
+    let admitted: Awaited<ReturnType<typeof admission.admit>>;
+    try {
+      admitted = await admission.admit(ctx, {
+        runId,
+        hostRuntimeId: evalRuntimeId,
+        ownerId,
+        contextId: owner.contextId,
+        authority: runArgs.authority,
+        executionImage: {
+          repoPath: harness.repoPath,
+          effectiveVersion: harness.effectiveVersion,
+          executionDigest: harness.executionDigest,
+          stateHash: sourceRoot.stateHash as `state:${string}`,
+          requested: ownerHarness?.requested ?? [],
+        },
+        ...(agentBinding ? { agentBinding } : {}),
+        admissionKey: `eval:${evalRuntimeId}:${runId}`,
+        taskRefFallback: `eval:${ownerId}:${runId}`,
+        ...(eventSinkNonce ? { eventSinkNonce } : {}),
+        legacyHostRuntimeId: legacyEvalDoRuntimeId(ownerId, runArgs.scope?.key ?? "default"),
+      });
+    } finally {
+      stopReconcile();
+    }
     const { executionSession } = admitted;
     const activityId =
-      deps.activity && deps.eventSinks ? `eval:${evalRuntimeId}:${runId}` : undefined;
+      deps.activity && (mode.pull || deps.eventSinks)
+        ? `eval:${evalRuntimeId}:${runId}`
+        : undefined;
     const discardPreparedAdmission = () => {
       admitted.discard();
-      deps.eventSinks?.close(eventSinkNonce);
+      if (eventSinkNonce) deps.eventSinks?.close(eventSinkNonce);
       if (activityId) deps.activity?.end(activityId);
     };
     // Every resource acquired after admission belongs to one preparation transaction.
     try {
       const evalExecutor = executionSession.executor;
-      deps.eventSinks?.register({
-        nonce: eventSinkNonce,
-        runtimeId: evalRuntimeId,
-        runId,
-        contextId: owner.contextId,
-        ownerCallerId: ownerId,
-        initiatorCallerId: ctx.caller.runtime.id,
-        subKey: runArgs.scope?.key ?? "default",
-        onTerminal: () => {
-          deps.executionSessions.close(evalRuntimeId, runId);
-          if (activityId) deps.activity?.end(activityId);
-          activeRuns.get(activeRunKey(evalRuntimeId, runId))?.closeAdmission();
-        },
-      });
+      if (eventSinkNonce)
+        deps.eventSinks?.register({
+          nonce: eventSinkNonce,
+          runtimeId: evalRuntimeId,
+          runId,
+          contextId: owner.contextId,
+          ownerCallerId: ownerId,
+          initiatorCallerId: ctx.caller.runtime.id,
+          subKey: runArgs.scope?.key ?? "default",
+          onTerminal: () => {
+            deps.executionSessions.close(evalRuntimeId, runId);
+            if (activityId) deps.activity?.end(activityId);
+            activeRuns.get(activeRunKey(evalRuntimeId, runId))?.closeAdmission();
+          },
+        });
       if (activityId) deps.activity?.begin(activityId);
       const authorityManifestDigest = admitted.authorityManifestDigest;
       const runDigest = sha256Canonical({
@@ -740,7 +836,7 @@ export function createEvalService(deps: {
           readOnly: evalExecutor.authorityManifest.effects === "read-only",
           authorityManifestDigest,
           intentDigest: runDigest,
-          eventSinkNonce,
+          ...(eventSinkNonce ? { eventSinkNonce } : {}),
           ...(admitted.legacyNotebookDropped ? { legacyNotebookDropped: true } : {}),
           ...chatBinding,
         },
@@ -795,7 +891,99 @@ export function createEvalService(deps: {
     })();
   }
 
-  return {
+  async function resetScope(ctx: ServiceContext, resetArgs: EvalRoute): Promise<{ ok: boolean }> {
+    const ref = await findEvalDoRefFor(ctx, resetArgs, "reset");
+    // An absent notebook is already empty; clearing it admits no execution.
+    return ref ? evalEngineClient(deps.doDispatch, ref).reset() : { ok: true };
+  }
+
+  async function disposeScope(
+    ctx: ServiceContext,
+    disposeArgs: EvalRoute
+  ): Promise<{ ok: boolean }> {
+    const owner = await resolveOwnerForCaller(ctx, disposeArgs);
+    const objectKey = evalDoKey(owner.ownerId, disposeArgs.scopeKey ?? "default");
+    const entityId = evalDoEntityId(objectKey);
+    const active = await store.resolveRecord(entityId);
+    if (!active || active.status !== "active") return { ok: true };
+    const stateArgs =
+      active.stateArgs && typeof active.stateArgs === "object" && !Array.isArray(active.stateArgs)
+        ? (active.stateArgs as Record<string, unknown>)
+        : null;
+    if (stateArgs?.["lifecycle"] !== "finite") {
+      throw new ServiceError(
+        "eval",
+        "dispose",
+        "Only an eval scope declared finite at creation may be disposed",
+        "EACCES",
+        undefined,
+        "access"
+      );
+    }
+    await deps.retireEntity(entityId);
+    return { ok: true };
+  }
+
+  const dynamicCodeDefinition: ServiceDefinition = {
+    name: "dynamicCode",
+    description:
+      "Admission of dynamic code: runs of a class an entity hosts, and the host-authority controls of its scope",
+    authority: { principals: ["code", "user", "host", "website"] },
+    methods: dynamicCodeMethods,
+    handler: defineServiceHandler("dynamicCode", dynamicCodeMethods, {
+      admit: async (ctx, [input]): Promise<DynamicCodeAdmission> => {
+        if (shutdownRequested) {
+          throw new ServiceError(
+            "dynamicCode",
+            "admit",
+            "Admission is closed because the server is shutting down",
+            "ESHUTDOWN",
+            undefined,
+            "service"
+          );
+        }
+        const prepared = await prepareRun(ctx, input, input.runId, { pull: true });
+        const evalRuntimeId = evalDoEntityId(prepared.evalDoRef.objectKey);
+        trackAdmission({
+          evalDoRef: prepared.evalDoRef,
+          runId: input.runId,
+          ctx,
+          eventSinkNonce: undefined,
+          activityId: prepared.activityId,
+          pull: true,
+        });
+        return {
+          runId: input.runId,
+          runDigest: prepared.runDigest,
+          authorityManifestDigest: prepared.authorityManifestDigest,
+          host: prepared.evalDoRef,
+          hostId: evalRuntimeId,
+          nonce: String(prepared.assembledArgs.executionSessionNonce),
+          start: { ...prepared.assembledArgs, runId: input.runId } as Record<string, unknown>,
+        };
+      },
+      release: async (ctx, [{ runId, hostId }]) => {
+        const tracked = activeRuns.get(activeRunKey(hostId, runId));
+        if (!tracked) return { released: false };
+        if (tracked.initiatorId !== ctx.caller.runtime.id && ctx.caller.runtime.kind !== "server") {
+          throw new ServiceError(
+            "dynamicCode",
+            "release",
+            "Only the caller that admitted a run releases it",
+            "EACCES",
+            undefined,
+            "access"
+          );
+        }
+        tracked.closeAdmission();
+        return { released: true };
+      },
+      reset: async (ctx, [resetArgs = {}]) => resetScope(ctx, resetArgs),
+      dispose: async (ctx, [disposeArgs = {}]) => disposeScope(ctx, disposeArgs),
+    }),
+  };
+
+  const evalDefinition: ServiceDefinition = {
     ...evalServiceDocumentation,
     handler: defineServiceHandler("eval", evalMethods, {
       start: async (ctx, [runArgs]) => {
@@ -819,18 +1007,14 @@ export function createEvalService(deps: {
           ...assembledArgs,
           runId,
         };
-        const evalRuntimeId = evalDoEntityId(evalDoRef.objectKey);
-        const activeKey = activeRunKey(evalRuntimeId, runId);
-        let admissionClosed = false;
-        const closeAdmission = () => {
-          if (admissionClosed) return;
-          admissionClosed = true;
-          if (activeRuns.get(activeKey)?.runId === runId) activeRuns.delete(activeKey);
-          deps.executionSessions.close(evalRuntimeId, runId);
-          deps.eventSinks?.close(eventSinkNonce);
-          if (activityId) deps.activity?.end(activityId);
-        };
-        activeRuns.set(activeKey, { evalDoRef, runId, closeAdmission });
+        const closeAdmission = trackAdmission({
+          evalDoRef,
+          runId,
+          ctx,
+          eventSinkNonce,
+          activityId,
+          pull: false,
+        });
         if (shutdownRequested) {
           closeAdmission();
           throw new ServiceError(
@@ -926,36 +1110,8 @@ export function createEvalService(deps: {
           deps.doDispatch,
           await evalDoRefFor(ctx, deleteArgs, "deleteScopeValue")
         ).deleteScopeValue(deleteArgs.key),
-      reset: async (ctx, [resetArgs = {}]) => {
-        const ref = await findEvalDoRefFor(ctx, resetArgs, "reset");
-        // An absent notebook is already empty; clearing it admits no execution.
-        return ref ? evalEngineClient(deps.doDispatch, ref).reset() : { ok: true };
-      },
-      dispose: async (ctx, [disposeArgs = {}]) => {
-        const owner = await resolveOwnerForCaller(ctx, disposeArgs);
-        const objectKey = evalDoKey(owner.ownerId, disposeArgs.scopeKey ?? "default");
-        const entityId = evalDoEntityId(objectKey);
-        const active = await store.resolveRecord(entityId);
-        if (!active || active.status !== "active") return { ok: true };
-        const stateArgs =
-          active.stateArgs &&
-          typeof active.stateArgs === "object" &&
-          !Array.isArray(active.stateArgs)
-            ? (active.stateArgs as Record<string, unknown>)
-            : null;
-        if (stateArgs?.["lifecycle"] !== "finite") {
-          throw new ServiceError(
-            "eval",
-            "dispose",
-            "Only an eval scope declared finite at creation may be disposed",
-            "EACCES",
-            undefined,
-            "access"
-          );
-        }
-        await deps.retireEntity(entityId);
-        return { ok: true };
-      },
+      reset: async (ctx, [resetArgs = {}]) => resetScope(ctx, resetArgs),
+      dispose: async (ctx, [disposeArgs = {}]) => disposeScope(ctx, disposeArgs),
       cancel: async (ctx, [cancelArgs]) => {
         const ref = await evalDoRefFor(ctx, cancelArgs, "cancel");
         const result = await evalEngineClient(deps.doDispatch, ref).cancel(cancelArgs.runId);
@@ -966,6 +1122,15 @@ export function createEvalService(deps: {
       },
     }),
   };
+
+  return { eval: evalDefinition, dynamicCode: dynamicCodeDefinition };
+}
+
+/** The `eval` service alone (the host service a caller of the push model still uses). */
+export function createEvalService(
+  deps: Parameters<typeof createEvalServices>[0]
+): ServiceDefinition {
+  return createEvalServices(deps).eval;
 }
 
 const RESULT_REDELIVERY_BASE_DELAY_MS = 1_000;
