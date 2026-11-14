@@ -40,8 +40,8 @@
     },
     {
       "id": "eval-run",
-      "backingSources": ["packages/builtin/src/eval-engine/EvalDO.ts"],
-      "note": "EvalDO persists run semantics and module values, not BuildStore refs; active harness code is covered by runtime-entity."
+      "backingSources": ["src/server/services/evalExecutionRootsService.ts"],
+      "note": "The eval kernel (hosted in a session entity) persists run semantics and module values, not BuildStore refs; the roots it retains are read back through the session entity. Active harness code is covered by runtime-entity."
     },
     {
       "id": "development-run",
