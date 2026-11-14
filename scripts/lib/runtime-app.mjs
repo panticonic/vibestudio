@@ -20,6 +20,7 @@ export const RUNTIME_APP_HOST_EXPORTS = Object.freeze([
   "default",
   "WorkerHost",
   "ExecutablePreparation",
+  "CodeHost",
   "UniversalDO",
 ]);
 const classes = INTERNAL_DO_PROGRAM_ENTRIES.map(({ className }) => className).sort();
@@ -118,7 +119,7 @@ export function runtimeAppEntrypointSource() {
     `import { initializeInternalDORealm } from "../internalDOs/workerdRealm.ts";\n` +
     `import { internalDurableObjectClass } from "./app.ts";\n` +
     `${imports}\n` +
-    `export { default, WorkerHost, ExecutablePreparation, UniversalDO } from "./app.ts";\n` +
+    `export { default, WorkerHost, ExecutablePreparation, CodeHost, UniversalDO } from "./app.ts";\n` +
     `${exports}\n` +
     `initializeInternalDORealm();\n`
   );

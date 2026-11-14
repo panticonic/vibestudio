@@ -74,6 +74,10 @@ export function buildRuntimeDeployment(input: RuntimeDeploymentInput): RuntimeDe
     (classes[className] ??= { secrets: [] }).secrets.push(binding);
   };
   classSecret("UniversalDO", UNIVERSAL_DO_LOADER_SECRET, input.doLoaderSecret);
+  // The root of every entity may grant a hosted class what its manifests permit
+  // (docs/dolt-redesign.md §7.2): a loader cannot grant more than it holds. The
+  // root never runs guest code itself, and the `do` facet it loads has neither.
+  classes["UniversalDO"] = { ...classes["UniversalDO"]!, codegen: true, residency: true };
   for (const cls of input.classes) {
     const bindingName = `do_${source.replace(/[^a-zA-Z0-9_]/g, "_")}_${cls.className}`;
     doBindingNames[`${source}:${cls.className}`] = bindingName;

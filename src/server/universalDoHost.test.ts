@@ -146,6 +146,82 @@ export class CounterDO extends DurableObject {
 }
 export default { fetch() { return new Response("counter host"); } };`;
 
+/** An entity that hosts code: it forwards a hosting request through its CODE_HOST binding. */
+const HOST_DO = `import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+export class VibestudioExecutable extends WorkerEntrypoint {
+  fetch() { return new Response(null, {status:204}); }
+}
+export class HostDO extends DurableObject {
+  constructor(ctx, env) { super(ctx, env); this.ctx = ctx; this.env = env; }
+  async fetch(request) {
+    if (this.env.VIBESTUDIO_SCHEMA_PROBE === true)
+      return Response.json({ className: "HostDO", version: 1, nativeOwner: false, durableWorkQueues: [], freshSchemaFingerprint: "[]" });
+    const parts = new URL(request.url).pathname.split("/").filter(Boolean);
+    const method = parts.slice(1).join("/");
+    if (method === "compile") {
+      try { return Response.json({ result: { ok: new Function("return 1")() } }); }
+      catch (error) { return Response.json({ result: { error: String(error && error.message || error) } }); }
+    }
+    if (method === "props") {
+      return Response.json({ result: { hasCodeHost: Boolean(this.env.CODE_HOST), codeHost: this.ctx.props.codeHost ? Object.keys(this.ctx.props.codeHost) : null } });
+    }
+    // "code" passes a hosting request through the binding; "forged" breaks the proof.
+    const proof = this.ctx.props.codeHost;
+    const body = JSON.parse(await request.text());
+    const response = await this.env.CODE_HOST.fetch("http://code-host/", {
+      method: "POST",
+      headers: { "X-Code-Host-Name": body.name ?? proof.name, "X-Code-Host-Proof": method === "forged" ? "AAAA" : proof.proof },
+      body: JSON.stringify(body.request),
+    });
+    return Response.json({ result: { status: response.status, body: await response.text() } });
+  }
+}
+export default { fetch() { return new Response("host"); } };`;
+
+/** A hosted class: a Dolt facet whose class holds codegen and residency, reached only through its root. */
+const KERNEL_DO = `import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+export class VibestudioExecutable extends WorkerEntrypoint {
+  fetch() { return new Response(null, {status:204}); }
+}
+export class KernelDO extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env);
+    this.ctx = ctx; this.env = env; this.runs = 0;
+  }
+  async fetch(request) {
+    if (this.env.VIBESTUDIO_SCHEMA_PROBE === true)
+      return Response.json({ className: "KernelDO", version: 1, nativeOwner: false, durableWorkQueues: [], freshSchemaFingerprint: "[]" });
+    const sql0 = this.ctx.storage.sql;
+    if (sql0.exec("SELECT name FROM sqlite_master WHERE name = 'runs'").toArray().length === 0)
+      this.ctx.storage.transactionSync(() => sql0.exec("CREATE TABLE runs (id INTEGER PRIMARY KEY, status TEXT NOT NULL)"), { commit: "kernel schema" });
+    const parts = new URL(request.url).pathname.split("/").filter(Boolean);
+    if (parts[1] !== "__hosted") return new Response("not hosted", { status: 404 });
+    const method = parts[2];
+    const { args = [], reason } = JSON.parse(await request.text() || "{}");
+    const sql = this.ctx.storage.sql;
+    const commit = (message, write) => this.ctx.storage.transactionSync(write, { commit: message });
+    if (method === "run") {
+      const result = new Function("return " + args[0])();
+      this.runs++;
+      commit("eval: run " + this.runs, () => sql.exec("INSERT INTO runs(status) VALUES ('ok')"));
+      return Response.json({ result: { result, runs: this.runs } });
+    }
+    if (method === "spin") { for (;;) {} }
+    if (method === "who") {
+      const props = this.ctx.props;
+      return Response.json({ result: { host: props.host && props.host.entityId, hasToken: typeof (props.host && props.host.token) === "string", codeHost: props.codeHost ?? null, hasCodeHostBinding: Object.hasOwn(this.env, "CODE_HOST"), key: parts[0] } });
+    }
+    if (method === "__revoked") {
+      commit("revoked: " + reason, () => sql.exec("INSERT INTO runs(status) VALUES ('revoked')"));
+      return Response.json({ result: null });
+    }
+    if (method === "info")
+      return Response.json({ result: { runs: this.runs, log: this.ctx.storage.dolt.log({ limit: 10 }).map((entry) => entry.message), hasHold: typeof this.ctx.residency } });
+    return Response.json({ error: { message: "no such method " + method } }, { status: 404 });
+  }
+}
+export default { fetch() { return new Response("kernel"); } };`;
+
 const SCHEMA_PROBE_DO = `import { DurableObject } from "cloudflare:workers";
 export class SchemaProbeDO extends DurableObject {
   constructor(ctx, env) {
@@ -229,7 +305,8 @@ interface Harness {
   admissionFetches: Map<string, number>;
   dispatch: (
     ref: { source: string; className: string; objectKey: string },
-    method: string
+    method: string,
+    body?: string
   ) => Promise<unknown>;
 }
 
@@ -249,6 +326,15 @@ async function createHarness(
       ref: { source: string; className: string; objectKey: string },
       admission: DoExecutableAdmission
     ) => Promise<void>;
+    /** `durable.classes` of each source, as the workspace graph would report them. */
+    manifests?: Record<
+      string,
+      Array<{
+        className: string;
+        hosts?: Array<{ source: string; className: string }>;
+        hosted?: import("@vibestudio/shared/types").HostedClassManifest;
+      }>
+    >;
   } = {}
 ): Promise<Harness> {
   const tokenManager = new TokenManager();
@@ -316,7 +402,7 @@ async function createHarness(
         : null;
     },
     getManifestRoutes: () => [],
-    getManifestDoClasses: () => [],
+    getManifestDoClasses: (source: string) => hooks.manifests?.[source] ?? [],
     singletonRegistry: new SingletonRegistry([]),
   };
   const manager = new RuntimeManager(deps);
@@ -371,6 +457,38 @@ async function createHarness(
       );
       return;
     }
+    if (url.startsWith("/_dohost/")) {
+      if (secret !== manager.getDoLoaderSecret()) {
+        res.writeHead(403);
+        res.end("forbidden");
+        return;
+      }
+      const requested = new URL(url, "http://gateway");
+      const [hostedSource, hostedClass] = requested.pathname
+        .slice("/_dohost/".length)
+        .split("/")
+        .map(decodeURIComponent);
+      const [hostSource, hostClass, hostObjectKey] = (requested.searchParams.get("host") ?? "")
+        .split("|")
+        .map(decodeURIComponent);
+      void manager
+        .admitHostedCode(
+          { source: hostSource!, className: hostClass!, objectKey: hostObjectKey! },
+          { source: hostedSource!, className: hostedClass! }
+        )
+        .then(
+          (admission) => {
+            res.writeHead(200, { "content-type": "application/json" });
+            res.end(JSON.stringify(admission));
+          },
+          (error: unknown) => {
+            const code = (error as { code?: string }).code;
+            res.writeHead(code === "EACCES" ? 403 : code === "ENOTFOUND" ? 404 : 409);
+            res.end(error instanceof Error ? error.message : String(error));
+          }
+        );
+      return;
+    }
     if (url.startsWith("/_docode/")) {
       if (secret !== manager.getDoLoaderSecret()) {
         res.writeHead(403);
@@ -423,7 +541,8 @@ async function createHarness(
 
   const dispatch = async (
     ref: { source: string; className: string; objectKey: string },
-    method: string
+    method: string,
+    body = "[]"
   ): Promise<unknown> => {
     const port = manager.getPort();
     if (!port) throw new Error("workerd not running");
@@ -438,7 +557,7 @@ async function createHarness(
         ),
         "Content-Type": "application/json",
       },
-      body: "[]",
+      body,
     });
     if (!res.ok) throw new Error(`dispatch failed ${res.status}: ${await res.text()}`);
     return ((await res.json()) as { result: unknown }).result;
@@ -1495,4 +1614,181 @@ export default { fetch() { return new Response("chunked host"); } };`;
       await dispatch({ source: "workers/other", className: "CounterDO", objectKey: "a" }, "incr")
     ).toMatchObject({ count: 1, source: "workers/other" });
   }, 30_000);
+
+  describe("hosting code in an entity (docs/dolt-redesign.md section 7.2)", () => {
+    const HOST = "workers/host";
+    const KERNEL = "workers/kernel";
+    const manifests = {
+      [HOST]: [{ className: "HostDO", hosts: [{ source: KERNEL, className: "KernelDO" }] }],
+      [KERNEL]: [
+        {
+          className: "KernelDO",
+          hosted: { storage: "dolt" as const, codegen: true, residency: true },
+        },
+      ],
+      "workers/plain": [{ className: "HostDO" }],
+    };
+    const builds = {
+      [HOST]: doBuild(HOST, "ev-1", HOST_DO),
+      "workers/plain": doBuild("workers/plain", "ev-1", HOST_DO),
+      [KERNEL]: doBuild(KERNEL, "ev-1", KERNEL_DO),
+    };
+    const hostRef = (key: string, source = HOST) => ({
+      source,
+      className: "HostDO",
+      objectKey: key,
+    });
+    const code = (
+      dispatch: Harness["dispatch"],
+      ref: ReturnType<typeof hostRef>,
+      request: Record<string, unknown>,
+      method = "code"
+    ) =>
+      dispatch(ref, method, JSON.stringify({ request })) as Promise<{
+        status: number;
+        body: string;
+      }>;
+    const hostKernel = {
+      op: "host",
+      name: "repl:default",
+      executable: { source: KERNEL, className: "KernelDO" },
+    };
+    const callKernel = (method: string, ...args: unknown[]) => ({
+      op: "call",
+      name: "repl:default",
+      executable: { source: KERNEL, className: "KernelDO" },
+      method,
+      args,
+    });
+
+    it("an entity hosts a Dolt class that compiles; it cannot compile or grant itself anything", async () => {
+      active = await createHarness(builds, { manifests });
+      const { manager, dispatch } = active;
+      await manager.ensureDOClass(HOST, "HostDO");
+      const a = hostRef("entity-a");
+      const b = hostRef("entity-b");
+      await bindConfiguredObject(manager, a, {});
+      await bindConfiguredObject(manager, b, {});
+
+      // The entity's own code has the binding and a proof, and no codegen.
+      expect(await dispatch(a, "props")).toMatchObject({
+        hasCodeHost: true,
+        codeHost: ["name", "proof"],
+      });
+      expect(await dispatch(a, "compile")).toMatchObject({
+        error: expect.stringMatching(/code generation|eval|Function/i),
+      });
+
+      expect((await code(dispatch, a, hostKernel)).status).toBe(200);
+      const run = await code(dispatch, a, callKernel("run", "40 + 2"));
+      expect(run.status).toBe(200);
+      expect(JSON.parse(run.body)).toEqual({ result: { result: 42, runs: 1 } });
+      // The hosted class acts as its entity: its identity and token are the entity's.
+      const who = JSON.parse((await code(dispatch, a, callKernel("who"))).body).result;
+      expect(who).toMatchObject({
+        host: "do:workers/host:HostDO:entity-a",
+        hasToken: true,
+        hasCodeHostBinding: false,
+      });
+      // A commit per finished run, in the facet's own Dolt store.
+      const info = JSON.parse((await code(dispatch, a, callKernel("info"))).body).result;
+      expect(info.log.slice(0, 2)).toEqual(["eval: run 1", "kernel schema"]);
+      expect(info.hasHold).toBe("object");
+
+      // Another entity's kernel is its own: a separate counter and identity.
+      await code(dispatch, b, hostKernel);
+      expect(JSON.parse((await code(dispatch, b, callKernel("run", "1"))).body).result).toEqual({
+        result: 1,
+        runs: 1,
+      });
+      expect(JSON.parse((await code(dispatch, b, callKernel("who"))).body).result.host).toBe(
+        "do:workers/host:HostDO:entity-b"
+      );
+      expect(JSON.parse((await code(dispatch, a, callKernel("run", "2"))).body).result).toEqual({
+        result: 2,
+        runs: 2,
+      });
+    }, 60_000);
+
+    it("refuses what the manifests do not permit and what the proof does not cover", async () => {
+      active = await createHarness(builds, { manifests });
+      const { manager, dispatch } = active;
+      await manager.ensureDOClass(HOST, "HostDO");
+      await manager.ensureDOClass("workers/plain", "HostDO");
+      const a = hostRef("entity-a");
+      const plain = hostRef("entity-p", "workers/plain");
+      await bindConfiguredObject(manager, a, {});
+      await bindConfiguredObject(manager, plain, {});
+      // The host class declares no `hosts` entry for the kernel.
+      const undeclared = await code(dispatch, plain, hostKernel);
+      expect(undeclared.status).toBe(500);
+      expect(undeclared.body).toMatch(/does not declare that it hosts/);
+      // A class that is not marked `hosted` is not hostable.
+      const notHostable = await code(dispatch, a, {
+        ...hostKernel,
+        executable: { source: HOST, className: "HostDO" },
+      });
+      expect(notHostable.body).toMatch(/not a hostable class|does not declare/);
+      // A proof for another name is refused before anything runs.
+      const forged = await code(dispatch, a, hostKernel, "forged");
+      expect(forged.status).toBe(403);
+      const otherName = (await dispatch(
+        a,
+        "code",
+        JSON.stringify({ name: "do:workers/host:HostDO:entity-x", request: hostKernel })
+      )) as { status: number };
+      expect(otherName.status).toBe(403);
+    }, 60_000);
+
+    it("a drain tells the hosted class before the node takes it, through its root's revocation handler", async () => {
+      active = await createHarness(builds, { manifests });
+      const { manager, dispatch } = active;
+      await manager.ensureDOClass(HOST, "HostDO");
+      const a = hostRef("entity-a");
+      await bindConfiguredObject(manager, a, {});
+      await code(dispatch, a, hostKernel);
+      await code(dispatch, a, callKernel("run", "1"));
+      await (manager as unknown as { restartWorkerd(): Promise<void> }).restartWorkerd();
+      // The kernel's Dolt store holds the commit its root asked it to make.
+      // (The first call after a planned restart waits about a minute in this harness, for any object.)
+      await code(dispatch, a, hostKernel);
+      const info = JSON.parse((await code(dispatch, a, callKernel("info"))).body).result;
+      expect(info.log.some((message: string) => /^revoked: (drain|swap)/.test(message))).toBe(true);
+      // The code is hosted again, and the committed history is intact.
+      expect(JSON.parse((await code(dispatch, a, callKernel("run", "5"))).body).result.result).toBe(
+        5
+      );
+    }, 180_000);
+
+    it("a CPU limit ends a spinning call and leaves the hosted instance, with its heap, answerable", async () => {
+      active = await createHarness(builds, {
+        manifests: {
+          ...manifests,
+          [KERNEL]: [
+            {
+              className: "KernelDO",
+              hosted: {
+                storage: "dolt" as const,
+                codegen: true,
+                residency: true,
+                limits: { cpuMs: 1000 },
+              },
+            },
+          ],
+        },
+      });
+      const { manager, dispatch } = active;
+      await manager.ensureDOClass(HOST, "HostDO");
+      const a = hostRef("entity-a");
+      await bindConfiguredObject(manager, a, {});
+      await code(dispatch, a, hostKernel);
+      await code(dispatch, a, callKernel("run", "1"));
+      const spun = await code(dispatch, a, callKernel("spin"));
+      expect(spun.body).toMatch(/CPU limit/);
+      expect(JSON.parse((await code(dispatch, a, callKernel("run", "3"))).body).result).toEqual({
+        result: 3,
+        runs: 2,
+      });
+    }, 60_000);
+  });
 });

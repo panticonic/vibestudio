@@ -478,8 +478,8 @@ describe("RuntimeManager", () => {
           durable_objects: Record<string, { secrets: string[]; codegen?: true; residency?: true }>;
         }
       ).durable_objects;
-      // Every product class holds its own credential, and only EvalDO may generate code
-      // and keep its heap resident.
+      // Every product class holds its own credential, and only EvalDO (until the kernel is
+      // hosted code) may generate code and keep its heap resident.
       for (const className of INTERNAL_DO_CLASSES) {
         expect(classes[className]!.secrets).toEqual([
           `RPC_AUTH_TOKEN__${className}`,
@@ -488,7 +488,12 @@ describe("RuntimeManager", () => {
         expect(classes[className]!.codegen).toBe(className === "EvalDO" ? true : undefined);
         expect(classes[className]!.residency).toBe(className === "EvalDO" ? true : undefined);
       }
-      expect(classes["UniversalDO"]).toEqual({ secrets: ["DO_LOADER_SECRET__UniversalDO"] });
+      // The root of every entity holds the grants it may give hosted code (§7.2).
+      expect(classes["UniversalDO"]).toEqual({
+        secrets: ["DO_LOADER_SECRET__UniversalDO"],
+        codegen: true,
+        residency: true,
+      });
       expect(Object.keys(secrets).sort()).toEqual(
         [
           ...INTERNAL_DO_CLASSES.flatMap((c) => [`RPC_AUTH_TOKEN__${c}`, `LIFECYCLE_SECRET__${c}`]),

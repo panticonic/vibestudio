@@ -49,6 +49,8 @@ import {
 } from "./internalDOs/internalDoLoader.js";
 import { encodeUniversalKey } from "./doDispatch.js";
 import { doExecutableHeaders, type DoExecutableAdmission } from "./doExecutableDispatch.js";
+import type { HostedCodeAdmission } from "./workerdPrograms/executableVersion.js";
+import type { HostedClassManifest } from "@vibestudio/shared/types";
 import { assertPresent } from "../lintHelpers";
 import { RuntimeImageStore, type RuntimeImageRecord } from "./runtimeImageStore.js";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
@@ -531,7 +533,11 @@ export interface WorkerdWorkspaceProvider {
   /** Resolve the exact retained execution named by a sealed durable entity. */
   getBuildByExecution(key: string, executionDigest: string): Promise<StoredBuildResult | null>;
   getManifestRoutes(source: string): ReadonlyArray<ManifestRouteDecl>;
-  getManifestDoClasses(source: string): ReadonlyArray<{ className: string }>;
+  getManifestDoClasses(source: string): ReadonlyArray<{
+    className: string;
+    hosts?: ReadonlyArray<{ source: string; className: string }>;
+    hosted?: HostedClassManifest;
+  }>;
   readonly singletonRegistry: SingletonRegistry;
 }
 
@@ -2138,6 +2144,70 @@ export class RuntimeManager {
       this.doAdmissions.set(image, admission);
     }
     return admission;
+  }
+
+  /**
+   * Admit a class an entity hosts in its own cell (docs/dolt-redesign.md §7.2).
+   * Two manifests decide it: the host class declares `hosts` (this code), the
+   * hosted class declares `hosted` (the grants it needs). The result is the
+   * exact executable, the grants, and the hosting entity's identity: a hosted
+   * class acts as the entity that hosts it, so no other principal exists for
+   * the run and the entity's own context and lineage apply.
+   */
+  async admitHostedCode(
+    host: { source: string; className: string; objectKey: string },
+    hosted: { source: string; className: string }
+  ): Promise<HostedCodeAdmission> {
+    const refuse = (code: string, message: string): never => {
+      throw Object.assign(new Error(message), { code });
+    };
+    if (isInternalDOSource(host.source) || isInternalDOSource(hosted.source))
+      refuse("EACCES", "Product classes do not host or get hosted through hostCode");
+    const entityId = canonicalEntityId({
+      kind: "do",
+      source: host.source,
+      className: host.className,
+      key: host.objectKey,
+    });
+    if (!this.doObjectBuilds.has(doObjectBuildKey(host.source, host.className, host.objectKey)))
+      refuse("ENOTFOUND", `${entityId} is not an admitted object of this runtime`);
+    const provider = this.requireWorkspaceProvider("hosted code admission");
+    const declared = provider
+      .getManifestDoClasses(host.source)
+      .find((entry) => entry.className === host.className);
+    if (
+      !declared?.hosts?.some(
+        (entry) => entry.source === hosted.source && entry.className === hosted.className
+      )
+    )
+      refuse(
+        "EACCES",
+        `${host.source}:${host.className} does not declare that it hosts ${hosted.source}:${hosted.className}`
+      );
+    const hostedDeclaration = provider
+      .getManifestDoClasses(hosted.source)
+      .find((entry) => entry.className === hosted.className)?.hosted;
+    if (!hostedDeclaration)
+      refuse("EINVAL", `${hosted.source}:${hosted.className} is not a hostable class`);
+    await this.ensureDOClass(hosted.source, hosted.className);
+    const admission = this.getDoAdmission(hosted.source, hosted.className);
+    if (!admission)
+      return refuse("ENOTFOUND", `${hosted.source}:${hosted.className} has no executable`);
+    const grants = hostedDeclaration as HostedClassManifest;
+    return {
+      executableVersion: admission.executableVersion,
+      grants: {
+        codegen: grants.codegen === true,
+        residency: grants.residency === true,
+        storage: grants.storage === "dolt" ? "dolt" : null,
+        doltLocal: [...(grants.doltLocal ?? [])],
+        cpuMs: grants.limits?.cpuMs ?? null,
+      },
+      props: {
+        ...admission.props,
+        host: { entityId, token: this.deps.tokenManager.ensureToken(entityId, "do") },
+      },
+    };
   }
 
   /** Resolve a userland DO method from the exact build bound to this object. */

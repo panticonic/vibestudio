@@ -4,12 +4,15 @@ import {
   DO_EXECUTABLE_VERSION_HEADER,
   DO_INCARNATION_VERSION_HEADER,
   type DoExecutableAdmission,
+  type HostedCodeAdmission,
+  type HostedCodeGrants,
 } from "./executableVersion.js";
 import {
   classSecretName,
   gatewayFetch,
   loadedNetworkPolicy,
   UNIVERSAL_DO_LOADER_SECRET,
+  type CelldFacetOptions,
   type CelldWorkerCode,
   type HostProgramEnv,
 } from "./celldRuntime.js";
@@ -72,18 +75,34 @@ function decodeKey(encoded: string): { source: string; className: string; userKe
   };
 }
 
-function executableUnitKey(source: string, className: string, version: string): string {
-  return `do-code:${encodeURIComponent(source)}:${encodeURIComponent(className)}:${encodeURIComponent(version)}`;
+function executableUnitKey(
+  source: string,
+  className: string,
+  version: string,
+  hosted?: HostedCodeGrants
+): string {
+  const base = `do-code:${encodeURIComponent(source)}:${encodeURIComponent(className)}:${encodeURIComponent(version)}`;
+  // A hosted class's grants are part of its unit: the same code loaded with
+  // another grant is another isolate, never a reuse of this one.
+  return hosted ? `${base}:hosted:${encodeURIComponent(JSON.stringify(hosted))}` : base;
 }
 
 function loadExecutable(
   env: UniversalDoEnv,
-  args: { source: string; className: string; version: string; userKey?: string }
+  ctx: DurableObjectState,
+  args: {
+    source: string;
+    className: string;
+    version: string;
+    userKey?: string;
+    /** Set when the class is hosted by another entity: its grants, and no code-host binding. */
+    hosted?: HostedCodeGrants;
+  }
 ): WorkerStub {
   // The loader owns one immutable executable unit per code and authority snapshot.
   // Objects still own separate facets, SQLite storage, and lifecycle; a live
   // update selects another unit without replacing a sibling's assigned code.
-  const unitKey = executableUnitKey(args.source, args.className, args.version);
+  const unitKey = executableUnitKey(args.source, args.className, args.version, args.hosted);
   return env.LOADER.get(unitKey, async (): Promise<CelldWorkerCode> => {
     const startedAt = performance.now();
     const identity = `${args.source}:${args.className}`;
@@ -117,15 +136,132 @@ function loadExecutable(
         decodeMs: performance.now() - fetchedAt,
       })
     );
+    const network = loadedNetworkPolicy(code.egressIdentity);
     return {
       compatibilityDate: code.compatibilityDate,
       compatibilityFlags: code.compatibilityFlags,
       mainModule: code.mainModule,
       modules: code.modules,
-      env: code.env,
-      ...loadedNetworkPolicy(code.egressIdentity),
+      // An entity's code reaches its own root through `CODE_HOST`; the binding
+      // names no entity (the proof in the facet's props does), so one unit
+      // serves every object of the class. Hosted code hosts nothing itself.
+      env: args.hosted
+        ? code.env
+        : {
+            ...code.env,
+            CODE_HOST: (
+              ctx as unknown as { exports: { CodeHost(options: object): Fetcher } }
+            ).exports.CodeHost({ props: {} }),
+          },
+      ...(args.hosted
+        ? {
+            ...network,
+            celld: {
+              ...(network.celld ?? {}),
+              ...(args.hosted.codegen ? { codegen: true } : {}),
+              ...(args.hosted.residency ? { residency: true } : {}),
+            },
+            ...(args.hosted.cpuMs !== null ? { limits: { cpuMs: args.hosted.cpuMs } } : {}),
+          }
+        : network),
     };
   });
+}
+
+/** Marks a call from `CodeHost`; the router strips `x-internal-*`, so no outside caller can set it. */
+const CODE_HOST_HEADER = "x-internal-vibestudio-codehost";
+const CODE_HOST_KEY = "__codehost";
+const CODE_HOST_NAME_PATTERN = /^[A-Za-z0-9:_.-]{1,128}$/;
+
+function base64Url(bytes: ArrayBuffer): string {
+  let binary = "";
+  for (const byte of new Uint8Array(bytes)) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+async function codeHostKey(env: HostProgramEnv, usage: "sign" | "verify"): Promise<CryptoKey> {
+  return crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(env.RUNTIME_LOADER_SECRET),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    [usage]
+  );
+}
+
+/** Proof that a request to `CodeHost` comes from the code of the named root. */
+async function codeHostProof(env: HostProgramEnv, name: string): Promise<string> {
+  const mac = await crypto.subtle.sign(
+    "HMAC",
+    await codeHostKey(env, "sign"),
+    new TextEncoder().encode(`code-host:${name}`)
+  );
+  return base64Url(mac);
+}
+
+async function verifyCodeHostProof(
+  env: HostProgramEnv,
+  name: string,
+  proof: string
+): Promise<boolean> {
+  const expected = await codeHostProof(env, name);
+  if (expected.length !== proof.length) return false;
+  let difference = 0;
+  for (let index = 0; index < expected.length; index++)
+    difference |= expected.charCodeAt(index) ^ proof.charCodeAt(index);
+  return difference === 0;
+}
+
+/**
+ * The entity's way to host code in its own cell (docs/dolt-redesign.md §7.2).
+ * The service binding names no entity: the request carries the root's name and
+ * a proof only that root's code was given (in its facet's props), and the
+ * entrypoint hands the request to that root, which asks the host what the
+ * entity's manifest permits. A loaded worker's env can carry service bindings
+ * only, so this is the one capability an entity holds; it cannot load code or
+ * grant itself `codegen` or `residency`.
+ */
+export class CodeHost extends WorkerEntrypoint<UniversalDoEnv> {
+  async fetch(request: Request): Promise<Response> {
+    try {
+      const name = request.headers.get("X-Code-Host-Name") ?? "";
+      const proof = request.headers.get("X-Code-Host-Proof") ?? "";
+      if (!name || !proof || !(await verifyCodeHostProof(this.env, name, proof)))
+        return new Response("Forbidden", { status: 403 });
+      const namespace = this.env.UNIVERSAL_DO;
+      return await namespace.get(namespace.idFromName(name)).fetch(
+        new Request(`http://universal-do/${CODE_HOST_KEY}`, {
+          method: "POST",
+          headers: { [CODE_HOST_HEADER]: "1" },
+          body: await request.text(),
+        })
+      );
+    } catch (error) {
+      return Response.json({ error: serializeRpcFailure(error) }, { status: 500 });
+    }
+  }
+}
+
+interface CodeHostInput {
+  op: "host" | "call" | "release";
+  /** Names the hosted instance inside the calling entity. */
+  name: string;
+  executable: { source: string; className: string };
+  method?: string;
+  args?: unknown[];
+}
+
+interface HostedInstance {
+  executable: { source: string; className: string };
+  admission: HostedCodeAdmission;
+  class: DurableObjectClass;
+  facetName: string;
+  hold: ResidencyHandleLike | null;
+}
+
+interface ResidencyHandleLike {
+  release(): void;
+  onrevoked: ((event: { reason: string }) => void | Promise<void>) | null;
 }
 
 interface PreparationInput {
@@ -175,6 +311,181 @@ interface FacetSelection {
 export class UniversalDO extends DurableObject<UniversalDoEnv> {
   private loadedFacet: LoadedFacetClass | null = null;
   private facetSelection: FacetSelection | null = null;
+  /** Code this entity hosts in its own cell, by the entity's own name for it. */
+  private readonly hosted = new Map<string, HostedInstance>();
+  private hostedNames: Set<string> | null = null;
+
+  private hostedFacetName(name: string): string {
+    return `code:${name}`;
+  }
+
+  /** The names this cell has ever hosted, so retirement can reclaim every facet. */
+  private knownHostedNames(): Set<string> {
+    if (this.hostedNames) return this.hostedNames;
+    const sql = this.ctx.storage.sql;
+    sql.exec("CREATE TABLE IF NOT EXISTS codehost_names (name TEXT PRIMARY KEY)");
+    this.hostedNames = new Set(
+      sql
+        .exec("SELECT name FROM codehost_names")
+        .toArray()
+        .map((row) => String(row["name"]))
+    );
+    return this.hostedNames;
+  }
+
+  private rememberHostedName(name: string): void {
+    const names = this.knownHostedNames();
+    if (names.has(name)) return;
+    this.ctx.storage.sql.exec("INSERT OR IGNORE INTO codehost_names(name) VALUES (?)", name);
+    names.add(name);
+  }
+
+  private endHosted(name: string, reason: Error, options: { deleteStorage?: boolean } = {}): void {
+    const instance = this.hosted.get(name);
+    this.hosted.delete(name);
+    instance?.hold?.release();
+    if (options.deleteStorage) this.ctx.facets.delete(this.hostedFacetName(name));
+    else if (instance) this.ctx.facets.abort(this.hostedFacetName(name), reason);
+  }
+
+  private endAllHosted(reason: Error, options: { deleteStorage?: boolean } = {}): void {
+    for (const name of [...this.hosted.keys()]) this.endHosted(name, reason, options);
+    if (options.deleteStorage)
+      for (const name of this.knownHostedNames())
+        this.ctx.facets.delete(this.hostedFacetName(name));
+  }
+
+  /**
+   * Admit, load and start a class this entity hosts, take its residency hold,
+   * and relay a revocation to it. The facet's own `onrevoked` does not run (it
+   * is in another isolate), so the root registers the handler and calls the
+   * hosted class's `__hosted/__revoked` to persist its state.
+   */
+  private async ensureHosted(input: CodeHostInput): Promise<HostedInstance> {
+    const { name, executable } = input;
+    if (!CODE_HOST_NAME_PATTERN.test(name)) throw new Error(`code host: bad name ${name}`);
+    const rootName = this.ctx.id.name;
+    if (!rootName) throw new Error("code host: this cell has no name");
+    const response = await fetchLoader(
+      this.env,
+      `/_dohost/${encodeURIComponent(executable.source)}/${encodeURIComponent(executable.className)}` +
+        `?host=${encodeURIComponent(rootName)}`
+    );
+    if (!response.ok) {
+      const body = await response.text();
+      throw Object.assign(new Error(`code host: ${body} (${response.status})`), {
+        code: response.status === 403 ? "EACCES" : response.status === 404 ? "ENOTFOUND" : "EHOST",
+      });
+    }
+    const admission = (await response.json()) as HostedCodeAdmission;
+    const existing = this.hosted.get(name);
+    if (
+      existing &&
+      existing.executable.source === executable.source &&
+      existing.executable.className === executable.className &&
+      existing.admission.executableVersion === admission.executableVersion &&
+      JSON.stringify(existing.admission.grants) === JSON.stringify(admission.grants)
+    ) {
+      existing.admission = admission;
+      return existing;
+    }
+    if (existing) this.endHosted(name, new Error("Hosted code replaced by another version"));
+    const worker = loadExecutable(this.env, this.ctx, {
+      source: executable.source,
+      className: executable.className,
+      version: admission.executableVersion,
+      hosted: admission.grants,
+    });
+    const instance: HostedInstance = {
+      executable,
+      admission,
+      class: worker.getDurableObjectClass(executable.className, { props: admission.props }),
+      facetName: this.hostedFacetName(name),
+      hold: null,
+    };
+    this.hosted.set(name, instance);
+    this.rememberHostedName(name);
+    const residency = (
+      this.ctx as unknown as {
+        residency?: { enabled: boolean; hold(): Promise<ResidencyHandleLike> };
+      }
+    ).residency;
+    if (admission.grants.residency && residency?.enabled) {
+      try {
+        const hold = await residency.hold();
+        hold.onrevoked = async ({ reason }) => {
+          // Persist what must survive; the node takes the object away next.
+          await this.hostedFacet(name, instance)
+            .fetch(this.hostedRequest(name, "__revoked", { reason }))
+            .catch((error: unknown) =>
+              console.error("hosted code could not persist on revocation", name, error)
+            );
+        };
+        instance.hold = hold;
+      } catch (error) {
+        // The node's budget refused it: the code runs without a hold and its
+        // heap may be lost at eviction. The class reports that; it is not silent.
+        console.warn(
+          `code host: residency hold refused for ${name}`,
+          error instanceof Error ? error.message : error
+        );
+      }
+    }
+    return instance;
+  }
+
+  private hostedFacet(name: string, instance: HostedInstance): Fetcher {
+    const facetOptions: CelldFacetOptions | null =
+      instance.admission.grants.storage === "dolt"
+        ? {
+            storage: "dolt",
+            ...(instance.admission.grants.doltLocal.length > 0
+              ? { doltLocal: instance.admission.grants.doltLocal }
+              : {}),
+          }
+        : null;
+    return (
+      this.ctx.facets as unknown as {
+        get(
+          name: string,
+          init: () => { class: DurableObjectClass; celld?: CelldFacetOptions }
+        ): Fetcher;
+      }
+    ).get(instance.facetName, () => ({
+      class: instance.class,
+      ...(facetOptions ? { celld: facetOptions } : {}),
+    }));
+  }
+
+  private hostedRequest(name: string, method: string, body: unknown): Request {
+    return new Request(
+      `http://hosted/${encodeURIComponent(name)}/__hosted/${encodeURIComponent(method)}`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    );
+  }
+
+  private async codeHostOp(input: CodeHostInput): Promise<Response> {
+    if (input.op === "release") {
+      const instance = this.hosted.get(input.name);
+      instance?.hold?.release();
+      if (instance) instance.hold = null;
+      return Response.json({ released: Boolean(instance) });
+    }
+    const instance =
+      input.op === "host"
+        ? await this.ensureHosted(input)
+        : (this.hosted.get(input.name) ?? (await this.ensureHosted(input)));
+    if (input.op === "host") return Response.json({ hosted: true });
+    if (typeof input.method !== "string" || input.method.length === 0)
+      throw new Error("code host: a call names a method");
+    return this.hostedFacet(input.name, instance).fetch(
+      this.hostedRequest(input.name, input.method, { args: input.args ?? [] })
+    );
+  }
 
   private async cancelFacetSelection(reason: Error): Promise<void> {
     const selection = this.facetSelection;
@@ -247,11 +558,21 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
           this.ctx.facets.abort("do", new Error("Runtime image advanced"));
           this.loadedFacet = null;
         }
-        const worker = loadExecutable(this.env, args);
+        const worker = loadExecutable(this.env, this.ctx, args);
+        const rootName = this.ctx.id.name;
         this.loadedFacet = {
           executableVersion: args.version,
           incarnationVersion: args.incarnationVersion,
-          class: worker.getDurableObjectClass(args.className, { props: admission.props }),
+          class: worker.getDurableObjectClass(args.className, {
+            props: {
+              ...admission.props,
+              // What lets this entity's code ask its own root to host code, and
+              // no other root (`CodeHost` verifies it).
+              codeHost: rootName
+                ? { name: rootName, proof: await codeHostProof(this.env, rootName) }
+                : null,
+            },
+          }),
         };
         return this.loadedFacet;
       } catch (error) {
@@ -283,7 +604,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
   }
 
   private async prepareExecutable(input: PreparationInput): Promise<Response> {
-    const worker = loadExecutable(this.env, input);
+    const worker = loadExecutable(this.env, this.ctx, input);
     const receipt = await worker
       .getEntrypoint("VibestudioExecutable")
       .fetch(new Request(`http://executable/${encodeURIComponent(input.className)}`));
@@ -299,6 +620,12 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
         return new Response("Forbidden", { status: 403 });
       }
       return this.prepareExecutable((await request.json()) as PreparationInput);
+    }
+    if (parts[0] === CODE_HOST_KEY) {
+      if (request.headers.get(CODE_HOST_HEADER) !== "1") {
+        return new Response("Forbidden", { status: 403 });
+      }
+      return this.codeHostOp((await request.json()) as CodeHostInput);
     }
     const encodedKey = parts[0] ? decodeURIComponent(parts[0]) : "";
     if (!encodedKey) {
@@ -320,14 +647,12 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
             : "Runtime entity retired"
         )
       );
-      this.ctx.facets.abort(
-        "do",
-        new Error(
-          parts[1] === "__vibestudio_restart"
-            ? "Runtime entity restarted"
-            : "Runtime entity retired"
-        )
+      const ended = new Error(
+        parts[1] === "__vibestudio_restart" ? "Runtime entity restarted" : "Runtime entity retired"
       );
+      this.ctx.facets.abort("do", ended);
+      // Hosted code ends with its entity: holds released, instances aborted.
+      this.endAllHosted(ended);
       this.loadedFacet = null;
       return new Response(null, { status: 204 });
     }
@@ -340,6 +665,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       // and removes its database (and any nested facet's) in one operation.
       await this.cancelFacetSelection(new Error("Runtime entity storage destroyed"));
       this.ctx.facets.delete("do");
+      this.endAllHosted(new Error("Runtime entity storage destroyed"), { deleteStorage: true });
       this.loadedFacet = null;
       await this.ctx.storage.deleteAll();
       return new Response(null, { status: 204 });

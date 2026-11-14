@@ -125,6 +125,19 @@ export interface PackageManifest {
       className: string;
       /** Stable host-reviewed typed receiver contract used by build discovery. */
       rpcSchema?: string;
+      /**
+       * Code this class may host in its own cell (`hostCode`, docs/dolt-redesign.md
+       * §7.2). Hosting is declared by the host class; the hosted class declares
+       * what it needs (`hosted`). The host decides each grant from both.
+       */
+      hosts?: Array<{ source: string; className: string }>;
+      /**
+       * Marks a class that is only ever hosted by another entity's root, and
+       * the runtime grants it needs: `codegen` (compile from strings),
+       * `residency` (a heap that storage cannot rebuild), a Dolt facet store,
+       * and a bounded CPU time per invocation.
+       */
+      hosted?: HostedClassManifest;
     }>;
   };
   /**
@@ -135,6 +148,18 @@ export interface PackageManifest {
   agent?: { displayName?: string; description?: string };
   /** Named service contracts exported by this repository. Workspace wiring selects source/name. */
   services?: import("@vibestudio/workspace-contracts/types").WorkspaceServiceExport[];
+}
+
+/** What a hosted class needs from the runtime (see `durable.classes[].hosted`). */
+export interface HostedClassManifest {
+  /** The class's engine, fixed when its cell is created. */
+  storage?: "dolt";
+  /** SQL name patterns kept out of every commit, fork and reset. */
+  doltLocal?: string[];
+  codegen?: boolean;
+  residency?: boolean;
+  /** Bounded CPU time per invocation of the loaded unit (celld `limits.cpuMs`). */
+  limits?: { cpuMs: number };
 }
 
 export type WorkspaceTestRuntime = "browser" | "workerd" | "native";

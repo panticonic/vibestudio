@@ -9,12 +9,19 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import router from "./router.js";
 import workerHost from "./workerHost.js";
-import { classSecretName, DESTROY_METHOD, LIFECYCLE_SECRET, RPC_AUTH_TOKEN } from "./celldRuntime.js";
+import {
+  classSecretName,
+  DESTROY_METHOD,
+  LIFECYCLE_SECRET,
+  RPC_AUTH_TOKEN,
+} from "./celldRuntime.js";
 
-export { UniversalDO, ExecutablePreparation } from "./universalDo.js";
+export { UniversalDO, ExecutablePreparation, CodeHost } from "./universalDo.js";
 export default router;
 
-export class WorkerHost extends WorkerEntrypoint<Parameters<NonNullable<typeof workerHost.fetch>>[1]> {
+export class WorkerHost extends WorkerEntrypoint<
+  Parameters<NonNullable<typeof workerHost.fetch>>[1]
+> {
   override fetch(request: Request): Promise<Response> {
     return Promise.resolve(
       workerHost.fetch!(
@@ -63,7 +70,8 @@ export function internalDurableObjectClass<T extends DurableObjectConstructor>(
   Base: T,
   className: string
 ): T {
-  const lifecycleSecret = (env: InternalEnv): unknown => env[classSecretName(LIFECYCLE_SECRET, className)];
+  const lifecycleSecret = (env: InternalEnv): unknown =>
+    env[classSecretName(LIFECYCLE_SECRET, className)];
   const Bound = class extends (Base as DurableObjectConstructor) {
     private readonly retirement: { ctx: DurableObjectState; secret: unknown };
     constructor(ctx: DurableObjectState, env: InternalEnv) {

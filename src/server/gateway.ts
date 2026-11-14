@@ -138,6 +138,11 @@ export interface WorkerHostCodeProvider {
     className: string,
     objectKey?: string
   ): import("./doExecutableDispatch.js").DoExecutableAdmission | null;
+  /** Code an entity hosts in its own cell (`hostCode`): exact executable, grants, host identity. */
+  admitHostedCode?(
+    host: { source: string; className: string; objectKey: string },
+    hosted: { source: string; className: string }
+  ): Promise<import("./workerdPrograms/executableVersion.js").HostedCodeAdmission>;
   /** Userland DO class code+env for the UniversalDO facet host. */
   getDoCode(
     source: string,
@@ -349,6 +354,56 @@ export class Gateway {
         }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify(admission));
+        return;
+      }
+
+      // Code an entity hosts in its own cell: the exact executable and grants its
+      // manifests permit. Reached only by the UniversalDO root of the host.
+      if (url.startsWith("/_dohost/")) {
+        const host = this.deps.getWorkerHost?.();
+        if (!host?.admitHostedCode) {
+          res.writeHead(503, { "Content-Type": "text/plain" });
+          res.end("Worker host unavailable");
+          return;
+        }
+        const provided = req.headers["x-vibestudio-loader-secret"];
+        if (
+          typeof provided !== "string" ||
+          !constantTimeStringEqual(provided, host.getDoLoaderSecret())
+        ) {
+          res.writeHead(403, { "Content-Type": "text/plain" });
+          res.end("Forbidden");
+          return;
+        }
+        const requestUrl = new URL(url, "http://localhost");
+        const segments = requestUrl.pathname.slice("/_dohost/".length).split("/");
+        const hostedSource = decodeURIComponent(segments[0] ?? "");
+        const hostedClass = decodeURIComponent(segments[1] ?? "");
+        const hostKey = requestUrl.searchParams.get("host") ?? "";
+        const [hostSource, hostClass, hostObjectKey] = hostKey
+          .split("|")
+          .map((part) => decodeURIComponent(part));
+        if (!hostedSource || !hostedClass || !hostSource || !hostClass || !hostObjectKey) {
+          res.writeHead(400, { "Content-Type": "text/plain" });
+          res.end("Missing hosted code identity");
+          return;
+        }
+        void host
+          .admitHostedCode(
+            { source: hostSource, className: hostClass, objectKey: hostObjectKey },
+            { source: hostedSource, className: hostedClass }
+          )
+          .then((admission) => {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(admission));
+          })
+          .catch((error: unknown) => {
+            const code = (error as { code?: unknown })?.code;
+            res.writeHead(code === "EACCES" ? 403 : code === "ENOTFOUND" ? 404 : 409, {
+              "Content-Type": "application/json",
+            });
+            res.end(JSON.stringify({ error: serializeRpcFailure(error) }));
+          });
         return;
       }
 

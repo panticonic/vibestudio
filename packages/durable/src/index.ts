@@ -92,6 +92,16 @@ import {
   type DoltTransactionOptions,
 } from "./dolt.js";
 export type { DoltStorage, DoltTransactionCommit, DoltTransactionOptions } from "./dolt.js";
+import {
+  createCodeHostClient,
+  isHostedCall,
+  serveHostedCall,
+  type CodeHostProps,
+  type HostCodeSpec,
+  type HostedCode,
+} from "./codeHost.js";
+export { CodeHostError } from "./codeHost.js";
+export type { CodeHostProps, HostCodeSpec, HostedCode, HostedExecutable } from "./codeHost.js";
 import type { ResidencyContext } from "./residency.js";
 export type { ResidencyContext, ResidencyHandle, ResidencyRevocationReason } from "./residency.js";
 import { DurableWorkReadiness } from "./durable-work-readiness.js";
@@ -249,6 +259,28 @@ export abstract class DurableObjectBase {
   }
 
   protected abstract createTables(): void | Promise<void>;
+
+  private codeHostClient: ((spec: HostCodeSpec) => Promise<HostedCode>) | null = null;
+
+  /**
+   * Host a class of dynamic code in this object's own cell (docs/dolt-redesign.md
+   * §7.2): a facet with the Dolt store, `codegen` and `residency` the manifests
+   * permit, which acts as this object on outbound calls. The object does not
+   * choose the grants; this manifest must declare `hosts` for the class.
+   */
+  protected hostCode(spec: HostCodeSpec): Promise<HostedCode> {
+    this.codeHostClient ??= createCodeHostClient({
+      env: this.env,
+      props: this.ctx.props as CodeHostProps,
+    });
+    return this.codeHostClient(spec);
+  }
+
+  /**
+   * A hosted class is told before the node takes it away (a drain or a swap):
+   * persist what must survive. Only a hosted class receives this.
+   */
+  protected async onHostedRevoked(_reason: string): Promise<void> {}
 
   /** `ctx.storage.dolt`, or `null` on a SQLite cell. */
   protected get dolt(): DoltStorage | null {
@@ -543,6 +575,9 @@ export abstract class DurableObjectBase {
    * row that supplies this object's owner, context, execution digest, and sealed authority.
    */
   protected get rpcSelfId(): string {
+    // A hosted class acts as the entity that hosts it (§7.2).
+    const host = (this.ctx.props as CodeHostProps).host;
+    if (host) return host.entityId;
     const source = String(this.env["WORKER_SOURCE"] ?? "");
     const className = String(this.env["WORKER_CLASS_NAME"] ?? "");
     return `do:${source}:${className}:${this.objectKey}`;
@@ -575,7 +610,7 @@ export abstract class DurableObjectBase {
 
   private connectionlessClient(): InternalConnectionlessRpcClient {
     if (!this.connectionless) {
-      const token = this.env["RPC_AUTH_TOKEN"];
+      const token = (this.ctx.props as CodeHostProps).host?.token ?? this.env["RPC_AUTH_TOKEN"];
       const source = this.env["WORKER_SOURCE"];
       const className = this.env["WORKER_CLASS_NAME"];
       const gatewayUrl = this.env["GATEWAY_URL"];
@@ -868,6 +903,16 @@ export abstract class DurableObjectBase {
       return method === "__vibestudio_schema_descriptor"
         ? this.schemaDescriptorResponse()
         : new Response("Schema probes refuse application dispatch", { status: 403 });
+    }
+    if (isHostedCall(method)) {
+      // Only the hosting root can name this facet (§7.2): no caller check applies.
+      return serveHostedCall({
+        instance: this,
+        props: this.ctx.props as CodeHostProps,
+        method,
+        body: await request.text(),
+        onRevoked: (reason) => this.onHostedRevoked(reason),
+      });
     }
     const acceptedAtRaw = request.headers.get(DIRECT_AUTHORITY_ACCEPTED_AT_HEADER);
     const acceptedAtHeader = acceptedAtRaw === null ? Number.NaN : Number(acceptedAtRaw);

@@ -31,7 +31,15 @@ export function gatewayFetch(env: HostProgramEnv, path: string, init?: RequestIn
 /** WorkerCode with celld's per-load capability block. */
 export type CelldWorkerCode = WorkerLoaderWorkerCode & {
   celld?: { egressIdentity?: string; codegen?: boolean; residency?: boolean };
+  /** Per-invocation CPU limit of the loaded unit (`cpuMs`), as `WorkerCode.limits`. */
+  limits?: { cpuMs?: number };
 };
+
+/** A facet's celld options at creation: its engine is fixed then. */
+export interface CelldFacetOptions {
+  storage?: "dolt";
+  doltLocal?: readonly string[];
+}
 
 /**
  * Network policy for loaded code: an attributed identity routes it through the
