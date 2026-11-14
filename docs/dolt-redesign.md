@@ -5,6 +5,7 @@ Status: proposal, revised 2026-11-14 to the fork as it now ships (celld
 branch is `feat/dolt-p0`, cut from `feat/celld-runtime`.
 
 Inputs:
+
 - the celld fork design (`celld/docs/fork/design.md`, §3b as built, decisions
   §8);
 - the fork's service docs: `dolt-cells.md`, `dolt-remotes.md`,
@@ -14,14 +15,15 @@ Inputs:
   `audit/celld-compat`);
 - this repository and the Base template at `92001a1`.
 
-Facts come from source reads unless they are marked *estimate*, *spike* or
-*to verify*. A claim read only from the fork's documentation and not yet run
-against the binary is marked *to verify*.
+Facts come from source reads unless they are marked _estimate_, _spike_ or
+_to verify_. A claim read only from the fork's documentation and not yet run
+against the binary is marked _to verify_.
 
 ## Status / handoff (2026-11-14)
 
 **Settled in this document** (the user's decisions are listed below; the rest
 is proposal):
+
 - the laws L1 to L10 (§2);
 - which classes become Dolt (§2.2);
 - the fork features F1 to F7, **all delivered** (§3);
@@ -39,6 +41,7 @@ is proposal):
 - the phases and gates (§10).
 
 **User decisions (2026-11-13, restated 2026-11-14):**
+
 - **GAD is decentralized and deeply integrated with Dolt.** It may stay one
   Dolt database if its size allows. What is decentralized is the work.
   - Participants (agents, the user, contexts, and later devices and other
@@ -60,6 +63,7 @@ is proposal):
 
 **What this revision changed.** The fork now ships everything the first draft
 asked for:
+
 - F1 merge with a resolver, F2 `transactionSync(fn, { commit })`, F3 forks that
   carry facets, F4 `doltLocal`, F5 checkout flat in local-state size, F6 read
   access to history tables, and F7 Dolt remotes between cells (grants, fetch,
@@ -67,6 +71,7 @@ asked for:
 - Dolt facets (`celld: { storage: "dolt" }`).
 
 Consequences:
+
 - **P0's roll-forward is unnecessary.** With F2 there is no window between a
   write and its commit, so `committedTransaction` is designed directly on F2
   (§4.2). There is no `doltUncommitted: "commit"` recovery path and no
@@ -84,7 +89,8 @@ Consequences:
   for it (P6).
 
 **Open:**
-- Deletion line counts marked *estimate* still need span-level checks.
+
+- Deletion line counts marked _estimate_ still need span-level checks.
 - The facet-relay path for remotes and `ondoltpush` (§5.6 and §3.2) are in
   the pinned fork (`9440c29`, tested there); a Vibestudio-side test is P5's.
   A facet loaded through a Worker Loader must pass a custom `transport`.
@@ -92,6 +98,7 @@ Consequences:
   whole file.
 
 **Done (`feat/dolt-p0`, see `HANDOFF-dolt-redesign.md`):**
+
 - P0 Foundations: the typed surface, `committedTransaction` on F2, schema
   install commits, the schema-guard filter and the `FakeDoltStorage` double,
   with a real-fork probe.
@@ -135,7 +142,6 @@ no long-lived dual path (§9).
 
 ---
 
-
 ## 0. The decisions on one page
 
 1. **One history per store.** Inside a Dolt cell, the Dolt commit graph is
@@ -149,12 +155,13 @@ no long-lived dual path (§9).
    commit message is a rendering of its rows, never the only copy of a fact.
 3. **Versioned tables and local tables.** Each Dolt class splits its tables
    into two kinds:
-   - *versioned*: history and knowledge, which fork, merge and reset carry;
-   - *local*: identity-bound operational state (outboxes, mailboxes,
+   - _versioned_: history and knowledge, which fork, merge and reset carry;
+   - _local_: identity-bound operational state (outboxes, mailboxes,
      admission receipts, caches), which a fork does not copy and a reset does
      not rewind.
 
    The fork supplies this split as `doltLocal` patterns (F4, §3).
+
 4. **Each owner chooses its commit points:**
    - GAD commits once per semantic mutation;
    - a channel commits once per ledger append;
@@ -165,6 +172,7 @@ no long-lived dual path (§9).
    The durable base commits inside the transaction that wrote the facts (F2),
    so a state and its commit are one durable step. It never uses a timer and
    has no recovery path to run.
+
 5. **Branches give one owner alternative states, forks give new identities.**
    - A GAD context is a branch of its participant's GAD work cell.
    - A forked conversation is a fork of the channel cell and of each agent
@@ -216,7 +224,6 @@ not do. Section 10 orders the work.
 
 ---
 
-
 ## 1. What the runtime gives, and its constraints
 
 From the fork docs (`dolt-cells.md`, `dolt-remotes.md`, `object-fork.md`,
@@ -252,16 +259,16 @@ From the fork docs (`dolt-cells.md`, `dolt-remotes.md`, `object-fork.md`,
 
 **Constraints that remain and shape this design:**
 
-| ID | Constraint | State on `9440c29` |
-|---|---|---|
-| **C1** | Dolt operations throw inside `transaction()` and `transactionSync()`. | Still true for every operation *except* the commit of F2: `{ commit }` is an option of the outermost transaction. It throws on a nested transaction (a savepoint) and on a SQLite cell. |
-| **C2** | A plain `merge(name)` that conflicts rolls back. | Resolved by F1: pass `resolve`. A merge Dolt finishes by itself still calls it once, with empty lists, so the application can add its own rows. A fast-forward or an up-to-date merge makes no commit and does not call it (`fastForward: false` forces a merge commit). Schema conflicts cannot be resolved by a row resolver. At most 100 000 conflicting rows and violations. |
-| **C3** | Writes go to the checked-out branch, and checkout moves the runtime tables. | Cost is flat in local-state size (F5). It is still a device write: **7 to 15 ms with `fsync`**, about 0.7 ms with the flush off. A transaction made with `{ commit }` leaves nothing for checkout to record, which is the faster path. |
-| **C4** | `_cf_*` tables are unversioned and classes cannot declare their own. | Resolved by F4: `doltLocal` patterns. Limits in §3. |
-| **C5** | A chunk file was capped at 1 GiB. | Lifted. A capture after `gc()` and a restore read the whole file into memory, and DoltLite's GC buffer limits live data to about 2 GiB. `gc()` rewrites the whole file. |
-| **C6** | A fork copies the whole file and shares no storage. | Still true (copy-on-write is planned). A fork drops identity: the alarm, the id name, **and the remotes, grants and remote-tracking branches** (§3.2). |
-| **C7** | Facets nest four deep, cannot set an alarm, keep the root resident when they hold sockets, and never commit atomically with their root. | Unchanged. A facet runs in its root's isolate, so facets of one root share one thread. Parallelism means separate objects (§5.1). |
-| **C8** | Dolt facets did not exist. | Resolved: `ctx.facets.get(name, () => ({ class, celld: { storage: "dolt", doltLocal } }))`. The engine is fixed at creation, and a start that omits `celld.storage` on a Dolt facet is refused, so every start passes it. |
+| ID     | Constraint                                                                                                                              | State on `9440c29`                                                                                                                                                                                                                                                                                                                                                               |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **C1** | Dolt operations throw inside `transaction()` and `transactionSync()`.                                                                   | Still true for every operation _except_ the commit of F2: `{ commit }` is an option of the outermost transaction. It throws on a nested transaction (a savepoint) and on a SQLite cell.                                                                                                                                                                                          |
+| **C2** | A plain `merge(name)` that conflicts rolls back.                                                                                        | Resolved by F1: pass `resolve`. A merge Dolt finishes by itself still calls it once, with empty lists, so the application can add its own rows. A fast-forward or an up-to-date merge makes no commit and does not call it (`fastForward: false` forces a merge commit). Schema conflicts cannot be resolved by a row resolver. At most 100 000 conflicting rows and violations. |
+| **C3** | Writes go to the checked-out branch, and checkout moves the runtime tables.                                                             | Cost is flat in local-state size (F5). It is still a device write: **7 to 15 ms with `fsync`**, about 0.7 ms with the flush off. A transaction made with `{ commit }` leaves nothing for checkout to record, which is the faster path.                                                                                                                                           |
+| **C4** | `_cf_*` tables are unversioned and classes cannot declare their own.                                                                    | Resolved by F4: `doltLocal` patterns. Limits in §3.                                                                                                                                                                                                                                                                                                                              |
+| **C5** | A chunk file was capped at 1 GiB.                                                                                                       | Lifted. A capture after `gc()` and a restore read the whole file into memory, and DoltLite's GC buffer limits live data to about 2 GiB. `gc()` rewrites the whole file.                                                                                                                                                                                                          |
+| **C6** | A fork copies the whole file and shares no storage.                                                                                     | Still true (copy-on-write is planned). A fork drops identity: the alarm, the id name, **and the remotes, grants and remote-tracking branches** (§3.2).                                                                                                                                                                                                                           |
+| **C7** | Facets nest four deep, cannot set an alarm, keep the root resident when they hold sockets, and never commit atomically with their root. | Unchanged. A facet runs in its root's isolate, so facets of one root share one thread. Parallelism means separate objects (§5.1).                                                                                                                                                                                                                                                |
+| **C8** | Dolt facets did not exist.                                                                                                              | Resolved: `ctx.facets.get(name, () => ({ class, celld: { storage: "dolt", doltLocal } }))`. The engine is fixed at creation, and a start that omits `celld.storage` on a Dolt facet is refused, so every start passes it.                                                                                                                                                        |
 
 - **Capabilities.**
   - `codegen` and `residency` are per-class declarations. A loader grants
@@ -282,7 +289,6 @@ to `ctx.storage.dolt`: any design step that needs one (panel undo in P3,
 purge in P5) must ask the fork for it or express it as a diff plus a commit.
 
 ---
-
 
 ## 2. First principles
 
@@ -351,20 +357,19 @@ purge in P5) must ask the fork for it or express it as a diff plus a commit.
 
 ### 2.2 Which classes become Dolt
 
-| Class | Engine | Why |
-|---|---|---|
-| GAD (`GadWorkspaceDO`, userland facet): the canonical database and each participant's work cell | Dolt | Its whole job is versioned state with branches and merges, and its work is decentralized over forks (§5) |
-| Channel (`PubSubChannel`, facet) | Dolt | A versioned ledger with native fork at a sequence |
-| Agent (`AiChatWorker` family, facet) | Dolt | Fork at a turn, rewind, inspection as of a turn |
-| Eval kernel (new kernel facet, replacing `EvalDO`) | Dolt | Per-run commits, reset as `reset`, forks with its owner |
-| `WorkspaceDO` (internal root) | Dolt | The panel and entity tree gains undo natively (`slot_history`, `panel_close_cleanup` go). Its scheduler and lifecycle tables disappear with the cutover (§4.5) |
-| `MissionsDO` (facet) | Dolt | Ordinary product state. Versioning comes free, and keeping one engine for all userland state is simpler than two |
-| Other userland facets (panels, apps) | Dolt by default | One facet engine for userland. A manifest can opt out to `sqlite` for secret-bearing state |
-| `BrowserVaultDO`, `WebhookStoreDO` | SQLite | They hold secrets (L7) |
-| celld-internal broker cells (D1, KV, queues) | unchanged | Runtime-owned |
+| Class                                                                                           | Engine          | Why                                                                                                                                                            |
+| ----------------------------------------------------------------------------------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GAD (`GadWorkspaceDO`, userland facet): the canonical database and each participant's work cell | Dolt            | Its whole job is versioned state with branches and merges, and its work is decentralized over forks (§5)                                                       |
+| Channel (`PubSubChannel`, facet)                                                                | Dolt            | A versioned ledger with native fork at a sequence                                                                                                              |
+| Agent (`AiChatWorker` family, facet)                                                            | Dolt            | Fork at a turn, rewind, inspection as of a turn                                                                                                                |
+| Eval kernel (new kernel facet, replacing `EvalDO`)                                              | Dolt            | Per-run commits, reset as `reset`, forks with its owner                                                                                                        |
+| `WorkspaceDO` (internal root)                                                                   | Dolt            | The panel and entity tree gains undo natively (`slot_history`, `panel_close_cleanup` go). Its scheduler and lifecycle tables disappear with the cutover (§4.5) |
+| `MissionsDO` (facet)                                                                            | Dolt            | Ordinary product state. Versioning comes free, and keeping one engine for all userland state is simpler than two                                               |
+| Other userland facets (panels, apps)                                                            | Dolt by default | One facet engine for userland. A manifest can opt out to `sqlite` for secret-bearing state                                                                     |
+| `BrowserVaultDO`, `WebhookStoreDO`                                                              | SQLite          | They hold secrets (L7)                                                                                                                                         |
+| celld-internal broker cells (D1, KV, queues)                                                    | unchanged       | Runtime-owned                                                                                                                                                  |
 
 ---
-
 
 ## 3. Fork features F1 to F7: delivered, with what they do not do
 
@@ -376,15 +381,15 @@ Vibestudio pins is `9440c29`, which also fixes the hard-reset durability gap
 
 ### 3.1 What was delivered
 
-| ID | Feature as shipped | How Vibestudio uses it |
-|---|---|---|
-| **F1** | `dolt.merge(name, { message, author?, date?, resolve, fastForward? })`. `resolve(merge)` runs once, synchronously, inside the merge's transaction. `merge.conflicts` holds each conflicting row (`table`, `key`, `base`, `ours`, `theirs`, `ourChange`, `theirChange`) and `merge.violations` each constraint violation. Each must be answered with `resolve()`, `keepOurs()` or `takeTheirs()`. celld then makes one 2-parent commit. A throw, a promise, or an unanswered row rolls everything back. Result: `{ hash, conflicts: [], fastForward, upToDate, resolved }`. | GAD's semantic resolution (§5.5) and every `pull` that needs it. The resolver writes rows with `ctx.storage.sql`, reads the other side with `dolt_at_<t>(ref)`, and adds its own rows (the `events` row, `decisions`). |
-| **F2** | `transactionSync(fn, { commit })` and `transaction(fn, { commit })`. One root record carries the writes and the commit. A function `commit` receives the callback's result and may return `null` to leave the writes uncommitted. | `committedTransaction` (§4.2), schema install commits (§4.3), every commit point of §0. **It removes the crash window (C1), so the first draft's roll-forward is deleted from the design.** |
-| **F3** | `env.NS.fork(sourceId, { at?, facets: { [name]: { at?, facets? } } })` copies the object with every facet, each Dolt component at its own commit. `ctx.facets.fork` copies one facet. Dolt facets exist. | Forked conversations (§6.4), eval kernel forks (§7.3), and **GAD work cells** (§5.7). Idempotent by target id (`to`, `name`), with `replaceUnfinished` and `deleteUnfinished` for an interrupted fork. |
-| **F4** | `doltLocal` patterns: for a class in `celld.durable_objects.<C>.doltLocal`, for a facet in its startup options `celld: { storage, doltLocal }`. Local tables are never staged, shown or hashed, survive `reset` and `merge`, move with `checkout` without copying rows, and start empty in a fork. | L3 (§2.1). Outboxes, receipts, mailboxes, caches. |
-| **F5** | Checkout does not copy rows (`dolt_checkout --carry-ignored`), so its cost does not depend on local-state size: 0.7 ms (flush off), **7.5 ms with nothing written and 13.8 ms after a local write** (`synchronous=NORMAL`, this NVMe), at 0, 1 000 and 10 000 local rows. | GAD's write to context B after one to context A (§5.3). |
-| **F6** | `dolt_at_<t>`, `dolt_history_<t>`, `dolt_diff_<t>`, `dolt_blame_<t>`, `dolt_diff_summary`, `dolt_log`, `dolt_commit_ancestors`, `dolt_branches`, `dolt_status`, `dolt_merge_base`, `dolt_hashof*`, and in a resolver `dolt_conflicts_<t>` and `dolt_constraint_violations_<t>` are readable from application SQL. `dolt.query` reads them under the local-read profile. | Cross-branch reads without a checkout (compare, blame, eval scope history). |
-| **F7** | Remotes between cells. The source issues a **grant** (`remote.grant({ label, fetch, branches, push, expiresAt?, peer? })`, a bearer token shown once, only its SHA-256 kept). The holder does `remote.add(name, { id, token })`, then `await fetch`, `pull` (fetch plus merge, with `resolve`) and `push`. A push is "ask the target to fetch": the target installs the pack as `pushed-<grant id>/<branch>` and moves the branch itself, in its own turn, **only as a fast-forward** (`ERR_DOLT_NON_FAST_FORWARD` otherwise, `ERR_DOLT_TARGET_DIRTY` if the checked-out branch has uncommitted changes). The wire is three requests (`refs`, `fetch`, `push`) over any `async (bytes) => bytes` carrier. The built-in carrier is an internal request to the source's object, so a source on another node of the fleet is reached over the inter-node channel. | Decentralized GAD (§5): participants fetch, merge and push. |
+| ID     | Feature as shipped                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | How Vibestudio uses it                                                                                                                                                                                                 |
+| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **F1** | `dolt.merge(name, { message, author?, date?, resolve, fastForward? })`. `resolve(merge)` runs once, synchronously, inside the merge's transaction. `merge.conflicts` holds each conflicting row (`table`, `key`, `base`, `ours`, `theirs`, `ourChange`, `theirChange`) and `merge.violations` each constraint violation. Each must be answered with `resolve()`, `keepOurs()` or `takeTheirs()`. celld then makes one 2-parent commit. A throw, a promise, or an unanswered row rolls everything back. Result: `{ hash, conflicts: [], fastForward, upToDate, resolved }`.                                                                                                                                                                                                                                                                                     | GAD's semantic resolution (§5.5) and every `pull` that needs it. The resolver writes rows with `ctx.storage.sql`, reads the other side with `dolt_at_<t>(ref)`, and adds its own rows (the `events` row, `decisions`). |
+| **F2** | `transactionSync(fn, { commit })` and `transaction(fn, { commit })`. One root record carries the writes and the commit. A function `commit` receives the callback's result and may return `null` to leave the writes uncommitted.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | `committedTransaction` (§4.2), schema install commits (§4.3), every commit point of §0. **It removes the crash window (C1), so the first draft's roll-forward is deleted from the design.**                            |
+| **F3** | `env.NS.fork(sourceId, { at?, facets: { [name]: { at?, facets? } } })` copies the object with every facet, each Dolt component at its own commit. `ctx.facets.fork` copies one facet. Dolt facets exist.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Forked conversations (§6.4), eval kernel forks (§7.3), and **GAD work cells** (§5.7). Idempotent by target id (`to`, `name`), with `replaceUnfinished` and `deleteUnfinished` for an interrupted fork.                 |
+| **F4** | `doltLocal` patterns: for a class in `celld.durable_objects.<C>.doltLocal`, for a facet in its startup options `celld: { storage, doltLocal }`. Local tables are never staged, shown or hashed, survive `reset` and `merge`, move with `checkout` without copying rows, and start empty in a fork.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | L3 (§2.1). Outboxes, receipts, mailboxes, caches.                                                                                                                                                                      |
+| **F5** | Checkout does not copy rows (`dolt_checkout --carry-ignored`), so its cost does not depend on local-state size: 0.7 ms (flush off), **7.5 ms with nothing written and 13.8 ms after a local write** (`synchronous=NORMAL`, this NVMe), at 0, 1 000 and 10 000 local rows.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | GAD's write to context B after one to context A (§5.3).                                                                                                                                                                |
+| **F6** | `dolt_at_<t>`, `dolt_history_<t>`, `dolt_diff_<t>`, `dolt_blame_<t>`, `dolt_diff_summary`, `dolt_log`, `dolt_commit_ancestors`, `dolt_branches`, `dolt_status`, `dolt_merge_base`, `dolt_hashof*`, and in a resolver `dolt_conflicts_<t>` and `dolt_constraint_violations_<t>` are readable from application SQL. `dolt.query` reads them under the local-read profile.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Cross-branch reads without a checkout (compare, blame, eval scope history).                                                                                                                                            |
+| **F7** | Remotes between cells. The source issues a **grant** (`remote.grant({ label, fetch, branches, push, expiresAt?, peer? })`, a bearer token shown once, only its SHA-256 kept). The holder does `remote.add(name, { id, token })`, then `await fetch`, `pull` (fetch plus merge, with `resolve`) and `push`. A push is "ask the target to fetch": the target installs the pack as `pushed-<grant id>/<branch>` and moves the branch itself, in its own turn, **only as a fast-forward** (`ERR_DOLT_NON_FAST_FORWARD` otherwise, `ERR_DOLT_TARGET_DIRTY` if the checked-out branch has uncommitted changes). The wire is three requests (`refs`, `fetch`, `push`) over any `async (bytes) => bytes` carrier. The built-in carrier is an internal request to the source's object, so a source on another node of the fleet is reached over the inter-node channel. | Decentralized GAD (§5): participants fetch, merge and push.                                                                                                                                                            |
 
 ### 3.2 What they do not do (gaps found by reading, with where it bites)
 
@@ -394,7 +399,7 @@ Vibestudio pins is `9440c29`, which also fixes the hard-reset durability gap
   nothing). The class needs the method; a holder gets no event. This replaces
   the earlier "no hook" gap: the canonical GAD database reacts to `main`
   moving without a follow-up RPC from the pusher. Pinned by the fork's
-  `examples/dolt-remotes`; *a Vibestudio-side test is P5's*.
+  `examples/dolt-remotes`; _a Vibestudio-side test is P5's_.
 - **A Dolt facet is a holder, and a source or push target only through its
   parent.** A facet has no id to route to. The parent relays request bytes to
   the facet's `remote.serve` through a facet call (`9440c29` tests the relay,
@@ -428,7 +433,7 @@ Vibestudio pins is `9440c29`, which also fixes the hard-reset durability gap
   rows were back at the pre-reset head; every other versioning call survived).
   The canary `src/server/doltDurableCelld.test.ts` "an acknowledged hard reset
   survives a kill" is now a plain test and passes. Backup restore (`reset
-  --hard` to `backup/<op>`), GAD `discard` and schema rollback may rely on it;
+--hard` to `backup/<op>`), GAD `discard` and schema rollback may rely on it;
   the interim rule (follow a reset with a committed write, or use a fork) is
   withdrawn.
 - **`sqlite_master.sql` is re-rendered once the creating transaction ends**
@@ -460,7 +465,6 @@ the facet relay and `ondoltpush` (the fork tests both).
 
 ---
 
-
 ## 4. Durable base
 
 ### 4.1 Typed surface (`@vibestudio/durable/dolt`)
@@ -473,6 +477,7 @@ documented API exactly: commits, branches, checkout, reset, both forms of
 patterns, the `{ commit }` transaction option, the error codes of §3.1). Two
 classes use it: the host's `DurableObjectBase` and the template's
 `durable-base.ts`, which share `@vibestudio/durable/schema`.
+
 - `doltStorageOf(storage)` returns the store or `null`.
 - `DurableObjectContext.storage.dolt?` is optional, and
   `transactionSync` and `transaction` accept the F2 `{ commit }` option.
@@ -505,7 +510,7 @@ protected committedTransaction<T>(
 ```
 
 - `committedTransaction` is `ctx.storage.transactionSync(fn, { commit:
-  describe })`. The message is rendered from the facts `fn` wrote (L2), and
+describe })`. The message is rendered from the facts `fn` wrote (L2), and
   `null` leaves the writes uncommitted. On a SQLite cell (no `dolt`) it is a
   plain `transactionSync` and the commit point no-ops, so a class's code does
   not branch on the engine (§9.1).
@@ -541,13 +546,13 @@ protected committedTransaction<T>(
   step: a write is one root record and one `fsync` with or without it. It adds
   about 1.3 ms of CPU and 340 bytes.
 
-  | one operation | p50 ms | root records | `fsync`s |
-  | --- | ---: | ---: | ---: |
-  | autocommit write, no commit | 6.5 | 1 | 1 |
-  | `BEGIN; write; txCommit; COMMIT` (`committedTransaction`) | 7.8 | 1 | 1 |
-  | the same plus a local-table write | 7.8 | 1 | 1 |
-  | write, then a separate commit | 13.5 | 2 | 2 |
-  | a write to a local table only | 6.3 | 1 | 1 |
+  | one operation                                             | p50 ms | root records | `fsync`s |
+  | --------------------------------------------------------- | -----: | -----------: | -------: |
+  | autocommit write, no commit                               |    6.5 |            1 |        1 |
+  | `BEGIN; write; txCommit; COMMIT` (`committedTransaction`) |    7.8 |            1 |        1 |
+  | the same plus a local-table write                         |    7.8 |            1 |        1 |
+  | write, then a separate commit                             |   13.5 |            2 |        2 |
+  | a write to a local table only                             |    6.3 |            1 |        1 |
 
   What is expensive is that **every transaction on a Dolt cell is a root
   record and so a device flush** (a SQLite cell at `NORMAL` has none), and in the
@@ -561,13 +566,13 @@ protected committedTransaction<T>(
   the dispatcher (`VIBESTUDIO_DO_CALL_TRACE`), the same eval on `d1bfdec3f`
   (SQLite `WorkspaceDO`) and on P3, mean ms over four runs:
 
-  | call | before P3 | P3 |
-  | --- | ---: | ---: |
-  | `panelTreeDetail` (read, 58 per navigation) | 35 | 64 |
-  | `entityResolve`, `contextEdgeListByChild` (reads) | 35 | 72, 58 |
-  | `alarmClear`, `alarmNextWakeAt` (about 35 each, background) | 41 | 67 |
-  | `slotCreate`, `slotCommitPreparedNavigation` (commits) | 35 | 94, 127 |
-  | `entityActivate`, `entityRetire` (commits) | 30, 29 | 116, 159 |
+  | call                                                        | before P3 |       P3 |
+  | ----------------------------------------------------------- | --------: | -------: |
+  | `panelTreeDetail` (read, 58 per navigation)                 |        35 |       64 |
+  | `entityResolve`, `contextEdgeListByChild` (reads)           |        35 |   72, 58 |
+  | `alarmClear`, `alarmNextWakeAt` (about 35 each, background) |        41 |       67 |
+  | `slotCreate`, `slotCommitPreparedNavigation` (commits)      |        35 |  94, 127 |
+  | `entityActivate`, `entityRetire` (commits)                  |    30, 29 | 116, 159 |
 
   Two consequences for this section's rule. (1) Making bookkeeping mutations
   `doltLocal`, or folding them into the next meaningful commit, **does not buy
@@ -583,7 +588,7 @@ protected committedTransaction<T>(
 
   **The nonce, fixed (P2b step 0; `DirectCallNonceGate`,
   `packages/shared/src/directRpcEnforcement.ts`).** On a Dolt object:
-  - *Every* call is admitted from a bounded in-memory set plus a **floor**: an
+  - _Every_ call is admitted from a bounded in-memory set plus a **floor**: an
     attestation issued at or before the object's activation (or before the
     `issuedAt` of an entry the full set evicted) is refused as
     `ERR_ATTESTATION_STALE`. So nothing an earlier activation could have
@@ -626,7 +631,7 @@ adds three things:
 
 1. **Before an upgrade path runs**, a dirty working set (state a `keep` class
    had not yet committed) is committed as `schema: checkpoint before
-   C vN→vM`. This is a plain `dolt.commit`, taken *before* the transaction,
+C vN→vM`. This is a plain `dolt.commit`, taken _before_ the transaction,
    because Dolt operations throw inside one (C1). The upgrade commit then
    contains exactly the migration, and the checkpoint is a known restore
    point. A crash between the checkpoint and the upgrade leaves the
@@ -647,7 +652,7 @@ adds three things:
    names, which a Dolt store may list in `sqlite_master`.
 
 `_vibestudio_schema` (version and shape) stays as the single current-state
-fact. The commits record *when* each migration happened, not a second copy
+fact. The commits record _when_ each migration happened, not a second copy
 of the version. With these commits, rolling back a deployed migration is an
 operator action, `reset --hard` to the checkpoint commit. It discards the
 writes made after it, and saying so is the honest cost. The guard can name
@@ -675,18 +680,18 @@ table first. P0 implements both (`@vibestudio/durable/dolt`).
 
 ### 4.4 Backup, restore, reset and clone
 
-*Built in P3 as §4.6 records: the userland objects these operations act on are
+_Built in P3 as §4.6 records: the userland objects these operations act on are
 SQLite facets of a UniversalDO cell, so the backup stays a fork and not a
 branch; the journal is gone. The Dolt column below is what a Dolt object can
-additionally do for itself.*
+additionally do for itself._
 
-| Operation | Today (`workerdManager.ts`, `durableObjectStorageClone.ts`) | On Dolt |
-|---|---|---|
-| Backup | Quiesce (facet abort, or a whole-process stop for internal DOs), integrity-check, then copy raw files into `do-backups/<op>` with a manifest and verify. Retain 5 and sweep | `branch.create("backup/<op>")`, in the object's own turn. O(1) |
-| Restore | Journaled replace of files, then reactivate | `reset({ hard: true, to: "backup/<op>" })`, in the object's own turn. Local tables survive, so in-flight obligations are not lost (L3) |
-| Reset (disposable state) | Back up, then delete files | Back up as a branch, then `reset --hard` to the latest `schema:` commit, giving the fresh schema with no rows |
-| Clone (`cloneDO`) | Reservation, seal and drain relays, quiesce or cooperatively pause, `node:sqlite` backup per file, staged and digest-verified publish, receipt table | `env.NS.fork(source, { at, facets })` (F3). The new id is claimed with a conditional create, so the operation is idempotent by target id. The entity reservation in `WorkspaceDO` stays |
-| Retention | `sweepDurableObjectBackups` | `branch.delete`, then `gc()` |
+| Operation                | Today (`workerdManager.ts`, `durableObjectStorageClone.ts`)                                                                                                                 | On Dolt                                                                                                                                                                                 |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Backup                   | Quiesce (facet abort, or a whole-process stop for internal DOs), integrity-check, then copy raw files into `do-backups/<op>` with a manifest and verify. Retain 5 and sweep | `branch.create("backup/<op>")`, in the object's own turn. O(1)                                                                                                                          |
+| Restore                  | Journaled replace of files, then reactivate                                                                                                                                 | `reset({ hard: true, to: "backup/<op>" })`, in the object's own turn. Local tables survive, so in-flight obligations are not lost (L3)                                                  |
+| Reset (disposable state) | Back up, then delete files                                                                                                                                                  | Back up as a branch, then `reset --hard` to the latest `schema:` commit, giving the fresh schema with no rows                                                                           |
+| Clone (`cloneDO`)        | Reservation, seal and drain relays, quiesce or cooperatively pause, `node:sqlite` backup per file, staged and digest-verified publish, receipt table                        | `env.NS.fork(source, { at, facets })` (F3). The new id is claimed with a conditional create, so the operation is idempotent by target id. The entity reservation in `WorkspaceDO` stays |
+| Retention                | `sweepDurableObjectBackups`                                                                                                                                                 | `branch.delete`, then `gc()`                                                                                                                                                            |
 
 A branch is not a copy: it is lost with the object. A backup that must
 outlive the object (the cutover's hidden fork cell `__vibestudio_backup:<op>`)
@@ -707,7 +712,7 @@ The durable-base survey splits `WorkspaceDO` (3,899 lines) into three parts.
   and `panel_close_cleanup` are deleted: closing commits, and reopening
   reverts that commit's rows. The just-landed "closing is reversible"
   behavior becomes the reverse patch of one commit: `dolt.diff({ from:
-  <closing commit>, to: <its parent> })` returns the SQL that turns the one
+<closing commit>, to: <its parent> })` returns the SQL that turns the one
   state into the other, and the owner applies it with `committedTransaction`.
   (`dolt_revert` is not exposed to applications, §3.2.)
 - **The alarm machinery goes with the cutover, not with Dolt.** That covers
@@ -726,11 +731,10 @@ The durable-base survey splits `WorkspaceDO` (3,899 lines) into three parts.
   - a deploy is a generation swap that celld drains;
   - acknowledged writes are covered by the output gate;
   - a held resource is a residency hold with `onrevoked`.
-  The one obligation that remains: a class holding residency persists what
-  it can in `onrevoked` (the eval kernel, §7.4).
+    The one obligation that remains: a class holding residency persists what
+    it can in `onrevoked` (the eval kernel, §7.4).
 
 ---
-
 
 ### 4.6 P3 as built
 
@@ -853,6 +857,7 @@ already takes over CDP, and `setMode()` with `undefined`. That changes what thes
 return for a browser panel from a failure to a value, which is for the user to review.
 
 **Findings on the fork, from building this:**
+
 - The real engine enforces foreign keys, in SQLite cells and in Dolt cells; the
   fake does not. Anything that inserts rows (the importer, a test seeding a
   store) must put parents first.
@@ -906,8 +911,9 @@ without a new protocol.
   - user, per device or session (long-lived);
   - later, another workspace (the same protocol over the P2P carrier, §8).
 
-  A *context* is a branch inside a cell, so a participant that works on many
+  A _context_ is a branch inside a cell, so a participant that works on many
   contexts uses one cell, not one per context.
+
 - **Why a fork and not an empty cell plus a fetch:** a merge needs a common
   ancestor. A cell created empty has unrelated history, and Dolt cannot merge
   it. A fork shares every commit with its source.
@@ -931,13 +937,15 @@ Inside any cell (canonical or work), the GAD database has one branch per
 context, `ctx/<contextId>`, plus `main`.
 
 **State tables** (versioned, current-state rows):
+
 - `repositories(repository_id PK, repo_path, presence, tombstone_change_id)`
 - `files(file_id PK, repository_id, path, content_hash, mode, content_kind,
-  byte_length, coordinate_extent, presence, tombstone_change_id)`, with
+byte_length, coordinate_extent, presence, tombstone_change_id)`, with
   `UNIQUE(repository_id, path)` over placed rows.
 
 **Merge-safe schema rules (L10, §2.1).** Because any two participants may
 write the same tables in parallel and merge later:
+
 - every primary key is an id minted without coordination: a content hash, or
   a participant-prefixed unique id (`<participantId>:<ulid>`). Nothing uses
   `AUTOINCREMENT`, a rowid-derived key, a per-table sequence, or a versioned
@@ -951,29 +959,29 @@ write the same tables in parallel and merge later:
 
 How the old structures map:
 
-| Today | On Dolt |
-|---|---|
-| `WorkspaceFactRoot`, persistent radix nodes and edges, file manifests | The Dolt root of the commit. A point read is `SELECT … FROM files WHERE repository_id = ? AND path = ?` (at a ref, `dolt_at_files(?)`) |
-| Repository and file *state* rows with `prior_*_state_id` | The current row, plus Dolt history. "Prior state" is the row at the commit's parent. Restore reads the row before the tombstone change (`dolt_at_files(<parent>)`) |
-| `contentKind`, `byteLength`, `coordinateExtent` | Unchanged columns. They are intrinsic file facts |
-| Host tree hash | Still derived for materialization. It is keyed by commit hash |
+| Today                                                                 | On Dolt                                                                                                                                                            |
+| --------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `WorkspaceFactRoot`, persistent radix nodes and edges, file manifests | The Dolt root of the commit. A point read is `SELECT … FROM files WHERE repository_id = ? AND path = ?` (at a ref, `dolt_at_files(?)`)                             |
+| Repository and file _state_ rows with `prior_*_state_id`              | The current row, plus Dolt history. "Prior state" is the row at the commit's parent. Restore reads the row before the tombstone change (`dolt_at_files(<parent>)`) |
+| `contentKind`, `byteLength`, `coordinateExtent`                       | Unchanged columns. They are intrinsic file facts                                                                                                                   |
+| Host tree hash                                                        | Still derived for materialization. It is keyed by commit hash                                                                                                      |
 
 ### 5.3 States, applications, events and contexts
 
-| GAD concept | On Dolt |
-|---|---|
-| `StateNodeRef` | A commit hash. The public `{kind: "event" \| "application"}` shape stays as a projection: a commit is an event if it introduced an `events` row |
-| `WorkApplication` (one mutation) | One commit on the context branch, holding its rows: `commands`, `work_units`, `changes` (+ coordinates and counteractions), `applied_changes` (+ predicates), `content_edges` (+ mappings), and any `decisions`. The basis is the commit's first parent |
-| `WorkspaceEvent` (commit) | One commit that adds a single `events(event_id, command_id, kind, message)` row. Its parents are the Dolt parents. "Applications committed by this event" is the first-parent range since the previous event |
-| Integration commit | The Dolt merge commit (2 parents) produced by §5.5, which adds its `events` row inside the resolver |
-| Genesis | The schema commit plus the template-installation commit, in the canonical database. Every work cell forks from a descendant of it |
-| Context `committed_event_id` / `working_head` | Branch `ctx/<id>`. The working head is the branch head. The committed event is the nearest first-parent commit with an `events` row (derived, no pointer) |
-| CAS on the working head | `hashOf("ctx/<id>") === expected`, checked inside the write turn **of the cell that owns the context**. The check stays local; no other cell can write that branch (§5.8) |
-| `forkContext` (with uncommitted applications) | `branch.create("ctx/<child>", { from: "ctx/<parent>" })`. O(1), carrying every application commit, which is exactly GAD's "share the immutable head" rule. Within one cell |
-| `discard` | `reset({ hard: true, to: <committed event> })` on the context branch |
-| `destroyContext` | `branch.delete`. Reachable commits remain through other branches and merges |
-| `vcs_workspace_heads`, `refs`, `ref_log` | Branches. A protected-main move is a fast-forward push, and its history is `dolt_log` of `main` in the canonical database |
-| Push to protected main | Approval at the host (unchanged), which mints a short-lived push grant, then a fast-forward-only push of the committed event (§5.5, §5.6) |
+| GAD concept                                   | On Dolt                                                                                                                                                                                                                                                 |
+| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `StateNodeRef`                                | A commit hash. The public `{kind: "event" \| "application"}` shape stays as a projection: a commit is an event if it introduced an `events` row                                                                                                         |
+| `WorkApplication` (one mutation)              | One commit on the context branch, holding its rows: `commands`, `work_units`, `changes` (+ coordinates and counteractions), `applied_changes` (+ predicates), `content_edges` (+ mappings), and any `decisions`. The basis is the commit's first parent |
+| `WorkspaceEvent` (commit)                     | One commit that adds a single `events(event_id, command_id, kind, message)` row. Its parents are the Dolt parents. "Applications committed by this event" is the first-parent range since the previous event                                            |
+| Integration commit                            | The Dolt merge commit (2 parents) produced by §5.5, which adds its `events` row inside the resolver                                                                                                                                                     |
+| Genesis                                       | The schema commit plus the template-installation commit, in the canonical database. Every work cell forks from a descendant of it                                                                                                                       |
+| Context `committed_event_id` / `working_head` | Branch `ctx/<id>`. The working head is the branch head. The committed event is the nearest first-parent commit with an `events` row (derived, no pointer)                                                                                               |
+| CAS on the working head                       | `hashOf("ctx/<id>") === expected`, checked inside the write turn **of the cell that owns the context**. The check stays local; no other cell can write that branch (§5.8)                                                                               |
+| `forkContext` (with uncommitted applications) | `branch.create("ctx/<child>", { from: "ctx/<parent>" })`. O(1), carrying every application commit, which is exactly GAD's "share the immutable head" rule. Within one cell                                                                              |
+| `discard`                                     | `reset({ hard: true, to: <committed event> })` on the context branch                                                                                                                                                                                    |
+| `destroyContext`                              | `branch.delete`. Reachable commits remain through other branches and merges                                                                                                                                                                             |
+| `vcs_workspace_heads`, `refs`, `ref_log`      | Branches. A protected-main move is a fast-forward push, and its history is `dolt_log` of `main` in the canonical database                                                                                                                               |
+| Push to protected main                        | Approval at the host (unchanged), which mints a short-lived push grant, then a fast-forward-only push of the committed event (§5.5, §5.6)                                                                                                               |
 
 A work cell is a transactional class (§4.2). Every mutation is one
 `committedTransaction` on its context branch. A write to a context first
@@ -985,6 +993,7 @@ participant's writes to one context). Reads of other contexts use
 ### 5.4 "Store each fact once" under Dolt
 
 What is still a stored fact:
+
 - the `changes` and `work_units` that express intent;
 - `applied_changes` and their result predicates;
 - `content_edges` and mappings that Dolt cannot see (text coordinates
@@ -995,6 +1004,7 @@ What is still a stored fact:
 - the import work unit's external snapshot tuple.
 
 What the commit graph now owns, so it is deleted as a stored fact:
+
 - event parents and event-application membership;
 - application basis and result root;
 - context heads and refs;
@@ -1003,6 +1013,7 @@ What the commit graph now owns, so it is deleted as a stored fact:
 - the incorporation of rows merged without conflict (§5.5).
 
 What becomes local (F4, never versioned, never merged, empty in a fork):
+
 - `gad_effect_intents` (the host-effect outbox);
 - `publication_intents` and `publication_delivery_outbox`;
 - `gad_materialized_repository_states` (receipts of host observations);
@@ -1013,6 +1024,7 @@ What becomes local (F4, never versioned, never merged, empty in a fork):
   keeps them out of every commit).
 
 `commands` stays versioned:
+
 - It is the causal root fact ("command K caused work unit W").
 - It is written in the application commit, so a retried command finds its
   row on the context branch and returns the same result. That is GAD's
@@ -1032,8 +1044,12 @@ canonical `main` (`origin/main`) and merges it into a context branch:
 
 ```ts
 await dolt.pull("origin", "main", {
-  message, author, date,
-  resolve(merge) { /* §5.5.2 */ },
+  message,
+  author,
+  date,
+  resolve(merge) {
+    /* §5.5.2 */
+  },
 });
 ```
 
@@ -1082,6 +1098,7 @@ meaning had to be chosen. This is a visible change to `vcs.merge`, the
 
 The resolver runs inside the merge's transaction, from resolutions prepared
 before the call:
+
 - **adopted (text)**: GAD's three-way text merge produced new content (bytes
   already admitted to the CAS through the existing `prepareContent` effect).
   The resolver writes the `files` row and `incorporates` content edges with
@@ -1107,7 +1124,7 @@ before the call:
   up with events `main` already has.
 
 **Incremental adoption** ("adopt one group, test, adopt the next") is a merge
-of a *prefix* of the source, with `upTo` set to one of the source's
+of a _prefix_ of the source, with `upTo` set to one of the source's
 application commits. Each prefix merge is an ordinary integration step on the
 context, and the final merge of the source event completes it. Change
 identities are preserved because the rows themselves arrive. No cherry-pick
@@ -1142,11 +1159,11 @@ them as follows. The tokens are bearer capabilities, handed over by an
 authenticated Vibestudio RPC, never stored by the issuer (only the SHA-256 is
 kept) and never written to a commit.
 
-| Holder | Grant | Lifetime |
-|---|---|---|
-| A work cell (agent, user, subagent) | `fetch: true`, `branches: ["main", "ctx/*", "pub/*"]`, `push: ["pub/<participant>/*"]`. May fetch the canonical and publish its own branches under its own namespace | The participant's life. `expiresAt` set to a renewal horizon, `peer` set when the carrier is P2P |
-| Publish to protected `main` | An **additional** short-lived grant with `push: ["main"]`, minted **after approval** and bound to one participant | Minutes, or one use (revoked after the push) |
-| A reader (a panel, a CLI, another workspace's read) | `fetch: true`, `branches: ["main"]` | As needed |
+| Holder                                              | Grant                                                                                                                                                                | Lifetime                                                                                         |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| A work cell (agent, user, subagent)                 | `fetch: true`, `branches: ["main", "ctx/*", "pub/*"]`, `push: ["pub/<participant>/*"]`. May fetch the canonical and publish its own branches under its own namespace | The participant's life. `expiresAt` set to a renewal horizon, `peer` set when the carrier is P2P |
+| Publish to protected `main`                         | An **additional** short-lived grant with `push: ["main"]`, minted **after approval** and bound to one participant                                                    | Minutes, or one use (revoked after the push)                                                     |
+| A reader (a panel, a CLI, another workspace's read) | `fetch: true`, `branches: ["main"]`                                                                                                                                  | As needed                                                                                        |
 
 - **Approval is grant issuance.** Today's "approval at the host, then a
   compare-and-swap of the protected ref" becomes "approval at the host, then a
@@ -1159,7 +1176,7 @@ kept) and never written to a commit.
   reachability, validated integration events, every effective change
   accounted for) are established by the pushing cell's own code before it
   pushes, which is the same code every cell runs. The canonical's own guard
-  is *after* the fact: when it learns `main` moved (the follow-up RPC or the
+  is _after_ the fact: when it learns `main` moved (the follow-up RPC or the
   next activation), it validates the pushed range (`dolt_log`,
   `dolt_diff_events`) and, on a violation, raises an operator-visible fault
   rather than rewinding `main` (a fast-forward-only store has no rewind for
@@ -1175,15 +1192,16 @@ kept) and never written to a commit.
 ### 5.7 A participant's cell: create, run, retire
 
 **Create** (idempotent by target id, crash-resumable):
+
 1. The requester computes `workId = gadwork:<participantId>` and calls
    `env.GAD_ROOT.fork(canonicalRoot, { name: workId, facets: { gad: { at:
-   hashOf("main") } }, replaceUnfinished: true })`. A repeat finds the id
+hashOf("main") } }, replaceUnfinished: true })`. A repeat finds the id
    claimed, so one cell results. An interrupted fork is taken over or deleted
    (`replaceUnfinished`, `deleteUnfinished`).
 2. The canonical issues the participant's grant (§5.6) and returns the token
    through the authenticated RPC that asked for the cell.
 3. On first activation the work cell runs `remote.add("origin", { id,
-   token })` (with a relay `transport` if the canonical is a facet, §3.2),
+token })` (with a relay `transport` if the canonical is a facet, §3.2),
    fetches `origin/main`, and branches `ctx/<id>` from `main`.
 4. Local tables start empty (F4). The effect outbox and the receipts are
    rebuilt as the participant works.
@@ -1195,6 +1213,7 @@ it pulls `main` into its contexts.
 
 **Retire** (when a subagent ends, a conversation is archived, or a user
 removes a device):
+
 1. **Settle.** If the participant integrated, its work is already on `main`.
    Otherwise the committed events of its contexts that are not on `main` are
    pushed to `retired/<participant>/<ctx>`. This keeps what today's GAD keeps
@@ -1217,21 +1236,21 @@ and its other laws assume one writer. On Dolt with work cells each law is
 kept where it still has a meaning, and replaced where the single writer
 disappears.
 
-| Single-writer law (provenance plan) | Under decentralized GAD |
-|---|---|
-| One DO owns contexts, events, applications, decisions, lineage | **Each cell owns the branches it writes.** A branch has exactly one writer, so the invariant "one writer per branch" holds everywhere. The *database* has many cells, and the canonical owns only `main` |
-| CAS on the working head, in one turn | **Kept, local.** `hashOf("ctx/<id>") === expected` inside the owning cell's turn. Cross-cell publication is a fast-forward-only push, which is a CAS on `main` performed by Dolt |
-| Protected push is an approval-gated CAS of the protected ref set | **Kept.** Approval mints a short-lived `push: ["main"]` grant; the push is the CAS (fast-forward only). `PublicationGate` still decides; it no longer writes the ref |
-| Push validates every traversed integration event and reachability | **Kept, at the pusher**, with an after-the-fact check on the canonical (§5.6). Reachability is a fast-forward by construction: the pushed tip contains `main` |
-| Command journal and idempotency | **Kept.** A `commands` row is versioned with its application commit. Ids come from the causal coordinate, so two cells never mint one. A retry goes to the cell that owns the context |
-| No persistent plan token, staging set or merge session | **Kept.** F1 resolves inside the merge's own transaction. A merge never spans turns. A failed push leaves a normal pull to run again |
-| Effect outbox, no DO transaction across external I/O | **Kept, local per cell.** The outbox is a local table. Materialization of `main` is the canonical's effect; materialization of a context is its cell's |
-| Neither side holds a global concurrency gate across external I/O | **Kept and strengthened.** No object holds anything for another |
-| `UNIQUE(repository_id, path)` and stable file identity | **Kept as constraints, enforced at merge** (L10): a violation reaches the resolver |
-| Execution and integration are independent axes (invariant 10) | **Kept.** A subagent's execution is its own cell; its code returns through §5.5 |
-| Agentic log owns events, GAD indexes them | Unchanged (§6.1) |
+| Single-writer law (provenance plan)                               | Under decentralized GAD                                                                                                                                                                                  |
+| ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| One DO owns contexts, events, applications, decisions, lineage    | **Each cell owns the branches it writes.** A branch has exactly one writer, so the invariant "one writer per branch" holds everywhere. The _database_ has many cells, and the canonical owns only `main` |
+| CAS on the working head, in one turn                              | **Kept, local.** `hashOf("ctx/<id>") === expected` inside the owning cell's turn. Cross-cell publication is a fast-forward-only push, which is a CAS on `main` performed by Dolt                         |
+| Protected push is an approval-gated CAS of the protected ref set  | **Kept.** Approval mints a short-lived `push: ["main"]` grant; the push is the CAS (fast-forward only). `PublicationGate` still decides; it no longer writes the ref                                     |
+| Push validates every traversed integration event and reachability | **Kept, at the pusher**, with an after-the-fact check on the canonical (§5.6). Reachability is a fast-forward by construction: the pushed tip contains `main`                                            |
+| Command journal and idempotency                                   | **Kept.** A `commands` row is versioned with its application commit. Ids come from the causal coordinate, so two cells never mint one. A retry goes to the cell that owns the context                    |
+| No persistent plan token, staging set or merge session            | **Kept.** F1 resolves inside the merge's own transaction. A merge never spans turns. A failed push leaves a normal pull to run again                                                                     |
+| Effect outbox, no DO transaction across external I/O              | **Kept, local per cell.** The outbox is a local table. Materialization of `main` is the canonical's effect; materialization of a context is its cell's                                                   |
+| Neither side holds a global concurrency gate across external I/O  | **Kept and strengthened.** No object holds anything for another                                                                                                                                          |
+| `UNIQUE(repository_id, path)` and stable file identity            | **Kept as constraints, enforced at merge** (L10): a violation reaches the resolver                                                                                                                       |
+| Execution and integration are independent axes (invariant 10)     | **Kept.** A subagent's execution is its own cell; its code returns through §5.5                                                                                                                          |
+| Agentic log owns events, GAD indexes them                         | Unchanged (§6.1)                                                                                                                                                                                         |
 
-What is *new* as a risk: the canonical's invariants hold because every cell
+What is _new_ as a risk: the canonical's invariants hold because every cell
 runs the same GAD code, so the canonical trusts its participants within one
 workspace. That is the same trust the single DO had in its callers. Across
 workspaces it does not hold, which is why §8 puts a validator in front.
@@ -1263,7 +1282,7 @@ workspaces it does not hold, which is why §8 puts a validator in front.
     (C5) and make every work-cell fork larger;
   - GC already reasons about CAS roots.
 - **GC roots** are every `content_hash` reachable from any retained commit
-  *in any cell that can still publish*. A local `content_roots` table holds
+  _in any cell that can still publish_. A local `content_roots` table holds
   them, maintained incrementally from `dolt_diff_files` at each commit and
   rebuildable from `dolt_history_files`. The canonical's roots cover `main`
   and the published and retired branches; a work cell's unpublished content is
@@ -1299,23 +1318,23 @@ workspaces it does not hold, which is why §8 puts a validator in front.
 ### 5.12 What GAD deletes, and what it adds
 
 Line counts are from `wc -l` on Base `92001a1`. Partial removals are
-*estimates*.
+_estimates_.
 
-| Removed | Lines |
-|---|---|
-| `persistentRadix.ts` | 817 |
-| `workspaceFactMap.ts` | 489 |
-| `workspaceFactChangeSet.ts` (manifest member algebra) | 354 |
-| `netEffectMerge.ts` aspect algebra (the three-way text merge stays) | ~200 of 311 |
-| `semanticWorkspaceFacts.ts` (fact-root composition) | ~1,100 of 1,284 |
-| `semanticWorkspace.ts`: event ancestor graph, maximal merge bases, merge comparison and structural constraints, decision attribution, commit and discard chain handling, working-mutation persistence | ~4,500 of 14,477 (*estimate*: spans 3021–3776, 9717–11860, 8513–9201, 4167–4433) |
-| `semanticVcsStore.ts` (state and frontier persistence) | ~1,000 of 2,062 |
-| `semanticVcsSchema.ts` (15 of 33 tables) | ~350 of 720 |
-| `GadWorkspaceDO.ts`: log chain, `forkLog`, refs and `ref_log`, projection copy by head | ~1,500 of 7,203 |
-| Tests that exercise removed mechanics | not counted |
-| **Total, production code** | **~10,000** (*estimate*) |
+| Removed                                                                                                                                                                                               | Lines                                                                            |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `persistentRadix.ts`                                                                                                                                                                                  | 817                                                                              |
+| `workspaceFactMap.ts`                                                                                                                                                                                 | 489                                                                              |
+| `workspaceFactChangeSet.ts` (manifest member algebra)                                                                                                                                                 | 354                                                                              |
+| `netEffectMerge.ts` aspect algebra (the three-way text merge stays)                                                                                                                                   | ~200 of 311                                                                      |
+| `semanticWorkspaceFacts.ts` (fact-root composition)                                                                                                                                                   | ~1,100 of 1,284                                                                  |
+| `semanticWorkspace.ts`: event ancestor graph, maximal merge bases, merge comparison and structural constraints, decision attribution, commit and discard chain handling, working-mutation persistence | ~4,500 of 14,477 (_estimate_: spans 3021–3776, 9717–11860, 8513–9201, 4167–4433) |
+| `semanticVcsStore.ts` (state and frontier persistence)                                                                                                                                                | ~1,000 of 2,062                                                                  |
+| `semanticVcsSchema.ts` (15 of 33 tables)                                                                                                                                                              | ~350 of 720                                                                      |
+| `GadWorkspaceDO.ts`: log chain, `forkLog`, refs and `ref_log`, projection copy by head                                                                                                                | ~1,500 of 7,203                                                                  |
+| Tests that exercise removed mechanics                                                                                                                                                                 | not counted                                                                      |
+| **Total, production code**                                                                                                                                                                            | **~10,000** (_estimate_)                                                         |
 
-Added (*estimate*, ~1,500 lines): the work-cell lifecycle (create, grant,
+Added (_estimate_, ~1,500 lines): the work-cell lifecycle (create, grant,
 retire), the sync layer (`pull`/`publish` with the retry bound and the
 divergent-decision rule), the canonical's after-the-fact guard, and the
 relay method that serves the canonical facet's remote requests.
@@ -1338,12 +1357,12 @@ relay method that serves the canonical facet's remote requests.
 
 ---
 
-
 ## 6. The agent system on Dolt
 
 ### 6.1 Ownership after the redesign
 
 The agent survey found three stores:
+
 - the agent DO's Pi store;
 - the channel DO's hash-chained ledger;
 - GAD's mirror of the channel log.
@@ -1399,7 +1418,7 @@ resolves this in favor of the code, with no copy:
   - Pi stores every kind of document in one `documents` table, so this
     split needs a Pi storage change: local document kinds go to Pi tables
     under the F4 local pattern. Pi already declares `fork: "initial" |
-    "asOf" | "current"` per document kind, and that declaration becomes the
+"asOf" | "current"` per document kind, and that declaration becomes the
     table choice.
 
 ### 6.4 Forks
@@ -1410,7 +1429,7 @@ A conversation fork at channel sequence N:
    journal, which is local.
 2. It computes a deterministic target id, `fork:<forkId>`. It calls
    `env.NS.fork(channelRoot, { facets: { do: { at: <channel commit whose
-   head sequence is N> } } })`. A repeated call finds the id already
+head sequence is N> } } })`. A repeated call finds the id already
    claimed, so the step is idempotent (F3, C6).
 3. **For each agent subscribed at N**, it forks the agent root at that
    agent's last commit whose anchor for this channel is ≤ N. That is the
@@ -1422,6 +1441,7 @@ A conversation fork at channel sequence N:
    `channel.forked` to the parent, as today.
 
 What this deletes:
+
 - `postClone` truncation;
 - `ChannelLedger.forkFrom`;
 - `resetForFork`;
@@ -1439,6 +1459,7 @@ announce. Each phase is idempotent by target id.
 ### 6.5 Subagents
 
 The model is unchanged: one invocation plus one task channel.
+
 - The child's file context is a GAD branch (§5.2).
 - A `mode: "fork"` child is a fork of the parent agent cell at its current
   commit (§6.4) instead of a knowledge export.
@@ -1464,16 +1485,16 @@ The model is unchanged: one invocation plus one task channel.
 
 ### 6.7 What the agent system deletes
 
-| Removed | Lines |
-|---|---|
-| Channel hash chain and fork boundary (`channel-ledger.ts`, mostly) | ~180 of 229 |
-| Log hash preimage (`hash.ts`, `prepare-log-event.ts`) | ~300 |
-| Fork saga clone, postClone and rollback (`channel-do.ts` 6504–7660, partly) | ~500 |
-| `delivery-projection.ts` fork reset paths | ~150 (*estimate*) |
-| Knowledge export and import (`native-channel-knowledge.ts` ×2, `native-channel-bootstrap.ts` import path) | ~1,100 |
-| Channel-to-GAD hash-for-hash mirror verification (`channel-observation.ts`, `channel-do.ts` 2041–2350, partly) | ~250 |
-| Host clone path for channels and agents (`cloneDO` 5109–5183, `durableObjectStorageClone.ts`) | ~310 |
-| **Total** | **~2,800** (*estimate*) |
+| Removed                                                                                                        | Lines                   |
+| -------------------------------------------------------------------------------------------------------------- | ----------------------- |
+| Channel hash chain and fork boundary (`channel-ledger.ts`, mostly)                                             | ~180 of 229             |
+| Log hash preimage (`hash.ts`, `prepare-log-event.ts`)                                                          | ~300                    |
+| Fork saga clone, postClone and rollback (`channel-do.ts` 6504–7660, partly)                                    | ~500                    |
+| `delivery-projection.ts` fork reset paths                                                                      | ~150 (_estimate_)       |
+| Knowledge export and import (`native-channel-knowledge.ts` ×2, `native-channel-bootstrap.ts` import path)      | ~1,100                  |
+| Channel-to-GAD hash-for-hash mirror verification (`channel-observation.ts`, `channel-do.ts` 2041–2350, partly) | ~250                    |
+| Host clone path for channels and agents (`cloneDO` 5109–5183, `durableObjectStorageClone.ts`)                  | ~310                    |
+| **Total**                                                                                                      | **~2,800** (_estimate_) |
 
 ---
 
@@ -1518,11 +1539,12 @@ class itself.
 ### 7.2 Hosting code in any entity
 
 **What the runtime forces (each measured on the real fork).**
+
 - A facet is created by its **root** (`ctx.facets.get(name, () => ({ class,
-  celld }))`) and cannot be reached from outside it. Ownership of a hosted
+celld }))`) and cannot be reached from outside it. Ownership of a hosted
   instance is therefore structural.
 - A Worker Loader's `env` supports **only service bindings** (`DataCloneError:
-  Worker Loader env supports only Service Binding capabilities`). An entity's own
+Worker Loader env supports only Service Binding capabilities`). An entity's own
   code (a loaded worker, the root's `do` facet) cannot load code or grant
   itself `codegen`: `ownerKernelPathCelld.test.ts`.
 - The `codegen` and `residency` grants are per isolate, and a loader cannot grant
@@ -1542,10 +1564,10 @@ Base's `durable-base.ts`) wrap it:
 ```ts
 // in any entity class
 const kernel = await this.hostCode({
-  name: `repl:${scopeKey}`,          // names the facet inside this entity
+  name: `repl:${scopeKey}`, // names the facet inside this entity
   executable: { source, className }, // resolved by the host, like loadExecutable
 });
-const run = await kernel.call("start", input);   // a call to the hosted class
+const run = await kernel.call("start", input); // a call to the hosted class
 ```
 
 - **The entity does not choose grants.** `hostCode` asks the root, and the root
@@ -1584,12 +1606,12 @@ host function, `admitDynamicCode`
 (`src/server/services/dynamicCodeAdmission.ts`), called once for every run of
 dynamic code, eval or not:
 
-| Part of the admission | Source today |
-|---|---|
-| the run's authority **intent** and `normalizeAuthorityManifest` (`effects`, requested capabilities, the allowlist) | `evalService.prepareRun`, `normalizeAuthorityManifest` |
-| `preauthorize` of exact prospective operations through the dispatcher's authorization-only path | `prepareRun`, `deps.preauthorize` |
-| **execution-session** admission and **task-authority** registration (`executionSessions.admitWhenAvailable`, `taskAuthorities.bind*`), including the mission, test policy, attached-host and parent-session facts | `prepareRun` |
-| the **causal parent** an agent-bound run must carry, and the check that it belongs to the relay's host-bound trajectory | `prepareRun` |
+| Part of the admission                                                                                                                                                                                             | Source today                                           |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| the run's authority **intent** and `normalizeAuthorityManifest` (`effects`, requested capabilities, the allowlist)                                                                                                | `evalService.prepareRun`, `normalizeAuthorityManifest` |
+| `preauthorize` of exact prospective operations through the dispatcher's authorization-only path                                                                                                                   | `prepareRun`, `deps.preauthorize`                      |
+| **execution-session** admission and **task-authority** registration (`executionSessions.admitWhenAvailable`, `taskAuthorities.bind*`), including the mission, test policy, attached-host and parent-session facts | `prepareRun`                                           |
+| the **causal parent** an agent-bound run must carry, and the check that it belongs to the relay's host-bound trajectory                                                                                           | `prepareRun`                                           |
 
 It takes the verified caller, the hosting entity (the session's `runtimeId`) and
 the run's intent, and returns the **session nonce** that the kernel call
@@ -1633,7 +1655,7 @@ resolves exact source by the host service it already calls).
   returns once the run is durably accepted; `await(runId)` blocks until the
   terminal row and returns it; `get(runId)` and `receipt(runId)` re-read it.
   The result is a committed row in the kernel's Dolt storage (`eval: <runId>
-  <status>`), so a restart of the caller, the entity or the node loses nothing
+<status>`), so a restart of the caller, the entity or the node loses nothing
   that was committed, and a caller that comes back reads the row.
 - **Progress** (console, tool-call and state events) goes through the kernel's
   `events(runId, afterSeq)` stream, paged by sequence number. A live consumer
@@ -1691,11 +1713,11 @@ node (`recoverUnresponsiveSandbox`), which kills every object. Probed on the
 real fork (`src/server/celldCpuWatchdogCelld.test.ts`, a Dolt facet in a loaded
 worker, one object):
 
-| Setup | Result |
-|---|---|
+| Setup                                                             | Result                                                                                                                                                                                                          |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `limits: { cpuMs: 1000 }` on the loaded worker, a call that spins | the call fails after **1004 ms** with `Worker exceeded CPU limit of 1000 ms`; the owner's root answers in 2 ms; a sibling object's kernel answers; **the same kernel serves the next calls and keeps its heap** |
-| the same limit, three calls of 200 ms CPU each | all succeed: the limit is **per invocation**, not cumulative |
-| no limit, a call that spins | **never ends** (the probe's 8 s window); a sibling object is unaffected, only that isolate is starved |
+| the same limit, three calls of 200 ms CPU each                    | all succeed: the limit is **per invocation**, not cumulative                                                                                                                                                    |
+| no limit, a call that spins                                       | **never ends** (the probe's 8 s window); a sibling object is unaffected, only that isolate is starved                                                                                                           |
 
 So celld's per-isolate limit **covers a CPU-starved loaded worker** and ends only
 the starving call, which is strictly better than replacing the node. One gap:
@@ -1703,6 +1725,7 @@ the starving call, which is strictly better than replacing the node. One gap:
 is the **loaded unit's** `WorkerCode.limits`, fixed at load, and cannot be a
 run's `timeoutMs`. A starving run with `timeoutMs: 5000` is therefore ended at
 the unit's `cpuMs`, not at 5 s. The decision:
+
 - the executable admission sets `limits.cpuMs` for every unit that holds
   `codegen` (a bounded CPU budget per invocation, a manifest value);
 - the per-run liveness supervisor (the 5 s probe, `superviseIsolateLiveness`) is
@@ -1710,8 +1733,8 @@ the unit's `cpuMs`, not at 5 s. The decision:
 - `recoverUnresponsiveSandbox` stays as a node-level watchdog call for what the
   limit cannot see (a hung runtime that burns no CPU). The root's or the node's
   watchdog calls it, not a per-run loop.
-A per-run CPU budget needs `limits` on `getDurableObjectClass`, which is a fork
-request (recorded in the handoff), not a Vibestudio change.
+  A per-run CPU budget needs `limits` on `getDurableObjectClass`, which is a fork
+  request (recorded in the handoff), not a Vibestudio change.
 
 ### 7.9 Trust model
 
@@ -1742,16 +1765,16 @@ workspace migrated. The retired cells are deleted by a later release, as
 
 ### 7.11 What this deletes
 
-| Removed | Lines |
-|---|---|
-| `src/server/services/evalService.ts` (owner resolution, `ensureEvalDO`, token minting, liveness supervision, kernel lease touch); about a quarter remains as `admitDynamicCode` | 1,247, ~300 kept |
-| `evalKernelLease.ts` (done in P2a), `evalKernelAuthority.ts`, `evalAuthorityEventJournal.ts`, `evalExecutionRootsService.ts`, `evalEventIngressService.ts` | 163 + 38 + 82 + 95 + 182 |
-| `EvalDO.ts`: host-only RPC wiring, redelivery, host-settlement paths (`appendAuthorityEvent`, `failPendingRun`), identity pinning, internal-DO packaging; the rest (~3,300 lines) moves to the Base kernel class | ~1,300 of 4,632 |
-| `packages/service-schemas/src/evalEngine.ts` (18 host-only methods), the `evalEventIngress` and `evalExecutionRoots` schemas | ~420 |
-| authority ledger rows: 18 `direct:...EvalDO...`, 10 `host:eval.*`, 2 kernel callback rows, the `runtime.code-execution.manage` review entries | generated |
-| `UNSAFE_EVAL` (already gone, P2a/cutover) | 0 |
-| tests of removed paths (`evalService.test.ts`, ingress and roots tests, part of `EvalDO.redelivery.test.ts`) | ~3,100 |
-| the per-run liveness supervisor and its `activity` lease (D4, §7.8) | ~110 |
+| Removed                                                                                                                                                                                                          | Lines                    |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| `src/server/services/evalService.ts` (owner resolution, `ensureEvalDO`, token minting, liveness supervision, kernel lease touch); about a quarter remains as `admitDynamicCode`                                  | 1,247, ~300 kept         |
+| `evalKernelLease.ts` (done in P2a), `evalKernelAuthority.ts`, `evalAuthorityEventJournal.ts`, `evalExecutionRootsService.ts`, `evalEventIngressService.ts`                                                       | 163 + 38 + 82 + 95 + 182 |
+| `EvalDO.ts`: host-only RPC wiring, redelivery, host-settlement paths (`appendAuthorityEvent`, `failPendingRun`), identity pinning, internal-DO packaging; the rest (~3,300 lines) moves to the Base kernel class | ~1,300 of 4,632          |
+| `packages/service-schemas/src/evalEngine.ts` (18 host-only methods), the `evalEventIngress` and `evalExecutionRoots` schemas                                                                                     | ~420                     |
+| authority ledger rows: 18 `direct:...EvalDO...`, 10 `host:eval.*`, 2 kernel callback rows, the `runtime.code-execution.manage` review entries                                                                    | generated                |
+| `UNSAFE_EVAL` (already gone, P2a/cutover)                                                                                                                                                                        | 0                        |
+| tests of removed paths (`evalService.test.ts`, ingress and roots tests, part of `EvalDO.redelivery.test.ts`)                                                                                                     | ~3,100                   |
+| the per-run liveness supervisor and its `activity` lease (D4, §7.8)                                                                                                                                              | ~110                     |
 
 Deleted outright: `appendAuthorityEvent`, `failPendingRun`,
 `acknowledgeRunResult`, `retainExecutionRoot`, `listRetainedExecutionRoots`, the
@@ -1763,6 +1786,7 @@ three lease methods (P2a). Kept as the kernel's ordinary methods: `start`,
 ### 7.12 Order, and where P2b stands
 
 Each step is a complete cut that keeps the system working.
+
 1. **This section** (the design), its own commit. **Done.**
 2. **The admission function** (§7.3): `admitDynamicCode` extracted from
    `evalService.prepareRun` with a general signature and its own tests;
@@ -1779,8 +1803,8 @@ Each step is a complete cut that keeps the system working.
    runner), with the push machinery deleted when the last has moved.
 6. **The liveness supervisor** goes with step 4 (§7.8); `evalService` is
    deleted when the last caller has moved.
-Steps 3 to 6 are **not done**; `HANDOFF-dolt-redesign.md` records where each
-stands.
+   Steps 3 to 6 are **not done**; `HANDOFF-dolt-redesign.md` records where each
+   stands.
 
 ---
 
@@ -1794,12 +1818,13 @@ permissioned, validator-admitted, peer-to-peer log adds nothing there.
 
 Chronolog is the substrate for data shared **between** workspaces: different
 machines, often different operators, and possibly offline. Examples:
+
 - a team dataset;
 - a shared task board across two companies' workspaces;
 - cross-organization approvals;
 - agent memory shared by several users' workspaces.
 
-Approvals and provenance *inside* a workspace stay where they are. An
+Approvals and provenance _inside_ a workspace stay where they are. An
 approval that must be visible to another workspace is a Chronolog
 transaction in a group they share.
 
@@ -1887,6 +1912,7 @@ chronolog.subscribe({ group, sql, bindings })     // live query results
    A flip means the manifest declares the class's facet storage as `dolt`,
    and the class ships a one-time importer. No class runs on both engines
    in one build.
+
 3. **When P0 lands before the cutover**, the Dolt primitives are dormant on
    SQLite (`doltStorageOf` returns `null`). Nothing branches on the engine
    except the commit points themselves, which no-op without `dolt`.
@@ -1931,8 +1957,8 @@ chronolog.subscribe({ group, sql, bindings })     // live query results
   the import.
 - **Kernels.** Not imported. Kernel scope survives today only as best-effort
   restart state, so the first run on the new kernel reports a kernel
-  restart. *(If kernel `db` tables are considered user data, the default row
-  copy applies.)*
+  restart. _(If kernel `db` tables are considered user data, the default row
+  copy applies.)_
 
 Importers are deleted once the minimum supported version passes the flip.
 That is the release policy in `durable-object-schema-migrations.md`.
@@ -1941,18 +1967,18 @@ That is the release policy in `durable-object-schema-migrations.md`.
 
 ## 10. Phases, gates and sizes
 
-Sizes are in agent-days for one focused agent. *Estimates.* P1 (the fork side)
+Sizes are in agent-days for one focused agent. _Estimates._ P1 (the fork side)
 is **done**: F1 to F7 ship in `fcc7268`, and `9440c29` (pinned) fixes the hard reset and adds `ondoltpush` (§3). What remains is Vibestudio's.
 
-| Phase | Content | Depends on | Gate (executable) | Size |
-|---|---|---|---|---|
-| **P0 Foundations** (`feat/dolt-p0`) | `@vibestudio/durable/dolt` typed surface of the whole `ctx.storage.dolt` API (merge with resolver, `doltLocal`, remotes); `committedTransaction` on F2 (no roll-forward); schema install commits on Dolt (checkpoint before an upgrade, `schema:` commits); schema-guard filter (`_cf_`, `_litestream`, `dolt_`, `doltlite_`); framework tables local on Dolt; a `FakeDoltStorage` test double with its divergences documented | none (the fork is delivered) | `vitest packages/durable`: commit points, `committedTransaction` atomicity (a throw leaves no rows and no commit), checkpoint before upgrade, failed upgrade commits nothing, filter, merge with resolver, local tables, remotes between fakes. Then a real-celld probe (`doltDurableCelld.test.ts`): a Dolt root class installs its schema, commits through `committedTransaction`, and survives a process kill and restart with `dolt.log()` correct | 3 |
-| **P1 Runtime** (fork side) | Dolt facets; F1 merge resolver; F2 commit in a transaction; F3 forks carrying facets; F4 local tables; F5 checkout cost; F6 history reads; F7 remotes | fork | **Done** (`fcc7268`; `9440c29` adds the durable hard reset and `ondoltpush`). Open for P5: a Vibestudio-side test of the facet relay and `ondoltpush`, and the checkout budget below | done |
-| **P2 Eval kernels** | **P2a (done):** `ctx.residency.hold()` for the heap until an explicit end (Q3, no idle timer), revocation through `onrevoked`, the host lease and its three methods deleted. **P2b (open, §7.12):** general dynamic code. The hosting helper (`hostCode`, any entity, Dolt facet with `codegen` and `residency` from the manifest), session entities for panels, the CLI and the runner, one admission function (`admitDynamicCode`, built), pull delivery, the kernel class in Base with no special identity; delete `EvalDO`, `evalService`, the push machinery and the `evalEngine` host schemas | cutover, P0 | `pnpm test` for eval packages; system tests `eval-*` (heap retained across turns, cancel, restart report, large return) compared with the cutover numbers; a confinement probe (a userland object's `eval` throws, the kernel's works); a cross-owner probe (owner A cannot address B's kernel); `rg 'EvalDO\|evalService' src packages` is empty (`UNSAFE_EVAL` already is) | 8 (P2a about 1) |
-| **P3 Durable services (done, §4.6)** | `WorkspaceDO` on Dolt; panel undo by reverse patch; backup, restore, reset and clone via Dolt; delete the maintenance journal, `cloneDO`, `durableObjectStorageClone.ts` and `computeWorkerdObjectIdHash`, and the lifecycle tables and driver if the cutover kept them | P2 (facet machinery proven) | `WorkspaceDO.test.ts` against `FakeDoltStorage`; system tests for panel close and reopen, `workers.resetStorage`, and a restore round trip; a fork-idempotency test (the same target id twice gives one object); `rg cloneDO\|do_maintenance` is empty | 6 |
-| **P4 Agent system** | Channel and agent cells on Dolt with local tables; Pi local document tables; native conversation fork; delete the hash chain, knowledge export and import, and the clone paths | P0 | Fork-and-subagents acceptance (§E3): edit-and-fork, a multi-agent fork, a subagent `mode: "fork"`, crash-resume of a fork op (kill between phases); hibernation tests (evict between turns, redelivery deduplicated); a fork at sequence N equals the parent's state at N (ledger, participants, agent anchors) | 12 |
-| **P5 GAD, decentralized** | Canonical Dolt database and participant work cells (§5.1); the state model, contexts as branches; integration by F1 merge, `pull` and `push` (§5.5); grants and approval as grant issuance (§5.6); work-cell create, retire (§5.7); a derived `commit_index`, `content_roots`; replay migration (Q2); delete the fact-map, radix and frontier machinery | P0, P4 (agent forks), the two *to verify* items | The provenance plan's acceptance matrix (§14), re-expressed over commit hashes and passing in full; the decentralization gates of §5.13; replay equivalence: for each real workspace snapshot available, every legacy event's materialized tree hash equals the replayed commit's, and blame answers match on a sampled set; the **size gate** (a replayed workspace database and the fork latency at that size, recorded); checkout and merge benchmarks: checkout **p95 within 20 ms with `fsync` and 10k local rows** (the fork measured 14 to 16 ms), a context switch batched per participant turn | 20 |
-| **P6 Chronolog capability** | Chronolog node deployed per workspace node; the `chronolog` host service; key custody; invite and join; agent writes through approval; Chronolog authority for pushes into a shared GAD `main` (§8.4); the cross-workspace P2P carrier for Dolt remotes | Chronolog fork phase 4, P0, the P2P cross-workspace run | Two workspace instances on two nodes: create a group, invite, write from both sides, see an owner-row rejection, run a replay flip (Chronolog's demo as a system test); a GAD push between workspaces authorised by group membership | 8 |
+| Phase                                | Content                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Depends on                                              | Gate (executable)                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Size            |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| **P0 Foundations** (`feat/dolt-p0`)  | `@vibestudio/durable/dolt` typed surface of the whole `ctx.storage.dolt` API (merge with resolver, `doltLocal`, remotes); `committedTransaction` on F2 (no roll-forward); schema install commits on Dolt (checkpoint before an upgrade, `schema:` commits); schema-guard filter (`_cf_`, `_litestream`, `dolt_`, `doltlite_`); framework tables local on Dolt; a `FakeDoltStorage` test double with its divergences documented                                                                                                                                                                      | none (the fork is delivered)                            | `vitest packages/durable`: commit points, `committedTransaction` atomicity (a throw leaves no rows and no commit), checkpoint before upgrade, failed upgrade commits nothing, filter, merge with resolver, local tables, remotes between fakes. Then a real-celld probe (`doltDurableCelld.test.ts`): a Dolt root class installs its schema, commits through `committedTransaction`, and survives a process kill and restart with `dolt.log()` correct                                                                                                                                                  | 3               |
+| **P1 Runtime** (fork side)           | Dolt facets; F1 merge resolver; F2 commit in a transaction; F3 forks carrying facets; F4 local tables; F5 checkout cost; F6 history reads; F7 remotes                                                                                                                                                                                                                                                                                                                                                                                                                                               | fork                                                    | **Done** (`fcc7268`; `9440c29` adds the durable hard reset and `ondoltpush`). Open for P5: a Vibestudio-side test of the facet relay and `ondoltpush`, and the checkout budget below                                                                                                                                                                                                                                                                                                                                                                                                                    | done            |
+| **P2 Eval kernels**                  | **P2a (done):** `ctx.residency.hold()` for the heap until an explicit end (Q3, no idle timer), revocation through `onrevoked`, the host lease and its three methods deleted. **P2b (open, §7.12):** general dynamic code. The hosting helper (`hostCode`, any entity, Dolt facet with `codegen` and `residency` from the manifest), session entities for panels, the CLI and the runner, one admission function (`admitDynamicCode`, built), pull delivery, the kernel class in Base with no special identity; delete `EvalDO`, `evalService`, the push machinery and the `evalEngine` host schemas | cutover, P0                                             | `pnpm test` for eval packages; system tests `eval-*` (heap retained across turns, cancel, restart report, large return) compared with the cutover numbers; a confinement probe (a userland object's `eval` throws, the kernel's works); a cross-owner probe (owner A cannot address B's kernel); `rg 'EvalDO\|evalService' src packages` is empty (`UNSAFE_EVAL` already is)                                                                                                                                                                                                                            | 8 (P2a about 1) |
+| **P3 Durable services (done, §4.6)** | `WorkspaceDO` on Dolt; panel undo by reverse patch; backup, restore, reset and clone via Dolt; delete the maintenance journal, `cloneDO`, `durableObjectStorageClone.ts` and `computeWorkerdObjectIdHash`, and the lifecycle tables and driver if the cutover kept them                                                                                                                                                                                                                                                                                                                             | P2 (facet machinery proven)                             | `WorkspaceDO.test.ts` against `FakeDoltStorage`; system tests for panel close and reopen, `workers.resetStorage`, and a restore round trip; a fork-idempotency test (the same target id twice gives one object); `rg cloneDO\|do_maintenance` is empty                                                                                                                                                                                                                                                                                                                                                  | 6               |
+| **P4 Agent system**                  | Channel and agent cells on Dolt with local tables; Pi local document tables; native conversation fork; delete the hash chain, knowledge export and import, and the clone paths                                                                                                                                                                                                                                                                                                                                                                                                                      | P0                                                      | Fork-and-subagents acceptance (§E3): edit-and-fork, a multi-agent fork, a subagent `mode: "fork"`, crash-resume of a fork op (kill between phases); hibernation tests (evict between turns, redelivery deduplicated); a fork at sequence N equals the parent's state at N (ledger, participants, agent anchors)                                                                                                                                                                                                                                                                                         | 12              |
+| **P5 GAD, decentralized**            | Canonical Dolt database and participant work cells (§5.1); the state model, contexts as branches; integration by F1 merge, `pull` and `push` (§5.5); grants and approval as grant issuance (§5.6); work-cell create, retire (§5.7); a derived `commit_index`, `content_roots`; replay migration (Q2); delete the fact-map, radix and frontier machinery                                                                                                                                                                                                                                             | P0, P4 (agent forks), the two _to verify_ items         | The provenance plan's acceptance matrix (§14), re-expressed over commit hashes and passing in full; the decentralization gates of §5.13; replay equivalence: for each real workspace snapshot available, every legacy event's materialized tree hash equals the replayed commit's, and blame answers match on a sampled set; the **size gate** (a replayed workspace database and the fork latency at that size, recorded); checkout and merge benchmarks: checkout **p95 within 20 ms with `fsync` and 10k local rows** (the fork measured 14 to 16 ms), a context switch batched per participant turn | 20              |
+| **P6 Chronolog capability**          | Chronolog node deployed per workspace node; the `chronolog` host service; key custody; invite and join; agent writes through approval; Chronolog authority for pushes into a shared GAD `main` (§8.4); the cross-workspace P2P carrier for Dolt remotes                                                                                                                                                                                                                                                                                                                                             | Chronolog fork phase 4, P0, the P2P cross-workspace run | Two workspace instances on two nodes: create a group, invite, write from both sides, see an owner-row rejection, run a replay flip (Chronolog's demo as a system test); a GAD push between workspaces authorised by group membership                                                                                                                                                                                                                                                                                                                                                                    | 8               |
 
 **Critical path:** P0 → P2 → P4 → P5. Two pieces can run in parallel: P3
 after P2, and P6 after P0 plus the cross-workspace carrier.
@@ -1966,52 +1992,52 @@ after P2, and P6 after P0 plus the cross-workspace carrier.
     the whole file (C5).
   - A context switch is a checkout, **7 to 15 ms with `fsync`**, not 2 ms.
     GAD batches a participant's writes per context.
-  - *Mitigation*: measure in P4 and P5. The benchmark covers 10k commits per
+  - _Mitigation_: measure in P4 and P5. The benchmark covers 10k commits per
     cell: latency, bytes per commit, GC time, and checkout p95.
   - Bytes are kept out of Dolt (§5.10).
-  - *Measured at P3 (§4.2)*: the commit is about 1.3 ms and no extra flush; the
+  - _Measured at P3 (§4.2)_: the commit is about 1.3 ms and no extra flush; the
     cost is one root record, about three flushes, per transaction, and every direct
     call writes a replay nonce. Count transactions per call, not commits.
 - **R2. Facet and remote paths not yet exercised by Vibestudio.** Dolt facets
-  and F7 are delivered, but Vibestudio runs neither. *Mitigation*: P0's probe
+  and F7 are delivered, but Vibestudio runs neither. _Mitigation_: P0's probe
   covers a Dolt root; P2 is the smallest facet consumer; the facet relay and
   the post-push notification (§3.2) are verified before P5.
 - **R3. Semantic change in GAD integration (Q1, accepted).** Agents and
   skills learn that clean changes merge without per-change decisions.
-  *Mitigation*: the P5 gate includes the skills documentation cutover
+  _Mitigation_: the P5 gate includes the skills documentation cutover
   (provenance plan §12).
 - **R4. A held kernel pins its owner.** Memory per open notebook rises with
   the number of owners holding heaps, and with Q3 (no idle release) it
-  rises until an explicit end. *Mitigation*: the node budget refuses
+  rises until an explicit end. _Mitigation_: the node budget refuses
   explicitly (§7.4), and every end condition (dispose, reset, archive,
   revocation) releases.
 - **R5. GAD replay cost.** Large workspaces may take minutes to replay.
-  *Mitigation*: replay runs as a resumable import (commits are its
+  _Mitigation_: replay runs as a resumable import (commits are its
   checkpoints). Q2 chose replay.
 - **R6. History is retention (L7).** A user who wants content gone must
   rewrite history. CAS bytes can be swept only after no retained commit
   references them. F7 has no force push, so a purge cannot be pushed:
-  every cell holding the history must rewrite it. *Mitigation*: secrets
+  every cell holding the history must rewrite it. _Mitigation_: secrets
   never enter Dolt. A purge operation is designed in P5 and is not built
   before it is needed. `dolt_rebase` is not exposed (§3.2).
 - **R7. A write outside `committedTransaction`.** F2 removed the crash window,
   but a class that writes versioned state with plain SQL leaves a dirty
-  working set that the next commit sweeps in. *Mitigation*:
+  working set that the next commit sweeps in. _Mitigation_:
   `assertCleanWorkingSet()` in tests and in the dev host (§4.2).
 - **R8. Engine maturity.** DoltLite 0.51 has no published test suite
-  (fork design §7). *Mitigation*: the fork's harness, plus Vibestudio's
+  (fork design §7). _Mitigation_: the fork's harness, plus Vibestudio's
   probes. Determinism is not relied on outside Chronolog.
 - **R9. Decentralized-merge hazards.**
-  - *Fork cost.* A work cell is a whole-file copy. Mitigation: the size gate
+  - _Fork cost._ A work cell is a whole-file copy. Mitigation: the size gate
     (§5.1); the sharding fallback.
-  - *Publication contention.* Many participants pushing to `main`. Mitigation:
+  - _Publication contention._ Many participants pushing to `main`. Mitigation:
     only a hash comparison contends, a bounded `pull`+`push` retry, and
     per-participant `pub/` namespaces for everything else (§5.5.3).
-  - *Divergent decisions.* The rule in §5.5.3.
-  - *No push hook.* The canonical may learn late that `main` moved.
+  - _Divergent decisions._ The rule in §5.5.3.
+  - _No push hook._ The canonical may learn late that `main` moved.
     Mitigation: a follow-up RPC and reconciliation from `hashOf("main")`
     (§3.2).
-  - *Trust.* The canonical enforces only the fast-forward rule; the other
+  - _Trust._ The canonical enforces only the fast-forward rule; the other
     invariants hold because every cell runs the same code. This is enough in
     one trust domain and not across workspaces (§8.4).
 - **R10. A fork forgets its authority.** A forked work cell has no remotes
@@ -2044,6 +2070,7 @@ The user answered Q1 to Q5 on 2026-11-13. The record:
   branches and merge back with F7 and F1.
 
 Still open for the user:
+
 - the retention horizon of `retired/*` branches in the canonical GAD database
   (§5.7), which trades provenance for size;
 - whether a user's own devices are separate participants (the proposal) or one

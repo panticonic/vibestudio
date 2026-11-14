@@ -83,7 +83,11 @@ async function timed(url: string, ms: number) {
   const started = Date.now();
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(ms) });
-    return { status: response.status, body: (await response.text()).slice(0, 300), ms: Date.now() - started };
+    return {
+      status: response.status,
+      body: (await response.text()).slice(0, 300),
+      ms: Date.now() - started,
+    };
   } catch (error) {
     return { status: 0, body: String(error), ms: Date.now() - started };
   }
@@ -99,15 +103,27 @@ it.skipIf(!celldTestBinary())(
     console.log("spin with cpuMs=1000:", JSON.stringify(spin));
     const root = await timed(`${base}/anything?object=owner`, 20_000);
     const sibling = await timed(`${base}/kernel/info?object=other`, 20_000);
-    console.log("after the spin: root", JSON.stringify(root), "sibling kernel", JSON.stringify(sibling));
+    console.log(
+      "after the spin: root",
+      JSON.stringify(root),
+      "sibling kernel",
+      JSON.stringify(sibling)
+    );
     // The limit is per invocation: fixed CPU work, three times over, each under the limit.
-    const born = ((await (await fetch(`${base}/kernel/info?object=owner`)).json()) as { born: string }).born;
+    const born = (
+      (await (await fetch(`${base}/kernel/info?object=owner`)).json()) as { born: string }
+    ).born;
     const again: unknown[] = [];
-    for (let i = 0; i < 3; i++) again.push(await timed(`${base}/kernel/work?object=owner&n=150000000`, 20_000));
+    for (let i = 0; i < 3; i++)
+      again.push(await timed(`${base}/kernel/work?object=owner&n=150000000`, 20_000));
     console.log("same kernel after the ended call:", JSON.stringify(again));
-    const afterWork = ((await (await fetch(`${base}/kernel/info?object=owner`)).json()) as { born: string }).born;
+    const afterWork = (
+      (await (await fetch(`${base}/kernel/info?object=owner`)).json()) as { born: string }
+    ).born;
     console.log("heap kept across within-limit calls:", born === afterWork);
-    const afterSpin = ((await (await fetch(`${base}/kernel/info?object=owner`)).json()) as { born: string }).born;
+    const afterSpin = (
+      (await (await fetch(`${base}/kernel/info?object=owner`)).json()) as { born: string }
+    ).born;
     console.log("heap kept across the ended call:", afterWork === afterSpin);
     expect(spin.status).not.toBe(200);
     expect(spin.ms).toBeLessThan(25_000);
