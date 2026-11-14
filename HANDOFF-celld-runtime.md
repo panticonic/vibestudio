@@ -3,8 +3,8 @@
 Branch `feat/celld-runtime` (worktree `/home/werg/vibestudio-worktrees/celld-cutover`),
 rebased onto `origin/main` `73e5ba525`. Not pushed.
 
-Fork binary: `unified-fork` `4b74341` (release, `/home/werg/celld-harness-bin/celld-uf-4b74341`,
-sha256 `56ace9963f096a0c4c6378d8476e890a51b055ced0110f3d6ff11fc165b9a3c7`,
+Fork binary: `unified-fork` `8a4ab46` (release, `/home/werg/celld-harness-bin/celld-uf-8a4ab46`,
+sha256 `a047b11af51171ea8adecd4551f9469ffd78b8876b22c350ad5b92ffbfeb1358`,
 named by `native/celld/targets.json`). Stage it with
 `node scripts/stage-native-celld.mjs --from <binary>` or set
 `VIBESTUDIO_CELLD_BIN=<absolute path>`.
@@ -31,7 +31,7 @@ named by `native/celld/targets.json`). Stage it with
 
 Also found by running the real product (`pnpm system-test`):
 - SES `lockdown()` replaces `Function` with an evaluator that rejects any source mentioning an import expression (the eval engine's own source does), and `createPrivateGuestGlobal` refuses a realm that can still compile. Fix: `workerdRealm.ts` sets the realm's compiler aside (`captureRealmCompiler`) before lockdown with `evalTaming: "no-eval"`; EvalDO compiles through `getRealmCompiler()`. (The audit's V7 "verified" probe did not include an import-expression source.)
-- celld's per-isolate V8 heap limit defaults to 128 MB; the supervisor sets `CELLD_V8_HEAP_LIMIT_MB=512` (`VIBESTUDIO_RUNTIME_HEAP_LIMIT_MB` overrides). Without it EvalDO runs failed with "the isolate is over its V8 heap limit".
+- celld's per-isolate V8 heap limit defaults to 128 MB; the supervisor sets `CELLD_V8_HEAP_LIMIT_MB=1024` (512 until 8a4ab46 testing: see below) (`VIBESTUDIO_RUNTIME_HEAP_LIMIT_MB` overrides). Without it EvalDO runs failed with "the isolate is over its V8 heap limit".
 - Product classes answer the host's storage-destroy lifecycle call (class secret `LIFECYCLE_SECRET__<Class>`, `__vibestudio_destroy`); entity retirement of an internal object needs it.
 
 ## Migration (V6)
@@ -75,7 +75,7 @@ Verified on the real fork: `celldMigration.integration.test.ts` (workerd-schema 
 
 ```sh
 # staged or local fork binary
-export VIBESTUDIO_CELLD_BIN=/home/werg/celld-harness-bin/celld-uf-4b74341
+export VIBESTUDIO_CELLD_BIN=/home/werg/celld-harness-bin/celld-uf-8a4ab46
 cd /home/werg/vibestudio-worktrees/celld-cutover
 NODE_ENV=development systemd-run --user --scope --quiet -p MemoryMax=8G -p MemorySwapMax=0 node scripts/ensure-host-build.mjs
 systemd-run --user --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 pnpm type-check
