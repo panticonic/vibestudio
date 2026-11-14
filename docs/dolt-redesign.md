@@ -126,10 +126,12 @@ Consequences:
 
 **P2b, the general dynamic-code system (§7), is designed (2026-11-14
 decisions) and partly built:** the per-call nonce cost is fixed (§4.2), the
-admission function exists (§7.3, §7.12 step 2), and the D4 question is answered
-on the real fork (§7.8). **Not done:** the hosting helper, session entities, the
-kernel class in Base, pull delivery and the deletion of `evalService` and the
-`evalEngine` host schemas (§7.12 steps 3 to 6). `UNSAFE_EVAL` is already gone
+admission function exists (§7.3, §7.12 step 2), the D4 question is answered
+on the real fork (§7.8), and **the hosting helper is built (§7.2 "As built",
+§7.12 step 3)** on both durable bases, with Dolt support and the nonce gate in
+Base's `durable-base.ts`. **Not done:** session entities, the kernel class in
+Base, pull delivery and the deletion of `evalService` and the `evalEngine` host
+schemas (§7.12 steps 4 to 6). `UNSAFE_EVAL` is already gone
 (the cutover replaced it with `new Function` under the class's `codegen`
 declaration), so only its documentation remains.
 
@@ -1598,6 +1600,70 @@ const run = await kernel.call("start", input); // a call to the hosted class
   `resolveParentPanel` walks. The caller hosts its kernels in it with
   `hostCode`, like any other entity. No new identity mechanism exists.
 
+**As built (step 3, 2026-11-14).** The design above held except in two
+places, both forced by measurement:
+
+- **The binding names no entity.** A loaded unit is shared by every object of
+  a class and its `env` is fixed when the unit loads, so a per-entity
+  `ctx.exports.CodeHost({ props: { name } })` in the unit's `env` would give every
+  later entity the first one's root (the `owner-v1` unit of
+  `ownerKernelPathCelld.test.ts` has that flaw, which the probe did not
+  exercise). `CODE_HOST` is one unnamed service binding in every regular unit's
+  `env`. What selects the root is a **proof** the root puts in the facet's
+  `props` (`codeHost: { name, proof }`, an HMAC of the root's name under the
+  runtime's loader secret): `CodeHost` verifies it and hands the request to that
+  root only. A hosted class's unit gets no `CODE_HOST`, so code does not host
+  code. Props are per facet, so one isolate still serves every entity.
+- **Two manifests decide the grants, not a capability request.** The hosting
+  class declares `vibestudio.durable.classes[].hosts: [{ source, className }]`; the hosted
+  class declares `.hosted: { storage: "dolt", doltLocal, codegen, residency, limits: { cpuMs } }`
+  (`HostedClassManifest`, `packages/shared/src/types.ts`). Nothing else grants:
+  the host (`RuntimeManager.admitHostedCode`, route `/_dohost/<source>/<class>?host=<root key>`,
+  reached only with the UniversalDO class's own secret) refuses a class the
+  host does not declare (`EACCES`) or one not marked `hosted` (`EINVAL`).
+  A capability request in `authority.requests` would have gone through the build's
+  static authority analysis, which has no call to analyse here.
+
+Mechanics, each checked on the real fork (`universalDoHost.test.ts`, "hosting
+code in an entity"):
+
+- The UniversalDO class is deployed with `codegen` and `residency`; its loader
+  puts `celld: { codegen, residency }` and `limits: { cpuMs }` on a hosted unit
+  only. The unit key carries the grants, so the same code with another grant is
+  another isolate. The entity's own `do` facet still cannot compile.
+- `UniversalDO` keeps a map of hosted instances by the entity's name for them
+  (`code:<name>` facets, remembered in a root table so retirement deletes every
+  facet's storage), takes the residency hold when the class declares it, and
+  registers the `onrevoked` handler that calls the class's `__hosted/__revoked`
+  (the facet's own does not run). A refused hold warns and the class runs
+  unheld.
+- **The call route.** `hostCode` returns `{ call(method, ...args), release() }`.
+  A call is a POST of `{ args }` to `/<name>/__hosted/<method>` on the facet, which
+  only the root can name, so the class serves any `@rpc` method of its own
+  without a caller check (`serveHostedCall`, refused unless `ctx.props.host` is
+  set, so an ordinary object cannot be driven through it). Arguments and results
+  use the RPC JSON codec.
+- **Identity.** The host puts `host: { entityId, token }` in the hosted class's
+  props (an entity-pinned token, minted as `evalService.mintGatewayToken` did);
+  the base presents `entityId` and the token on outbound RPC. The hosted class
+  therefore acts as its entity: its context, lineage and sealed authority are the
+  entity's. Its network effects are attributed to its own class's egress identity.
+- **Both bases**: one helper (`packages/durable/src/codeHost.ts`, export
+  `@vibestudio/durable/codeHost`); Base's `durable-base.ts` now has `dolt`,
+  `committedTransaction`, `transactionSync`, the local nonce table and the
+  `DirectCallNonceGate` of §4.2, so a Base class can be a Dolt class.
+  A product class has no `ctx.props`; both bases read it defensively (the first
+  version did not, and the product DOs failed on `undefined.host`).
+- **Measured, not caused by this**: after a planned restart of the node, the first
+  call to any object in this harness waits about a minute (a plain `HostDO` call
+  too), so the drain test takes 63 s.
+- **Session entities are not built.** `createEntity` of a `do` class with the
+  initiating caller as the parent already gives the lineage `resolveParentPanel`
+  walks; what is missing is the `SessionDO` class and its authority (the session
+  checks that its caller is the principal it serves, because the host no longer
+  does). That is designed together with the kernel's call contract, since the
+  session's methods are the kernel's `start`, `await`, `events`, `cancel`.
+
 ### 7.3 One admission step for all dynamic code
 
 A kernel cannot mint its own execution session, so "no host check" holds for
@@ -1792,18 +1858,19 @@ Each step is a complete cut that keeps the system working.
    `evalService.prepareRun` with a general signature and its own tests;
    `evalService` calls it. **Done** (this pass).
 3. **The hosting helper** (§7.2): the `CodeHost` entrypoint on `UniversalDO`,
-   `hostCode` on both durable bases (Base's `durable-base.ts` also needs the
-   Dolt awareness it lacks: `committedTransaction`, the local nonce table, the
-   call-nonce gate of §4.2), the manifest grants through admission, and the
-   root's `onrevoked`. Then the session entities for panels, the CLI and the
-   runner.
+   `hostCode` on both durable bases (Base's `durable-base.ts` also got the Dolt
+   awareness it lacked: `committedTransaction`, the local nonce table, the
+   call-nonce gate of §4.2), the manifest grants through the host's admission,
+   and the root's `onrevoked`. **Done** (this pass, "As built" in §7.2).
+   **Not done:** the session entities for panels, the CLI and the runner (they
+   come with the kernel's call contract in step 4/5).
 4. **The kernel class in Base** hosted through (3), replacing the product
    `EvalDO`; the host-only schemas and the catalog entry go with it.
 5. **Pull** (§7.5) for each consumer in turn (agent loop, harness tool, CLI,
    runner), with the push machinery deleted when the last has moved.
 6. **The liveness supervisor** goes with step 4 (§7.8); `evalService` is
    deleted when the last caller has moved.
-   Steps 3 to 6 are **not done**; `HANDOFF-dolt-redesign.md` records where each
+   Steps 4 to 6 are **not done**; `HANDOFF-dolt-redesign.md` records where each
    stands.
 
 ---

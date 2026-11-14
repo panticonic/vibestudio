@@ -10,14 +10,14 @@ Branch `feat/dolt-p0` (worktree `/home/werg/vibestudio-worktrees/dolt-p0`), cut 
 
 ## State
 
-| Step                                                                                                                   | Status                                                                                                                                                                                                                                                                                                                                     |
-| ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 1. Design doc revised to the fork as shipped, GAD decentralized                                                        | done                                                                                                                                                                                                                                                                                                                                       |
-| 2. P0 Foundations                                                                                                      | done and verified                                                                                                                                                                                                                                                                                                                          |
-| 3. P2a: heap residency by a hold; the host kernel lease deleted                                                        | **done and gated** (below)                                                                                                                                                                                                                                                                                                                 |
-| 4. P2b: general dynamic code (§7 rewritten 2026-11-14 to the user's decisions)                                         | **partly done**: step 0 (per-call nonce) done and measured; §7 rewritten; the admission function (`admitDynamicCode`) built; D4 answered on the real fork; **not done:** the hosting helper, session entities, the kernel class in Base, pull delivery, deletion of `evalService`/`EvalDO` (§7.12 steps 3 to 6, "P2b: what remains" below) |
-| 5. P3 Durable services: `WorkspaceStateDO` (Dolt), the replaying import, the maintenance journal and `cloneDO` deleted | **done and gated**; the `panel-tree-navigation` "regression" was a pre-P3 gap in browser-panel agent calls ("P3 follow-up" below), and every call to a Dolt object costs about three flushes (measured, a decision for the user)                                                                                                           |
-| 6. P4 onward                                                                                                           | not started                                                                                                                                                                                                                                                                                                                                |
+| Step                                                                                                                   | Status                                                                                                                                                                                                                                                                                                                                                                   |
+| ---------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 1. Design doc revised to the fork as shipped, GAD decentralized                                                        | done                                                                                                                                                                                                                                                                                                                                                                     |
+| 2. P0 Foundations                                                                                                      | done and verified                                                                                                                                                                                                                                                                                                                                                        |
+| 3. P2a: heap residency by a hold; the host kernel lease deleted                                                        | **done and gated** (below)                                                                                                                                                                                                                                                                                                                                               |
+| 4. P2b: general dynamic code (§7 rewritten 2026-11-14 to the user's decisions)                                         | **partly done**: step 0 (per-call nonce), the admission function, D4 (measured) and **step 3, the hosting helper on both durable bases with Dolt support in Base (done, gated, below)**; **not done:** session entities, the kernel class in Base (step 4), pull delivery per consumer (step 5), deletion of `evalService`/`EvalDO` (step 6) - "P2b: what remains" below |
+| 5. P3 Durable services: `WorkspaceStateDO` (Dolt), the replaying import, the maintenance journal and `cloneDO` deleted | **done and gated**; the `panel-tree-navigation` "regression" was a pre-P3 gap in browser-panel agent calls ("P3 follow-up" below), and every call to a Dolt object costs about three flushes (measured, a decision for the user)                                                                                                                                         |
+| 6. P4 onward                                                                                                           | not started                                                                                                                                                                                                                                                                                                                                                              |
 
 ## Commits
 
@@ -36,11 +36,14 @@ vibestudio `feat/dolt-p0` (this pass, newest last):
 11. `083f47ec4` durable: a Dolt object admits a call from memory and records a mutating call's nonce in its own transaction (P2b step 0)
 12. `9a8a8cc44` docs: §7 is a general dynamic-code system; the CPU-limit probe `celldCpuWatchdogCelld.test.ts` (D4)
 13. `1f61b1447` dynamic code: one admission function (`dynamicCodeAdmission.ts`), called by `evalService`
-14. (this handoff)
+14. `253763068` handoff: state only what was checked (earlier pass)
+15. `9065f0ae8` dynamic code: any entity hosts a class in its own cell (`CodeHost` on `UniversalDO`, `hostCode` on the durable base; §7.2 "As built")
+16. `6b932b884` durable: a product class has no per-object props; the hosting props are read defensively (a bug of 15 found by `internalStorageWorkerd.test.ts`)
+17. docs: §7.2 as built, §7.12 step 3; this handoff
 
 Earlier: `72b682e86`, `1ca22c6f8`, `4a81ab2c7`, `7d5bc1775`, `01ef6ffe9`, `0019b6d35`.
 
-Base `feat/dolt-p2`: `a14ef7c` skills: the eval notebook heap is held until an explicit end, not for a
+Base `feat/dolt-p2`: `dbc66e5` durable base: Dolt support (`committedTransaction`, `transactionSync`, the call-nonce gate of `083f47ec4`) and `hostCode`; `340a236` reads the hosting props defensively; `a14ef7c` skills: the eval notebook heap is held until an explicit end, not for a
 30-minute idle lease (EVAL.md, TOOLS.md, WORKFLOW.md); `473acbb` panels: agent calls on a browser panel are answered by the host
 (`panelRuntime.ts`, test, `PANEL_API.md`).
 
@@ -213,27 +216,82 @@ one test per `run`, concurrency 1, 420 s, Base worktree as above. "Before" is th
 No test showed a hang, a residency problem or an input-gate error. No lane test failed with an attestation error (the failures above are model errors or the known ones); the re-stamp path is proved by its unit tests and the live latency numbers, and was not counted in a server log. The run left no process behind:
 instances `p2bbase`, `p2bafter*`, `p2blane` are stopped.
 
-### P2b: what remains (`docs/dolt-redesign.md` §7.12, steps 3 to 6)
+### Step 3: the hosting helper (commits `9065f0ae8`, `6b932b884`; Base `dbc66e5`, `340a236`)
 
-Not started, and why each is more than one step:
+What exists, and how it differs from the design as first written, is `docs/dolt-redesign.md` §7.2 "As built". In short: any
+entity calls `this.hostCode({ name, executable: { source, className } })` and gets `{ call(method, ...args), release() }`;
+`UniversalDO` (now deployed with `codegen` and `residency`) loads the class as a unit carrying the grants, takes the hold,
+relays a drain to the class and ends it with the entity; the host admits it only if the host class declares
+`durable.classes[].hosts` and the hosted class declares `durable.classes[].hosted` (`RuntimeManager.admitHostedCode`, gateway
+route `/_dohost/`). The `CODE_HOST` binding is unnamed (a proof in the facet's props selects the root: a shared unit cannot carry a
+per-entity binding). A hosted class acts as its entity (`props.host`). One helper, `packages/durable/src/codeHost.ts`, serves both
+bases; Base's `durable-base.ts` got `dolt`, `committedTransaction`, `transactionSync`, the local nonce table and the
+`DirectCallNonceGate` (and `createTestDO` takes a `storage`, so Base tests can run on `FakeDoltStorage`).
 
-- **Hosting helper.** `UniversalDO` (`workerdPrograms/universalDo.ts`, 430 lines) creates only the `do` facet with
-  `ctx.facets.get("do", () => ({ class }))`. It needs a `CodeHost` entrypoint per entity (`ctx.exports`, props the entity cannot change),
-  the executable admission (`/_doadmission`) returning the entity's permitted `celld` grants (`codegen`, `residency`, `storage: "dolt"`,
-  `doltLocal`, `limits.cpuMs`) from its manifest, the root's `onrevoked` relay, and `hostCode` on both durable bases. Base's
-  `durable-base.ts` also needs Dolt support first (`committedTransaction`, a `dolt` getter, `vsl_` local nonce table, the call-nonce gate).
-  The probes for the mechanics exist (`doltEvalKernelCelld.test.ts`, `ownerKernelPathCelld.test.ts`).
-- **Session entities** for panels, the CLI and the runner: `ensureEvalDO`'s hand registration (`store.activate`/`advanceExecution`:
-  `parentId`, `ownerUserId`, `agentBinding`, `stateArgs`, finite or persistent) becomes `runtime.createEntity` of a `session:<principal>:<scope>`
-  UniversalDO. `resolveParentPanel` walks the lineage, so `parentId` must be preserved.
-- **The kernel class in Base** (`EvalDO.ts` is 4,6k lines in `packages/builtin/src/eval-engine/`, the engine is workspace-owned): no
-  `internalDOExecutionIdentity`, `hostOnly` schemas (`service-schemas/evalEngine.ts`), catalog entry or `INTERNAL_DO_ENV`.
-  D5: legacy objects are not imported; the restart report must say it.
-- **Pull** (D3): `resultReceiver`, `onEvalComplete`, `onEvalProgress`, the event-sink routes, `acknowledge`, `eval_result_redeliveries`
-  go; the consumers are Base's `agentic-do` (`native-eval-tool.ts`, `native-agent-owner.ts`, `agent-vessel.ts`, `rpc-contract.ts`),
-  `harness/src/tools/eval.ts`, the CLI `evalCommand.ts`, the system-test runner (about 51 Base files reference the eval client).
-- `rg 'evalService|EvalDO|UNSAFE_EVAL|resultReceiver|eval_result_redeliveries'` therefore still has every hit it had; none is new, and
-  `UNSAFE_EVAL` has docs-only hits (plans). The authority-ledger rows are unchanged.
+Tests: real fork, `universalDoHost.test.ts` "hosting code in an entity" (4 tests: compile + Dolt commit + identity + isolation
+between entities; refusals incl. a forged proof; a CPU limit ends a spin and the same instance answers; a drain reaches the class
+through its root's handler), `packages/durable/src/codeHost.test.ts` (7), Base `durable-base.dolt.test.ts` (6).
+
+Gate (this step): `pnpm type-check`, `pnpm lint`, `type-check:userland:base` clean. `vitest run packages/durable packages/shared
+packages/service-schemas packages/builtin`: 185 files, 1963 pass (before: 184, 1956). Host vitest `src/server/services`, `doDispatch`,
+`workerdRpcRelay`, `runtimeManager`, `rpcServer`: 188 files pass, 1 fails (`runtimeService.test.ts` "starts an unbound native
+execution clone fresh", pre-existing). Base userland `packages/runtime/src/worker` + `packages/agentic-do`: 62 files, 675 pass. Real-fork
+host suites (the P2 list + `workspaceStateCelld`, `celldCpuWatchdogCelld`, one worker): 14 files, 71 pass, 2 skipped; the one
+failure of the first run (`internalStorageWorkerd`, 11 tests: product classes have no `ctx.props`, my bug) was fixed and the file
+passes (14 pass, 2 skipped).
+
+System-test lanes, `openai-codex:gpt-6-luna`, a fresh instance per 3 to 5 tests, one test per `run`, concurrency 1, 420 s, fork
+9440c29, Base worktree + the symlink root. "Before" is "Gate, this pass (steps 0 to 2)" above.
+
+| Lane                   | Before                                                                                                                             | After (step 3)                                                                                                                                                                                                                 |
+| ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| eval-lifecycle (11)    | 11 pass                                                                                                                            | **11 pass** (`eval-db-persistence` failed once, passed on the re-run)                                                                                                                                                          |
+| agentic-runtime (9)    | 6 pass, 3 fail                                                                                                                     | **7 pass, 2 fail**: `state-args-immediate-snapshot` and `workspace-test-runner-extension` (both fail on the pre-change commits); `agent-debug-state-method` passed this time                                                   |
+| smoke (4)              | 4 pass                                                                                                                             | **3 pass**, `file-search-read-tools` fails (2 of 2 here, and **2 of 2 on the pre-change commits `253763068` + Base `473acbb`**: the "no `grep` run" sample, so not this step)                                                  |
+| workers (9)            | 8 pass                                                                                                                             | **9 pass** (`create-destroy` and `dynamic-workspace-service` failed or errored once each, then passed: `create-destroy` 1 of 1, `dynamic-workspace-service` 3 of 3 here; the pre-change build 2 of 2; `call-do-method` passed) |
+| harness-resilience (5) | 5 pass                                                                                                                             | **5 pass**                                                                                                                                                                                                                     |
+| panels                 | `browser-panel`, `panel-list-sources`, `panel-tree-navigation` pass; `create-panel` fails; `browser-import-panel-lifecycle` 0 of 0 | **the same** (`panel-list-sources` failed once, passed on the re-run; `create-panel` fails with model errors as before)                                                                                                        |
+
+No test showed a hang, an attestation error or an input-gate error. The pre-change checks checked out the two commits in the same
+worktrees (detached), rebuilt, ran, and went back to the branches (rebuilt); nothing was left detached. All instances are stopped.
+
+### P2b: what remains (`docs/dolt-redesign.md` §7.12 steps 3c to 6), with what this pass learned
+
+Not started, and each is more than one pass; sizes are from reading the code, not estimates of effort:
+
+- **Session entities (step 3c).** `internal.createEntity(caller, spec)` of `runtimeService` is the creation path
+  (`createEntity({ lifecycleCaller, initiatingCaller }, spec)`); a `kind: "do"` spec with the initiating caller as parent
+  gives the `parentId` lineage `resolveParentPanel` walks. A `kind: "session"` entity already exists but is inert (no code, no root),
+  so the session must be a `do` class (`workers/session`, `SessionDO`, Base) with `hosts` for the kernel. What is missing is the class,
+  its authority (the host no longer checks "may this caller reach that kernel": the session must check that its caller is the
+  principal it serves, from its `stateArgs`) and its method set, which is the kernel's contract (`start`, `await`, `events`,
+  `cancel`, `reset`, scope reads). Design it with step 4; `ensureEvalDO`'s hand registration (`store.activate`/`advanceExecution`,
+  `ownerUserId`, `agentBinding`, finite or persistent lifecycle) is what it replaces.
+- **Kernel class in Base (step 4).** `EvalDO.ts` is 4,490 lines and depends on `executionJournal.ts` (778), `evalSurfaceHelp.ts` (606),
+  `evalOwnerBindings.ts`, `outsideContent.ts`, `consoleStreamer.ts`, `evalNatlangProvider.ts`, `evalNodeCompat.ts`,
+  `moduleNamespace.ts` (about 7.5k lines), with about 7.6k lines of tests (`EvalDO.cancel.test.ts` alone is 4,169, on a SQLite fake).
+  It uses `@schemaRpc()` methods under the host-only `evalEngineMethods` table, the resident-session and callback machinery, the
+  `INTERNAL_DO_ENV` provider bindings (`EVAL_ENGINE_SOURCE`, runtime source), and host-settlement paths. It becomes a `hosted`
+  Dolt class (`storage: "dolt"`, `codegen`, `residency`, `limits.cpuMs`) on Base's durable base with ordinary `@rpc` methods, imports
+  the engine (`@workspace/eval`) directly, takes its identity from `props.host`, and keeps `onHostedRevoked` as today's scope
+  persistence on a drain. `internalDOExecutionIdentity`, `INTERNAL_DO_ENV`, the catalog entry and `service-schemas/evalEngine.ts`
+  go with it. Things to settle there: the egress identity of a hosted class is its own class's, not the host's (state that or change
+  `registerDoEgressCaller`); `admitHostedCode` mints an entity token with `tokenManager.ensureToken(entityId, "do")` on every
+  admission (idempotent, as `mintGatewayToken` was). D5: say in the restart report that legacy `EvalDO` scopes and unacknowledged
+  receipts are dropped.
+- **Pull (step 5)** per consumer, in the order of the task: agent (Base `agentic-do`: `native-eval-tool.ts` sets
+  `resultReceiver: { kind: "caller" }`; `native-agent-owner.ts` `onEvalComplete`; `agent-vessel.ts` `onEvalComplete`/`onEvalProgress`,
+  about 300 lines around 3840 and 4110; `rpc-contract.ts`; `harness/src/tools/eval.ts` `formatEvalResult`), then panels, the CLI
+  (`evalCommand.ts`), the runner. About 51 Base files reference the eval client; the ones that matter are the above plus
+  `skills/sandbox` docs.
+- **Deletion (step 6)** is unchanged by this pass: `rg 'evalService|EvalDO|UNSAFE_EVAL|resultReceiver|eval_result_redeliveries'` still
+  has every hit it had (none new). The per-run liveness supervisor goes when kernels are hosted classes with `limits.cpuMs`
+  (the mechanism now exists; no kernel uses it yet). `recoverUnresponsiveSandbox` stays.
+- **Unexplained, not investigated:** after a planned restart of the node (`restartWorkerd`) in the `universalDoHost` harness the first
+  call to any object takes about 60 s (a plain object too; the log shows `NodeFenced` on the first admission fetch). The product's
+  lanes do not show it. Repro: the "a drain tells the hosted class" test, which takes 63 s.
+- **Fork gaps:** none new. (The per-run CPU limit request of the previous pass stands: `getDurableObjectClass` takes only `props`, so
+  `cpuMs` is per loaded unit.)
 
 ## P3 Durable services: what was built (`docs/dolt-redesign.md` §4.6 has the design and the deviations)
 
