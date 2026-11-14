@@ -386,6 +386,14 @@ export interface DirectRpcNonceStorage {
   transactionSync<T>(callback: () => T): T;
 }
 
+/** The nonce table on a SQLite store. */
+export const DIRECT_RPC_NONCE_TABLE = "_vibestudio_direct_rpc_nonces";
+/**
+ * The nonce table on a Dolt store. The ledger is identity-bound state (L3), so
+ * it must match a `doltLocal` pattern, and a pattern cannot start with `_`.
+ */
+export const DIRECT_RPC_NONCE_LOCAL_TABLE = "vsl_direct_rpc_nonces";
+
 /**
  * Receiver-owned, durable replay ledger.
  *
@@ -396,20 +404,30 @@ export interface DirectRpcNonceStorage {
  */
 export class DurableDirectRpcNonceLedger {
   #ready = false;
+  readonly #table: string;
 
-  constructor(private readonly storage: DirectRpcNonceStorage) {}
+  constructor(
+    private readonly storage: DirectRpcNonceStorage,
+    options: { readonly table?: string } = {}
+  ) {
+    const table = options.table ?? DIRECT_RPC_NONCE_TABLE;
+    if (table !== DIRECT_RPC_NONCE_TABLE && table !== DIRECT_RPC_NONCE_LOCAL_TABLE) {
+      throw new Error(`Unsupported direct RPC nonce table: ${table}`);
+    }
+    this.#table = table;
+  }
 
   consume(nonce: string, expiresAt: number, now = Date.now()): boolean {
     if (!isAttestationNonce(nonce) || expiresAt <= now) return false;
     this.ensureReady();
     return this.storage.transactionSync(() => {
-      this.storage.exec(`DELETE FROM _vibestudio_direct_rpc_nonces WHERE expires_at <= ?`, now);
+      this.storage.exec(`DELETE FROM ${this.#table} WHERE expires_at <= ?`, now);
       const existing = this.storage
-        .exec(`SELECT nonce FROM _vibestudio_direct_rpc_nonces WHERE nonce = ?`, nonce)
+        .exec(`SELECT nonce FROM ${this.#table} WHERE nonce = ?`, nonce)
         .toArray();
       if (existing.length > 0) return false;
       this.storage.exec(
-        `INSERT INTO _vibestudio_direct_rpc_nonces(nonce, expires_at) VALUES (?, ?)`,
+        `INSERT INTO ${this.#table}(nonce, expires_at) VALUES (?, ?)`,
         nonce,
         expiresAt
       );
@@ -420,7 +438,7 @@ export class DurableDirectRpcNonceLedger {
   private ensureReady(): void {
     if (this.#ready) return;
     this.storage.exec(
-      `CREATE TABLE IF NOT EXISTS _vibestudio_direct_rpc_nonces (
+      `CREATE TABLE IF NOT EXISTS ${this.#table} (
         nonce TEXT PRIMARY KEY,
         expires_at INTEGER NOT NULL
       ) WITHOUT ROWID`

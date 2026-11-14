@@ -31,6 +31,8 @@ import {
   type AttestedCaller,
 } from "@vibestudio/rpc/internal";
 import {
+  DIRECT_RPC_NONCE_LOCAL_TABLE,
+  DIRECT_RPC_NONCE_TABLE,
   DurableDirectRpcNonceLedger,
   directRpcInvalidAttestationFailure,
   directRpcDenial,
@@ -78,6 +80,15 @@ import {
   validateDurableObjectSchemaIndexes,
 } from "./schema.js";
 import { InvocationContext } from "./invocation-context.js";
+import {
+  assertCleanWorkingSet,
+  committedTransactionSync,
+  doltStorageOf,
+  type DoltStorage,
+  type DoltTransactionCommit,
+  type DoltTransactionOptions,
+} from "./dolt.js";
+export type { DoltStorage, DoltTransactionCommit, DoltTransactionOptions } from "./dolt.js";
 import { DurableWorkReadiness } from "./durable-work-readiness.js";
 export { DurableWorkReadiness } from "./durable-work-readiness.js";
 
@@ -105,8 +116,10 @@ export interface DurableObjectContext {
     setAlarm(scheduledTime: number | Date): void;
     getAlarm(): Promise<number | null>;
     deleteAlarm(): void;
-    transactionSync<T>(callback: () => T): T;
-    transaction<T>(callback: () => Promise<T>): Promise<T>;
+    transactionSync<T>(callback: () => T, options?: DoltTransactionOptions<T>): T;
+    transaction<T>(callback: () => Promise<T>, options?: DoltTransactionOptions<T>): Promise<T>;
+    /** celld `ctx.storage.dolt`: present only on a Dolt cell or a Dolt facet. */
+    dolt?: DoltStorage;
   };
   acceptWebSocket(ws: WebSocket, tags?: string[]): void;
   getWebSockets(tag?: string): WebSocket[];
@@ -200,10 +213,15 @@ export abstract class DurableObjectBase {
   constructor(ctx: DurableObjectContext, env: unknown) {
     this.ctx = ctx;
     this.sql = ctx.storage.sql as TypedSqlStorage;
-    this.directRpcNonces = new DurableDirectRpcNonceLedger({
-      exec: (query, ...bindings) => this.sql.exec(query, ...bindings),
-      transactionSync: (callback) => this.ctx.storage.transactionSync(callback),
-    });
+    this.directRpcNonces = new DurableDirectRpcNonceLedger(
+      {
+        exec: (query, ...bindings) => this.sql.exec(query, ...bindings),
+        transactionSync: (callback) => this.ctx.storage.transactionSync(callback),
+      },
+      // The ledger is identity-bound (L3): on a Dolt store it lives in a table
+      // a `doltLocal` pattern can match, so no commit, fork or reset carries it.
+      { table: ctx.storage.dolt ? DIRECT_RPC_NONCE_LOCAL_TABLE : DIRECT_RPC_NONCE_TABLE }
+    );
     this.env = env as Record<string, unknown>;
     this.durableWorkReadiness = new DurableWorkReadiness(
       {
@@ -216,6 +234,29 @@ export abstract class DurableObjectBase {
   }
 
   protected abstract createTables(): void | Promise<void>;
+
+  /** `ctx.storage.dolt`, or `null` on a SQLite cell. */
+  protected get dolt(): DoltStorage | null {
+    return doltStorageOf(this.ctx.storage);
+  }
+
+  /**
+   * Write versioned state and commit it in one durable step (F2): the writes
+   * and the Dolt commit are one root record, so no crash leaves them apart and
+   * nothing needs recovering at activation. `describe` renders the commit
+   * message from the facts `fn` wrote (L2) and may return `null` to leave the
+   * writes uncommitted. On a SQLite cell this is a plain `transactionSync`.
+   * Not for a nested transaction on a Dolt cell (the fork refuses it).
+   */
+  protected committedTransaction<T>(describe: DoltTransactionCommit<T>, fn: () => T): T {
+    return committedTransactionSync(this.ctx.storage, describe, fn);
+  }
+
+  /** Throws if versioned rows were written outside `committedTransaction`; see `assertCleanWorkingSet`. */
+  protected assertCleanWorkingSet(): void {
+    const dolt = this.dolt;
+    if (dolt) assertCleanWorkingSet(dolt);
+  }
 
   /** Restore activation-local state synchronously after schema admission.
    * Network setup and resource acquisition belong to their owning operation. */
