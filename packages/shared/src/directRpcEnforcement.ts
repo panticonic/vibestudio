@@ -435,6 +435,27 @@ export class DurableDirectRpcNonceLedger {
     });
   }
 
+  /** Whether the nonce is already recorded (a read: no write, no flush). */
+  has(nonce: string, now = Date.now()): boolean {
+    this.ensureReady();
+    return (
+      this.storage
+        .exec(`SELECT nonce FROM ${this.#table} WHERE nonce = ? AND expires_at > ?`, nonce, now)
+        .toArray().length > 0
+    );
+  }
+
+  /** Insert the nonce inside the caller's own transaction (no transaction of its own). */
+  insertWithinTransaction(nonce: string, expiresAt: number, now = Date.now()): void {
+    this.ensureReady();
+    this.storage.exec(`DELETE FROM ${this.#table} WHERE expires_at <= ?`, now);
+    this.storage.exec(
+      `INSERT OR IGNORE INTO ${this.#table}(nonce, expires_at) VALUES (?, ?)`,
+      nonce,
+      expiresAt
+    );
+  }
+
   private ensureReady(): void {
     if (this.#ready) return;
     this.storage.exec(
@@ -444,6 +465,164 @@ export class DurableDirectRpcNonceLedger {
       ) WITHOUT ROWID`
     );
     this.#ready = true;
+  }
+}
+
+/** The error code of a call refused only because its attestation predates the receiver's activation. */
+export const ATTESTATION_STALE_CODE = "ERR_ATTESTATION_STALE";
+
+/** Whether a failure is a receiver's refusal of an attestation that predates its activation (nothing ran). */
+export function isStaleAttestationFailure(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === ATTESTATION_STALE_CODE
+  );
+}
+
+/**
+ * The host re-issues the same attestation, same nonce, with a fresh `issuedAt`
+ * and the same lifetime, after a stale refusal. The refused attempt never
+ * entered the receiver's set, so the nonce is still unused; only the host can
+ * do this (a replayed copy keeps its old `issuedAt`).
+ */
+export function restampAttestation<T extends { issuedAt: number; expiresAt: number }>(
+  attestation: T,
+  now = Date.now()
+): T {
+  return {
+    ...attestation,
+    issuedAt: now,
+    expiresAt: now + (attestation.expiresAt - attestation.issuedAt),
+  };
+}
+
+/** Run one direct call; if it was refused as stale, run it once more with a re-stamped attestation. */
+export async function retryOnStaleAttestation<
+  A extends { issuedAt: number; expiresAt: number; method?: string },
+  T,
+>(initial: A | undefined, attempt: (attestation: A | undefined) => Promise<T>): Promise<T> {
+  try {
+    return await attempt(initial);
+  } catch (error) {
+    if (!initial || !isStaleAttestationFailure(error)) throw error;
+    // Once per object activation, not per call: worth a trace when diagnosing latency.
+    console.debug(
+      `[DirectRpc] re-stamping an attestation refused as stale: ${initial.method ?? ""}`
+    );
+    return await attempt(restampAttestation(initial));
+  }
+}
+
+export type DirectCallAdmission =
+  | { readonly ok: true; readonly pending: PendingCallNonce | null }
+  | { readonly ok: false; readonly reason: "replayed" | "stale" | "invalid" };
+
+/**
+ * A mutating call's nonce that the call's own first transaction records (so a
+ * durable nonce costs no flush of its own). `persisted` flips only when that
+ * transaction committed.
+ */
+export class PendingCallNonce {
+  persisted = false;
+  /** A transaction that records it is open (a nested one need not record it again). */
+  recording = false;
+  /**
+   * The object's storage change counter when the call was admitted. A call that
+   * changed nothing durable has nothing for a replay to repeat in storage, so it
+   * records no nonce (a pure no-op would otherwise cost the call's only flush).
+   */
+  baseline: number | null = null;
+  constructor(
+    readonly nonce: string,
+    readonly expiresAt: number
+  ) {}
+}
+
+/**
+ * The replay protection of a direct call to a **Dolt** object, where every
+ * transaction is a root record and a device flush, so the per-call durable nonce
+ * of {@link DurableDirectRpcNonceLedger} would double the cost of every call.
+ *
+ * - **Every call** is admitted against a bounded in-memory set and a floor: a
+ *   request whose attestation was issued at or before the floor is refused as
+ *   `stale`. The floor is this activation's start, so nothing a previous
+ *   activation could have accepted is accepted again, and it rises when the
+ *   set is full (the oldest entry is dropped and the floor moves to its
+ *   `issuedAt`: a hole is never opened, only a legitimate request is
+ *   re-signed). The host re-stamps and resends a `stale` refusal (it never
+ *   executed), see `ATTESTATION_STALE_CODE`.
+ * - **A mutating call** (a declared sensitivity other than `read`) also checks
+ *   the durable ledger and hands back a {@link PendingCallNonce} that the
+ *   call's own transaction records, so the durable nonce is in the same root
+ *   record as the call's first write. A call that commits no transaction of
+ *   its own records it when it ends. This is defence in depth against a clock
+ *   that steps backwards across a restart, where the floor alone would admit
+ *   an old request.
+ * - A SQLite object (cheap nonce, no flush) keeps the durable ledger only.
+ */
+export class DirectCallNonceGate {
+  readonly #accepted = new Map<string, { issuedAt: number; expiresAt: number }>();
+  #floor: number;
+
+  constructor(
+    private readonly ledger: DurableDirectRpcNonceLedger,
+    private readonly options: {
+      readonly dolt: boolean;
+      readonly activatedAt?: number;
+      readonly capacity?: number;
+    }
+  ) {
+    this.#floor = options.activatedAt ?? Date.now();
+  }
+
+  admit(
+    attestation: { nonce: string; issuedAt: number; expiresAt: number },
+    mutating: boolean,
+    now = Date.now()
+  ): DirectCallAdmission {
+    const { nonce, issuedAt, expiresAt } = attestation;
+    if (!this.options.dolt) {
+      return this.ledger.consume(nonce, expiresAt, now)
+        ? { ok: true, pending: null }
+        : { ok: false, reason: "replayed" };
+    }
+    if (!isAttestationNonce(nonce) || expiresAt <= now) return { ok: false, reason: "invalid" };
+    if (issuedAt <= this.#floor) return { ok: false, reason: "stale" };
+    this.#prune(now);
+    if (this.#accepted.has(nonce)) return { ok: false, reason: "replayed" };
+    if (mutating && this.ledger.has(nonce, now)) return { ok: false, reason: "replayed" };
+    const capacity = this.options.capacity ?? 4096;
+    while (this.#accepted.size >= capacity) {
+      const oldest = this.#accepted.entries().next().value as
+        | [string, { issuedAt: number; expiresAt: number }]
+        | undefined;
+      if (!oldest) break;
+      this.#accepted.delete(oldest[0]);
+      this.#floor = Math.max(this.#floor, oldest[1].issuedAt);
+    }
+    // Admission bookkeeping after the capacity check, so an entry that raised
+    // the floor above this request's own `issuedAt` does not admit it.
+    if (issuedAt <= this.#floor) return { ok: false, reason: "stale" };
+    this.#accepted.set(nonce, { issuedAt, expiresAt });
+    return { ok: true, pending: mutating ? new PendingCallNonce(nonce, expiresAt) : null };
+  }
+
+  /** Record the pending nonce inside a transaction the caller is already running. */
+  recordInTransaction(pending: PendingCallNonce, now = Date.now()): void {
+    this.ledger.insertWithinTransaction(pending.nonce, pending.expiresAt, now);
+  }
+
+  /** Record a pending nonce that no transaction of the call carried. */
+  recordStandalone(pending: PendingCallNonce, now = Date.now()): void {
+    if (pending.persisted) return;
+    this.ledger.consume(pending.nonce, pending.expiresAt, now);
+    pending.persisted = true;
+  }
+
+  #prune(now: number): void {
+    for (const [key, entry] of this.#accepted)
+      if (entry.expiresAt <= now) this.#accepted.delete(key);
   }
 }
 

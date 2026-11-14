@@ -608,7 +608,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
    * `describe` renders the message from the facts the mutation wrote.
    */
   private commit<T>(describe: (result: T) => string | DoltCommitOptions, fn: () => T): T {
-    if (this.commitDepth > 0) return this.ctx.storage.transactionSync(fn);
+    if (this.commitDepth > 0) return this.transactionSync(fn);
     let changed = false;
     this.commitDepth += 1;
     try {
@@ -1582,7 +1582,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
     }
   ): "accepted" | "stale" {
     this.assertLifecycleKey(input);
-    return this.ctx.storage.transactionSync(() => {
+    return this.transactionSync(() => {
       const entityId = canonicalEntityId({
         kind: "do",
         source: input.source,
@@ -1662,7 +1662,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
     input: LifecycleKey & { dispatchOwner?: string; dispatchGeneration?: number }
   ): "accepted" | "stale" {
     this.assertLifecycleKey(input);
-    return this.ctx.storage.transactionSync(() => {
+    return this.transactionSync(() => {
       const hasOwner = input.dispatchOwner !== undefined;
       const hasGeneration = input.dispatchGeneration !== undefined;
       if (hasOwner !== hasGeneration) {
@@ -1728,7 +1728,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
       nextAlarm: { wakeAt: number; testPolicy?: AgentExecutionTestPolicy } | null;
     }
   ): { status: "accepted"; wakeAt: number | null } | { status: "stale" } {
-    return this.ctx.storage.transactionSync(() => {
+    return this.transactionSync(() => {
       if (
         !input.dispatchOwner?.trim() ||
         !Number.isSafeInteger(input.dispatchGeneration) ||
@@ -1809,7 +1809,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
     if (typeof workerId !== "string" || workerId.length < 8 || workerId.length > 512) {
       throw new Error("alarmAdoptWorker: invalid workerId");
     }
-    return this.ctx.storage.transactionSync(() => {
+    return this.transactionSync(() => {
       const previousWorkerId = this.getStateValue("alarm-active-worker");
       this.sql.exec(
         `UPDATE do_alarms
@@ -1886,7 +1886,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
         return `${key.source}\u0000${key.className}\u0000${key.objectKey}`;
       })
     );
-    return this.ctx.storage.transactionSync(() => {
+    return this.transactionSync(() => {
       const candidates = this.sql
         .exec(
           `SELECT a.source, a.class_name, a.object_key, a.wake_at, p.test_policy_json
@@ -1987,7 +1987,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
 
   @schemaRpc()
   lifecycleOpenEpoch(input: LifecycleEpochInput): string {
-    return this.ctx.storage.transactionSync(() => {
+    return this.transactionSync(() => {
       const seqRow = this.sql
         .exec(
           `SELECT COALESCE(MAX(CAST(substr(epoch_id, 7) AS INTEGER)), 0) + 1 AS seq
@@ -2406,7 +2406,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
       }
     }
 
-    return this.ctx.storage.transactionSync(() => {
+    return this.transactionSync(() => {
       const revision = this.panelTreeRevision();
 
       const clauses = ["s.closed_at IS NULL"];
@@ -2636,7 +2636,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
 
   @schemaRpc()
   panelTreeDetail(slotId: string): WorkspacePanelDetail | null {
-    return this.ctx.storage.transactionSync(() => {
+    return this.transactionSync(() => {
       const slot = this.sql
         .exec(
           `SELECT s.*, history.cursor AS current_history_cursor,
@@ -3557,7 +3557,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
    */
   @schemaRpc()
   slotPurgePlan(slotId: string): WorkspacePanelPurgePlan {
-    return this.ctx.storage.transactionSync(() => {
+    return this.transactionSync(() => {
       const root = this.requireReopenableRoot(slotId);
       const pending = this.sql
         .exec(`SELECT 1 FROM panel_close_cleanup WHERE close_id = ? LIMIT 1`, slotId)
@@ -3627,7 +3627,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
   /** The current history entries a reopen of `slotId`'s close must reactivate. */
   @schemaRpc()
   slotReopenPlan(slotId: string): WorkspacePanelReopenPlan {
-    return this.ctx.storage.transactionSync(() => {
+    return this.transactionSync(() => {
       const root = this.requireReopenableRoot(slotId);
       const pending = this.sql
         .exec(`SELECT 1 FROM panel_close_cleanup WHERE close_id = ? LIMIT 1`, slotId)
@@ -3996,7 +3996,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
     }
     // Dolt operations cannot run inside a transaction, so the base is read first.
     const baseCommit = this.requireDolt().hashOf("HEAD");
-    this.ctx.storage.transactionSync(() => {
+    this.transactionSync(() => {
       this.setImportValue("base_commit", baseCommit);
       this.setImportValue("manifest", JSON.stringify(manifest));
       this.setImportValue("applied", "0");
@@ -4019,7 +4019,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
       throw new Error(`Unknown legacy table: ${input.table}`);
     }
     const known = new Set(LEGACY_COLUMNS[input.table]);
-    this.ctx.storage.transactionSync(() => {
+    this.transactionSync(() => {
       for (const { rowid, row } of input.rows) {
         for (const column of Object.keys(row)) {
           if (!known.has(column)) throw new Error(`Unknown column ${input.table}.${column}`);
@@ -4080,7 +4080,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
     this.sql.exec(`DELETE FROM local_legacy_events`);
     const CHUNK = 2_000;
     for (let start = 0; start < events.length; start += CHUNK) {
-      this.ctx.storage.transactionSync(() => {
+      this.transactionSync(() => {
         events.slice(start, start + CHUNK).forEach((event, offset) => {
           this.sql.exec(
             `INSERT INTO local_legacy_events (ord, time, kind, key, entity_id, entry_key)
@@ -4095,7 +4095,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
         });
       });
     }
-    this.ctx.storage.transactionSync(() => {
+    this.transactionSync(() => {
       this.setImportValue("total", String(events.length));
       this.setImportValue("applied", "0");
       this.setImportValue("phase", "replaying");
@@ -4274,7 +4274,7 @@ export class WorkspaceStateDO extends DurableObjectBase {
       throw new Error("The retired store changed while it was being imported; import again");
     }
     // Operational state is moved as it is. It is local, so it is never committed.
-    this.ctx.storage.transactionSync(() => {
+    this.transactionSync(() => {
       for (const table of LEGACY_IMPORT_TABLES) {
         if (REPLAYED_TABLES.includes(table)) continue;
         if (table !== "state") this.sql.exec(`DELETE FROM ${table}`);

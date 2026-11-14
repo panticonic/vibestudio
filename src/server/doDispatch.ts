@@ -1,3 +1,4 @@
+import { retryOnStaleAttestation } from "@vibestudio/shared/directRpcEnforcement";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 /**
@@ -850,13 +851,17 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     }
     const result = await this.authorityParentRunner(doTargetId(ref), authorization, () =>
       this.withRelayAdmission(ref, () =>
-        postRpcToDOWithToken(
-          ref,
-          method,
-          dispatchedArgs,
-          this.buildPostDeps(ref),
-          serverCaller,
-          signal
+        // A receiver refuses an attestation that predates its activation before
+        // it runs anything; the host re-stamps it and sends it once more.
+        retryOnStaleAttestation(serverCaller.authorization, (attestation) =>
+          postRpcToDOWithToken(
+            ref,
+            method,
+            dispatchedArgs,
+            this.buildPostDeps(ref),
+            attestation ? { ...serverCaller, authorization: attestation } : serverCaller,
+            signal
+          )
         )
       )
     );

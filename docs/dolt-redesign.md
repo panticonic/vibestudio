@@ -574,9 +574,44 @@ protected committedTransaction<T>(
   `entityAdvanceExecution` and the resource bindings (no user-meaningful history).
   (2) The lever is the
   number of transactions per call, and the biggest single contributor is the
-  nonce row. Replacing it (writing it in the call's own transaction, or holding
-  it in memory and persisting it lazily) changes the replay protection's
-  durability window and is a decision for the user; it is not made here.
+  nonce row.
+
+  **The nonce, fixed (P2b step 0; `DirectCallNonceGate`,
+  `packages/shared/src/directRpcEnforcement.ts`).** On a Dolt object:
+  - *Every* call is admitted from a bounded in-memory set plus a **floor**: an
+    attestation issued at or before the object's activation (or before the
+    `issuedAt` of an entry the full set evicted) is refused as
+    `ERR_ATTESTATION_STALE`. So nothing an earlier activation could have
+    accepted is accepted again, and a full set never forgets an unexpired nonce:
+    it raises the floor. The attestation is host-minted and carries `issuedAt`,
+    `expiresAt` (60 s) and a UUID nonce (`attestDirectRpc`), so this is sound.
+  - A stale refusal runs nothing, so the **host re-stamps it** (same nonce,
+    fresh `issuedAt`, same lifetime; only the host can) and sends it once more,
+    in the two transports every host-mediated call uses
+    (`workerdRpcRelay.postToDurableObject` and `streamFromDurableObject`,
+    `DODispatch.dispatchImpl`). It happens once per activation, on the first
+    call.
+  - A **mutating** call (a declared sensitivity other than `read`) also checks
+    the durable ledger (a read) and records its nonce in **its own first
+    transaction** (`committedTransaction`, or the base's `transactionSync` for
+    local state), so the durable nonce shares the call's root record. A call
+    whose storage did not change (`total_changes()` unchanged) records nothing;
+    a call that changed storage outside a base transaction records it when it
+    ends (one extra record, as before). The durable record is defence in depth
+    against a clock that steps backwards across a restart, where the floor alone
+    would admit an old request. Events and alarms keep the immediate durable
+    consume; a SQLite object is unchanged.
+  - Residual: a clock step back across a restart, a write outside a base
+    transaction, a crash before the call ends, and a captured request replayed
+    within its 60 s all at once.
+
+  Measured on the model-free navigation (`VIBESTUDIO_DO_CALL_TRACE=all`, five
+  runs after a warm-up, same build otherwise): mean ms per call
+  `panelTreeDetail` 44 to 8, `entityResolve` 48 to 6, `contextEdgeListByChild` 42
+  to 6, `alarmNextWakeAt` 47 to 8, `alarmClear` 48 to 14; per run `openPanel`
+  2.1 s to 0.9 s, `navigate` 2.0 s to 0.85 s, the two reads 1.1 s to 0.6 s. The
+  P3 numbers above were 35 to 64 for the same read, so the call is now cheaper
+  than on the SQLite `WorkspaceDO`.
 
 ### 4.3 Schema migrations as commits
 

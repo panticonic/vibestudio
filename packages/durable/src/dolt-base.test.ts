@@ -24,6 +24,11 @@ class NotesDO extends DurableObjectBase {
   addUncommitted(body: string): void {
     this.sql.exec("INSERT INTO notes(body) VALUES (?)", body);
   }
+  noopTransaction(): void {
+    this.transactionSync(() => {
+      this.sql.exec("SELECT count(*) FROM notes").toArray();
+    });
+  }
   mark(note: string): void {
     this.sql.exec("INSERT INTO local_marks(note) VALUES (?)", note);
   }
@@ -32,6 +37,39 @@ class NotesDO extends DurableObjectBase {
   }
   engine(): boolean {
     return this.dolt !== null;
+  }
+  /** Admit a call the way the inbound envelope does, then run `fn` as that call. */
+  runCall<T>(
+    nonce: string,
+    mutating: boolean,
+    fn: () => T
+  ): { result: T; persisted: boolean | null } {
+    const internals = this as unknown as {
+      directCalls: {
+        admit(
+          a: { nonce: string; issuedAt: number; expiresAt: number },
+          mutating: boolean
+        ): {
+          ok: boolean;
+          pending: { persisted: boolean; baseline: number | null } | null;
+          reason?: string;
+        };
+      };
+      totalChanges(): number;
+      invocationContext: { run<R>(context: unknown, operation: () => R): R };
+    };
+    const now = Date.now();
+    const admitted = internals.directCalls.admit(
+      { nonce, issuedAt: now + 1, expiresAt: now + 60_000 },
+      mutating
+    );
+    if (!admitted.ok) throw new Error(`refused: ${admitted.reason}`);
+    if (admitted.pending) admitted.pending.baseline = internals.totalChanges();
+    const result = internals.invocationContext.run(
+      admitted.pending ? { pendingNonce: admitted.pending } : {},
+      fn
+    );
+    return { result, persisted: admitted.pending ? admitted.pending.persisted : null };
   }
   consumeNonce(nonce: string): boolean {
     const ledger = (
@@ -91,6 +129,46 @@ describe("DurableObjectBase on a Dolt cell", () => {
     expect(instance.consumeNonce(nonce)).toBe(false);
     const fork = await fake.fork();
     expect(fork.sql.exec("SELECT count(*) AS n FROM vsl_direct_rpc_nonces").one()["n"]).toBe(0);
+  });
+
+  it("records a mutating call's nonce in the call's own commit and a read's nowhere", async () => {
+    const { fake, instance } = await onDolt();
+    const count = () =>
+      fake.sql.exec("SELECT name FROM sqlite_master WHERE name = 'vsl_direct_rpc_nonces'").toArray()
+        .length === 0
+        ? 0
+        : Number(fake.sql.exec("SELECT count(*) AS n FROM vsl_direct_rpc_nonces").one()["n"]);
+    const read = instance.runCall("123e4567-e89b-42d3-a456-426614174001", false, () => 1);
+    expect(read).toEqual({ result: 1, persisted: null });
+    expect(count()).toBe(0);
+    const logBefore = fake.dolt.log().length;
+    const write = instance.runCall("123e4567-e89b-42d3-a456-426614174002", true, () =>
+      instance.add("x")
+    );
+    expect(write).toEqual({ result: 1, persisted: true });
+    expect(count()).toBe(1);
+    // One commit for the write, none for the nonce, and the working set is clean.
+    expect(fake.dolt.log().length).toBe(logBefore + 1);
+    expect(() => instance.check()).not.toThrow();
+    // A second transaction in the same call does not record it again.
+    const second = instance.runCall("123e4567-e89b-42d3-a456-426614174003", true, () => {
+      instance.add("y");
+      instance.add("z");
+    });
+    expect(second.persisted).toBe(true);
+    expect(count()).toBe(2);
+  });
+
+  it("records no nonce for a call that changed nothing in storage", async () => {
+    const { fake, instance } = await onDolt();
+    const noop = instance.runCall("123e4567-e89b-42d3-a456-426614174004", true, () => {
+      instance.noopTransaction();
+    });
+    expect(noop.persisted).toBe(false);
+    expect(
+      fake.sql.exec("SELECT name FROM sqlite_master WHERE name = 'vsl_direct_rpc_nonces'").toArray()
+    ).toHaveLength(1); // the table exists (the mutating admission checked it) but holds nothing
+    expect(fake.sql.exec("SELECT count(*) AS n FROM vsl_direct_rpc_nonces").one()["n"]).toBe(0);
   });
 
   it("is a plain transaction on a SQLite cell: the same class, no Dolt, the old nonce table", async () => {

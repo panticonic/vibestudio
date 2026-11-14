@@ -8,7 +8,14 @@ import {
   relationship,
 } from "./authorityRequirements.js";
 import {
+  ATTESTATION_STALE_CODE,
+  DIRECT_RPC_NONCE_LOCAL_TABLE,
+  DirectCallNonceGate,
   DirectRpcNonceWindow,
+  DurableDirectRpcNonceLedger,
+  isStaleAttestationFailure,
+  restampAttestation,
+  retryOnStaleAttestation,
   assertEventIntakeRules,
   directRpcDenial,
   directRpcInvocationResourceKey,
@@ -940,5 +947,156 @@ describe("event intake", () => {
         ],
       })
     ).toThrow(/exactly one/);
+  });
+});
+
+describe("DirectCallNonceGate", () => {
+  /** A tiny in-memory stand-in for the nonce table. */
+  function fakeLedger() {
+    const rows = new Map<string, number>();
+    let transactions = 0;
+    const storage = {
+      exec(query: string, ...b: unknown[]) {
+        if (query.startsWith("CREATE")) return { toArray: () => [] };
+        if (query.startsWith("DELETE")) {
+          for (const [k, v] of rows) if (v <= (b[0] as number)) rows.delete(k);
+          return { toArray: () => [] };
+        }
+        if (query.startsWith("SELECT")) {
+          const hit =
+            rows.has(b[0] as string) &&
+            (b.length < 2 || rows.get(b[0] as string)! > (b[1] as number));
+          return { toArray: () => (hit ? [{ nonce: b[0] }] : []) };
+        }
+        rows.set(b[0] as string, b[1] as number);
+        return { toArray: () => [] };
+      },
+      transactionSync<T>(cb: () => T): T {
+        transactions++;
+        return cb();
+      },
+    };
+    return {
+      rows,
+      ledger: new DurableDirectRpcNonceLedger(storage, { table: DIRECT_RPC_NONCE_LOCAL_TABLE }),
+      transactions: () => transactions,
+    };
+  }
+  const n = (i: number) => `12345678-1234-4123-8123-${String(i).padStart(12, "0")}`;
+  const att = (i: number, issuedAt = 2_000) => ({
+    nonce: n(i),
+    issuedAt,
+    expiresAt: issuedAt + 60_000,
+  });
+
+  it("admits a read from memory with no write, and refuses a repeat", () => {
+    const f = fakeLedger();
+    const gate = new DirectCallNonceGate(f.ledger, { dolt: true, activatedAt: 1_000 });
+    expect(gate.admit(att(1), false, 2_000)).toEqual({ ok: true, pending: null });
+    expect(gate.admit(att(1), false, 2_001)).toEqual({ ok: false, reason: "replayed" });
+    expect(f.transactions()).toBe(0);
+    expect(f.rows.size).toBe(0);
+  });
+
+  it("refuses a request issued at or before the activation as stale (a replay after a restart)", () => {
+    const gate = new DirectCallNonceGate(fakeLedger().ledger, { dolt: true, activatedAt: 5_000 });
+    expect(gate.admit(att(1, 4_999), false, 5_100)).toEqual({ ok: false, reason: "stale" });
+    expect(gate.admit(att(2, 5_000), true, 5_100)).toEqual({ ok: false, reason: "stale" });
+    expect(gate.admit(att(3, 5_001), true, 5_100).ok).toBe(true);
+  });
+
+  it("a mutating call hands back a pending nonce the call's own transaction records", () => {
+    const f = fakeLedger();
+    const gate = new DirectCallNonceGate(f.ledger, { dolt: true, activatedAt: 1_000 });
+    const admitted = gate.admit(att(1), true, 2_000);
+    if (!admitted.ok || !admitted.pending) throw new Error("expected a pending nonce");
+    expect(f.rows.size).toBe(0);
+    gate.recordInTransaction(admitted.pending, 2_000);
+    expect(f.rows.get(n(1))).toBe(62_000);
+    expect(f.transactions()).toBe(0); // it ran inside the caller's transaction
+    // A later activation, whatever its floor, still finds the durable record.
+    const later = new DirectCallNonceGate(f.ledger, { dolt: true, activatedAt: 1_000 });
+    expect(later.admit(att(1), true, 2_100)).toEqual({ ok: false, reason: "replayed" });
+  });
+
+  it("records a pending nonce standalone when no transaction carried it", () => {
+    const f = fakeLedger();
+    const gate = new DirectCallNonceGate(f.ledger, { dolt: true, activatedAt: 1_000 });
+    const admitted = gate.admit(att(1), true, 2_000);
+    if (!admitted.ok || !admitted.pending) throw new Error("expected a pending nonce");
+    gate.recordStandalone(admitted.pending, 2_000);
+    expect(admitted.pending.persisted).toBe(true);
+    expect(f.rows.has(n(1))).toBe(true);
+  });
+
+  it("a full set raises the floor instead of forgetting an unexpired nonce", () => {
+    const gate = new DirectCallNonceGate(fakeLedger().ledger, {
+      dolt: true,
+      activatedAt: 1_000,
+      capacity: 2,
+    });
+    expect(gate.admit(att(1, 2_000), false, 2_000).ok).toBe(true);
+    expect(gate.admit(att(2, 2_001), false, 2_001).ok).toBe(true);
+    expect(gate.admit(att(3, 2_002), false, 2_002).ok).toBe(true); // evicts nonce 1, floor = 2_000
+    // The evicted nonce is refused by the floor, not accepted again.
+    expect(gate.admit(att(1, 2_000), false, 2_003)).toEqual({ ok: false, reason: "stale" });
+    expect(gate.admit(att(2, 2_001), false, 2_003)).toEqual({ ok: false, reason: "replayed" });
+  });
+
+  it("refuses an expired or malformed attestation", () => {
+    const gate = new DirectCallNonceGate(fakeLedger().ledger, { dolt: true, activatedAt: 1_000 });
+    expect(gate.admit({ nonce: n(1), issuedAt: 2_000, expiresAt: 2_500 }, false, 3_000)).toEqual({
+      ok: false,
+      reason: "invalid",
+    });
+    expect(gate.admit({ nonce: "nope", issuedAt: 2_000, expiresAt: 9_000 }, false, 3_000)).toEqual({
+      ok: false,
+      reason: "invalid",
+    });
+  });
+
+  it("a SQLite object keeps the durable ledger: every call is one recorded nonce", () => {
+    const f = fakeLedger();
+    const gate = new DirectCallNonceGate(f.ledger, { dolt: false, activatedAt: 1_000 });
+    expect(gate.admit(att(1, 500), false, 2_000)).toEqual({ ok: true, pending: null }); // no floor
+    expect(f.rows.has(n(1))).toBe(true);
+    expect(gate.admit(att(1, 500), false, 2_001)).toEqual({ ok: false, reason: "replayed" });
+  });
+
+  it("the host re-stamps a stale refusal once, with the same nonce", async () => {
+    const stale = Object.assign(new Error("stale"), { code: ATTESTATION_STALE_CODE });
+    expect(isStaleAttestationFailure(stale)).toBe(true);
+    expect(isStaleAttestationFailure(new Error("x"))).toBe(false);
+    const first = { nonce: n(1), issuedAt: 100, expiresAt: 60_100 };
+    const seen: number[] = [];
+    const result = await retryOnStaleAttestation(first, async (a) => {
+      seen.push(a!.issuedAt);
+      if (seen.length === 1) throw stale;
+      expect(a!.nonce).toBe(n(1));
+      expect(a!.expiresAt - a!.issuedAt).toBe(60_000);
+      return "ok";
+    });
+    expect(result).toBe("ok");
+    expect(seen).toHaveLength(2);
+    expect(seen[1]).toBeGreaterThan(100);
+    // Only one retry, and only for the stale refusal.
+    let attempts = 0;
+    await expect(
+      retryOnStaleAttestation(first, async () => {
+        attempts++;
+        throw stale;
+      })
+    ).rejects.toBe(stale);
+    expect(attempts).toBe(2);
+    await expect(
+      retryOnStaleAttestation(first, async () => {
+        throw new Error("other");
+      })
+    ).rejects.toThrow("other");
+    expect(restampAttestation(first, 500)).toEqual({
+      nonce: n(1),
+      issuedAt: 500,
+      expiresAt: 60_500,
+    });
   });
 });

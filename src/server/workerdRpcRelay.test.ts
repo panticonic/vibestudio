@@ -116,6 +116,54 @@ describe("workerdRpcRelay", () => {
     expect(body.message).toMatchObject({ type: "request", method: "ping", args: ["arg"] });
   });
 
+  it("sends a call once more, re-stamped, when the receiver refused its attestation as predating its activation", async () => {
+    const attestation = {
+      issuedAt: 1_000,
+      expiresAt: 61_000,
+      nonce: "12345678-1234-4123-8123-123456789abc",
+    };
+    const stale = new Response(
+      JSON.stringify({
+        from: "do",
+        target: "main",
+        delivery: { caller: { callerId: "do", callerKind: "do" } },
+        provenance: [],
+        message: {
+          type: "response",
+          requestId: "x",
+          error: { message: "stale", errorKind: "access", code: "ERR_ATTESTATION_STALE" },
+        },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(stale)
+      .mockResolvedValueOnce(responseEnvelope({ ok: true }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(
+      postToDurableObject(
+        { source: "workers/agent", className: "AgentDO", objectKey: "channel-1" },
+        "ping",
+        [],
+        {
+          workerdUrl: "http://127.0.0.1:8787",
+          workerdGatewayToken: "gateway-token",
+          resolveExecutableAdmission,
+          authorization: attestation as never,
+        }
+      )
+    ).resolves.toEqual({ ok: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const sent = fetchMock.mock.calls.map(
+      (call) => JSON.parse(String(call[1]!.body)).delivery.caller.authorization
+    );
+    expect(sent[0].issuedAt).toBe(1_000);
+    expect(sent[1].issuedAt).toBeGreaterThan(1_000);
+    expect(sent[1].nonce).toBe(sent[0].nonce);
+    expect(sent[1].expiresAt - sent[1].issuedAt).toBe(60_000);
+  });
+
   it("surfaces durable-work readiness from caller-attributed DO relays", async () => {
     const response = responseEnvelope(
       { ok: true },

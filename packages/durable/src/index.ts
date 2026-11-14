@@ -31,9 +31,12 @@ import {
   type AttestedCaller,
 } from "@vibestudio/rpc/internal";
 import {
+  ATTESTATION_STALE_CODE,
   DIRECT_RPC_NONCE_LOCAL_TABLE,
   DIRECT_RPC_NONCE_TABLE,
+  DirectCallNonceGate,
   DurableDirectRpcNonceLedger,
+  type PendingCallNonce,
   directRpcInvalidAttestationFailure,
   directRpcDenial,
   directRpcInvocationResourceKey,
@@ -175,6 +178,8 @@ interface RpcInvocationContext {
   readyQueues: Set<DurableWorkQueue>;
   alarmRpcs: Set<Promise<unknown>>;
   requestSignal?: AbortSignal;
+  /** A mutating call on a Dolt object: its durable nonce, recorded by the call's first transaction. */
+  pendingNonce?: PendingCallNonce;
 }
 
 export interface LifecycleResumeInput {
@@ -201,6 +206,7 @@ export abstract class DurableObjectBase {
   protected ctx: DurableObjectContext;
   protected sql: TypedSqlStorage;
   private readonly directRpcNonces: DurableDirectRpcNonceLedger;
+  private readonly directCalls: DirectCallNonceGate;
   protected env: Record<string, unknown>;
 
   private schemaReady = false;
@@ -226,6 +232,11 @@ export abstract class DurableObjectBase {
       // a `doltLocal` pattern can match, so no commit, fork or reset carries it.
       { table: ctx.storage.dolt ? DIRECT_RPC_NONCE_LOCAL_TABLE : DIRECT_RPC_NONCE_TABLE }
     );
+    // A Dolt object admits a call from memory and records a mutating call's nonce
+    // in the call's own transaction: see `DirectCallNonceGate`.
+    this.directCalls = new DirectCallNonceGate(this.directRpcNonces, {
+      dolt: Boolean(ctx.storage.dolt),
+    });
     this.env = env as Record<string, unknown>;
     this.durableWorkReadiness = new DurableWorkReadiness(
       {
@@ -253,7 +264,59 @@ export abstract class DurableObjectBase {
    * Not for a nested transaction on a Dolt cell (the fork refuses it).
    */
   protected committedTransaction<T>(describe: DoltTransactionCommit<T>, fn: () => T): T {
-    return committedTransactionSync(this.ctx.storage, describe, fn);
+    return this.withCallNonce(
+      (body) => committedTransactionSync(this.ctx.storage, describe, body),
+      fn
+    );
+  }
+
+  /**
+   * A plain transaction (no Dolt commit point) for state the class keeps local
+   * or does not version. A class uses this instead of `ctx.storage.transactionSync`
+   * so the call's durable nonce can ride in it (see `committedTransaction`).
+   */
+  protected transactionSync<T>(fn: () => T): T {
+    return this.withCallNonce((body) => this.ctx.storage.transactionSync(body), fn);
+  }
+
+  /**
+   * The call's durable nonce (a mutating call on a Dolt object) rides in the
+   * call's first transaction: same root record, so no flush of its own. A call
+   * that never opens a transaction through the base records it when it ends.
+   */
+  private withCallNonce<T>(run: (body: () => T) => T, fn: () => T): T {
+    const pending = this.invocationContext.current()?.pendingNonce;
+    if (!pending || pending.persisted || pending.recording) return run(fn);
+    pending.recording = true;
+    try {
+      let recorded = false;
+      const result = run(() => {
+        const value = fn();
+        if (this.changedSince(pending)) {
+          this.directCalls.recordInTransaction(pending);
+          recorded = true;
+        }
+        return value;
+      });
+      if (recorded) pending.persisted = true;
+      return result;
+    } finally {
+      pending.recording = false;
+    }
+  }
+
+  /** Whether this object's storage changed since the call was admitted (unknown counts as changed). */
+  private changedSince(pending: PendingCallNonce): boolean {
+    if (pending.baseline === null) return true;
+    try {
+      return this.totalChanges() !== pending.baseline;
+    } catch {
+      return true;
+    }
+  }
+
+  private totalChanges(): number {
+    return Number(this.sql.exec("SELECT total_changes() AS n").one()["n"]);
   }
 
   /** Throws if versioned rows were written outside `committedTransaction`; see `assertCleanWorkingSet`. */
@@ -1261,39 +1324,52 @@ export abstract class DurableObjectBase {
         readyQueues: [],
       };
     }
-    if (
-      method !== "__alarm" &&
-      (!attestation ||
-        !this.directRpcNonces.consume(
-          attestation.nonce,
-          attestation.expiresAt,
-          authorityAcceptedAt
-        ))
-    ) {
-      const reason =
-        `${method ?? "<unknown>"}: host authority attestation nonce was replayed or is outside ` +
-        "the receiver's retention bound";
-      return {
-        result: {
-          from: envelope.target,
-          target: envelope.from,
-          delivery: { caller: caller ?? { callerId: "", callerKind: "unknown" } },
-          provenance: envelope.provenance ?? [],
-          message: {
-            type: "response",
-            requestId: message?.requestId ?? "",
-            error: {
-              message: reason,
-              code: "EACCES",
-              errorKind: "access",
-              errorData: {
-                authorityFailure: directRpcInvalidAttestationFailure(reason),
+    let pendingNonce: PendingCallNonce | undefined;
+    if (method !== "__alarm") {
+      const admission = attestation
+        ? this.directCalls.admit(
+            attestation,
+            declaration?.sensitivity !== "read",
+            authorityAcceptedAt
+          )
+        : ({ ok: false, reason: "invalid" } as const);
+      if (!admission.ok) {
+        const stale = admission.reason === "stale";
+        const reason = stale
+          ? `${method ?? "<unknown>"}: host authority attestation predates this object's activation; ` +
+            "it was not executed and must be re-issued"
+          : `${method ?? "<unknown>"}: host authority attestation nonce was replayed or is outside ` +
+            "the receiver's retention bound";
+        return {
+          result: {
+            from: envelope.target,
+            target: envelope.from,
+            delivery: { caller: caller ?? { callerId: "", callerKind: "unknown" } },
+            provenance: envelope.provenance ?? [],
+            message: {
+              type: "response",
+              requestId: message?.requestId ?? "",
+              error: {
+                message: reason,
+                code: stale ? ATTESTATION_STALE_CODE : "EACCES",
+                errorKind: "access",
+                errorData: {
+                  authorityFailure: directRpcInvalidAttestationFailure(reason),
+                },
               },
             },
-          },
-        } as RpcEnvelope,
-        readyQueues: [],
-      };
+          } as RpcEnvelope,
+          readyQueues: [],
+        };
+      }
+      pendingNonce = admission.pending ?? undefined;
+      if (pendingNonce) {
+        try {
+          pendingNonce.baseline = this.totalChanges();
+        } catch {
+          pendingNonce.baseline = null;
+        }
+      }
     }
     const dispatched = await this.withRpcCaller(
       caller,
@@ -1304,7 +1380,8 @@ export abstract class DurableObjectBase {
         onAdmitted?.();
         return invocation.completion;
       },
-      alarmRpcs
+      alarmRpcs,
+      pendingNonce
     );
     const attachReadyMetadata = (result: RpcEnvelope | null): RpcEnvelope | null => {
       if (result?.message.type === "response" && dispatched.readyQueues.length > 0) {
@@ -1627,12 +1704,22 @@ export abstract class DurableObjectBase {
     }
   }
 
+  private recordPendingNonce(pending: PendingCallNonce): void {
+    try {
+      this.directCalls.recordStandalone(pending);
+    } catch (error) {
+      // The in-memory set and the activation floor still refuse a replay.
+      console.error(`[${this.constructor.name}] could not record a call nonce`, error);
+    }
+  }
+
   private async withRpcCaller<T>(
     caller: AttestedCaller | null,
     message: RpcRequest,
     envelope: RpcEnvelope,
     callback: () => Promise<T>,
-    alarmRpcs = new Set<Promise<unknown>>()
+    alarmRpcs = new Set<Promise<unknown>>(),
+    pendingNonce?: PendingCallNonce
   ): Promise<{ result: T; readyQueues: DurableWorkQueue[] }> {
     const context: RpcInvocationContext = {
       verifiedCaller: caller,
@@ -1644,6 +1731,7 @@ export abstract class DurableObjectBase {
       idempotencyKey: envelope.delivery.idempotencyKey ?? null,
       readyQueues: new Set(),
       alarmRpcs,
+      ...(pendingNonce ? { pendingNonce } : {}),
     };
     try {
       const result = await this.invocationContext.run(context, async () => {
@@ -1659,6 +1747,10 @@ export abstract class DurableObjectBase {
           // Wake publication can itself start causal RPCs; join them before
           // retiring the original caller's authority, including on failure.
           await this.causalRpcOperations.drain(context);
+          // A call that committed no transaction of its own still records its
+          // nonce, so a replay after a restart is refused whether or not it wrote.
+          if (pendingNonce && !pendingNonce.persisted && this.changedSince(pendingNonce))
+            this.recordPendingNonce(pendingNonce);
         }
       });
       return { result, readyQueues: [...context.readyQueues] };
