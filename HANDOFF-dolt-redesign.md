@@ -1,4 +1,4 @@
-# Handoff: Vibestudio Dolt redesign, P0 and P2a (P2b open)
+# Handoff: Vibestudio Dolt redesign, P0, P2a and P3 (P2b open)
 
 Branch `feat/dolt-p0` (worktree `/home/werg/vibestudio-worktrees/dolt-p0`), cut from
 `feat/celld-runtime` `db8e365fd`. Not pushed. Base template branch `feat/dolt-p2`
@@ -16,7 +16,8 @@ Branch `feat/dolt-p0` (worktree `/home/werg/vibestudio-worktrees/dolt-p0`), cut 
 | 2. P0 Foundations | done and verified |
 | 3. P2a: heap residency by a hold; the host kernel lease deleted | **done and gated** (below) |
 | 4. P2b: the kernel as a facet of the owner's root; `evalService` and the `evalEngine` host schemas deleted | **not implemented**; probes verified, decisions D1 to D5 needed (`docs/dolt-redesign.md` §7.7) |
-| 5. P3 onward | not started |
+| 5. P3 Durable services: `WorkspaceStateDO` (Dolt), the replaying import, the maintenance journal and `cloneDO` deleted | **done and gated** ("P3" below) |
+| 6. P4 onward | not started |
 
 ## Commits
 
@@ -24,7 +25,11 @@ vibestudio `feat/dolt-p0` (this pass, newest last):
 1. `1afb6c862` celld: pin fork 9440c29; schema text rule matches the documented rendering
 2. `7611524ef` eval: the notebook heap is held by a residency hold; the host kernel lease is gone
 3. `c065446c3` tests: the owner reaches its kernel through a gateway its root binds; a userland object cannot compile code
-4. (this handoff and the design doc) docs: P2a results, P2b findings and decisions
+4. `d1bfdec3f` docs: P2a results, P2b findings and decisions
+5. `a31856181` workspace state: `WorkspaceStateDO`, a Dolt cell, replaces the SQLite `WorkspaceDO`; the import replays the retired store's history (P3)
+6. `80a744f9c` workspace state: format
+7. `a1d39adf9` storage: backup, restore, reset and retirement without a maintenance journal; `cloneDO` is `forkObjectStorage` (P3)
+8. (this handoff and the design doc) P3 results, §4.6 as built, the fresh-workspace legacy cell, the real-fork reverse-patch check
 
 Earlier: `72b682e86`, `1ca22c6f8`, `4a81ab2c7`, `7d5bc1775`, `01ef6ffe9`, `0019b6d35`.
 
@@ -138,17 +143,77 @@ recommended answers and an order of three cuts. `UNSAFE_EVAL` was already remove
 provider bindings in `meta/vibestudio.yml` and the agent loop, and declares no `runtime.code-execution`
 capability yet.
 
-## Next phase: P3 Durable services (`docs/dolt-redesign.md` §10)
+## P3 Durable services: what was built (`docs/dolt-redesign.md` §4.6 has the design and the deviations)
 
-`WorkspaceDO` on Dolt; panel undo by reverse patch (`dolt_revert` is not exposed: diff plus SQL);
-backup, restore, reset and clone via Dolt (the hard-reset fix is now in the pinned fork, so the interim
-rule is withdrawn); delete the maintenance journal, `cloneDO`, `durableObjectStorageClone.ts` and
-`computeWorkerdObjectIdHash`. P3 depends on "facet machinery proven" (P2): the probes cover the facet
-mechanics, but P2b would prove them in the product. Gate: `WorkspaceDO.test.ts` against
-`FakeDoltStorage`, system tests for panel close and reopen, `workers.resetStorage` and a restore round
-trip, a fork-idempotency test, `rg cloneDO\|do_maintenance` empty. P3 can start without P2b, since
-`WorkspaceDO` is a product class that needs no kernel facet; the migration importer question (SQLite
-files into a Dolt cell, §9) comes first for it too.
+**`WorkspaceStateDO`** (`packages/builtin/src/workspace-state/WorkspaceStateDO.ts`) is the workspace state on a
+Dolt cell. It is a new class because a cell's engine is fixed at creation; the SQLite `WorkspaceDO` stays
+for one release as a read-only exporter (`WorkspaceDO.ts`: `legacyManifest`, `legacyReadRows`).
+Versioned: entities, bindings, slots, slot history, context edges, the seeding marker. Every mutation is one
+`committedTransaction` (no commit for a retry, a failure or a local-only change, found through `dolt_status` inside
+the transaction). Local (`doltLocal`, declared in the deployment from `runtime.doltLocal`): the close-cleanup outbox,
+the panel-tree revision, the lifecycle registry, the alarm schedule, the durable-work owners, the import's staging.
+
+**Deviations from the doc's plan, with reasons (also §4.6):**
+- *Panel undo is not "closing deletes rows, reopening reverts them".* Closing stays `slots.closed_at` because the closed
+  list, its paging and the purge are row queries (L2) and `dolt_history_*` is not modelled by the double and cannot
+  purge. Each close, reopen and purge is one commit; a close commit's reverse patch touches only `slots` (checked on the
+  real fork); a hard reset to the commit before a close is the undo, and the schedule and outbox are untouched.
+- *The lifecycle tables and driver, `alarmDriver` and `durableWorkDriver` are not deleted.* They are live: every DO's
+  `setAlarmAt` calls `workspace-state.alarmSet`, Pi owners publish a lease, `MissionsDO` and Base's `durable-base.ts`
+  register lifecycle releases. Deleting them is the agent system's hibernation-first work (P4), not a local change.
+  They became local tables of the new class.
+
+**The migration** (Q2, replay where history exists; `legacyImport.ts`, `legacyImportDriver.ts`,
+`src/server/workspaceStateMigration.ts`, the barrier in `DODispatch`): the first call to `WorkspaceStateDO` runs it and
+every call waits. Status settled (`verified`, `skipped`, `adopted`) means the retired store is not read. Otherwise the host
+pages the 14 tables into a local staging table, `planReplay` orders the rows by their own timestamps (dependencies pulled
+forward: the real engine enforces foreign keys), and the class applies one commit per event dated as the row's time
+(entity, slot on its first entry, each later history entry as a navigation, one close per shared `closed_at` stamp,
+retire at `retired_at`), the applied counter in the same transaction. It then copies the operational tables, proves every
+table equal to the retired store's digest, and only then writes the marker commit and `verified`. Idempotent (a settled
+cell never reads the store; resume continues at the next event; a changed source restarts from the base commit);
+the retired cell is never written or deleted (a later release deletes the class); a failure fails the start and the next
+start resumes. A cell that already holds rows is `adopted`, never imported into.
+
+**Storage operations** (`src/server/durableObjectStorage.ts`): `do_maintenance` and its step machine are gone; the node's
+fork and restore do the copying. Kept as rows: the storage identity (rotated before any replacement), the backup registry
+(listed once the fork finished; unfinished ones swept), the retired-object outbox (an earlier build's open retirements are
+adopted). `cloneDO` is `forkObjectStorage`, idempotent by target id. `rg 'cloneDO|do_maintenance'` has only the one
+explained hit: the adoption of the earlier journal (`durableObjectStorage.ts` and its test), plus two historical docs
+(`capability-approval-design.md`, `ws1-agent-loop-spec.md`). `durableObjectStorageClone.ts` and
+`computeWorkerdObjectIdHash` had no remnants.
+
+### P3 results
+
+| Run | Result |
+| --- | --- |
+| `pnpm type-check`, `pnpm lint` | clean |
+| `vitest run packages/durable packages/shared packages/service-schemas packages/builtin` | 184 files, 1946 tests pass (after the catalog and contract test updates; builtin alone: `WorkspaceStateDO.test.ts` 103 tests on `FakeDoltStorage`, `WorkspaceStateDO.dolt.test.ts` 7, `legacyImport.test.ts` 12) |
+| host vitest `src/server/services`, `doDispatch`, `workerdRpcRelay`, `panelExecutionReconciler`, `workspaceServices`, `rpcServer`, `workspaceEntityStore`, `runtimeManager`, `durableObjectStorage`, `workspaceStateMigration` | all pass except `runtimeService.test.ts` "starts an unbound native execution clone fresh" (pre-existing on the cutover baseline `73e5ba525`, documented in the cutover handoff) |
+| real-fork host suites, one worker (P2 list + `workspaceStateCelld.test.ts`, `universalDoHost` with the new fork-idempotency test, `internalStorageWorkerd` on `WorkspaceStateDO`) | 13 files, 63 pass, 2 skipped, 0 fail (before: 12 files, 60 pass, 2 skipped) |
+| `workspaceStateCelld.test.ts` on the real fork | 3 tests: the store installs, one commit per mutation, close undone by a durable reset, local state across a kill, the reverse patch of a close; the import end to end with the node killed at four points mid-import and an empty retired store |
+LANES
+
+**Fork gaps found by P3:** none that block. Observations that shaped the work: the real engine enforces foreign keys
+in SQLite and Dolt cells (the fake does not); `dolt_status` is readable inside a `{ commit }` transaction;
+`ctx.storage.dolt.hashOf` is not (the fake refuses it too, as the doc says); a string with an embedded NUL is cut when
+bound (sql.js too), so composite keys use `\u001f`. `dolt_revert` is still not exposed: undo is a hard reset, or the
+patch of `dolt.diff` applied as SQL.
+
+## What remains
+
+- **P2b** (unchanged, waiting for D1 to D5, `docs/dolt-redesign.md` §7.7).
+- **Delete the retired store** in the release after this one: the `WorkspaceDO` class, its catalog entry, its
+  schemas, the import driver, the barrier, the adoption of the earlier maintenance journal, and the retired cells
+  themselves (the only deletion of user data this migration implies; nothing deletes it now).
+- **Lifecycle, alarm and durable-work machinery** (P4: native alarms for every DO, replace the planned-restart prepare
+  protocol); their tables then leave `WorkspaceStateDO`.
+- A **system test for panel close and reopen, `workers.resetStorage` and a restore round trip** does not exist in
+  the catalog (275 tests; none exercises them). The coverage is the real-fork tests (`universalDoHost`, `workspaceStateCelld`);
+  an acceptance test that drives the panel tree through the agent is worth adding to the Base `system-testing` skill.
+- Measure **commit volume** (R1): every mutation of the workspace state is a commit; GC rewrites the file. Not measured here.
+- The import's **cost on a large workspace** is not measured (one commit per event, about one to two ms each on the
+  real engine in the tests); `replay` calls are bounded by `budgetMs` so the start reports progress.
 
 ## How to run
 

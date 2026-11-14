@@ -109,6 +109,12 @@ Consequences:
 - The owner-to-kernel path and the confinement probe, on the real fork
   (`ownerKernelPathCelld.test.ts`, `universalDoHost.test.ts`): §7.1 and §7.7.
 
+- **P3 Durable services** (§4.6): the workspace state is a Dolt cell
+  (`WorkspaceStateDO`) with the retired SQLite `WorkspaceDO` kept one release
+  as the read-only source of a replaying, verified, resumable import; the
+  maintenance journal and `cloneDO` are deleted (`DurableObjectStorage`,
+  `forkObjectStorage`). What P3 did not do, and why, is §4.6 too.
+
 **Not done:** P2b, the structural move (the kernel as a facet of the owner's
 root, `evalService` and the `evalEngine` host schemas deleted). §7.7 records
 why it is not a local change and the decisions it needs. `UNSAFE_EVAL` is
@@ -581,6 +587,11 @@ table first. P0 implements both (`@vibestudio/durable/dolt`).
 
 ### 4.4 Backup, restore, reset and clone
 
+*Built in P3 as §4.6 records: the userland objects these operations act on are
+SQLite facets of a UniversalDO cell, so the backup stays a fork and not a
+branch; the journal is gone. The Dolt column below is what a Dolt object can
+additionally do for itself.*
+
 | Operation | Today (`workerdManager.ts`, `durableObjectStorageClone.ts`) | On Dolt |
 |---|---|---|
 | Backup | Quiesce (facet abort, or a whole-process stop for internal DOs), integrity-check, then copy raw files into `do-backups/<op>` with a manifest and verify. Retain 5 and sweep | `branch.create("backup/<op>")`, in the object's own turn. O(1) |
@@ -632,6 +643,112 @@ The durable-base survey splits `WorkspaceDO` (3,899 lines) into three parts.
 
 ---
 
+
+### 4.6 P3 as built
+
+**`WorkspaceStateDO`.** A cell's engine is fixed when its class creates it, so
+the Dolt store is a new class and the SQLite `WorkspaceDO` stays one release,
+read-only, as the import's source (`packages/builtin/src/workspace-state/`).
+The deployment lists `WorkspaceDO` in `new_sqlite_classes` and
+`WorkspaceStateDO` in `new_dolt_classes` with its `doltLocal` patterns
+(`runtime.storage`, `runtime.doltLocal` of the builtin catalog).
+
+- **Versioned:** `entities`, `runtime_resource_bindings`, `slots`,
+  `slot_history`, `context_edges`, `workspace_meta` (the template-seeding
+  marker). Every mutation is one `committedTransaction` through the class's
+  `commit` helper; `dolt_status` is read inside the transaction, so an
+  idempotent retry, a failed call and a call that changed only local tables make
+  no commit. A nested mutation (`initializePanels`) joins its outer commit.
+  Verified on the real engine: `dolt_status` is readable inside a transaction.
+- **Local** (`panel_close_cleanup`, `local_%`, `lifecycle_*`, `do_alarms`,
+  `do_alarm_test_policies`, `durable_work_owners`, plus the framework's `vsl_%`
+  and `state`): never in a commit, not rewound by a reset. The panel-tree
+  revision is local (`local_workspace_meta`) and replaces the change triggers: a
+  reader sees the stored counter, plus one while a mutation has uncommitted
+  versioned changes, and `commit` bumps the counter inside the same transaction,
+  so a result built inside a mutation carries the revision the tree has once it
+  lands, and a reset never moves it back.
+- **Deviation from §4.5, panel undo.** Closing stays a row state
+  (`slots.closed_at`), and `slot_history` and `panel_close_cleanup` stay. The
+  closed-panel list, its keyset paging, its closed counts and the permanent
+  purge are queries over rows (L2); a list derived from commits would need
+  history-table reads (`dolt_history_*`, which the double does not model) and
+  could not purge. Navigation history is application data with a cursor, not
+  version history. What Dolt adds: the close, the reopen and the purge are each
+  one commit, the reverse patch of a close commit is exactly the SQL that reopens
+  it (`dolt.diff({ from: close, to: parent })` touches only `slots`), and a hard
+  reset to the commit before a close is the undo of everything since, with the
+  schedule and outbox untouched (tests: `WorkspaceStateDO.dolt.test.ts`, and on
+  the real fork `workspaceStateCelld.test.ts`). `panel_close_cleanup` is an
+  outbox, so it became local.
+- **Deviation from §4.5, lifecycle, alarms, durable work.** They stay, as local
+  tables of the new class, and their drivers stay. The cutover did not delete
+  them and they are not dead: `DurableObjectBase.setAlarmAt` still calls
+  `workspace-state.alarmSet`, Pi owners hold a lease published by
+  `publishDurableWorkOwner`, and `MissionsDO` and the Base `durable-base.ts`
+  register lifecycle releases. Deleting `lifecycleDriver`, `alarmDriver` and
+  `durableWorkDriver` means moving every class's alarms to native alarms and
+  replacing the planned-restart prepare protocol, which is the agent system's
+  hibernation-first semantics (§6.6, P4). Their tables are local so a reset
+  never rewinds a scheduler's claims (the invariant the wake-publication header
+  states).
+
+**The import** (`legacyImport.ts`, `legacyImportDriver.ts`,
+`src/server/workspaceStateMigration.ts`), Q2 (replay where history exists):
+
+1. The first call to `WorkspaceStateDO` (every dispatch awaits it; the
+   migration's own calls bypass the barrier) asks the new store for its status.
+   `verified`, `skipped` or `adopted` (a cell that already holds workspace rows,
+   say a restored object) is settled and the retired store is never read.
+2. Otherwise `WorkspaceDO.legacyManifest` states, per table, the row count and
+   an order-independent SHA-256. No tables means a fresh workspace: `skipped`.
+3. `legacyImportBegin` records the manifest and the base commit, and the host
+   pages the 14 tables (`legacyReadRows`, rowid keyset) into the local staging
+   table `local_legacy_rows`, idempotent by legacy rowid.
+4. `planReplay` orders the rows by their own timestamps (`created_at`,
+   `recorded_at`, `closed_at`, `retired_at`): an entity arrives, a slot arrives
+   on its first history entry, each later entry is a navigation commit that moves
+   the pointer (the last one to its final pointer), every slot one close took
+   down closes together at the shared stamp, a retired entity retires at
+   `retired_at`. A row never arrives before what it references (the real engine
+   enforces foreign keys), and the plan is a pure function of the rows. It is
+   stored (`local_legacy_events`) and applied one commit per event with the
+   event's time as the commit date; the applied counter is written in the same
+   transaction, so a crash resumes at the next event, never repeating one.
+5. `legacyImportFinish` copies the operational tables (alarms, leases, outbox,
+   `state`, the revision) as they are, then proves every legacy table equal to
+   what the cell holds by digest (`state` as a subset), and only then writes the
+   marker commit and `verified`. If the retired store changed since staging began
+   the driver refuses to finish and the next start begins again from the base
+   commit (`reset --hard`).
+
+The retired cell is never written (apart from creating the framework's `state`
+table in a fresh empty cell) and never deleted: it stays the fallback until a
+later release deletes the class. A failed import fails the start (no call to the
+store gets through) and resumes on the next one.
+
+**Storage operations** (`src/server/durableObjectStorage.ts`). The journal and
+its step machine (`do_maintenance`) are deleted; the node's object fork and
+restore do the copying and a restore the node accepted completes by itself. The
+host keeps three tables: the storage identity a host authority is bound to
+(rotated before any replacement, so a crash leaves an identity newer than the
+data, never authority outliving it); the backup registry (a backup is listed
+only once its fork finished, an unfinished one is swept at the next operation or
+start); and an outbox of retired objects whose storage is not yet deleted (an
+earlier build's open retirements move into it). `cloneDO` is
+`forkObjectStorage`, idempotent by target id: `ERR_OBJECT_EXISTS` is done, an
+interrupted fork is taken over (`replaceUnfinished`), and a retry after a lost
+receipt leaves the one object it holds. The clone receipt table stays: it is the
+reservation's proof that the copy is its own, not a journal.
+
+**Findings on the fork, from building this:**
+- The real engine enforces foreign keys, in SQLite cells and in Dolt cells; the
+  fake does not. Anything that inserts rows (the importer, a test seeding a
+  store) must put parents first.
+- A string with an embedded NUL is cut at the NUL when bound (sql.js, and so
+  any key built with `\0`); the importer's composite keys use `\u001f`.
+- `dolt_status` and a pinned commit `date` work inside a `{ commit }`
+  transaction; `ctx.storage.dolt.hashOf` does not (read it first).
 
 ## 5. GAD on Dolt: decentralized work over one database
 
@@ -1592,7 +1709,11 @@ chronolog.subscribe({ group, sql, bindings })     // live query results
 - **Internal root classes** (`WorkspaceDO`). The engine is fixed per class,
   so the Dolt class is a new class name (`new_dolt_classes`). Its first
   activation imports from the old object through an export RPC on the old
-  class. That RPC ships for exactly one release.
+  class. That RPC ships for exactly one release. **Built in P3 (§4.6):** the
+  old class is read-only (`legacyManifest`, `legacyReadRows`), the host drives
+  the import because the new class cannot address the old, the history is
+  replayed as commits (Q2) and the move is verified by digest before it is
+  settled.
 - **GAD replays its history.** It walks events and applications in
   topological order, writes each application's fact-root state into
   `files` and `repositories` with its semantic rows, and commits. Each
@@ -1632,7 +1753,7 @@ is **done**: F1 to F7 ship in `fcc7268`, and `9440c29` (pinned) fixes the hard r
 | **P0 Foundations** (`feat/dolt-p0`) | `@vibestudio/durable/dolt` typed surface of the whole `ctx.storage.dolt` API (merge with resolver, `doltLocal`, remotes); `committedTransaction` on F2 (no roll-forward); schema install commits on Dolt (checkpoint before an upgrade, `schema:` commits); schema-guard filter (`_cf_`, `_litestream`, `dolt_`, `doltlite_`); framework tables local on Dolt; a `FakeDoltStorage` test double with its divergences documented | none (the fork is delivered) | `vitest packages/durable`: commit points, `committedTransaction` atomicity (a throw leaves no rows and no commit), checkpoint before upgrade, failed upgrade commits nothing, filter, merge with resolver, local tables, remotes between fakes. Then a real-celld probe (`doltDurableCelld.test.ts`): a Dolt root class installs its schema, commits through `committedTransaction`, and survives a process kill and restart with `dolt.log()` correct | 3 |
 | **P1 Runtime** (fork side) | Dolt facets; F1 merge resolver; F2 commit in a transaction; F3 forks carrying facets; F4 local tables; F5 checkout cost; F6 history reads; F7 remotes | fork | **Done** (`fcc7268`; `9440c29` adds the durable hard reset and `ondoltpush`). Open for P5: a Vibestudio-side test of the facet relay and `ondoltpush`, and the checkout budget below | done |
 | **P2 Eval kernels** | **P2a (done):** `ctx.residency.hold()` for the heap until an explicit end (Q3, no idle timer), revocation through `onrevoked`, the host lease and its three methods deleted. **P2b (open, §7.7):** the kernel class in Base as a Dolt facet of the owner's root with the `codegen` and `residency` grants; the owner calls it through its `KernelGateway`; delete `EvalDO`, `evalService` and the `evalEngine` host schemas | cutover, P0 | `pnpm test` for eval packages; system tests `eval-*` (heap retained across turns, cancel, restart report, large return) compared with the cutover numbers; a confinement probe (a userland object's `eval` throws, the kernel's works); a cross-owner probe (owner A cannot address B's kernel); `rg 'EvalDO\|evalService' src packages` is empty (`UNSAFE_EVAL` already is) | 8 (P2a about 1) |
-| **P3 Durable services** | `WorkspaceDO` on Dolt; panel undo by reverse patch; backup, restore, reset and clone via Dolt; delete the maintenance journal, `cloneDO`, `durableObjectStorageClone.ts` and `computeWorkerdObjectIdHash`, and the lifecycle tables and driver if the cutover kept them | P2 (facet machinery proven) | `WorkspaceDO.test.ts` against `FakeDoltStorage`; system tests for panel close and reopen, `workers.resetStorage`, and a restore round trip; a fork-idempotency test (the same target id twice gives one object); `rg cloneDO\|do_maintenance` is empty | 6 |
+| **P3 Durable services (done, §4.6)** | `WorkspaceDO` on Dolt; panel undo by reverse patch; backup, restore, reset and clone via Dolt; delete the maintenance journal, `cloneDO`, `durableObjectStorageClone.ts` and `computeWorkerdObjectIdHash`, and the lifecycle tables and driver if the cutover kept them | P2 (facet machinery proven) | `WorkspaceDO.test.ts` against `FakeDoltStorage`; system tests for panel close and reopen, `workers.resetStorage`, and a restore round trip; a fork-idempotency test (the same target id twice gives one object); `rg cloneDO\|do_maintenance` is empty | 6 |
 | **P4 Agent system** | Channel and agent cells on Dolt with local tables; Pi local document tables; native conversation fork; delete the hash chain, knowledge export and import, and the clone paths | P0 | Fork-and-subagents acceptance (§E3): edit-and-fork, a multi-agent fork, a subagent `mode: "fork"`, crash-resume of a fork op (kill between phases); hibernation tests (evict between turns, redelivery deduplicated); a fork at sequence N equals the parent's state at N (ledger, participants, agent anchors) | 12 |
 | **P5 GAD, decentralized** | Canonical Dolt database and participant work cells (§5.1); the state model, contexts as branches; integration by F1 merge, `pull` and `push` (§5.5); grants and approval as grant issuance (§5.6); work-cell create, retire (§5.7); a derived `commit_index`, `content_roots`; replay migration (Q2); delete the fact-map, radix and frontier machinery | P0, P4 (agent forks), the two *to verify* items | The provenance plan's acceptance matrix (§14), re-expressed over commit hashes and passing in full; the decentralization gates of §5.13; replay equivalence: for each real workspace snapshot available, every legacy event's materialized tree hash equals the replayed commit's, and blame answers match on a sampled set; the **size gate** (a replayed workspace database and the fork latency at that size, recorded); checkout and merge benchmarks: checkout **p95 within 20 ms with `fsync` and 10k local rows** (the fork measured 14 to 16 ms), a context switch batched per participant turn | 20 |
 | **P6 Chronolog capability** | Chronolog node deployed per workspace node; the `chronolog` host service; key custody; invite and join; agent writes through approval; Chronolog authority for pushes into a shared GAD `main` (§8.4); the cross-workspace P2P carrier for Dolt remotes | Chronolog fork phase 4, P0, the P2P cross-workspace run | Two workspace instances on two nodes: create a group, invite, write from both sides, see an owner-row rejection, run a replay flip (Chronolog's demo as a system test); a GAD push between workspaces authorised by group membership | 8 |
