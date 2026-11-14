@@ -786,6 +786,13 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     report: (message: string) => void = console.warn
   ): Promise<T> {
     const startedAt = Date.now();
+    // Diagnostic: `VIBESTUDIO_DO_CALL_TRACE=<substring of a call label>` logs the
+    // latency of every dispatch whose label contains it (`1` or `all`: every call).
+    const trace = process.env["VIBESTUDIO_DO_CALL_TRACE"];
+    const traceStart =
+      trace && (trace === "1" || trace === "all" || label.includes(trace))
+        ? performance.now()
+        : null;
     let reported = false;
     const timer = setInterval(() => {
       reported = true;
@@ -798,6 +805,11 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
       return await fn();
     } finally {
       clearInterval(timer);
+      if (traceStart !== null) {
+        console.info(
+          `[DOTrace] ${label} ${(performance.now() - traceStart).toFixed(1)}ms t=${Date.now()}`
+        );
+      }
       if (reported && state === "working") {
         report(
           `[DODispatch] state=completed ${label} finished after ${Math.round((Date.now() - startedAt) / 1000)}s`

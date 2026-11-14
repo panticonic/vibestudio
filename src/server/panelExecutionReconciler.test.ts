@@ -270,6 +270,35 @@ describe("PanelExecutionReconciler", () => {
     expect(activate).toHaveBeenCalledTimes(1);
   });
 
+  it("an entity that is already active is neither activated nor logged as activating again", async () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    try {
+      const activate = vi.fn(async () => activeHandle);
+      const reconciler = new PanelExecutionReconciler({
+        getDetail: vi.fn(async () => ({
+          ...detail,
+          entity: { ...detail.entity, status: "active" as const },
+        })),
+        resolveSlotByEntity: vi.fn(async () => detail.slot.slot_id),
+        listPreparingPanels: vi.fn(async () => []),
+        activate,
+        onError: vi.fn(),
+      });
+
+      // Every acquire and every ensureSlot runs this level-triggered check.
+      for (let call = 0; call < 3; call += 1) {
+        await expect(reconciler.ensureExecutable(detail.slot.slot_id, entity.id)).resolves.toBe(
+          true
+        );
+      }
+
+      expect(activate).not.toHaveBeenCalled();
+      expect(info).not.toHaveBeenCalled();
+    } finally {
+      info.mockRestore();
+    }
+  });
+
   it("reports supersession as convergence state when the slot changes during activation", async () => {
     let currentDetail: WorkspacePanelDetail = detail;
     const reconciler = new PanelExecutionReconciler({
