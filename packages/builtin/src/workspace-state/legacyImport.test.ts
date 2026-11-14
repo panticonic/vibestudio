@@ -55,7 +55,14 @@ const entry = (entity: { key: string; id: string }) => ({
 describe("planReplay", () => {
   const row = (values: Record<string, string | number | null>): LegacyRow => values;
   const entity = (id: string, createdAt: number, extra: LegacyRow = {}) =>
-    row({ id, created_at: createdAt, status: "active", retired_at: null, agent_entity_id: null, ...extra });
+    row({
+      id,
+      created_at: createdAt,
+      status: "active",
+      retired_at: null,
+      agent_entity_id: null,
+      ...extra,
+    });
   const slot = (id: string, createdAt: number, extra: LegacyRow = {}) =>
     row({
       slot_id: id,
@@ -66,8 +73,13 @@ describe("planReplay", () => {
       closed_at: null,
       ...extra,
     });
-  const history = (slotId: string, cursor: number, entryKey: string, entityId: string, at: number) =>
-    row({ slot_id: slotId, cursor, entry_key: entryKey, entity_id: entityId, recorded_at: at });
+  const history = (
+    slotId: string,
+    cursor: number,
+    entryKey: string,
+    entityId: string,
+    at: number
+  ) => row({ slot_id: slotId, cursor, entry_key: entryKey, entity_id: entityId, recorded_at: at });
   const empty: StagedRows = {
     entities: [],
     slots: [],
@@ -80,7 +92,10 @@ describe("planReplay", () => {
   it("orders rows by their own timestamps, with the markers first", () => {
     const events = planReplay({
       ...empty,
-      workspace_meta: [row({ key: "initial-panels", value: "[]" }), row({ key: "panel_tree_revision", value: "9" })],
+      workspace_meta: [
+        row({ key: "initial-panels", value: "[]" }),
+        row({ key: "panel_tree_revision", value: "9" }),
+      ],
       entities: [entity("e2", T0 + 20), entity("e1", T0 + 10)],
       slots: [slot("s1", T0 + 30, { current_entity_id: "e1", current_entry_key: "k1" })],
       slot_history: [history("s1", 0, "k1", "e1", T0 + 30)],
@@ -100,16 +115,27 @@ describe("planReplay", () => {
       entities: [entity("e1", T0), entity("e2", T0 + 1)],
       slots: [
         slot("root", T0 + 2, { current_entry_key: "k1", closed_at: T0 + 50 }),
-        slot("child", T0 + 3, { parent_slot_id: "root", current_entry_key: "k2", closed_at: T0 + 50 }),
+        slot("child", T0 + 3, {
+          parent_slot_id: "root",
+          current_entry_key: "k2",
+          closed_at: T0 + 50,
+        }),
       ],
-      slot_history: [history("root", 0, "k1", "e1", T0 + 2), history("child", 0, "k2", "e2", T0 + 3)],
+      slot_history: [
+        history("root", 0, "k1", "e1", T0 + 2),
+        history("child", 0, "k2", "e2", T0 + 3),
+      ],
     });
     expect(events.filter((event) => event.kind === "close")).toEqual([
       { kind: "close", time: T0 + 50, key: String(T0 + 50) },
     ]);
     // A closed slot first arrives open, on the entity its current entry names.
-    expect(events.find((event) => event.kind === "slot" && event.key === "root")?.entityId).toBe("e1");
-    expect(events.find((event) => event.kind === "slot" && event.key === "child")?.entityId).toBe("e2");
+    expect(events.find((event) => event.kind === "slot" && event.key === "root")?.entityId).toBe(
+      "e1"
+    );
+    expect(events.find((event) => event.kind === "slot" && event.key === "child")?.entityId).toBe(
+      "e2"
+    );
     expect(events.at(-1)?.kind).toBe("close");
   });
 
@@ -130,7 +156,9 @@ describe("planReplay", () => {
     const depth = 3_000;
     for (let level = 0; level < depth; level += 1) {
       slots.push(
-        slot(`s${level}`, T0 + level, { parent_slot_id: level + 1 < depth ? `s${level + 1}` : null })
+        slot(`s${level}`, T0 + level, {
+          parent_slot_id: level + 1 < depth ? `s${level + 1}` : null,
+        })
       );
     }
     const events = planReplay({ ...empty, slots });
@@ -148,7 +176,9 @@ describe("planReplay", () => {
       slots: [slot("s1", T0, { current_entity_id: "e1", current_entry_key: "k" })],
       slot_history: [history("s1", 0, "k", "e1", T0)],
     };
-    expect(planReplay(rows)).toEqual(planReplay({ ...rows, entities: [...rows.entities].reverse() }));
+    expect(planReplay(rows)).toEqual(
+      planReplay({ ...rows, entities: [...rows.entities].reverse() })
+    );
   });
 });
 
@@ -163,12 +193,11 @@ function legacyRowsOf(source: SourceWorkspace): Record<LegacyImportTable, Legacy
   const tables = {} as Record<LegacyImportTable, LegacyRow[]>;
   for (const table of LEGACY_IMPORT_TABLES) {
     const columns = LEGACY_COLUMNS[table].join(", ");
-    tables[table] = (
-      table === "workspace_meta"
-        ? source.sql.exec(
-            `SELECT ${columns} FROM workspace_meta UNION ALL SELECT ${columns} FROM local_workspace_meta`
-          )
-        : source.sql.exec(`SELECT ${columns} FROM ${table}`)
+    tables[table] = (table === "workspace_meta"
+      ? source.sql.exec(
+          `SELECT ${columns} FROM workspace_meta UNION ALL SELECT ${columns} FROM local_workspace_meta`
+        )
+      : source.sql.exec(`SELECT ${columns} FROM ${table}`)
     ).toArray() as unknown as LegacyRow[];
   }
   return tables;
@@ -277,8 +306,7 @@ describe("the legacy import", () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  const importerOf = (target: SourceWorkspace) =>
-    target.instance as unknown as LegacyStoreImporter;
+  const importerOf = (target: SourceWorkspace) => target.instance as unknown as LegacyStoreImporter;
 
   async function importInto(
     target: SourceWorkspace,
@@ -299,7 +327,15 @@ describe("the legacy import", () => {
     );
     // An empty SQLite cell has no workspace tables at all.
     const result = await importLegacyWorkspaceState({
-      legacy: { ...reader, legacyManifest: async () => ({ present: false, schemaVersion: null, tables: [], digest: "0".repeat(64) }) } as LegacyStoreReader,
+      legacy: {
+        ...reader,
+        legacyManifest: async () => ({
+          present: false,
+          schemaVersion: null,
+          tables: [],
+          digest: "0".repeat(64),
+        }),
+      } as LegacyStoreReader,
       target: importerOf(target),
     });
     expect(result.outcome).toBe("skipped");
@@ -381,7 +417,9 @@ describe("the legacy import", () => {
     // Resetting to the commit before the subtree close brings the subtree back whole: the undo.
     const log = fake.dolt.log({ limit: 500 });
     const closeIndex = log.findIndex((commit) => commit.message.startsWith("replay: close"));
-    const lastClose = log.slice(closeIndex).find((commit) => commit.message.startsWith("replay: close"))!;
+    const lastClose = log
+      .slice(closeIndex)
+      .find((commit) => commit.message.startsWith("replay: close"))!;
     const beforeLastClose = log[log.indexOf(lastClose) + 1]!;
     expect(instance.slotGet("other")?.closed_at).not.toBeNull();
     fake.dolt.reset({ hard: true, to: beforeLastClose.hash });
@@ -396,7 +434,8 @@ describe("the legacy import", () => {
     // The runtime's cleanup of the close finishes, the entries are reactivated, the close reopens.
     live.instance.slotCloseCleanupAck(["root", "child"]);
     const plan = live.instance.slotReopenPlan("root");
-    for (const { entry: history } of plan.slots) live.instance.entityActivate(panel(history.entry_key));
+    for (const { entry: history } of plan.slots)
+      live.instance.entityActivate(panel(history.entry_key));
     expect(
       live.instance.slotReopen({ slotId: "root", closedAt: plan.closedAt }).reopenedCount
     ).toBe(2);

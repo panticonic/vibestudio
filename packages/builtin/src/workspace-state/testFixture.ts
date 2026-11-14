@@ -24,7 +24,11 @@ export class WorkspaceDOTestable extends WorkspaceStateDO {
  * reopen the same store.
  */
 export async function createWorkspaceStateTestDO(
-  options: { fake?: FakeDoltStorage; fakeOptions?: FakeDoltOptions; env?: Record<string, unknown> } = {}
+  options: {
+    fake?: FakeDoltStorage;
+    fakeOptions?: FakeDoltOptions;
+    env?: Record<string, unknown>;
+  } = {}
 ) {
   const fake =
     options.fake ??

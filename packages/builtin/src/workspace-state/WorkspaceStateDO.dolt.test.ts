@@ -70,11 +70,13 @@ describe("WorkspaceStateDO commit discipline", () => {
     instance.slotClose("slot-a");
     expect(messages()).toEqual(afterClose);
     expect(afterClose.length).toBe(before.length + 1);
-    expect(() => instance.slotCommitPreparedNavigation({
-      slotId: "slot-a",
-      expectedCurrentEntityId: entity.id,
-      mutation: { kind: "append", entry: entry(entity) },
-    })).toThrow();
+    expect(() =>
+      instance.slotCommitPreparedNavigation({
+        slotId: "slot-a",
+        expectedCurrentEntityId: entity.id,
+        mutation: { kind: "append", entry: entry(entity) },
+      })
+    ).toThrow();
     instance.slotGet("slot-a");
     instance.panelTreeRootGroups({ limit: 10 });
     expect(messages()).toEqual(afterClose);
@@ -144,7 +146,9 @@ describe("WorkspaceStateDO commit discipline", () => {
     const revision = instance.panelTreeRootGroups({ limit: 10 }).revision;
 
     // None of the operational tables is in a diff against the first state.
-    const changed = fake.dolt.diff({ from: base, to: "HEAD" }).summary.map((entry) => entry.toTable);
+    const changed = fake.dolt
+      .diff({ from: base, to: "HEAD" })
+      .summary.map((entry) => entry.toTable);
     expect(changed).toEqual(expect.arrayContaining(["entities", "slots"]));
     expect(changed).not.toContain("do_alarms");
     expect(changed).not.toContain("lifecycle_leases");

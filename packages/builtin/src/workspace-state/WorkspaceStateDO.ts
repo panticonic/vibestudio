@@ -718,110 +718,115 @@ export class WorkspaceStateDO extends DurableObjectBase {
     if (nextAuthority !== null && nextExecutionDigest === null) {
       throw new Error("entity activeAuthority requires an activeExecutionDigest");
     }
-    return this.commit((entity) => `activate ${entity.kind} ${entity.id}`, () => {
-      this.publishDurableWorkOwner(input);
-      const id = canonicalEntityId({
-        kind: input.kind,
-        source: input.source.repoPath,
-        className: input.className,
-        key: input.key,
-      });
+    return this.commit(
+      (entity) => `activate ${entity.kind} ${entity.id}`,
+      () => {
+        this.publishDurableWorkOwner(input);
+        const id = canonicalEntityId({
+          kind: input.kind,
+          source: input.source.repoPath,
+          className: input.className,
+          key: input.key,
+        });
 
-      const existing = this.readEntityRow(id);
-      if (existing) {
-        this.assertIdentityMatches(id, existing, input);
-        if (existing.status === "retired" && existing.cleanup_complete !== 1) {
-          throw new Error(`Cannot reactivate entity ${id} before retirement cleanup completes`);
-        }
-        if (existing.active_build_key && existing.active_build_key !== nextBuildKey) {
-          throw new IdentityCollisionError(id, {
-            field: "activeBuildKey",
-            existing: existing.active_build_key,
-            attempted: nextBuildKey,
-          });
-        }
-        if (
-          existing.active_build_key !== nextBuildKey ||
-          existing.active_execution_digest !== nextExecutionDigest ||
-          existing.active_authority !== nextAuthority
-        ) {
-          this.sql.exec(
-            `UPDATE entities
+        const existing = this.readEntityRow(id);
+        if (existing) {
+          this.assertIdentityMatches(id, existing, input);
+          if (existing.status === "retired" && existing.cleanup_complete !== 1) {
+            throw new Error(`Cannot reactivate entity ${id} before retirement cleanup completes`);
+          }
+          if (existing.active_build_key && existing.active_build_key !== nextBuildKey) {
+            throw new IdentityCollisionError(id, {
+              field: "activeBuildKey",
+              existing: existing.active_build_key,
+              attempted: nextBuildKey,
+            });
+          }
+          if (
+            existing.active_build_key !== nextBuildKey ||
+            existing.active_execution_digest !== nextExecutionDigest ||
+            existing.active_authority !== nextAuthority
+          ) {
+            this.sql.exec(
+              `UPDATE entities
                 SET active_build_key = ?, active_execution_digest = ?, active_authority = ?
               WHERE id = ?`,
-            nextBuildKey,
-            nextExecutionDigest,
-            nextAuthority,
+              nextBuildKey,
+              nextExecutionDigest,
+              nextAuthority,
+              id
+            );
+            existing.active_build_key = nextBuildKey;
+            existing.active_execution_digest = nextExecutionDigest;
+            existing.active_authority = nextAuthority;
+          }
+          const nextAgentEntityId =
+            input.agentBinding === undefined || input.agentBinding.entityId === id
+              ? null
+              : input.agentBinding.entityId;
+          const nextAgentChannelId = input.agentBinding?.channelId ?? null;
+          if (
+            input.agentBinding !== undefined &&
+            input.agentBinding.contextId !== input.contextId
+          ) {
+            throw new IdentityCollisionError(id, {
+              field: "agentBinding.contextId",
+              existing: input.contextId,
+              attempted: input.agentBinding.contextId,
+            });
+          }
+          if (
+            existing.agent_entity_id !== nextAgentEntityId ||
+            existing.agent_channel_id !== nextAgentChannelId
+          ) {
+            throw new IdentityCollisionError(id, {
+              field: "agentBinding",
+              existing: {
+                entityId: existing.agent_entity_id ?? id,
+                contextId: existing.context_id,
+                channelId: existing.agent_channel_id,
+              },
+              attempted: input.agentBinding ?? null,
+            });
+          }
+          const nextOwnerUserId = input.ownerUserId ?? null;
+          if (existing.owner_user_id !== nextOwnerUserId) {
+            throw new IdentityCollisionError(id, {
+              field: "ownerUserId",
+              existing: existing.owner_user_id,
+              attempted: nextOwnerUserId,
+            });
+          }
+          if (existing.status === "active") {
+            this.publishNativeOwner(input, id);
+            return this.rowToEntity(this.readEntityRow(id)!);
+          }
+          // Preparing -> active preserves its reserved lifetime; completed
+          // retirement -> active creates a new authority owner over retained data.
+          const authoritySessionId =
+            existing.status === "retired" ? crypto.randomUUID() : existing.authority_session_id;
+          this.sql.exec(
+            `UPDATE entities SET status = 'active', retired_at = NULL, cleanup_complete = 1, error = NULL, authority_session_id = ? WHERE id = ?`,
+            authoritySessionId,
             id
           );
-          existing.active_build_key = nextBuildKey;
-          existing.active_execution_digest = nextExecutionDigest;
-          existing.active_authority = nextAuthority;
-        }
-        const nextAgentEntityId =
-          input.agentBinding === undefined || input.agentBinding.entityId === id
-            ? null
-            : input.agentBinding.entityId;
-        const nextAgentChannelId = input.agentBinding?.channelId ?? null;
-        if (input.agentBinding !== undefined && input.agentBinding.contextId !== input.contextId) {
-          throw new IdentityCollisionError(id, {
-            field: "agentBinding.contextId",
-            existing: input.contextId,
-            attempted: input.agentBinding.contextId,
-          });
-        }
-        if (
-          existing.agent_entity_id !== nextAgentEntityId ||
-          existing.agent_channel_id !== nextAgentChannelId
-        ) {
-          throw new IdentityCollisionError(id, {
-            field: "agentBinding",
-            existing: {
-              entityId: existing.agent_entity_id ?? id,
-              contextId: existing.context_id,
-              channelId: existing.agent_channel_id,
-            },
-            attempted: input.agentBinding ?? null,
-          });
-        }
-        const nextOwnerUserId = input.ownerUserId ?? null;
-        if (existing.owner_user_id !== nextOwnerUserId) {
-          throw new IdentityCollisionError(id, {
-            field: "ownerUserId",
-            existing: existing.owner_user_id,
-            attempted: nextOwnerUserId,
-          });
-        }
-        if (existing.status === "active") {
           this.publishNativeOwner(input, id);
-          return this.rowToEntity(this.readEntityRow(id)!);
+          return this.rowToEntity({
+            ...existing,
+            native_owner: input.nativeOwner === null ? null : JSON.stringify(input.nativeOwner),
+            agent_entity_id: existing.agent_entity_id,
+            agent_channel_id: existing.agent_channel_id,
+            authority_session_id: authoritySessionId,
+            status: "active",
+            retired_at: null,
+            cleanup_complete: 1,
+            error: null,
+          });
         }
-        // Preparing -> active preserves its reserved lifetime; completed
-        // retirement -> active creates a new authority owner over retained data.
-        const authoritySessionId =
-          existing.status === "retired" ? crypto.randomUUID() : existing.authority_session_id;
-        this.sql.exec(
-          `UPDATE entities SET status = 'active', retired_at = NULL, cleanup_complete = 1, error = NULL, authority_session_id = ? WHERE id = ?`,
-          authoritySessionId,
-          id
-        );
-        this.publishNativeOwner(input, id);
-        return this.rowToEntity({
-          ...existing,
-          native_owner: input.nativeOwner === null ? null : JSON.stringify(input.nativeOwner),
-          agent_entity_id: existing.agent_entity_id,
-          agent_channel_id: existing.agent_channel_id,
-          authority_session_id: authoritySessionId,
-          status: "active",
-          retired_at: null,
-          cleanup_complete: 1,
-          error: null,
-        });
-      }
 
-      const now = Date.now();
-      this.sql.exec(
-        `INSERT INTO entities (
+        const now = Date.now();
+        this.sql.exec(
+          `INSERT INTO entities (
           id, kind, source_repo_path, source_effective_version, active_build_key,
           active_execution_digest,
           active_authority, execution_authority,
@@ -829,32 +834,33 @@ export class WorkspaceStateDO extends DurableObjectBase {
           parent_id, owner_user_id, authority_session_id, created_at,
           status, retired_at, cleanup_complete, error
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', NULL, 1, NULL)`,
-        id,
-        input.kind,
-        input.source.repoPath,
-        input.source.effectiveVersion,
-        nextBuildKey,
-        nextExecutionDigest,
-        nextAuthority,
-        input.executionAuthority ? canonicalJson(input.executionAuthority) : null,
-        input.contextId,
-        input.className ?? null,
-        input.key,
-        input.stateArgs === undefined ? null : JSON.stringify(input.stateArgs),
-        input.agentBinding === undefined || input.agentBinding.entityId === id
-          ? null
-          : input.agentBinding.entityId,
-        input.agentBinding?.channelId ?? null,
-        input.parentId ?? null,
-        input.ownerUserId ?? null,
-        crypto.randomUUID(),
-        now
-      );
-      const row = this.readEntityRow(id);
-      if (!row) throw new Error(`entityActivate: failed to read row after insert: ${id}`);
-      this.publishNativeOwner(input, id);
-      return this.rowToEntity(this.readEntityRow(id)!);
-    });
+          id,
+          input.kind,
+          input.source.repoPath,
+          input.source.effectiveVersion,
+          nextBuildKey,
+          nextExecutionDigest,
+          nextAuthority,
+          input.executionAuthority ? canonicalJson(input.executionAuthority) : null,
+          input.contextId,
+          input.className ?? null,
+          input.key,
+          input.stateArgs === undefined ? null : JSON.stringify(input.stateArgs),
+          input.agentBinding === undefined || input.agentBinding.entityId === id
+            ? null
+            : input.agentBinding.entityId,
+          input.agentBinding?.channelId ?? null,
+          input.parentId ?? null,
+          input.ownerUserId ?? null,
+          crypto.randomUUID(),
+          now
+        );
+        const row = this.readEntityRow(id);
+        if (!row) throw new Error(`entityActivate: failed to read row after insert: ${id}`);
+        this.publishNativeOwner(input, id);
+        return this.rowToEntity(this.readEntityRow(id)!);
+      }
+    );
   }
 
   /**
@@ -869,29 +875,68 @@ export class WorkspaceStateDO extends DurableObjectBase {
     if (input.activeBuildKey || input.activeExecutionDigest || input.activeAuthority) {
       throw new Error("An entity reservation cannot carry an execution identity");
     }
-    return this.commit((entity) => `reserve ${entity.kind} ${entity.id}`, () => {
-      const id = canonicalEntityId({
-        kind: input.kind,
-        source: input.source.repoPath,
-        className: input.className,
-        key: input.key,
-      });
-      const existing = this.readEntityRow(id);
-      if (existing) {
-        if (
-          existing.clone_provenance !==
-          (input.cloneProvenance ? canonicalJson(input.cloneProvenance) : null)
-        ) {
-          throw new IdentityCollisionError(id, {
-            field: "cloneProvenance",
-            existing: existing.clone_provenance,
-            attempted: input.cloneProvenance ?? null,
-          });
+    return this.commit(
+      (entity) => `reserve ${entity.kind} ${entity.id}`,
+      () => {
+        const id = canonicalEntityId({
+          kind: input.kind,
+          source: input.source.repoPath,
+          className: input.className,
+          key: input.key,
+        });
+        const existing = this.readEntityRow(id);
+        if (existing) {
+          if (
+            existing.clone_provenance !==
+            (input.cloneProvenance ? canonicalJson(input.cloneProvenance) : null)
+          ) {
+            throw new IdentityCollisionError(id, {
+              field: "cloneProvenance",
+              existing: existing.clone_provenance,
+              attempted: input.cloneProvenance ?? null,
+            });
+          }
+          this.assertIdentityMatches(id, existing, input);
+          if (existing.status === "retired") {
+            throw new Error(`Cannot reserve retired entity ${id}`);
+          }
+          if (input.lifecycleOwner) {
+            this.upsertContextEdge({
+              contextId: input.contextId,
+              ownerContextId: input.lifecycleOwner.contextId,
+              kind: "lifecycle",
+              ownerEntityId: input.lifecycleOwner.entityId,
+            });
+          }
+          return this.rowToEntity(existing);
         }
-        this.assertIdentityMatches(id, existing, input);
-        if (existing.status === "retired") {
-          throw new Error(`Cannot reserve retired entity ${id}`);
-        }
+
+        const now = Date.now();
+        this.sql.exec(
+          `INSERT INTO entities (
+          id, kind, source_repo_path, source_effective_version, active_build_key,
+          active_execution_digest, active_authority, execution_authority, context_id, class_name, key,
+          state_args, agent_entity_id, agent_channel_id, parent_id, owner_user_id, authority_session_id,
+          clone_provenance, created_at, status, retired_at, cleanup_complete, error
+        ) VALUES (?, ?, ?, '', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', NULL, 1, NULL)`,
+          id,
+          input.kind,
+          input.source.repoPath,
+          input.executionAuthority ? canonicalJson(input.executionAuthority) : null,
+          input.contextId,
+          input.className ?? null,
+          input.key,
+          input.stateArgs === undefined ? null : JSON.stringify(input.stateArgs),
+          input.agentBinding === undefined || input.agentBinding.entityId === id
+            ? null
+            : input.agentBinding.entityId,
+          input.agentBinding?.channelId ?? null,
+          input.parentId ?? null,
+          input.ownerUserId ?? null,
+          crypto.randomUUID(),
+          input.cloneProvenance ? canonicalJson(input.cloneProvenance) : null,
+          now
+        );
         if (input.lifecycleOwner) {
           this.upsertContextEdge({
             contextId: input.contextId,
@@ -900,47 +945,11 @@ export class WorkspaceStateDO extends DurableObjectBase {
             ownerEntityId: input.lifecycleOwner.entityId,
           });
         }
-        return this.rowToEntity(existing);
+        const row = this.readEntityRow(id);
+        if (!row) throw new Error(`entityReserve: failed to read row after insert: ${id}`);
+        return this.rowToEntity(row);
       }
-
-      const now = Date.now();
-      this.sql.exec(
-        `INSERT INTO entities (
-          id, kind, source_repo_path, source_effective_version, active_build_key,
-          active_execution_digest, active_authority, execution_authority, context_id, class_name, key,
-          state_args, agent_entity_id, agent_channel_id, parent_id, owner_user_id, authority_session_id,
-          clone_provenance, created_at, status, retired_at, cleanup_complete, error
-        ) VALUES (?, ?, ?, '', NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', NULL, 1, NULL)`,
-        id,
-        input.kind,
-        input.source.repoPath,
-        input.executionAuthority ? canonicalJson(input.executionAuthority) : null,
-        input.contextId,
-        input.className ?? null,
-        input.key,
-        input.stateArgs === undefined ? null : JSON.stringify(input.stateArgs),
-        input.agentBinding === undefined || input.agentBinding.entityId === id
-          ? null
-          : input.agentBinding.entityId,
-        input.agentBinding?.channelId ?? null,
-        input.parentId ?? null,
-        input.ownerUserId ?? null,
-        crypto.randomUUID(),
-        input.cloneProvenance ? canonicalJson(input.cloneProvenance) : null,
-        now
-      );
-      if (input.lifecycleOwner) {
-        this.upsertContextEdge({
-          contextId: input.contextId,
-          ownerContextId: input.lifecycleOwner.contextId,
-          kind: "lifecycle",
-          ownerEntityId: input.lifecycleOwner.entityId,
-        });
-      }
-      const row = this.readEntityRow(id);
-      if (!row) throw new Error(`entityReserve: failed to read row after insert: ${id}`);
-      return this.rowToEntity(row);
-    });
+    );
   }
 
   /**
@@ -951,12 +960,15 @@ export class WorkspaceStateDO extends DurableObjectBase {
    */
   @schemaRpc()
   entityAdvanceExecution(input: EntityActivateInput): EntityRecord {
-    return this.commit((entity) => `advance execution of ${entity.id}`, () => {
-      const record = this.advanceEntityExecution(input);
-      this.publishDurableWorkOwner(input);
-      this.publishNativeOwner(input, record.id);
-      return this.rowToEntity(this.readEntityRow(record.id)!);
-    });
+    return this.commit(
+      (entity) => `advance execution of ${entity.id}`,
+      () => {
+        const record = this.advanceEntityExecution(input);
+        this.publishDurableWorkOwner(input);
+        this.publishNativeOwner(input, record.id);
+        return this.rowToEntity(this.readEntityRow(record.id)!);
+      }
+    );
   }
 
   /**
@@ -966,44 +978,49 @@ export class WorkspaceStateDO extends DurableObjectBase {
   @schemaRpc()
   entityAdvanceExecutions(inputs: EntityActivateInput[]): EntityRecord[] {
     if (inputs.length === 0) return [];
-    return this.commit((entities) => `advance execution of ${entities.length} entities`, () =>
-      inputs.map((input) => {
-        const record = this.advanceEntityExecution(input);
-        this.publishDurableWorkOwner(input);
-        this.publishNativeOwner(input, record.id);
-        return this.rowToEntity(this.readEntityRow(record.id)!);
-      })
+    return this.commit(
+      (entities) => `advance execution of ${entities.length} entities`,
+      () =>
+        inputs.map((input) => {
+          const record = this.advanceEntityExecution(input);
+          this.publishDurableWorkOwner(input);
+          this.publishNativeOwner(input, record.id);
+          return this.rowToEntity(this.readEntityRow(record.id)!);
+        })
     );
   }
 
   @schemaRpc()
   entityPrepareExecution(input: EntityActivationInput): EntityRecord {
-    return this.commit((entity) => `prepare execution of ${entity.id}`, () => {
-      const id = canonicalEntityId({
-        kind: input.kind,
-        source: input.source.repoPath,
-        className: input.className,
-        key: input.key,
-      });
-      const existing = this.readEntityRow(id);
-      if (!existing || existing.status !== "preparing") {
-        throw new Error(`entityPrepareExecution: ${id} is not a reserved incarnation`);
-      }
-      if (existing.active_build_key !== null) {
-        this.assertIdentityMatches(id, existing, input);
-        if (
-          existing.active_build_key !== input.activeBuildKey ||
-          existing.active_execution_digest !== input.activeExecutionDigest ||
-          existing.active_authority !== serializeActiveAuthority(input.activeAuthority) ||
-          existing.owner_user_id !== (input.ownerUserId ?? null)
-        ) {
-          throw new Error(`entityPrepareExecution: sealed preparation changed for ${id}`);
+    return this.commit(
+      (entity) => `prepare execution of ${entity.id}`,
+      () => {
+        const id = canonicalEntityId({
+          kind: input.kind,
+          source: input.source.repoPath,
+          className: input.className,
+          key: input.key,
+        });
+        const existing = this.readEntityRow(id);
+        if (!existing || existing.status !== "preparing") {
+          throw new Error(`entityPrepareExecution: ${id} is not a reserved incarnation`);
         }
-        return this.rowToEntity(existing);
+        if (existing.active_build_key !== null) {
+          this.assertIdentityMatches(id, existing, input);
+          if (
+            existing.active_build_key !== input.activeBuildKey ||
+            existing.active_execution_digest !== input.activeExecutionDigest ||
+            existing.active_authority !== serializeActiveAuthority(input.activeAuthority) ||
+            existing.owner_user_id !== (input.ownerUserId ?? null)
+          ) {
+            throw new Error(`entityPrepareExecution: sealed preparation changed for ${id}`);
+          }
+          return this.rowToEntity(existing);
+        }
+        const record = this.advanceEntityExecution(input, "preparing");
+        return record;
       }
-      const record = this.advanceEntityExecution(input, "preparing");
-      return record;
-    });
+    );
   }
 
   private advanceEntityExecution(
@@ -1064,29 +1081,33 @@ export class WorkspaceStateDO extends DurableObjectBase {
    */
   @schemaRpc()
   entityRebindAgentChannel(id: string, channelId: string): EntityRecord {
-    return this.commit((entity) => `bind ${entity.id} to channel ${channelId}`, () => {
-      const row = this.readEntityRow(id);
-      if (!row || row.status !== "active") {
-        throw new Error(`agent channel binding target is not active: ${id}`);
+    return this.commit(
+      (entity) => `bind ${entity.id} to channel ${channelId}`,
+      () => {
+        const row = this.readEntityRow(id);
+        if (!row || row.status !== "active") {
+          throw new Error(`agent channel binding target is not active: ${id}`);
+        }
+        if (!channelId) throw new Error("agent channel binding requires a channel id");
+        if (!["do", "worker", "session"].includes(row.kind)) {
+          throw new Error(`entity ${id} cannot serve an agent channel`);
+        }
+        if (row.agent_entity_id !== null && row.agent_entity_id !== id) {
+          throw new Error(`entity ${id} relays another agent and cannot be rebound as self-hosted`);
+        }
+        if (row.agent_channel_id !== channelId || row.agent_entity_id !== null) {
+          this.sql.exec(
+            `UPDATE entities SET agent_entity_id = NULL, agent_channel_id = ? WHERE id = ?`,
+            channelId,
+            id
+          );
+        }
+        const updated = this.readEntityRow(id);
+        if (!updated)
+          throw new Error(`entityRebindAgentChannel: failed to read ${id} after update`);
+        return this.rowToEntity(updated);
       }
-      if (!channelId) throw new Error("agent channel binding requires a channel id");
-      if (!["do", "worker", "session"].includes(row.kind)) {
-        throw new Error(`entity ${id} cannot serve an agent channel`);
-      }
-      if (row.agent_entity_id !== null && row.agent_entity_id !== id) {
-        throw new Error(`entity ${id} relays another agent and cannot be rebound as self-hosted`);
-      }
-      if (row.agent_channel_id !== channelId || row.agent_entity_id !== null) {
-        this.sql.exec(
-          `UPDATE entities SET agent_entity_id = NULL, agent_channel_id = ? WHERE id = ?`,
-          channelId,
-          id
-        );
-      }
-      const updated = this.readEntityRow(id);
-      if (!updated) throw new Error(`entityRebindAgentChannel: failed to read ${id} after update`);
-      return this.rowToEntity(updated);
-    });
+    );
   }
 
   /**
@@ -1101,78 +1122,87 @@ export class WorkspaceStateDO extends DurableObjectBase {
     patch: Record<string, unknown>,
     expected: { activeBuildKey: string; schema?: StateArgsSchema }
   ): EntityRecord {
-    return this.commit((entity) => `patch state arguments of ${entity.id}`, () => {
-      const row = this.readEntityRow(id);
-      if (!row || row.status !== "active") throw new Error(`Entity is not active: ${id}`);
-      if (row.kind !== "panel") throw new Error(`Entity ${id} is not a panel`);
-      if (row.active_build_key !== expected.activeBuildKey) {
-        throw new PanelStateArgsConflictError(id, {
-          field: "activeBuildKey",
-          expected: expected.activeBuildKey,
-          actual: row.active_build_key,
-        });
+    return this.commit(
+      (entity) => `patch state arguments of ${entity.id}`,
+      () => {
+        const row = this.readEntityRow(id);
+        if (!row || row.status !== "active") throw new Error(`Entity is not active: ${id}`);
+        if (row.kind !== "panel") throw new Error(`Entity ${id} is not a panel`);
+        if (row.active_build_key !== expected.activeBuildKey) {
+          throw new PanelStateArgsConflictError(id, {
+            field: "activeBuildKey",
+            expected: expected.activeBuildKey,
+            actual: row.active_build_key,
+          });
+        }
+        const next = mergeValidateStateArgs(
+          decodePanelStateArgs(row.state_args),
+          patch,
+          expected.schema
+        );
+        this.sql.exec(`UPDATE entities SET state_args = ? WHERE id = ?`, JSON.stringify(next), id);
+        const updated = this.readEntityRow(id);
+        if (!updated) throw new Error(`entityPatchStateArgs: failed to read ${id} after update`);
+        return this.rowToEntity(updated);
       }
-      const next = mergeValidateStateArgs(
-        decodePanelStateArgs(row.state_args),
-        patch,
-        expected.schema
-      );
-      this.sql.exec(`UPDATE entities SET state_args = ? WHERE id = ?`, JSON.stringify(next), id);
-      const updated = this.readEntityRow(id);
-      if (!updated) throw new Error(`entityPatchStateArgs: failed to read ${id} after update`);
-      return this.rowToEntity(updated);
-    });
+    );
   }
 
   /** Mark a single entity as retired. Idempotent. Returns the retired record (or null if not found). */
   @schemaRpc()
   entityRetire(id: string): EntityRecord | null {
-    return this.commit((entity) => `retire ${entity?.id ?? id}`, () => {
-      const row = this.readEntityRow(id);
-      if (!row) return null;
-      if (row.status === "retired") {
+    return this.commit(
+      (entity) => `retire ${entity?.id ?? id}`,
+      () => {
+        const row = this.readEntityRow(id);
+        if (!row) return null;
+        if (row.status === "retired") {
+          this.sql.exec(`DELETE FROM runtime_resource_bindings WHERE entity_id = ?`, id);
+          this.clearEntityDoLifecycle(row);
+          return this.rowToEntity(row);
+        }
+        const now = Date.now();
+        this.sql.exec(
+          `UPDATE entities SET status = 'retired', retired_at = ?, cleanup_complete = 0 WHERE id = ?`,
+          now,
+          id
+        );
         this.sql.exec(`DELETE FROM runtime_resource_bindings WHERE entity_id = ?`, id);
         this.clearEntityDoLifecycle(row);
-        return this.rowToEntity(row);
+        const updated = this.readEntityRow(id);
+        return updated ? this.rowToEntity(updated) : null;
       }
-      const now = Date.now();
-      this.sql.exec(
-        `UPDATE entities SET status = 'retired', retired_at = ?, cleanup_complete = 0 WHERE id = ?`,
-        now,
-        id
-      );
-      this.sql.exec(`DELETE FROM runtime_resource_bindings WHERE entity_id = ?`, id);
-      this.clearEntityDoLifecycle(row);
-      const updated = this.readEntityRow(id);
-      return updated ? this.rowToEntity(updated) : null;
-    });
+    );
   }
 
   @schemaRpc()
   runtimeResourceBindingsReplace(entityId: string, bindings: RuntimeResourceBindingInput[]): void {
-    this.commit(() => `replace resource bindings of ${entityId}`, () => {
-      const entity = this.readEntityRow(entityId);
-      if (!entity || entity.status !== "active") {
-        throw new Error(`runtime resource binding target is not active: ${entityId}`);
-      }
-      this.sql.exec(`DELETE FROM runtime_resource_bindings WHERE entity_id = ?`, entityId);
-      const createdAt = Date.now();
-      for (const binding of bindings) {
-        this.sql.exec(
-          `INSERT INTO runtime_resource_bindings
+    this.commit(
+      () => `replace resource bindings of ${entityId}`,
+      () => {
+        const entity = this.readEntityRow(entityId);
+        if (!entity || entity.status !== "active") {
+          throw new Error(`runtime resource binding target is not active: ${entityId}`);
+        }
+        this.sql.exec(`DELETE FROM runtime_resource_bindings WHERE entity_id = ?`, entityId);
+        const createdAt = Date.now();
+        for (const binding of bindings) {
+          this.sql.exec(
+            `INSERT INTO runtime_resource_bindings
              (entity_id, resource_kind, resource_id, capabilities,
               scope_kind, scope_channel_id, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          entityId,
-          binding.resource.kind,
-          binding.resource.id,
-          JSON.stringify(binding.capabilities),
-          binding.scope.kind,
-          binding.scope.kind === "agent-channel" ? binding.scope.channelId : null,
-          createdAt
-        );
+            entityId,
+            binding.resource.kind,
+            binding.resource.id,
+            JSON.stringify(binding.capabilities),
+            binding.scope.kind,
+            binding.scope.kind === "agent-channel" ? binding.scope.channelId : null,
+            createdAt
+          );
+        }
       }
-    });
+    );
   }
 
   @schemaRpc()
@@ -1289,39 +1319,42 @@ export class WorkspaceStateDO extends DurableObjectBase {
   entityGc(opts: GcOptions = {}): string[] {
     const graceMs = opts.graceMs ?? DEFAULT_GRACE_MS;
     const cutoff = Date.now() - graceMs;
-    return this.commit((ids) => `collect ${ids.length} retired entities`, () => {
-      let candidates: Array<{ id: string }>;
-      if (opts.all) {
-        candidates = this.sql
-          .exec(
-            `SELECT id FROM entities
+    return this.commit(
+      (ids) => `collect ${ids.length} retired entities`,
+      () => {
+        let candidates: Array<{ id: string }>;
+        if (opts.all) {
+          candidates = this.sql
+            .exec(
+              `SELECT id FROM entities
              WHERE status = 'retired' AND retired_at IS NOT NULL AND retired_at <= ?
                AND id NOT IN (SELECT entity_id FROM slot_history)`,
-            cutoff
-          )
-          .toArray() as Array<{ id: string }>;
-      } else if (opts.slotId) {
-        candidates = this.sql
-          .exec(
-            `SELECT e.id FROM entities e
+              cutoff
+            )
+            .toArray() as Array<{ id: string }>;
+        } else if (opts.slotId) {
+          candidates = this.sql
+            .exec(
+              `SELECT e.id FROM entities e
              WHERE e.status = 'retired' AND e.retired_at IS NOT NULL AND e.retired_at <= ?
                AND e.id IN (SELECT entity_id FROM slot_history WHERE slot_id = ?)
                AND e.id NOT IN (SELECT entity_id FROM slot_history WHERE slot_id != ?)`,
-            cutoff,
-            opts.slotId,
-            opts.slotId
-          )
-          .toArray() as Array<{ id: string }>;
-      } else {
-        return [];
-      }
+              cutoff,
+              opts.slotId,
+              opts.slotId
+            )
+            .toArray() as Array<{ id: string }>;
+        } else {
+          return [];
+        }
 
-      const ids = candidates.map((row) => row.id);
-      for (const id of ids) {
-        this.sql.exec(`DELETE FROM entities WHERE id = ?`, id);
+        const ids = candidates.map((row) => row.id);
+        for (const id of ids) {
+          this.sql.exec(`DELETE FROM entities WHERE id = ?`, id);
+        }
+        return ids;
       }
-      return ids;
-    });
+    );
   }
 
   // ── Entity reads ──
@@ -2744,23 +2777,25 @@ export class WorkspaceStateDO extends DurableObjectBase {
     inputs: NonNullable<WorkspaceConfig["initPanels"]>,
     privateOwnerUserId?: string
   ): WorkspacePanelDetail[] {
-    return this.commit((details) => `initialize ${details.length} template panels`, () => {
-      // A private workspace has one immutable human owner. Older template
-      // seeds predate authenticated panel creation and were stored ownerless;
-      // normalize the durable tree here, before any client can page or mutate
-      // it, so private workspaces have one real root group rather than a UI-only
-      // merge of incompatible placement groups.
-      if (privateOwnerUserId) {
-        const needsNormalization =
-          this.sql
-            .exec(
-              "SELECT 1 AS found FROM slots WHERE owner_user_id IS NOT ? LIMIT 1",
-              privateOwnerUserId
-            )
-            .toArray().length > 0;
-        if (needsNormalization)
-          this.sql.exec(
-            `WITH ranked_roots AS MATERIALIZED (
+    return this.commit(
+      (details) => `initialize ${details.length} template panels`,
+      () => {
+        // A private workspace has one immutable human owner. Older template
+        // seeds predate authenticated panel creation and were stored ownerless;
+        // normalize the durable tree here, before any client can page or mutate
+        // it, so private workspaces have one real root group rather than a UI-only
+        // merge of incompatible placement groups.
+        if (privateOwnerUserId) {
+          const needsNormalization =
+            this.sql
+              .exec(
+                "SELECT 1 AS found FROM slots WHERE owner_user_id IS NOT ? LIMIT 1",
+                privateOwnerUserId
+              )
+              .toArray().length > 0;
+          if (needsNormalization)
+            this.sql.exec(
+              `WITH ranked_roots AS MATERIALIZED (
              SELECT slot_id,
                     ROW_NUMBER() OVER (
                       ORDER BY CASE
@@ -2782,148 +2817,152 @@ export class WorkspaceStateDO extends DurableObjectBase {
                   )
             WHERE owner_user_id IS NOT ?
                OR (parent_slot_id IS NULL AND closed_at IS NULL)`,
-            privateOwnerUserId,
-            PANEL_TREE_ORDER_STEP,
-            privateOwnerUserId,
-            privateOwnerUserId
-          );
-        if (needsNormalization) {
-          this.sql.exec(
-            "UPDATE panel_close_cleanup SET owner_user_id = ? WHERE owner_user_id IS NOT ?",
-            privateOwnerUserId,
-            privateOwnerUserId
-          );
-        }
-      }
-      const markerKey = "initial-panels";
-      const prior = this.sql
-        .exec("SELECT value FROM workspace_meta WHERE key = ?", markerKey)
-        .toArray()[0];
-      let slotIds: string[];
-      if (prior) {
-        slotIds = JSON.parse(String(prior["value"])) as string[];
-      } else {
-        slotIds = [];
-        // Earlier clients owned template seeding. Any durable tree use,
-        // including closed slots, means that presentation is already adopted.
-        // An empty live tree is never permission to recreate deleted panels.
-        if (
-          this.panelTreeRevision() === 0 &&
-          !this.sql.exec("SELECT 1 FROM slots LIMIT 1").toArray().length
-        ) {
-          for (const input of inputs) {
-            const slotId = computePanelId({ relativePath: input.source, isRoot: true });
-            const key = mintHistoryEntryKey();
-            const entity = this.entityReserve({
-              kind: "panel",
-              source: { repoPath: input.source, effectiveVersion: "" },
-              key,
-              contextId: globalThis.crypto.randomUUID(),
-              stateArgs: input.stateArgs ?? {},
-              parentId: "server",
-              // A seeded panel is a runtime principal, not just a slot. In a
-              // private workspace its one human owner is known here, so stamp
-              // it: an ownerless principal attributes every effect it launches
-              // to nobody, and anything downstream that needs the human — a
-              // private approval, user-owned state — has no answer. A shared
-              // workspace has no such owner and seeds an unowned panel.
-              ...(privateOwnerUserId ? { ownerUserId: privateOwnerUserId } : {}),
-            });
-            this.slotCreate({
-              slotId,
-              parentSlotId: null,
-              ...(privateOwnerUserId ? { ownerUserId: privateOwnerUserId } : {}),
-              ...(slotIds.length
-                ? { placement: { beforeSlotId: slotIds[slotIds.length - 1]! } }
-                : {}),
-              initialEntry: {
-                entryKey: key,
-                entityId: entity.id,
-                source: input.source,
-                contextId: entity.contextId,
-                stateArgs: input.stateArgs ?? {},
-              },
-            });
-            slotIds.push(slotId);
+              privateOwnerUserId,
+              PANEL_TREE_ORDER_STEP,
+              privateOwnerUserId,
+              privateOwnerUserId
+            );
+          if (needsNormalization) {
+            this.sql.exec(
+              "UPDATE panel_close_cleanup SET owner_user_id = ? WHERE owner_user_id IS NOT ?",
+              privateOwnerUserId,
+              privateOwnerUserId
+            );
           }
         }
-        this.sql.exec(
-          "INSERT INTO workspace_meta (key, value) VALUES (?, ?)",
-          markerKey,
-          JSON.stringify(slotIds)
-        );
+        const markerKey = "initial-panels";
+        const prior = this.sql
+          .exec("SELECT value FROM workspace_meta WHERE key = ?", markerKey)
+          .toArray()[0];
+        let slotIds: string[];
+        if (prior) {
+          slotIds = JSON.parse(String(prior["value"])) as string[];
+        } else {
+          slotIds = [];
+          // Earlier clients owned template seeding. Any durable tree use,
+          // including closed slots, means that presentation is already adopted.
+          // An empty live tree is never permission to recreate deleted panels.
+          if (
+            this.panelTreeRevision() === 0 &&
+            !this.sql.exec("SELECT 1 FROM slots LIMIT 1").toArray().length
+          ) {
+            for (const input of inputs) {
+              const slotId = computePanelId({ relativePath: input.source, isRoot: true });
+              const key = mintHistoryEntryKey();
+              const entity = this.entityReserve({
+                kind: "panel",
+                source: { repoPath: input.source, effectiveVersion: "" },
+                key,
+                contextId: globalThis.crypto.randomUUID(),
+                stateArgs: input.stateArgs ?? {},
+                parentId: "server",
+                // A seeded panel is a runtime principal, not just a slot. In a
+                // private workspace its one human owner is known here, so stamp
+                // it: an ownerless principal attributes every effect it launches
+                // to nobody, and anything downstream that needs the human — a
+                // private approval, user-owned state — has no answer. A shared
+                // workspace has no such owner and seeds an unowned panel.
+                ...(privateOwnerUserId ? { ownerUserId: privateOwnerUserId } : {}),
+              });
+              this.slotCreate({
+                slotId,
+                parentSlotId: null,
+                ...(privateOwnerUserId ? { ownerUserId: privateOwnerUserId } : {}),
+                ...(slotIds.length
+                  ? { placement: { beforeSlotId: slotIds[slotIds.length - 1]! } }
+                  : {}),
+                initialEntry: {
+                  entryKey: key,
+                  entityId: entity.id,
+                  source: input.source,
+                  contextId: entity.contextId,
+                  stateArgs: input.stateArgs ?? {},
+                },
+              });
+              slotIds.push(slotId);
+            }
+          }
+          this.sql.exec(
+            "INSERT INTO workspace_meta (key, value) VALUES (?, ?)",
+            markerKey,
+            JSON.stringify(slotIds)
+          );
+        }
+        // Return live seed slots on retries too: derived presentation binding can
+        // then recover a crash after this commit without recreating any slot.
+        return slotIds.flatMap((slotId) => {
+          const detail = this.panelTreeDetail(slotId);
+          return detail ? [detail] : [];
+        });
       }
-      // Return live seed slots on retries too: derived presentation binding can
-      // then recover a crash after this commit without recreating any slot.
-      return slotIds.flatMap((slotId) => {
-        const detail = this.panelTreeDetail(slotId);
-        return detail ? [detail] : [];
-      });
-    });
+    );
   }
 
   @schemaRpc()
   slotCreate(input: SlotCreateInput): void {
     if (input.initialEntry) assertViewHostedSource(input.initialEntry.source);
-    this.commit(() => `create slot ${input.slotId}`, () => {
-      const existing = this.sql
-        .exec(
-          `SELECT s.slot_id, s.parent_slot_id, s.current_entity_id, s.current_entry_key,
+    this.commit(
+      () => `create slot ${input.slotId}`,
+      () => {
+        const existing = this.sql
+          .exec(
+            `SELECT s.slot_id, s.parent_slot_id, s.current_entity_id, s.current_entry_key,
                   s.owner_user_id, s.closed_at, h.source, h.context_id, h.state_args, h.options
              FROM slots s
              LEFT JOIN slot_history h
                ON h.slot_id = s.slot_id AND h.entry_key = s.current_entry_key
             WHERE s.slot_id = ?`,
-          input.slotId
-        )
-        .toArray()[0] as
-        | {
-            slot_id: string;
-            parent_slot_id: string | null;
-            current_entity_id: string | null;
-            current_entry_key: string | null;
-            owner_user_id: string | null;
-            closed_at: number | null;
-            source: string | null;
-            context_id: string | null;
-            state_args: string | null;
-            options: string | null;
-          }
-        | undefined;
-      if (existing) {
-        // Idempotent resume: a retried creation carrying the identical durable
-        // identity (slot id, entry key, entity id) converges on the live slot.
-        // Any divergence is a typed collision — never a silent overwrite, and
-        // distinguishable from transport failure so the caller does not roll
-        // back state it did not create.
-        this.assertSlotCreateResumable(existing, input);
-        return;
-      }
-      const now = Date.now();
-      const ownerUserId =
-        input.parentSlotId === null
-          ? (input.ownerUserId ?? null)
-          : this.rootOwnerOf(input.parentSlotId);
-      const sortKey = this.allocatePanelTreeOrderKey(
-        input.parentSlotId,
-        ownerUserId,
-        input.placement
-      );
-      this.sql.exec(
-        `INSERT INTO slots (slot_id, parent_slot_id, current_entity_id, current_entry_key, sort_key, owner_user_id, created_at, closed_at)
+            input.slotId
+          )
+          .toArray()[0] as
+          | {
+              slot_id: string;
+              parent_slot_id: string | null;
+              current_entity_id: string | null;
+              current_entry_key: string | null;
+              owner_user_id: string | null;
+              closed_at: number | null;
+              source: string | null;
+              context_id: string | null;
+              state_args: string | null;
+              options: string | null;
+            }
+          | undefined;
+        if (existing) {
+          // Idempotent resume: a retried creation carrying the identical durable
+          // identity (slot id, entry key, entity id) converges on the live slot.
+          // Any divergence is a typed collision — never a silent overwrite, and
+          // distinguishable from transport failure so the caller does not roll
+          // back state it did not create.
+          this.assertSlotCreateResumable(existing, input);
+          return;
+        }
+        const now = Date.now();
+        const ownerUserId =
+          input.parentSlotId === null
+            ? (input.ownerUserId ?? null)
+            : this.rootOwnerOf(input.parentSlotId);
+        const sortKey = this.allocatePanelTreeOrderKey(
+          input.parentSlotId,
+          ownerUserId,
+          input.placement
+        );
+        this.sql.exec(
+          `INSERT INTO slots (slot_id, parent_slot_id, current_entity_id, current_entry_key, sort_key, owner_user_id, created_at, closed_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, NULL)`,
-        input.slotId,
-        input.parentSlotId,
-        input.initialEntry?.entityId ?? null,
-        input.initialEntry?.entryKey ?? null,
-        sortKey,
-        ownerUserId,
-        now
-      );
-      if (input.initialEntry) {
-        this.appendHistoryRow(input.slotId, 0, input.initialEntry, now);
+          input.slotId,
+          input.parentSlotId,
+          input.initialEntry?.entityId ?? null,
+          input.initialEntry?.entryKey ?? null,
+          sortKey,
+          ownerUserId,
+          now
+        );
+        if (input.initialEntry) {
+          this.appendHistoryRow(input.slotId, 0, input.initialEntry, now);
+        }
       }
-    });
+    );
   }
 
   private assertSlotCreateResumable(
@@ -3029,98 +3068,103 @@ export class WorkspaceStateDO extends DurableObjectBase {
     input: SlotCommitPreparedNavigationInput
   ): SlotCommitPreparedNavigationResult {
     if (input.mutation.kind !== "select") assertViewHostedSource(input.mutation.entry.source);
-    return this.commit(() => `navigate slot ${input.slotId} (${input.mutation.kind})`, () => {
-      const slot = this.requireSlot(input.slotId);
-      if (slot.closed_at !== null) {
-        throw new Error(`Cannot navigate closed slot: ${input.slotId}`);
-      }
-      if (
-        slot.current_entity_id !== input.expectedCurrentEntityId ||
-        slot.current_entry_key === null
-      ) {
-        throw new Error(
-          `Slot navigation conflict: ${input.slotId} current entity changed during preparation`
-        );
-      }
-
-      const previousEntityId = slot.current_entity_id;
-      const currentRow = this.sql
-        .exec(
-          `SELECT cursor FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
-          input.slotId,
-          slot.current_entry_key
-        )
-        .toArray()[0] as { cursor: number } | undefined;
-      if (!currentRow) {
-        throw new Error(
-          `Slot ${input.slotId} current entry is missing from history: ${slot.current_entry_key}`
-        );
-      }
-
-      let target: SlotHistoryEntryInput;
-      let cursor: number;
-      if (input.mutation.kind === "select") {
-        const selected = this.sql
-          .exec(
-            `SELECT cursor, entry_key, entity_id, source, context_id, state_args, options
-               FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
-            input.slotId,
-            input.mutation.entryKey
-          )
-          .toArray()[0] as DbSlotHistoryRow | undefined;
-        if (!selected) {
+    return this.commit(
+      () => `navigate slot ${input.slotId} (${input.mutation.kind})`,
+      () => {
+        const slot = this.requireSlot(input.slotId);
+        if (slot.closed_at !== null) {
+          throw new Error(`Cannot navigate closed slot: ${input.slotId}`);
+        }
+        if (
+          slot.current_entity_id !== input.expectedCurrentEntityId ||
+          slot.current_entry_key === null
+        ) {
           throw new Error(
-            `History entry not found: slot=${input.slotId} entry=${input.mutation.entryKey}`
+            `Slot navigation conflict: ${input.slotId} current entity changed during preparation`
           );
         }
-        cursor = selected.cursor;
-        target = {
-          entryKey: selected.entry_key,
-          entityId: selected.entity_id,
-          source: selected.source,
-          contextId: selected.context_id,
-          ...(selected.state_args === null
-            ? {}
-            : { stateArgs: this.parseJsonOrNull(selected.state_args) }),
-          ...(selected.options === null ? {} : { options: this.parseJsonOrNull(selected.options) }),
-        };
-      } else {
-        target = input.mutation.entry;
-        if (input.mutation.kind === "append") {
-          cursor = currentRow.cursor + 1;
-          // Browser-style navigation from a back-history position abandons the
-          // forward branch before appending the new destination.
-          this.sql.exec(
-            `DELETE FROM slot_history WHERE slot_id = ? AND cursor > ?`,
-            input.slotId,
-            currentRow.cursor
-          );
-          this.appendHistoryRow(input.slotId, cursor, target, Date.now());
-        } else {
-          cursor = currentRow.cursor;
-          this.sql.exec(
-            `DELETE FROM slot_history WHERE slot_id = ? AND cursor = ?`,
-            input.slotId,
-            cursor
-          );
-          this.appendHistoryRow(input.slotId, cursor, target, Date.now());
-        }
-      }
 
-      this.assertCompleteActivePanelIncarnation(target);
-      this.sql.exec(
-        `UPDATE slots SET current_entity_id = ?, current_entry_key = ? WHERE slot_id = ?`,
-        target.entityId,
-        target.entryKey,
-        input.slotId
-      );
-      return {
-        previousEntityId,
-        currentEntityId: target.entityId,
-        currentEntryKey: target.entryKey,
-        cursor,
-      };
-    });
+        const previousEntityId = slot.current_entity_id;
+        const currentRow = this.sql
+          .exec(
+            `SELECT cursor FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
+            input.slotId,
+            slot.current_entry_key
+          )
+          .toArray()[0] as { cursor: number } | undefined;
+        if (!currentRow) {
+          throw new Error(
+            `Slot ${input.slotId} current entry is missing from history: ${slot.current_entry_key}`
+          );
+        }
+
+        let target: SlotHistoryEntryInput;
+        let cursor: number;
+        if (input.mutation.kind === "select") {
+          const selected = this.sql
+            .exec(
+              `SELECT cursor, entry_key, entity_id, source, context_id, state_args, options
+               FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
+              input.slotId,
+              input.mutation.entryKey
+            )
+            .toArray()[0] as DbSlotHistoryRow | undefined;
+          if (!selected) {
+            throw new Error(
+              `History entry not found: slot=${input.slotId} entry=${input.mutation.entryKey}`
+            );
+          }
+          cursor = selected.cursor;
+          target = {
+            entryKey: selected.entry_key,
+            entityId: selected.entity_id,
+            source: selected.source,
+            contextId: selected.context_id,
+            ...(selected.state_args === null
+              ? {}
+              : { stateArgs: this.parseJsonOrNull(selected.state_args) }),
+            ...(selected.options === null
+              ? {}
+              : { options: this.parseJsonOrNull(selected.options) }),
+          };
+        } else {
+          target = input.mutation.entry;
+          if (input.mutation.kind === "append") {
+            cursor = currentRow.cursor + 1;
+            // Browser-style navigation from a back-history position abandons the
+            // forward branch before appending the new destination.
+            this.sql.exec(
+              `DELETE FROM slot_history WHERE slot_id = ? AND cursor > ?`,
+              input.slotId,
+              currentRow.cursor
+            );
+            this.appendHistoryRow(input.slotId, cursor, target, Date.now());
+          } else {
+            cursor = currentRow.cursor;
+            this.sql.exec(
+              `DELETE FROM slot_history WHERE slot_id = ? AND cursor = ?`,
+              input.slotId,
+              cursor
+            );
+            this.appendHistoryRow(input.slotId, cursor, target, Date.now());
+          }
+        }
+
+        this.assertCompleteActivePanelIncarnation(target);
+        this.sql.exec(
+          `UPDATE slots SET current_entity_id = ?, current_entry_key = ? WHERE slot_id = ?`,
+          target.entityId,
+          target.entryKey,
+          input.slotId
+        );
+        return {
+          previousEntityId,
+          currentEntityId: target.entityId,
+          currentEntryKey: target.entryKey,
+          cursor,
+        };
+      }
+    );
   }
 
   @schemaRpc()
@@ -3131,59 +3175,62 @@ export class WorkspaceStateDO extends DurableObjectBase {
   ): Record<string, unknown> {
     // The owner serializes every patch: read, merge, validate, and write happen
     // in one transaction, so concurrent patches compose instead of losing keys.
-    return this.commit(() => `patch state arguments of slot ${slotId}`, () => {
-      const slot = this.requireSlot(slotId);
-      if (slot.closed_at !== null) {
-        throw new Error(`Cannot patch state of closed slot: ${slotId}`);
-      }
-      if (!slot.current_entry_key) {
-        throw new Error(`Slot ${slotId} has no current history entry`);
-      }
-      if (slot.current_entry_key !== expected.entryKey) {
-        throw new PanelStateArgsConflictError(slotId, {
-          field: "entryKey",
-          expected: expected.entryKey,
-          actual: slot.current_entry_key,
-        });
-      }
-      const entity = slot.current_entity_id ? this.readEntityRow(slot.current_entity_id) : null;
-      const activeBuildKey = entity?.active_build_key ?? null;
-      if (activeBuildKey !== expected.activeBuildKey) {
-        throw new PanelStateArgsConflictError(slotId, {
-          field: "activeBuildKey",
-          expected: expected.activeBuildKey,
-          actual: activeBuildKey,
-        });
-      }
-      const history = this.sql
-        .exec(
-          `SELECT state_args FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
+    return this.commit(
+      () => `patch state arguments of slot ${slotId}`,
+      () => {
+        const slot = this.requireSlot(slotId);
+        if (slot.closed_at !== null) {
+          throw new Error(`Cannot patch state of closed slot: ${slotId}`);
+        }
+        if (!slot.current_entry_key) {
+          throw new Error(`Slot ${slotId} has no current history entry`);
+        }
+        if (slot.current_entry_key !== expected.entryKey) {
+          throw new PanelStateArgsConflictError(slotId, {
+            field: "entryKey",
+            expected: expected.entryKey,
+            actual: slot.current_entry_key,
+          });
+        }
+        const entity = slot.current_entity_id ? this.readEntityRow(slot.current_entity_id) : null;
+        const activeBuildKey = entity?.active_build_key ?? null;
+        if (activeBuildKey !== expected.activeBuildKey) {
+          throw new PanelStateArgsConflictError(slotId, {
+            field: "activeBuildKey",
+            expected: expected.activeBuildKey,
+            actual: activeBuildKey,
+          });
+        }
+        const history = this.sql
+          .exec(
+            `SELECT state_args FROM slot_history WHERE slot_id = ? AND entry_key = ?`,
+            slotId,
+            slot.current_entry_key
+          )
+          .toArray()[0] as Pick<DbSlotHistoryRow, "state_args"> | undefined;
+        if (!history) throw new Error(`Slot ${slotId} current history entry is missing`);
+        const next = mergeValidateStateArgs(
+          decodePanelStateArgs(history.state_args),
+          patch,
+          expected.schema
+        );
+        const serialized = JSON.stringify(next);
+        this.sql.exec(
+          `UPDATE slot_history SET state_args = ? WHERE slot_id = ? AND entry_key = ?`,
+          serialized,
           slotId,
           slot.current_entry_key
-        )
-        .toArray()[0] as Pick<DbSlotHistoryRow, "state_args"> | undefined;
-      if (!history) throw new Error(`Slot ${slotId} current history entry is missing`);
-      const next = mergeValidateStateArgs(
-        decodePanelStateArgs(history.state_args),
-        patch,
-        expected.schema
-      );
-      const serialized = JSON.stringify(next);
-      this.sql.exec(
-        `UPDATE slot_history SET state_args = ? WHERE slot_id = ? AND entry_key = ?`,
-        serialized,
-        slotId,
-        slot.current_entry_key
-      );
-      if (slot.current_entity_id) {
-        this.sql.exec(
-          `UPDATE entities SET state_args = ? WHERE id = ?`,
-          serialized,
-          slot.current_entity_id
         );
+        if (slot.current_entity_id) {
+          this.sql.exec(
+            `UPDATE entities SET state_args = ? WHERE id = ?`,
+            serialized,
+            slot.current_entity_id
+          );
+        }
+        return next;
       }
-      return next;
-    });
+    );
   }
 
   /**
@@ -3202,63 +3249,66 @@ export class WorkspaceStateDO extends DurableObjectBase {
     placement: WorkspacePanelTreePlacement | undefined,
     ownerUserId?: string
   ): void {
-    this.commit(() => `move slot ${slotId}`, () => {
-      const slot = this.requireSlot(slotId);
-      if (slot.closed_at !== null) {
-        throw new Error(`Cannot move closed slot: ${slotId}`);
-      }
-
-      // Resolve and validate the destination before mutating parent links. In
-      // particular, persisting a move below one's own descendant would create
-      // a cycle before the in-memory registry gets a chance to reject it.
-      let destOwner: string | null;
-      if (parentSlotId !== null) {
-        const parent = this.requireSlot(parentSlotId);
-        if (parent.closed_at !== null) {
-          throw new Error(`Cannot move slot under closed parent: ${parentSlotId}`);
+    this.commit(
+      () => `move slot ${slotId}`,
+      () => {
+        const slot = this.requireSlot(slotId);
+        if (slot.closed_at !== null) {
+          throw new Error(`Cannot move closed slot: ${slotId}`);
         }
-        const destinationInsideSubtree = this.sql
-          .exec(
-            `WITH RECURSIVE subtree(slot_id) AS (
+
+        // Resolve and validate the destination before mutating parent links. In
+        // particular, persisting a move below one's own descendant would create
+        // a cycle before the in-memory registry gets a chance to reject it.
+        let destOwner: string | null;
+        if (parentSlotId !== null) {
+          const parent = this.requireSlot(parentSlotId);
+          if (parent.closed_at !== null) {
+            throw new Error(`Cannot move slot under closed parent: ${parentSlotId}`);
+          }
+          const destinationInsideSubtree = this.sql
+            .exec(
+              `WITH RECURSIVE subtree(slot_id) AS (
                SELECT slot_id FROM slots WHERE slot_id = ?
                UNION ALL
                SELECT child.slot_id
                  FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
              )
              SELECT 1 AS found FROM subtree WHERE slot_id = ? LIMIT 1`,
-            slotId,
-            parentSlotId
-          )
-          .toArray()[0];
-        if (destinationInsideSubtree) {
-          throw new Error(`Cannot move slot ${slotId} under its own subtree`);
+              slotId,
+              parentSlotId
+            )
+            .toArray()[0];
+          if (destinationInsideSubtree) {
+            throw new Error(`Cannot move slot ${slotId} under its own subtree`);
+          }
+          destOwner = this.rootOwnerOf(parentSlotId);
+        } else {
+          destOwner = ownerUserId ?? slot.owner_user_id ?? null;
         }
-        destOwner = this.rootOwnerOf(parentSlotId);
-      } else {
-        destOwner = ownerUserId ?? slot.owner_user_id ?? null;
-      }
 
-      const sortKey = this.allocatePanelTreeOrderKey(parentSlotId, destOwner, placement, slotId);
-      this.sql.exec(
-        `UPDATE slots SET parent_slot_id = ?, sort_key = ? WHERE slot_id = ?`,
-        parentSlotId,
-        sortKey,
-        slotId
-      );
-      // Re-stamp the subtree inside SQLite; application memory stays constant
-      // regardless of subtree size.
-      this.sql.exec(
-        `WITH RECURSIVE subtree(slot_id) AS (
+        const sortKey = this.allocatePanelTreeOrderKey(parentSlotId, destOwner, placement, slotId);
+        this.sql.exec(
+          `UPDATE slots SET parent_slot_id = ?, sort_key = ? WHERE slot_id = ?`,
+          parentSlotId,
+          sortKey,
+          slotId
+        );
+        // Re-stamp the subtree inside SQLite; application memory stays constant
+        // regardless of subtree size.
+        this.sql.exec(
+          `WITH RECURSIVE subtree(slot_id) AS (
            SELECT slot_id FROM slots WHERE slot_id = ?
            UNION ALL
            SELECT child.slot_id
              FROM slots child JOIN subtree ON child.parent_slot_id = subtree.slot_id
          )
          UPDATE slots SET owner_user_id = ? WHERE slot_id IN (SELECT slot_id FROM subtree)`,
-        slotId,
-        destOwner
-      );
-    });
+          slotId,
+          destOwner
+        );
+      }
+    );
   }
 
   /**
@@ -3287,26 +3337,31 @@ export class WorkspaceStateDO extends DurableObjectBase {
 
   @schemaRpc()
   slotClose(slotId: string): WorkspacePanelCloseResult {
-    return this.commit((closed) => `close panel ${slotId} (${closed.closedCount} slots)`, () => {
-      const root = this.requireSlot(slotId);
-      const closeId = slotId;
-      if (root.closed_at !== null) {
-        const pending = Number(
-          (
-            this.sql
-              .exec(`SELECT COUNT(*) AS count FROM panel_close_cleanup WHERE close_id = ?`, closeId)
-              .one() as { count: number }
-          ).count
-        );
-        return { closeId, closedCount: pending };
-      }
-      // A close stamp identifies its close: every slot one close takes down
-      // shares it, and no other close reuses it. Reopen relies on this to
-      // reverse exactly one close without disturbing descendants that were
-      // closed on their own before it.
-      const now = this.nextCloseStamp();
-      this.sql.exec(
-        `WITH RECURSIVE subtree(slot_id, current_entity_id) AS (
+    return this.commit(
+      (closed) => `close panel ${slotId} (${closed.closedCount} slots)`,
+      () => {
+        const root = this.requireSlot(slotId);
+        const closeId = slotId;
+        if (root.closed_at !== null) {
+          const pending = Number(
+            (
+              this.sql
+                .exec(
+                  `SELECT COUNT(*) AS count FROM panel_close_cleanup WHERE close_id = ?`,
+                  closeId
+                )
+                .one() as { count: number }
+            ).count
+          );
+          return { closeId, closedCount: pending };
+        }
+        // A close stamp identifies its close: every slot one close takes down
+        // shares it, and no other close reuses it. Reopen relies on this to
+        // reverse exactly one close without disturbing descendants that were
+        // closed on their own before it.
+        const now = this.nextCloseStamp();
+        this.sql.exec(
+          `WITH RECURSIVE subtree(slot_id, current_entity_id) AS (
            SELECT slot_id, current_entity_id FROM slots
             WHERE slot_id = ? AND closed_at IS NULL
            UNION ALL
@@ -3318,19 +3373,19 @@ export class WorkspaceStateDO extends DurableObjectBase {
            (slot_id, close_id, owner_user_id, entity_id, queued_at)
          SELECT subtree.slot_id, ?, slot.owner_user_id, subtree.current_entity_id, ?
            FROM subtree JOIN slots slot ON slot.slot_id = subtree.slot_id`,
-        slotId,
-        closeId,
-        now
-      );
-      const closedCount = Number(
-        (
-          this.sql
-            .exec(`SELECT COUNT(*) AS count FROM panel_close_cleanup WHERE close_id = ?`, closeId)
-            .one() as { count: number }
-        ).count
-      );
-      this.sql.exec(
-        `WITH RECURSIVE subtree(slot_id) AS (
+          slotId,
+          closeId,
+          now
+        );
+        const closedCount = Number(
+          (
+            this.sql
+              .exec(`SELECT COUNT(*) AS count FROM panel_close_cleanup WHERE close_id = ?`, closeId)
+              .one() as { count: number }
+          ).count
+        );
+        this.sql.exec(
+          `WITH RECURSIVE subtree(slot_id) AS (
            SELECT slot_id FROM slots WHERE slot_id = ? AND closed_at IS NULL
            UNION ALL
            SELECT child.slot_id
@@ -3340,11 +3395,12 @@ export class WorkspaceStateDO extends DurableObjectBase {
          UPDATE slots
             SET closed_at = ?, current_entity_id = NULL
           WHERE slot_id IN (SELECT slot_id FROM subtree)`,
-        slotId,
-        now
-      );
-      return { closeId, closedCount };
-    });
+          slotId,
+          now
+        );
+        return { closeId, closedCount };
+      }
+    );
   }
 
   private nextCloseStamp(): number {
@@ -3545,24 +3601,27 @@ export class WorkspaceStateDO extends DurableObjectBase {
     deletedCount: number;
     entityIds: string[];
   } {
-    return this.commit((purged) => `purge close of ${input.slotId} (${purged.deletedCount} slots)`, () => {
-      this.requireReopenableRoot(input.slotId, input.closedAt);
-      const slotIds = this.closedTree(input.slotId);
-      const placeholders = slotIds.map(() => "?").join(", ");
-      const entityIds = this.sql
-        .exec(
-          `SELECT DISTINCT entity_id FROM slot_history WHERE slot_id IN (${placeholders})
+    return this.commit(
+      (purged) => `purge close of ${input.slotId} (${purged.deletedCount} slots)`,
+      () => {
+        this.requireReopenableRoot(input.slotId, input.closedAt);
+        const slotIds = this.closedTree(input.slotId);
+        const placeholders = slotIds.map(() => "?").join(", ");
+        const entityIds = this.sql
+          .exec(
+            `SELECT DISTINCT entity_id FROM slot_history WHERE slot_id IN (${placeholders})
             ORDER BY entity_id`,
-          ...slotIds
-        )
-        .toArray()
-        .map((row) => String((row as { entity_id: string }).entity_id));
-      this.sql.exec(`DELETE FROM slot_history WHERE slot_id IN (${placeholders})`, ...slotIds);
-      for (const memberId of slotIds) {
-        this.sql.exec(`DELETE FROM slots WHERE slot_id = ?`, memberId);
+            ...slotIds
+          )
+          .toArray()
+          .map((row) => String((row as { entity_id: string }).entity_id));
+        this.sql.exec(`DELETE FROM slot_history WHERE slot_id IN (${placeholders})`, ...slotIds);
+        for (const memberId of slotIds) {
+          this.sql.exec(`DELETE FROM slots WHERE slot_id = ?`, memberId);
+        }
+        return { deletedCount: slotIds.length, entityIds };
       }
-      return { deletedCount: slotIds.length, entityIds };
-    });
+    );
   }
 
   /** The current history entries a reopen of `slotId`'s close must reactivate. */
@@ -3608,41 +3667,44 @@ export class WorkspaceStateDO extends DurableObjectBase {
   slotReopen(input: { slotId: string; closedAt: number }): WorkspacePanelReopenResult & {
     slots: Array<{ slotId: string; entityId: string; source: string }>;
   } {
-    return this.commit((reopened) => `reopen panel ${input.slotId} (${reopened.reopenedCount} slots)`, () => {
-      const root = this.requireReopenableRoot(input.slotId, input.closedAt);
-      const members = this.closedSubtree(input.slotId, root.closed_at);
-      const slots: Array<{ slotId: string; entityId: string; source: string }> = [];
-      for (const memberId of members) {
-        const entry = this.sql
-          .exec(
-            `SELECT h.* FROM slots s
+    return this.commit(
+      (reopened) => `reopen panel ${input.slotId} (${reopened.reopenedCount} slots)`,
+      () => {
+        const root = this.requireReopenableRoot(input.slotId, input.closedAt);
+        const members = this.closedSubtree(input.slotId, root.closed_at);
+        const slots: Array<{ slotId: string; entityId: string; source: string }> = [];
+        for (const memberId of members) {
+          const entry = this.sql
+            .exec(
+              `SELECT h.* FROM slots s
                JOIN slot_history h ON h.slot_id = s.slot_id AND h.entry_key = s.current_entry_key
               WHERE s.slot_id = ?`,
+              memberId
+            )
+            .toArray()[0] as DbSlotHistoryRow | undefined;
+          if (!entry) {
+            throw new Error(`Closed slot ${memberId} retained no current entry and cannot reopen`);
+          }
+          this.assertCompleteActivePanelIncarnation({
+            entryKey: entry.entry_key,
+            entityId: entry.entity_id,
+            source: entry.source,
+            contextId: entry.context_id,
+          });
+          this.sql.exec(
+            `UPDATE slots SET closed_at = NULL, current_entity_id = ? WHERE slot_id = ?`,
+            entry.entity_id,
             memberId
-          )
-          .toArray()[0] as DbSlotHistoryRow | undefined;
-        if (!entry) {
-          throw new Error(`Closed slot ${memberId} retained no current entry and cannot reopen`);
+          );
+          slots.push({ slotId: memberId, entityId: entry.entity_id, source: entry.source });
         }
-        this.assertCompleteActivePanelIncarnation({
-          entryKey: entry.entry_key,
-          entityId: entry.entity_id,
-          source: entry.source,
-          contextId: entry.context_id,
-        });
-        this.sql.exec(
-          `UPDATE slots SET closed_at = NULL, current_entity_id = ? WHERE slot_id = ?`,
-          entry.entity_id,
-          memberId
-        );
-        slots.push({ slotId: memberId, entityId: entry.entity_id, source: entry.source });
+        return {
+          slotId: input.slotId as WorkspacePanelReopenResult["slotId"],
+          reopenedCount: members.length,
+          slots,
+        };
       }
-      return {
-        slotId: input.slotId as WorkspacePanelReopenResult["slotId"],
-        reopenedCount: members.length,
-        slots,
-      };
-    });
+    );
   }
 
   @schemaRpc()
@@ -3831,7 +3893,9 @@ export class WorkspaceStateDO extends DurableObjectBase {
   }
 
   private importValue(key: string): string | null {
-    const row = this.sql.exec(`SELECT value FROM local_legacy_import WHERE key = ?`, key).toArray()[0];
+    const row = this.sql
+      .exec(`SELECT value FROM local_legacy_import WHERE key = ?`, key)
+      .toArray()[0];
     return row ? String(row["value"]) : null;
   }
 
@@ -3973,9 +4037,9 @@ export class WorkspaceStateDO extends DurableObjectBase {
       }
     });
     return Number(
-      this.sql
-        .exec(`SELECT COUNT(*) AS n FROM local_legacy_rows WHERE tbl = ?`, input.table)
-        .one()["n"]
+      this.sql.exec(`SELECT COUNT(*) AS n FROM local_legacy_rows WHERE tbl = ?`, input.table).one()[
+        "n"
+      ]
     );
   }
 
@@ -4047,7 +4111,8 @@ export class WorkspaceStateDO extends DurableObjectBase {
   } {
     const phase = this.importValue("phase");
     if (phase === "staging") this.planLegacyReplay();
-    else if (phase !== "replaying") throw new Error(`Cannot replay a legacy import that is ${phase}`);
+    else if (phase !== "replaying")
+      throw new Error(`Cannot replay a legacy import that is ${phase}`);
     const total = Number(this.importValue("total") ?? 0);
     const startedAt = Date.now();
     let applied = Number(this.importValue("applied") ?? 0);
@@ -4238,14 +4303,19 @@ export class WorkspaceStateDO extends DurableObjectBase {
     for (const expected of manifest.tables) {
       const rows = this.importedRows(expected.name);
       if (expected.name === "state") {
-        const held = new Set(rows.map((row) => `${String(row["key"])}\u001f${String(row["value"])}`));
+        const held = new Set(
+          rows.map((row) => `${String(row["key"])}\u001f${String(row["value"])}`)
+        );
         const missing = this.stagedRows("state").filter(
           (row) => !held.has(`${String(row["key"])}\u001f${String(row["value"])}`)
         );
         if (missing.length > 0) mismatched.push(`state (${missing.length} rows missing)`);
         continue;
       }
-      if (rows.length !== expected.rows || (await digestRows(expected.name, rows)) !== expected.digest) {
+      if (
+        rows.length !== expected.rows ||
+        (await digestRows(expected.name, rows)) !== expected.digest
+      ) {
         mismatched.push(`${expected.name} (${rows.length} of ${expected.rows} rows)`);
       }
     }

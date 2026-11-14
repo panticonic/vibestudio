@@ -92,7 +92,9 @@ export function buildRuntimeDeployment(input: RuntimeDeploymentInput): RuntimeDe
     if (cls.residency) (classes[cls.className] ??= { secrets: [] }).residency = true;
     if (cls.storage === "dolt") {
       doltClasses.push(cls.className);
-      (classes[cls.className] ??= { secrets: [] }).doltLocal = doltLocalPatterns(cls.doltLocal ?? []);
+      (classes[cls.className] ??= { secrets: [] }).doltLocal = doltLocalPatterns(
+        cls.doltLocal ?? []
+      );
     }
   }
   const classNames = input.classes

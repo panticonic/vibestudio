@@ -36,8 +36,10 @@ export function createWorkspaceStateMigration(deps: {
     className,
     objectKey: deps.workspaceId,
   });
-  const call = (className: string, method: string) => (...args: unknown[]) =>
-    deps.dispatch(ref(className), method, ...args);
+  const call =
+    (className: string, method: string) =>
+    (...args: unknown[]) =>
+      deps.dispatch(ref(className), method, ...args);
 
   const legacy = {
     legacyManifest: call(LEGACY_WORKSPACE_CLASS, "legacyManifest"),

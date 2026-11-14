@@ -107,7 +107,11 @@ function probeSource(): string {
 
 async function bundleProbe(): Promise<string> {
   const result = await build({
-    stdin: { contents: probeSource(), resolveDir: process.cwd(), sourcefile: "workspace-state-probe.ts" },
+    stdin: {
+      contents: probeSource(),
+      resolveDir: process.cwd(),
+      sourcefile: "workspace-state-probe.ts",
+    },
     bundle: true,
     platform: "browser",
     format: "esm",
@@ -178,7 +182,8 @@ async function startWorkspaceProbe() {
     return ("result" in body ? body.result : body) as T;
   };
   const state = (name: string) => ({
-    call: <T = unknown>(method: string, ...args: unknown[]) => rpc<T>("state", name, method, ...args),
+    call: <T = unknown>(method: string, ...args: unknown[]) =>
+      rpc<T>("state", name, method, ...args),
     info: () =>
       rpc<{
         branch: string;
@@ -187,10 +192,12 @@ async function startWorkspaceProbe() {
         tables: string[];
         rows: Record<string, LegacyRow[]>;
       }>("state", name, "__info", LEGACY_IMPORT_TABLES, TABLE_SQL),
-    dolt: <T = unknown>(method: string, ...args: unknown[]) => rpc<T>("state", name, "__dolt", method, args),
+    dolt: <T = unknown>(method: string, ...args: unknown[]) =>
+      rpc<T>("state", name, "__dolt", method, args),
   });
   const legacy = (name: string) => ({
-    call: <T = unknown>(method: string, ...args: unknown[]) => rpc<T>("legacy", name, method, ...args),
+    call: <T = unknown>(method: string, ...args: unknown[]) =>
+      rpc<T>("legacy", name, method, ...args),
   });
   return { probe, state, legacy };
 }
@@ -220,7 +227,11 @@ type Entity = { id: string; key: string };
 async function buildHistory(workspace: StateHandle): Promise<void> {
   const open = async (slotId: string, parent: string | null) => {
     const entity = await workspace.call<Entity>("entityActivate", panel(`${slotId}-entry`));
-    await workspace.call("slotCreate", { slotId, parentSlotId: parent, initialEntry: entry(entity) });
+    await workspace.call("slotCreate", {
+      slotId,
+      parentSlotId: parent,
+      initialEntry: entry(entity),
+    });
     return entity;
   };
   await workspace.call("initializePanels", []);
@@ -240,7 +251,10 @@ async function buildHistory(workspace: StateHandle): Promise<void> {
   });
   await workspace.call("slotClose", "root");
   await workspace.call("slotClose", "other");
-  const retired = await workspace.call<{ id: string; authoritySessionId: string }>("entityRetire", other.id);
+  const retired = await workspace.call<{ id: string; authoritySessionId: string }>(
+    "entityRetire",
+    other.id
+  );
   await workspace.call("entityCleanupComplete", retired.id, retired.authoritySessionId);
   await workspace.call("slotCloseCleanupAck", ["other"]);
   const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
@@ -281,8 +295,16 @@ it.skipIf(!celldTestBinary())(
     const afterActivate = (await workspace.info()).log.length;
     await workspace.call("entityActivate", panel("root-entry"));
     expect((await workspace.info()).log.length).toBe(afterActivate);
-    await workspace.call("slotCreate", { slotId: "root", parentSlotId: null, initialEntry: entry(root) });
-    await workspace.call("slotCreate", { slotId: "root", parentSlotId: null, initialEntry: entry(root) });
+    await workspace.call("slotCreate", {
+      slotId: "root",
+      parentSlotId: null,
+      initialEntry: entry(root),
+    });
+    await workspace.call("slotCreate", {
+      slotId: "root",
+      parentSlotId: null,
+      initialEntry: entry(root),
+    });
     const afterCreate = await workspace.info();
     expect(afterCreate.log.length).toBe(afterActivate + 1);
     expect(afterCreate.log[0]?.message).toBe("create slot root");
@@ -313,14 +335,20 @@ it.skipIf(!celldTestBinary())(
     await workspace.call("alarmAdoptWorker", "driver-1");
     await workspace.call("alarmSet", { ...key, wakeAt: 4_102_444_800_000 });
     await workspace.call("lifecycleLeaseUpsert", { ...key, detail: { turnId: "t" } });
-    const revision = (await workspace.call<{ revision: number }>("panelTreeRootGroups", { limit: 5 })).revision;
+    const revision = (
+      await workspace.call<{ revision: number }>("panelTreeRootGroups", { limit: 5 })
+    ).revision;
 
     // The undo of the close is a hard reset, and it survives a kill.
     await workspace.dolt("reset", { hard: true, to: beforeClose });
-    expect((await workspace.call<{ closed_at: number | null }>("slotGet", "root")).closed_at).toBeNull();
+    expect(
+      (await workspace.call<{ closed_at: number | null }>("slotGet", "root")).closed_at
+    ).toBeNull();
     await probe.kill();
     await probe.start();
-    expect((await workspace.call<{ closed_at: number | null }>("slotGet", "root")).closed_at).toBeNull();
+    expect(
+      (await workspace.call<{ closed_at: number | null }>("slotGet", "root")).closed_at
+    ).toBeNull();
     // Local tables were neither rewound nor lost; the revision did not go backwards.
     expect(await workspace.call("alarmNextWakeAt", 0)).toBe(4_102_444_800_000);
     expect(await workspace.call<unknown[]>("lifecycleListLeases")).toHaveLength(1);
@@ -331,10 +359,10 @@ it.skipIf(!celldTestBinary())(
     // Reopen as a commit of its own, after a close, on the restarted node.
     await workspace.call("slotClose", "root");
     await workspace.call("slotCloseCleanupAck", ["root"]);
-    const plan = await workspace.call<{ closedAt: number; slots: Array<{ entry: { entry_key: string } }> }>(
-      "slotReopenPlan",
-      "root"
-    );
+    const plan = await workspace.call<{
+      closedAt: number;
+      slots: Array<{ entry: { entry_key: string } }>;
+    }>("slotReopenPlan", "root");
     for (const { entry: history } of plan.slots) {
       await workspace.call("entityActivate", panel(history.entry_key));
     }
@@ -475,7 +503,9 @@ it.skipIf(!celldTestBinary())(
     await target.dolt("reset", { hard: true, to: log[lastClose + 1]!.hash });
     await probe.kill();
     await probe.start();
-    expect((await target.call<{ closed_at: number | null }>("slotGet", "other")).closed_at).toBeNull();
+    expect(
+      (await target.call<{ closed_at: number | null }>("slotGet", "other")).closed_at
+    ).toBeNull();
     expect(await target.call("alarmNextWakeAt", 0)).toBe(4_102_444_800_000);
   },
   420_000

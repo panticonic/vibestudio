@@ -193,7 +193,9 @@ export async function manifestOf(
     present,
     schemaVersion,
     tables,
-    digest: await sha256Hex(tables.map((table) => `${table.name}:${table.rows}:${table.digest}`).join("\n")),
+    digest: await sha256Hex(
+      tables.map((table) => `${table.name}:${table.rows}:${table.digest}`).join("\n")
+    ),
   };
 }
 
@@ -374,15 +376,17 @@ export function planReplay(rows: StagedRows): ReplayEvent[] {
     });
   }
   for (const row of rows.context_edges) {
-    events.push({ kind: "edge", time: num(row["created_at"], 0), key: stagedKey("context_edges", row) });
+    events.push({
+      kind: "edge",
+      time: num(row["created_at"], 0),
+      key: stagedKey("context_edges", row),
+    });
   }
   for (const stamp of closeStamps) events.push({ kind: "close", time: stamp, key: String(stamp) });
 
   events.sort(
     (a, b) =>
-      a.time - b.time ||
-      RANK[a.kind] - RANK[b.kind] ||
-      (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
+      a.time - b.time || RANK[a.kind] - RANK[b.kind] || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)
   );
 
   // Pull each event's references ahead of it. The first event of each kind that

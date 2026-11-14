@@ -9,11 +9,7 @@
  * continues at its applied count, and the finish is repeatable until it
  * verifies. Nothing is ever deleted from the retired store.
  */
-import {
-  type LegacyImportTable,
-  type LegacyManifest,
-  type LegacyRow,
-} from "./legacyImport.js";
+import { type LegacyImportTable, type LegacyManifest, type LegacyRow } from "./legacyImport.js";
 
 export interface LegacyStoreReader {
   legacyManifest(): Promise<LegacyManifest>;

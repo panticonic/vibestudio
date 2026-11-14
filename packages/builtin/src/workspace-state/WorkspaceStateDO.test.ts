@@ -52,7 +52,9 @@ function panelInput(overrides: Partial<Parameters<WorkspaceStateDO["entityReserv
   };
 }
 
-function preparedPanelInput(overrides: Partial<Parameters<WorkspaceStateDO["entityActivate"]>[0]> = {}) {
+function preparedPanelInput(
+  overrides: Partial<Parameters<WorkspaceStateDO["entityActivate"]>[0]> = {}
+) {
   return panelInput({
     activeBuildKey: "b".repeat(64),
     activeExecutionDigest: "a".repeat(64),
@@ -287,7 +289,10 @@ describe("WorkspaceStateDO schema", () => {
     const sql = fake.storage.sql;
     sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     sql.exec(`CREATE TABLE _vibestudio_schema (singleton INTEGER PRIMARY KEY, version INTEGER)`);
-    sql.exec(`INSERT INTO _vibestudio_schema (singleton, version) VALUES (1, ?)`, CURRENT_SCHEMA_VERSION);
+    sql.exec(
+      `INSERT INTO _vibestudio_schema (singleton, version) VALUES (1, ?)`,
+      CURRENT_SCHEMA_VERSION
+    );
     await expect(createWorkspaceStateTestDO({ fake })).rejects.toThrow(
       /schema identity table is malformed/
     );
