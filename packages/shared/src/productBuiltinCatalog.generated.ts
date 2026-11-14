@@ -1792,6 +1792,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
     runtime: {
       staticAuthorityProjection: true,
       codegen: false,
+      residency: false,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],
@@ -4233,6 +4234,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
     runtime: {
       staticAuthorityProjection: true,
       codegen: false,
+      residency: false,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],
@@ -4916,6 +4918,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
     runtime: {
       staticAuthorityProjection: true,
       codegen: true,
+      residency: true,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [
@@ -4931,75 +4934,6 @@ export const PRODUCT_BUILTIN_CATALOG = [
       },
     ],
     directMethods: {
-      acquireKernelLease: {
-        website: {
-          kind: "closed",
-          reason: "Execution engine control is internal to reviewed execution receivers.",
-        },
-        capability: "runtime.code-execution.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          website: {
-            kind: "closed",
-            reason: "Execution engine control is internal to reviewed execution receivers.",
-          },
-          capability: "runtime.code-execution.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      attachKernelLeaseHolder: {
-        website: {
-          kind: "closed",
-          reason: "Execution engine control is internal to reviewed execution receivers.",
-        },
-        capability: "runtime.code-execution.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          website: {
-            kind: "closed",
-            reason: "Execution engine control is internal to reviewed execution receivers.",
-          },
-          capability: "runtime.code-execution.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
-      holdKernelLease: {
-        website: {
-          kind: "closed",
-          reason: "Execution engine control is internal to reviewed execution receivers.",
-        },
-        capability: "runtime.code-execution.manage",
-        tier: "gated",
-        session: "family",
-        sensitivity: "write",
-        principals: ["host"],
-        presentation: null,
-        effect: {
-          kind: "host-capability",
-          website: {
-            kind: "closed",
-            reason: "Execution engine control is internal to reviewed execution receivers.",
-          },
-          capability: "runtime.code-execution.manage",
-          resource: {
-            kind: "receiver-object",
-          },
-        },
-      },
       run: {
         website: {
           kind: "closed",
@@ -5356,6 +5290,7 @@ export const PRODUCT_BUILTIN_CATALOG = [
     runtime: {
       staticAuthorityProjection: true,
       codegen: false,
+      residency: false,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],

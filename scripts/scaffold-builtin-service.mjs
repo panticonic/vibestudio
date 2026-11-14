@@ -119,6 +119,7 @@ catalog = catalog.replace(
     runtime: {
       staticAuthorityProjection: true,
       codegen: false,
+      residency: false,
     },
     hostCapabilityRequests: [],
   },

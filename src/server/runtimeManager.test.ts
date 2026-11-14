@@ -455,16 +455,18 @@ describe("RuntimeManager", () => {
       expect(config.name).toBe("vibestudio");
       const classes = (
         config["celld"] as {
-          durable_objects: Record<string, { secrets: string[]; codegen?: true }>;
+          durable_objects: Record<string, { secrets: string[]; codegen?: true; residency?: true }>;
         }
       ).durable_objects;
-      // Every product class holds its own credential, and only EvalDO may generate code.
+      // Every product class holds its own credential, and only EvalDO may generate code
+      // and keep its heap resident.
       for (const className of INTERNAL_DO_CLASSES) {
         expect(classes[className]!.secrets).toEqual([
           `RPC_AUTH_TOKEN__${className}`,
           `LIFECYCLE_SECRET__${className}`,
         ]);
         expect(classes[className]!.codegen).toBe(className === "EvalDO" ? true : undefined);
+        expect(classes[className]!.residency).toBe(className === "EvalDO" ? true : undefined);
       }
       expect(classes["UniversalDO"]).toEqual({ secrets: ["DO_LOADER_SECRET__UniversalDO"] });
       expect(Object.keys(secrets).sort()).toEqual(

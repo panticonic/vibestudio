@@ -38,7 +38,6 @@ import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
 import { taskAuthorityPrincipal, type TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 import { resolveCodeIdentity } from "./principalIdentity.js";
-import { EvalKernelLeaseCoordinator, type EvalKernelLease } from "./evalKernelLease.js";
 
 type EvalEngineClient = TypedServiceClient<typeof evalEngineMethods>;
 function evalEngineClient(
@@ -288,10 +287,6 @@ export function createEvalService(deps: {
   recoverUnresponsiveSandbox?: (input: EvalSandboxRecoveryInput) => Promise<void>;
   /** Bound on one side-effect-free liveness probe (and the interval between probes). */
   livenessProbeMs?: number;
-  /** Test seam; production uses one held inter-cell lease per EvalDO. */
-  kernelLeases?: EvalKernelLease;
-  /** Receives the production coordinator so ordered server shutdown can close its held requests. */
-  onKernelLeaseCoordinator?: (coordinator: EvalKernelLeaseCoordinator) => void;
   /** Receives the shared eval admission drain used by ordered server shutdown. */
   onShutdown?: (shutdown: EvalShutdown) => void;
   /** Canonical dispatcher authorization-only path for exact prospective calls. */
@@ -323,15 +318,6 @@ export function createEvalService(deps: {
   }>;
 }): ServiceDefinition {
   const store = deps.entityStore;
-  const kernelLeases =
-    deps.kernelLeases ??
-    new EvalKernelLeaseCoordinator(deps.doDispatch, {
-      onError: (message, error) =>
-        console.warn(message, error instanceof Error ? error.message : error),
-    });
-  if (!deps.kernelLeases && kernelLeases instanceof EvalKernelLeaseCoordinator) {
-    deps.onKernelLeaseCoordinator?.(kernelLeases);
-  }
   const activeRuns = new Map<string, ActiveEvalRun>();
   /**
    * One liveness supervisor per admitted timed run. Replayed starts for the
@@ -994,7 +980,6 @@ export function createEvalService(deps: {
         }
       }
       const evalDoRef = { source: INTERNAL_DO_SOURCE, className: EVAL_DO_CLASS, objectKey };
-      await kernelLeases.touch(evalDoRef);
       return {
         evalDoRef,
         assembledArgs: {

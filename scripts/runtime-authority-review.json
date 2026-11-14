@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:8a68c7f58598676edcc428bbf658086b4cf9b9408d91b1e06e179ad222468366",
+  "censusDigest": "sha256:43f8bf4a0e2687f072caa4a7961476df9c086218739949c6830b6d0e9f234df1",
   "decisions": {
     "host:terminalApps.launch": {
       "review": "single-prepared-terminal-program-consent",
@@ -29,17 +29,9 @@
       "review": "exact-owned-eval-terminal-acknowledgement",
       "change": "Acknowledges only the exact retained run and result digests through the existing owner relationship. Commits acknowledgement before removing redelivery debt, preserves result history, and grants no execution or reset authority."
     },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:acquireKernelLease": {
-      "review": "host-only-eval-kernel-residency-refresh",
-      "change": "Adds a host-only, gated code-execution authority that creates or refreshes the exact EvalDO incarnation's bounded idle residency lease. The receiver validates the lease identity and duration, and no user or code principal may invoke it directly."
-    },
     "direct:packages/builtin/src/eval-engine/EvalDO.ts:appendAuthorityEvent": {
       "review": "host-only-eval-authority-event-ingress",
       "change": "Adds the typed host-only write used to append one already receiver-bound authority lifecycle event to an exact eval run. It cannot choose another owner, execute code, or grant authority."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:attachKernelLeaseHolder": {
-      "review": "host-only-eval-kernel-holder-claim",
-      "change": "Adds a host-only, gated code-execution authority that atomically claims the single held-request slot for an already-active exact kernel lease. It cannot create, widen, or extend a lease."
     },
     "direct:packages/builtin/src/eval-engine/EvalDO.ts:getRunEvents": {
       "review": "host-only-bounded-eval-event-page",
@@ -48,10 +40,6 @@
     "direct:packages/builtin/src/eval-engine/EvalDO.ts:getRunReceipt": {
       "review": "exact-owned-eval-terminal-receipt",
       "change": "Returns the retained terminal result and immutable run/result digests for the authenticated Eval owner. A delivery hint supplies no result or authority. Nonterminal cancellation remains owned until actual cleanup ends."
-    },
-    "direct:packages/builtin/src/eval-engine/EvalDO.ts:holdKernelLease": {
-      "review": "host-only-bounded-eval-kernel-hold",
-      "change": "Adds a host-only, gated code-execution authority whose request remains held only for the exact attached lease and settles on expiry, release, or replacement. It exposes no scope data and cannot outlive the receiver-owned lease deadline."
     },
     "direct:packages/builtin/src/eval-engine/EvalDO.ts:listRetainedExecutionRoots": {
       "review": "host-only-eval-execution-root-census",

@@ -75,7 +75,6 @@ export const evalEngineRunArgsSchema = z
   .strict();
 
 const runIdSchema = z.string().min(1);
-const kernelLeaseIdSchema = z.string().min(1);
 const okSchema = z.object({ ok: z.boolean() }).strict();
 const cancellationSchema = z.object({ ok: z.literal(true), forcedReset: z.boolean() }).strict();
 const retainedRootSchema = z
@@ -87,62 +86,6 @@ const retainedRootSchema = z
   .strict();
 
 const rawEvalEngineMethods = defineServiceMethods({
-  acquireKernelLease: {
-    website: {
-      kind: "closed",
-      reason: "Execution engine control is internal to reviewed execution receivers.",
-    } as const,
-    ...managed("write"),
-    args: z.tuple([
-      z
-        .object({
-          leaseId: kernelLeaseIdSchema,
-          idleMs: z
-            .number()
-            .int()
-            .positive()
-            .max(60 * 60 * 1_000),
-        })
-        .strict(),
-    ]),
-    returns: z
-      .object({
-        leaseId: kernelLeaseIdSchema,
-        expiresAt: z
-          .number()
-          .int()
-          .nonnegative()
-          .nullable()
-          .describe(
-            "Idle deadline; null while admitted execution or cancellation owns the kernel."
-          ),
-        holderAttached: z.boolean(),
-      })
-      .strict(),
-  },
-  attachKernelLeaseHolder: {
-    website: {
-      kind: "closed",
-      reason: "Execution engine control is internal to reviewed execution receivers.",
-    } as const,
-    ...managed("write"),
-    args: z.tuple([kernelLeaseIdSchema]),
-    returns: z.object({ attached: z.literal(true) }).strict(),
-  },
-  holdKernelLease: {
-    website: {
-      kind: "closed",
-      reason: "Execution engine control is internal to reviewed execution receivers.",
-    } as const,
-    ...managed("write"),
-    args: z.tuple([kernelLeaseIdSchema]),
-    returns: z
-      .object({
-        leaseId: kernelLeaseIdSchema,
-        reason: z.enum(["expired", "released", "replaced"]),
-      })
-      .strict(),
-  },
   run: {
     website: {
       kind: "closed",

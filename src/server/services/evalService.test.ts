@@ -129,7 +129,6 @@ function createHarness(
     retryGetRunGate?: Promise<void>;
     finiteEvalEntityIds?: ReadonlySet<string>;
     retiredEvalEntityIds?: ReadonlySet<string>;
-    kernelLeaseError?: Error;
     preauthorize?: Parameters<typeof createEvalService>[0]["preauthorize"];
     systemTestHarness?: boolean;
     executeRunPending?: boolean;
@@ -371,11 +370,6 @@ function createHarness(
       ? { recoverUnresponsiveSandbox: options.recoverUnresponsiveSandbox }
       : {}),
     ...(options.livenessProbeMs ? { livenessProbeMs: options.livenessProbeMs } : {}),
-    kernelLeases: {
-      touch: vi.fn(async () => {
-        if (options.kernelLeaseError) throw options.kernelLeaseError;
-      }),
-    },
     resolveContextSource: async (_contextId, sourcePath) => ({
       code: `// exact:${sourcePath}\nreturn 7;`,
       sourceDigest: createHash("sha256").update(`// exact:${sourcePath}\nreturn 7;`).digest("hex"),
@@ -718,29 +712,6 @@ describe("createEvalService", () => {
     }
   });
 
-  it("closes admission when kernel residency cannot be established", async () => {
-    const ownerId = "session:default";
-    const subKey = "default";
-    const { service, executionSessions } = createHarness(
-      { [ownerId]: "ctx_1" },
-      { kernelLeaseError: new Error("kernel lease unavailable") }
-    );
-
-    await expect(
-      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "start", [
-        inlineEvalStart({
-          target: { kind: "owner-session", sessionId: ownerId },
-          scopeKey: subKey,
-          runId: "run:lease-error",
-          code: "return 1;",
-        }),
-      ])
-    ).rejects.toThrow("kernel lease unavailable");
-
-    const runtimeId = `do:${INTERNAL_DO_SOURCE}:EvalDO:${evalKey(ownerId, subKey)}`;
-    expect(executionSessions.resolve(runtimeId)).toBeNull();
-  });
-
   it("rolls back failed task binding so the next eval can acquire the same cell", async () => {
     const ownerId = "session:default";
     const { service, executionSessions, taskAuthorities } = createHarness({ [ownerId]: "ctx_1" });
@@ -956,7 +927,6 @@ describe("createEvalService", () => {
       workspaceId: "ws",
       executionSessions: new AgentExecutionSessionRegistry(),
       taskAuthorities: new TaskAuthorityRegistry(),
-      kernelLeases: { touch: vi.fn(async () => {}) },
     });
 
     await service.handler(
@@ -1037,7 +1007,6 @@ describe("createEvalService", () => {
       workspaceId: "ws",
       executionSessions: new AgentExecutionSessionRegistry(),
       taskAuthorities: new TaskAuthorityRegistry(),
-      kernelLeases: { touch: async () => undefined },
     });
 
     await service.handler(
@@ -1852,7 +1821,6 @@ function createHeldFailHarness(opts: {
     taskAuthorities: new TaskAuthorityRegistry(),
     recoverUnresponsiveSandbox,
     livenessProbeMs: 2,
-    kernelLeases: { touch: vi.fn(async () => {}) },
   });
   return { service, calls, ownerId, recoverUnresponsiveSandbox };
 }

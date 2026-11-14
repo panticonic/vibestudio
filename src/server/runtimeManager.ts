@@ -2453,6 +2453,7 @@ export class RuntimeManager {
         // not credentials.
         env: { ...this.deps.getInternalDoEnv(className) },
         codegen: builtin.runtime.codegen,
+        residency: builtin.runtime.residency,
       };
     });
     return buildRuntimeDeployment({

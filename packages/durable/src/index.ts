@@ -89,6 +89,8 @@ import {
   type DoltTransactionOptions,
 } from "./dolt.js";
 export type { DoltStorage, DoltTransactionCommit, DoltTransactionOptions } from "./dolt.js";
+import type { ResidencyContext } from "./residency.js";
+export type { ResidencyContext, ResidencyHandle, ResidencyRevocationReason } from "./residency.js";
 import { DurableWorkReadiness } from "./durable-work-readiness.js";
 export { DurableWorkReadiness } from "./durable-work-readiness.js";
 
@@ -121,6 +123,8 @@ export interface DurableObjectContext {
     /** celld `ctx.storage.dolt`: present only on a Dolt cell or a Dolt facet. */
     dolt?: DoltStorage;
   };
+  /** celld `ctx.residency`: present on a class the deployment declares residency for. */
+  residency?: ResidencyContext;
   acceptWebSocket(ws: WebSocket, tags?: string[]): void;
   getWebSockets(tag?: string): WebSocket[];
   blockConcurrencyWhile<T>(fn: () => Promise<T>): Promise<T>;

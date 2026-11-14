@@ -252,9 +252,6 @@ describe("EvalDO canonical result receipts", () => {
     await expect(reopened.startRun({ runId: "new-run", code: "return 43" })).rejects.toThrow(
       "execution namespace is retired"
     );
-    await expect(
-      reopened.acquireKernelLease({ leaseId: "new-lease", idleMs: 1000 })
-    ).rejects.toThrow("execution namespace is retired");
     expect(execute).toHaveBeenCalledTimes(1);
   });
 

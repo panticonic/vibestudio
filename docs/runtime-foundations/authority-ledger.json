@@ -1430,48 +1430,6 @@
       "parityAssertion": "generated-census:direct-authority"
     },
     {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:acquireKernelLease",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "acquireKernelLease",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "host-only-eval-kernel-residency-refresh",
-        "change": "Adds a host-only, gated code-execution authority that creates or refreshes the exact EvalDO incarnation's bounded idle residency lease. The receiver validates the lease identity and duration, and no user or code principal may invoke it directly."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
       "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:appendAuthorityEvent",
       "rpcPlane": "workspace-do",
       "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
@@ -1510,48 +1468,6 @@
       "r3b": {
         "review": "host-only-eval-authority-event-ingress",
         "change": "Adds the typed host-only write used to append one already receiver-bound authority lifecycle event to an exact eval run. It cannot choose another owner, execute code, or grant authority."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:attachKernelLeaseHolder",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "attachKernelLeaseHolder",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "host-only-eval-kernel-holder-claim",
-        "change": "Adds a host-only, gated code-execution authority that atomically claims the single held-request slot for an already-active exact kernel lease. It cannot create, widen, or extend a lease."
       },
       "parityAssertion": "generated-census:direct-authority"
     },
@@ -1846,48 +1762,6 @@
       "r3b": {
         "review": "exact-owned-eval-terminal-receipt",
         "change": "Returns the retained terminal result and immutable run/result digests for the authenticated Eval owner. A delivery hint supplies no result or authority. Nonterminal cancellation remains owned until actual cleanup ends."
-      },
-      "parityAssertion": "generated-census:direct-authority"
-    },
-    {
-      "id": "direct:packages/builtin/src/eval-engine/EvalDO.ts:holdKernelLease",
-      "rpcPlane": "workspace-do",
-      "owner": "packages/builtin/src/eval-engine/EvalDO.ts",
-      "source": "vibestudio/internal",
-      "method": "holdKernelLease",
-      "resourceDerivation": {
-        "kind": "direct-target",
-        "owner": "packages/builtin/src/eval-engine/EvalDO.ts"
-      },
-      "authorityPrincipals": [
-        "host"
-      ],
-      "sensitivity": "write",
-      "tier": "gated",
-      "sessionAdmission": "family",
-      "capability": "runtime.code-execution.manage",
-      "authenticatedFacts": [
-        "session",
-        "acting-user-relay",
-        "runtime-entity",
-        "exact-code-artifact",
-        "owner-chain",
-        "agent-binding",
-        "audience-bound-attestation"
-      ],
-      "currentOutcomes": {
-        "allowed": "schema-declared direct-RPC requirement satisfied",
-        "denied": "missing attested facts or requirement failure is EACCES"
-      },
-      "predicates": [
-        "live-owner-service-relationship",
-        "exact-resource-scope",
-        "next-dispatch-revocation"
-      ],
-      "r3aRequirement": "catalog-schema",
-      "r3b": {
-        "review": "host-only-bounded-eval-kernel-hold",
-        "change": "Adds a host-only, gated code-execution authority whose request remains held only for the exact attached lease and settles on expiry, release, or replacement. It exposes no scope data and cannot outlive the receiver-owned lease deadline."
       },
       "parityAssertion": "generated-census:direct-authority"
     },

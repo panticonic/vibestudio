@@ -67,6 +67,56 @@ function setPriv(instance: object, key: string, value: unknown): void {
   (instance as unknown as Record<string, unknown>)[key] = value;
 }
 
+/** A celld `ctx.residency` for the object under test: every hold taken, and a way to revoke one as the node does. */
+function fakeResidency(options: { refuse?: Error } = {}) {
+  type Hold = {
+    isReleased: boolean;
+    revokedReason: string | null;
+    onrevoked: ((event: { reason: string }) => void | Promise<void>) | null;
+    released: Promise<{ reason: string }>;
+    release(): void;
+  };
+  const holds: Hold[] = [];
+  const residency = {
+    enabled: true,
+    async hold(): Promise<Hold> {
+      if (options.refuse) throw options.refuse;
+      let finish!: (value: { reason: string }) => void;
+      const released = new Promise<{ reason: string }>((resolve) => (finish = resolve));
+      const hold: Hold = {
+        isReleased: false,
+        revokedReason: null,
+        onrevoked: null,
+        released,
+        release() {
+          if (hold.isReleased) return;
+          hold.isReleased = true;
+          finish({ reason: "released" });
+        },
+      };
+      holds.push(hold);
+      return hold;
+    },
+  };
+  /** What the node does on a drain, a swap or an operator revocation: tell the object, then drop the hold. */
+  const revoke = async (reason: string) => {
+    for (const hold of holds.filter((candidate) => !candidate.isReleased)) {
+      hold.revokedReason = reason;
+      await hold.onrevoked?.({ reason });
+      hold.release();
+    }
+  };
+  return { residency, holds, revoke };
+}
+
+function withResidency(instance: object, residency: object): void {
+  priv<{ residency?: unknown }>(instance, "ctx").residency = residency;
+}
+
+function holdKernel(instance: EvalDO): Promise<void> {
+  return priv<() => Promise<void>>(instance, "holdKernelResidency").call(instance);
+}
+
 function seedRuntimeUnitIdentity(instance: object): void {
   const source = "packages/runtime";
   (instance as unknown as { env: Record<string, unknown> }).env["EVAL_RUNTIME_SOURCE"] = source;
@@ -630,49 +680,33 @@ describe("EvalDO cancellation + forced recovery", () => {
     );
   });
 
-  it("holds one notebook kernel across cells until its refreshed idle lease expires", async () => {
+  it("holds one notebook kernel across cells with no idle timer, and ends it only explicitly", async () => {
     vi.useFakeTimers();
     try {
       const { instance } = await createTestDO(EvalDO);
+      const { residency, holds } = fakeResidency();
+      withResidency(instance, residency);
       const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
       mockOwnedCall(instance, lifecycleCall);
-      const first = await instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
-      await instance.attachKernelLeaseHolder("kernel-1");
-      const held = instance.holdKernelLease("kernel-1");
+      setPriv(instance, "runLocked", async () => ({ success: true, console: "" }));
 
-      await vi.advanceTimersByTimeAsync(750);
-      const refreshed = await instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 1_000 });
-      expect(refreshed.expiresAt).toBeGreaterThan(first.expiresAt!);
-
-      await vi.advanceTimersByTimeAsync(750);
-      let settled = false;
-      void held.then(() => {
-        settled = true;
-      });
-      await Promise.resolve();
-      expect(settled).toBe(false);
-
-      await vi.advanceTimersByTimeAsync(250);
-      await expect(held).resolves.toEqual({ leaseId: "kernel-1", reason: "expired" });
-      expect(lifecycleCall).toHaveBeenNthCalledWith(
-        1,
+      await instance.startRun({ runId: "cell-1", code: "return 1" });
+      await priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+        instance,
+        "cell-1"
+      );
+      expect(holds).toHaveLength(1);
+      // Two hours of inactivity (the old lease ended after thirty minutes) end nothing.
+      await vi.advanceTimersByTimeAsync(2 * 60 * 60 * 1_000);
+      expect(holds[0]!.isReleased).toBe(false);
+      // Another cell shares the one hold.
+      await instance.startRun({ runId: "cell-2", code: "return 2" });
+      expect(holds).toHaveLength(1);
+      // Nothing is declared to the host lifecycle journal any more.
+      expect(lifecycleCall).not.toHaveBeenCalledWith(
         "main",
         "workspace-state.lifecycleLeaseUpsert",
-        [
-          expect.objectContaining({
-            detail: {
-              kind: "eval-kernel",
-              leaseId: "kernel-1",
-            },
-          }),
-        ],
-        undefined
-      );
-      expect(lifecycleCall).toHaveBeenNthCalledWith(
-        2,
-        "main",
-        "workspace-state.lifecycleLeaseClear",
-        [expect.any(Object)],
+        expect.anything(),
         undefined
       );
     } finally {
@@ -680,57 +714,52 @@ describe("EvalDO cancellation + forced recovery", () => {
     }
   });
 
-  it("starts the idle interval only after active work and cancellation settle", async () => {
-    vi.useFakeTimers();
-    try {
-      const { instance, sql } = await createTestDO(EvalDO);
-      const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
-      mockOwnedCall(instance, lifecycleCall);
-      const { runLocked, started } = blockUntilAborted();
-      setPriv(instance, "runLocked", runLocked);
-      await instance.acquireKernelLease({ leaseId: "active-kernel", idleMs: 1_000 });
-      await instance.attachKernelLeaseHolder("active-kernel");
-      const held = instance.holdKernelLease("active-kernel");
-      let settled = false;
-      void held.then(() => {
-        settled = true;
-      });
-      seedPendingRun(sql, "long-active-run");
-      const run = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
-        instance,
-        "long-active-run"
-      );
-      await started;
-      await vi.advanceTimersByTimeAsync(10_000);
-      expect(settled).toBe(false);
-      expect(
-        await instance.acquireKernelLease({ leaseId: "active-kernel", idleMs: 1_000 })
-      ).toMatchObject({ expiresAt: null });
-      await instance.cancel("long-active-run");
-      await run;
-      await vi.advanceTimersByTimeAsync(999);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(held).resolves.toEqual({ leaseId: "active-kernel", reason: "expired" });
-      expect(lifecycleCall).toHaveBeenCalledTimes(2);
-      expect(lifecycleCall).toHaveBeenLastCalledWith(
-        "main",
-        "workspace-state.lifecycleLeaseClear",
-        [expect.any(Object)],
-        undefined
-      );
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("releases the inter-cell kernel hold during planned lifecycle shutdown", async () => {
+  it("runs unheld when the node refuses the hold, and never fails the run", async () => {
     const { instance } = await createTestDO(EvalDO);
-    const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
-    mockOwnedCall(instance, lifecycleCall);
-    await instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 60_000 });
-    await instance.attachKernelLeaseHolder("kernel-1");
-    const held = instance.holdKernelLease("kernel-1");
+    const { residency, holds } = fakeResidency({
+      refuse: Object.assign(new Error("the node already pins as many cells as it allows"), {
+        code: "ERR_RESIDENCY_BUDGET",
+      }),
+    });
+    withResidency(instance, residency);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      await expect(instance.startRun({ runId: "unheld", code: "return 1" })).resolves.toMatchObject(
+        { status: "pending" }
+      );
+      expect(holds).toHaveLength(0);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("refused a residency hold"));
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("takes a new hold after the previous one ends, and none when residency is not declared", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const { residency, holds, revoke } = fakeResidency();
+    withResidency(instance, residency);
+    await holdKernel(instance);
+    await revoke("operator");
+    await holdKernel(instance);
+    expect(holds).toHaveLength(2);
+    expect(holds[0]!.isReleased).toBe(true);
+    expect(holds[1]!.isReleased).toBe(false);
+
+    const bare = await createTestDO(EvalDO);
+    withResidency(bare.instance, { enabled: false, hold: vi.fn() });
+    await holdKernel(bare.instance);
+    expect(priv(bare.instance, "kernelHold")).toBeNull();
+  });
+
+  it("releases the notebook hold during a lifecycle release", async () => {
+    const { instance } = await createTestDO(EvalDO);
+    const { residency, holds } = fakeResidency();
+    withResidency(instance, residency);
+    mockOwnedCall(
+      instance,
+      vi.fn(() => Promise.resolve(undefined))
+    );
+    await holdKernel(instance);
 
     await expect(
       prepareLifecycle(instance, {
@@ -740,38 +769,71 @@ describe("EvalDO cancellation + forced recovery", () => {
         deadlineMs: 1_000,
       })
     ).resolves.toEqual({ status: "ready" });
-    await expect(held).resolves.toEqual({ leaseId: "kernel-1", reason: "released" });
-    expect(lifecycleCall).toHaveBeenLastCalledWith(
-      "main",
-      "workspace-state.lifecycleLeaseClear",
-      [expect.any(Object)],
-      undefined
-    );
+    expect(holds[0]!.isReleased).toBe(true);
   });
 
-  it("ends the inter-cell kernel hold when the host cancels its leg, without waiting for a release", async () => {
+  it("releases the notebook hold on a forced reset, and the next run holds again", async () => {
     const { instance } = await createTestDO(EvalDO);
+    const { residency, holds } = fakeResidency();
+    withResidency(instance, residency);
     mockOwnedCall(
       instance,
       vi.fn(() => Promise.resolve(undefined))
     );
-    const controller = new AbortController();
-    Object.defineProperty(instance, "rpcAbortSignal", { get: () => controller.signal });
-    await instance.acquireKernelLease({ leaseId: "kernel-1", idleMs: 60_000 });
-    await instance.attachKernelLeaseHolder("kernel-1");
-    const held = instance.holdKernelLease("kernel-1");
-    let settled = false;
-    void held.then(
-      () => (settled = true),
-      () => (settled = true)
+    await holdKernel(instance);
+    await instance.reset();
+    expect(holds[0]!.isReleased).toBe(true);
+    await holdKernel(instance);
+    expect(holds).toHaveLength(2);
+  });
+
+  it("on a drain, the node's revocation takes the typed generation-lost terminal for active runs", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const { residency, revoke } = fakeResidency();
+    withResidency(instance, residency);
+    mockOwnedCall(
+      instance,
+      vi.fn(() => Promise.resolve(undefined))
     );
-    await Promise.resolve();
-    expect(settled).toBe(false);
-    const reason = new Error("host shutdown cancelled the residency request");
-    controller.abort(reason);
-    await expect(held).rejects.toBe(reason);
-    // The kernel stays leased; a later holder may attach.
-    await expect(instance.attachKernelLeaseHolder("kernel-1")).resolves.toEqual({ attached: true });
+    const { runLocked, started } = blockUntilAborted();
+    setPriv(instance, "runLocked", runLocked);
+    await holdKernel(instance);
+    seedPendingRun(sql, "drained-run");
+    const run = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      instance,
+      "drained-run"
+    );
+    await started;
+
+    await revoke("drain");
+    await expect(run).resolves.toMatchObject({
+      success: false,
+      failureKind: "infrastructure",
+      failureCode: "runtime_generation_lost",
+    });
+  });
+
+  it("on an operator revocation, the hold ends and the active run is left alone", async () => {
+    const { instance, sql } = await createTestDO(EvalDO);
+    const { residency, revoke } = fakeResidency();
+    withResidency(instance, residency);
+    const { runLocked, started } = blockUntilAborted();
+    setPriv(instance, "runLocked", runLocked);
+    await holdKernel(instance);
+    seedPendingRun(sql, "operator-run");
+    const run = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
+      instance,
+      "operator-run"
+    );
+    await started;
+
+    await revoke("operator");
+    expect(priv(instance, "kernelHold")).toBeNull();
+    expect(
+      sql.exec(`SELECT status FROM runs WHERE run_id = 'operator-run'`).toArray()[0]
+    ).toMatchObject({ status: "running" });
+    await instance.cancel("operator-run");
+    await run;
   });
 
   it("retires resident channels through their recorded target without contextual rediscovery", async () => {
@@ -834,9 +896,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { runLocked, started } = blockUntilAborted();
     setPriv(instance, "runLocked", runLocked);
 
-    await instance.acquireKernelLease({ leaseId: "kernel-active", idleMs: 60_000 });
-    await instance.attachKernelLeaseHolder("kernel-active");
-    const held = instance.holdKernelLease("kernel-active");
+    const { residency, holds } = fakeResidency();
+    withResidency(instance, residency);
+    await holdKernel(instance);
     seedPendingRun(sql, "lifecycle-active-run");
     const run = priv<(id: string) => Promise<RunResult>>(instance, "executeRun").call(
       instance,
@@ -861,10 +923,7 @@ describe("EvalDO cancellation + forced recovery", () => {
       failureCode: "runtime_generation_lost",
     });
     expect(instance.getRun("lifecycle-active-run")).toMatchObject({ status: "cancelled" });
-    await expect(held).resolves.toEqual({
-      leaseId: "kernel-active",
-      reason: "released",
-    });
+    expect(holds[0]!.isReleased).toBe(true);
   });
 
   it("serializes live event delivery and permits only cleanup/diagnostic tails after terminal", async () => {
@@ -2437,9 +2496,9 @@ describe("EvalDO cancellation + forced recovery", () => {
     const { instance, sql } = await createTestDO(EvalDO);
     const lifecycleCall = vi.fn(() => Promise.resolve(undefined));
     mockOwnedCall(instance, lifecycleCall);
-    await instance.acquireKernelLease({ leaseId: "finite-kernel", idleMs: 60_000 });
-    await instance.attachKernelLeaseHolder("finite-kernel");
-    const held = instance.holdKernelLease("finite-kernel");
+    const { residency, holds } = fakeResidency();
+    withResidency(instance, residency);
+    await holdKernel(instance);
     seedPendingRun(sql, "finite");
     sql.exec(
       `INSERT INTO run_progress (run_id, progress, updated_at) VALUES (?, ?, ?)`,
@@ -2465,7 +2524,7 @@ describe("EvalDO cancellation + forced recovery", () => {
         deadlineMs: 0,
       })
     ).resolves.toEqual({ status: "ready" });
-    await expect(held).resolves.toEqual({ leaseId: "finite-kernel", reason: "released" });
+    expect(holds[0]!.isReleased).toBe(true);
 
     expect(sql.exec(`SELECT COUNT(*) AS count FROM runs`).toArray()[0]).toMatchObject({ count: 1 });
     await expect(instance.startRun({ runId: "finite", code: "return 1" })).rejects.toThrow(
@@ -2486,12 +2545,6 @@ describe("EvalDO cancellation + forced recovery", () => {
       "node:async_hooks",
       "node:util/types",
     ]);
-    expect(lifecycleCall).toHaveBeenLastCalledWith(
-      "main",
-      "workspace-state.lifecycleLeaseClear",
-      [expect.any(Object)],
-      undefined
-    );
   });
 
   it("keeps orphaned and replacement runs in distinct immutable execution contexts", async () => {

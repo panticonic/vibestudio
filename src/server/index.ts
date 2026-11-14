@@ -4098,7 +4098,6 @@ async function main() {
   }
 
   // ── eval.* service (owner-scoped sandbox eval backed by per-owner EvalDO) ──
-  let closeEvalKernelLeases: (() => Promise<void>) | null = null;
   let closeActiveEvalRuns: (() => Promise<void>) | null = null;
   let closeEvalAuthorityEvents: (() => Promise<void>) | null = null;
   {
@@ -4233,9 +4232,6 @@ async function main() {
             runtimeManager.recoverUnresponsiveSandbox(
               `eval ${runId} remained unresponsive after ${timeoutMs}ms`
             ),
-          onKernelLeaseCoordinator: (coordinator) => {
-            closeEvalKernelLeases = () => coordinator.close();
-          },
           onShutdown: (shutdown) => {
             closeActiveEvalRuns = shutdown;
           },
@@ -8489,14 +8485,6 @@ async function main() {
       () => closeEvalAuthorityEvents?.() ?? Promise.resolve()
     ).catch((err) => console.warn("[Server] eval authority event journal shutdown failed:", err));
 
-    // Start cancellation of the held residency requests now, but join their
-    // terminal responses only after lifecycle prepare releases the matching
-    // EvalDO holders. The receiver owns each original request until that
-    // release; awaiting its response first would deadlock the lifecycle call.
-    const evalKernelLeaseClose = shutdownStage(
-      "eval-kernel-lease-close",
-      () => closeEvalKernelLeases?.() ?? Promise.resolve()
-    ).catch((err) => console.warn("[Server] eval kernel lease shutdown failed:", err));
     // Graceful release is complete only after the activation joins its owned
     // resources and the lifecycle journal acknowledges it.
     await shutdownStage("lifecycle-prepare", () => lifecycleDriver.prepareForShutdown()).catch(
@@ -8505,7 +8493,6 @@ async function main() {
         console.error("[Server] lifecycle shutdown prepare failed:", error);
       }
     );
-    await evalKernelLeaseClose;
     // Canonical durable observations drain before their owners release. Stop
     // this sole executor only after the lifecycle barriers have joined them.
     const durableWorkQuiescence = durableWorkDriver.quiesce().catch((error) => {

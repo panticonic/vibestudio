@@ -23,6 +23,8 @@ interface BuiltinBase {
   runtime: {
     staticAuthorityProjection: boolean;
     codegen: boolean;
+    /** The class keeps an object resident through `ctx.residency.hold()` (celld residency holds). */
+    residency: boolean;
   };
   /** Static authority ceiling for work that has no inbound RPC authority
    * parent, notably durable-object alarms. Direct RPC execution is narrowed
@@ -82,6 +84,7 @@ export const PRODUCT_BUILTINS = [
     runtime: {
       staticAuthorityProjection: true,
       codegen: false,
+      residency: false,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],
@@ -103,6 +106,7 @@ export const PRODUCT_BUILTINS = [
     runtime: {
       staticAuthorityProjection: true,
       codegen: false,
+      residency: false,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],
@@ -119,6 +123,7 @@ export const PRODUCT_BUILTINS = [
     runtime: {
       staticAuthorityProjection: true,
       codegen: true,
+      residency: true,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [
@@ -144,6 +149,7 @@ export const PRODUCT_BUILTINS = [
     runtime: {
       staticAuthorityProjection: true,
       codegen: false,
+      residency: false,
     },
     residentCapabilityRequests: [],
     hostCapabilityRequests: [],

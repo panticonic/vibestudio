@@ -15,7 +15,8 @@ import {
   schemaRpc,
   type DurableObjectContext,
   type LifecyclePrepareInput,
-  type LifecycleResumeInput,
+  type ResidencyHandle,
+  type ResidencyRevocationReason,
 } from "@vibestudio/durable";
 import * as asyncHooks from "node:async_hooks";
 import * as utilTypes from "node:util/types";
@@ -159,7 +160,6 @@ const DESTRUCTIVE_STMT = /^\s*(DROP|DELETE|ALTER|UPDATE|INSERT|REPLACE|TRUNCATE|
 const RESULT_CONSOLE_MAX_CHARS = 80_000;
 const RESULT_STORAGE_MAX_CHARS = 250_000;
 const CANCELLATION_GRACE_MS = 5_000;
-const MAX_KERNEL_IDLE_LEASE_MS = 60 * 60 * 1_000;
 /** Delivery is a hint; only an exact durable acknowledgement closes it. */
 const RESULT_REDELIVERY_BASE_DELAY_MS = 5_000;
 const RESULT_REDELIVERY_MAX_DELAY_MS = 5 * 60_000;
@@ -538,8 +538,6 @@ interface KernelRunStatus {
   /** Identifies the exact in-memory notebook heap serving this result. */
   incarnationId: string;
   startedAt: number;
-  /** The current residency lease deadline, refreshed before every eval cell. */
-  idleExpiresAt?: number;
   /** Present only on the first result produced by this kernel incarnation. */
   event?: {
     kind: "started" | "restarted";
@@ -547,16 +545,6 @@ interface KernelRunStatus {
       | { status: "complete"; restored: string[]; lost: string[] }
       | { status: "unavailable" };
   };
-}
-
-interface KernelLeaseState {
-  id: string;
-  idleMs: number;
-  expiresAt: number | null;
-  holderAttached: boolean;
-  timer: ReturnType<typeof setTimeout> | null;
-  settled: Promise<{ reason: "expired" | "released" | "replaced" }>;
-  settle: (result: { reason: "expired" | "released" | "replaced" }) => void;
 }
 
 export class EvalDO extends DurableObjectBase {
@@ -662,12 +650,14 @@ export class EvalDO extends DurableObjectBase {
   /** Exact durable recovery report captured when this incarnation first hydrates scope. */
   private scopeRecovery: ScopeRecovery | null = null;
   /**
-   * One host-held request owns inter-cell notebook residency. Individual eval
-   * requests protect only their own execution; this lease keeps the same heap
-   * (scope objects, module singletons, open client handles) alive between cells.
+   * The residency hold that keeps this notebook heap (scope objects, module
+   * singletons, open client handles) alive between cells. An individual eval
+   * request protects only its own execution. Taken when a run is admitted and
+   * ended only explicitly: `reset`, a lifecycle release, or the node's own
+   * revocation (drain, swap, operator). There is no idle timer.
    */
-  private kernelLease: KernelLeaseState | null = null;
-  private kernelLeaseTransitions: Promise<unknown> = Promise.resolve();
+  private kernelHold: ResidencyHandle | null = null;
+  private kernelHoldPending: Promise<void> | null = null;
   constructor(ctx: DurableObjectContext, env: unknown) {
     super(ctx, env);
     this.kernelIncarnationId = crypto.randomUUID();
@@ -1088,121 +1078,6 @@ export class EvalDO extends DurableObjectBase {
 
   // ── public RPC methods (dispatched by the server `eval` service) ──────────────
 
-  @schemaRpc()
-  async acquireKernelLease(input: { leaseId: string; idleMs: number }): Promise<{
-    leaseId: string;
-    expiresAt: number | null;
-    holderAttached: boolean;
-  }> {
-    return this.withKernelLeaseTransition(() => this.acquireKernelLeaseLocked(input));
-  }
-
-  private acquireKernelLeaseLocked(input: { leaseId: string; idleMs: number }): {
-    leaseId: string;
-    expiresAt: number | null;
-    holderAttached: boolean;
-  } {
-    this.assertAdmissionOpen();
-    if (!input || typeof input.leaseId !== "string" || input.leaseId.length === 0) {
-      throw new Error("eval kernel lease requires a non-empty leaseId");
-    }
-    if (
-      !Number.isSafeInteger(input.idleMs) ||
-      input.idleMs <= 0 ||
-      input.idleMs > MAX_KERNEL_IDLE_LEASE_MS
-    ) {
-      throw new Error(
-        `eval kernel lease idleMs must be an integer between 1 and ${MAX_KERNEL_IDLE_LEASE_MS}`
-      );
-    }
-
-    let lease = this.kernelLease;
-    if (lease?.id !== input.leaseId) {
-      if (lease) this.settleKernelLease(lease, "replaced");
-      let settle!: KernelLeaseState["settle"];
-      const settled = new Promise<Awaited<KernelLeaseState["settled"]>>((resolve) => {
-        settle = resolve;
-      });
-      lease = {
-        id: input.leaseId,
-        idleMs: input.idleMs,
-        expiresAt: null,
-        holderAttached: false,
-        timer: null,
-        settled,
-        settle,
-      };
-      this.kernelLease = lease;
-    } else if (lease.timer) {
-      clearTimeout(lease.timer);
-    }
-
-    lease.idleMs = input.idleMs;
-    lease.timer = null;
-    this.refreshKernelIdleLease();
-    return {
-      leaseId: lease.id,
-      expiresAt: lease.expiresAt,
-      holderAttached: lease.holderAttached,
-    };
-  }
-
-  @schemaRpc()
-  async attachKernelLeaseHolder(leaseId: string): Promise<{ attached: true }> {
-    return this.withKernelLeaseTransition(() => this.attachKernelLeaseHolderLocked(leaseId));
-  }
-
-  private async attachKernelLeaseHolderLocked(leaseId: string): Promise<{ attached: true }> {
-    const lease = this.kernelLease;
-    if (!lease || lease.id !== leaseId) {
-      throw new Error(`eval kernel lease ${leaseId} is not active`);
-    }
-    if (lease.holderAttached) {
-      throw new Error(`eval kernel lease ${leaseId} already has a holder`);
-    }
-    // Register the activation-owned hold before acknowledging it so planned
-    // restart and shutdown can release every successful long request.
-    await this.registerLifecycleRelease({ kind: "eval-kernel", leaseId });
-    if (this.kernelLease !== lease) {
-      throw new Error(`eval kernel lease ${leaseId} changed while its holder was attaching`);
-    }
-    lease.holderAttached = true;
-    return { attached: true };
-  }
-
-  @schemaRpc()
-  async holdKernelLease(
-    leaseId: string
-  ): Promise<{ leaseId: string; reason: "expired" | "released" | "replaced" }> {
-    const lease = this.kernelLease;
-    if (!lease || lease.id !== leaseId) {
-      throw new Error(`eval kernel lease ${leaseId} is not active`);
-    }
-    if (!lease.holderAttached) {
-      throw new Error(`eval kernel lease ${leaseId} has no attached holder`);
-    }
-    // The host's leg is a transport for residency. When the host cancels it (an
-    // ordered shutdown, or a failed lifecycle preparation that will never reach
-    // this object's release), the request must end rather than wait for a release
-    // that may not come; the kernel itself stays leased for the next holder.
-    const cancelled = this.rpcAbortSignal;
-    try {
-      const terminal = await (cancelled
-        ? new Promise<Awaited<typeof lease.settled>>((resolve, reject) => {
-            const abort = () => reject(cancelled.reason);
-            if (cancelled.aborted) return abort();
-            cancelled.addEventListener("abort", abort, { once: true });
-            lease.settled.then(resolve, reject).finally(() => {
-              cancelled.removeEventListener("abort", abort);
-            });
-          })
-        : lease.settled);
-      return { leaseId, ...terminal };
-    } finally {
-      lease.holderAttached = false;
-    }
-  }
-
   /**
    * Held synchronous run for connection-holding callers (panels over their persistent WS, the CLI):
    * insert + execute in this held handler, return the result in one response. The CALLER holds its
@@ -1269,7 +1144,6 @@ export class EvalDO extends DurableObjectBase {
       return { status: "ready" };
     }
 
-    const failures: unknown[] = [];
     // Peer obligations have already joined execution; now join any artifact
     // writes started by those executions before releasing their owners.
     const artifacts = await Promise.allSettled([...this.inFlightResultArtifacts]);
@@ -1280,27 +1154,14 @@ export class EvalDO extends DurableObjectBase {
       throw new AggregateError(artifactFailures, "eval result artifact writes did not settle", {
         cause: artifactFailures[0],
       });
-    try {
-      await this.clearLifecycleRelease();
-    } catch (error) {
-      failures.push(error);
-    }
-    if (this.kernelLease) this.settleKernelLease(this.kernelLease, "released");
+    this.releaseKernelHold();
     this.releaseKernelReferences();
-    if (failures.length > 0) {
-      const details = failures
-        .map((error) => (error instanceof Error ? error.message : String(error)))
-        .join("; ");
-      throw new AggregateError(failures, `eval lifecycle release failed: ${details}`, {
-        cause: failures[0],
-      });
-    }
     return { status: "ready" };
   }
 
   /**
    * A lifecycle release is a process-boundary operation, not just a notebook
-   * lease release. Any pending/running durable run owns work inside this
+   * residency release. Any pending/running durable run owns work inside this
    * activation and must be cancelled before the activation can claim that it
    * is ready to disappear. The durable CAS in cancel() makes a late execution
    * unable to resurrect a completed result after shutdown.
@@ -1359,13 +1220,6 @@ export class EvalDO extends DurableObjectBase {
       }),
       runId
     );
-  }
-
-  override async resumeAfterRestart(_input: LifecycleResumeInput): Promise<void> {
-    // A process crash cannot preserve the JavaScript heap. Clear a stale
-    // activation-resource declaration; the next eval establishes a fresh,
-    // explicitly reported kernel incarnation and held lease.
-    await this.clearLifecycleRelease();
   }
 
   /**
@@ -1441,7 +1295,7 @@ export class EvalDO extends DurableObjectBase {
     if (args.resultReceiverRef) this.scheduleResultRedelivery(runId);
     this.appendRunEvent(runId, "state", { status: "accepted" });
     this.appendRunEvent(runId, "state", { status: "queued" });
-    this.refreshKernelIdleLease();
+    await this.holdKernelResidency();
     if (schedule) this.scheduleRun(runId);
     return {
       runId,
@@ -1675,7 +1529,6 @@ export class EvalDO extends DurableObjectBase {
       .catch(() => undefined)
       .finally(() => {
         this.inFlightRuns.delete(runId);
-        this.refreshKernelIdleLease();
       });
     return promise;
   }
@@ -1734,7 +1587,7 @@ export class EvalDO extends DurableObjectBase {
       };
     }
     this.appendRunEvent(runId, "state", { status: "running" });
-    this.refreshKernelIdleLease();
+    if (!this.kernelHold) await this.holdKernelResidency();
 
     const args = JSON.parse(String(row["args"])) as RunArgs;
     const deadlineAt = row["deadline_at"] != null ? Number(row["deadline_at"]) : null;
@@ -2371,7 +2224,7 @@ export class EvalDO extends DurableObjectBase {
     const row = this.sql
       .exec(`SELECT status, result FROM runs WHERE run_id = ?`, runId)
       .toArray()[0];
-    this.refreshKernelIdleLease();
+
     return row?.["status"] === "done" && row["result"] != null
       ? (JSON.parse(String(row["result"])) as RunResult)
       : null;
@@ -2810,7 +2663,6 @@ export class EvalDO extends DurableObjectBase {
       if (this.inFlightCancellations.get(runId) === cancellation) {
         this.inFlightCancellations.delete(runId);
       }
-      this.refreshKernelIdleLease();
     }
   }
 
@@ -3069,7 +2921,7 @@ export class EvalDO extends DurableObjectBase {
     // Orphan the (possibly wedged) chain — do NOT `.then()` off it, or we'd hang behind the stuck
     // run. A subsequently-enqueued run chains off this fresh resolved promise and proceeds at once.
     this.runChain = Promise.resolve();
-    this.refreshKernelIdleLease();
+    this.releaseKernelHold();
     let result: { ok: boolean };
     try {
       result = this.resetLocked();
@@ -3120,56 +2972,61 @@ export class EvalDO extends DurableObjectBase {
 
   // ── internals ─────────────────────────────────────────────────────────────────
 
-  private withKernelLeaseTransition<T>(operation: () => T | Promise<T>): Promise<T> {
-    const transition = this.kernelLeaseTransitions.catch(() => undefined).then(operation);
-    this.kernelLeaseTransitions = transition;
-    return transition;
+  /**
+   * Keep this activation, and so the notebook heap, resident until an explicit
+   * end (Q3 of docs/dolt-redesign.md: no idle timer). A node that refuses the
+   * hold (`ERR_RESIDENCY_BUDGET`, a drain under way) does not fail the run: the
+   * heap may be lost at eviction, and the next run reports `[kernel] Restarted`
+   * with the exact restored and lost keys. A class without residency (a test
+   * context, a node that does not declare it) runs unheld.
+   */
+  private async holdKernelResidency(): Promise<void> {
+    const residency = this.ctx.residency;
+    if (!residency?.enabled) return;
+    if (this.kernelHold && !this.kernelHold.isReleased) return;
+    this.kernelHoldPending ??= (async () => {
+      try {
+        const hold = await residency.hold();
+        hold.onrevoked = (event) => this.onKernelHoldRevoked(hold, event.reason);
+        this.kernelHold = hold;
+        void hold.released.then(() => {
+          if (this.kernelHold === hold) this.kernelHold = null;
+        });
+      } catch (error) {
+        console.warn(
+          `[EvalDO] the node refused a residency hold; this run proceeds without one: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+      } finally {
+        this.kernelHoldPending = null;
+      }
+    })();
+    await this.kernelHoldPending;
   }
 
-  /** Active durable work is not notebook inactivity. Use canonical run state,
-   * not lingering execution promises: a force-reset orphan no longer owns
-   * residency. The normal idle interval begins after the last owner settles. */
-  private refreshKernelIdleLease(): void {
-    const lease = this.kernelLease;
-    if (!lease) return;
-    const active =
-      this.sql
-        .exec(
-          `SELECT run_id FROM runs WHERE status IN ('pending', 'running', 'cancelling') LIMIT 1`
-        )
-        .toArray().length > 0;
-    if (active) {
-      if (lease.timer) clearTimeout(lease.timer);
-      lease.timer = null;
-      lease.expiresAt = null;
-      return;
-    }
-    if (lease.timer) return;
-    lease.expiresAt = Date.now() + lease.idleMs;
-    lease.timer = setTimeout(
-      () => void this.withKernelLeaseTransition(() => this.expireKernelLease(lease)),
-      lease.idleMs
-    );
-    lease.timer.unref?.();
+  private releaseKernelHold(): void {
+    const hold = this.kernelHold;
+    this.kernelHold = null;
+    hold?.release();
   }
 
-  private settleKernelLease(lease: KernelLeaseState, reason: "released" | "replaced"): void {
-    if (lease.timer) clearTimeout(lease.timer);
-    if (this.kernelLease === lease) this.kernelLease = null;
-    lease.settle({ reason });
-  }
-
-  private async expireKernelLease(lease: KernelLeaseState): Promise<void> {
-    if (this.kernelLease !== lease || lease.expiresAt === null || lease.expiresAt > Date.now())
-      return;
-    // The held request keeps this activation resident while its durable
-    // lifecycle declaration is cleared.
-    await this.clearLifecycleRelease();
-    if (this.kernelLease === lease) {
-      if (lease.timer) clearTimeout(lease.timer);
-      this.kernelLease = null;
-      lease.settle({ reason: "expired" });
-    }
+  /**
+   * The node tells the object before it takes the heap away. A drain or a
+   * generation swap is a planned lifecycle transition, never user intent: the
+   * active runs take the typed `runtime_generation_lost` terminal (their scope
+   * is persisted by the cancellation path), so the next incarnation reports
+   * exactly what it restored. An operator revocation leaves the cell resident
+   * and only ends the hold; the next run takes a new one.
+   */
+  private async onKernelHoldRevoked(
+    hold: ResidencyHandle,
+    reason: ResidencyRevocationReason
+  ): Promise<void> {
+    if (this.kernelHold === hold) this.kernelHold = null;
+    if (reason !== "drain" && reason !== "swap") return;
+    await this.cancelRunsForLifecycle();
+    await Promise.allSettled([...this.inFlightResultArtifacts]);
   }
 
   private kernelStatusForRun(): KernelRunStatus {
@@ -3189,7 +3046,6 @@ export class EvalDO extends DurableObjectBase {
     return {
       incarnationId: this.kernelIncarnationId,
       startedAt: this.kernelStartedAt,
-      ...(this.kernelLease?.expiresAt != null ? { idleExpiresAt: this.kernelLease.expiresAt } : {}),
       ...(event ? { event } : {}),
     };
   }

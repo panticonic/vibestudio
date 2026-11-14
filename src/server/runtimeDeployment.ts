@@ -32,6 +32,8 @@ export interface RuntimeDeploymentInput {
     readonly env: Readonly<Record<string, string>>;
     /** Whether the class's isolates may generate code from strings. */
     readonly codegen: boolean;
+    /** Whether the class may keep an object resident (`ctx.residency.hold()`). */
+    readonly residency: boolean;
   }>;
   /** UniversalDO's loader and lifecycle secret: a class secret of that class. */
   readonly doLoaderSecret: string;
@@ -48,7 +50,7 @@ export function buildRuntimeDeployment(input: RuntimeDeploymentInput): RuntimeDe
     { name: "UNIVERSAL_DO", class_name: "UniversalDO" },
   ];
   const internalEnv: Record<string, Readonly<Record<string, string>>> = {};
-  const classes: Record<string, { codegen?: true; secrets: string[] }> = {};
+  const classes: Record<string, { codegen?: true; residency?: true; secrets: string[] }> = {};
   const secrets: Record<string, string> = {};
   // Credentials a single class holds are class secrets: sealed in the bucket,
   // opened by the node for that class only, never in the deployment manifest
@@ -72,6 +74,10 @@ export function buildRuntimeDeployment(input: RuntimeDeploymentInput): RuntimeDe
     // class the deployment declares gets code generation; its isolates are a
     // separate pool, so no other class can evaluate (celld docs/fork/codegen.md).
     if (cls.codegen) (classes[cls.className] ??= { secrets: [] }).codegen = true;
+    // A heap that cannot be rebuilt from storage (the notebook kernel) is kept
+    // resident by an explicit hold; celld ends it only on a drain, a swap or an
+    // operator revocation (celld docs/services/residency.md).
+    if (cls.residency) (classes[cls.className] ??= { secrets: [] }).residency = true;
   }
   const classNames = input.classes.map((cls) => cls.className);
   return {
