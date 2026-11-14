@@ -1,7 +1,7 @@
 # Vibestudio on Dolt cells: data and agent systems redesign
 
 Status: proposal, revised 2026-11-14 to the fork as it now ships (celld
-`unified-fork` at `fcc7268`). First written 2026-11-13. The implementation
+`unified-fork` at `9440c29`). First written 2026-11-13. The implementation
 branch is `feat/dolt-p0`, cut from `feat/celld-runtime`.
 
 Inputs:
@@ -83,8 +83,9 @@ Consequences:
 
 **Open:**
 - Deletion line counts marked *estimate* still need span-level checks.
-- The facet-relay path for remotes and the post-push notification (§5.6 and
-  §3.2) are *to verify* against the binary before P5.
+- The facet-relay path for remotes and `ondoltpush` (§5.6 and §3.2) are in
+  the pinned fork (`9440c29`, tested there); a Vibestudio-side test is P5's.
+  A facet loaded through a Worker Loader must pass a custom `transport`.
 - The GAD database size gate (§5.1, §10 P5): a participant fork copies the
   whole file.
 
@@ -96,10 +97,23 @@ Consequences:
   per-isolate codegen grant, per-run commits in a kernel Dolt facet that
   survive a kill, residency holds without a timer, and revocation through the
   root (§7.4).
+- **P2a: the notebook heap is held by a residency hold, and the host kernel
+  lease is gone** (`7611524ef`). `EvalDO` takes `ctx.residency.hold()` when a
+  run is admitted and ends it only on `reset`, a lifecycle release, or the
+  node's revocation; there is no timer and no `idleExpiresAt`. On a drain or
+  swap `onrevoked` gives active runs the typed `runtime_generation_lost`
+  terminal; an operator revocation only ends the hold. Deleted: the lease
+  coordinator and its test, `evalService`'s touch, the server's
+  `eval-kernel-lease-close` stage, the three lease methods and their rows, the
+  `registerLifecycleRelease({ kind: "eval-kernel" })` declaration.
+- The owner-to-kernel path and the confinement probe, on the real fork
+  (`ownerKernelPathCelld.test.ts`, `universalDoHost.test.ts`): §7.1 and §7.7.
 
-**Not done:** the P2 implementation itself (moving `EvalDO` to the owner's
-kernel facet and deleting the lease, `evalService` and `UNSAFE_EVAL`), and
-P3 onward.
+**Not done:** P2b, the structural move (the kernel as a facet of the owner's
+root, `evalService` and the `evalEngine` host schemas deleted). §7.7 records
+why it is not a local change and the decisions it needs. `UNSAFE_EVAL` is
+already gone (the cutover replaced it with `new Function` under the class's
+`codegen` declaration), so only its documentation remains. P3 onward.
 
 This document re-derives GAD, the agent system, eval, the durable base and
 Chronolog integration for a runtime in which a Durable Object's state is a
@@ -227,7 +241,7 @@ From the fork docs (`dolt-cells.md`, `dolt-remotes.md`, `object-fork.md`,
 
 **Constraints that remain and shape this design:**
 
-| ID | Constraint | State on `fcc7268` |
+| ID | Constraint | State on `9440c29` |
 |---|---|---|
 | **C1** | Dolt operations throw inside `transaction()` and `transactionSync()`. | Still true for every operation *except* the commit of F2: `{ commit }` is an option of the outermost transaction. It throws on a nested transaction (a savepoint) and on a SQLite cell. |
 | **C2** | A plain `merge(name)` that conflicts rolls back. | Resolved by F1: pass `resolve`. A merge Dolt finishes by itself still calls it once, with empty lists, so the application can add its own rows. A fast-forward or an up-to-date merge makes no commit and does not call it (`fastForward: false` forces a merge commit). Schema conflicts cannot be resolved by a row resolver. At most 100 000 conflicting rows and violations. |
@@ -345,7 +359,9 @@ purge in P5) must ask the fork for it or express it as a diff plus a commit.
 
 Each one wrapped an engine feature DoltLite already had, and each removed a
 wall that would otherwise have forced a workaround in Vibestudio. All are in
-`unified-fork` at `fcc7268` (fork design §3b.12 for F1 to F6, §3b.13 for F7).
+`unified-fork` (fork design §3b.12 for F1 to F6, §3b.13 for F7); the build
+Vibestudio pins is `9440c29`, which also fixes the hard-reset durability gap
+(below) and adds `ondoltpush`.
 
 ### 3.1 What was delivered
 
@@ -361,18 +377,22 @@ wall that would otherwise have forced a workaround in Vibestudio. All are in
 
 ### 3.2 What they do not do (gaps found by reading, with where it bites)
 
-- **No hook on an accepted push.** The runtime answers `fetch`, `push` and
-  `refs` for the built-in carrier before the object's instance runs, so the
-  canonical database's own code is not told that `main` moved. Mitigation:
-  the pusher sends a follow-up RPC (a hint, not a fact: the canonical
-  reconciles from `hashOf("main")`), or the canonical serves the remote
-  itself through a custom carrier (`remote.serve`), which is also the facet
-  path. *To verify against the binary in P5.*
-- **A Dolt facet is a holder, and a source only through its parent.** A facet
-  has no id to route to. The parent relays request bytes to the facet's
-  `remote.serve` through a facet call, and the holder passes a custom
-  `transport`. GAD is a facet, so its canonical copy is served by the relay
-  method of its root. *To verify against the binary in P5.*
+- **A push that moved a branch is announced to the target** (`9440c29`,
+  `ondoltpush({ remote, grant, branch, from, to, created })`, in the target's
+  turn and before the pusher is answered; a handler that throws changes
+  nothing). The class needs the method; a holder gets no event. This replaces
+  the earlier "no hook" gap: the canonical GAD database reacts to `main`
+  moving without a follow-up RPC from the pusher. Pinned by the fork's
+  `examples/dolt-remotes`; *a Vibestudio-side test is P5's*.
+- **A Dolt facet is a holder, and a source or push target only through its
+  parent.** A facet has no id to route to. The parent relays request bytes to
+  the facet's `remote.serve` through a facet call (`9440c29` tests the relay,
+  with the grant, the refusals and `ondoltpush` on the facet's own class), and
+  the holder passes a custom `transport`. **For a facet loaded through a Worker
+  Loader that transport is mandatory**: the built-in carrier needs a namespace
+  binding, and a loaded worker's env carries only service bindings (measured in
+  `ownerKernelPathCelld.test.ts`, §7.1). GAD is a facet, so its canonical copy
+  is served by the relay method of its root.
 - **A fork starts without remotes, grants and tracking branches.** A forked
   work cell must be given a fresh grant and call `remote.add` itself
   (§5.7). That is a security feature (a fork does not inherit authority) and
@@ -391,25 +411,27 @@ wall that would otherwise have forced a workaround in Vibestudio. All are in
   cannot be local by pattern (§4.3). `AUTOINCREMENT` is forbidden in a local
   table (`sqlite_sequence` is one tracked table). A rule added by a redeploy is
   an uncommitted change to `dolt_ignore` until the branch commits.
-- **An acknowledged `reset({ hard: true })` is lost by a SIGKILL** (found by
-  P0's probe on `fcc7268`; a durable stop keeps it). Repro: commit twice,
-  `dolt.reset({ hard: true, to: "HEAD~1" })`, answer a request, `kill -9` the
-  node, restart over the same bucket: `dolt.log()` and the rows are back at
-  the pre-reset head. `commit`, `branch.create` and `delete`, `checkout`,
-  `merge` (with and without a resolver), soft `reset` and `gc` all survive the
-  same kill. Canary: `src/server/doltDurableCelld.test.ts`, the
-  `it.fails` test "an acknowledged hard reset survives a kill". Until it is
-  fixed, backup restore (`reset --hard` to `backup/<op>`), GAD `discard` and
-  schema rollback must follow the reset with a `committedTransaction` that
-  writes a row (any commit makes the head durable), or use a fork.
+- **Fixed in `9440c29`: an acknowledged `reset({ hard: true })` survives a
+  SIGKILL.** On `fcc7268` it was lost (P0's probe: commit twice,
+  `dolt.reset({ hard: true, to: "HEAD~1" })`, answer, `kill -9`, restart: the
+  rows were back at the pre-reset head; every other versioning call survived).
+  The canary `src/server/doltDurableCelld.test.ts` "an acknowledged hard reset
+  survives a kill" is now a plain test and passes. Backup restore (`reset
+  --hard` to `backup/<op>`), GAD `discard` and schema rollback may rely on it;
+  the interim rule (follow a reset with a committed write, or use a fork) is
+  withdrawn.
 - **`sqlite_master.sql` is re-rendered once the creating transaction ends**
-  (P0 probe): `CREATE TABLE notes (id` becomes `notes(id`, `CHECK (` becomes
-  `CHECK(`, `ON notes (body)` becomes `ON notes(body)`. A fingerprint taken
+  (P0 probe, now documented by the fork: `docs/services/dolt-cells.md`, "Schema
+  text"). Whitespace runs become one space, none stays before `(`, `)` and `,`,
+  comments are gone, a name is quoted only when it has to be, string literals
+  and quoted names that need their quotes are kept, views and triggers are kept
+  as written, and rendering a rendered text changes nothing. A fingerprint taken
   inside the install transaction therefore differs from the next activation's.
-  The schema guard compares Dolt stores ignoring that spacing (§4.3). Also
-  seen: `dolt_ignore` and the `sqlite_autoindex_*` of `_cf_*`, `dolt_ignore`
-  and `state` are listed in `sqlite_master`, and a rowid is not reused after a
-  hard reset (L10: no meaning in `INTEGER PRIMARY KEY`).
+  The schema guard's `looseSql` (§4.3) ignores every one of those differences
+  (P0 handled only the whitespace; comments and quoting are covered since
+  `1afb6c862`). Also seen: `dolt_ignore` and the `sqlite_autoindex_*` of
+  `_cf_*`, `dolt_ignore` and `state` are listed in `sqlite_master`, and a rowid
+  is not reused after a hard reset (L10: no meaning in `INTEGER PRIMARY KEY`).
 - **`dolt_revert`, `dolt_cherry_pick` and `dolt_rebase` are not exposed.**
   Undo of one commit is the reverse patch from `diff({ from, to })` applied
   with SQL (§4.5).
@@ -422,8 +444,8 @@ wall that would otherwise have forced a workaround in Vibestudio. All are in
   This redesign targets the local node.
 
 The engine facts above are the whole interface. Nothing in Vibestudio needs
-another fork change to start P0, P2 or P4. P5 needs the two *to verify*
-items answered.
+another fork change to start P0, P2 or P4. P5 needs a Vibestudio-side test of
+the facet relay and `ondoltpush` (the fork tests both).
 
 ---
 
@@ -539,10 +561,13 @@ the checkpoint as an extra safe action (`restore-schema-checkpoint`) when an
 older build meets a newer schema.
 
 **Fingerprints on a Dolt store.** The engine re-renders table text after the
-creating transaction (§3.2), so on a Dolt store every shape comparison (the
-persisted shape, the trusted fingerprint, the upgrade sources and targets)
-ignores whitespace around `(`, `)` and `,`. SQLite stores keep the exact
-text, so no persisted shape changes meaning. Index definitions are compared
+creating transaction (§3.2, the fork's "Schema text" rule), so on a Dolt store
+every shape comparison (the persisted shape, the trusted fingerprint, the
+upgrade sources and targets) goes through `looseSql`, which ignores each
+difference the rendering makes: whitespace around `(`, `)` and `,`, comments,
+and the quotes of a plain name; string literals and names that need their
+quotes are compared as written. SQLite stores keep the exact text, so no
+persisted shape changes meaning. Index definitions are compared
 loosely on both engines (the declared text is code).
 
 **Framework tables on a Dolt store.** The base's own operational tables are
@@ -1249,15 +1274,25 @@ const kernel = ctx.facets.get(`eval:${scopeKey}`, () => ({
   holds"). The root never runs guest code itself.
 - **A facet cannot be reached from outside its root.** Ownership is
   therefore structural: no other owner can name the kernel, and no host
-  check is involved.
+  check is involved. The owner's own code is a loaded worker (the `do` facet)
+  that can reach nothing but what the root binds into it: measured on the
+  fork (`ownerKernelPathCelld.test.ts`), a Worker Loader's `env` supports
+  **only service bindings** (a namespace or the loader itself is refused with
+  `DataCloneError: Worker Loader env supports only Service Binding
+  capabilities`), so the owner can neither load a kernel nor grant itself
+  `codegen`. The root exports a `KernelGateway` entrypoint and binds one per
+  owner with `ctx.exports.KernelGateway({ props: { name } })`; its `fetch`
+  forwards to the root named in its props, which the owner cannot change.
+  Another owner's root is unaddressable from the first.
 - **Callers without a cell** (a user's shell, the CLI) get kernels in that
   principal's session cell. That cell is an ordinary UniversalDO root keyed
   by the principal.
 
 ### 7.2 Calls
 
-- **The owner calls its kernel directly**, through the root's facet dispatch
-  (the same `fetch`-based path UniversalDO uses for its `do` facet today):
+- **The owner calls its kernel directly**, through the root: owner code ->
+  its `KernelGateway` binding -> the root's `/kernel/<method>` handler ->
+  the kernel facet (verified end to end on the real fork, one extra hop):
   `start`, `get`, `receipt`, `events`, `cancel`, `reset`,
   `readScopeTextPage` and `deleteScopeValue`.
 - **Receipts are pulled.** The owner and the kernel share a cell and fail
@@ -1359,6 +1394,80 @@ callbacks.
   owner: `run`, `startRun`, `executeRun`, `getRun`, `getRunReceipt`,
   `getRunEvents`, `readScopeTextPage`, `deleteScopeValue`, `reset` and
   `cancel`.
+
+### 7.6a What changed in the table above (as of P2a)
+
+- The three lease methods, `evalKernelLease.ts` and its test, the lease touch,
+  the shutdown stage and the `idleExpiresAt` field are **deleted** (P2a,
+  `7611524ef`), together with 126 lines of authority ledger.
+- `UNSAFE_EVAL` was **already gone**: the cutover replaced the binding with
+  `new Function` under the class's `codegen` declaration (§1),
+  and `rg UNSAFE_EVAL src packages` is empty. Only the plans in `docs/`
+  mention it.
+- Everything else in the table is P2b.
+
+### 7.7 What the structural move needs (P2b): found by starting it
+
+Reading `evalService.ts` (1,262 lines), `EvalDO.ts` (4,600) and their
+consumers shows that the "owner calls its kernel directly" cut is not a
+move of one class. The host `eval` service is the **admission layer** for
+every execution, and §7.6 counted its lines but not these duties, each of
+which needs a new home or an explicit decision to drop:
+
+| Duty today (in `evalService` unless noted) | Needed in P2b |
+|---|---|
+| Owner resolution for four caller kinds: an agent (the host-verified entity binding is the owner), a shell or server naming an `owner-session`, a panel, and a worker or DO. A client-supplied owner is never honoured for an agent | **D1** The principal of a kernel call. §7.5 says "the root's entity", which is right for a DO owner. A panel, the CLI and the system-test runner have no root: §7.1's "session cell" needs an entity registration, a context binding and a lifecycle (`ensureEvalDO` does that now with `store.activate` / `advanceExecution`: lineage `parentId`, `ownerUserId`, `agentBinding`, `stateArgs`, finite or persistent lifecycle) |
+| Authority admission per run: the run's `authority` intent, `normalizeAuthorityManifest`, `preauthorize` of exact operations, `executionSessions` and `taskAuthorities` registration, the causal parent an agent-bound run must carry | **D2** Where the per-run admission lives once the host does not see the call. The capability `runtime.code-execution` gives the kernel the codegen grant (a *workspace* decision); it does not replace the per-run allowlist and approvals that `eval-exact-authority`, `eval-pregranted-only` and `eval-preauthorization` test. `runtime.code-execution.manage` is a host-only builtin capability today; no Base manifest declares a `runtime.code-execution` capability yet |
+| Exact source resolution (`resolveContextSource`), the panel parent (`resolveParentPanel`, panel-slot bindings), the gateway token minted per owner | Stay host services the kernel calls; the token goes (the kernel authenticates as its root) |
+| Result delivery: `resultReceiver`, `onEvalComplete`, `onEvalProgress`, event-sink routes, `acknowledge` | **D3** Pull instead of push (§7.2) changes the Base agent loop: 51 files in Base reference the eval client, among them `agentic-do` (`native-eval-tool.ts`, `native-agent-owner.ts`, `agent-vessel.ts`, `rpc-contract.ts`) and `harness/src/tools/eval.ts`; the CLI (`evalCommand.ts`), panels and the system-test runner call `eval.start` through the host |
+| Host-process safety: `recoverUnresponsiveSandbox` (a sandbox that starves the CPU makes the host replace the node), the liveness probe, `activity` leases for idle exit, shutdown cancellation | **D4** Each needs an owner in a world with no host service. The node's own watchdog may replace some; this has not been checked |
+| `EvalDO` is a **product builtin** with `hostOnly` method authority, an internal-DO identity (`internalDOExecutionIdentity`) and an `INTERNAL_DO_ENV` provider binding for the eval engine and runtime units | **D5** The kernel class in Base (a template worker) needs the same admitted identity, the engine and runtime provider bindings, and a way to be declared Dolt and `codegen` per class by a manifest (§7.1). `celldMigration` imports legacy product objects into SQLite cells, which a Dolt kernel cannot open ("the storage engine is fixed when it is created") |
+
+Mechanics verified on the real fork, for P2b to build on:
+- a facet loaded with `celld: { codegen, residency }` and `storage: "dolt"`
+  compiles, commits per run, survives a kill, holds the root resident without
+  a timer, and is released by the root; its own `onrevoked` does not run, the
+  root's does (`doltEvalKernelCelld.test.ts`);
+- an owner's loaded worker reaches only a service binding the root gives it
+  (`KernelGateway`); it cannot load a kernel or name another root
+  (`ownerKernelPathCelld.test.ts`);
+- a userland object in the product's UniversalDO cannot compile code
+  (`universalDoHost.test.ts`, "confines code generation"). The cross-owner
+  probe of §10 P2 is the second half of the gateway test.
+
+Recommended answers (a proposal for the user to confirm, not a decision):
+- **D1.** A DO owner: its own root's entity. A panel, the CLI or the
+  system-test runner: a session cell, a UniversalDO keyed `session:<principal>`
+  and registered through the existing `runtime.createEntity` path (what
+  `ensureEvalDO` does by hand today), so no new identity mechanism exists.
+- **D2.** `evalService` shrinks to an **admission function** instead of being
+  deleted: authority intent, `preauthorize`, execution-session and task
+  authority registration, returning the session nonce that the kernel call
+  carries (about a quarter of the file). Owner resolution, `ensureEvalDO`,
+  token minting, liveness supervision, dispatch and the lease are what goes.
+  A kernel cannot mint its own execution session, so "no host check" holds for
+  *reachability* (§7.1), not for *authority*.
+- **D3.** Pull for the agent loop, with `events` as the progress channel; the
+  push callbacks and `eval_result_redeliveries` go with it (§7.2).
+- **D4.** Keep `recoverUnresponsiveSandbox` as a node-level watchdog call the
+  gateway makes; drop the per-run liveness supervisor only after a celld
+  per-isolate watchdog is shown to cover a CPU-starved loaded worker.
+- **D5.** Do not migrate legacy `EvalDO` objects into the Dolt kernel: scope
+  state is soft (the restart report states what is lost), and run receipts of
+  a previous generation are not needed after acknowledgement. This is a
+  product decision (it drops unacknowledged receipts of migrated workspaces).
+
+Suggested order for P2b, each a complete cut that keeps the system working:
+1. D1 and D2 first, as a design decision (they decide whether `evalService`
+   shrinks to an admission function, as recommended, or is replaced by a
+   manifest-level capability), because every later step depends on them.
+2. The kernel class as a Base worker and its manifest declaration (D5), served
+   by the existing UniversalDO as an ordinary userland class on its `do` facet
+   with the `codegen` and `residency` grants (the `celld` options flow through
+   `loadExecutable`), replacing the product `EvalDO`. This removes the
+   host-only schemas and the product catalog entry.
+3. The owner path (D3), one caller kind at a time, with `evalService` deleted
+   when the last caller kind has moved.
 
 ---
 
@@ -1516,13 +1625,13 @@ That is the release policy in `durable-object-schema-migrations.md`.
 ## 10. Phases, gates and sizes
 
 Sizes are in agent-days for one focused agent. *Estimates.* P1 (the fork side)
-is **done**: F1 to F7 ship in `fcc7268` (§3). What remains is Vibestudio's.
+is **done**: F1 to F7 ship in `fcc7268`, and `9440c29` (pinned) fixes the hard reset and adds `ondoltpush` (§3). What remains is Vibestudio's.
 
 | Phase | Content | Depends on | Gate (executable) | Size |
 |---|---|---|---|---|
 | **P0 Foundations** (`feat/dolt-p0`) | `@vibestudio/durable/dolt` typed surface of the whole `ctx.storage.dolt` API (merge with resolver, `doltLocal`, remotes); `committedTransaction` on F2 (no roll-forward); schema install commits on Dolt (checkpoint before an upgrade, `schema:` commits); schema-guard filter (`_cf_`, `_litestream`, `dolt_`, `doltlite_`); framework tables local on Dolt; a `FakeDoltStorage` test double with its divergences documented | none (the fork is delivered) | `vitest packages/durable`: commit points, `committedTransaction` atomicity (a throw leaves no rows and no commit), checkpoint before upgrade, failed upgrade commits nothing, filter, merge with resolver, local tables, remotes between fakes. Then a real-celld probe (`doltDurableCelld.test.ts`): a Dolt root class installs its schema, commits through `committedTransaction`, and survives a process kill and restart with `dolt.log()` correct | 3 |
-| **P1 Runtime** (fork side) | Dolt facets; F1 merge resolver; F2 commit in a transaction; F3 forks carrying facets; F4 local tables; F5 checkout cost; F6 history reads; F7 remotes | fork | **Done** (`fcc7268`). Open for P5: the two *to verify* items of §3.2 and the checkout budget below | done |
-| **P2 Eval kernels** | Kernel class; the root grants `codegen` and `residency`; the owner gets direct facet calls; `ctx.residency.hold()` for the heap until an explicit end (Q3, no idle timer); delete `EvalDO`, `evalService`, the lease, the authority rows and `UNSAFE_EVAL` | cutover, P0 | `pnpm test` for eval packages; system tests `eval-*` (heap retained across turns, cancel, restart report, large return) compared with the cutover numbers; a confinement probe (agent `eval` throws, kernel `eval` works); a cross-owner probe (owner A cannot address B's kernel); `rg UNSAFE_EVAL\|EvalDO src packages` is empty | 8 |
+| **P1 Runtime** (fork side) | Dolt facets; F1 merge resolver; F2 commit in a transaction; F3 forks carrying facets; F4 local tables; F5 checkout cost; F6 history reads; F7 remotes | fork | **Done** (`fcc7268`; `9440c29` adds the durable hard reset and `ondoltpush`). Open for P5: a Vibestudio-side test of the facet relay and `ondoltpush`, and the checkout budget below | done |
+| **P2 Eval kernels** | **P2a (done):** `ctx.residency.hold()` for the heap until an explicit end (Q3, no idle timer), revocation through `onrevoked`, the host lease and its three methods deleted. **P2b (open, §7.7):** the kernel class in Base as a Dolt facet of the owner's root with the `codegen` and `residency` grants; the owner calls it through its `KernelGateway`; delete `EvalDO`, `evalService` and the `evalEngine` host schemas | cutover, P0 | `pnpm test` for eval packages; system tests `eval-*` (heap retained across turns, cancel, restart report, large return) compared with the cutover numbers; a confinement probe (a userland object's `eval` throws, the kernel's works); a cross-owner probe (owner A cannot address B's kernel); `rg 'EvalDO\|evalService' src packages` is empty (`UNSAFE_EVAL` already is) | 8 (P2a about 1) |
 | **P3 Durable services** | `WorkspaceDO` on Dolt; panel undo by reverse patch; backup, restore, reset and clone via Dolt; delete the maintenance journal, `cloneDO`, `durableObjectStorageClone.ts` and `computeWorkerdObjectIdHash`, and the lifecycle tables and driver if the cutover kept them | P2 (facet machinery proven) | `WorkspaceDO.test.ts` against `FakeDoltStorage`; system tests for panel close and reopen, `workers.resetStorage`, and a restore round trip; a fork-idempotency test (the same target id twice gives one object); `rg cloneDO\|do_maintenance` is empty | 6 |
 | **P4 Agent system** | Channel and agent cells on Dolt with local tables; Pi local document tables; native conversation fork; delete the hash chain, knowledge export and import, and the clone paths | P0 | Fork-and-subagents acceptance (§E3): edit-and-fork, a multi-agent fork, a subagent `mode: "fork"`, crash-resume of a fork op (kill between phases); hibernation tests (evict between turns, redelivery deduplicated); a fork at sequence N equals the parent's state at N (ledger, participants, agent anchors) | 12 |
 | **P5 GAD, decentralized** | Canonical Dolt database and participant work cells (§5.1); the state model, contexts as branches; integration by F1 merge, `pull` and `push` (§5.5); grants and approval as grant issuance (§5.6); work-cell create, retire (§5.7); a derived `commit_index`, `content_roots`; replay migration (Q2); delete the fact-map, radix and frontier machinery | P0, P4 (agent forks), the two *to verify* items | The provenance plan's acceptance matrix (§14), re-expressed over commit hashes and passing in full; the decentralization gates of §5.13; replay equivalence: for each real workspace snapshot available, every legacy event's materialized tree hash equals the replayed commit's, and blame answers match on a sampled set; the **size gate** (a replayed workspace database and the fork latency at that size, recorded); checkout and merge benchmarks: checkout **p95 within 20 ms with `fsync` and 10k local rows** (the fork measured 14 to 16 ms), a context switch batched per participant turn | 20 |
