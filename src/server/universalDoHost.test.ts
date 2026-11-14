@@ -105,6 +105,14 @@ export class CounterDO extends DurableObject {
       return Response.json({ result: await response.json() });
     }
     if (method === "generation") return Response.json({result:"v1"});
+    if (method === "compile") {
+      // Code generation from a string: only a class the deployment declares may do it.
+      const attempt = (compile) => { try { return { ok: compile() }; } catch (error) { return { error: String(error && error.message || error) }; } };
+      return Response.json({result:{
+        newFunction: attempt(() => new Function("return 1")()),
+        indirectEval: attempt(() => (0, eval)("1")),
+      }});
+    }
     if (method === "failure") throw new Error("Original provider failure (503)");
     if (method === "instance") {
       this.localCalls = (this.localCalls || 0) + 1;
@@ -563,6 +571,23 @@ describe.skipIf(!celldBinary)("UniversalDO facet host (real celld)", () => {
     await expect(dispatch(ref, "failure")).rejects.toThrow("Original provider failure (503)");
     expect(await dispatch(ref, "get")).toMatchObject({ count: 0 });
   });
+  it("confines code generation: a userland object cannot compile what it was not deployed with", async () => {
+    // P2 confinement gate (docs/dolt-redesign.md section 10): only the isolate pool of a class the
+    // deployment declares `codegen` (EvalDO today, the kernel facet's loader grant later) compiles.
+    active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
+    const { manager, dispatch } = active;
+    await manager.ensureDOClass("workers/counter", "CounterDO");
+    const ref = { source: "workers/counter", className: "CounterDO", objectKey: "compile" };
+    const result = (await dispatch(ref, "compile")) as Record<
+      string,
+      { ok?: unknown; error?: string }
+    >;
+    expect(result["newFunction"]?.ok).toBeUndefined();
+    expect(result["newFunction"]?.error).toMatch(/code generation|eval|Function/i);
+    expect(result["indirectEval"]?.ok).toBeUndefined();
+    expect(result["indirectEval"]?.error).toMatch(/code generation|eval/i);
+  }, 30_000);
+
   it("shares executable code while isolating SQLite, fields and retirement cancellation", async () => {
     active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
     const { manager, dispatch, codeFetches } = active;

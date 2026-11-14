@@ -768,10 +768,9 @@ describe.skipIf(!celldBinary)("internal storage DOs on celld", () => {
   }, 240_000);
 
   it("starts internal workerd before a workspace provider is attached", async () => {
-    // Regression: the EvalDO binding was emitted as `unsafeEval = ()` (empty
-    // struct), which workerd rejects with "Type mismatch; expected Void", so the
-    // whole runtime failed to boot once EvalDO was registered. Other workerd tests
-    // register only WorkspaceDO/BrowserVaultDO, so they never exercised this binding.
+    // Regression: the whole runtime failed to boot once EvalDO was registered
+    // (its binding was malformed). Other tests register only
+    // WorkspaceDO/BrowserVaultDO, so they never exercised EvalDO's registration.
     const harness = await createWorkerdHarness({ bindWorkspaceProvider: false });
     manager = harness.manager;
     // registerAllDOClasses writes the capnp config and (re)starts workerd; a
