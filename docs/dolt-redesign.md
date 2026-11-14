@@ -529,6 +529,54 @@ protected committedTransaction<T>(
   throw inside `transaction()` (C1). A class sequences them between
   `committedTransaction` calls, in its own turn.
 - No timer, retry loop or watchdog is involved.
+- **What a commit costs, measured (P3 follow-up; fork `9440c29`, this NVMe,
+  `crates/celld/dolt_cell.rs` `commit_cost_by_shape` and the plain test beside
+  it on the branch `fix/dolt-commit-cost` of the fork, flushes counted with
+  `strace -f`).** A commit made in the transaction is **not** a second durable
+  step: a write is one root record and one `fsync` with or without it. It adds
+  about 1.3 ms of CPU and 340 bytes.
+
+  | one operation | p50 ms | root records | `fsync`s |
+  | --- | ---: | ---: | ---: |
+  | autocommit write, no commit | 6.5 | 1 | 1 |
+  | `BEGIN; write; txCommit; COMMIT` (`committedTransaction`) | 7.8 | 1 | 1 |
+  | the same plus a local-table write | 7.8 | 1 | 1 |
+  | write, then a separate commit | 13.5 | 2 | 2 |
+  | a write to a local table only | 6.3 | 1 | 1 |
+
+  What is expensive is that **every transaction on a Dolt cell is a root
+  record and so a device flush** (a SQLite cell at `NORMAL` has none), and in the
+  product one durable step is about three flushes (the cell file, the replication
+  segment and the node index's WAL). That includes a transaction that writes only
+  a `doltLocal` table. Every direct RPC to a Dolt object consumes a replay nonce
+  (`vsl_direct_rpc_nonces`, a local table, `DurableDirectRpcNonceLedger.consume`),
+  so **every call to `WorkspaceStateDO`, a read as much as a write, is at least one
+  root record**: 228 calls in a 15 s window of a navigation were 233 flushes of
+  the cell file, 208 of the segments and 342 of the index. Per call latency from
+  the dispatcher (`VIBESTUDIO_DO_CALL_TRACE`), the same eval on `d1bfdec3f`
+  (SQLite `WorkspaceDO`) and on P3, mean ms over four runs:
+
+  | call | before P3 | P3 |
+  | --- | ---: | ---: |
+  | `panelTreeDetail` (read, 58 per navigation) | 35 | 64 |
+  | `entityResolve`, `contextEdgeListByChild` (reads) | 35 | 72, 58 |
+  | `alarmClear`, `alarmNextWakeAt` (about 35 each, background) | 41 | 67 |
+  | `slotCreate`, `slotCommitPreparedNavigation` (commits) | 35 | 94, 127 |
+  | `entityActivate`, `entityRetire` (commits) | 30, 29 | 116, 159 |
+
+  Two consequences for this section's rule. (1) Making bookkeeping mutations
+  `doltLocal`, or folding them into the next meaningful commit, **does not buy
+  flushes**: a local-only write costs the same root record as a versioned one,
+  and the commit it would drop is the 1.3 ms. So "every mutation of versioned
+  state is one `committedTransaction`" is **not narrowed**: nothing was measured
+  that it would save. The bookkeeping that would be the candidates, were the CPU
+  worth it, are `entityReserve`, `entityPrepareExecution`,
+  `entityAdvanceExecution` and the resource bindings (no user-meaningful history).
+  (2) The lever is the
+  number of transactions per call, and the biggest single contributor is the
+  nonce row. Replacing it (writing it in the call's own transaction, or holding
+  it in memory and persisting it lazily) changes the replay protection's
+  durability window and is a decision for the user; it is not made here.
 
 ### 4.3 Schema migrations as commits
 
@@ -741,12 +789,28 @@ interrupted fork is taken over (`replaceUnfinished`), and a retry after a lost
 receipt leaves the one object it holds. The clone receipt table stays: it is the
 reservation's proof that the copy is its own, not a journal.
 
-**Open, found by the P3 gate: `panel-tree-navigation` fails on P3 (4 of 4) and passes before it (2 of 2).** The
-navigated `browser~data` panel's runtime target is "not reachable": the panel runtime coordinator re-materializes the
-navigation entity three times where it did once, and the WorkspaceStateDO calls on that path took two to four times
-longer. Disabling only the Dolt commit made it pass 1 of 2. The cost of a commit per bookkeeping mutation (R1) arrived
-earlier than the benchmark gate of P5 expected; `HANDOFF-dolt-redesign.md` has the evidence and the next steps. Until it is
-understood P3 is not accepted.
+**`panel-tree-navigation` was not a P3 regression.** The P3 gate saw it fail 4 of 4 on
+P3 and pass 2 of 2 on `d1bfdec3f`. On `d1bfdec3f` rebuilt with only a call-latency
+trace it failed 3 of 3 (two with the same error as P3, one with a model error), and a
+deterministic script (`openPanel(data:...)`, `navigate`, then `state()` and `tree()`,
+run with `vibestudio eval run`) fails the same way on both builds, before and after the
+navigation. The failing call is `PanelHandle.state()` or `.tree()` on a **browser
+panel**: `_agent.*` is answered by the panel runtime inside a code panel, an external
+page has none, so the call addresses a `panel:` target that never connects and fails as
+`TARGET_NOT_REACHABLE`, reported as a recoverable `host_unavailable`. The test passes only
+when the model does not make that call. Two readings of the first evidence were wrong:
+"the coordinator re-materializes the entity three times" was the log line of
+`PanelExecutionReconciler.resume`, written for every `ensureExecutable` check (each
+acquire and each `ensureSlot`), almost all of which find the entity active and
+activate nothing (the pre-P3 server log has the same repeats); the line is now written
+only for a real activation. And the per-call slowdown is real but is not what fails the
+test: see the cost paragraph of §4.2 (every call to a Dolt object writes a replay nonce).
+Fixed on the Base side (`panelRuntime.ts`, `callPanelAgent`, test in
+`panelRuntime.test.ts`): on a browser panel the host answers the agent calls itself,
+`state()` with `{}` (an external page registers no state providers), `routes()` with the
+panel's URL parts, `tree()` and `snapshot()` with the document capture `snapshot()`
+already takes over CDP, and `setMode()` with `undefined`. That changes what these four
+return for a browser panel from a failure to a value, which is for the user to review.
 
 **Findings on the fork, from building this:**
 - The real engine enforces foreign keys, in SQLite cells and in Dolt cells; the
@@ -1780,6 +1844,9 @@ after P2, and P6 after P0 plus the cross-workspace carrier.
   - *Mitigation*: measure in P4 and P5. The benchmark covers 10k commits per
     cell: latency, bytes per commit, GC time, and checkout p95.
   - Bytes are kept out of Dolt (§5.10).
+  - *Measured at P3 (§4.2)*: the commit is about 1.3 ms and no extra flush; the
+    cost is one root record, about three flushes, per transaction, and every direct
+    call writes a replay nonce. Count transactions per call, not commits.
 - **R2. Facet and remote paths not yet exercised by Vibestudio.** Dolt facets
   and F7 are delivered, but Vibestudio runs neither. *Mitigation*: P0's probe
   covers a Dolt root; P2 is the smallest facet consumer; the facet relay and

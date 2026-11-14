@@ -16,7 +16,7 @@ Branch `feat/dolt-p0` (worktree `/home/werg/vibestudio-worktrees/dolt-p0`), cut 
 | 2. P0 Foundations | done and verified |
 | 3. P2a: heap residency by a hold; the host kernel lease deleted | **done and gated** (below) |
 | 4. P2b: the kernel as a facet of the owner's root; `evalService` and the `evalEngine` host schemas deleted | **not implemented**; probes verified, decisions D1 to D5 needed (`docs/dolt-redesign.md` §7.7) |
-| 5. P3 Durable services: `WorkspaceStateDO` (Dolt), the replaying import, the maintenance journal and `cloneDO` deleted | implemented and unit/host/real-fork gated; **one system-test regression is open** (`panel-tree-navigation`, "P3 results" below) |
+| 5. P3 Durable services: `WorkspaceStateDO` (Dolt), the replaying import, the maintenance journal and `cloneDO` deleted | **done and gated**; the `panel-tree-navigation` "regression" was a pre-P3 gap in browser-panel agent calls ("P3 follow-up" below), and every call to a Dolt object costs about three flushes (measured, a decision for the user) |
 | 6. P4 onward | not started |
 
 ## Commits
@@ -29,12 +29,19 @@ vibestudio `feat/dolt-p0` (this pass, newest last):
 5. `a31856181` workspace state: `WorkspaceStateDO`, a Dolt cell, replaces the SQLite `WorkspaceDO`; the import replays the retired store's history (P3)
 6. `80a744f9c` workspace state: format
 7. `a1d39adf9` storage: backup, restore, reset and retirement without a maintenance journal; `cloneDO` is `forkObjectStorage` (P3)
-8. (this handoff and the design doc) P3 results, §4.6 as built, the fresh-workspace legacy cell, the real-fork reverse-patch check
+8. P3 results, §4.6 as built, the fresh-workspace legacy cell, the real-fork reverse-patch check (`7e106506a`, `5697de08c`, `fb63135ac`)
+9. `132c51b48` panel execution: log an activation only when one happens; `VIBESTUDIO_DO_CALL_TRACE` (P3 follow-up)
+10. (this handoff and §4.2/§4.6 of the design doc) the follow-up's measurements and results
 
 Earlier: `72b682e86`, `1ca22c6f8`, `4a81ab2c7`, `7d5bc1775`, `01ef6ffe9`, `0019b6d35`.
 
 Base `feat/dolt-p2`: `a14ef7c` skills: the eval notebook heap is held until an explicit end, not for a
-30-minute idle lease (EVAL.md, TOOLS.md, WORKFLOW.md). The user's main Base checkout has uncommitted
+30-minute idle lease (EVAL.md, TOOLS.md, WORKFLOW.md); `473acbb` panels: agent calls on a browser panel are answered by the host
+(`panelRuntime.ts`, test, `PANEL_API.md`).
+
+Fork (`/home/werg/celld-worktrees/commit-cost`, branch `fix/dolt-commit-cost` from `unified-fork` `9440c29`, **not pushed**):
+`ed1010b` measures what a commit adds to a write and pins the root-record counts (tests and `docs/fork/design.md` only; the binary behaves as
+`9440c29`, so nothing is re-pinned here). The wip binary `/home/werg/celld-harness-bin/celld-uf-ed1010b-wip` was built for the e2e run; the worktree's `target/` is deleted. The user's main Base checkout has uncommitted
 edits to `skills/sandbox/EVAL.md`; expect a textual conflict there when this branch is merged.
 
 All commits use `--no-verify`: the pre-commit hook (`pnpm check:commit`) passes type-check and lint
@@ -205,25 +212,61 @@ P2a section above or `HANDOFF-celld-runtime.md`.
 | panels (5, no earlier numbers) | n/a | 2 pass (`browser-panel`, `panel-list-sources`), `browser-import-panel-lifecycle` ran no test (0 of 0), `create-panel` fails (model errors: `panelCdp.consoleHistory` without `page`; **fails the same way on d1bfdec3f**), **`panel-tree-navigation` fails 4 of 4 on P3 and passes 2 of 2 on `d1bfdec3f` (P2a, before P3)** |
 | the doctor boot | | the product boots on a fresh workspace with the new classes: "no retired SQLite store, nothing to import" |
 
-**Open regression, blocking: `panel-tree-navigation`.** The failing eval is `p.navigate('data:...')` then `p.tree()` on a
-`browser~data` panel: `PANEL_OPERATION_FAILED`, "Panel ... runtime target panel:nav-... is not reachable"
-(`TARGET_NOT_REACHABLE`, infrastructure). Evidence so far, no root cause:
-- the server log of a P3 run shows the panel runtime coordinator re-materializing the same navigation entity three times
-  ("Activating ... (durable recovery)" at 37, 113 and 127 ms) where the pre-P3 run activates it once (52 ms);
-  `ensureExecutable` is level-triggered by the coordinator, so this is host-lease churn while the eval holds its CDP session;
-- the WorkspaceStateDO calls on that path are slower: entity "identity" phases 26 to 200 ms (pre-P3 17 to 45 ms), the
-  `getDetail` read behind the activation 113 to 127 ms (pre-P3 28 to 52 ms);
-- with the Dolt commit disabled in `commit()` (a diagnostic build, reverted; the engine stays Dolt) it passed 1 of 2, so
-  the per-mutation commit and the engine each look implicated and neither is proven the cause. Samples are small.
-- not the cause: the data model (103 behaviour tests and the real-fork tests pass), the class rename (the same strings are
-  updated everywhere `rg` finds them), the migration (fresh workspace, "skipped").
-Next steps: (1) time WorkspaceStateDO calls in a product run against a pre-P3 build (the `DODispatch` slow-call reporter
-only warns at 10 s; log every call's latency per method); (2) bisect inside P3: a build whose `commit()` skips only the
-commit, then one that commits only at close/reopen/purge and the import; (3) read what in `panelRuntimeCoordinator` re-attempts
-a slot when `getDetail` is slow; (4) if the commit is the cost, the R1 mitigation applies sooner than planned: commit the
-bookkeeping mutations (`entityReserve`, `entityPrepareExecution`, `entityAdvanceExecution`, resource bindings) lazily with the
-next domain commit, which needs the "transactional class" rule of §4.2 relaxed for them, a decision for the user.
+### P3 follow-up: the "regression", measured
 
+**`panel-tree-navigation` was not a P3 regression** (`docs/dolt-redesign.md` §4.6 has the account). On `d1bfdec3f` rebuilt
+with only a call-latency trace it failed 3 of 3 (twice with the same `TARGET_NOT_REACHABLE` as P3, once with a model error), and a
+script with no model (`openPanel(data:...)`, `navigate`, `state()`, `tree()`, via `vibestudio eval run`) fails the same way on both
+builds, before and after the navigation. The call is `PanelHandle.state()` or `.tree()` on a **browser panel**: `_agent.*` is
+answered by the panel runtime of a code panel, an external page has none, so it addresses a `panel:` target that never connects.
+The test passes only when the model does not make that call. The earlier evidence, re-read:
+- "re-materialized three times" was the log line of `PanelExecutionReconciler.resume`, written for every `ensureExecutable`
+  (each acquire and `ensureSlot`); nearly all find the entity active and activate nothing. The pre-P3 server log has the same repeats.
+  It is now logged by the activation itself (`132c51b48`). No race, timeout or revision check in the coordinator or the panel runtime
+  is involved; there is no latency-exposed correctness bug there.
+- "disabling the commit passed 1 of 2" was a model sample, not a signal.
+
+**Fixed (Base, `473acbb`, for the user to review):** on a browser panel the host answers the agent calls: `state()` is `{}`, `routes()`
+the URL parts, `tree()` and `snapshot()` the CDP document capture `snapshot()` already takes, `setMode()` `undefined`. It was a failure
+reported as a recoverable `host_unavailable` that invites retries. Test: `panelRuntime.test.ts`.
+
+**What is slower, measured.** `VIBESTUDIO_DO_CALL_TRACE=all` (or a label substring) on the server logs each `DODispatch` call's latency.
+Same eval (open a data panel, navigate, state, tree, cdp) four times on each build; mean ms per call, `d1bfdec3f` against P3:
+`panelTreeDetail` 35 to 64 (58 calls per run), `entityResolve` 36 to 72, `contextEdgeListByChild` 35 to 58, `alarmClear` 41 to 67,
+`alarmNextWakeAt` 41 to 68, `slotCreate` 36 to 94, `slotCommitPreparedNavigation` 35 to 127, `entityActivate` 30 to 116,
+`entityRetire` 29 to 159; about 190 calls per run on both. `navigate` went from 1.7 s to 2.2 to 3.5 s, `openPanel` from 2.0 to 3.0 to 3.7 s.
+**Cause: every transaction on a Dolt cell is a root record and a flush, and every call writes one.** The node under `strace -f`
+(wrapper via `VIBESTUDIO_CELLD_BIN`) showed 228 calls to `WorkspaceStateDO` in a 15 s window as 233 flushes of the cell file, 208 of the
+replication segments and 342 of the node index's WAL: a read costs as much as a write. The writer is the replay nonce
+(`DurableDirectRpcNonceLedger.consume`, a `DELETE` and an `INSERT` into `vsl_direct_rpc_nonces`, local, per direct RPC). It is an
+inference from the flush count and the code, not a bypass experiment. The commit itself is cheap (fork, release, same NVMe, 200 writes
+per shape): write 6.5 ms, 1 root record, 1 flush; the same in a transaction with `{ commit }` 7.8 ms, 1 root record, 1 flush; the same
+plus a local-table write 7.8 ms, 1, 1; write then a separate commit 13.5 ms, 2, 2; a write to a local table only 6.3 ms, 1, 1.
+**So item (a) does not apply** (a commit in the transaction costs no flush) and **(b) buys nothing**: `doltLocal` does not avoid the root
+record, and folding bookkeeping into the next commit saves the 1.3 ms of CPU. `docs/dolt-redesign.md` §4.2 records this and that "every
+mutation of versioned state is one commit" is **not narrowed**. The lever is transactions per call; the options, all for the user:
+the nonce written in the call's own transaction; the nonce held in memory and persisted lazily (a replay window after a crash or
+eviction within the attestation lifetime: a security decision); a fork mode in which a transaction that writes only `doltLocal` tables
+shares the next durable step's flush (changes what "local state survives a kill" promises).
+
+**Gate, P3 build + the Base fix, one test per invocation, concurrency 1, 420 s, `openai-codex:gpt-6-luna`:**
+
+| Lane | Result |
+| --- | --- |
+| `panel-tree-navigation` | **3 of 3** pass with the fix (before it: P3 failed 5 of 5 as first measured, 4 in the P3 report and 1 here, and `d1bfdec3f` 3 of 3; an intermediate sample on P3, while the first draft of the fix was in place, went 2 of 3) |
+| panels | `browser-panel`, `panel-list-sources` pass; `create-panel` fails (model errors; fails the same way on `d1bfdec3f`, unchanged); `browser-import-panel-lifecycle` not installed in this workspace |
+| smoke | **4 of 4** (`file-search-read-tools` ran no `grep` once, passed twice on re-run, as in the P3 report) |
+| workers | first pass 7 of 9 (`dynamic-workspace-service`, `installed-workspace-service-consumer` failed on model errors); re-run: both pass (`dynamic-workspace-service` twice), so all nine have passed on this build |
+| harness-resilience | first pass 4 of 5 (`eval-huge-return-bounded-terminal`: the model's own `JSON.parse` of a truncated value), re-run passes: **5 of 5** |
+| `call-do-method` on detached `d1bfdec3f` | **fails 2 of 2** (it passed once of three on P3) |
+| `dynamic-workspace-service` on detached `d1bfdec3f` | passes 2 of 2 (P3: 2 of 3 in this pass, 0 of 2 in the P3 report): the failures are model errors, not a state difference I can show |
+
+`pnpm type-check`, `pnpm lint` clean; host vitest `doDispatch`, `panelExecutionReconciler`, `panelRuntimeCoordinator`, `panelRuntimeService`
+109 pass; Base `panelRuntime.test.ts` 57 pass (userland runner, `--template base`). Fork: `cargo test -p celld` 123 pass, 2 ignored (the
+benchmarks), `celld-ltx` dolt tests 7 pass, `tests/e2e/run --no-slow` exit 0 (34 pass, 1 known-failing, 2 skipped), `examples/dolt`
+`demo.sh` and `sqlite-regression.sh`, `dolt-facets`, `dolt-remotes` `demo.sh` and `cluster.sh` pass (`CELLD_ESBUILD` set).
+`check:runtime-docs` fails on Base's generated `RUNTIME_API.md`/`WORKERS.md` (the user's uncommitted Base edit adds
+`panelTree.listPresentationTargets`); it fails without these changes. The detached `d1bfdec3f` worktree is removed.
 
 **Fork gaps found by P3:** none that block. Observations that shaped the work: the real engine enforces foreign keys
 in SQLite and Dolt cells (the fake does not); `dolt_status` is readable inside a `{ commit }` transaction;
@@ -242,7 +285,8 @@ patch of `dolt.diff` applied as SQL.
 - A **system test for panel close and reopen, `workers.resetStorage` and a restore round trip** does not exist in
   the catalog (275 tests; none exercises them). The coverage is the real-fork tests (`universalDoHost`, `workspaceStateCelld`);
   an acceptance test that drives the panel tree through the agent is worth adding to the Base `system-testing` skill.
-- Measure **commit volume** (R1): every mutation of the workspace state is a commit; GC rewrites the file. Not measured here.
+- **Commit volume** (R1): the per-commit cost is measured (§4.2). The nonce and the per-call flushes are the open cost; GC time over many commits is not measured.
+- Decide the per-call nonce options above.
 - The import's **cost on a large workspace** is not measured (one commit per event, about one to two ms each on the
   real engine in the tests); `replay` calls are bounded by `budgetMs` so the start reports progress.
 
@@ -261,6 +305,9 @@ systemd-run --user --scope --quiet -p MemoryMax=6G -p MemorySwapMax=0 npx vitest
   src/server/celldNative.integration.test.ts src/server/nativeSqlitePayloadCelld.test.ts src/server/celldMigration.integration.test.ts \
   src/server/nativeAlarmRetirementCelld.test.ts src/server/nativeModelTransportCelld.test.ts src/server/internalStorageDo.test.ts \
   src/server/doltDurableCelld.test.ts src/server/doltEvalKernelCelld.test.ts src/server/ownerKernelPathCelld.test.ts
+# per-call latency of every DO call in a server log: VIBESTUDIO_DO_CALL_TRACE=all (or a label substring such as WorkspaceStateDO) in the
+# environment of `doctor`; a model-free repro of the navigation: `node --import tsx src/dev/runCli.ts --instance ID agent attach default`, then
+# `... eval run FILE --approval-level 2 --timeout 150000` (FILE: openPanel(data:...), navigate, state(), tree())
 # system tests: a fresh instance per 3 to 4 tests, one test per `run`, concurrency 1
 systemd-run --user --scope --unit=p2-inst -p MemoryMax=6G -p MemorySwapMax=0 --quiet pnpm system-test --instance dolt-p2 doctor
 pnpm system-test --instance dolt-p2 run eval-cancel-run --concurrency 1 --test-timeout-ms 420000
