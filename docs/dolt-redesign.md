@@ -1858,6 +1858,29 @@ happens" polls `events` or issues `await` with a short `waitMs`.
 - **Forks.** A forked entity forks its hosted classes' durable state with it
   (F3). Heap state is never forked.
 
+**Measured: the Dolt write cost of one kernel run** (2026-11-14, celld `ec0d6f5`,
+`VIBESTUDIO_DO_CALL_TRACE=all`, a `vibestudio eval run` of `return 1 + 1` twenty times in
+one session of a fresh instance, the node under `strace -f -e fsync,fdatasync,sync_file_range`;
+an idle 20 s window as the baseline: 0.95 flushes per second for the whole node):
+
+| What                                                                 | Per run                                                                                                                                              |
+| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| flushes (`fsync`) of the kernel's own cell file (`db.sqlite`)        | **11.0** (220 over 20 runs)                                                                                                                          |
+| of which named commits                                               | 2 by construction (`eval: <runId> accepted`, `eval: <runId> done`); the other 9 are writes outside a commit (run events, checkpoints, state), each its own transaction and flush |
+| flushes of the node index WAL (shared by every cell, so an upper bound) | 5.0 (99 over 20 runs)                                                                                                                              |
+| replication segments written (`ltx`)                                 | about 0.25 (the node batches them)                                                                                                                   |
+| the session entity's own SQLite cell                                 | 0.15 (3 WAL flushes in the window)                                                                                                                   |
+| `SessionDO.start` (route, hold check, `accepted` commit, schedule)   | 78.7 ms mean                                                                                                                                         |
+| the pull until the terminal row (`get`: execution plus the terminal commit) | 121.5 ms mean                                                                                                                                  |
+
+At 6.5 ms per commit-sized flush (§4.2: write 6.5 ms, one root record, one flush) the 11 flushes are
+about 70 ms of the 200 ms from accepting a trivial run to its terminal row, a third. **The lever is
+not the two commits but the nine uncommitted writes**: wrapping the run's lifecycle writes in the
+transaction of the commit they precede (the `accepted` row with its two state events; the terminal
+row with its events) would take the run to about 4 flushes. It is a kernel change, not measured
+beyond this count, and not made here. A run with many outbound calls pays one more flush per
+checkpoint (not measured).
+
 ### 7.8 Host-process safety (D4): measured
 
 The host's per-run liveness supervisor exists because a synchronous guest loop
@@ -1890,6 +1913,34 @@ So `start` carries the run's `timeoutMs` as its CPU limit
 (`kernelStartLimits`, Base `workers/eval-kernel/contract.ts`, applied by
 `hostCode(...).limited`), and a run's own timeout timer, already due when the
 spin is ended, settles it. The decision:
+
+**What the product kernel does after the limit ends its run (found by driving it, not by the
+probe).** `vibestudio eval run` of `while (true) {}` with `--timeout 4000` on a fresh instance, kernel
+as built:
+
+- the spin ends at about 4 s (`celld::ops: an op was handed to an event that no longer takes ops` at
+  +4.0 s, the deadline timer's continuation): the limit works on the real kernel;
+- **the next calls to that kernel's entity never return**: not another `eval run` (waited 100 s), not
+  `eval repl-reset`. Another session's kernel (another cell, same loaded unit) is unaffected. Before
+  this pass the same hang would come after 600 s of CPU, at the unit's limit, so the limit made the
+  failure arrive sooner and did not create it; but it is the failure the host's liveness
+  supervisor used to turn into a node restart, and nothing does now;
+- the minimal probe (`celldCpuWatchdogCelld.test.ts`: a Dolt facet in a loaded worker, root with a hold,
+  `codegen`, a spin inside `new Function`, a deadline timer, a commit on both sides, requests queued
+  during the spin) does **not** reproduce it: the facet and root answer afterwards. It does show that the
+  continuation of work left under `waitUntil` (the timer callback, the terminal commit) never runs after
+  the limit ends the call. What differs in the product kernel is not known (SES, the shared unit, the
+  outbound RPC path are the candidates). So this is a **fork gap without a minimal repro**: the repro is
+  the CLI sequence above against the product build (instance, `agent attach`, the two commands), and the
+  celld request is that a call ended by its CPU limit must leave its cell able to take the next event.
+
+What is built because of it, each tested and none of it sufficient alone: a run's own timer cannot be trusted
+to settle it, so the kernel settles an overdue run on the next pull (`reapOverdueRuns`, for runs with a
+`timeoutMs`; a run with none is ended by `cancel`); a hosted instance can be restarted without losing its
+storage (`hostCode(...).restart()`, root op `restart`), and `callOrRestart` asks for that when a call overruns
+a generous budget and answers the caller with `EUNRESPONSIVE`. If it is the cell and not the facet that
+stopped, the restart request does not return either, which the caller no longer waits for; the node-level
+`recoverUnresponsiveSandbox` is then the only recovery, and no caller has it.
 
 - the executable admission sets `limits.cpuMs` for every unit that holds
   `codegen` (a bounded CPU budget per invocation, a manifest value; the kernel's
