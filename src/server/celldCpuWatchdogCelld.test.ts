@@ -39,6 +39,28 @@ export class Kernel {
       })());
       return Response.json({ started: true });
     }
+    if (url.pathname === '/run') {
+      // What the product kernel's run does (EvalKernel.runEval): answer at once, run the cell
+      // under waitUntil, arm a deadline timer, and settle the run by racing the cell against the
+      // deadline's abort. A spinning cell's promise never settles once the CPU limit unwinds it.
+      const deadlineMs = Number(url.searchParams.get('deadline'));
+      this.run = { status: 'running' };
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), deadlineMs);
+      const ran = (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        for (let i = 0; i < 4e12; i++) { if (i % 1e6 === 0 && Date.now() > Date.now() + 1e9) break; }
+        return 'done';
+      })();
+      const aborted = new Promise((resolve) => controller.signal.addEventListener('abort', () => resolve('aborted')));
+      this.ctx.waitUntil((async () => {
+        const first = await Promise.race([ran, aborted]);
+        clearTimeout(timer);
+        this.run = { status: first === 'aborted' ? 'settled-by-deadline' : 'done', at: Date.now() };
+      })());
+      return Response.json({ started: true });
+    }
+    if (url.pathname === '/state') return Response.json({ run: this.run ?? null });
     return Response.json({ ok: true, spins: this.spins, born: this.born ??= String(Math.random()) });
   }
 }`;
@@ -188,6 +210,35 @@ it.skipIf(!celldTestBinary())(
     expect(Date.now() - detachedStarted).toBeLessThan(6_000);
     // The same heap: an ended run is not a lost kernel.
     expect(born).toBeTruthy();
+  },
+  120_000
+);
+
+it.skipIf(!celldTestBinary())(
+  "a run ended by its call's CPU limit is settled by its own deadline timer, and the same kernel answers the next call (celld 2d1749d)",
+  async () => {
+    const probe = await probeWith(null);
+    const base = probe.endpoint;
+    expect((await timed(`${base}/kernel/info?object=owner`, 20_000)).status).toBe(200);
+    const startedAt = Date.now();
+    // The deadline (1000 ms) is due before the call's CPU limit (1500 ms) ends the spin: the timer
+    // fires only once the isolate is free again, and its continuation has to run after the limit.
+    const started = await timed(`${base}/kernel/run?object=owner&cpu=1500&deadline=1000`, 30_000);
+    expect(started.status).toBe(200);
+    let state: { run: { status: string } | null } = { run: null };
+    for (let i = 0; i < 40; i++) {
+      const response = await timed(`${base}/kernel/state?object=owner`, 20_000);
+      expect(response.status).toBe(200);
+      state = JSON.parse(response.body) as typeof state;
+      if (state.run && state.run.status !== "running") break;
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    console.log("run state after the limit:", JSON.stringify(state), "after", Date.now() - startedAt, "ms");
+    expect(state.run?.status).toBe("settled-by-deadline");
+    expect(Date.now() - startedAt).toBeLessThan(15_000);
+    // The next run on the same kernel is admitted and settles the same way.
+    const again = await timed(`${base}/kernel/run?object=owner&cpu=1500&deadline=1000`, 30_000);
+    expect(again.status).toBe(200);
   },
   120_000
 );
