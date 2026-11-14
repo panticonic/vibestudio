@@ -16,7 +16,7 @@ Branch `feat/dolt-p0` (worktree `/home/werg/vibestudio-worktrees/dolt-p0`), cut 
 | 2. P0 Foundations | done and verified |
 | 3. P2a: heap residency by a hold; the host kernel lease deleted | **done and gated** (below) |
 | 4. P2b: the kernel as a facet of the owner's root; `evalService` and the `evalEngine` host schemas deleted | **not implemented**; probes verified, decisions D1 to D5 needed (`docs/dolt-redesign.md` §7.7) |
-| 5. P3 Durable services: `WorkspaceStateDO` (Dolt), the replaying import, the maintenance journal and `cloneDO` deleted | **done and gated** ("P3" below) |
+| 5. P3 Durable services: `WorkspaceStateDO` (Dolt), the replaying import, the maintenance journal and `cloneDO` deleted | implemented and unit/host/real-fork gated; **one system-test regression is open** (`panel-tree-navigation`, "P3 results" below) |
 | 6. P4 onward | not started |
 
 ## Commits
@@ -192,7 +192,38 @@ explained hit: the adoption of the earlier journal (`durableObjectStorage.ts` an
 | host vitest `src/server/services`, `doDispatch`, `workerdRpcRelay`, `panelExecutionReconciler`, `workspaceServices`, `rpcServer`, `workspaceEntityStore`, `runtimeManager`, `durableObjectStorage`, `workspaceStateMigration` | all pass except `runtimeService.test.ts` "starts an unbound native execution clone fresh" (pre-existing on the cutover baseline `73e5ba525`, documented in the cutover handoff) |
 | real-fork host suites, one worker (P2 list + `workspaceStateCelld.test.ts`, `universalDoHost` with the new fork-idempotency test, `internalStorageWorkerd` on `WorkspaceStateDO`) | 13 files, 63 pass, 2 skipped, 0 fail (before: 12 files, 60 pass, 2 skipped) |
 | `workspaceStateCelld.test.ts` on the real fork | 3 tests: the store installs, one commit per mutation, close undone by a durable reset, local state across a kill, the reverse patch of a close; the import end to end with the node killed at four points mid-import and an empty retired store |
-LANES
+
+System-test lanes, real models (`openai-codex:gpt-6-luna`), fork 9440c29, Base worktree as in "How the test runs find the
+Base worktree", a fresh instance per batch of 4 to 5 tests, one test per `run`, 420 s per test, concurrency 1. "Before" is the
+P2a section above or `HANDOFF-celld-runtime.md`.
+
+| Lane | Before | After (P3) |
+| --- | --- | --- |
+| smoke (4) | 4 pass | **4 pass** (first sample 2 pass: `build-service` hit an authority prompt after the model chose `build.getBuildNpm`, `file-search-read-tools` ran no `grep`; both passed on rerun) |
+| workers (9) | 5 pass, 4 timeout (cutover; base: `call-do-method` and `installed-workspace-service-consumer` fail) | **7 pass** (`list-sources`, `create-worker`, `list-workers`, `create-destroy`, `worker-env`, `worker-do-sql-persistence`, `installed-workspace-service-consumer`), 2 fail twice each: `call-do-method` (`FixtureWorkerDO missing from launchable class list`, fails on the cutover base too; not re-run on base here) and `dynamic-workspace-service` (model errors: a `package.json` that is not valid JSON, an `rpc.call` descriptor misuse; passed on the cutover base, not re-run on base here) |
+| harness-resilience (5) | 4 pass, 1 timeout | **5 pass** (`invalid-tool-args-visible-retry` first showed "eval interrupted by restart": celld's `SELF-FENCE: node lease not renewed within TTL` after the host stalled for about 65 minutes, then passed twice) |
+| panels (5, no earlier numbers) | n/a | 2 pass (`browser-panel`, `panel-list-sources`), `browser-import-panel-lifecycle` ran no test (0 of 0), `create-panel` fails (model errors: `panelCdp.consoleHistory` without `page`; **fails the same way on d1bfdec3f**), **`panel-tree-navigation` fails 4 of 4 on P3 and passes 2 of 2 on `d1bfdec3f` (P2a, before P3)** |
+| the doctor boot | | the product boots on a fresh workspace with the new classes: "no retired SQLite store, nothing to import" |
+
+**Open regression, blocking: `panel-tree-navigation`.** The failing eval is `p.navigate('data:...')` then `p.tree()` on a
+`browser~data` panel: `PANEL_OPERATION_FAILED`, "Panel ... runtime target panel:nav-... is not reachable"
+(`TARGET_NOT_REACHABLE`, infrastructure). Evidence so far, no root cause:
+- the server log of a P3 run shows the panel runtime coordinator re-materializing the same navigation entity three times
+  ("Activating ... (durable recovery)" at 37, 113 and 127 ms) where the pre-P3 run activates it once (52 ms);
+  `ensureExecutable` is level-triggered by the coordinator, so this is host-lease churn while the eval holds its CDP session;
+- the WorkspaceStateDO calls on that path are slower: entity "identity" phases 26 to 200 ms (pre-P3 17 to 45 ms), the
+  `getDetail` read behind the activation 113 to 127 ms (pre-P3 28 to 52 ms);
+- with the Dolt commit disabled in `commit()` (a diagnostic build, reverted; the engine stays Dolt) it passed 1 of 2, so
+  the per-mutation commit and the engine each look implicated and neither is proven the cause. Samples are small.
+- not the cause: the data model (103 behaviour tests and the real-fork tests pass), the class rename (the same strings are
+  updated everywhere `rg` finds them), the migration (fresh workspace, "skipped").
+Next steps: (1) time WorkspaceStateDO calls in a product run against a pre-P3 build (the `DODispatch` slow-call reporter
+only warns at 10 s; log every call's latency per method); (2) bisect inside P3: a build whose `commit()` skips only the
+commit, then one that commits only at close/reopen/purge and the import; (3) read what in `panelRuntimeCoordinator` re-attempts
+a slot when `getDetail` is slow; (4) if the commit is the cost, the R1 mitigation applies sooner than planned: commit the
+bookkeeping mutations (`entityReserve`, `entityPrepareExecution`, `entityAdvanceExecution`, resource bindings) lazily with the
+next domain commit, which needs the "transactional class" rule of §4.2 relaxed for them, a decision for the user.
+
 
 **Fork gaps found by P3:** none that block. Observations that shaped the work: the real engine enforces foreign keys
 in SQLite and Dolt cells (the fake does not); `dolt_status` is readable inside a `{ commit }` transaction;

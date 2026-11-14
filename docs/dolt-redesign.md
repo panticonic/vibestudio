@@ -741,6 +741,13 @@ interrupted fork is taken over (`replaceUnfinished`), and a retry after a lost
 receipt leaves the one object it holds. The clone receipt table stays: it is the
 reservation's proof that the copy is its own, not a journal.
 
+**Open, found by the P3 gate: `panel-tree-navigation` fails on P3 (4 of 4) and passes before it (2 of 2).** The
+navigated `browser~data` panel's runtime target is "not reachable": the panel runtime coordinator re-materializes the
+navigation entity three times where it did once, and the WorkspaceStateDO calls on that path took two to four times
+longer. Disabling only the Dolt commit made it pass 1 of 2. The cost of a commit per bookkeeping mutation (R1) arrived
+earlier than the benchmark gate of P5 expected; `HANDOFF-dolt-redesign.md` has the evidence and the next steps. Until it is
+understood P3 is not accepted.
+
 **Findings on the fork, from building this:**
 - The real engine enforces foreign keys, in SQLite cells and in Dolt cells; the
   fake does not. Anything that inserts rows (the importer, a test seeding a
