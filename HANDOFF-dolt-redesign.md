@@ -111,7 +111,7 @@ Unit and integration (all inside `systemd-run -p MemoryMax=6G`, system tests at 
 | `vitest run packages/durable packages/shared packages/service-schemas packages/builtin` | 182 files, 1927 tests pass (durable alone: 11 files, 129 tests, 2 new for the schema text rule) |
 | host vitest: `runtimeManager`, `evalService`, `serviceAuthorityMatrix`, `authorityRuntime` | 4 files, 168 pass |
 | host vitest on the real fork 9440c29, one worker: `dynamicWorkerHost`, `universalDoHost` (+ the confinement test), `internalStorageWorkerd`, `celldNative.integration`, `nativeSqlitePayloadCelld`, `celldMigration.integration`, `nativeAlarmRetirementCelld`, `nativeModelTransportCelld`, `internalStorageDo`, `doltDurableCelld` (hard-reset canary now a plain test), `doltEvalKernelCelld`, `ownerKernelPathCelld` | 12 files, 60 pass, 2 skipped, 0 fail (before: 10 files, 57 pass, 2 skipped) |
-| `scripts/celld-runtime-smoke.ts` | passes |
+| `CELLD=native/celld/linux-x64/celld npx tsx scripts/celld-runtime-smoke.ts <scratch dir>` | passes (P3 build) |
 
 System-test lanes, real models (`openai-codex:gpt-6-luna`), one test per `run`, 420 s per-test timeout, fork 9440c29,
 Base worktree as above. "Before" is `HANDOFF-celld-runtime.md` (8a4ab46 unless stated).
