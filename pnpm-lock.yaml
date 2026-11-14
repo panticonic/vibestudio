@@ -1170,6 +1170,9 @@ importers:
       '@vibestudio/workspace-contracts':
         specifier: workspace:*
         version: link:../workspace-contracts
+      ses:
+        specifier: ^2.2.0
+        version: 2.2.0
       zod:
         specifier: ^3.25.76
         version: 3.25.76
