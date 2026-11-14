@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { serializeRpcFailure } from "@vibestudio/rpc";
+import { DurableObjectBase } from "./index.js";
+import { createTestDO } from "./test-utils.js";
 import {
   createCodeHostClient,
   isHostedCall,
@@ -126,5 +128,28 @@ describe("createCodeHostClient", () => {
     });
     const kernel = await failing({ name: "repl", executable: { source: "w/k", className: "K" } });
     await expect(kernel.call("boom")).rejects.toThrow("kernel failure");
+  });
+});
+
+class Plain extends DurableObjectBase {
+  protected createTables(): void {}
+  selfId(): string {
+    return this.rpcSelfId;
+  }
+  kernel() {
+    return this.hostCode({ name: "k", executable: { source: "w/k", className: "K" } });
+  }
+}
+
+describe("a product class has no per-object props", () => {
+  it("still has an identity, and cannot host code", async () => {
+    const { instance } = await createTestDO(Plain, {
+      WORKER_SOURCE: "s",
+      WORKER_CLASS_NAME: "C",
+      __objectKey: "k1",
+    });
+    (instance as unknown as { ctx: { props: unknown } }).ctx.props = undefined;
+    expect(instance.selfId()).toBe("do:s:C:k1");
+    await expect(instance.kernel()).rejects.toMatchObject({ code: "EUNAVAILABLE" });
   });
 });

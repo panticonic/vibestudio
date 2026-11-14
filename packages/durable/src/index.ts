@@ -260,6 +260,11 @@ export abstract class DurableObjectBase {
 
   protected abstract createTables(): void | Promise<void>;
 
+  /** A product class has no per-object props (`ctx.props` is absent there). */
+  private codeHostProps(): CodeHostProps {
+    return (this.ctx.props ?? {}) as CodeHostProps;
+  }
+
   private codeHostClient: ((spec: HostCodeSpec) => Promise<HostedCode>) | null = null;
 
   /**
@@ -271,7 +276,7 @@ export abstract class DurableObjectBase {
   protected hostCode(spec: HostCodeSpec): Promise<HostedCode> {
     this.codeHostClient ??= createCodeHostClient({
       env: this.env,
-      props: this.ctx.props as CodeHostProps,
+      props: this.codeHostProps(),
     });
     return this.codeHostClient(spec);
   }
@@ -576,7 +581,7 @@ export abstract class DurableObjectBase {
    */
   protected get rpcSelfId(): string {
     // A hosted class acts as the entity that hosts it (§7.2).
-    const host = (this.ctx.props as CodeHostProps).host;
+    const host = this.codeHostProps().host;
     if (host) return host.entityId;
     const source = String(this.env["WORKER_SOURCE"] ?? "");
     const className = String(this.env["WORKER_CLASS_NAME"] ?? "");
@@ -610,7 +615,7 @@ export abstract class DurableObjectBase {
 
   private connectionlessClient(): InternalConnectionlessRpcClient {
     if (!this.connectionless) {
-      const token = (this.ctx.props as CodeHostProps).host?.token ?? this.env["RPC_AUTH_TOKEN"];
+      const token = this.codeHostProps().host?.token ?? this.env["RPC_AUTH_TOKEN"];
       const source = this.env["WORKER_SOURCE"];
       const className = this.env["WORKER_CLASS_NAME"];
       const gatewayUrl = this.env["GATEWAY_URL"];
@@ -908,7 +913,7 @@ export abstract class DurableObjectBase {
       // Only the hosting root can name this facet (§7.2): no caller check applies.
       return serveHostedCall({
         instance: this,
-        props: this.ctx.props as CodeHostProps,
+        props: this.codeHostProps(),
         method,
         body: await request.text(),
         onRevoked: (reason) => this.onHostedRevoked(reason),
