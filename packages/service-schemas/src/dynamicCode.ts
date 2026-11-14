@@ -193,10 +193,74 @@ export const hostedCodeMethods = {
   end: hostedCall<[], { ok: true }>("end"),
 } as const;
 
+/**
+ * The calls a caller makes on one admitted run, once it has the hosting entity's id: pull
+ * (`get`, `await`, `events`), `cancel`, and `release`. Everything is the caller's own pull on the
+ * hosting entity; nothing is routed through the host but the release of the admission.
+ */
+export function createDynamicCodeRunObserver(
+  rpc: Pick<RpcCaller, "call">,
+  route: { hostId: string; runId: string }
+) {
+  const main = createMainRpcCaller(rpc);
+  const on = <A extends unknown[], R>(method: RpcMethod<A, R>, args: A, options?: RpcCallOptions) =>
+    rpc.call(route.hostId, method, args, options);
+  return {
+    route,
+    get: () => on(hostedCodeMethods.get, [route.runId]),
+    receipt: () => on(hostedCodeMethods.receipt, [route.runId]),
+    await: (waitMs: number, options?: RpcCallOptions) =>
+      on(hostedCodeMethods.await, [route.runId, { waitMs }], options),
+    events: (after: number, limit: number) =>
+      on(hostedCodeMethods.events, [route.runId, { after, limit }]),
+    cancel: () => on(hostedCodeMethods.cancel, [route.runId]),
+    /** Close the host's admission once the run is terminal; releasing twice is harmless. */
+    release: () => main("dynamicCode.release", [{ runId: route.runId, hostId: route.hostId }]),
+  };
+}
+
+/** The scope-level calls on a hosting entity: they name no run. */
+export function createDynamicCodeScope(rpc: Pick<RpcCaller, "call">, hostId: string) {
+  return {
+    readScopeTextPage: (key: string, offset: number, limit: number) =>
+      rpc.call(hostId, hostedCodeMethods.readScopeTextPage, [key, offset, limit]),
+    deleteScopeValue: (key: string) => rpc.call(hostId, hostedCodeMethods.deleteScopeValue, [key]),
+  };
+}
+
+/**
+ * Admit a run and start it on its hosting entity without waiting for it: the caller keeps the
+ * observer (and the `hostId`) to pull, cancel and release later, possibly from another activation.
+ */
+export async function startDynamicCodeRun(
+  rpc: Pick<RpcCaller, "call">,
+  input: EvalStartInput
+): Promise<{
+  admission: DynamicCodeAdmission;
+  observer: ReturnType<typeof createDynamicCodeRunObserver>;
+}> {
+  const main = createMainRpcCaller(rpc);
+  const { resultReceiver: _receiver, ...intent } = input;
+  const admission = await main("dynamicCode.admit", [intent]);
+  const observer = createDynamicCodeRunObserver(rpc, {
+    hostId: admission.hostId,
+    runId: admission.runId,
+  });
+  try {
+    await rpc.call(admission.hostId, hostedCodeMethods.start, [admission.start, admission.nonce]);
+  } catch (error) {
+    await observer.release().catch(() => undefined);
+    throw error;
+  }
+  return { admission, observer };
+}
+
 export interface DynamicCodeExecutorOptions {
   signal?: AbortSignal;
   /** Receives each page of the run's events, in order, as they are pulled (console, authority, state). */
   onEvents?: (events: EvalRunEvent[]) => void;
+  /** Called once the host admitted the run, with the hosting entity's id (scope-level calls name it). */
+  onAdmitted?: (admission: DynamicCodeAdmission) => void;
   /**
    * How long one pull blocks before the events are read again. A run that ends ends the
    * wait at once; this bounds the latency of live output. Default 400 ms.
@@ -213,41 +277,27 @@ export function createDynamicCodeExecutor(
   rpc: Pick<RpcCaller, "call">,
   options: DynamicCodeExecutorOptions = {}
 ): (input: EvalStartInput) => Promise<RunResult> {
-  const main = createMainRpcCaller(rpc);
   return async (input) => {
     if (options.signal?.aborted) throw abortReason(options.signal);
-    const { resultReceiver: _receiver, ...intent } = input;
-    const admission = await main("dynamicCode.admit", [intent]);
-    const { runId, hostId } = admission;
-    const on = <A extends unknown[], R>(
-      method: RpcMethod<A, R>,
-      args: A,
-      callOptions?: RpcCallOptions
-    ): Promise<R> => rpc.call(hostId, method, args, callOptions);
-    let released = false;
-    const release = async () => {
-      if (released) return;
-      released = true;
-      await main("dynamicCode.release", [{ runId, hostId }]).catch(() => undefined);
-    };
+    const { admission, observer } = await startDynamicCodeRun(rpc, input);
+    const { runId } = admission;
+    options.onAdmitted?.(admission);
     let cancelled = false;
     const cancel = async (): Promise<never> => {
       if (!cancelled) {
         cancelled = true;
-        await on(hostedCodeMethods.cancel, [runId]).catch(() => undefined);
+        await observer.cancel().catch(() => undefined);
       }
       throw abortReason(options.signal);
     };
     try {
-      await on(hostedCodeMethods.start, [admission.start, admission.nonce]);
       let after = 0;
       for (;;) {
         if (options.signal?.aborted) return await cancel();
         let snapshot: RunStatus;
         try {
-          snapshot = await on(
-            hostedCodeMethods.await,
-            [runId, { waitMs: options.waitMs ?? 400 }],
+          snapshot = await observer.await(
+            options.waitMs ?? 400,
             options.signal ? { signal: options.signal } : undefined
           );
         } catch (error) {
@@ -255,7 +305,7 @@ export function createDynamicCodeExecutor(
           throw error;
         }
         for (;;) {
-          const page = await on(hostedCodeMethods.events, [runId, { after, limit: 256 }]);
+          const page = await observer.events(after, 256);
           after = page.next;
           if (page.events.length > 0) options.onEvents?.(page.events);
           if (!page.hasMore) break;
@@ -267,7 +317,7 @@ export function createDynamicCodeExecutor(
         }
       }
     } finally {
-      await release();
+      await observer.release().catch(() => undefined);
     }
   };
 }
