@@ -1567,6 +1567,39 @@ describe("createEvalService", () => {
     });
   });
 
+  it("tells an agent receiver of the terminal row it pulled from the kernel, until the receiver acknowledges", async () => {
+    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
+    const domain = new FakeEvalDomain();
+    let receipts = 0;
+    domain.getRunReceipt = (runId: string) => ({
+      runId,
+      runDigest: "d".repeat(64),
+      resultDigest: "e".repeat(64),
+      result: { success: true, console: "" },
+      // The receiver commits the result only on the second hint.
+      acknowledged: ++receipts > 2,
+    });
+    const { service, calls } = createHarness({ [ownerId]: "ctx_agent" }, { evalDomain: domain });
+
+    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+      inlineEvalStart({
+        scopeKey: "chan_1",
+        runId: "run:hint",
+        code: "return 1;",
+        resultReceiver: { kind: "caller" },
+      }),
+    ]);
+
+    await vi.waitFor(
+      () => expect(calls.filter((call) => call.method === "onEvalComplete")).toHaveLength(2),
+      { timeout: 8_000 }
+    );
+    expect(calls.find((call) => call.method === "onEvalComplete")).toMatchObject({
+      ref: { source: "workers/agent-worker", className: "AiChatWorker", objectKey: "abc" },
+      args: [{ runId: "run:hint" }],
+    });
+  });
+
   it("keeps missing-scope controls from admitting work and treats reset as already empty", async () => {
     const ownerId = "session:default";
     const { service, calls } = createHarness({ [ownerId]: "ctx_1" });

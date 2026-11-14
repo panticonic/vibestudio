@@ -1657,12 +1657,25 @@ code in an entity"):
 - **Measured, not caused by this**: after a planned restart of the node, the first
   call to any object in this harness waits about a minute (a plain `HostDO` call
   too), so the drain test takes 63 s.
-- **Session entities are not built.** `createEntity` of a `do` class with the
-  initiating caller as the parent already gives the lineage `resolveParentPanel`
-  walks; what is missing is the `SessionDO` class and its authority (the session
-  checks that its caller is the principal it serves, because the host no longer
-  does). That is designed together with the kernel's call contract, since the
-  session's methods are the kernel's `start`, `await`, `events`, `cancel`.
+- **Session entities (step 3c, as built).** `SessionDO` (Base `workers/session`)
+  is a plain SQLite entity that hosts one kernel with `hostCode` (its manifest
+  declares `hosts: [workers/eval-kernel:EvalKernel]`). It is created by
+  `evalService` through `runtime.internal.createEntity` as a `do` with the owner as
+  parent (`stateArgs`: `principalId`, `ownerPrincipalId`, `subKey`,
+  `agentExecutionAdmission`, `lifecycle`), keyed by `evalHostObjectKey(owner,
+scope)` (`packages/shared/src/evalRuntimeIdentity.ts`; the runtime id is
+  `do:workers/session:SessionDO:<key>`). A verified caller that is not the owner
+  (an agent relay, a shell selecting a live session owner) acts for the owner
+  record, so the parent is always the owner and the lineage
+  `resolveParentPanel` walks is kept. The class authenticates its caller (its
+  principal, or the host service acting for it), relays the §7.5.1 contract with
+  the nonce of the run named (it keeps `(runId, nonce)` in a local table), relays
+  the entity's lifecycle to the kernel (`lifecycle`), and has one host-only path,
+  `settle`, for the push model's settlement calls (below). The identity checks of
+  the host that named the product `EvalDO` (principal identity, kernel
+  authority, event ingress, execution roots, approvals, webhooks, the authority
+  observer) recognise this entity (`isEvalHostRecord`). The owner with no code of its own
+  (a user or CLI session) is mediated by the session class's sealed image.
 
 ### 7.3 One admission step for all dynamic code
 
@@ -1776,11 +1789,15 @@ type KernelCaller =
   system-test runner. The session class authenticates that principal first (its
   own `stateArgs` name it, and its caller must be it or the host service acting
   for it). It then relays with the **admission nonce** that the one admission
-  function (§7.3) returned for the run. The kernel stores a digest of that nonce
-  in the run's row at `start` and checks it on every run-scoped method
-  (`await`, `events`, `cancel`, `get`, `receipt`) with a constant-time
-  comparison; a replayed `start` whose nonce differs from the row's is refused
-  (`EACCES`). Scope-level methods take the nonce of any run of this kernel.
+  function (§7.3) returned for the run. The kernel keeps the nonce with the run's
+  admission arguments (`executionSessionNonce`, as today) and checks it, as a
+  digest in constant time, on every run-scoped method (`await`, `events`,
+  `cancel`, `get`, `receipt`). `start` requires the run's own nonce to be the
+  one the session presents; a replay of a run that has not begun (`pending` or
+  `cancelling`) may carry a fresh admission (the host re-drives a start after
+  a restart), and a replay of a run that has begun is refused (`EACCES`)
+  unless it carries the run's own nonce. Scope-level methods take the nonce of
+  any run of this kernel, or none while the kernel has no run.
   The nonce is a host-minted, per-run secret that the execution-session registry
   already binds to the run's principal, so a session class that holds a nonce
   for one run cannot name another run it did not admit. After the run has ended
@@ -1926,14 +1943,34 @@ Each step is a complete cut that keeps the system working.
    and the root's `onrevoked`. **Done** (this pass, "As built" in §7.2).
    **Not done:** the session entities for panels, the CLI and the runner (they
    come with the kernel's call contract in step 4/5).
+   3c. **Session entities** (§7.2 "As built"): `SessionDO`. **Done** (2026-11-14).
 4. **The kernel class in Base** hosted through (3), replacing the product
-   `EvalDO`; the host-only schemas and the catalog entry go with it.
+   `EvalDO`. **Done** (2026-11-14): `workers/eval-kernel` (`EvalKernel`), the
+   engine imported directly, a Dolt class that commits when a run is accepted
+   and when it ends (`eval: <runId> <status>`), the §7.5.1 contract with its
+   caller check, the realm locked down at load (`@vibestudio/shared/kernelRealm`,
+   SES), the root holding residency and relaying a drain. The product class,
+   its catalog entry, generated authority rows and `packages/builtin/src/eval-engine`
+   are deleted. **Kept for step 5/6** (they are push, and the callers still use it):
+   the kernel pushes live events to `evalEventIngress` and its progress to an
+   agent's `onEvalProgress`; the host pulls a terminal row with `await` and
+   delivers `onEvalComplete` to a receiver, with backoff until the receiver's
+   acknowledgement (in memory: a restart of the host loses it; the kernel has no
+   redelivery index and no alarm, since a facet has none); the host reaches the
+   kernel's settlement paths (`appendAuthorityEvent`, `retainExecutionRoot`,
+   `listRetainedExecutionRoots`, `acknowledgeRunResult`) through `SessionDO.settle`;
+   `service-schemas/evalEngine.ts` still declares the old host-only table.
+   **D5:** legacy `EvalDO` scopes and unacknowledged receipts are dropped: the
+   new kernel starts empty. **Provider sources** are the template's own
+   packages (`@workspace/eval`, `@workspace/runtime`, `@workspace/natlang`,
+   `@workspace/cdp-client`), overridable by the class's env.
 5. **Pull** (§7.5) for each consumer in turn (agent loop, harness tool, CLI,
    runner), with the push machinery deleted when the last has moved.
-6. **The liveness supervisor** goes with step 4 (§7.8); `evalService` is
-   deleted when the last caller has moved.
-   Steps 4 to 6 are **not done**; `HANDOFF-dolt-redesign.md` records where each
-   stands.
+6. **The liveness supervisor** went with step 4 (the kernel's unit carries
+   `limits.cpuMs`; the unit-wide limit is the fork gap of §7.8); `evalService`
+   is deleted when the last caller has moved.
+   Steps 5 and 6 are **not done**; `HANDOFF-dolt-redesign.md` records where
+   each stands.
 
 ---
 
