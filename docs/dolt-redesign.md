@@ -1921,10 +1921,10 @@ as built:
 - the spin ends at about 4 s (`celld::ops: an op was handed to an event that no longer takes ops` at
   +4.0 s, the deadline timer's continuation): the limit works on the real kernel;
 - **the next calls to that kernel's entity never return**: not another `eval run` (waited 100 s), not
-  `eval repl-reset`. Another session's kernel (another cell, same loaded unit) is unaffected. Before
-  this pass the same hang would come after 600 s of CPU, at the unit's limit, so the limit made the
-  failure arrive sooner and did not create it; but it is the failure the host's liveness
-  supervisor used to turn into a node restart, and nothing does now;
+  `eval repl-reset`. Another session's kernel (another cell, same loaded unit) is unaffected. Whether the
+  same hang follows the unit's own 600 s limit was not run (it is likely, since the mechanism is the
+  same); it is the failure the host's liveness supervisor used to turn into a node restart, and
+  nothing does now;
 - the minimal probe (`celldCpuWatchdogCelld.test.ts`: a Dolt facet in a loaded worker, root with a hold,
   `codegen`, a spin inside `new Function`, a deadline timer, a commit on both sides, requests queued
   during the spin) does **not** reproduce it: the facet and root answer afterwards. It does show that the
