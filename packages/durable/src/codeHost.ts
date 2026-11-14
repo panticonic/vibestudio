@@ -60,6 +60,21 @@ export interface CodeHostProps {
   readonly host?: { readonly entityId: string; readonly token: string } | null;
 }
 
+/**
+ * The CPU limit one call carries for a run that declared a `timeoutMs`
+ * (docs/dolt-redesign.md §7.8). A run executes under the `start` call's
+ * `waitUntil`, so a limit on that call bounds the run's CPU, and `timeoutMs` is
+ * the budget the run declared. The lower of this and the class's own `cpuMs`
+ * applies, and a spinning run is ended at the limit while its kernel keeps its
+ * heap; the kernel's own timeout then settles the run, whose timer is already
+ * due. No `timeoutMs` means the class's own limit alone.
+ */
+export function cpuLimitForTimeout(timeoutMs: unknown): HostedCallLimits | undefined {
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0)
+    return undefined;
+  return { cpuMs: Math.max(1, Math.ceil(timeoutMs)) };
+}
+
 interface CodeHostFetcher {
   fetch(input: string, init?: RequestInit): Promise<Response>;
 }

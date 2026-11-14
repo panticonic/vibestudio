@@ -3,6 +3,7 @@ import { serializeRpcFailure } from "@vibestudio/rpc";
 import { DurableObjectBase } from "./index.js";
 import { createTestDO } from "./test-utils.js";
 import {
+  cpuLimitForTimeout,
   createCodeHostClient,
   isHostedCall,
   serveHostedCall,
@@ -96,6 +97,37 @@ describe("createCodeHostClient", () => {
     expect(seen.map((entry) => entry.body["op"])).toEqual(["host", "call", "release"]);
     expect(seen[1]!.headers).toEqual({ "X-Code-Host-Name": "root", "X-Code-Host-Proof": "p" });
     expect(seen[1]!.body).toMatchObject({ method: "run", args: ["1 + 6", { a: 1 }], name: "repl" });
+  });
+
+  it("carries a limit on the calls made through limited(), and only those", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const env = {
+      CODE_HOST: {
+        fetch: async (_url: string, init: RequestInit) => {
+          const body = JSON.parse(String(init.body)) as Record<string, unknown>;
+          seen.push(body);
+          return body["op"] === "call" ? Response.json({ result: 1 }) : Response.json({ hosted: true });
+        },
+      },
+    };
+    const kernel = await createCodeHostClient({ env, props })({
+      name: "repl",
+      executable: { source: "w/k", className: "K" },
+    });
+    await kernel.limited({ cpuMs: 5000 }).call("start", {});
+    await kernel.call("await", "r1");
+    await kernel.limited({ cpuMs: 5000 }).limited({ subRequests: 3 }).call("start", {});
+    const calls = seen.filter((body) => body["op"] === "call");
+    expect(calls[0]!["limits"]).toEqual({ cpuMs: 5000 });
+    expect(calls[1]).not.toHaveProperty("limits");
+    expect(calls[2]!["limits"]).toEqual({ cpuMs: 5000, subRequests: 3 });
+  });
+
+  it("derives a call's CPU limit from a run's timeoutMs, and none without a usable one", () => {
+    expect(cpuLimitForTimeout(12_345)).toEqual({ cpuMs: 12_345 });
+    expect(cpuLimitForTimeout(0.4)).toEqual({ cpuMs: 1 });
+    for (const none of [undefined, null, 0, -1, Number.NaN, Number.POSITIVE_INFINITY, "5"])
+      expect(cpuLimitForTimeout(none)).toBeUndefined();
   });
 
   it("rejects an entity without a binding, a refused request and a hosted failure", async () => {
