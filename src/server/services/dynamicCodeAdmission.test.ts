@@ -16,7 +16,10 @@ const caller = () =>
     handle: "test",
   });
 
-function setup(preauthorize?: Parameters<typeof createDynamicCodeAdmission>[0]["preauthorize"]) {
+function setup(
+  preauthorize?: Parameters<typeof createDynamicCodeAdmission>[0]["preauthorize"],
+  hasActiveEntity?: (runtimeId: string) => Promise<boolean>
+) {
   const executionSessions = new AgentExecutionSessionRegistry();
   const taskAuthorities = new TaskAuthorityRegistry();
   const admission = createDynamicCodeAdmission({
@@ -25,6 +28,7 @@ function setup(preauthorize?: Parameters<typeof createDynamicCodeAdmission>[0]["
     entityCache: new EntityCache(),
     workspaceId: "ws_1",
     ...(preauthorize ? { preauthorize } : {}),
+    ...(hasActiveEntity ? { hasActiveEntity } : {}),
   });
   const input = (over: Record<string, unknown> = {}) => ({
     runId: "run-1",
@@ -60,6 +64,27 @@ describe("admitDynamicCode", () => {
     expect(executionSessions.resolve("do:host:Kernel:k1")).toBeTruthy();
     admitted.discard();
     expect(executionSessions.resolve("do:host:Kernel:k1")).toBeFalsy();
+  });
+
+  it("says a retired EvalDO notebook was dropped only while its entity is still recorded active (D5)", async () => {
+    const legacy = "do:vibestudio/internal:EvalDO:abc";
+    const active = vi.fn(async (id: string) => id === legacy);
+    const { admission, input } = setup(undefined, active);
+    const dropped = await admission.admit(
+      { caller: caller() },
+      input({ legacyHostRuntimeId: legacy })
+    );
+    expect(dropped.legacyNotebookDropped).toBe(true);
+    dropped.discard();
+    const none = await admission.admit(
+      { caller: caller() },
+      input({ legacyHostRuntimeId: "do:vibestudio/internal:EvalDO:other" })
+    );
+    expect(none.legacyNotebookDropped).toBe(false);
+    none.discard();
+    // No legacy coordinates, or a host that cannot tell: never reported.
+    const plain = await admission.admit({ caller: caller() }, input());
+    expect(plain.legacyNotebookDropped).toBe(false);
   });
 
   it("refuses a caller with no authenticated user", async () => {

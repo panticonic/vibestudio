@@ -1920,12 +1920,32 @@ spin is ended, settles it. The decision:
 
 Legacy `EvalDO` objects are **not** migrated into a Dolt kernel (a cell's engine
 is fixed at creation, and `celldMigration` imports product objects into SQLite
-cells). Scope state is soft (the restart report states what is lost), and a run
-receipt of the previous generation is not needed once pull delivery exists. The
-restart report names what is dropped: the notebook scopes of every legacy
-`EvalDO`, and the receipts of runs that had not been acknowledged when the
-workspace migrated. The retired cells are deleted by a later release, as
-`WorkspaceDO`'s are.
+cells). Scope state is soft, and a run receipt of the previous generation is not
+needed once pull delivery exists. What is dropped: the notebook scopes (values
+and `db` tables) of every legacy `EvalDO`, and the receipts of runs that had not
+been acknowledged when the workspace migrated. The retired cells are deleted by a
+later release, as `WorkspaceDO`'s are.
+
+**The restart report is a message the user sees, not prose.** The next run of a
+scope that had a legacy notebook carries it in its result:
+
+- **Detected by the admission.** The retired entity is `do:vibestudio/internal:EvalDO:<key>`
+  with the same `<key>` as the new host (`evalHostObjectKey(owner, scope)`;
+  `legacyEvalDoRuntimeId`). The one admission function (§7.3) reports
+  `legacyNotebookDropped` when that entity is still recorded `active` in the workspace
+  entity store, and the call into the kernel carries it (`RunArgs.legacyNotebookDropped`,
+  host to kernel only).
+- **Said once by the kernel.** `kernelStatusForRun` puts `legacyNotebookDropped: true`
+  on the first result's `kernel.event` (kind `restarted`, so the existing restart
+  notice also appears) and records in its own state that it did, so a later restart
+  of the heap does not repeat it (`evalKernelStatusSchema`).
+- **Shown by every surface of the result.** The agent's eval tool text (Base
+  `harness/src/tools/eval.ts`) adds: `[kernel] This notebook was upgraded: scope values
+  and db tables from the previous version (its EvalDO) were not carried over and are gone.
+  Rebuild what you need from stable IDs, files, or durable records ...`, directly under
+  `[kernel] Restarted`, which is the surface the user and the agent read. Tests: the
+  admission (`dynamicCodeAdmission.test.ts`), the service (`evalService.test.ts`), the
+  kernel (`EvalKernel.cancel.test.ts`) and the tool (`eval.test.ts`).
 
 ### 7.11 What this deletes
 

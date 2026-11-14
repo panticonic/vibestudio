@@ -24,6 +24,7 @@ import {
   EVAL_HOST_SOURCE,
   evalHostObjectKey,
   isEvalHostRecord,
+  legacyEvalDoRuntimeId,
 } from "@vibestudio/shared/evalRuntimeIdentity";
 import { sha256Canonical } from "@vibestudio/shared/authority/invocationSnapshot";
 import type { RuntimeAgentBinding } from "@vibestudio/shared/runtime/entitySpec";
@@ -201,6 +202,9 @@ export function createEvalService(deps: {
     entityCache: store.cache,
     workspaceId: deps.workspaceId,
     ...(deps.isSystemTestHarness ? { isSystemTestHarness: deps.isSystemTestHarness } : {}),
+    hasActiveEntity: async (runtimeId) =>
+      (store.cache.resolveActive(runtimeId) ?? (await store.resolveRecord(runtimeId)))?.status ===
+      "active",
     ...(deps.preauthorize ? { preauthorize: deps.preauthorize } : {}),
   });
   const activeRuns = new Map<string, ActiveEvalRun>();
@@ -639,6 +643,7 @@ export function createEvalService(deps: {
       admissionKey: `eval:${evalRuntimeId}:${runId}`,
       taskRefFallback: `eval:${ownerId}:${runId}`,
       eventSinkNonce,
+      legacyHostRuntimeId: legacyEvalDoRuntimeId(ownerId, runArgs.scope?.key ?? "default"),
     });
     const { executionSession } = admitted;
     const activityId =
@@ -735,6 +740,7 @@ export function createEvalService(deps: {
           authorityManifestDigest,
           intentDigest: runDigest,
           eventSinkNonce,
+          ...(admitted.legacyNotebookDropped ? { legacyNotebookDropped: true } : {}),
           ...chatBinding,
         },
         agentRef: isAgentDo ? ownerId : undefined,

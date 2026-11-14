@@ -45,6 +45,11 @@ export interface DynamicCodeAdmissionDeps {
   entityCache: Pick<EntityCache, "resolveActive" | "resolve">;
   workspaceId: string;
   isSystemTestHarness?: (caller: ServiceContext["caller"], runId: string) => boolean;
+  /**
+   * Whether an entity of the retired product `EvalDO` is still recorded active
+   * (D5, docs/dolt-redesign.md §7.10): its notebook was dropped by the upgrade.
+   */
+  hasActiveEntity?: (runtimeId: string) => Promise<boolean>;
   /** Canonical dispatcher authorization-only path for exact prospective calls. */
   preauthorize?: (
     ctx: ServiceContext,
@@ -76,6 +81,8 @@ export interface DynamicCodeRunInput {
   taskRefFallback: string;
   /** Today's push route for the run's events; deleted with push delivery (§7.5). */
   eventSinkNonce: string;
+  /** The retired `EvalDO` entity of this owner and scope, when the run belongs to a notebook. */
+  legacyHostRuntimeId?: string;
   /** Names the runtime kind of the executor fact (`eval` until the wire type is renamed). */
   controllerSignal?: AbortSignal;
 }
@@ -88,6 +95,8 @@ export interface AdmittedDynamicCodeRun {
   nonce: string;
   authorityManifest: EvalAuthorityManifest;
   authorityManifestDigest: string;
+  /** The scope had a notebook in the retired `EvalDO`, which the upgrade dropped (D5): the kernel tells the user once. */
+  legacyNotebookDropped: boolean;
   /** Close the session and forget the admission (a failure or a terminal). */
   discard(): void;
 }
@@ -312,11 +321,16 @@ export function createDynamicCodeAdmission(deps: DynamicCodeAdmissionDeps) {
           for (const operation of intent.preauthorize)
             await deps.preauthorize(prospectiveCtx, operation);
         }
+        const legacyNotebookDropped =
+          input.legacyHostRuntimeId && deps.hasActiveEntity
+            ? await deps.hasActiveEntity(input.legacyHostRuntimeId)
+            : false;
         return {
           executionSession,
           nonce: executionSession.nonce,
           authorityManifest: executor.authorityManifest,
           authorityManifestDigest: executor.authorityManifest.digest,
+          legacyNotebookDropped,
           discard,
         };
       } catch (error) {

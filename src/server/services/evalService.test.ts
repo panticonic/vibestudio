@@ -238,6 +238,8 @@ function createHarness(
       status: "pending" | "running" | "cancelling" | "done" | "cancelled" | "unknown";
       gate?: Promise<void>;
     }>;
+    /** A retired product EvalDO notebook is still recorded active for every scope (D5). */
+    legacyNotebook?: boolean;
   } = {}
 ) {
   const calls: Array<{ ref: unknown; method: string; args: unknown[] }> = [];
@@ -406,6 +408,19 @@ function createHarness(
   const resolveActive = entityCache.resolveActive.bind(entityCache);
   entityCache.resolveActive = (id) => {
     if (options.retiredEvalEntityIds?.has(id)) return null;
+    if (options.legacyNotebook && id.startsWith("do:vibestudio/internal:EvalDO:"))
+      return {
+        id,
+        kind: "do",
+        source: { repoPath: "vibestudio/internal", effectiveVersion: "internal" },
+        contextId: "ctx_agent",
+        className: "EvalDO",
+        key: id.slice(id.lastIndexOf(":") + 1),
+        authoritySessionId: "authority:eval-test",
+        createdAt: 0,
+        status: "active",
+        cleanupComplete: true,
+      } satisfies EntityRecord;
     if (options.ownerRecord?.id === id) return options.ownerRecord;
     const contextId = contexts[id];
     if (contextId == null || !id.startsWith("do:")) return resolveActive(id);
@@ -1565,6 +1580,19 @@ describe("createEvalService", () => {
     expect(calls.find((c) => c.method === "startRun")?.args[0]).toMatchObject({
       timeoutMs: 12_345,
     });
+  });
+
+  it("hands the kernel the fact that a retired EvalDO notebook was dropped, only when one was recorded (D5)", async () => {
+    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
+    for (const legacyNotebook of [true, false]) {
+      const { service, calls } = createHarness({ [ownerId]: "ctx_agent" }, { legacyNotebook });
+      await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
+        inlineEvalStart({ scopeKey: "chan_1", runId: `run:legacy:${legacyNotebook}`, code: "return 1;" }),
+      ]);
+      const started = calls.find((c) => c.method === "startRun")?.args[0] as Record<string, unknown>;
+      if (legacyNotebook) expect(started).toMatchObject({ legacyNotebookDropped: true });
+      else expect(started).not.toHaveProperty("legacyNotebookDropped");
+    }
   });
 
   it("tells an agent receiver of the terminal row it pulled from the kernel, until the receiver acknowledges", async () => {

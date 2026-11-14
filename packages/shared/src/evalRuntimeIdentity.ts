@@ -45,3 +45,13 @@ export function isEvalHostRecord(record: {
     record.source.repoPath === EVAL_HOST_SOURCE
   );
 }
+
+/**
+ * The entity of the retired product `EvalDO` that kept this owner's notebook for
+ * this scope before the kernel became hosted code (docs/dolt-redesign.md §7.10, D5).
+ * Same object key as the session entity; only the class and source differ. Its
+ * state was dropped by the upgrade, and a run of the scope tells the user once.
+ */
+export function legacyEvalDoRuntimeId(ownerId: string, scopeKey: string): string {
+  return `do:vibestudio/internal:EvalDO:${evalHostObjectKey(ownerId, scopeKey)}`;
+}

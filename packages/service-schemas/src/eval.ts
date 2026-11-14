@@ -480,6 +480,12 @@ export const evalKernelStatusSchema = z
             .strict(),
           z.object({ status: z.literal("unavailable") }).strict(),
         ]),
+        /**
+         * Set on the first result of a scope whose notebook belonged to the retired
+         * product `EvalDO` (docs/dolt-redesign.md §7.10, D5): its scope values and its
+         * `db` tables were dropped when the workspace moved to the kernel class.
+         */
+        legacyNotebookDropped: z.literal(true).optional(),
       })
       .strict()
       .optional(),

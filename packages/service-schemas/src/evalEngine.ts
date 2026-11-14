@@ -51,6 +51,7 @@ export const evalEngineRunArgsSchema = z
     gatewayToken: z.string().min(1),
     executionSessionNonce: z.string().min(1).optional(),
     eventSinkNonce: z.string().min(1).optional(),
+    legacyNotebookDropped: z.boolean().optional(),
     causalParent: rpcCausalParentSchema.optional(),
     agentInvocationId: z.string().min(1).optional(),
     parent: z
