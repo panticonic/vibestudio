@@ -142,12 +142,62 @@ export function durableObjectSchemaFingerprint(
   return normalizedShape(sql, schemaTables);
 }
 
-/** SQL text with the spacing around punctuation removed, for Dolt's re-rendered schema text. */
-function looseSql(value: string): string {
-  return value
+/**
+ * The form of a statement that the engine's rendering leaves unchanged.
+ *
+ * DoltLite re-renders `sqlite_master.sql` when the creating transaction commits
+ * (celld `docs/services/dolt-cells.md`, "Schema text"): whitespace runs become
+ * one space, none stays before `(`, `)` and `,`, comments are gone, and a name
+ * is quoted only when it has to be; string literals and quoted names that need
+ * their quotes are kept. This function removes every one of those differences
+ * (and, being loose, the spacing after `(` and `,` as well), so the text as
+ * written and the text as rendered compare equal. Equality under it admits
+ * nothing a store could forge: the declared text is code.
+ */
+export function looseSql(value: string): string {
+  // Text the engine keeps as written is set aside while the rest is loosened.
+  const kept: string[] = [];
+  const keep = (text: string): string => `\u0000${kept.push(text) - 1}\u0000`;
+  let out = "";
+  let at = 0;
+  const length = value.length;
+  while (at < length) {
+    const char = value[at]!;
+    const next = value[at + 1];
+    if (char === "-" && next === "-") {
+      while (at < length && value[at] !== "\n") at++;
+      out += " ";
+    } else if (char === "/" && next === "*") {
+      const end = value.indexOf("*/", at + 2);
+      at = end === -1 ? length : end + 2;
+      out += " ";
+    } else if (char === "'") {
+      let end = at + 1;
+      while (end < length && !(value[end] === "'" && value[end + 1] !== "'")) {
+        end += value[end] === "'" ? 2 : 1;
+      }
+      out += keep(value.slice(at, end + 1));
+      at = end + 1;
+    } else if (char === '"' || char === "`" || char === "[") {
+      const close = char === "[" ? "]" : char;
+      let end = at + 1;
+      while (end < length && !(value[end] === close && value[end + 1] !== close)) {
+        end += value[end] === close ? 2 : 1;
+      }
+      const quoted = value.slice(at, end + 1);
+      const name = value.slice(at + 1, end);
+      out += /^[A-Za-z_][A-Za-z0-9_]*$/u.test(name) ? name : keep(quoted);
+      at = end + 1;
+    } else {
+      out += char;
+      at++;
+    }
+  }
+  return out
     .replace(/\s+/gu, " ")
     .replace(/\s*([(),])\s*/gu, "$1")
-    .trim();
+    .trim()
+    .replace(/\u0000(\d+)\u0000/gu, (_match, index: string) => kept[Number(index)]!);
 }
 
 /** `normalizedShape` output with each statement's punctuation spacing ignored. */

@@ -4,6 +4,7 @@ import {
   DurableObjectSchemaError,
   durableObjectSchemaFingerprint,
   installDurableObjectSchema,
+  looseSql,
   validateDurableObjectSchemaIndexes,
   type DurableObjectSchemaDefinition,
 } from "./schema.js";
@@ -312,5 +313,43 @@ describe("the schema guard's filter", () => {
     // Names that merely resemble them are the class's.
     sql.exec("CREATE TABLE doltish (a TEXT)");
     expect(durableObjectSchemaFingerprint(sql)).not.toBe(base);
+  });
+});
+
+describe("the rendering rule of celld's dolt-cells.md, 'Schema text'", () => {
+  it("makes the text as written and the text as rendered compare equal", () => {
+    const pairs: Array<[written: string, rendered: string]> = [
+      [
+        "CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)",
+        "CREATE TABLE notes(id INTEGER PRIMARY KEY, body TEXT)",
+      ],
+      ['CREATE TABLE "q" ( a , b )', "CREATE TABLE q( a, b)"],
+      ["CREATE UNIQUE INDEX u ON t ( a )", "CREATE UNIQUE INDEX u ON t( a)"],
+      [
+        "CREATE TABLE t (a TEXT CHECK (length(a) < 5))",
+        "CREATE TABLE t(a TEXT CHECK(length(a) < 5))",
+      ],
+      // Comments are gone after the commit.
+      [
+        "CREATE TABLE t (\n  a TEXT, -- the name\n  /* kept? no */ b TEXT\n)",
+        "CREATE TABLE t( a TEXT, b TEXT)",
+      ],
+      // A name is quoted only when it has to be.
+      ['CREATE TABLE "t" ("a" TEXT, `b` TEXT, [c] TEXT)', "CREATE TABLE t(a TEXT, b TEXT, c TEXT)"],
+    ];
+    for (const [written, rendered] of pairs) expect(looseSql(written)).toBe(looseSql(rendered));
+  });
+
+  it("keeps string literals and names that need their quotes as written", () => {
+    expect(looseSql("CREATE TABLE t (a TEXT DEFAULT 'x  ( y -- not a comment' )")).toContain(
+      "'x  ( y -- not a comment'"
+    );
+    expect(looseSql('CREATE TABLE "my table" (a TEXT)')).toContain('"my table"');
+    expect(looseSql("CREATE TABLE t (a TEXT DEFAULT 'it''s')")).toContain("'it''s'");
+    // Real differences still differ.
+    expect(looseSql("CREATE TABLE t (a TEXT)")).not.toBe(looseSql("CREATE TABLE t (a BLOB)"));
+    expect(looseSql("CREATE TABLE t (a TEXT DEFAULT 'x')")).not.toBe(
+      looseSql("CREATE TABLE t (a TEXT DEFAULT 'y')")
+    );
   });
 });

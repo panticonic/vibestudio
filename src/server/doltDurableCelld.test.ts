@@ -399,13 +399,10 @@ it.skipIf(!celldTestBinary())(
   240_000
 );
 
-// FORK GAP (celld fcc7268), kept as a canary: it passes when the gap is fixed,
-// and then this `.fails` must be turned into a plain test. An acknowledged
-// `dolt.reset({ hard: true, to })` is lost by a SIGKILL and restart (a durable
-// stop keeps it). Commit, branch create and delete, checkout, merge, soft
-// reset and gc all survive the same kill. Backup restore and GAD `discard`
-// depend on a durable hard reset.
-it.skipIf(!celldTestBinary()).fails(
+// Fixed in celld 9440c29: an acknowledged `dolt.reset({ hard: true, to })`
+// survives a SIGKILL and restart (it was lost on fcc7268; this was an
+// `it.fails` canary). Backup restore and GAD `discard` depend on it.
+it.skipIf(!celldTestBinary())(
   "an acknowledged hard reset survives a kill",
   async () => {
     const { probe, call, dolt } = await startProbe({});
