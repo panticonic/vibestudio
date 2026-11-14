@@ -110,10 +110,14 @@ export interface CelldProbeOptions {
   /** SQLite Durable Object classes; each is bound under its upper-case name
    *  unless `bindings` names them. */
   readonly classes: readonly string[];
+  /** Dolt Durable Object classes (`new_dolt_classes`); bound like `classes`. */
+  readonly doltClasses?: readonly string[];
   readonly bindings?: ReadonlyArray<{ readonly name: string; readonly class_name: string }>;
+  /** The top-level `celld` block of the deployment (per-class `doltLocal`, `doltRemotes`, ...). */
+  readonly celld?: Record<string, unknown>;
   /** Bind a Worker Loader as `LOADER`. */
   readonly loader?: boolean;
-  readonly vars?: Readonly<Record<string, string>>;
+  readonly vars?: Readonly<Record<string, unknown>>;
   readonly compatibilityFlags?: readonly string[];
   readonly inspector?: boolean;
   /** Route egress through this proxy (default: the probe dials out itself). */
@@ -132,6 +136,12 @@ export interface CelldProbe {
   start(): Promise<void>;
   /** Kill the node without its durable stop (a crash). */
   kill(): Promise<void>;
+  /**
+   * Deploy a different bundle over the same bucket (a new build of the same
+   * classes). The node must not be running: `stop` or `kill` it first, then
+   * `start` it again.
+   */
+  redeploy(bundle: string, vars?: Readonly<Record<string, unknown>>): Promise<void>;
 }
 
 export async function startCelldProbe(options: CelldProbeOptions): Promise<CelldProbe> {
@@ -147,23 +157,34 @@ export async function startCelldProbe(options: CelldProbeOptions): Promise<Celld
     ...(options.egress ? { egressProxyUrl: options.egress.url, egressSecret: options.egress.secret } : {}),
     onOutput: options.onOutput ?? (() => undefined),
   });
-  await node.deploy(options.bundle, {
+  const sqliteClasses = options.classes;
+  const doltClasses = options.doltClasses ?? [];
+  const allClasses = [...sqliteClasses, ...doltClasses];
+  const deployConfig = (vars: Readonly<Record<string, unknown>>) => ({
     name: "probe",
     compatibility_date: "2025-12-01",
     compatibility_flags: [...(options.compatibilityFlags ?? ["nodejs_compat"])],
     ...(options.loader ? { worker_loaders: [{ binding: "LOADER" }] } : {}),
-    ...(options.classes.length > 0
+    ...(allClasses.length > 0
       ? {
           durable_objects: {
             bindings:
               options.bindings ??
-              options.classes.map((name) => ({ name: name.toUpperCase(), class_name: name })),
+              allClasses.map((name) => ({ name: name.toUpperCase(), class_name: name })),
           },
-          migrations: [{ tag: "v1", new_sqlite_classes: [...options.classes] }],
+          migrations: [
+            {
+              tag: "v1",
+              ...(sqliteClasses.length > 0 ? { new_sqlite_classes: [...sqliteClasses] } : {}),
+              ...(doltClasses.length > 0 ? { new_dolt_classes: [...doltClasses] } : {}),
+            },
+          ],
         }
       : {}),
-    vars: { ...(options.vars ?? {}) },
+    ...(options.celld ? { celld: options.celld } : {}),
+    vars: { ...vars },
   });
+  await node.deploy(options.bundle, deployConfig(options.vars ?? {}));
   let running: CelldNodeProcess | null = null;
   const probe: CelldProbe = {
     endpoint: `http://127.0.0.1:${listen}`,
@@ -205,6 +226,10 @@ export async function startCelldProbe(options: CelldProbeOptions): Promise<Celld
       current.child.kill("SIGKILL");
       await current.exited;
       running = null;
+    },
+    async redeploy(bundle, vars) {
+      if (running) throw new Error("Stop the probe node before redeploying");
+      await node.deploy(bundle, deployConfig(vars ?? options.vars ?? {}));
     },
   };
   return probe;
