@@ -88,8 +88,18 @@ Consequences:
 - The GAD database size gate (§5.1, §10 P5): a participant fork copies the
   whole file.
 
-**Not done:** P2 onward. P0 is the first implementation slice
-(`feat/dolt-p0`); see its handoff for what it covers.
+**Done (`feat/dolt-p0`, see `HANDOFF-dolt-redesign.md`):**
+- P0 Foundations: the typed surface, `committedTransaction` on F2, schema
+  install commits, the schema-guard filter and the `FakeDoltStorage` double,
+  with a real-fork probe.
+- The P2 prerequisites, checked on the fork (`doltEvalKernelCelld.test.ts`):
+  per-isolate codegen grant, per-run commits in a kernel Dolt facet that
+  survive a kill, residency holds without a timer, and revocation through the
+  root (§7.4).
+
+**Not done:** the P2 implementation itself (moving `EvalDO` to the owner's
+kernel facet and deleting the lease, `evalService` and `UNSAFE_EVAL`), and
+P3 onward.
 
 This document re-derives GAD, the agent system, eval, the durable base and
 Chronolog integration for a runtime in which a Durable Object's state is a
@@ -1280,6 +1290,14 @@ const kernel = ctx.facets.get(`eval:${scopeKey}`, () => ({
   persists the scope snapshot (the existing `scopeManager` persistence).
   The next run reports `[kernel] Restarted` with the exact restored and lost
   keys, which is today's restart contract.
+  - **The handler is registered by the owner's root, not by the kernel.** The
+    kernel is a loaded-worker facet in its own isolate, and the fork does not
+    run an `onrevoked` registered there (`residency.md`, "Facets"). The probe
+    confirms it on `fcc7268` (`doltEvalKernelCelld.test.ts`): a drain ran the
+    root's handler, which called the kernel facet to persist and commit
+    (`root onrevoked: drain`), and did not run the kernel's own. The hold
+    itself may be taken by the kernel's `ctx.residency.hold()` (it pins the
+    root) or by the root; only the handler placement matters.
 - **When the node's budget refuses a hold** (`ERR_RESIDENCY_BUDGET`), the
   run proceeds without one. The heap may be lost at eviction, and the
   restart contract reports it. This refusal is explicit, never a silent
