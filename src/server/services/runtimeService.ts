@@ -207,7 +207,16 @@ export type PreparedFor<E> = E extends CodeExecution
       : never;
 
 export interface RuntimeServiceInternal {
-  createEntity(caller: VerifiedCaller, spec: RuntimeEntityCreateSpec): Promise<RuntimeEntityHandle>;
+  /**
+   * `trusted.agentBinding` is a relationship the host has already verified (the eval
+   * service binds the session entity of an agent's kernel to that agent); a
+   * caller's own `spec.agentBinding` stays restricted to host callers.
+   */
+  createEntity(
+    caller: VerifiedCaller,
+    spec: RuntimeEntityCreateSpec,
+    trusted?: { agentBinding?: RuntimeAgentBinding }
+  ): Promise<RuntimeEntityHandle>;
   /** Complete a durable code reservation from the server-owned reconciler. */
   activateReservedEntity(spec: RuntimeCodeEntityCreateSpec): Promise<RuntimeEntityHandle>;
   /** Preparing panel reservations that must be resumed after server startup. */
@@ -254,6 +263,8 @@ interface RuntimeCreationActors {
   signal?: AbortSignal;
   /** Scope retained when copying an existing executable entity. */
   retainedExecutionAuthority?: import("@vibestudio/rpc").ExecutionAuthorityOrigin;
+  /** A binding the host verified itself; it replaces the restricted `spec.agentBinding`. */
+  trustedAgentBinding?: RuntimeAgentBinding;
   /** Authenticated principal that owns and controls the new runtime lifecycle. */
   lifecycleCaller: VerifiedCaller;
   /** Host-verified root initiator whose human subject owns the new runtime. */
@@ -660,12 +671,14 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       }
       const requestedContextId =
         spec.contextId == null || spec.contextId === "" ? undefined : spec.contextId;
-      const agentBinding = await resolveAgentBinding(
-        caller,
-        "createEntity",
-        requestedContextId,
-        bindingFromSpec(spec)
-      );
+      const agentBinding =
+        actors.trustedAgentBinding ??
+        (await resolveAgentBinding(
+          caller,
+          "createEntity",
+          requestedContextId,
+          bindingFromSpec(spec)
+        ));
       if (
         preparedResourceBindings &&
         requestedContextId !== undefined &&
@@ -2912,8 +2925,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   return {
     definition,
     internal: {
-      createEntity: (caller, spec) =>
-        createEntity({ lifecycleCaller: caller, initiatingCaller: caller }, spec),
+      createEntity: (caller, spec, trusted) =>
+        createEntity(
+          {
+            lifecycleCaller: caller,
+            initiatingCaller: caller,
+            ...(trusted?.agentBinding ? { trustedAgentBinding: trusted.agentBinding } : {}),
+          },
+          spec
+        ),
       activateReservedEntity: (spec) => activateReservedEntity(null, spec),
       listPreparingPanels: () => store.listPreparing("panel"),
       retireEntity: (id) => retireEntity(id),

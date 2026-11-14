@@ -4192,7 +4192,8 @@ async function main() {
         evalDefinition = createEvalService({
           doDispatch,
           entityStore: evalEntityStore,
-          createEntity: (caller, spec) => runtime.internal.createEntity(caller, spec),
+          createEntity: (caller, spec, trusted) =>
+            runtime.internal.createEntity(caller, spec, trusted),
           retireEntity: (id) => runtime.internal.retireEntity(id),
           workspaceId,
           resolveExecutionArtifact: async (code) => {

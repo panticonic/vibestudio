@@ -1575,7 +1575,7 @@ describe("createEvalService", () => {
       runId,
       runDigest: "d".repeat(64),
       resultDigest: "e".repeat(64),
-      result: { success: true, console: "" },
+      result: { success: true, console: "", failureKind: "user-code" },
       // The receiver commits the result only on the second hint.
       acknowledged: ++receipts > 2,
     });

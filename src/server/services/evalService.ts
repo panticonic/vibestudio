@@ -142,7 +142,11 @@ export function createEvalService(deps: {
    * `runtime.internal.createEntity`: creates the session entity, with the
    * lifecycle caller as its parent and owner.
    */
-  createEntity: (caller: VerifiedCaller, spec: RuntimeEntityCreateSpec) => Promise<{ id: string }>;
+  createEntity: (
+    caller: VerifiedCaller,
+    spec: RuntimeEntityCreateSpec,
+    trusted?: { agentBinding?: RuntimeAgentBinding }
+  ) => Promise<{ id: string }>;
   /** Host lifecycle owner used to retire a disposed session through the normal
    * release, relay-drain, cleanup, and durable-reaper path. */
   retireEntity: (id: string) => Promise<void>;
@@ -351,7 +355,8 @@ export function createEvalService(deps: {
     ctx: ServiceContext,
     owner: EvalOwner,
     subKey: string,
-    requestedLifecycle: "finite" | "persistent"
+    requestedLifecycle: "finite" | "persistent",
+    agentBinding: RuntimeAgentBinding | undefined
   ): Promise<{ objectKey: string }> {
     const { ownerId, contextId } = owner;
     const objectKey = evalDoKey(ownerId, subKey);
@@ -394,6 +399,7 @@ export function createEvalService(deps: {
       active &&
       active.contextId === contextId &&
       isEvalHostRecord(active) &&
+      JSON.stringify(active.agentBinding ?? null) === JSON.stringify(agentBinding ?? null) &&
       activeStateArgs?.["ownerPrincipalId"] === ownerId &&
       typeof activeStateArgs["agentExecutionAdmission"] === "object"
     ) {
@@ -405,20 +411,26 @@ export function createEvalService(deps: {
     // sub-agent the orchestrator's eval creates via runtime.createEntity) records
     // THIS session as its parentId: the lineage continues owner -> owner's panel,
     // so the sub-agent's panels nest under the owner's panel.
-    await deps.createEntity(await ownerCaller(ctx.caller, ownerId), {
-      kind: "do",
-      key: objectKey,
-      contextId,
-      className: EVAL_HOST_CLASS,
-      execution: { surface: "code", source: EVAL_HOST_SOURCE },
-      stateArgs: {
-        principalId: ownerId,
-        ownerPrincipalId: ownerId,
-        subKey,
-        agentExecutionAdmission: { v: 1, ownerId },
-        ...(requestedLifecycle === "finite" ? { lifecycle: "finite" as const } : {}),
+    // The session carries the agent relationship the host verified for this run: the
+    // execution admission is checked against it on every call the kernel makes.
+    await deps.createEntity(
+      await ownerCaller(ctx.caller, ownerId),
+      {
+        kind: "do",
+        key: objectKey,
+        contextId,
+        className: EVAL_HOST_CLASS,
+        execution: { surface: "code", source: EVAL_HOST_SOURCE },
+        stateArgs: {
+          principalId: ownerId,
+          ownerPrincipalId: ownerId,
+          subKey,
+          agentExecutionAdmission: { v: 1, ownerId },
+          ...(requestedLifecycle === "finite" ? { lifecycle: "finite" as const } : {}),
+        },
       },
-    });
+      agentBinding ? { agentBinding } : undefined
+    );
     return { objectKey };
   }
 
@@ -547,7 +559,8 @@ export function createEvalService(deps: {
       ctx,
       owner,
       runArgs.scope?.key ?? "default",
-      runArgs.scope?.lifecycle ?? "persistent"
+      runArgs.scope?.lifecycle ?? "persistent",
+      agentBinding
     );
     const isAgentDo = ctx.caller.runtime.kind === "do" && agentBinding !== undefined;
     if (runArgs.resultReceiver && !isAgentDo) {
