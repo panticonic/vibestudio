@@ -317,6 +317,12 @@ it.skipIf(!celldTestBinary())(
     const closed = await workspace.info();
     expect(closed.log.length).toBe(afterCreate.log.length + 1);
     expect(closed.log[0]?.message).toBe("close panel root (1 slots)");
+    // The reverse patch of the close commit touches the slot rows only: it is exactly what reopens it.
+    const reverse = await workspace.dolt<{
+      patch: Array<{ table: string; statement: string }>;
+    }>("diff", { from: closed.log[0]!.hash, to: beforeClose });
+    expect(reverse.patch.map((entry) => entry.table)).toEqual(["slots"]);
+    expect(reverse.patch[0]!.statement).toMatch(/closed_at/u);
 
     // Operational state that must outlive the undo.
     const key = { source: SOURCE, className: "MyDO", objectKey: "k1" };
@@ -509,4 +515,33 @@ it.skipIf(!celldTestBinary())(
     expect(await target.call("alarmNextWakeAt", 0)).toBe(4_102_444_800_000);
   },
   420_000
+);
+
+it.skipIf(!celldTestBinary())(
+  "a workspace with no retired store (its legacy cell is empty) settles as skipped, and the Dolt store works at once",
+  async () => {
+    const { state, legacy } = await startWorkspaceProbe();
+    const legacyCell = legacy("ws-fresh");
+    const target = state("ws-fresh");
+    const result = await importLegacyWorkspaceState({
+      legacy: {
+        legacyManifest: () => legacyCell.call("legacyManifest"),
+        legacyReadRows: (input) => legacyCell.call("legacyReadRows", input),
+      },
+      target: Object.fromEntries(
+        [
+          "legacyImportStatus",
+          "legacyImportSkip",
+          "legacyImportBegin",
+          "legacyImportStage",
+          "legacyImportReplay",
+          "legacyImportFinish",
+        ].map((method) => [method, (...args: unknown[]) => target.call(method, ...args)])
+      ) as unknown as LegacyStoreImporter,
+    });
+    expect(result.outcome).toBe("skipped");
+    const entity = await target.call<Entity>("entityActivate", panel("first"));
+    expect(entity.key).toBe("first");
+  },
+  120_000
 );

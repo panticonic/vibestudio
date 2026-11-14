@@ -38,8 +38,16 @@ export class WorkspaceDO extends DurableObjectBase {
     throw new Error("WorkspaceDO is the retired SQLite store; WorkspaceStateDO holds the state");
   }
 
-  /** The cell is read as it is: no schema is installed, none is validated. */
+  /**
+   * The cell is read as it is: no schema is installed, none is validated. The
+   * one table the framework itself reads on every call (`state`) is created if
+   * the cell is a fresh one that never had it, so a workspace with no retired
+   * store (its cell is empty) answers "nothing to import" instead of failing.
+   */
   protected override initializeSchema(): Promise<void> {
+    if (!this.tableExists("state")) {
+      this.sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    }
     return Promise.resolve();
   }
 

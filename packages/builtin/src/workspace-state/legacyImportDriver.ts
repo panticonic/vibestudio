@@ -56,7 +56,7 @@ export async function importLegacyWorkspaceState(deps: {
   maxEvents?: number;
 }): Promise<{ outcome: LegacyImportOutcome; status: LegacyImportStatus }> {
   const log = deps.log ?? (() => undefined);
-  const pageRows = deps.pageRows ?? 250;
+  const pageRows = deps.pageRows ?? 100;
   const budgetMs = deps.budgetMs ?? 10_000;
   const { legacy, target } = deps;
 
