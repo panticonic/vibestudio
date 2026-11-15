@@ -185,6 +185,11 @@ export const hostedCodeMethods = {
   cancel: hostedCall<[string], { ok: true; forcedReset: boolean }>("cancel"),
   get: hostedCall<[string], RunStatus>("get"),
   receipt: hostedCall<[string], unknown>("receipt"),
+  /** Records, durably, that the caller consumed the run's exact terminal result (its digests). */
+  acknowledge: hostedCall<
+    [string, { runDigest: string; resultDigest: string }],
+    { acknowledged: true; duplicate: boolean }
+  >("acknowledge"),
   readScopeTextPage: hostedCall<
     [string, number, number],
     { length: number; encoding: "utf16le-base64"; chunk: string }
@@ -209,11 +214,13 @@ export function createDynamicCodeRunObserver(
     route,
     get: () => on(hostedCodeMethods.get, [route.runId]),
     receipt: () => on(hostedCodeMethods.receipt, [route.runId]),
+    acknowledge: (identity: { runDigest: string; resultDigest: string }) =>
+      on(hostedCodeMethods.acknowledge, [route.runId, identity]),
     await: (waitMs: number, options?: RpcCallOptions) =>
       on(hostedCodeMethods.await, [route.runId, { waitMs }], options),
     events: (after: number, limit: number) =>
       on(hostedCodeMethods.events, [route.runId, { after, limit }]),
-    cancel: () => on(hostedCodeMethods.cancel, [route.runId]),
+    cancel: (options?: RpcCallOptions) => on(hostedCodeMethods.cancel, [route.runId], options),
     /** Close the host's admission once the run is terminal; releasing twice is harmless. */
     release: () => main("dynamicCode.release", [{ runId: route.runId, hostId: route.hostId }]),
   };
@@ -234,10 +241,21 @@ export function createDynamicCodeScope(rpc: Pick<RpcCaller, "call">, hostId: str
  */
 export async function startDynamicCodeRun(
   rpc: Pick<RpcCaller, "call">,
-  input: EvalStartInput
+  input: EvalStartInput,
+  options: {
+    /**
+     * Keep the host's admission when the start call fails. A caller whose start may have reached
+     * the hosting entity (a lost response) retries the same run with the same admission; releasing
+     * it would end the effects of a run that is in fact running. Default: release, which is right
+     * for a caller that gives up.
+     */
+    keepAdmissionOnFailure?: boolean;
+  } = {}
 ): Promise<{
   admission: DynamicCodeAdmission;
   observer: ReturnType<typeof createDynamicCodeRunObserver>;
+  /** The hosting entity's acknowledgement of `start`: the run's digest and status. */
+  started: { runId: string; runDigest?: string; status: string };
 }> {
   const main = createMainRpcCaller(rpc);
   const { resultReceiver: _receiver, ...intent } = input;
@@ -246,13 +264,17 @@ export async function startDynamicCodeRun(
     hostId: admission.hostId,
     runId: admission.runId,
   });
+  let started: { runId: string; runDigest?: string; status: string };
   try {
-    await rpc.call(admission.hostId, hostedCodeMethods.start, [admission.start, admission.nonce]);
+    started = await rpc.call(admission.hostId, hostedCodeMethods.start, [
+      admission.start,
+      admission.nonce,
+    ]);
   } catch (error) {
-    await observer.release().catch(() => undefined);
+    if (!options.keepAdmissionOnFailure) await observer.release().catch(() => undefined);
     throw error;
   }
-  return { admission, observer };
+  return { admission, observer, started };
 }
 
 export interface DynamicCodeExecutorOptions {

@@ -52,6 +52,8 @@ function fakeRpc(
           return { status: "done", result: { success: true, console: "" } };
         case "cancel":
           return { ok: true, forcedReset: false };
+        case "acknowledge":
+          return { acknowledged: true, duplicate: false };
         case "dynamicCode.release":
           return { released: true };
         default:
@@ -141,5 +143,48 @@ describe("startDynamicCodeRun and the run observer", () => {
     await expect(later.get()).resolves.toMatchObject({ status: "done" });
     await expect(observer.cancel()).resolves.toEqual({ ok: true, forcedReset: false });
     await expect(later.release()).resolves.toEqual({ released: true });
+  });
+
+  it("returns the hosting entity's acknowledgement of start", async () => {
+    const { rpc } = fakeRpc();
+    const { started } = await startDynamicCodeRun(rpc, input);
+    expect(started).toEqual({ runId: "run-1", status: "pending" });
+  });
+
+  it("releases the admission of a start that failed, unless the caller keeps it for a retry", async () => {
+    const lost = new Error("start response lost");
+    const released = fakeRpc({ startError: lost });
+    await expect(startDynamicCodeRun(released.rpc, input)).rejects.toBe(lost);
+    expect(released.calls.map((c) => c.method)).toEqual([
+      "dynamicCode.admit",
+      "start",
+      "dynamicCode.release",
+    ]);
+    // The start may have reached the entity: the run is retried with the same admission.
+    const kept = fakeRpc({ startError: lost });
+    await expect(
+      startDynamicCodeRun(kept.rpc, input, { keepAdmissionOnFailure: true })
+    ).rejects.toBe(lost);
+    expect(kept.calls.map((c) => c.method)).toEqual(["dynamicCode.admit", "start"]);
+  });
+
+  it("acknowledges a run's exact result on the hosting entity, and cancels with call options", async () => {
+    const { rpc, calls } = fakeRpc();
+    const observer = createDynamicCodeRunObserver(rpc, { hostId: HOST_ID, runId: "run-1" });
+    const identity = { runDigest: "a".repeat(64), resultDigest: "b".repeat(64) };
+    await observer.acknowledge(identity).catch(() => undefined);
+    expect(calls[0]).toMatchObject({
+      target: HOST_ID,
+      method: "acknowledge",
+      args: ["run-1", identity],
+    });
+    const controller = new AbortController();
+    await observer.cancel({ signal: controller.signal });
+    expect((rpc as unknown as { call: ReturnType<typeof vi.fn> }).call).toHaveBeenLastCalledWith(
+      HOST_ID,
+      expect.objectContaining({ name: "cancel" }),
+      ["run-1"],
+      { signal: controller.signal }
+    );
   });
 });
