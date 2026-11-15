@@ -341,7 +341,10 @@ export function createDynamicCodeService(deps: {
     agentBinding: RuntimeAgentBinding | undefined
   ): Promise<{ ref: SessionRef }> {
     const { ownerId, contextId } = owner;
-    const selfHost = await selfHostOf(ownerId, ctx.caller.runtime.id);
+    // A finite scope is a utility scope with a life of its own (the harness's probes, a one-shot
+    // notebook), disposed by its creator: it stays a session entity. The owner's own work is its kernel.
+    const selfHost =
+      requestedLifecycle === "finite" ? null : await selfHostOf(ownerId, ctx.caller.runtime.id);
     if (selfHost) {
       if (selfHost.contextId !== contextId)
         throw new ServiceError(
@@ -351,15 +354,6 @@ export function createDynamicCodeService(deps: {
           "EACCES",
           undefined,
           "access"
-        );
-      if (requestedLifecycle === "finite")
-        throw new ServiceError(
-          "dynamicCode",
-          "admit",
-          "An entity that hosts its own kernel keeps it for its own life: a finite scope is a session entity's",
-          "EINVAL",
-          undefined,
-          "application"
         );
       return { ref: selfHost.ref };
     }
@@ -547,11 +541,17 @@ export function createDynamicCodeService(deps: {
   ): Promise<{ source: string; className: string; objectKey: string } | null> {
     const owner = await resolveOwnerForCaller(ctx, route);
     const scopeKey = route.scopeKey ?? "default";
-    const selfHost = await selfHostOf(owner.ownerId, ctx.caller.runtime.id);
-    if (selfHost) return selfHost.ref;
     const objectKey = sessionObjectKey(owner.ownerId, scopeKey);
     const entityId = sessionEntityId(objectKey);
     const existing = store.cache.resolveActive(entityId) ?? (await store.resolveRecord(entityId));
+    // A finite scope of the owner is a session entity of its own; everything else of an owner that hosts
+    // its own kernel is that kernel's.
+    const existingStateArgs = existing?.stateArgs as { lifecycle?: unknown } | undefined;
+    const selfHost =
+      existingStateArgs?.lifecycle === "finite"
+        ? null
+        : await selfHostOf(owner.ownerId, ctx.caller.runtime.id);
+    if (selfHost) return selfHost.ref;
     if (!existing) return null;
     if (existing.status !== "active") {
       throw new ServiceError(

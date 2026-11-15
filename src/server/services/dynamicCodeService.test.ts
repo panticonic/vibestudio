@@ -1646,12 +1646,18 @@ describe("dynamicCode admission — an entity that hosts its own kernel (§6.11.
       className: "AiChatWorker",
       objectKey: "k",
     });
-    // The finite scope is a session entity's: the owner keeps its kernel for its own life.
-    await expect(
-      h.dynamicCode.handler(agentCtx(), "admit", [
-        inlineEvalStart({ runId: "run:finite", code: "return 1;", lifecycle: "finite" }),
-      ])
-    ).rejects.toThrow(/finite scope is a session entity/);
+    // A finite scope is a utility scope with a life of its own: it stays a session entity, which the
+    // owner (or its harness) disposes; the owner's own work is its kernel.
+    const finite = (await h.dynamicCode.handler(agentCtx(), "admit", [
+      inlineEvalStart({
+        runId: "run:finite",
+        code: "return 1;",
+        lifecycle: "finite",
+        scopeKey: "probe",
+      }),
+    ])) as { hostId: string };
+    expect(finite.hostId).toMatch(/^do:workers\/session:SessionDO:/);
+    expect(h.createEntity).toHaveBeenCalledOnce();
   });
 
   it("keeps a session entity when another principal selects the entity as its target: that run is not the entity's own", async () => {

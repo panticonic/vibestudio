@@ -1803,10 +1803,13 @@ className: "EvalKernel" }]`. The host recognises an eval host by that declaratio
   (`evalKernelAuthority.ts`); `isEvalHostRecord` stays the session entity's own test.
 - **Admission.** `dynamicCode.admit` resolves the owner; when the owner's class hosts the kernel, the host entity
   is the owner (`selfHostOf`): the executor's runtime id is the agent's own, the harness identity is the agent's
-  own sealed code (as it already was for an agent), and no session entity is created. A finite scope is
-  refused (it is a session entity's: the agent keeps its kernel for its own life). Host controls reach the
-  agent's methods by their names (`get`, `cancel`, `reset`, `recordAuthorityEvent`, `retainExecutionRoot`,
-  `executionRoots`).
+  own sealed code (as it already was for an agent), and no session entity is created. This holds only when
+  **the owner itself asks, for a persistent scope**: a shell, the server or a test runner that selects the
+  agent as the target of its run (`owner-session`) is another principal with its own scope, and a **finite**
+  scope is a utility scope with a life of its own (the system-test harness runs its probes as the headless
+  agent and disposes them); both stay session entities, as before (found by `eval-events`, whose harness
+  probes run as an `AiChatWorker`). Host controls reach the agent's methods by their names (`get`, `cancel`,
+  `reset`, `recordAuthorityEvent`, `retainExecutionRoot`, `executionRoots`).
 - **The agent.** `HostedEvalKernel` (`packages/agentic-do/src/hosted-eval-kernel.ts`) holds the relay once; the
   vessel exposes `start`, `await`, `events`, `cancel`, `get`, `receipt`, `acknowledge`, `readScopeTextPage`,
   `deleteScopeValue`, `end` (the agent itself or the host) and `reset`, `recordAuthorityEvent`,
