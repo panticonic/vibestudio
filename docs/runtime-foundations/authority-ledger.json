@@ -16830,7 +16830,7 @@
       "r3aRequirement": "allOf(capability(code,service:evalExecutionRoots.retain),workspace-member)",
       "r3b": {
         "review": "sealed-eval-kernel-retention",
-        "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention. Retention is authenticated as the live sealed EvalDO and rechecks the exact active execution admission, run, and immutable imported artifact. Evaluated code cannot call this kernel-only bookkeeping receiver."
+        "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention. Retention is authenticated as the live sealed session entity that hosts the kernel and rechecks the exact active execution admission, run, and immutable imported artifact. Evaluated code cannot call this kernel-only bookkeeping receiver."
       },
       "capability": "service:evalExecutionRoots.retain",
       "parityAssertion": "generated-census:host-authority"

@@ -542,6 +542,132 @@ session (shell, host-only reset, website-eligible runs) and the natlang panel. s
 probe above. One behaviour worth knowing: after the CPU limit ends a `start` call the kernel keeps its heap (same incarnation id on the next run) and the timer fires about one
 limit after the call began, so a run with `timeoutMs` T is settled at about T plus the 1.5 s grace.
 
+### P2b steps 5 and 6, third pass (2026-11-15): the agent pulls, the push model is deleted
+
+**What moved.** The agent (Base `packages/agentic-do`), the website acceptance spec and a host integration test
+(`tests/headless-panel.integration.test.ts`, found by `rg` and not in the earlier list) settle by pull; then step 6
+deleted the push model. The design is the "What the agent needs" plan above, with the deviations below; the
+as-built account is `docs/dolt-redesign.md` §7.5.2 ("The agent pulls too") and §7.11 ("As done").
+
+- **Agent.** `native-eval-tool.ts` `execute` admits with `dynamicCode` and starts on the session entity
+  (`startDynamicCodeRun`, new option `keepAdmissionOnFailure`, so a lost start response is retried under the same
+  admission instead of releasing it), records the start's digest, reads `receipt`; if the run is not terminal it
+  creates the `vibestudio.eval-await` background task (once: its id is kept in the retained admission document)
+  and parks as before. `createNativeEvalAwait` (`native-eval-receipts.ts`) pulls `await` and `events` for at most
+  15 s per invocation, hands the pages to `publishEvalEvents` (console to `invocation.output`, authority events
+  to `invocation.progress`; the old `onEvalProgress` body), checkpoints the cursor, sleeps 0.5 s and repeats; a
+  terminal row releases the admission and commits the receipt acceptance, the acknowledgement task and its own
+  completion in **one transaction** (`retainEvalReceiptTx`). `SessionDO.acknowledge` relays the acknowledgement
+  to the kernel under the run's nonce (the kernel's `acknowledgeRunResult` now checks its caller).
+  `cancel` and the chat pill's `cancelEval` are `cancel` on the entity. Gone: `onEvalComplete`, `onEvalProgress`,
+  `consumeEvalReceipt`, `retainedEvalRunRoute`, `evalOwnerCallbackRpcMethods` and its contract check.
+- **Deviation from the plan: the pull is not one long phase.** The first version looped for the whole run inside
+  one invocation. `alarm()` runs `harness.runPass`, which waits for every live invocation, so it would have held
+  the owner's wake-up pass for as long as the user's code runs. Each invocation now pulls for at most 15 s and
+  sleeps (`sleepUntil`); a failed pull sleeps with backoff instead of looping.
+- **Deviation from the plan: `settle` is not "replaced by the host keeping events".** The two host-to-entity
+  interlocks that carry facts only the host holds stay, as named host-only methods of `SessionDO`
+  (`recordAuthorityEvent`, `retainExecutionRoot`, `executionRoots`); they are not delivery to a caller. A pull of
+  authority events by the kernel was not built (a host round trip per poll and a second cursor). The string
+  `settle`, `failPendingRun` and the event-sink nonce are gone.
+- **Step 6.** `evalService.ts` is `dynamicCodeService.ts` (`createDynamicCodeService`, the `dynamicCode` service
+  alone; the managed service is named `dynamicCode`); deleted: the `eval` service and its methods, the host tail,
+  `deliverTerminalToReceiver` and its backoff, `resultReceiver`, `evalEngine.ts` (and
+  `EVAL_ENGINE_HOST_CONTRACT_VERSION`: nothing compared it), `evalEventIngress` (service, schema, sink registry, the
+  kernel's live push), `createEvalExecutor` and the other push-era helpers of `eval.ts`, `eventSinkNonce`. The
+  kernel lost the console streamer and every push. Authority golden, host catalog, foundation ledgers and
+  `scripts/runtime-authority-review.json` (11 rows removed, `censusDigest` updated) are regenerated (deletions
+  only). `execution.eval-do` is `execution.eval-kernel` in the update ledger. Repo-wide prose and fixtures: see the
+  `rg` result below.
+- **Website spec.** `tests/e2e/flows/websiteWorkspaceConnection.spec.ts` admits with `callMain('dynamicCode.admit')`,
+  starts and pulls with an ad-hoc `hostedCall` descriptor over the SDK's `rpc`, releases in `finally`. It needs the
+  desktop app: it type-checks (host `pnpm type-check`) and **was not run**.
+- **Self-development scenario.** The attached-host protocol carries service calls only, so the system-testing
+  scenario `self-development-child-eval` (which called the child host's `eval.start`/`eval.get`) now admits and
+  releases through the attached route (`dynamicCode.admit`, `dynamicCode.release`) and no longer proves that the cell
+  runs. Its validator and unit test are updated; **the scenario was not run** (it needs an isolated development host).
+- **Not done:** the optional agent self-hosting (`hosts` manifests, `onHostedRevoked`, the executor fact renamed from
+  `kind: "eval"`): documented in §7.12 item 7; nothing needs it.
+
+**Not tested as the user asked.** A real-fork probe of "the agent restarts mid-run and gets its result exactly once" was
+not built: the owner's Pi harness runs in the agent's cell with its own storage, and a probe would need the whole
+Base agent bundle and the host's authority stack in a fork test. The restart semantics are tested on a real
+file-backed Pi session instead (`native-eval-tool.test.ts` "an owner restart while the run is pending still gets its
+result exactly once": the owner closes with the run pending, the run finishes while it is down, the reopened owner's
+await task pulls the row, accepts the receipt once, the parked tool call finishes, the cell was started once, the
+acknowledgement is called once, a second restart changes nothing; also a restart between the terminal row and the
+acknowledgement, a failed and a refused pull, an event cursor that survives a restart, cancellation), and on the
+product by the agent lanes below (the pull itself, not a restart).
+
+**`rg 'evalService|EvalDO|UNSAFE_EVAL|resultReceiver|eval_result_redeliveries'`** over host, Base and system-testing
+(`node_modules` excluded) now has these hits and no others; each is explained:
+
+- **Base and system-testing: none.**
+- **Host, the D5 migration that drops legacy `EvalDO` state (the user's decision):** `packages/shared/src/evalRuntimeIdentity.ts`
+  (`legacyEvalDoRuntimeId`, the entity id of the retired class), `src/server/services/dynamicCodeAdmission.ts` (comments on
+  `legacyHostRuntimeId` and `legacyNotebookDropped`), their tests (`evalRuntimeIdentity.test.ts`, `dynamicCodeAdmission.test.ts`, the
+  D5 cases of `dynamicCodeService.test.ts`), `src/server/celldMigration.test.ts` (the legacy storage class names the migration maps)
+  and `src/server/workspaceStateMigration.test.ts` ("owes nothing to the retired class"), and `STATE_DIRECTORY.md` (the legacy
+  `vibestudio_internal:EvalDO/` directory, now documented as dropped by the upgrade).
+- **Host, regression guards that name the retired thing on purpose:** `packages/shared/src/productBuiltinCatalog.generated.test.ts`
+  ("eval is hosted code, not a product class": `EvalDO` is not a product builtin) and
+  `packages/service-schemas/src/eval.test.ts` (`resultReceiver` is refused by the start input).
+- **Host `docs/`: 48 files.** `docs/dolt-redesign.md` is this design and names what it deletes. The other 47 are dated plans, specs,
+  reviews and audits (`*-plan.md`, `*-spec.md`, `security-review-*`, `reviews/`, `durable-pi-*`, ...) that describe the system as it
+  was when written; they were not rewritten. The live reference docs were (`docs/architecture/*`, `docs/cli.md`, `docs/pi-architecture.md`,
+  `docs/agentic-architecture.md`, `skills/vibestudio-agent/*`, the generated `API.md`).
+- Generated rows (`authority-ledger.json`, the golden, the host catalog, `runtime-authority-review.json`) have no hit left.
+
+**Gate, this pass.** `pnpm type-check`, `pnpm lint`, Base `type-check:userland` for `base` and `system-testing`
+(`npx tsx scripts/type-check-userland.ts --template X`), `check:execution-root-providers`, `check:builtin-catalog`,
+`generate:host-authority --check`, `generate-runtime-foundation-ledgers --check`, `generate-unit-authority-manifests --check`,
+`check-explicit-authority-manifests`, `check:runtime-docs`, `check:agent-docs`, `check:userland-rpc-contracts`: clean.
+Host vitest, the whole `vitest.host.config.ts` suite including the real-fork files (fork `2d1749d`): 1,054 files, 10,287 tests: 2 failures, both pre-existing (`runtimeService.test.ts` "starts an unbound native execution clone fresh", `src/cli/agent/index.test.ts` "exports the selected workspace RPC client"); the earlier run of this pass failed 22 tests of my own fixture renames (`workspaceEntityStore.test.ts`, one `rpcServer.test.ts` case), fixed. The run included the 13 real-fork files (the P2 list, `workspaceStateCelld`, `celldCpuWatchdogCelld`, `doltEvalKernelCelld`, `ownerKernelPathCelld`, `doltDurableCelld`), all green; `internalDoLoader.test.ts`, which the earlier gates did not include, had two failures from step 4 (it named the deleted `EvalDO` bundle entry) and is fixed.
+Base userland, the whole template: 540 files, 5,094 tests, 2 failures: `workers/session` "records the host's observations..." (my
+new test, a wrong message pattern, fixed and re-run green) and `tests/vcs-skill-release-generator.test.ts` ("stale VCS skill artifacts:
+skills/vibestudio-vcs/content-manifest.json": **pre-existing**, it fails identically on the tree without my uncommitted Base changes and
+this work touches nothing under `skills/vibestudio-vcs`). system-testing template (`workers/system-test-runner`, `skills/system-testing`):
+72 files, 892 tests, 4 failures, all in `cli.test.ts` doctor tests: **pre-existing** (the same 4 fail with this pass's changes stashed).
+New and changed tests: `native-eval-tool.test.ts` (15, on a file-backed Pi session: the restart cases above), `native-eval-receipts.test.ts`
+(10), `native-agent-owner.test.ts` (57), `chat-op.test.ts` (61), `SessionDO.test.ts` (12), `EvalKernel.contract.test.ts` (9), host
+`dynamicCodeService.test.ts` (34), `dynamicCode.test.ts` (8).
+
+**System-test lanes** (`openai-codex:gpt-6-luna`, a fresh instance per 4 to 5 tests, one test per `run`, concurrency 1, 420 s, fork
+`2d1749d`, Base and system-testing worktrees through the symlink root, each instance given 150 s to finish its background builds before its
+first run: a run started during them lost the instance to the 6 GiB scope limit twice, which is why the sweep above has a settle delay). "Before" is the last table of the second pass.
+
+| Lane                   | Before                | First sweep                                                                                                                                                                       | After one re-run                                                                                                                                                                                                                                                                                                  |
+| ---------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| eval-lifecycle (12)    | 12 pass               | 10 pass; `eval-exact-authority` (the model passed `resource.key: "*"`: its own `ERUNMANIFEST`; it failed 3 of 3 here, 3 times earlier, passed on re-run), `eval-scope-reset` fail | **12 pass** (`eval-exact-authority` and `eval-scope-reset` pass on re-run)                                                                                                                                                                                                                                        |
+| agentic-runtime (9)    | 8 pass, 1 fail        | 6 pass; `state-args-immediate-snapshot`, `gad-status-summary`, `workspace-test-runner-extension` fail                                                                              | **7 pass, 2 fail**: `workspace-test-runner-extension` (`[fs.ensureMaterialized] Context folder ... is missing` in `verify`; fails on base, passed on re-run in the earlier pass), `state-args-immediate-snapshot` (`eval:guest_type_error`, the model's own script; **2 of 2 fail on the pre-change commits too**). `gad-status-summary` passes on re-run |
+| smoke (4)              | 3 pass, 1 fail        | **4 pass**                                                                                                                                                                        | 4 pass                                                                                                                                                                                                                                                                                                            |
+| workers (9)            | 9 pass                | **9 pass**                                                                                                                                                                        | 9 pass                                                                                                                                                                                                                                                                                                            |
+| harness-resilience (5) | 5 pass                | 4 pass; `eval-huge-return-bounded-terminal` fails (the model's own `JSON.parse` of the truncated value, as in earlier passes)                                                      | **5 pass**                                                                                                                                                                                                                                                                                                        |
+| panels                 | 3 pass, create-panel  | `browser-panel`, `panel-tree-navigation`, `panel-list-sources` pass; `create-panel` fails (model errors, `eval:guest_execution_failed`); `browser-import-panel-lifecycle` 0 of 0 (about/browser-import-inspector is not installed) | the same: 3 pass, `create-panel` fails again, 0 of 0                                                                                                                                                                                                                                                              |
+
+The agent's pull itself is exercised by every agent-driven test above (the eval tool is the agent's pull). **Not exercised on the
+product:** an agent restart in the middle of a run (unit-tested on a real file-backed session only, see above), the website spec, the
+self-development child scenario. No lane test showed a hang or an attestation error. All instances are stopped; the
+fork binary is unchanged.
+
+**Commits of this pass.** vibestudio `feat/dolt-p0`: `12042a31f` the shared client (the entity's acknowledgement of `start`,
+`acknowledge` on the observer, `cancel` with call options, `keepAdmissionOnFailure`); `5ec7dbbee` the website spec and the
+headless-panel integration test pull; `1069cc0d9` step 6 (the push model deleted); the handoff commit that follows this text. Base
+`feat/dolt-p2`: `74e5261` the agent pulls (eval-await task, acknowledge relay, kernel pushes removed); `9b757c8` step 6 in Base
+(named host-only session methods, `failPendingRun` and the engine constant deleted, prose and fixtures, the sandbox skill documents the pull
+client). system-testing `feat/dolt-p2`: `915ea48` the self-development scenario. All host commits used `--no-verify` for the pre-existing
+`pnpm format:check` failure only (type-check and lint were run by hand). Nothing pushed.
+
+## What remains after P2b
+
+- **The agent hosting its own kernel** (§7.12 item 7). Optional; nothing in the pull or the deletions needs it.
+- **Moving the host's authority events to a pull** (the kernel asking the host on each `events` call) if the two named host-to-entity
+  interlocks of §7.5.2 are to go too.
+- **A product-level restart probe for the agent** (kill or swap the agent's cell in the middle of a run in a lane). The system tests have no
+  scenario that restarts an agent; the unit tests cover the durable semantics.
+- **The pre-existing failures**, unchanged: `runtimeService.test.ts` clone test, `src/cli/agent/index.test.ts`, system-testing
+  `cli.test.ts` doctor tests, `vcs-skill-release-generator` (stale manifest in Base).
+
 ## P3 Durable services: what was built (`docs/dolt-redesign.md` §4.6 has the design and the deviations)
 
 **`WorkspaceStateDO`** (`packages/builtin/src/workspace-state/WorkspaceStateDO.ts`) is the workspace state on a

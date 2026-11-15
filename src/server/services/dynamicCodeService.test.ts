@@ -1521,7 +1521,7 @@ describe("dynamicCode admission", () => {
 
 describe("dynamicCode admission — agent bindings", () => {
   // Plan §6.4: an `agent` caller binds to its host-verified entity binding with
-  // zero flags; the EvalDO trusts the binding, not client-supplied owner/context.
+  // zero flags; the kernel trusts the binding, not client-supplied owner/context.
   it("binds agent eval to the entity binding (owner = binding.entityId, context = binding.contextId)", async () => {
     const { service, calls } = createHarness({ ent_agent: "ctx_bound" });
     const binding = {
@@ -1542,7 +1542,7 @@ describe("dynamicCode admission — agent bindings", () => {
       [inlineEvalStart({ runId: "run:bound-agent", code: "return 1;" })]
     );
 
-    // Registered + ran against the EvalDO keyed by the BINDING entity, in the
+    // Registered + ran against the session entity keyed by the BINDING entity, in the
     // bound context — no ownerId/contextId came from the client.
     const objectKey = evalKey("ent_agent", "default");
     const activate = calls.find((c) => c.method === "createEntity");
