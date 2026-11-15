@@ -105,6 +105,12 @@ const FRAMEWORK_OBJECTS = new Set([
   "_vibestudio_direct_rpc_nonces",
   "vsl_direct_rpc_nonces",
 ]);
+/**
+ * The `vsl_` prefix is the framework's local-table naming (a Dolt cell never versions it): a table under it belongs to
+ * a library store that is created when its session opens (Pi's composite storage keeps its operational set there),
+ * not to the class's sealed schema, so an object that predates such a table opens without a shape difference.
+ */
+const FRAMEWORK_PREFIX = "vsl_";
 
 function normalizedShape(sql: SchemaSqlStorage, schemaTables?: readonly string[]): string {
   const ownedTables = schemaTables === undefined ? null : new Set(["state", ...schemaTables]);
@@ -121,6 +127,7 @@ function normalizedShape(sql: SchemaSqlStorage, schemaTables?: readonly string[]
         const name = String(row["name"]);
         const table = String(row["tbl_name"] ?? "");
         if (FRAMEWORK_OBJECTS.has(name) || FRAMEWORK_OBJECTS.has(table)) return false;
+        if (name.startsWith(FRAMEWORK_PREFIX) || table.startsWith(FRAMEWORK_PREFIX)) return false;
         if (!ownedTables) return true;
         return ownedTables.has(name) || ownedTables.has(table);
       })

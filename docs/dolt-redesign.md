@@ -1745,6 +1745,13 @@ table lost its `AUTOINCREMENT` (a local table of a Dolt cell may not have one).
   channel prefix accounts for, `at`. The commit is then the newest turn commit whose `entries<=N` is at most
   `at` (`lastTurnCommitThrough`), or the cell before its first turn closed. The granularity is a closed
   turn, as §6.4 required; the anchors a fork adopts are those of entries the commit holds.
+- **An object that predates the split opens under its sealed schema.** The schema gate fingerprints every
+  table of an object, and the local `vsl_` set is created by the session, after the gate. Found by reading the
+  gate against the change, not by a test that failed: the first draft listed the `vsl_` tables as required (an
+  existing object has none until it opens) and the shape of a store that had opened once would have drifted at
+  its next activation. The `vsl_` prefix, the framework's local-table naming, is now outside every class's
+  sealed shape (`packages/durable/src/schema.ts`), and `ensureLocalPiTables` creates the set (or its
+  schema-version row, which a fork loses) at each open, as a read when there is nothing to do.
 - **The one-time move of a single-set store** (`pi-store-split.ts`): a legacy object (copied by the
   engine's import, or an upgraded SQLite object) has Pi's one set. `migratePiStoreLayout`, one committed
   transaction after the layout migration, moves tasks, submissions and the operational documents (with

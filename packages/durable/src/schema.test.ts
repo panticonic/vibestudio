@@ -53,6 +53,20 @@ function definition(
 }
 
 describe("current-only durable-object schema identity", () => {
+  it("leaves a library store's local `vsl_` tables out of the sealed shape, so an object made before them opens unchanged", async () => {
+    const sql = await createInMemorySql();
+    const first = definition(sql);
+    await installDurableObjectSchema(first);
+    const before = durableObjectSchemaFingerprint(sql);
+    // A library store creates its own local set when its session opens, after the schema gate sealed the shape.
+    sql.exec("CREATE TABLE vsl_payload_chunks (id INTEGER PRIMARY KEY, data BLOB)");
+    sql.exec("CREATE INDEX vsl_payload_by_id ON vsl_payload_chunks (id)");
+    expect(durableObjectSchemaFingerprint(sql)).toBe(before);
+    await expect(
+      installDurableObjectSchema({ ...definition(sql), schemaTables: undefined })
+    ).resolves.toBeUndefined();
+  });
+
   it("uses one fresh shape snapshot for trusted admission and metadata, rejecting a different build shape", async () => {
     const probe=await createInMemorySql();
     await installDurableObjectSchema(definition(probe));
