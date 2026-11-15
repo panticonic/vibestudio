@@ -1787,15 +1787,53 @@ provenance and forks the **caller's own** storage into it before activation (`re
 entity itself can fork itself, into its own class, at one of its own commits), and the child adopts the
 conversation for its task channel with the same `adoptChannelKnowledge`.
 
-#### 6.11.6 S6: what was done
+#### 6.11.6 S6: executor fact (S6a) and agent self-hosting (S6b)
 
-Done: the executor fact is `kind: "dynamic-code"` with a `runId` (it was `kind: "eval"` with an `evalRunId`),
+**S6a.** The executor fact is `kind: "dynamic-code"` with a `runId` (it was `kind: "eval"` with an `evalRunId`),
 in the wire type, the registry, the admission, the roots and live-caller consumers and their tests.
-**Not done: agent self-hosting** (`hosts` in the agent manifests, `hostCode` in the agent, `onHostedRevoked`).
-It means moving `SessionDO`'s relay (start, await, events, cancel, get, receipt, acknowledge, the three
-host-only interlocks and the channel-delivery relay to the kernel's resident sessions) into the agent base,
-making the admission resolve the agent itself as the host, and recognising an agent-hosted kernel in the places
-`isEvalHostRecord` names (approvals, webhooks, authority runtime, live caller). Nothing in S1 to S5 needs it.
+
+**S6b, as built (2026-11-15).** An agent hosts its own eval kernel; no session entity stands between an agent
+and its runs.
+
+- **Manifests.** `AiChatWorker` and `SilentAgentWorker` declare `hosts: [{ source: "workers/eval-kernel",
+className: "EvalKernel" }]`. The host recognises an eval host by that declaration, not by a class name:
+  `declaresEvalKernel` (shared) over the build graph's `durable.classes[].hosts`, behind one predicate
+  (`hostsEvalKernel`, `index.ts`) that `dynamicCode`, `evalExecutionRoots`, the root provider and the authority
+  observer take. `isEvalHost(record, hostsEvalKernel)` is the session entity or such a class
+  (`evalKernelAuthority.ts`); `isEvalHostRecord` stays the session entity's own test.
+- **Admission.** `dynamicCode.admit` resolves the owner; when the owner's class hosts the kernel, the host entity
+  is the owner (`selfHostOf`): the executor's runtime id is the agent's own, the harness identity is the agent's
+  own sealed code (as it already was for an agent), and no session entity is created. A finite scope is
+  refused (it is a session entity's: the agent keeps its kernel for its own life). Host controls reach the
+  agent's methods by their names (`get`, `cancel`, `reset`, `recordAuthorityEvent`, `retainExecutionRoot`,
+  `executionRoots`).
+- **The agent.** `HostedEvalKernel` (`packages/agentic-do/src/hosted-eval-kernel.ts`) holds the relay once; the
+  vessel exposes `start`, `await`, `events`, `cancel`, `get`, `receipt`, `acknowledge`, `readScopeTextPage`,
+  `deleteScopeValue`, `end` (the agent itself or the host) and `reset`, `recordAuthorityEvent`,
+  `retainExecutionRoot`, `executionRoots` (the host only). Every call to the kernel is `{ kind: "host" }`: no
+  admission nonce, the agent is the kernel's only principal (§7.5.1). The agent's tool, await task and
+  acknowledgement address `evalHostId(ownerId)`, which is the owner. A call an agent makes to its own id is
+  delivered in-process by its rpc client with **no verified caller**; the vessel accepts exactly that and the
+  host (a call from outside always carries the caller the host verified). The chat/describe relays
+  (`chatOp`, `describeEvalOwner`, ...) now check that the caller is the agent itself, because the kernel acts as
+  the agent.
+- **Lifecycle.** `releaseForLifecycle` relays each phase to the kernel first (runs cancelled, panels it opened
+  retired, the residency hold released on `release`), then to the agent's own release. `onHostedRevoked` needs
+  nothing in the agent: the root relays a drain or swap to each hosted facet, and the kernel class owns the
+  callback.
+- **Deviations from §7.2 and §7.5.1, each forced.** (1) **One kernel per agent, one notebook scope for the whole
+  agent.** The execution-session registry admits one live run per executing runtime id, and a kernel's outbound
+  calls are attributed to its entity; several kernels in one entity (one per conversation scope, as session
+  entities give) would need the registry keyed by (entity, scope). The agent's former per-conversation
+  notebooks are therefore one; runs of different conversations queue behind each other at admission, as the
+  runs of one conversation always did. (2) **Approvals of an agent's own eval are titled as the agent's** (the
+  requester is the agent entity; `approvalCallerTitle`'s "eval sandbox" title is for session entities).
+  (3) **The kernel's channel-delivery relay** (resident sessions) is not on the agent: an agent's eval reaches
+  channels through `chatOp`, never through resident sessions. (4) The kernel's infrastructure calls run under
+  the agent's sealed authority, as the design says; the agent's manifest was not widened for it (see the lanes).
+  (5) **The census activates every self-hosting agent**: `executionRoots` is a call on each active agent entity
+  (the session entity answered `[]` without starting a kernel and so does the agent, but the agent's own
+  activation is the cost).
 
 #### 6.11.7 What the product lanes found (the last of the pass)
 
@@ -1822,6 +1860,37 @@ The unit and real-fork tests passed before the lanes ran; the lanes found what t
   Agent cells hit it rarely and persistently (§6.11.3's agent runs many transactions from chained promises); a
   retry does not cure it. The evidence and the pointer into celld are in `HANDOFF-dolt-redesign.md`
   ("Input-gate refusals in agent cells"); it is the fork's to fix, and Pi's 8-attempt retry should go when it does.
+
+#### 6.11.8 Compaction of Dolt cells
+
+A commit appends to the cell's file and frees nothing; `gc` rewrites the whole file. R1 for the agent cell:
+635 KB a turn before `gc`, 41 KB after, and a fork copies the file. Nothing in the product ran it. Now every Dolt
+class does, from its base (`@vibestudio/durable` and Base's `durable-base.ts`; helpers `doltGcDue`,
+`collectDoltGarbage`, `DoltGcPolicy` in `packages/durable/src/dolt.ts`):
+
+- **Schedule, geometric.** A cell is due after `minCommits` (64) commits, and after that when the commits since
+  its last collection reach half the commits it held then (`growth` 0.5), capped at the engine's log window of
+  10 000. A fixed N would make the total cost quadratic (the rewrite is the size of the file); this keeps it
+  linear in the history and collects a young cell early, when it is cheap. The memory is the cell's own local
+  `state` (`__dolt_gc_head`, `__dolt_gc_commits`): never versioned, never forked, and kept across a restart. Due
+  is one bounded read of the log (`log({ limit: threshold })`); a class overrides `doltGcPolicy()` (or returns
+  `null` for never).
+- **When.** After a commit, never in it: `committedTransaction` asks for a check after every eighth commit of an
+  activation (a channel commits per event); the agent asks after the commit of a closed turn
+  (`agentCommitPolicy` in `native-agent-owner.ts`, every one). The check waits 250 ms under `waitUntil`, so the
+  committing event finishes first, then runs in a `blockConcurrencyWhile` (no other event, no open
+  transaction), and **only when the working set holds nothing uncommitted** (`dirtyApplicationTables`): a turn
+  that is mid-way leaves the cell alone and the next closed turn tries again.
+- **Measured on the real fork** (`doltGcCelld.test.ts`, class on the real `DurableObjectBase`, a turn of eight
+  plain transactions and a commit): the same 19-commit history is 5.4 MB never collected and 0.66 MB after the
+  schedule ran (2.8 MB at 10 commits before it); the cell reads and writes, keeps every commit and its local
+  rows, and the schedule survives a kill and restart. The agent-cell stand-in (`universalDoHost.test.ts`)
+  asserts that a collection changes no state (entries and commits identical, nothing dirty), that the parent
+  closes another turn afterwards, and that a fork cut after the collection holds exactly what the parent held at
+  its commit and continues on its own.
+- **Not done:** `WorkspaceStateDO` (a product class, not this base) is not on the schedule; a byte threshold
+  (the engine reports no file size to the cell; `sql.databaseSize` was not probed); gc under concurrent writes
+  to other objects of the same node.
 
 ---
 
@@ -2475,11 +2544,8 @@ Each step is a complete cut that keeps the system working.
    Done since step 4: a run's `timeoutMs` bounds its CPU (§7.8, celld `ec0d6f5`), a run ended by its CPU limit
    is settled by its deadline (§7.8, celld `2d1749d`, Base `bd89d94`), the D5 restart report is a message
    (§7.10), the cost of a kernel run is measured (§7.7).
-7. **Not done:** the agent hosting its own kernel (`hosts` in the agent classes' manifests, `onHostedRevoked`,
-   the executor fact renamed from `kind: "eval"`). The agent's kernel is hosted by its session entity, which is
-   what the host places that name the session entity (`isEvalHostRecord`: approvals, webhooks, authority
-   runtime, live caller) and `chatOp`'s `assertOwnEvalCaller` already expect; self-hosting is a change to all of
-   them and is not needed for any deletion above.
+7. **Done** (2026-11-15, §6.11.6 "S6b, as built"): the agent hosts its own kernel (`hosts` in the agent classes'
+   manifests, the host's manifest-based eval-host recognition, the executor fact `kind: "dynamic-code"`).
 
 ---
 
