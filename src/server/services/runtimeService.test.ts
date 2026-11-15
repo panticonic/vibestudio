@@ -3907,7 +3907,8 @@ describe("runtimeService.cloneContext", () => {
           : null,
     });
     const native = await seedDO(service, "ctx-native-clone", "native");
-    expect(instance.entityResolve(native.id)?.agentBinding).toBeUndefined();
+    // A native owner serves its own channel; its clone is created unbound until the fork rebinds it.
+    expect(instance.entityResolve(native.id)?.agentBinding).toBeDefined();
     const ordinary = (await service.handler({ caller: serverCaller }, "createEntity", [
       {
         kind: "do",
@@ -3923,6 +3924,7 @@ describe("runtimeService.cloneContext", () => {
     const nativeClone = result.entities.find((entity) => entity.sourceId === native.id)!;
     const ordinaryClone = result.entities.find((entity) => entity.sourceId === ordinary.id)!;
     expect(instance.entityResolve(nativeClone.newId)?.cloneProvenance?.storage).toBe("snapshot");
+    expect(instance.entityResolve(nativeClone.newId)?.agentBinding).toBeUndefined();
     expect(instance.entityResolve(ordinaryClone.newId)?.cloneProvenance?.storage).toBe("snapshot");
     expect(cloneDurableStorage).toHaveBeenCalledTimes(2);
     expect(cloneDurableStorage).toHaveBeenCalledWith(
@@ -3944,6 +3946,65 @@ describe("runtimeService.cloneContext", () => {
         }),
       })
     );
+  });
+
+  it("lets an entity fork its own storage into a new entity of its class, at a commit, and refuses any other fork", async () => {
+    const { service, instance, cloneDurableStorage } = await buildDeps();
+    const parent = await seedDO(service, "ctx-self-fork", "parent");
+    const caller = createVerifiedCaller(parent.id, "do");
+    const child = (await service.handler({ caller }, "createEntity", [
+      {
+        kind: "do",
+        execution: { surface: "code", source: "workers/agent" },
+        className: "AgentDO",
+        key: "child",
+        contextId: "ctx-self-fork",
+        forkStorage: { at: "commit-of-the-last-closed-turn" },
+      },
+    ])) as { id: string };
+    expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
+    expect(cloneDurableStorage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fromKey: "parent",
+        toKey: "child",
+        at: "commit-of-the-last-closed-turn",
+        cooperativelyPaused: true,
+        reservation: expect.objectContaining({
+          cloneProvenance: expect.objectContaining({
+            storage: "snapshot",
+            sourceEntityId: parent.id,
+          }),
+        }),
+      })
+    );
+    expect(instance.entityResolve(child.id)?.cloneProvenance?.storage).toBe("snapshot");
+    // Another class is not the caller's own: no entity reads another's storage through this.
+    await expect(
+      service.handler({ caller }, "createEntity", [
+        {
+          kind: "do",
+          execution: { surface: "code", source: "workers/counter" },
+          className: "CounterDO",
+          key: "other-class",
+          contextId: "ctx-self-fork",
+          forkStorage: { at: "commit" },
+        },
+      ])
+    ).rejects.toThrow(/own class/);
+    // A caller that is not an entity cannot fork one.
+    await expect(
+      service.handler({ caller: serverCaller }, "createEntity", [
+        {
+          kind: "do",
+          execution: { surface: "code", source: "workers/agent" },
+          className: "AgentDO",
+          key: "from-host",
+          contextId: "ctx-self-fork",
+          forkStorage: { at: "commit" },
+        },
+      ])
+    ).rejects.toThrow(/caller to be an active DO/);
+    expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
   });
 
   it("marks only the verified source caller for a cooperative storage snapshot", async () => {
@@ -4159,12 +4220,13 @@ describe("runtimeService.cloneContext", () => {
     ])) as CloneResult;
     const clonedChannel = clone.entities.find((entity) => entity.sourceId === channel.id)!;
     const clonedAgent = clone.entities.find((entity) => entity.sourceId === agent.id)!;
-    expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
+    // The agent's cell is forked with the channel's: the clone holds its conversation, unbound until it is rebound.
+    expect(cloneDurableStorage).toHaveBeenCalledTimes(2);
     expect(cloneDurableStorage).toHaveBeenCalledWith(
       expect.objectContaining({ fromKey: "chat-parent", toKey: clonedChannel.newKey })
     );
-    expect(cloneDurableStorage).not.toHaveBeenCalledWith(
-      expect.objectContaining({ fromKey: "agent-parent" })
+    expect(cloneDurableStorage).toHaveBeenCalledWith(
+      expect.objectContaining({ fromKey: "agent-parent", toKey: clonedAgent.newKey })
     );
     expect(instance.entityResolve(clonedAgent.newId)?.agentBinding).toBeUndefined();
 

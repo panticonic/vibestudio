@@ -1636,10 +1636,9 @@ that make §6.3 and §6.4 steps 3 and 4 larger than written:
    whole-cell fork carries other channels' conversations.
 
 So S3 is a Pi change first (composite storage, local document kinds, a turn-commit with anchors) and
-an agent change second. It was not started in this pass because half of it cannot be done in the
-Base template alone, and a half-migrated Pi would leave two models in force.
+an agent change second. §6.11 is what was built, and where this survey was wrong.
 
-### 6.10 The hash chain: what deleting it touches (S1, not started)
+### 6.10 The hash chain: what deleting it touches (S1, done: §6.11.1)
 
 Corrections to §6.7 found by the survey. `prepare-log-event.ts` has **no hash code** (it normalizes
 actors, audiences and causality, and GAD calls it too): it stays. `hash.ts` is a different, legacy
@@ -1659,6 +1658,137 @@ parent envelope id); (3) `channel-ledger.ts` stops computing and storing the cha
 its own chain with a private function (its removal is P5's) and stops exposing it; (5) delete the
 protocol's chain code and legacy `hash.ts`, regenerate the GAD catalog. The channel's
 `channel_ledger_state` already is a local table (S2), so (2) and (3) need no engine work.
+
+### 6.11 P4 as built, slices S1 and S3 to S6
+
+The slice order held: S1, then S3 (Pi first, then the agent), S4, S5, S6. Each slice was committed
+separately; the lanes were run once for S3 to S5 together, because the three are one model (the agent's
+cell on Dolt and the fork that follows from it) and a lane run of S3 alone would have gated a state that
+cannot fork.
+
+#### 6.11.1 S1: the hash chain is deleted
+
+The channel's event ledger carries no `prevHash`/`hash`. What changed, in the survey's order:
+
+1. The host's strict wire schema `logEnvelopeSchema` (`workspaceSource.ts`) lost the two fields.
+2. The observation protocol, the delivery-release barrier and the fork prefix name a boundary by
+   `(sequence, envelopeId)`: `waitObservedThrough` answers `{ observedSequence, envelopeId }` (null at
+   sequence 0), a fork's parent prefix is the envelope id at its sequence, and the claim receipts carry the
+   envelope id alone. GAD's `initializeLogHead` and `forkLog` still answer their head-level hash; the channel
+   no longer compares it.
+3. `channel-ledger.ts` stores and computes no chain. Schema 127 **recreates** `channel_ledger_events` (no
+   `hash`) and `channel_ledger_state` (no `head_hash`, `parent_hash`) instead of `ALTER TABLE ... DROP
+COLUMN`: the real engine drops a column correctly (probed, `universalDoHost.test.ts`), but a SQLite store
+   keeps the old table text with a hole in it and the shape fingerprint reads that as drift, and a legacy
+   SQLite object is upgraded on SQLite before the one-time import. An event stored before the change
+   still carries its two fields in its chunked body; `ChannelLedger.at` strips them on read, so the strict
+   schema and every comparison see one shape.
+4. GAD keeps a private chain for the logs it owns (`workers/workspace-source/logChain.ts`: the
+   preimage, `ChainedLogEnvelope`, `wireLogEnvelope`); a stored envelope is a `ChainedLogEnvelope`
+   inside the worker and is stripped before it is answered. **Not exposed any more:** the wire envelope.
+   **Still exposed, and P5's to remove with the log machinery:** the head-level pointers
+   (`headHash`, `forkHash`, `expectedHeadHash`) and the trajectory event view (`prevEventHash`,
+   `eventHash`), which GAD derives from its own chain.
+5. Deleted from `agentic-protocol`: `computeLogEnvelopeHash`, `verifyLogEnvelopeHash`, `checkLogIntegrity`,
+   `LOG_GENESIS_HASH`, the preimage and the legacy `hash.ts` (`computeEventHash`, `checkTrajectoryIntegrity`).
+   `GENESIS_EVENT_HASH` stays: it is GAD's chain start.
+
+#### 6.11.2 S3, Pi: a composite storage (`@panticonic/pi-durable`)
+
+`CompositeSqliteStorage` (Pi `packages/durable/src/storage/sqlite/composite.ts`, tests
+`test/sqlite-composite.test.ts`, 37 tests including Pi's own storage conformance suite) is one store over two
+table sets in one database, written in one transaction:
+
+| Set                       | Tables                                                                                      | Holds                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| versioned (default names) | conversations, entries, documents, document revisions, payload chunks, record ids, metadata | conversations, entries, and the documents that are conversation knowledge |
+| local (`vsl_` prefix)     | the same eleven tables                                                                      | tasks, submissions, every other document, **and the two counters**        |
+
+The routing rule is `defaultDocumentRoute`: a document is versioned when its scope is a conversation and
+its `fork` is `current` or `asOf`, local otherwise. It reproduces §6.9's list exactly with no per-kind table:
+of the 53 document kinds, `pi.agent`, `pi.codemode.store` and `vibestudio.product-model-configuration` are
+the versioned ones. **§6.9 was wrong on tasks:** it left open whether they are versioned; they are all
+local (a task is an operation in flight, and a fork must not inherit a pending publication), and so are
+submissions.
+
+- **Counters.** The ID and the sequence counters live in the local set and are the composite's alone. A
+  rewind of the versioned set cannot lower them, two forks never share one, and a fork (whose local rows
+  start empty) restarts them above the highest ID and sequence its versioned set stores, once, at open.
+- **A fork empties the local rows and keeps the local tables.** Found by the first real-fork run: Pi's
+  migrations run again from version zero over tables that exist and fail (`table vsl_durable_metadata already
+exists`). The local set's migrations are therefore written `IF NOT EXISTS` / `INSERT OR IGNORE`
+  (`applyCompositeSqliteMigrationsInTransaction`).
+- **The commit option.** `NativeDatabase.transaction(fn, afterCommit, { commit })` passes the engine's
+  `{ commit }` to `ctx.storage.transaction`, and the composite's `commit(writes, seq, { entryHigh })` policy
+  names the commit a storage transaction ends with (or none). Two engine facts the real run gave: a
+  `{ commit }` that has nothing to commit **throws** (`nothing to commit`), so a commit function must return
+  null for no change; and a Dolt operation (`dolt.status()`) cannot run inside the transaction, while the SQL
+  table `dolt_status` can.
+- **No `--` comment in any Pi migration** (a test asserts it), as §6.8 required.
+
+#### 6.11.3 S3, Base: the agent cell
+
+`NativeAgentOwner` opens `CompositeSqliteStorage` over `ctx.storage`; the agent classes declare
+`storage: "dolt"` with the product tables local (`do_identity`, `subscription_intents`, `subscriptions`,
+`subagent_runs`, `custom_cards`, `agent_hot_path_trace`; `vsl_%` and `state` are the framework's). The trace
+table lost its `AUTOINCREMENT` (a local table of a Dolt cell may not have one).
+
+- **When a turn commits.** The storage transaction that creates the pending `turn.closed` publication task
+  ends in a commit, `agent: turn closed <turn> entries<=<N>` (`nativeAgentCommitPolicy`): it sweeps in
+  everything the turn wrote and names how much of the conversation it holds. Nothing else commits. A
+  faux-model turn is **23 storage transactions** (about 25 KB of JSON) and one Dolt commit.
+- **Where §6.3 and §6.4 were wrong: no anchor rows.** The design put
+  `{channelId, throughSequence, eventDigest}` in the commit's rows, which needs a second commit after
+  publication acknowledgement (the agent's own events get their channel sequences after the turn). Instead
+  the frontier is derived **at fork time** by the function the knowledge export already used
+  (`nativeChannelKnowledgeFrontier`, extracted from `exportNativeChannelKnowledge`): the greatest entry the
+  channel prefix accounts for, `at`. The commit is then the newest turn commit whose `entries<=N` is at most
+  `at` (`lastTurnCommitThrough`), or the cell before its first turn closed. The granularity is a closed
+  turn, as §6.4 required; the anchors a fork adopts are those of entries the commit holds.
+- **The one-time move of a single-set store** (`pi-store-split.ts`): a legacy object (copied by the
+  engine's import, or an upgraded SQLite object) has Pi's one set. `migratePiStoreLayout`, one committed
+  transaction after the layout migration, moves tasks, submissions and the operational documents (with
+  revisions, chunks and ID rows) to `vsl_` under the same IDs and carries the counters, then records
+  `vibestudio.pi-store.layout = 3`. A new object only records the layout. Tested on a store made by Pi's
+  own single-set `SqliteStorage`, and in `native-agent-owner.test.ts` (the legacy-provenance tests un-split a
+  store first, then reopen).
+
+#### 6.11.4 S4: a native conversation fork across the channel and its agents
+
+The channel's fork saga journals, per kept agent, the agent's **frontier** (`forkFrontier`: the conversation
+id, the commit, the entry high-water mark, the anchors, the configuration) and passes
+`storageAt: { <channel>: commit, <agent>: commit, ... }` to `runtime.cloneContext`. The host forks a native
+owner like any other DO (`cloneProvenance.storage` is `snapshot` for every DO; the `!agentBinding` exception
+is gone), the fork's versioned conversation arrives with it under the same entry IDs, and its local set is
+empty. The first activation is `adoptChannelKnowledge`: the owner sets a `state` marker
+(`vibestudio.fork-adoption`) so `openBoundAgentSession` accepts a conversation with no owner (the only time it
+does), binds a new owner, then adopts the existing conversation (`adoptNativeChannelKnowledge`: the channel
+binding, the anchors, the configuration, the bootstrap `native-import` provenance) once, and clears the
+marker. Deleted: `exportNativeChannelKnowledge`, `importNativeChannelKnowledge` and the `KnowledgeExport`
+document family, the history copy with re-allocated entry IDs, and `exportChannelKnowledge`/
+`importChannelKnowledge` on the wire (the contract is `forkFrontier` and `adoptChannelKnowledge`).
+**Not deleted:** `native-channel-bootstrap`'s `native-import` phase (the adoption still uses it, with the
+fork's provenance) and `postClone` of the channel (it carries identity, as §6.8 said).
+A multi-channel agent's other conversations stay in the fork's cell as unbound conversations (the fork
+holds the whole cell); they are never subscribed and cost space only.
+
+#### 6.11.5 S5: a subagent `mode: "fork"` is a fork of the parent's cell
+
+The parent asks itself for the frontier at the channel's present head, then creates the child with
+`runtime.createEntity { forkStorage: { at: <commit> } }`: the host reserves the child with `snapshot`
+provenance and forks the **caller's own** storage into it before activation (`reserveForkedStorage`; only the
+entity itself can fork itself, into its own class, at one of its own commits), and the child adopts the
+conversation for its task channel with the same `adoptChannelKnowledge`.
+
+#### 6.11.6 S6: what was done
+
+Done: the executor fact is `kind: "dynamic-code"` with a `runId` (it was `kind: "eval"` with an `evalRunId`),
+in the wire type, the registry, the admission, the roots and live-caller consumers and their tests.
+**Not done: agent self-hosting** (`hosts` in the agent manifests, `hostCode` in the agent, `onHostedRevoked`).
+It means moving `SessionDO`'s relay (start, await, events, cancel, get, receipt, acknowledge, the three
+host-only interlocks and the channel-delivery relay to the kernel's resident sessions) into the agent base,
+making the admission resolve the agent itself as the host, and recognising an agent-hosted kernel in the places
+`isEvalHostRecord` names (approvals, webhooks, authority runtime, live caller). Nothing in S1 to S5 needs it.
 
 ---
 

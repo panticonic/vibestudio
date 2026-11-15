@@ -661,8 +661,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       key: spec.key,
     });
     const create = async (): Promise<RuntimeEntityHandle> => {
-      if (spec.kind === "do" && spec.forkStorage)
-        await reserveForkedStorage(actors, spec, canonicalId);
+      const forkSource =
+        spec.kind === "do" && spec.forkStorage
+          ? await reserveForkedStorage(actors, spec, canonicalId)
+          : undefined;
       const preparedResourceBindings = spec.resourceBindings?.length
         ? await deps.prepareResourceBindings?.({
             bindings: spec.resourceBindings,
@@ -706,7 +708,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         contextId,
         agentBinding,
         selfAgentChannelFromSpec(spec),
-        undefined,
+        forkSource,
         async (record, previous) => {
           try {
             actors.signal?.throwIfAborted();
@@ -756,7 +758,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     actors: RuntimeCreationActors,
     spec: Extract<RuntimeEntityCreateSpec, { kind: "do" }> & { key: string },
     canonicalId: string
-  ): Promise<void> {
+  ): Promise<EntityRecord> {
     const caller = actors.lifecycleCaller;
     const at = spec.forkStorage!.at;
     const source = await store.resolveRecord(caller.runtime.id);
@@ -782,7 +784,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       sourceExecutionDigest: source.activeExecutionDigest,
     };
     const existing = await store.resolveRecord(canonicalId);
-    if (existing && existing.status !== "preparing") return;
+    if (existing && existing.status !== "preparing") return source;
     if (!existing) {
       await reserveEntityOnce(actors, spec, spec.key, canonicalId, provenance);
     } else if (canonicalJson(existing.cloneProvenance ?? null) !== canonicalJson(provenance)) {
@@ -801,6 +803,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       cooperativelyPaused: true,
       at,
     });
+    return source;
   }
 
   async function releaseResourceBindings(caller: VerifiedCaller, id: string): Promise<void> {
