@@ -1382,6 +1382,10 @@ resolves this in favor of the code, with no copy:
 
 ### 6.2 The channel cell
 
+_Built in P4 slice S2; §6.8 has what was built and where the code showed this
+list to be wrong (`participants`, the receipts, the relationship projection and
+the `state` table are not as listed below)._
+
 - **The ledger.** `channel_ledger_events` and `chunks` become a plain
   append-only versioned table. The channel is a `"commit"` class. Each
   ledger append transaction, together with the projections updated in it,
@@ -1497,6 +1501,137 @@ The model is unchanged: one invocation plus one task channel.
 | Channel-to-GAD hash-for-hash mirror verification (`channel-observation.ts`, `channel-do.ts` 2041–2350, partly) | ~250                    |
 | Host clone path for channels and agents (`cloneDO` 5109–5183, `durableObjectStorageClone.ts`)                  | ~310                    |
 | **Total**                                                                                                      | **~2,800** (_estimate_) |
+
+### 6.8 P4 as built, slice S2: the Dolt engine for userland classes, and the channel cell
+
+**The engine declaration.** A userland class says `"storage": "dolt"` and `"doltLocal": [...]`
+in its `durable.classes[]` entry (`HostedClassManifest` already had both for hosted
+classes). `RuntimeManager.classEngine` reads it into the object's admission
+(`DoExecutableAdmission.engine`, with the framework patterns `vsl_%` and `state` added by
+`doltLocalPatterns`; it is part of the incarnation version only when present). UniversalDO
+starts the object's one facet, still named `do`, with `celld: { storage: "dolt", doltLocal }`.
+The name is uniform on purpose: a fork at a commit names it (`facets: { do: { at } }`,
+`RuntimeManager.forkObjectStorage({ at })`, the router's `fork` operation), and the host
+never needs to know which engine an object has.
+
+**A class that was SQLite (§9.2 as built).** An object created before its class declared Dolt
+has a SQLite facet `do`, and celld refuses to start the other engine under a name. UniversalDO
+finds out by trying: a first request asks the Dolt `do` for `__legacy/engine`; the refusal
+"storage engine is fixed" means a legacy facet exists. (The root cannot read celld's
+`_cf_FACET_INDEX`: `access to _cf_FACET_INDEX.name is prohibited`.) The move is a state machine
+whose stage is a key of the root's own storage (`vibestudio:do-engine`), written before the stage
+begins, so a kill resumes where it stopped (two real-fork tests inject a failure in each stage):
+
+1. `copying`: the legacy SQLite facet is intact. Stage it into a Dolt facet `do-staging`
+   (every table, parents first, through the class's own proof-gated `__legacy/tables|rows|load|commit`
+   calls, `packages/durable/src/legacyImport.ts`, served by both durable bases).
+2. `copied`: delete the legacy facet (the staging facet holds everything now).
+3. `swapping`: delete any partial `do`, copy the staging facet into a new Dolt `do`, commit
+   `import: <key> from sqlite`, delete the staging facet. The marker becomes `dolt`.
+
+The detour through a staging facet exists because celld has no rename and a facet fork empties the
+local tables, whose rows (the object's identity in `state`, its mailbox) must survive the move.
+The class code runs on the legacy facet too, so the schema guard has already upgraded the legacy
+tables to the current shape before the copy. The importer is deleted when the minimum supported
+version passes the flip (§9.2).
+
+**The channel.** `PubSubChannel` declares `storage: "dolt"` (schema 126).
+
+|                     | Tables                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Versioned           | `channel_ledger_events`, `channel_ledger_chunks`, `channel_members`, **`channel_facts`** (new)                                                                                                                                                                                                                                                                                               |
+| Local (`doltLocal`) | everything else: `channel_ledger_state` (head, GAD observation cursor, fork provenance), `participants`, `presence_last_seen`, `invite_index_ops`, `channel_relationship*`, `channel_event_identities`, `channel_delivery_*`, `channel_receipts`, `channel_observation_claim`, `channel_maintenance_queue`, `pending_calls`, `provider_call_claims`, `fork_*`, `lineage_*`, `state`, `vsl_*` |
+
+Where this differs from §6.2, and why (all found by the survey of `channel-do.ts`):
+
+- **`participants` is local, not versioned.** `restoreActivationState` deletes every row at each
+  activation (they are live external sessions), presence is not in the ledger, and typing and
+  status sweeps write it at high frequency. Durable membership of an agent is
+  `channel_relationships`.
+- **`channel_relationships`, the receipts and the whole delivery projection are local, rebuilt by
+  folding the ledger.** They are a deterministic fold (L2: a fact is stored once). A fork's child
+  has _different_ subscriptions on purpose (its agents are new entities), and today's rule, kept,
+  is that the inherited prefix is replayed context-only through the fork boundary. Versioning the
+  table would give the child the parent's subscriptions. `read` and `declined` receipts are not in
+  the ledger, but a fork has always started without them and a projection-version change has
+  always discarded them, so keeping them local changes no behaviour.
+- **The ledger append transaction does not contain the projections.** The fold needs the hydrated
+  event (an async blob read) and runs in its own transaction after the append; a crash between
+  them is repaired by the cursor (`alarm` replays from it). So the commit of an append holds the
+  event, and the projections are local and recomputable. Commit message: `channel: append <seq>
+<kind> <envelopeId>`; a membership change is `channel: member add|remove|handle <id>`; a fact
+  `channel: <key>`; a fork's first commit `fork: initialized <key> from <source>`.
+- **`state` is local by the framework's own rule, and the conversation's facts lived in it.**
+  `channel_facts` holds `config`, `initialConfig`, `conversationSeed(Installed)`, `createdAt` and
+  the opening-request keys, written only inside a commit (`writeFact`/`setFact`). What stays in
+  `state` is identity (`contextId`, `forkedFrom*`, `forkPointId`, `rootChannelId`) and caches. The
+  125 to 126 upgrade (`schemaUpgrades`, pinned to the version-125 shape in
+  `channel-schema-history.ts`) moves the facts, and `initial_config_json`, into `channel_facts`.
+- **The head is a local column, not derived.** `channel_ledger_state` keeps `head_sequence` and
+  `head_hash` (the hash chain is still there until §6.7's deletion); a fork's local table starts
+  empty, so `initializeClone` rebuilds the row from the events it holds.
+- **`lineage_heads`, `lineage_head_outbox` and `invite_index_ops`** were not in the list: they are
+  an outbox and a cache of other cells' state, so local.
+
+**The fork, channel side (§6.4 steps 1, 2 and 5; the agents are S3 and S4).** The fork saga journals
+`channelCommit`, the commit that appended the fork point (`commitAtSequence`: `dolt_log` by the
+append message, checked against `dolt_at_channel_ledger_events`), and passes it to
+`runtime.cloneContext` as `storageAt: { <entity id>: <commit> }` (captured in the clone definition,
+so a retry with another commit is refused). The host forks that object's `do` facet `at` it. What
+is gone from the channel: truncating the child's ledger (`forkFrom`, now `adoptParent`, which only
+names the parent), `resetForFork` (now `seedForFork`, which re-seeds the local rows a fork lacks),
+pruning the fork view, the table-by-table clone deletes in `initializeClonedStorage` and the
+`state` key deletes. `postClone` remains: it carries the identity and the seed marker, which the
+child needs and the fork cannot give. Agents are still forked by knowledge export and import.
+
+**Dolt facts established on the real engine** (`universalDoHost.test.ts`): the dialect probe shows
+partial unique indexes, CHECK, JSON1, `RETURNING`, `ON CONFLICT ... DO UPDATE ... WHERE`,
+multi-statement `exec`, `STRICT` tables, `INSERT OR REPLACE`, `PRAGMA table_info` and
+`PRAGMA foreign_keys` all work on a Dolt facet, so the channel's and Pi's SQL runs unchanged. A
+class's own `ctx.facets.get` registers the name with the first start options: after a refused
+start the root must `abort` the name before starting it with other options.
+
+### 6.9 What the survey of the agent cell found, and what it changes (S3 onward)
+
+The agent family (`AiChatWorker` to `NativeAgentOwner`) was surveyed before any change. Findings
+that make §6.3 and §6.4 steps 3 and 4 larger than written:
+
+1. **Pi is an external package** (`@panticonic/pi-durable`), not in the Base template. Its shared
+   id counter is a singleton row (`durable_metadata.next_id`) updated on every commit, and every
+   record type (conversation, entry, task, submission, document) draws from it. That breaks L10 in
+   a versioned table: two forks would hand out the same ids, and a merge or a hard reset would
+   rewind the counter. A split store needs a composite `Storage` that mints ids from a local one.
+   Pi already supports a table prefix (`SqliteStorage.open(db, { prefix })`, `vsl_` matches the
+   framework pattern), so the second table set costs no schema work, but `Harness.open` takes one
+   `Storage`, and `NativeDatabase.transaction` has no commit option.
+2. **`fork` is declared only on conversation-scoped documents.** 28 of 53 kinds (session and task
+   scope) declare none. Almost all of them are admission, outbox or receipt documents, so the table
+   choice is "local unless a kind is conversation knowledge", with `pi.agent`, `pi.codemode.store`
+   and `vibestudio.product-model-configuration` the versioned ones. Pi's `initial` kinds must be local
+   (a fork must see them empty); `current` cannot be honoured exactly (the fork sees the value as of
+   the commit).
+3. **Tasks and submissions are versioned unless split too**, and the commit that closes a turn also
+   creates a non-terminal `turn.closed` publication task aimed at the parent channel (and eval,
+   input-settlement, automation-run tasks). A fork at that commit would copy a pending publication.
+4. **`ExecutionOwner` must be local** (it holds the runtime id, context, incarnation and authority
+   session), and `openBoundAgentSession` refuses an unbound namespace that has conversations: a fork
+   needs first-activation logic (bind a new owner, rebind the conversation to the fork channel,
+   restore `agent:settings` from `state`, ignore inherited operational tasks, drop other channels
+   of a multi-channel agent).
+5. **The turn-close transaction mixes both kinds** (entries and the run state, with publication
+   tails, admission documents and model evidence). One composite transaction across the versioned and
+   local table sets is required.
+6. **There is no per-turn anchor row.** Anchors are derived from several documents by
+   `exportNativeChannelKnowledge`, and the agent's own published events get channel sequences
+   asynchronously after the Pi commit, so a commit written at turn close knows only the input side.
+   The "last commit whose anchor is at most N" rule needs a second commit after publication
+   acknowledgement, or the anchor is defined on the input side only.
+7. Agents can be multi-channel (`nativeReasoningChannelIds` derives from `subscriptions`), so a
+   whole-cell fork carries other channels' conversations.
+
+So S3 is a Pi change first (composite storage, local document kinds, a turn-commit with anchors) and
+an agent change second. It was not started in this pass because half of it cannot be done in the
+Base template alone, and a half-migrated Pi would leave two models in force.
 
 ---
 

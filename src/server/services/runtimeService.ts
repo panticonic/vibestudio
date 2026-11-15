@@ -150,6 +150,8 @@ export interface RuntimeEntityHooks {
      * be snapshotted online without trying to retire the caller mid-invocation.
      */
     cooperativelyPaused?: boolean;
+    /** A Dolt class's object is forked at this commit of its store (the newest when absent). */
+    at?: string;
   }) => Promise<void>;
 
   destroyDurableStorage?: (args: {
@@ -1806,6 +1808,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       sourceContextId: string;
       include?: string[];
       recursive?: boolean;
+      storageAt?: Record<string, string>;
       targetKey?: string;
     }
   ): Promise<CloneContextResult> {
@@ -1819,6 +1822,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       sourceContextId: string;
       include?: string[];
       recursive?: boolean;
+      storageAt?: Record<string, string>;
       targetKey?: string;
     }
   ): Promise<CloneContextResult> {
@@ -1829,6 +1833,15 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       sourceContextId,
       include: args.include ? [...new Set(args.include)].sort() : null,
       recursive: args.recursive === true,
+      ...(args.storageAt && Object.keys(args.storageAt).length > 0
+        ? {
+            storageAt: Object.fromEntries(
+              Object.entries(args.storageAt).sort(([left], [right]) =>
+                left < right ? -1 : left > right ? 1 : 0
+              )
+            ),
+          }
+        : {}),
     };
     const initiatingEntity = await store.resolveRecord(actors.initiatingCaller.runtime.id);
     if (
@@ -2164,6 +2177,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
                   toKey: newKey,
                   reservation: (await store.resolveRecord(targetId))!,
                   ...(src.id === caller.runtime.id ? { cooperativelyPaused: true } : {}),
+                  ...(request.storageAt?.[src.id] ? { at: request.storageAt[src.id] } : {}),
                 });
               }
               const activated = await activateEntityOnce(

@@ -1,12 +1,15 @@
 import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
-import { serializeRpcFailure } from "@vibestudio/rpc";
+import { decodeRpcJson, encodeRpcJson, serializeRpcFailure } from "@vibestudio/rpc";
 import {
   DO_EXECUTABLE_VERSION_HEADER,
   DO_INCARNATION_VERSION_HEADER,
+  type DoEngineAdmission,
   type DoExecutableAdmission,
   type HostedCodeAdmission,
   type HostedCodeGrants,
 } from "./executableVersion.js";
+import { DO_FACET, DO_STAGING_FACET } from "./doFacets.js";
+import { LEGACY_ROUTE } from "@vibestudio/durable/legacyImport";
 import {
   classSecretName,
   gatewayFetch,
@@ -44,7 +47,14 @@ interface LoadedFacetClass {
   executableVersion: string;
   incarnationVersion: string;
   class: DurableObjectClass;
+  /** The class's declared engine; null is the default SQLite facet. */
+  engine: DoEngineAdmission | null;
 }
+
+/** The object's cell: a SQLite facet, or for a Dolt class the facet beside which a legacy one is imported. */
+/** Root key-value record that this object's state is the Dolt facet's (set once the import, if any, is done). */
+const ENGINE_KEY = "vibestudio:do-engine";
+const LEGACY_PROOF_HEADER = "x-legacy-import-proof";
 
 async function fetchLoader(
   env: HostProgramEnv,
@@ -371,6 +381,194 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
         this.ctx.facets.delete(this.hostedFacetName(name));
   }
 
+  private abortObjectFacets(reason: Error): void {
+    this.ctx.facets.abort(DO_FACET, reason);
+    this.ctx.facets.abort(DO_STAGING_FACET, reason);
+  }
+
+  private doltPreparation: Promise<void> | null = null;
+  private doltReady = false;
+  private sqliteEngineChecked = false;
+
+  /**
+   * The facet that holds this object's state: `do`, a SQLite facet or, for a class
+   * that declares `storage: "dolt"`, a Dolt facet. An object created before its
+   * class was a Dolt class still has a SQLite `do`; its state is copied into a Dolt
+   * facet once (§9.2). Every request waits for that to finish.
+   */
+  private async objectFacet(loaded: LoadedFacetClass, userKey: string): Promise<Fetcher> {
+    const engine = loaded.engine;
+    if (!engine) {
+      if (!this.sqliteEngineChecked) {
+        // The engine of a cell is fixed: a manifest that drops `storage: "dolt"`
+        // would otherwise start an empty SQLite cell under a Dolt object.
+        if ((await this.ctx.storage.get<string>(ENGINE_KEY)) === "dolt")
+          throw new Error(
+            "universal-do: this object's state is a Dolt store but its class no longer declares storage: dolt"
+          );
+        this.sqliteEngineChecked = true;
+      }
+      return this.ctx.facets.get(DO_FACET, () => ({ class: loaded.class }));
+    }
+    if (!this.doltReady) {
+      this.doltPreparation ??= this.prepareDoltObject(loaded, userKey).then(
+        () => {
+          this.doltReady = true;
+        },
+        (error: unknown) => {
+          this.doltPreparation = null;
+          throw error;
+        }
+      );
+      await this.doltPreparation;
+    }
+    return this.doltFacet(loaded, engine, DO_FACET);
+  }
+
+  private doltFacet(loaded: LoadedFacetClass, engine: DoEngineAdmission, name: string): Fetcher {
+    return this.ctx.facets.get(name, () => ({
+      class: loaded.class,
+      celld: {
+        storage: "dolt",
+        ...(engine.doltLocal.length > 0 ? { doltLocal: [...engine.doltLocal] } : {}),
+      },
+    }));
+  }
+
+  /** A call the class serves to its own root only (`@vibestudio/durable/legacyImport`). */
+  private async legacyCall<T>(
+    facet: Fetcher,
+    userKey: string,
+    proof: string,
+    method: string,
+    body: unknown
+  ): Promise<T> {
+    const response = await facet.fetch(
+      new Request(`http://do/${encodeURIComponent(userKey)}/${LEGACY_ROUTE}/${method}`, {
+        method: "POST",
+        headers: { "content-type": "application/json", [LEGACY_PROOF_HEADER]: proof },
+        body: encodeRpcJson(body),
+      })
+    );
+    const decoded = decodeRpcJson(await response.text()) as {
+      result?: T;
+      error?: { message?: string };
+    };
+    if (!response.ok || decoded.error)
+      throw new Error(`legacy import ${method}: ${decoded.error?.message ?? response.status}`);
+    return decoded.result as T;
+  }
+
+  private async prepareDoltObject(loaded: LoadedFacetClass, userKey: string): Promise<void> {
+    let marker = await this.ctx.storage.get<string>(ENGINE_KEY);
+    if (marker === "dolt") return;
+    const rootName = this.ctx.id.name;
+    if (!rootName) throw new Error("universal-do: this cell has no name");
+    const proof = await codeHostProof(this.env, rootName);
+    const engine = loaded.engine!;
+    if (marker === undefined) {
+      // Either a new object (its Dolt facet is made now) or one whose SQLite
+      // facet predates the declaration: celld refuses to start the other engine
+      // under a name, and leaves the data alone.
+      try {
+        await this.legacyCall(
+          this.doltFacet(loaded, engine, DO_FACET),
+          userKey,
+          proof,
+          "engine",
+          {}
+        );
+        await this.ctx.storage.put(ENGINE_KEY, "dolt");
+        return;
+      } catch (error) {
+        if (
+          !/storage engine is fixed/i.test(error instanceof Error ? error.message : String(error))
+        )
+          throw error;
+        // The refused start stays registered under the name with its Dolt options.
+        this.ctx.facets.abort(DO_FACET, error instanceof Error ? error : new Error(String(error)));
+      }
+      marker = "copying";
+      await this.ctx.storage.put(ENGINE_KEY, marker);
+    }
+    await this.importLegacyFacet(loaded, userKey, proof, marker);
+    await this.ctx.storage.put(ENGINE_KEY, "dolt");
+  }
+
+  /**
+   * Move a legacy SQLite facet's state into a Dolt facet named `do` (§9.2). Each
+   * stage is recorded before the next begins, so a crash resumes where it stopped:
+   * copying (the legacy facet is intact: stage it into a Dolt facet), copied
+   * (delete the legacy facet), swapping (the staging facet is the only copy:
+   * rebuild `do` from it, commit `import: ... from sqlite`, delete the staging
+   * facet). The copy goes through the class's own `__legacy` calls, so versioned
+   * and local rows alike move.
+   */
+  private async importLegacyFacet(
+    loaded: LoadedFacetClass,
+    userKey: string,
+    proof: string,
+    from: string
+  ): Promise<void> {
+    const engine = loaded.engine!;
+    const legacy = () => this.ctx.facets.get(DO_FACET, () => ({ class: loaded.class }));
+    const staging = () => this.doltFacet(loaded, engine, DO_STAGING_FACET);
+    const target = () => this.doltFacet(loaded, engine, DO_FACET);
+    const call = <T>(facet: Fetcher, method: string, body: unknown) =>
+      this.legacyCall<T>(facet, userKey, proof, method, body);
+    const copy = async (source: Fetcher, destination: Fetcher, message: string) => {
+      const tables = await call<Array<{ name: string; columns: string[]; count: number }>>(
+        source,
+        "tables",
+        {}
+      );
+      let copied = 0;
+      for (const table of tables) {
+        let after: number | null = null;
+        for (;;) {
+          const page: { columns: string[]; rows: unknown[][]; next: number | null } = await call(
+            source,
+            "rows",
+            { table: table.name, after }
+          );
+          if (page.rows.length > 0)
+            copied += await call<number>(destination, "load", {
+              table: table.name,
+              columns: page.columns,
+              rows: page.rows,
+            });
+          if (page.next === null) break;
+          after = page.next;
+        }
+      }
+      await call(destination, "commit", { message });
+      console.info("Durable Object moved its state", {
+        objectKey: userKey,
+        message,
+        tables: tables.length,
+        rows: copied,
+      });
+    };
+    let marker = from;
+    if (marker === "copying") {
+      this.ctx.facets.delete(DO_STAGING_FACET);
+      await copy(legacy(), staging(), `import: ${userKey} from sqlite (staging)`);
+      marker = "copied";
+      await this.ctx.storage.put(ENGINE_KEY, marker);
+    }
+    if (marker === "copied") {
+      this.ctx.facets.delete(DO_FACET);
+      marker = "swapping";
+      await this.ctx.storage.put(ENGINE_KEY, marker);
+    }
+    if (marker === "swapping") {
+      // A partial target of an interrupted attempt goes; the staging facet is whole.
+      this.ctx.facets.delete(DO_FACET);
+      await copy(staging(), target(), `import: ${userKey} from sqlite`);
+      this.ctx.facets.delete(DO_STAGING_FACET);
+    }
+  }
+
   /**
    * Admit, load and start a class this entity hosts, take its residency hold,
    * and relay a revocation to it. The facet's own `onrevoked` does not run (it
@@ -593,7 +791,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
         if (this.facetSelection !== selection)
           throw new Error("Runtime image advanced during object admission");
         if (this.loadedFacet) {
-          this.ctx.facets.abort("do", new Error("Runtime image advanced"));
+          this.abortObjectFacets(new Error("Runtime image advanced"));
           this.loadedFacet = null;
         }
         const worker = loadExecutable(this.env, this.ctx, args);
@@ -601,6 +799,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
         this.loadedFacet = {
           executableVersion: args.version,
           incarnationVersion: args.incarnationVersion,
+          engine: admission.engine ?? null,
           class: worker.getDurableObjectClass(args.className, {
             props: {
               ...admission.props,
@@ -688,7 +887,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       const ended = new Error(
         parts[1] === "__vibestudio_restart" ? "Runtime entity restarted" : "Runtime entity retired"
       );
-      this.ctx.facets.abort("do", ended);
+      this.abortObjectFacets(ended);
       // Hosted code ends with its entity: holds released, instances aborted.
       this.endAllHosted(ended);
       this.loadedFacet = null;
@@ -702,7 +901,8 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       // Storage reclamation of a retired object: the runtime stops the facet
       // and removes its database (and any nested facet's) in one operation.
       await this.cancelFacetSelection(new Error("Runtime entity storage destroyed"));
-      this.ctx.facets.delete("do");
+      this.ctx.facets.delete(DO_FACET);
+      this.ctx.facets.delete(DO_STAGING_FACET);
       this.endAllHosted(new Error("Runtime entity storage destroyed"), { deleteStorage: true });
       this.loadedFacet = null;
       await this.ctx.storage.deleteAll();
@@ -717,7 +917,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       // universal host stay live, so the next ordinary request constructs a
       // genuinely fresh vessel over the same durable state.
       await this.cancelFacetSelection(new Error("System-test injected vessel crash"));
-      this.ctx.facets.abort("do", new Error("System-test injected vessel crash"));
+      this.abortObjectFacets(new Error("System-test injected vessel crash"));
       return new Response(null, { status: 204 });
     }
 
@@ -742,7 +942,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
 
     // One logical DO per host object means one constant facet name. Keeping it
     // stable also makes clone/delete operations portable across host objects.
-    const facet = this.ctx.facets.get("do", () => ({ class: loaded.class }));
+    const facet = await this.objectFacet(loaded, userKey);
 
     const innerRest = parts.slice(1);
     const innerUrl = new URL(

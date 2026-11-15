@@ -1155,6 +1155,12 @@ export const runtimeMethods = defineServiceMethods({
           .describe(
             "Clone the LIFECYCLE subtree of the source context (subagent worlds), re-parented to the cloned owner. Lineage (fork) edges are never followed. Cloning a context that HAS lifecycle children without this flag is an error."
           ),
+        storageAt: z
+          .record(z.string(), z.string())
+          .optional()
+          .describe(
+            "A Dolt-class entity's object is forked at this commit of its store instead of at its newest state: canonical entity id to commit hash. The ROOT context's entities only; an entity not named, or one whose class is not a Dolt class, is copied as of now."
+          ),
         targetKey: z
           .string()
           .optional()

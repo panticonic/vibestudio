@@ -47,7 +47,11 @@ async function fetchDurableObject(stub: DurableObjectStub, request: Request): Pr
 interface ForkableNamespace extends DurableObjectNamespace {
   fork(
     sourceId: DurableObjectId,
-    options?: { to?: DurableObjectId; replaceUnfinished?: boolean }
+    options?: {
+      to?: DurableObjectId;
+      replaceUnfinished?: boolean;
+      facets?: Record<string, { at?: string }>;
+    }
   ): Promise<DurableObjectId>;
   deleteUnfinished(id: DurableObjectId): Promise<{ deleted: number }>;
   restore(
@@ -67,6 +71,8 @@ interface ObjectOperation {
   stop?: boolean;
   /** `fork`: take over a target an interrupted fork left unfinished. */
   replaceUnfinished?: boolean;
+  /** `fork`: each named Dolt facet is copied at its own commit (`at`), not at its newest. */
+  facets?: Record<string, { at?: string }>;
 }
 
 async function objectOperation(env: RouterEnv, request: Request): Promise<Response> {
@@ -82,6 +88,7 @@ async function objectOperation(env: RouterEnv, request: Request): Promise<Respon
       const id = await namespace.fork(namespace.idFromName(input.from), {
         to: namespace.idFromName(input.to),
         ...(input.replaceUnfinished ? { replaceUnfinished: true } : {}),
+        ...(input.facets ? { facets: input.facets } : {}),
       });
       return Response.json({ id: id.toString() });
     }

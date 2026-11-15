@@ -276,6 +276,7 @@ const contextCloneDefinitionSchema = z
         sourceContextId: z.string().min(1),
         include: z.array(z.string().min(1)).nullable(),
         recursive: z.boolean(),
+        storageAt: z.record(z.string(), z.string()).optional(),
       })
       .strict(),
     author: z

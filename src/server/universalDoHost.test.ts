@@ -11,7 +11,7 @@ import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
  *   - distinct object keys get isolated facet storage.
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -221,6 +221,192 @@ export class KernelDO extends DurableObject {
   }
 }
 export default { fetch() { return new Response("kernel"); } };`;
+
+/**
+ * A class that can be either engine: the same code on the legacy SQLite facet and on the Dolt
+ * facet that replaces it. `notes` is versioned, `local_hits` is a `doltLocal` table. The
+ * `__legacy/*` calls are what the product base serves (`@vibestudio/durable/legacyImport`).
+ */
+const NOTES_DO = `import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+export class VibestudioExecutable extends WorkerEntrypoint {
+  fetch() { return new Response(null, {status:204}); }
+}
+export class NotesDO extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env); this.ctx = ctx; this.env = env;
+    const sql = ctx.storage.sql;
+    sql.exec("CREATE TABLE IF NOT EXISTS notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)");
+    sql.exec("CREATE TABLE IF NOT EXISTS local_hits (id INTEGER PRIMARY KEY, n INTEGER NOT NULL)");
+  }
+  async fetch(request) {
+    if (this.env.VIBESTUDIO_SCHEMA_PROBE === true)
+      return Response.json({ className: "NotesDO", version: 1, nativeOwner: false, durableWorkQueues: [], freshSchemaFingerprint: "[]" });
+    const parts = new URL(request.url).pathname.split("/").filter(Boolean);
+    const method = parts.slice(1).join("/");
+    const sql = this.ctx.storage.sql;
+    const dolt = this.ctx.storage.dolt;
+    const body = request.method === "POST" ? JSON.parse((await request.text()) || "null") : null;
+    if (method.startsWith("__legacy/")) {
+      if (request.headers.get("x-legacy-import-proof") !== (this.ctx.props.codeHost && this.ctx.props.codeHost.proof))
+        return Response.json({ error: { message: "Forbidden" } }, { status: 403 });
+      const call = method.slice("__legacy/".length);
+      if (call === "engine") return Response.json({ result: { engine: dolt ? "dolt" : "sqlite" } });
+      if (call === "tables") return Response.json({ result: [
+        { name: "notes", columns: ["id", "body"], count: sql.exec("SELECT count(*) AS n FROM notes").one().n },
+        { name: "local_hits", columns: ["id", "n"], count: 1 } ] });
+      if (call === "rows") {
+        const rows = [...sql.exec("SELECT * FROM " + body.table + " ORDER BY id").raw()];
+        return Response.json({ result: { columns: body.table === "notes" ? ["id", "body"] : ["id", "n"], rows, next: null } });
+      }
+      if (call === "load") {
+        this.ctx.storage.transactionSync(() => { for (const row of body.rows) sql.exec("INSERT OR REPLACE INTO " + body.table + " (" + body.columns.join(", ") + ") VALUES (" + body.columns.map(() => "?").join(", ") + ")", ...row); });
+        return Response.json({ result: body.rows.length });
+      }
+      if (call === "commit") {
+        // Fault injection for the resume test: fail the Nth commit this object's import makes.
+        const counts = (globalThis.__importCommits ??= new Map());
+        const nth = (counts.get(parts[0]) ?? 0) + 1;
+        counts.set(parts[0], nth);
+        if (this.ctx.props.stateArgs && this.ctx.props.stateArgs.failOnCommit === nth) throw new Error("injected commit failure " + nth);
+        return Response.json({ result: dolt.commit({ message: body.message, allowEmpty: true }) });
+      }
+    }
+    this.ctx.storage.transactionSync(() => {
+      sql.exec("INSERT INTO local_hits (id, n) VALUES (1, 1) ON CONFLICT(id) DO UPDATE SET n = n + 1");
+    });
+    if (method === "add") {
+      const write = () => sql.exec("INSERT INTO notes (body) VALUES (?)", body);
+      if (dolt) this.ctx.storage.transactionSync(write, { commit: "note: " + body });
+      else write();
+    }
+    if (method === "reset-to") dolt.reset({ hard: true, to: body });
+    return Response.json({ result: {
+      engine: dolt ? "dolt" : "sqlite",
+      notes: [...sql.exec("SELECT body FROM notes ORDER BY id").raw()].map((r) => r[0]),
+      hits: sql.exec("SELECT n FROM local_hits WHERE id = 1").toArray()[0]?.n ?? 0,
+      log: dolt ? dolt.log({ limit: 20 }).map((e) => e.message) : null,
+      head: dolt ? dolt.hashOf("HEAD") : null,
+      commits: dolt ? dolt.log({ limit: 20 }).map((e) => [e.hash, e.message]) : null,
+    }});
+  }
+}
+export default { fetch() { return new Response("notes"); } };`;
+
+/** Runs the SQL features the channel and Pi stores use against a Dolt facet, one try each. */
+const DIALECT_DO = `import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+export class VibestudioExecutable extends WorkerEntrypoint {
+  fetch() { return new Response(null, {status:204}); }
+}
+export class DialectDO extends DurableObject {
+  constructor(ctx, env) { super(ctx, env); this.ctx = ctx; this.env = env; }
+  async fetch(request) {
+    if (this.env.VIBESTUDIO_SCHEMA_PROBE === true)
+      return Response.json({ className: "DialectDO", version: 1, nativeOwner: false, durableWorkQueues: [], freshSchemaFingerprint: "[]" });
+    if (!request.url.endsWith("/run")) return Response.json({ result: { engine: this.ctx.storage.dolt ? "dolt" : "sqlite" } });
+    const sql = this.ctx.storage.sql;
+    const results = {};
+    const attempt = (name, fn) => { try { results[name] = { ok: fn() }; } catch (error) { results[name] = { error: String(error && error.message || error) }; } };
+    attempt("partial unique index", () => {
+      sql.exec("CREATE TABLE p (id TEXT PRIMARY KEY, handle TEXT)");
+      sql.exec("CREATE UNIQUE INDEX p_handle ON p(handle) WHERE handle IS NOT NULL");
+      sql.exec("INSERT INTO p VALUES ('a', NULL), ('b', NULL), ('c', 'h')");
+      try { sql.exec("INSERT INTO p VALUES ('d', 'h')"); return "not unique"; } catch (e) { return /unique/i.test(String(e.message)) ? "enforced" : String(e.message); }
+    });
+    attempt("check constraint", () => {
+      sql.exec("CREATE TABLE ck (n INTEGER CHECK (n > 0), s TEXT CHECK (s IN ('a','b')))");
+      try { sql.exec("INSERT INTO ck VALUES (0, 'a')"); return "not enforced"; } catch (e) { return "enforced"; }
+    });
+    attempt("json functions", () => {
+      sql.exec("CREATE TABLE j (id INTEGER PRIMARY KEY, doc TEXT)");
+      sql.exec("INSERT INTO j VALUES (1, '{\\"type\\":\\"agent\\",\\"n\\":{\\"a\\":0}}')");
+      const a = sql.exec("SELECT json_extract(doc, '$.type') AS t, json_type(doc, '$.n.a') AS ty FROM j").one();
+      sql.exec("UPDATE j SET doc = json_set(doc, '$.n.a', json('false'))");
+      return [a.t, a.ty, sql.exec("SELECT doc FROM j").one().doc];
+    });
+    attempt("returning", () => {
+      sql.exec("CREATE TABLE r (id INTEGER PRIMARY KEY, v TEXT)");
+      return sql.exec("INSERT INTO r (v) VALUES ('x') RETURNING id, v").toArray().length;
+    });
+    attempt("upsert with where", () => {
+      sql.exec("CREATE TABLE u (k TEXT PRIMARY KEY, n INTEGER, m INTEGER)");
+      sql.exec("INSERT INTO u VALUES ('k', 1, 1)");
+      sql.exec("INSERT INTO u VALUES ('k', 2, 2) ON CONFLICT(k) DO UPDATE SET n = MAX(n, excluded.n) WHERE excluded.n > u.n");
+      return sql.exec("SELECT n FROM u").one().n;
+    });
+    attempt("multi-statement exec", () => { sql.exec("CREATE TABLE m1 (a INTEGER); CREATE TABLE m2 (b INTEGER); INSERT INTO m1 VALUES (1);"); return sql.exec("SELECT count(*) AS n FROM m1").one().n; });
+    attempt("insert or replace / ignore", () => { sql.exec("CREATE TABLE ir (k TEXT PRIMARY KEY, v TEXT)"); sql.exec("INSERT OR REPLACE INTO ir VALUES ('a','1')"); sql.exec("INSERT OR REPLACE INTO ir VALUES ('a','2')"); sql.exec("INSERT OR IGNORE INTO ir VALUES ('a','3')"); return sql.exec("SELECT v FROM ir").one().v; });
+    attempt("pragma table_info", () => sql.exec("PRAGMA table_info(ir)").toArray().map((r) => r.name));
+    attempt("pragma foreign_keys", () => { sql.exec("PRAGMA foreign_keys = ON"); return "accepted"; });
+    attempt("strict table", () => { sql.exec("CREATE TABLE st (id INTEGER PRIMARY KEY, b BLOB, t TEXT) STRICT"); return "created"; });
+    attempt("blob and bigint", () => { sql.exec("CREATE TABLE bl (id INTEGER PRIMARY KEY, b BLOB)"); sql.exec("INSERT INTO bl VALUES (1, ?)", new Uint8Array([1,2,3])); return [...new Uint8Array(sql.exec("SELECT b FROM bl").one().b)]; });
+    attempt("total_changes", () => typeof sql.exec("SELECT total_changes() AS n").one().n);
+    attempt("sqlite_master text", () => sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'p'").toArray().length);
+    attempt("dolt_log columns", () => Object.keys(sql.exec("SELECT * FROM dolt_log LIMIT 1").toArray()[0] || {}));
+    return Response.json({ result: results });
+  }
+}
+export default { fetch() { return new Response("dialect"); } };`;
+
+/**
+ * The channel's write shape on a Dolt facet, for the commit-volume measurement (R1): per event one
+ * committed transaction that appends a ledger row (`body` bytes, in 64 KiB chunks) and one plain
+ * transaction for the local projection (mailbox row and cursor), as the channel does.
+ */
+const LOAD_DO = `import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+export class VibestudioExecutable extends WorkerEntrypoint {
+  fetch() { return new Response(null, {status:204}); }
+}
+export class LoadDO extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env); this.ctx = ctx; this.env = env;
+    const sql = ctx.storage.sql;
+    sql.exec("CREATE TABLE IF NOT EXISTS ledger (sequence INTEGER PRIMARY KEY, envelope_id TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, body TEXT NOT NULL)");
+    sql.exec("CREATE TABLE IF NOT EXISTS local_mailbox (delivery_id TEXT PRIMARY KEY, sequence INTEGER NOT NULL, state TEXT NOT NULL)");
+    sql.exec("CREATE TABLE IF NOT EXISTS local_cursor (singleton INTEGER PRIMARY KEY, through INTEGER NOT NULL)");
+  }
+  async fetch(request) {
+    if (this.env.VIBESTUDIO_SCHEMA_PROBE === true)
+      return Response.json({ className: "LoadDO", version: 1, nativeOwner: false, durableWorkQueues: [], freshSchemaFingerprint: "[]" });
+    const url = new URL(request.url);
+    const method = url.pathname.split("/").filter(Boolean).slice(1).join("/");
+    if (method === "__legacy/engine") return Response.json({ result: { engine: "dolt" } });
+    const input = JSON.parse((await request.text()) || "{}");
+    const sql = this.ctx.storage.sql;
+    const dolt = this.ctx.storage.dolt;
+    const stat = (xs) => { const s = [...xs].sort((a, b) => a - b); const q = (p) => s[Math.min(s.length - 1, Math.floor(p * s.length))]; return { n: s.length, p50: q(0.5), p95: q(0.95), p99: q(0.99), max: s[s.length - 1], mean: s.reduce((a, b) => a + b, 0) / s.length }; };
+    if (method === "load") {
+      const body = "x".repeat(input.bytes);
+      const base = Number(sql.exec("SELECT COALESCE(MAX(sequence), 0) AS n FROM ledger").one().n);
+      const append = [], local = [], both = [];
+      for (let i = 1; i <= input.events; i++) {
+        const sequence = base + i;
+        const t0 = performance.now();
+        this.ctx.storage.transactionSync(() => sql.exec("INSERT INTO ledger VALUES (?, ?, 'message', ?)", sequence, "env-" + sequence, body), { commit: "channel: append " + sequence + " message env-" + sequence });
+        const t1 = performance.now();
+        this.ctx.storage.transactionSync(() => {
+          sql.exec("INSERT INTO local_mailbox VALUES (?, ?, 'ready')", "d-" + sequence, sequence);
+          sql.exec("INSERT INTO local_cursor VALUES (1, ?) ON CONFLICT(singleton) DO UPDATE SET through = excluded.through", sequence);
+        });
+        const t2 = performance.now();
+        append.push(t1 - t0); local.push(t2 - t1); both.push(t2 - t0);
+      }
+      return Response.json({ result: { commits: dolt.log({ limit: 1_000_000 }).length, append: stat(append), local: stat(local), both: stat(both) } });
+    }
+    if (method === "gc") { const t0 = performance.now(); dolt.gc(); return Response.json({ result: { ms: performance.now() - t0 } }); }
+    if (method === "reads") {
+      const t0 = performance.now();
+      const head = Number(sql.exec("SELECT MAX(sequence) AS n FROM ledger").one().n);
+      const t1 = performance.now();
+      const hash = sql.exec("SELECT commit_hash FROM dolt_log WHERE message LIKE ? ORDER BY date DESC LIMIT 1", "channel: append " + Math.floor(head / 2) + " %").toArray()[0];
+      const t2 = performance.now();
+      const at = Number(sql.exec("SELECT COALESCE(MAX(sequence), 0) AS n FROM dolt_at_ledger('" + hash.commit_hash + "')").one().n);
+      const t3 = performance.now();
+      return Response.json({ result: { head, headMs: t1 - t0, commitLookupMs: t2 - t1, atMs: t3 - t2, at } });
+    }
+    return Response.json({ error: { message: "no such method " + method } }, { status: 404 });
+  }
+}
+export default { fetch() { return new Response("load"); } };`;
 
 const SCHEMA_PROBE_DO = `import { DurableObject } from "cloudflare:workers";
 export class SchemaProbeDO extends DurableObject {
@@ -1851,5 +2037,277 @@ export default { fetch() { return new Response("chunked host"); } };`;
       const refused = await code(dispatch, a, { ...callKernel("run", "1"), limits: { cpuMs: -5 } });
       expect(refused.body).toMatch(/limits.cpuMs must be a positive integer/);
     }, 90_000);
+  });
+
+  describe("a class that declares storage: dolt (docs/dolt-redesign.md §9)", () => {
+    const NOTES = "workers/notes";
+    const manifests: Record<string, Array<Record<string, unknown>>> = {
+      [NOTES]: [{ className: "NotesDO", storage: "dolt", doltLocal: ["local_%"] }],
+    };
+    const builds = { [NOTES]: doBuild(NOTES, "ev-1", NOTES_DO) };
+    const ref = (key: string) => ({ source: NOTES, className: "NotesDO", objectKey: key });
+    const bind = async (manager: RuntimeManager, key: string) =>
+      bindConfiguredObject(manager, ref(key), {});
+    /** A source object as the existing fork test prepares one: ensured, with its image, its owner restored. */
+    const prepareSource = async (manager: RuntimeManager, key: string, forkKey: string) => {
+      const prepared = await manager.ensureDurableObjectEntity({
+        source: NOTES,
+        className: "NotesDO",
+        key,
+        contextId: "source-context",
+      });
+      const reservation = cloneReservation(ref(key), forkKey, manager);
+      await manager.restoreDurableObjectEntity({
+        ...sourceOwner(reservation),
+        source: { repoPath: NOTES, effectiveVersion: prepared.effectiveVersion },
+        activeAuthority: prepared.authority,
+      });
+      return reservation;
+    };
+    type Notes = {
+      engine: string;
+      notes: string[];
+      hits: number;
+      log: string[] | null;
+      head: string | null;
+      commits: Array<[string, string]> | null;
+    };
+
+    it("the SQL the channel and Pi stores use runs on a Dolt facet (dialect probe)", async () => {
+      const DIALECT = "workers/dialect";
+      active = await createHarness(
+        { [DIALECT]: doBuild(DIALECT, "ev-1", DIALECT_DO) },
+        { manifests: { [DIALECT]: [{ className: "DialectDO", storage: "dolt" }] } as never }
+      );
+      const { manager, dispatch } = active;
+      await manager.ensureDOClass(DIALECT, "DialectDO");
+      const ref = { source: DIALECT, className: "DialectDO", objectKey: "probe" };
+      await bindConfiguredObject(manager, ref, {});
+      const results = (await dispatch(ref, "run")) as Record<
+        string,
+        { ok?: unknown; error?: string }
+      >;
+      // eslint-disable-next-line no-console
+      console.info("DIALECT", JSON.stringify(results));
+      const failures = Object.entries(results).filter(([, value]) => value.error !== undefined);
+      expect(failures).toEqual([]);
+      expect(results["partial unique index"]!.ok).toBe("enforced");
+      expect(results["check constraint"]!.ok).toBe("enforced");
+    }, 60_000);
+
+    it("measures the commit volume of a channel's write shape on a Dolt facet (R1)", async () => {
+      const LOAD = "workers/load";
+      const events = Number(process.env["VIBESTUDIO_R1_EVENTS"] ?? 300);
+      const bytes = Number(process.env["VIBESTUDIO_R1_BYTES"] ?? 1024);
+      active = await createHarness(
+        { [LOAD]: doBuild(LOAD, "ev-1", LOAD_DO) },
+        {
+          manifests: {
+            [LOAD]: [{ className: "LoadDO", storage: "dolt", doltLocal: ["local_%"] }],
+          } as never,
+        }
+      );
+      const { manager, dispatch, ownedPaths } = active;
+      await manager.ensureDOClass(LOAD, "LoadDO");
+      const ref = { source: LOAD, className: "LoadDO", objectKey: "load" };
+      await bindConfiguredObject(manager, ref, {});
+      const dbFiles = (): Array<{ file: string; bytes: number }> => {
+        const found: Array<{ file: string; bytes: number }> = [];
+        const walk = (dir: string): void => {
+          for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            const path = join(dir, entry.name);
+            if (entry.isDirectory()) walk(path);
+            else if (entry.name === "db.sqlite")
+              found.push({ file: path, bytes: statSync(path).size });
+          }
+        };
+        for (const root of ownedPaths) if (existsSync(root)) walk(root);
+        return found;
+      };
+      const largest = () => Math.max(0, ...dbFiles().map((f) => f.bytes));
+      const before = largest();
+      // The cell's clock is coarse by design (a frozen timer), so time batches from outside.
+      const batch = 50;
+      const perEventMs: number[] = [];
+      let commits = 0;
+      for (let done = 0; done < events; done += batch) {
+        const started = performance.now();
+        const result = (await dispatch(
+          ref,
+          "load",
+          JSON.stringify({ events: Math.min(batch, events - done), bytes })
+        )) as { commits: number };
+        perEventMs.push((performance.now() - started) / Math.min(batch, events - done));
+        commits = result.commits;
+      }
+      const sorted = [...perEventMs].sort((x, y) => x - y);
+      const quantile = (q: number) =>
+        sorted[Math.min(sorted.length - 1, Math.floor(q * sorted.length))]!;
+      const loaded = {
+        commits,
+        both: {
+          batches: sorted.length,
+          meanMs: Number((perEventMs.reduce((x, y) => x + y, 0) / perEventMs.length).toFixed(2)),
+          p50Ms: Number(quantile(0.5).toFixed(2)),
+          p95Ms: Number(quantile(0.95).toFixed(2)),
+        },
+      };
+      const afterLoad = largest();
+      const readsStarted = performance.now();
+      const reads = (await dispatch(ref, "reads", "{}")) as Record<string, number>;
+      reads["callMs"] = Number((performance.now() - readsStarted).toFixed(1));
+      const gcStarted = performance.now();
+      await dispatch(ref, "gc", "{}");
+      const gc = { ms: performance.now() - gcStarted };
+      const afterGc = largest();
+      const report = {
+        events,
+        bytesPerEvent: bytes,
+        commits: loaded.commits,
+        perEventMsByBatchOf50: loaded.both,
+        fileBytes: { empty: before, afterLoad, afterGc },
+        bytesPerEventOnDisk: Math.round((afterLoad - before) / events),
+        gcMs: Math.round(gc.ms),
+        reads,
+      };
+      // eslint-disable-next-line no-console
+      console.info("R1", JSON.stringify(report));
+      expect(loaded.commits).toBeGreaterThanOrEqual(events);
+      expect(reads["at"]).toBe(Math.floor(reads["head"]! / 2));
+    }, 900_000);
+
+    it("an object is a Dolt facet: its writes are commits, a local table is not versioned, and a fork starts the local table empty", async () => {
+      active = await createHarness(builds, { manifests: manifests as never });
+      const { manager, dispatch } = active;
+      await manager.ensureDOClass(NOTES, "NotesDO");
+      expect(manager.getDoAdmission(NOTES, "NotesDO", undefined)?.engine).toMatchObject({
+        storage: "dolt",
+        doltLocal: expect.arrayContaining(["local_%", "vsl_%", "state"]),
+      });
+      const reservation = await prepareSource(manager, "orig", "fork");
+      await dispatch(ref("orig"), "add", JSON.stringify("a"));
+      await dispatch(ref("orig"), "add", JSON.stringify("b"));
+      const state = (await dispatch(ref("orig"), "add", JSON.stringify("c"))) as Notes;
+      expect(state.engine).toBe("dolt");
+      expect(state.notes).toEqual(["a", "b", "c"]);
+      expect(state.log!.slice(0, 3)).toEqual(["note: c", "note: b", "note: a"]);
+      expect(state.hits).toBe(3);
+
+      // A hard reset to the first note rewinds the notes and not the local table.
+      const firstNote = state.commits![2]![0];
+      const rewound = (await dispatch(ref("orig"), "reset-to", JSON.stringify(firstNote))) as Notes;
+      expect(rewound.notes).toEqual(["a"]);
+      expect(rewound.hits).toBe(4);
+      await dispatch(ref("orig"), "add", JSON.stringify("b"));
+      await dispatch(ref("orig"), "add", JSON.stringify("c"));
+
+      // A fork of the whole object, as the product's clone is: versioned rows copied, the local table empty.
+      await manager.forkObjectStorage(ref("orig"), "fork", {
+        reservation,
+        resolveSource: async () => sourceOwner(reservation),
+      });
+      await bind(manager, "fork");
+      const forked = (await dispatch(ref("fork"), "get")) as Notes;
+      expect(forked.engine).toBe("dolt");
+      expect(forked.notes).toEqual(["a", "b", "c"]);
+      expect(forked.hits).toBe(1);
+      expect(forked.log!.slice(0, 3)).toEqual(["note: c", "note: b", "note: a"]);
+    }, 90_000);
+
+    it("a fork at a commit of the Dolt facet holds the parent as of that commit, and a repeat of the fork leaves the one object", async () => {
+      active = await createHarness(builds, { manifests: manifests as never });
+      const { manager, dispatch } = active;
+      await manager.ensureDOClass(NOTES, "NotesDO");
+      const reservation = await prepareSource(manager, "parent", "at-two");
+      await dispatch(ref("parent"), "add", JSON.stringify("one"));
+      await dispatch(ref("parent"), "add", JSON.stringify("two"));
+      const withThree = (await dispatch(ref("parent"), "add", JSON.stringify("three"))) as Notes;
+      const atTwo = withThree.commits![1]![0];
+      const options = {
+        reservation,
+        resolveSource: async () => sourceOwner(reservation),
+        at: atTwo,
+      };
+      await manager.forkObjectStorage(ref("parent"), "at-two", options);
+      await manager.forkObjectStorage(ref("parent"), "at-two", options);
+      await bind(manager, "at-two");
+      const child = (await dispatch(ref("at-two"), "get")) as Notes;
+      expect(child.notes).toEqual(["one", "two"]);
+      expect(child.log!.slice(0, 2)).toEqual(["note: two", "note: one"]);
+      // The parent is untouched and the child diverges on its own.
+      await dispatch(ref("at-two"), "add", JSON.stringify("child-three"));
+      expect(((await dispatch(ref("parent"), "get")) as Notes).notes).toEqual([
+        "one",
+        "two",
+        "three",
+      ]);
+    }, 90_000);
+
+    it.each([
+      { stage: "copying", failOnCommit: 1, expectedFailures: 1 },
+      { stage: "swapping", failOnCommit: 2, expectedFailures: 1 },
+    ])(
+      "an import interrupted while $stage resumes where it stopped and loses nothing",
+      async ({ failOnCommit, expectedFailures }) => {
+        const sqliteManifests = { [NOTES]: [{ className: "NotesDO" }] };
+        active = await createHarness(builds, { manifests: sqliteManifests as never });
+        const { manager, dispatch } = active;
+        await manager.ensureDOClass(NOTES, "NotesDO");
+        await bind(manager, "legacy");
+        await dispatch(ref("legacy"), "add", JSON.stringify("old-1"));
+        await dispatch(ref("legacy"), "add", JSON.stringify("old-2"));
+        sqliteManifests[NOTES] = manifests[NOTES] as never;
+        await bindConfiguredObject(manager, ref("legacy"), { failOnCommit });
+        let failures = 0;
+        let after: Notes | null = null;
+        for (let attempt = 0; attempt < 3 && after === null; attempt++) {
+          try {
+            after = (await dispatch(
+              ref("legacy"),
+              "add",
+              JSON.stringify(`new-${attempt}`)
+            )) as Notes;
+          } catch (error) {
+            expect(String(error)).toMatch(/injected commit failure/);
+            failures++;
+          }
+        }
+        expect(failures).toBe(expectedFailures);
+        expect(after!.engine).toBe("dolt");
+        expect(after!.notes.slice(0, 2)).toEqual(["old-1", "old-2"]);
+        expect(after!.log!.some((message) => /^import: .* from sqlite$/.test(message))).toBe(true);
+        // Once finished it stays finished: another request imports nothing.
+        const again = (await dispatch(ref("legacy"), "get")) as Notes;
+        expect(again.notes).toEqual(after!.notes);
+      },
+      120_000
+    );
+
+    it("an object whose class was SQLite is copied into the Dolt facet once, committed, and its legacy facet is deleted", async () => {
+      const sqliteManifests = { [NOTES]: [{ className: "NotesDO" }] };
+      active = await createHarness(builds, { manifests: sqliteManifests as never });
+      const { manager, dispatch } = active;
+      await manager.ensureDOClass(NOTES, "NotesDO");
+      await bind(manager, "legacy");
+      await dispatch(ref("legacy"), "add", JSON.stringify("old-1"));
+      const before = (await dispatch(ref("legacy"), "add", JSON.stringify("old-2"))) as Notes;
+      expect(before).toMatchObject({ engine: "sqlite", notes: ["old-1", "old-2"], hits: 2 });
+      // The release that flips the class to Dolt.
+      sqliteManifests[NOTES] = manifests[NOTES] as never;
+      await bind(manager, "legacy");
+      const after = (await dispatch(ref("legacy"), "add", JSON.stringify("new-3"))) as Notes;
+      expect(after.engine).toBe("dolt");
+      expect(after.notes).toEqual(["old-1", "old-2", "new-3"]);
+      // Operational rows are copied as well (the local table survives the move).
+      expect(after.hits).toBe(3);
+      expect(after.log!.slice(0, 2)).toEqual([
+        "note: new-3",
+        expect.stringMatching(/^import: .* from sqlite$/),
+      ]);
+      // An object created under the Dolt declaration has no import commit.
+      await bind(manager, "fresh");
+      const fresh = (await dispatch(ref("fresh"), "add", JSON.stringify("x"))) as Notes;
+      expect(fresh.log!.some((message) => message.startsWith("import:"))).toBe(false);
+    }, 120_000);
   });
 });

@@ -3427,6 +3427,35 @@ describe("runtimeService.cloneContext", () => {
     }
   );
 
+  it("forks a named entity's store at the commit it was given, and replays the same commit", async () => {
+    const cloneDurableStorage = vi.fn(async () => {});
+    const { service } = await buildDeps({ cloneDurableStorage });
+    const source = await seedDO(service, "ctx-storage-at", "source");
+    const commit = "c".repeat(40);
+    const input = [
+      {
+        sourceContextId: "ctx-storage-at",
+        targetKey: "at-owner",
+        storageAt: { [source.id]: commit },
+      },
+    ];
+    const first = (await service.handler(
+      { caller: serverCaller },
+      "cloneContext",
+      input
+    )) as CloneResult;
+    expect(cloneDurableStorage).toHaveBeenCalledWith(
+      expect.objectContaining({ fromKey: "source", at: commit })
+    );
+    // A retry of the same operation answers the same child; a different commit is another operation.
+    expect(await service.handler({ caller: serverCaller }, "cloneContext", input)).toEqual(first);
+    await expect(
+      service.handler({ caller: serverCaller }, "cloneContext", [
+        { ...input[0], storageAt: { [source.id]: "d".repeat(40) } },
+      ])
+    ).rejects.toThrow(/cloneDefinition|identity/i);
+  });
+
   it("re-adopts its sealed interrupted preparation without reforking the context or rebuilding its image", async () => {
     const initializeDurableClone = vi.fn<RuntimeEntityHooks["initializeDurableClone"]>(
       async () => {}

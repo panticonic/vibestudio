@@ -49,6 +49,9 @@ import {
 } from "./internalDOs/internalDoLoader.js";
 import { encodeUniversalKey } from "./doDispatch.js";
 import { doExecutableHeaders, type DoExecutableAdmission } from "./doExecutableDispatch.js";
+import type { DoEngineAdmission } from "./workerdPrograms/executableVersion.js";
+import { DO_FACET } from "./workerdPrograms/doFacets.js";
+import { doltLocalPatterns } from "@vibestudio/durable/dolt";
 import type { HostedCodeAdmission } from "./workerdPrograms/executableVersion.js";
 import type { HostedClassManifest } from "@vibestudio/shared/types";
 import { assertPresent } from "../lintHelpers";
@@ -295,7 +298,8 @@ function runtimeExecutableVersion(
 function runtimeIncarnationVersion(
   image: RuntimeImageRecord,
   stateArgs?: Record<string, unknown>,
-  nativeOwner: import("@vibestudio/shared/runtime/entitySpec").NativeOwnerAdmission | null = null
+  nativeOwner: import("@vibestudio/shared/runtime/entitySpec").NativeOwnerAdmission | null = null,
+  engine: DoEngineAdmission | null = null
 ): string {
   return crypto
     .createHash("sha256")
@@ -309,6 +313,8 @@ function runtimeIncarnationVersion(
           effectiveVersion: image.artifact.sourceState.effectiveVersion,
           sourceRef: workerSourceRef(image, image.source),
         },
+        // Only a Dolt class names its engine, so no other object's version moves.
+        ...(engine ? { engine } : {}),
       })
     )
     .digest("hex");
@@ -325,12 +331,14 @@ function freezeAdmissionValue<T>(value: T): T {
 function doAdmission(
   image: RuntimeImageRecord,
   stateArgs?: Record<string, unknown>,
-  nativeOwner: import("@vibestudio/shared/runtime/entitySpec").NativeOwnerAdmission | null = null
+  nativeOwner: import("@vibestudio/shared/runtime/entitySpec").NativeOwnerAdmission | null = null,
+  engine: DoEngineAdmission | null = null
 ): DoExecutableAdmission {
   const ownedStateArgs = stateArgs ? structuredClone(stateArgs) : undefined;
   return freezeAdmissionValue({
     executableVersion: runtimeExecutableVersion(image),
-    incarnationVersion: runtimeIncarnationVersion(image, ownedStateArgs, nativeOwner),
+    incarnationVersion: runtimeIncarnationVersion(image, ownedStateArgs, nativeOwner, engine),
+    engine: engine ? structuredClone(engine) : null,
     props: {
       nativeOwner: nativeOwner ? structuredClone(nativeOwner) : null,
       stateArgs: ownedStateArgs ?? null,
@@ -537,6 +545,8 @@ export interface WorkerdWorkspaceProvider {
     className: string;
     hosts?: ReadonlyArray<{ source: string; className: string }>;
     hosted?: HostedClassManifest;
+    storage?: "dolt";
+    doltLocal?: readonly string[];
   }>;
   readonly singletonRegistry: SingletonRegistry;
 }
@@ -1301,7 +1311,12 @@ export class RuntimeManager {
     this.doObjectBuilds.set(doObjectBuildKey(source, className, record.key), {
       imageId: image.id,
       buildKey: image.artifact.buildKey,
-      admission: doAdmission(image, stateArgs, this.nativeOwnerAdmission(record)),
+      admission: doAdmission(
+        image,
+        stateArgs,
+        this.nativeOwnerAdmission(record),
+        this.classEngine(source, className)
+      ),
       ...(image.scopeRef ? { scopeRef: image.scopeRef } : {}),
     });
     this.registerDoEgressCaller(source, className, image);
@@ -2140,10 +2155,29 @@ export class RuntimeManager {
     if (!image) throw new Error(`Durable Object ${source}:${className} has no admitted image`);
     let admission = this.doAdmissions.get(image);
     if (!admission) {
-      admission = doAdmission(image);
+      admission = doAdmission(
+        image,
+        undefined,
+        null,
+        this.classEngine(service.source, service.className)
+      );
       this.doAdmissions.set(image, admission);
     }
     return admission;
+  }
+
+  /**
+   * The storage engine the class's manifest declares (`durable.classes[].storage`).
+   * Product classes and a runtime without a workspace provider declare none.
+   */
+  private classEngine(source: string, className: string): DoEngineAdmission | null {
+    if (isInternalDOSource(source) || !this.workspaceProvider) return null;
+    const declared = this.workspaceProvider
+      .getManifestDoClasses(source)
+      .find((entry) => entry.className === className);
+    return declared?.storage === "dolt"
+      ? { storage: "dolt", doltLocal: doltLocalPatterns(declared.doltLocal ?? []) }
+      : null;
   }
 
   /**
@@ -3671,7 +3705,9 @@ export class RuntimeManager {
           buildKey: image?.artifact.buildKey ?? service.buildKey,
           admission: doAdmission(
             image ?? assertPresent(this.runtimeImages.get(imageId)),
-            stateArgs
+            stateArgs,
+            null,
+            this.classEngine(source, className)
           ),
           ...(scopeRef ? { scopeRef } : {}),
         });
@@ -4279,6 +4315,8 @@ export class RuntimeManager {
     stop?: boolean;
     /** `fork`: take over a target an interrupted fork left unfinished. */
     replaceUnfinished?: boolean;
+    /** `fork`: a Dolt facet copied at its own commit. */
+    facets?: Record<string, { at?: string }>;
   }): Promise<void> {
     const response = await this.nodeFetch("/_object", {
       body: {
@@ -4288,6 +4326,7 @@ export class RuntimeManager {
         to: this.cellName(input.to),
         ...(input.stop ? { stop: true } : {}),
         ...(input.replaceUnfinished ? { replaceUnfinished: true } : {}),
+        ...(input.facets ? { facets: input.facets } : {}),
       },
     });
     if (!response.ok) {
@@ -4427,6 +4466,11 @@ export class RuntimeManager {
       reservation: EntityRecord;
       resolveSource: () => Promise<EntityRecord | null>;
       cooperativelyPaused?: boolean;
+      /**
+       * A Dolt class's object is forked at this commit of its Dolt facet (the
+       * newest when absent): the parent's state as of one conversation point.
+       */
+      at?: string;
     }
   ): Promise<DORef> {
     if (this.shuttingDown) throw new Error("RuntimeManager is shutting down");
@@ -4456,6 +4500,7 @@ export class RuntimeManager {
           to: target,
           // An earlier attempt the node lost mid-publication is taken over.
           replaceUnfinished: true,
+          ...(options.at ? { facets: { [DO_FACET]: { at: options.at } } } : {}),
         });
       } catch (error) {
         // A retry of a clone whose earlier fork finished before its receipt

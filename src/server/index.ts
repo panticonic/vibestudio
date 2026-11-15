@@ -4846,12 +4846,14 @@ async function main() {
               toKey,
               reservation,
               cooperativelyPaused,
+              at,
             }) => {
               await runtimeManager.forkObjectStorage(
                 { source, className, objectKey: fromKey },
                 toKey,
                 {
                   cooperativelyPaused,
+                  ...(at ? { at } : {}),
                   reservation,
                   resolveSource: () =>
                     ensureEntityStore(doDispatch).resolveActiveRecord(

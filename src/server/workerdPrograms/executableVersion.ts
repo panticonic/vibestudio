@@ -1,7 +1,20 @@
 /** Exact code and object configuration selected at authenticated host dispatch. */
+/**
+ * A class's own storage engine, from its manifest (`durable.classes[].storage`).
+ * Fixed when an object is created: UniversalDO starts the object's cell as a Dolt
+ * facet and imports a legacy SQLite facet once (docs/dolt-redesign.md §9.2).
+ */
+export interface DoEngineAdmission {
+  readonly storage: "dolt";
+  /** SQL name patterns kept out of every commit, fork and reset (framework patterns included). */
+  readonly doltLocal: readonly string[];
+}
+
 export interface DoExecutableAdmission {
   readonly executableVersion: string;
   readonly incarnationVersion: string;
+  /** Null is the default SQLite facet. */
+  readonly engine?: DoEngineAdmission | null;
   readonly props: {
     readonly nativeOwner:
       | import("@vibestudio/shared/runtime/entitySpec").NativeOwnerAdmission

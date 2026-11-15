@@ -138,6 +138,18 @@ export interface PackageManifest {
        * and a bounded CPU time per invocation.
        */
       hosted?: HostedClassManifest;
+      /**
+       * The class's own storage engine (docs/dolt-redesign.md §6, §9.1). Absent is
+       * SQLite. `"dolt"` makes the object's cell a Dolt store: its tables are
+       * versioned, a fork can be taken at a commit, and `doltLocal` names the
+       * tables (SQL name patterns, `%` for any run) that belong to the object and
+       * not to its history: a fork starts them empty and a reset never rewinds
+       * them. The engine is fixed when an object is created; an object that
+       * already holds SQLite state is imported once, by the runtime, on its
+       * first activation under a Dolt declaration.
+       */
+      storage?: "dolt";
+      doltLocal?: string[];
     }>;
   };
   /**
