@@ -347,3 +347,39 @@ describe("@rpc direct authority declaration", () => {
     expect([...rpcExposedMethodNames(new PolicyDO())].sort()).toEqual(["broad", "serverOnly"]);
   });
 });
+
+describe("a call to the client's own id", () => {
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+  it("is delivered in-process by default: it never reaches the transport", async () => {
+    const fetch = vi.fn(async () => new Response("{}"));
+    const connectionless = createInternalConnectionlessRpcClient({
+      selfId: SELF,
+      serverUrl: "http://gw.test",
+      authToken: "T",
+      callerKind: "do",
+      workspaceId: "ws",
+      fetch,
+    });
+    // Nothing is exposed here, so the in-process delivery answers with a refusal, not a network call.
+    await expect(connectionless.client.call(SELF, "anything", [])).rejects.toBeDefined();
+    await settle();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("leaves the process when the client is a hosted class presenting its entity's id (loopback: false)", async () => {
+    const fetch = vi.fn(async () => new Response("{}"));
+    const connectionless = createInternalConnectionlessRpcClient({
+      selfId: SELF,
+      serverUrl: "http://gw.test",
+      authToken: "T",
+      callerKind: "do",
+      workspaceId: "ws",
+      loopback: false,
+      fetch,
+    });
+    void connectionless.client.call(SELF, "chatOp", []).catch(() => undefined);
+    await settle();
+    expect(fetch).toHaveBeenCalled();
+  });
+});

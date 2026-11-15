@@ -574,12 +574,7 @@ describe("openBridgeUploadStream ↔ relay (in-memory bridge)", () => {
       finalUrl: "http://gateway/x",
       body: new ReadableStream<Uint8Array>({}),
     }));
-    const response = await openBridgeUploadStream(
-      surface,
-      streamRequestEnvelope(),
-      null,
-      body
-    );
+    const response = await openBridgeUploadStream(surface, streamRequestEnvelope(), null, body);
     const reason = new Error("response consumer stopped");
     await response.body?.cancel(reason);
     await vi.waitFor(() => expect(cancelReason).toBeDefined());
