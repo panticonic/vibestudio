@@ -1633,6 +1633,27 @@ So S3 is a Pi change first (composite storage, local document kinds, a turn-comm
 an agent change second. It was not started in this pass because half of it cannot be done in the
 Base template alone, and a half-migrated Pi would leave two models in force.
 
+### 6.10 The hash chain: what deleting it touches (S1, not started)
+
+Corrections to §6.7 found by the survey. `prepare-log-event.ts` has **no hash code** (it normalizes
+actors, audiences and causality, and GAD calls it too): it stays. `hash.ts` is a different, legacy
+trajectory hash with no production consumer. The real chain is `log-envelope.ts` (`logEnvelopeHashPreimage`,
+`computeLogEnvelopeHash`, `verifyLogEnvelopeHash`, `checkLogIntegrity`, `LOG_GENESIS_HASH`, and the
+`prevHash`/`hash` fields of the strict wire schema). `logEnvelopeSemantic` stays (it is the canonical
+content comparison of "exact" idempotency). GAD's chain is **independent**: it computes its own hash
+over the same preimage, and the channel only checks that the two agree
+(`channel-observation.ts`); GAD keeps `log_events.hash UNIQUE NOT NULL` and a `builds` log that uses
+the chain for `checkLogIntegrity`. `eventDigest` of the agent's knowledge anchors does not depend on
+the chain.
+
+Dependency order: (1) host `workspaceSource.ts` schemas make the hash fields optional (the schemas are
+strict and shared with Base workers); (2) the channel observation protocol and the barriers and
+fork checks of `channel-do.ts` move from `hash` to `(sequence, envelopeId)` (`parent_hash` becomes the
+parent envelope id); (3) `channel-ledger.ts` stops computing and storing the chain; (4) GAD computes
+its own chain with a private function (its removal is P5's) and stops exposing it; (5) delete the
+protocol's chain code and legacy `hash.ts`, regenerate the GAD catalog. The channel's
+`channel_ledger_state` already is a local table (S2), so (2) and (3) need no engine work.
+
 ---
 
 ## 7. Dynamic code: one hosting helper, one admission step

@@ -336,6 +336,10 @@ export class DialectDO extends DurableObject {
     attempt("multi-statement exec", () => { sql.exec("CREATE TABLE m1 (a INTEGER); CREATE TABLE m2 (b INTEGER); INSERT INTO m1 VALUES (1);"); return sql.exec("SELECT count(*) AS n FROM m1").one().n; });
     attempt("insert or replace / ignore", () => { sql.exec("CREATE TABLE ir (k TEXT PRIMARY KEY, v TEXT)"); sql.exec("INSERT OR REPLACE INTO ir VALUES ('a','1')"); sql.exec("INSERT OR REPLACE INTO ir VALUES ('a','2')"); sql.exec("INSERT OR IGNORE INTO ir VALUES ('a','3')"); return sql.exec("SELECT v FROM ir").one().v; });
     attempt("pragma table_info", () => sql.exec("PRAGMA table_info(ir)").toArray().map((r) => r.name));
+    attempt("table_info shape", () => {
+      sql.exec("CREATE TABLE ti (item_id TEXT PRIMARY KEY, kind TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, disposition TEXT NOT NULL DEFAULT 'ready', note TEXT)");
+      return sql.exec("PRAGMA table_info(ti)").toArray();
+    });
     attempt("pragma foreign_keys", () => { sql.exec("PRAGMA foreign_keys = ON"); return "accepted"; });
     attempt("strict table", () => { sql.exec("CREATE TABLE st (id INTEGER PRIMARY KEY, b BLOB, t TEXT) STRICT"); return "created"; });
     attempt("blob and bigint", () => { sql.exec("CREATE TABLE bl (id INTEGER PRIMARY KEY, b BLOB)"); sql.exec("INSERT INTO bl VALUES (1, ?)", new Uint8Array([1,2,3])); return [...new Uint8Array(sql.exec("SELECT b FROM bl").one().b)]; });
