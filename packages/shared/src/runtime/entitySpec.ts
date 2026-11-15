@@ -461,6 +461,12 @@ export type RuntimeEntityCreateSpec =
       agentInitialization?: RuntimeAgentInitialization;
       agentBinding?: RuntimeAgentBindingInput;
       agentChannelId?: string;
+      /**
+       * Start from a fork of the calling entity's own storage, taken at this commit of its history
+       * (a Dolt commit hash): the new entity is of the caller's class and begins with what the cell
+       * held then, its local state empty. Only the entity itself can fork itself.
+       */
+      forkStorage?: { at: string };
     })
   | (RuntimeEntityCreateCommon & {
       /** Inert session entity: identity, context, and optional external-agent binding. */

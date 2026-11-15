@@ -15,6 +15,7 @@ import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from "node:fs"
 import { readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { build as esbuild } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ledgerTest } from "../../tests/helpers/ledgerTest.js";
 
@@ -227,6 +228,106 @@ export default { fetch() { return new Response("kernel"); } };`;
  * facet that replaces it. `notes` is versioned, `local_hits` is a `doltLocal` table. The
  * `__legacy/*` calls are what the product base serves (`@vibestudio/durable/legacyImport`).
  */
+/**
+ * An agent's cell: Pi's own `CompositeSqliteStorage` (bundled from the package the product ships) over a Dolt facet,
+ * driven the way the agent drives it: many storage transactions to a turn, one of which closes it and ends in a
+ * Dolt commit. The bundle is the real storage code, so the migrations, the routing between the versioned and the local
+ * table set, the counters and the commit option meet the real engine.
+ */
+async function agentCellSource(): Promise<string> {
+  const entry = `import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
+import {
+  applyCompositeSqliteMigrationsInTransaction,
+  CompositeSqliteStorage,
+  nativeSqliteExecutor,
+  NativeDatabase,
+} from "@panticonic/pi-durable/storage/sqlite";
+export class VibestudioExecutable extends WorkerEntrypoint {
+  fetch() { return new Response(null, {status:204}); }
+}
+const context = { abortSignal: undefined };
+const closedTurn = (writes) => writes.some((w) => w.type === "task" && w.value.kind === "vibestudio.channel-publication" && w.value.state.status === "pending");
+export class AgentCellDO extends DurableObject {
+  constructor(ctx, env) {
+    super(ctx, env); this.ctx = ctx; this.env = env;
+    if (env.VIBESTUDIO_SCHEMA_PROBE === true) { this.ready = Promise.resolve(); return; }
+    this.ready = ctx.blockConcurrencyWhile(async () => {
+      await ctx.storage.transaction(async () => {
+        await applyCompositeSqliteMigrationsInTransaction(nativeSqliteExecutor(ctx.storage.sql, () => {}));
+      }, { commit: () => Number(ctx.storage.sql.exec("SELECT count(*) AS n FROM dolt_status").one().n) > 0 ? "schema: pi store" : null });
+      this.storage = await CompositeSqliteStorage.open(new NativeDatabase(ctx.storage), {
+        commit: (writes, seq, state) => closedTurn(writes) ? "agent: turn closed t" + seq + " entries<=" + state.entryHigh : null,
+      });
+    });
+  }
+  async fetch(request) {
+    await this.ready;
+    if (this.env.VIBESTUDIO_SCHEMA_PROBE === true)
+      return Response.json({ className: "AgentCellDO", version: 1, nativeOwner: false, durableWorkQueues: [], freshSchemaFingerprint: "[]" });
+    const url = new URL(request.url);
+    const method = url.pathname.split("/").filter(Boolean).slice(1).join("/");
+    if (method === "__legacy/engine") return Response.json({ result: { engine: "dolt" } });
+    const input = JSON.parse((await request.text()) || "{}");
+    const sql = this.ctx.storage.sql;
+    const dolt = this.ctx.storage.dolt;
+    const count = (table) => Number(sql.exec("SELECT count(*) AS n FROM " + table).one().n);
+    if (method === "turns") {
+      // Each turn is input.writes storage transactions of input.bytes each; the last one closes the turn.
+      if (!(await this.storage.conversation(1, context)))
+        await this.storage.commit([{ type: "conversation", value: { id: 1 } }], () => {}, context);
+      const body = "x".repeat(input.bytes);
+      const started = [];
+      for (let turn = 0; turn < input.turns; turn++) {
+        const t0 = performance.now();
+        for (let write = 0; write < input.writes; write++) {
+          const last = write === input.writes - 1;
+          const id = await this.storage.mintId();
+          const writes = [];
+          if (write % 3 === 0) writes.push({ type: "entry", value: { id, conversationId: 1, kind: "message", data: body } });
+          else writes.push({ type: "task", value: { id, conversationId: 1, kind: "test.task", version: 1, state: { status: "terminal" }, abortRequested: false, background: false, input: { body } } });
+          if (last) {
+            const closing = await this.storage.mintId();
+            writes.push({ type: "task", value: { id: closing, conversationId: 1, kind: "vibestudio.channel-publication", version: 1, state: { status: "pending" }, abortRequested: false, background: true, input: { events: [{ event: { kind: "turn.closed", turnId: "t" + turn }, key: "k" }] } } });
+          }
+          await this.storage.commit(writes, () => {}, context);
+        }
+        started.push(performance.now() - t0);
+      }
+      return Response.json({ result: { perTurnMs: started } });
+    }
+    if (method === "state") {
+      const commits = dolt.log({ limit: 1000000 }).map((c) => [c.hash, c.message]);
+      return Response.json({ result: {
+        entries: count("entries"), localTasks: count("vsl_tasks"), versionedTasks: count("tasks"),
+        counters: sql.exec("SELECT next_id, next_seq FROM vsl_durable_metadata").one(),
+        commits, dirty: dolt.status().length,
+      } });
+    }
+    if (method === "mint") return Response.json({ result: { id: await this.storage.mintId() } });
+    if (method === "gc") { dolt.gc(); return Response.json({ result: {} }); }
+    return Response.json({ error: { message: "no such method " + method } }, { status: 404 });
+  }
+}
+export default { fetch() { return new Response("agent cell"); } };`;
+  const result = await esbuild({
+    stdin: {
+      contents: entry,
+      resolveDir: process.cwd(),
+      sourcefile: "agent-cell.js",
+      loader: "js",
+    },
+    bundle: true,
+    write: false,
+    format: "esm",
+    platform: "neutral",
+    mainFields: ["module", "main"],
+    conditions: ["import", "default"],
+    external: ["cloudflare:workers"],
+    logLevel: "silent",
+  });
+  return result.outputFiles[0]!.text;
+}
+
 const NOTES_DO = `import { DurableObject, WorkerEntrypoint } from "cloudflare:workers";
 export class VibestudioExecutable extends WorkerEntrypoint {
   fetch() { return new Response(null, {status:204}); }
@@ -2201,6 +2302,139 @@ export default { fetch() { return new Response("chunked host"); } };`;
       console.info("R1", JSON.stringify(report));
       expect(loaded.commits).toBeGreaterThanOrEqual(events);
       expect(reads["at"]).toBe(Math.floor(reads["head"]! / 2));
+    }, 900_000);
+
+    it("an agent's cell: Pi's composite storage on a Dolt facet commits at a closed turn, forks at that commit with its local set empty, and measures the commit volume of a turn (R1)", async () => {
+      const CELL = "workers/agent-cell";
+      const source = await agentCellSource();
+      active = await createHarness(
+        { [CELL]: doBuild(CELL, "ev-1", source) },
+        {
+          manifests: {
+            [CELL]: [
+              {
+                className: "AgentCellDO",
+                storage: "dolt",
+                doltLocal: ["do_identity", "subscriptions", "agent_hot_path_trace"],
+              },
+            ],
+          } as never,
+        }
+      );
+      const { manager, dispatch, ownedPaths } = active;
+      await manager.ensureDOClass(CELL, "AgentCellDO");
+      const cellRef = (key: string) => ({ source: CELL, className: "AgentCellDO", objectKey: key });
+      const prepared = await manager.ensureDurableObjectEntity({
+        source: CELL,
+        className: "AgentCellDO",
+        key: "parent",
+        contextId: "source-context",
+      });
+      const reservation = cloneReservation(cellRef("parent"), "child", manager);
+      await manager.restoreDurableObjectEntity({
+        ...sourceOwner(reservation),
+        source: { repoPath: CELL, effectiveVersion: prepared.effectiveVersion },
+        activeAuthority: prepared.authority,
+      });
+      type Cell = {
+        entries: number;
+        localTasks: number;
+        versionedTasks: number;
+        counters: { next_id: string; next_seq: number };
+        commits: Array<[string, string]>;
+        dirty: number;
+      };
+      const state = async (key: string) => (await dispatch(cellRef(key), "state", "{}")) as Cell;
+      const fileBytes = () => {
+        let largest = 0;
+        const walk = (dir: string): void => {
+          for (const entry of readdirSync(dir, { withFileTypes: true })) {
+            const path = join(dir, entry.name);
+            if (entry.isDirectory()) walk(path);
+            else if (entry.name === "db.sqlite") largest = Math.max(largest, statSync(path).size);
+          }
+        };
+        for (const root of ownedPaths) if (existsSync(root)) walk(root);
+        return largest;
+      };
+      // Three turns of 10 storage transactions each: a turn closes in its last one.
+      await dispatch(
+        cellRef("parent"),
+        "turns",
+        JSON.stringify({ turns: 3, writes: 10, bytes: 1200 })
+      );
+      const parent = await state("parent");
+      const turnCommits = parent.commits.filter(([, message]) =>
+        message.startsWith("agent: turn closed")
+      );
+      expect(turnCommits).toHaveLength(3);
+      // The closing transaction's commit swept in everything the turn wrote: nothing is left dirty.
+      expect(parent.dirty).toBe(0);
+      expect(parent.localTasks).toBeGreaterThan(0);
+      expect(parent.versionedTasks).toBe(0);
+      // A fork at the commit of the second turn holds the conversation as of then and none of the local set.
+      const secondTurn = turnCommits[1]![0];
+      const entriesAtSecond = Number(/entries<=(\d+)/.exec(turnCommits[1]![1])?.[1] ?? 0);
+      await manager.forkObjectStorage(cellRef("parent"), "child", {
+        reservation,
+        resolveSource: async () => sourceOwner(reservation),
+        at: secondTurn,
+      });
+      await bindConfiguredObject(manager, cellRef("child"), {});
+      const child = await state("child");
+      expect(child.localTasks).toBe(0);
+      expect(child.entries).toBeLessThan(parent.entries);
+      expect(entriesAtSecond).toBeGreaterThan(0);
+      // The counters restart above everything the fork's versioned set stores: no ID of the fork is the parent's.
+      const minted = ((await dispatch(cellRef("child"), "mint", "{}")) as { id: number }).id;
+      expect(minted).toBeGreaterThanOrEqual(entriesAtSecond);
+      // The fork continues on its own: another turn commits there and leaves the parent as it was.
+      await dispatch(
+        cellRef("child"),
+        "turns",
+        JSON.stringify({ turns: 1, writes: 4, bytes: 500 })
+      );
+      expect(
+        (await state("child")).commits.filter(([, message]) =>
+          message.startsWith("agent: turn closed")
+        )
+      ).toHaveLength(3);
+      expect((await state("parent")).entries).toBe(parent.entries);
+
+      // R1 for the agent cell: the cost of a turn, and of a fork of the file it leaves behind.
+      const turns = Number(process.env["VIBESTUDIO_R1_TURNS"] ?? 60);
+      const writes = Number(process.env["VIBESTUDIO_R1_WRITES"] ?? 23);
+      const bytes = Number(process.env["VIBESTUDIO_R1_BYTES"] ?? 1100);
+      const before = fileBytes();
+      const run = (await dispatch(
+        cellRef("parent"),
+        "turns",
+        JSON.stringify({ turns, writes, bytes })
+      )) as { perTurnMs: number[] };
+      const afterLoad = fileBytes();
+      const gcStarted = performance.now();
+      await dispatch(cellRef("parent"), "gc", "{}");
+      const gcMs = performance.now() - gcStarted;
+      const afterGc = fileBytes();
+      const sorted = [...run.perTurnMs].sort((x, y) => x - y);
+      // eslint-disable-next-line no-console
+      console.info(
+        "R1-AGENT",
+        JSON.stringify({
+          turns,
+          storageTransactionsPerTurn: writes,
+          bytesPerTransaction: bytes,
+          doltCommitsPerTurn: 1,
+          meanTurnMs: Number((run.perTurnMs.reduce((x, y) => x + y, 0) / turns).toFixed(1)),
+          p95TurnMs: Number(
+            sorted[Math.min(sorted.length - 1, Math.floor(0.95 * sorted.length))]!.toFixed(1)
+          ),
+          fileBytes: { before, afterLoad, afterGc },
+          bytesPerTurnOnDisk: Math.round((afterLoad - before) / turns),
+          gcMs: Math.round(gcMs),
+          forkCopiesBytes: afterGc,
+        })
+      );
     }, 900_000);
 
     it("an object is a Dolt facet: its writes are commits, a local table is not versioned, and a fork starts the local table empty", async () => {

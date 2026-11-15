@@ -661,6 +661,8 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       key: spec.key,
     });
     const create = async (): Promise<RuntimeEntityHandle> => {
+      if (spec.kind === "do" && spec.forkStorage)
+        await reserveForkedStorage(actors, spec, canonicalId);
       const preparedResourceBindings = spec.resourceBindings?.length
         ? await deps.prepareResourceBindings?.({
             bindings: spec.resourceBindings,
@@ -742,6 +744,63 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       );
     };
     return serializeByKey(entityTransitions, canonicalId, create);
+  }
+
+  /**
+   * Reserve an entity that starts from a fork of the caller's own storage and copy that storage into
+   * it, before the ordinary creation path activates it. The caller is the source: an entity forks
+   * itself at one of its own commits, into its own class, so no entity can read another's storage
+   * through this. A retry finds the reservation and the receipt of the copy and does neither again.
+   */
+  async function reserveForkedStorage(
+    actors: RuntimeCreationActors,
+    spec: Extract<RuntimeEntityCreateSpec, { kind: "do" }> & { key: string },
+    canonicalId: string
+  ): Promise<void> {
+    const caller = actors.lifecycleCaller;
+    const at = spec.forkStorage!.at;
+    const source = await store.resolveRecord(caller.runtime.id);
+    if (!source || source.kind !== "do" || source.status !== "active" || !source.className) {
+      throw new Error("runtime.createEntity forkStorage requires the caller to be an active DO");
+    }
+    if (source.source.repoPath !== spec.execution.source || source.className !== spec.className) {
+      throw new Error("runtime.createEntity forkStorage creates the caller's own class");
+    }
+    if (!source.authoritySessionId || !source.activeBuildKey || !source.activeExecutionDigest) {
+      throw new Error(`Fork source ${source.id} has no sealed incarnation ownership`);
+    }
+    if (!deps.hooks.cloneDurableStorage) {
+      throw new Error("runtime.createEntity forkStorage is unavailable");
+    }
+    const provenance: EntityCloneProvenance = {
+      storage: "snapshot",
+      operationContextId: spec.contextId || source.contextId,
+      sourceEntityId: source.id,
+      sourceContextId: source.contextId,
+      sourceAuthoritySessionId: source.authoritySessionId,
+      sourceBuildKey: source.activeBuildKey,
+      sourceExecutionDigest: source.activeExecutionDigest,
+    };
+    const existing = await store.resolveRecord(canonicalId);
+    if (existing && existing.status !== "preparing") return;
+    if (!existing) {
+      await reserveEntityOnce(actors, spec, spec.key, canonicalId, provenance);
+    } else if (canonicalJson(existing.cloneProvenance ?? null) !== canonicalJson(provenance)) {
+      throw new IdentityCollisionError(canonicalId, {
+        field: "cloneProvenance",
+        existing: existing.cloneProvenance ?? null,
+        attempted: provenance,
+      });
+    }
+    await deps.hooks.cloneDurableStorage({
+      source: source.source.repoPath,
+      className: source.className,
+      fromKey: source.key,
+      toKey: spec.key,
+      reservation: (await store.resolveRecord(canonicalId))!,
+      cooperativelyPaused: true,
+      at,
+    });
   }
 
   async function releaseResourceBindings(caller: VerifiedCaller, id: string): Promise<void> {
@@ -2005,13 +2064,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         throw new Error(`Clone source ${source.id} has no sealed incarnation ownership`);
       }
       return {
-        // Native session state contains execution ownership and channel/task
-        // provenance. Conversation transfer owns its semantic copy; raw file
-        // snapshots are reserved for independently cloneable ordinary DOs.
-        storage:
-          source.kind === "do" && !source.nativeOwner && !source.agentBinding
-            ? "snapshot"
-            : "fresh",
+        // A DO's storage is forked, an agent's included: the versioned conversation comes with
+        // the fork (at the commit `storageAt` names) and the cell's local state, which holds
+        // execution ownership and channel/task provenance, starts empty, so the fork binds a
+        // new owner of its own on its first activation.
+        storage: source.kind === "do" ? "snapshot" : "fresh",
         operationContextId: rootTarget,
         sourceEntityId: source.id,
         sourceContextId: source.contextId,
@@ -2161,11 +2218,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
               // a sealed record resumes initialization of that exact image.
               if (!existing)
                 await reserveEntityOnce(cloneActors, spec, newKey, targetId, cloneProvenance);
-              if (
-                (!existing || existing.status === "preparing") &&
-                src.kind === "do" &&
-                !src.agentBinding
-              ) {
+              if ((!existing || existing.status === "preparing") && src.kind === "do") {
                 const className = src.className;
                 if (className == null) {
                   throw new Error(`cloneContext: DO entity ${src.id} has no className`);

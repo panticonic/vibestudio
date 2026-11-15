@@ -97,6 +97,22 @@ async function runNpmInstallInSlot(
   await ownership.close();
 }
 
+/**
+ * A developer's loopback registry for an unpublished first-party release (`scripts/serve-vibestudio-registry.mjs` of the
+ * Pi fork serves one). It is read only from the environment of the host process, never from a manifest, and only a
+ * loopback http origin is accepted; its tarballs are then admitted in place of registry.npmjs.org's.
+ */
+export function developmentRegistryOrigin(
+  environment: Record<string, string | undefined> = process.env
+): URL | null {
+  const value = environment["VIBESTUDIO_DEV_NPM_REGISTRY"];
+  if (!value) return null;
+  const url = new URL(value);
+  if (url.protocol !== "http:" || (url.hostname !== "127.0.0.1" && url.hostname !== "localhost"))
+    throw new Error("VIBESTUDIO_DEV_NPM_REGISTRY must be a loopback http origin");
+  return url;
+}
+
 async function installInOwnership(
   ownership: Ownership,
   platform: "linux" | "darwin" | "win32",
@@ -129,6 +145,9 @@ async function installInOwnership(
     const installation = getNativeExecutionInstallation(options.appRoot);
     const guestEnvironment = {
       ...runtime.environment,
+      ...(developmentRegistryOrigin()
+        ? { npm_config_registry: developmentRegistryOrigin()!.href }
+        : {}),
       HOME: home,
       USERPROFILE: home,
       APPDATA: home,
@@ -313,7 +332,8 @@ async function installInOwnership(
         throw new Error("npm dependency lockfile is not a regular file");
       assertRegistryDependencyGraph(
         JSON.parse(fs.readFileSync(lockPath, "utf8")),
-        createRequire(npmCli)("npm-package-arg").resolve
+        createRequire(npmCli)("npm-package-arg").resolve,
+        developmentRegistryOrigin()
       );
       fs.mkdirSync(downloadCache, { recursive: true, mode: 0o700 });
       // npm ci consumes the reviewed graph. With registry sources and scripts
@@ -411,7 +431,8 @@ function assertRegistryDependencyGraph(
   parse: (
     name: string,
     spec: string
-  ) => { registry?: boolean; type?: string; subSpec?: { registry?: boolean } }
+  ) => { registry?: boolean; type?: string; subSpec?: { registry?: boolean } },
+  developmentRegistry: URL | null = null
 ): void {
   if (lock.lockfileVersion !== 3 || !lock.packages?.[""])
     throw new Error("npm resolution did not produce a complete dependency lockfile");
@@ -442,12 +463,14 @@ function assertRegistryDependencyGraph(
     if (typeof pkg["resolved"] !== "string" || typeof pkg["integrity"] !== "string")
       throw new Error(`npm dependency ${location} has no registry resolution and integrity`);
     const source = new URL(pkg["resolved"]);
+    const fromDevelopmentRegistry =
+      developmentRegistry !== null && source.origin === developmentRegistry.origin;
     if (
-      source.protocol !== "https:" ||
-      source.hostname !== "registry.npmjs.org" ||
-      source.username ||
-      source.password
+      !fromDevelopmentRegistry &&
+      (source.protocol !== "https:" || source.hostname !== "registry.npmjs.org")
     )
+      throw new Error(`Refusing non-registry npm dependency: ${location} (${pkg["resolved"]})`);
+    if (source.username || source.password)
       throw new Error(`Refusing non-registry npm dependency: ${location} (${pkg["resolved"]})`);
   }
 }

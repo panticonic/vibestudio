@@ -3899,7 +3899,7 @@ describe("runtimeService.cloneContext", () => {
     expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
   });
 
-  it("starts an unbound native execution clone fresh while ordinary DOs preserve their storage snapshots", async () => {
+  it("forks the storage of a native execution owner like any other DO, at the commit named for it", async () => {
     const { service, instance, cloneDurableStorage } = await buildDeps({
       resolveNativeOwner: (input) =>
         input.className === "AgentDO"
@@ -3918,19 +3918,20 @@ describe("runtimeService.cloneContext", () => {
       },
     ])) as { id: string };
     const result = (await service.handler({ caller: serverCaller }, "cloneContext", [
-      { sourceContextId: "ctx-native-clone" },
+      { sourceContextId: "ctx-native-clone", storageAt: { [native.id]: "commit-of-native" } },
     ])) as CloneResult;
     const nativeClone = result.entities.find((entity) => entity.sourceId === native.id)!;
     const ordinaryClone = result.entities.find((entity) => entity.sourceId === ordinary.id)!;
-    expect(instance.entityResolve(nativeClone.newId)?.cloneProvenance?.storage).toBe("fresh");
+    expect(instance.entityResolve(nativeClone.newId)?.cloneProvenance?.storage).toBe("snapshot");
     expect(instance.entityResolve(ordinaryClone.newId)?.cloneProvenance?.storage).toBe("snapshot");
     expect(cloneDurableStorage).toHaveBeenCalledTimes(2);
     expect(cloneDurableStorage).toHaveBeenCalledWith(
       expect.objectContaining({
         fromKey: "native",
         toKey: nativeClone.newKey,
+        at: "commit-of-native",
         reservation: expect.objectContaining({
-          cloneProvenance: expect.objectContaining({ storage: "fresh" }),
+          cloneProvenance: expect.objectContaining({ storage: "snapshot" }),
         }),
       })
     );

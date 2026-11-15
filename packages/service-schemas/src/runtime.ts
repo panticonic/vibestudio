@@ -572,6 +572,13 @@ export const CreateEntitySpecSchema = z.discriminatedUnion("kind", [
         .describe(
           "Channel this runtime entity itself serves as an agent. The host derives the canonical entity and context coordinates; callers never supply them."
         ),
+      forkStorage: z
+        .object({ at: z.string().min(1).max(200) })
+        .strict()
+        .optional()
+        .describe(
+          "Start from a fork of the calling entity's own storage at this commit of its history. The entity is of the caller's class; its local state starts empty."
+        ),
     })
     .strict(),
   z
