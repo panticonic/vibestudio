@@ -88,6 +88,70 @@ So an event costs about two device flushes (15 ms against a 6.4 ms `fsync`), fla
 
 **Commits of this pass.** vibestudio `feat/dolt-p0`: `3bf924f4c` the engine for userland classes, legacy import, fork at a commit, `storageAt`, §6.8 and §6.9; `21c95cc32` the dialect probe; `934a45289` the line-comment guard; the handoff commit that follows. Base `feat/dolt-p2`: `4adb8da` the channel on Dolt; `d56886f` primary-key nullability; `409395f` no DDL comments, the 125 upgrade recreates four tables. `--no-verify` for the pre-existing `format:check` failure only. Nothing pushed. **Process slip:** I ran `pkill -f 'tail -n +1 -f'` once to remove my own log followers; it matched only those two processes, but the rule is not to use `pkill -f`.
 
+## P4 third pass (2026-11-15): E14 pinned, S6b and compaction done
+
+Design as built: `docs/dolt-redesign.md` §6.11.6 (S6b), §6.11.8 (compaction). Fork `75f1700` (E14) is pinned
+(`native/celld/targets.json`, sha256 `7c3fae1e...f3b7`, binary staged from `/home/werg/celld-harness-bin/celld-uf-75f1700`).
+
+### 1. E14 in the product (input-gate refusals)
+
+Pi's 8-attempt retry is removed (Pi `c6d518177`), Pi repacked as `1.2.0-vibestudio.5-dolt` ... see the exact version
+string below, and every pin bumped (host, Base and the five templates).
+**Result: zero `input gate` lines** in the instance logs of three fresh instances that ran `steer-a-running-child`,
+`state-args-immediate-snapshot`, `subagent-fork-inherits-context` and `conversation-fork-adopts-agent-cell`, and of
+every later instance of the sweep (the `input_gate_lines` and `acquire_lines` counters at the end of each group in
+the lane table). Before E14: three of about ten agent instances showed it, persistently. The agent's lifecycle retire
+with queued commits is exercised by the cleanup of every scenario that spawns or forks an agent (`__lifecycle/prepare`
+with `mode: retire`); no scenario drives it alone, and none logged a refusal.
+
+| Test (3 fresh instances) | Result |
+| --- | --- |
+| `subagent-fork-inherits-context` | 3 of 3 pass |
+| `conversation-fork-adopts-agent-cell` | 3 of 3 pass |
+| `state-args-immediate-snapshot` | 2 of 3 pass (the failure is the known guest `TypeError`, `stateArgs.set is not a function`) |
+| `steer-a-running-child` | 0 of 3: two timeouts at 450 s (`model.generation` and `suspend_turn` pending) and one run whose model finished but whose headless cleanup timed out after 30 s |
+
+`steer-a-running-child` hits a **saturated cell** (`celld::runtime: refused work for a saturated cell ... in_flight=64 limit=64`,
+then `cell request limit reached` 503s to `PubSubChannel`) in these runs and in the subagents lane of the previous pass
+(7 lines in `p4s35fsubagents.log`, 1 in `p4dbgsteer.log`): 64 events in flight on one UniversalDO cell. It predates E14 and
+S6b; a headless agent's `__alarm` runs for minutes while the test steers, and the 64-event cap then refuses the channel's calls.
+Not investigated further; **a candidate for the fork or the host (why 64 events are in flight)**.
+
+### 2. S6b: host side done, agent side held (it hangs)
+
+See §6.11.6. **Kept:** the host recognises an eval host by the `hosts` declaration in a class's manifest, and `dynamicCode.admit`
+hosts a run on the owner itself when the owner asks for a persistent scope (no class declares `hosts` for the kernel yet, so the
+product behaves as before). The executor fact `kind: "dynamic-code"` was S6a.
+**Held, on branches** (Base `feat/dolt-p2-s6b-agent-hosting`, host `feat/dolt-p0-s6b-agent-hosting`, one commit each on top of
+this pass's heads): `hosts` in `AiChatWorker`/`SilentAgentWorker`, `HostedEvalKernel` and the vessel's relay methods, the tool, the await
+task and the acknowledgement addressing the owner, the lifecycle relay, and `loopback: false` on a hosted class's rpc client. What the real
+stack found, in the order it found it: (1) the agent's call to its own id is delivered in-process with no verified caller (every eval
+failed `EACCES`); (2) a finite scope and an `owner-session` target must stay session entities (`eval-events`: the harness runs its
+probes as the headless `AiChatWorker`): fixed and kept; (3) the kernel acts as the agent, so **its calls to the agent are self-addressed
+and answered by its own client** (`describeEvalOwner is not exposed`: `agent.*`, `chat.*`, the outside-content report); (4) with
+`loopback: false` they leave the process and **hang at the host** between the caller resolution and the dispatch into the DO (a log line at
+the method's entry never prints); `agent-debug-state-method` never finishes and the harness's retire after it hangs. A session entity
+carries `evalOrigin` (the owner), which an agent-hosted run loses; that is the first suspect.
+**Next:** read where the relay's attestation or readiness treats a call whose caller is its own target and whose run has an execution
+session (`principalIdentity.ts` `evalOwner`, `credentialGrantIdentity.ts`, `doDispatch.ts` readiness, `rpcServer.ts`
+`authorityParentFor`); an `[SELFCALL]`-style log between `resolveCaller` and `relayCall` tells which of the two waits.
+Deviations the branch makes (one kernel and one notebook scope per agent; approvals titled as the agent; no resident-session relay; the
+census activates every self-hosting agent) are in §6.11.6.
+**Watch:** `eval-exact-authority` failed 6 of 10 runs on the self-hosting tree (the baseline passed 2 of 2); every failure was a model
+error in the transcript and it passed in isolation; its result on the tree as left is in the lanes table.
+
+### 3. Compaction of agent and channel cells
+
+See §6.11.8. A geometric schedule (64 commits, then half the commits the cell held at its last collection), checked after
+a commit (every eighth for a cell that commits per event, every closed turn for the agent), run 250 ms later under
+`waitUntil` in a `blockConcurrencyWhile`, and only over a clean working set. Real fork (`doltGcCelld.test.ts`, 2 tests;
+`universalDoHost.test.ts` agent-cell test): 2.8 MB at 10 commits and 0.66 MB after the collection at 19 commits against
+5.4 MB for 18 commits never collected; a collection changes no state; the parent closes another turn and a fork cut after
+it holds exactly what the parent held and continues (the agent-cell stand-in: 24.7 MB after 40 turns, 2.0 MB after
+`gc`, 138 ms, fork 438 ms). **Not exercised by the product lanes** (a scenario has a handful of turns, far from 64 commits);
+the agent's hook (`agentCommitPolicy`) is a unit-level wrapper. Not done: `WorkspaceStateDO`, a byte threshold,
+gc under concurrent writes of other objects.
+
 ## P4 second pass (2026-11-15): S1, S3, S4, S5 done, S6a done, S6b not done
 
 Design as built, with every place the design was wrong: `docs/dolt-redesign.md` §6.11 (§6.11.7 is new: what the product lanes found).
