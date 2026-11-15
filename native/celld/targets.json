@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "fork": { "repository": "panticonic/celld", "branch": "unified-fork", "commit": "2d1749d" },
+  "fork": { "repository": "panticonic/celld", "branch": "unified-fork", "commit": "75f1700" },
   "targets": [
     {
       "platform": "linux",
       "arch": "x64",
       "binary": "celld",
-      "sha256": "3588aa0ed9707c685f063c352bb5894f573d77a09d3b65176b1921ee906b2776"
+      "sha256": "7c3fae1eb18c0b85e0d43b18b5af91d932dc51fb1bd0fb58056138b2445df3b7"
     },
     { "platform": "linux", "arch": "arm64", "binary": "celld", "sha256": null },
     { "platform": "darwin", "arch": "arm64", "binary": "celld", "sha256": null },
