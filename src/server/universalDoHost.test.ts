@@ -345,6 +345,29 @@ export class DialectDO extends DurableObject {
     attempt("blob and bigint", () => { sql.exec("CREATE TABLE bl (id INTEGER PRIMARY KEY, b BLOB)"); sql.exec("INSERT INTO bl VALUES (1, ?)", new Uint8Array([1,2,3])); return [...new Uint8Array(sql.exec("SELECT b FROM bl").one().b)]; });
     attempt("total_changes", () => typeof sql.exec("SELECT total_changes() AS n").one().n);
     attempt("sqlite_master text", () => sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'p'").toArray().length);
+    attempt("recreate a committed table without a column (the shape of a channel's 126 to 127 upgrade)", () => {
+      sql.exec("CREATE TABLE dc (sequence INTEGER PRIMARY KEY, envelope_id TEXT NOT NULL UNIQUE, kind TEXT NOT NULL, hash TEXT NOT NULL)");
+      sql.exec("CREATE INDEX dc_kind ON dc (kind, sequence)");
+      sql.exec("INSERT INTO dc VALUES (1, 'e1', 'm', 'h1'), (2, 'e2', 'm', 'h2')");
+      this.ctx.storage.dolt.commit({ message: "dc: rows" });
+      this.ctx.storage.transactionSync(() => {
+        sql.exec("CREATE TABLE dc_upgrade AS SELECT sequence, envelope_id, kind FROM dc");
+        sql.exec("DROP TABLE dc");
+        sql.exec("CREATE TABLE dc (sequence INTEGER PRIMARY KEY, envelope_id TEXT NOT NULL UNIQUE, kind TEXT NOT NULL)");
+        sql.exec("CREATE INDEX dc_kind ON dc (kind, sequence)");
+        sql.exec("INSERT INTO dc (sequence, envelope_id, kind) SELECT sequence, envelope_id, kind FROM dc_upgrade");
+        sql.exec("DROP TABLE dc_upgrade");
+      }, { commit: "dc: drop hash" });
+      return [sql.exec("PRAGMA table_info(dc)").toArray().map((r) => r.name), sql.exec("SELECT count(*) AS n FROM dc").one().n, sql.exec("SELECT name FROM sqlite_master WHERE tbl_name = 'dc' ORDER BY name").toArray().map((r) => r.name), this.ctx.storage.dolt.status().length];
+    });
+    attempt("drop column of a committed table", () => {
+      sql.exec("CREATE TABLE dd (sequence INTEGER PRIMARY KEY, hash TEXT NOT NULL)");
+      sql.exec("INSERT INTO dd VALUES (1, 'h1')");
+      this.ctx.storage.dolt.commit({ message: "dd: rows" });
+      sql.exec("ALTER TABLE dd DROP COLUMN hash");
+      this.ctx.storage.dolt.commit({ message: "dd: drop hash" });
+      return sql.exec("SELECT sql FROM sqlite_master WHERE name = 'dd'").one().sql;
+    });
     attempt("dolt_log columns", () => Object.keys(sql.exec("SELECT * FROM dolt_log LIMIT 1").toArray()[0] || {}));
     return Response.json({ result: results });
   }

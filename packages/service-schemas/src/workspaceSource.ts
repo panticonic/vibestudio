@@ -190,8 +190,6 @@ const logEnvelopeSchema = z
     annotations: PolymorphicJsonRecordSchema.optional(),
     causality: LogEventCausalityWireSchema.optional(),
     appendedAt: z.string().datetime({ offset: true }),
-    prevHash: z.string().min(1),
-    hash: z.string().min(1),
   })
   .strict();
 
