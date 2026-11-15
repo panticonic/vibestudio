@@ -1591,6 +1591,12 @@ multi-statement `exec`, `STRICT` tables, `INSERT OR REPLACE`, `PRAGMA table_info
 class's own `ctx.facets.get` registers the name with the first start options: after a refused
 start the root must `abort` the name before starting it with other options.
 
+**Two more engine facts, found by the first lanes.** A Dolt store reports a primary-key column as
+NOT NULL (the exact-schema helper ignores a key's nullability), and it drops `--` comments from the
+DDL it keeps while the shape is taken from whitespace-collapsed text, so a line comment would make
+the shape drift at the second activation: the install now refuses it, and any class moved to Dolt
+(Pi's migrations in S3) must be free of them.
+
 ### 6.9 What the survey of the agent cell found, and what it changes (S3 onward)
 
 The agent family (`AiChatWorker` to `NativeAgentOwner`) was surveyed before any change. Findings
@@ -2504,6 +2510,10 @@ after P2, and P6 after P0 plus the cross-workspace carrier.
   - _Measured at P3 (§4.2)_: the commit is about 1.3 ms and no extra flush; the
     cost is one root record, about three flushes, per transaction, and every direct
     call writes a replay nonce. Count transactions per call, not commits.
+  - _Measured at P4 S2 (§6.8, handoff)_: the channel's write shape on a real Dolt facet costs about
+    15 ms per event (two flushes), flat over 10 000 commits; about 24 KB on disk per 1 KiB event
+    before gc, 12 KB after; gc of a 237 MB file takes 3.7 s. The agent cell is not measured (it is not
+    on Dolt).
 - **R2. Facet and remote paths not yet exercised by Vibestudio.** Dolt facets
   and F7 are delivered, but Vibestudio runs neither. _Mitigation_: P0's probe
   covers a Dolt root; P2 is the smallest facet consumer; the facet relay and
