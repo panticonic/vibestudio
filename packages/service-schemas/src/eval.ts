@@ -1,16 +1,11 @@
 /**
- * Wire schema for the server "eval" service — owner-scoped sandbox eval backed by a
- * per-owner internal EvalDO. Replaces the former "scope" service: the EvalDO holds REPL
- * scope (and a user `db`) in its own SQLite, and runs code via the workerd UnsafeEval binding.
- *
- * The `objectKey` is derived server-side from `ctx.caller` (+ optional scope key), so a caller
- * can only ever address its own EvalDO — owner isolation is structural, no client-supplied key.
+ * The data shapes of dynamic code run as eval (docs/dolt-redesign.md §7): a run's intent, its
+ * result and receipt, its events, and the kernel's status. The calls themselves are the host's
+ * `dynamicCode` service (admission) and the hosting entity's own methods (`dynamicCode.ts`).
  */
 
 import { z } from "zod";
 import { rpcFailureSchema } from "./rpcFailure.js";
-import { defineServiceMethods } from "@vibestudio/shared/typedServiceClient";
-import { createRpcMethods } from "@vibestudio/shared/rpcMethods";
 import { CapabilityScopeSchema } from "./build.js";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 
@@ -287,7 +282,7 @@ export const evalImageArtifactSchema = evalImagePayloadSchema
   .strict();
 
 /**
- * Host-emitted eval lifecycle failure codes (the EvalDO's `RunResult.failureCode`
+ * Host-emitted eval lifecycle failure codes (the kernel's `RunResult.failureCode`
  * values for terminations the runtime itself decides). The wire field stays an
  * open string — engine/user code may surface its own codes — but every host
  * lifecycle termination uses exactly one of these, so drivers can branch on
@@ -295,7 +290,7 @@ export const evalImageArtifactSchema = evalImagePayloadSchema
  *
  * The two infrastructure codes are deliberately distinct rather than unified:
  * - `eval_runtime_restarted` — an UNPLANNED process loss (crash/kill) orphaned a
- *   `running` row; stamped by the EvalDO's boot orphan-reconcile. Nothing had a
+ *   `running` row; stamped by the kernel's boot orphan-reconcile. Nothing had a
  *   chance to cancel cleanly.
  * - `runtime_generation_lost` — a PLANNED lifecycle transition (workerd
  *   suspend/replace) cancelled the run through the normal cooperative path.
@@ -358,14 +353,6 @@ export const evalScopeSchema = z
     lifecycle: z.enum(["persistent", "finite"]).optional(),
   })
   .strict();
-
-/**
- * The only public completion destination is the authenticated caller. The host
- * derives its runtime/entity identity from transport; input can never name an
- * owner, agent, channel, or arbitrary RPC target.
- */
-export const evalResultReceiverRefSchema = z.object({ kind: z.literal("caller") }).strict();
-export type EvalResultReceiverRef = z.infer<typeof evalResultReceiverRefSchema>;
 
 export const evalPreauthorizationIntentSchema = z
   .object({
@@ -432,7 +419,7 @@ export const evalStartInputSchema = z
      * Declare that this eval scope is an owned finite resource. Finite scopes may
      * be disposed without an interactive destructive-data confirmation after
      * their result has been copied out. The declaration is bound immutably to
-     * the EvalDO entity on first activation; a persistent scope cannot later be
+     * the session entity on first activation; a persistent scope cannot later be
      * reclassified as finite.
      */
     scope: evalScopeSchema.optional(),
@@ -442,8 +429,6 @@ export const evalStartInputSchema = z
     imports: z.record(z.string()).optional(),
     /** Caller-owned idempotent run identity (agents derive it from the tool invocation id). */
     runId: z.string().min(1),
-    /** Optional terminal push to the authenticated caller. */
-    resultReceiver: evalResultReceiverRefSchema.optional(),
     timeoutMs: z
       .number()
       .int()
@@ -482,7 +467,7 @@ export const evalKernelStatusSchema = z
         ]),
         /**
          * Set on the first result of a scope whose notebook belonged to the retired
-         * product `EvalDO` (docs/dolt-redesign.md §7.10, D5): its scope values and its
+         * product notebook class (docs/dolt-redesign.md §7.10, D5): its scope values and its
          * `db` tables were dropped when the workspace moved to the kernel class.
          */
         legacyNotebookDropped: z.literal(true).optional(),
@@ -612,12 +597,6 @@ export const evalResultReceiptSchema = evalResultIdentitySchema
   })
   .strict();
 export type EvalResultReceipt = z.infer<typeof evalResultReceiptSchema>;
-export const evalAcknowledgeArgsSchema = evalGetArgsSchema
-  .extend({
-    receipt: evalResultIdentitySchema,
-  })
-  .strict();
-
 /** Durable eval lifecycle. `cancelling` remains non-terminal while registered
  * cleanup still needs the run's evaluated-execution admission. */
 export const evalRunStatusValueSchema = z.enum([
@@ -659,38 +638,9 @@ export const evalRunStatusSchema = z
   })
   .strict();
 
-export const evalStartResultSchema = z
-  .object({
-    runId: z.string().min(1),
-    /** Digest of the complete normalized accepted run identity. */
-    runDigest: z.string().regex(/^[a-f0-9]{64}$/),
-    /** Digest of the normalized per-run attenuation manifest. */
-    authorityManifestDigest: z.string().regex(/^[a-f0-9]{64}$/),
-    status: z.enum(["accepted", "already-running", "terminal"]),
-    snapshot: evalRunStatusSchema.optional(),
-  })
-  .strict()
-  .superRefine((value, ctx) => {
-    if ((value.status === "terminal") !== (value.snapshot !== undefined)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: "snapshot is required exactly when status is terminal",
-        path: ["snapshot"],
-      });
-    }
-  });
-
 export const evalResetArgsSchema = z
   .object({
     ...evalRouteShape,
-  })
-  .strict();
-
-/** Args for cancelling one run: owner/scope routing plus the caller-owned runId. */
-export const evalCancelArgsSchema = z
-  .object({
-    ...evalRouteShape,
-    runId: z.string().min(1),
   })
   .strict();
 
@@ -714,15 +664,6 @@ export const evalRunEventSchema = z
   .strict();
 export type EvalRunEvent = z.infer<typeof evalRunEventSchema>;
 
-export const evalEventsArgsSchema = z
-  .object({
-    ...evalRouteShape,
-    runId: z.string().min(1),
-    after: z.number().int().nonnegative().optional(),
-    limit: z.number().int().positive().max(256).optional(),
-  })
-  .strict();
-
 export const evalEventsPageSchema = z
   .object({
     events: z.array(evalRunEventSchema).max(256),
@@ -731,453 +672,10 @@ export const evalEventsPageSchema = z
   })
   .strict();
 
-/**
- * Owner-scoped routing plus a bounded page into one durable string value in the
- * current eval scope. This is the lossless transport for values too large for
- * an eval run's deliberately bounded result envelope.
- */
-export const evalReadScopeTextPageArgsSchema = z
-  .object({
-    ...evalRouteShape,
-    key: z.string().min(1).max(512),
-    offset: z.number().int().nonnegative(),
-    /** Bounded so the base64 RPC response remains comfortably below transport limits. */
-    limit: z
-      .number()
-      .int()
-      .positive()
-      .max(128 * 1024),
-  })
-  .strict();
-
-export const evalDeleteScopeValueArgsSchema = z
-  .object({
-    ...evalRouteShape,
-    key: z.string().min(1).max(512),
-  })
-  .strict();
-
-/** Internal callbacks from an EvalDO to the owner of an agent-run execution. */
-export const evalOwnerCallbackMethods = defineServiceMethods({
-  onEvalComplete: {
-    website: {
-      kind: "closed",
-      reason: "Eval completion delivery is an internal callback to the owning agent.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "codeOnly",
-      residency: "untrusted-execution",
-      family: "eval.owner-callback",
-      rationale: "Host-delivered completion settles one previously admitted owner eval run",
-    },
-    args: z.tuple([z.object({ runId: z.string().min(1) }).strict()]),
-    returns: z.object({ accepted: z.boolean() }).strict(),
-    description: "Deliver the terminal hint for an eval run to its owning agent.",
-    access: { sensitivity: "write" },
-  },
-  onEvalProgress: {
-    website: {
-      kind: "closed",
-      reason: "Eval progress delivery is an internal callback to the owning agent.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "codeOnly",
-      residency: "observability",
-      family: "eval.owner-callback",
-      rationale: "Host-delivered progress reports one admitted owner eval run",
-    },
-    args: z.tuple([
-      z
-        .object({
-          runId: z.string().min(1),
-          agentInvocationId: z.string().min(1),
-          channelId: z.string().min(1),
-          output: z.string().optional(),
-          activity: z
-            .object({
-              kind: z.enum(["authority-requested", "authority-decided"]),
-              detail: z.unknown().optional(),
-            })
-            .strict()
-            .optional(),
-        })
-        .strict(),
-    ]),
-    returns: z.void(),
-    description: "Deliver bounded console or authority activity progress to the owning agent.",
-    access: { sensitivity: "write" },
-  },
-});
-
-/** Namesless descriptors are shared by the host sender and owner receiver contract. */
-export const evalOwnerCallbackRpcMethods = createRpcMethods(
-  "evalOwnerCallbacks",
-  evalOwnerCallbackMethods,
-  ""
-);
-
-export const evalMethods = defineServiceMethods({
-  start: {
-    website: {
-      kind: "eligible",
-      rationale:
-        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.create",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    args: z.tuple([evalStartInputSchema]),
-    returns: evalStartResultSchema,
-    description:
-      "Durably accept one caller-owned eval run. A new run executes asynchronously in the owner's EvalDO; replaying the same runId and exact input observes the same run, while input drift is rejected. A trivially fast or replayed settled run may return its terminal snapshot immediately.",
-    access: { sensitivity: "write" },
-  },
-  get: {
-    website: {
-      kind: "eligible",
-      rationale:
-        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.read",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    args: z.tuple([evalGetArgsSchema]),
-    returns: evalRunStatusSchema,
-    description:
-      "Read the canonical durable snapshot for a caller-owned eval run. This is a recovery/backstop read; agent-owned runs normally settle through the EvalDO's terminal completion push.",
-    access: { sensitivity: "read" },
-  },
-  receipt: {
-    website: {
-      kind: "eligible",
-      rationale: "Read the authenticated caller's own execution receipt.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.read",
-      rationale: "Owner-scoped read of an immutable result; no new execution or authority.",
-    },
-    args: z.tuple([evalGetArgsSchema]),
-    returns: evalResultReceiptSchema.nullable(),
-    description:
-      "Read the exact canonical terminal result and its admission/result digests. Null means no terminal receipt exists; it never means success.",
-    access: { sensitivity: "read" },
-  },
-  acknowledge: {
-    website: {
-      kind: "eligible",
-      rationale: "Acknowledge only the authenticated caller's exact retained result.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.control",
-      rationale: "Owner-scoped acknowledgement neither executes code nor deletes retained data.",
-    },
-    args: z.tuple([evalAcknowledgeArgsSchema]),
-    returns: z.object({ acknowledged: z.literal(true), duplicate: z.boolean() }).strict(),
-    description:
-      "Acknowledge a terminal result after durably accepting it. Both admission and result digests must match. The closed identity and result remain retained.",
-    access: { sensitivity: "write" },
-  },
-  events: {
-    website: {
-      kind: "eligible",
-      rationale:
-        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.control",
-      rationale: "Owner-scoped bounded read of durable eval lifecycle events",
-    },
-    args: z.tuple([evalEventsArgsSchema]),
-    returns: evalEventsPageSchema,
-    description:
-      "Read one stable, bounded page of durable events for a caller-owned eval run. Subscribe to the canonical eval:run-event through events.watch for live delivery, then use this cursor page to catch up after reconnect or backpressure.",
-    access: { sensitivity: "read" },
-  },
-  reset: {
-    website: {
-      kind: "eligible",
-      rationale:
-        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
-    } as const,
-    capability: "code-runner.reset",
-    tier: {
-      tier: "critical",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.control",
-      rationale:
-        "C3: irreversible destruction outside VCS protection; §2 default {code, session} family",
-    },
-    presentation: {
-      title: "Reset the code runner",
-      action: "reset the code runner",
-      description: "Clear the code runner and start fresh.",
-      group: "runtime",
-      authorityCategory: {
-        domain: "automation",
-        verb: "act",
-      },
-    },
-    args: z.union([z.tuple([]), z.tuple([evalResetArgsSchema])]),
-    returns: z.object({ ok: z.boolean() }).strict(),
-    description:
-      "Reset the eval context: wipe the live/durable scope and user `db` tables while preserving kernel infrastructure. The owner's existing eval data is cleared.",
-    access: { sensitivity: "destructive" },
-  },
-  dispose: {
-    website: {
-      kind: "eligible",
-      rationale:
-        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.control",
-      rationale:
-        "Owned-resource release: the host admits disposal only when this caller declared the isolated EvalDO finite at its immutable first activation",
-    },
-    args: z.union([z.tuple([]), z.tuple([evalResetArgsSchema])]),
-    returns: z.object({ ok: z.boolean() }).strict(),
-    description:
-      "Permanently retire one explicitly finite eval scope through its host lifecycle owner. Close admission and drain owned work before releasing the runtime and content. Retained receipts remain closed; use a new scope key for new work. Persistent notebooks cannot be disposed through this method.",
-    access: { sensitivity: "destructive" },
-  },
-  readScopeTextPage: {
-    website: {
-      kind: "eligible",
-      rationale:
-        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.read",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    args: z.tuple([evalReadScopeTextPageArgsSchema]),
-    returns: z
-      .object({
-        length: z.number().int().nonnegative(),
-        encoding: z.literal("utf16le-base64"),
-        chunk: z.string(),
-      })
-      .strict(),
-    description:
-      "Read a bounded page from a string in the caller's current durable eval scope. Use this to retrieve a large eval result losslessly after an eval caches it under a scope key; pages are UTF-16LE base64 so every JavaScript string code unit round-trips exactly.",
-    access: { sensitivity: "read" },
-  },
-  deleteScopeValue: {
-    website: {
-      kind: "eligible",
-      rationale:
-        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.retire",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    args: z.tuple([evalDeleteScopeValueArgsSchema]),
-    returns: z.object({ ok: z.boolean(), existed: z.boolean() }).strict(),
-    description:
-      "Delete one value from the caller's current durable eval scope and persist the deletion. Intended for cleaning up temporary keys used by lossless large-result paging.",
-    access: { sensitivity: "write" },
-  },
-  cancel: {
-    website: {
-      kind: "eligible",
-      rationale:
-        "Caller-owned evaluated execution retains its authenticated launch scope; effects use ordinary resource approvals.",
-    } as const,
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.retire",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    args: z.tuple([evalCancelArgsSchema]),
-    returns: z.object({ ok: z.literal(true), forcedReset: z.boolean() }).strict(),
-    description:
-      "Cancel an in-flight or pending run by runId. The durable status is cancelling while registered cleanup runs and becomes cancelled only after cleanup settles, so the eval history and its owned cleanup remain one trust unit with valid teardown authority. Owned cleanup is awaited to real settlement and preserves other runs and scope. An unowned, non-cooperative guest run may trigger bounded recovery, which cancels all non-terminal runs, resets shared scope/user db, and returns forcedReset:true. A terminal run is a no-op with forcedReset:false.",
-    access: { sensitivity: "write" },
-  },
-});
-
-export type EvalCall = import("./mainRpc.js").MainRpcCaller;
-
 export interface EvalRunRoute {
   target?: EvalStartInput["target"];
   scopeKey?: string;
   runId: string;
-}
-
-/**
- * Shared non-blocking control surface for one caller-owned eval handle.
- *
- * Long-lived orchestrators may intentionally start now and observe/cancel
- * later; this keeps their route construction and public lifecycle calls on the
- * same composition as one-shot callers without forcing them into a polling
- * wait.
- */
-export function createEvalRunObserver(call: EvalCall, route: EvalRunRoute) {
-  const canonicalRoute = {
-    ...(route.target ? { target: route.target } : {}),
-    ...(route.scopeKey !== undefined ? { scopeKey: route.scopeKey } : {}),
-    runId: route.runId,
-  };
-  return {
-    route: canonicalRoute,
-    get: () => call("eval.get", [canonicalRoute]),
-    cancel: () => call("eval.cancel", [canonicalRoute]),
-  };
-}
-
-export function createEvalRunHandle(call: EvalCall, input: EvalStartInput) {
-  const observer = createEvalRunObserver(call, {
-    ...(input.target ? { target: input.target } : {}),
-    ...(input.scope?.key !== undefined ? { scopeKey: input.scope.key } : {}),
-    runId: input.runId,
-  });
-  return {
-    ...observer,
-    start: (receiver?: EvalResultReceiverRef) =>
-      call("eval.start", [receiver ? { ...input, resultReceiver: receiver } : input]),
-  };
-}
-
-export interface EvalExecutorOptions {
-  signal?: AbortSignal;
-  /** Ask the host to deliver the terminal snapshot to this authenticated caller. */
-  receiver?: EvalResultReceiverRef;
-  /**
-   * Optional local receiver bridge. When supplied, terminal push and durable
-   * polling race; the first terminal result wins and is settled exactly once.
-   */
-  waitForReceiver?: (
-    runId: string,
-    signal?: AbortSignal
-  ) => Promise<z.infer<typeof evalRunResultSchema>>;
-  /** Test/embedding seam. Production callers use the latency-sensitive bounded backoff. */
-  pollDelay?: (attempt: number) => Promise<void>;
-}
-
-/**
- * Compose the durable eval lifecycle into the familiar one-call UX.
- *
- * `start` is the only execution method. `get` is solely the lost-push/recovery
- * backstop, and abort requests cancellation through that same run handle.
- * Callers with a native completion receiver (the agent vessel) keep using the
- * terminal push as their primary settlement path.
- */
-export function createEvalExecutor(
-  call: EvalCall,
-  options: EvalExecutorOptions = {}
-): (input: EvalStartInput) => Promise<z.infer<typeof evalRunResultSchema>> {
-  return async (input) => {
-    const handle = createEvalRunHandle(call, input);
-    let cancelled = false;
-    const cancel = async (): Promise<never> => {
-      if (!cancelled) {
-        cancelled = true;
-        await handle.cancel();
-      }
-      throw abortReason(options.signal);
-    };
-    // No start request has been sent, so this invocation owns nothing to cancel.
-    if (options.signal?.aborted) throw abortReason(options.signal);
-
-    const started = await handle.start(options.receiver);
-    const immediate = settledResult(started.snapshot);
-    if (immediate) return immediate;
-
-    let receiverResult: z.infer<typeof evalRunResultSchema> | undefined;
-    const poll = async (): Promise<z.infer<typeof evalRunResultSchema>> => {
-      let attempt = 0;
-      for (;;) {
-        if (receiverResult) return receiverResult;
-        if (options.signal?.aborted) return cancel();
-        const snapshot = await handle.get();
-        if (receiverResult) return receiverResult;
-        const result = settledResult(snapshot);
-        if (result) return result;
-        if (snapshot.status === "unknown") {
-          throw new Error(`eval: run ${input.runId} is unknown after start`);
-        }
-        await (options.pollDelay ?? defaultEvalPollDelay)(attempt++);
-      }
-    };
-    if (!options.waitForReceiver) return poll();
-    const receiver = options.waitForReceiver(input.runId, options.signal).then(
-      (result) => {
-        receiverResult = result;
-        return result;
-      },
-      // Losing the local push bridge is precisely what the durable read path
-      // exists to recover from. Keep polling instead of stranding the run or
-      // leaving a rejected race with a live background poller.
-      () => new Promise<never>(() => undefined)
-    );
-    return Promise.race([receiver, poll()]);
-  };
-}
-
-export type DeferredEvalSettlement =
-  | { deferred: true }
-  | { deferred: false; result: z.infer<typeof evalRunResultSchema> };
-
-/**
- * Compose the agent vessel's push-primary deferral over the same lifecycle.
- * `start` registers the caller receiver, then one immediate durable read closes
- * the lost-push/replay window. A non-terminal run stays parked for the receiver
- * push or the vessel's ordinary durable redrive; no polling loop is created.
- */
-export function createDeferredEvalExecutor(
-  call: EvalCall,
-  options: {
-    receiver?: EvalResultReceiverRef;
-    onBackstopError?: (error: unknown) => void;
-  } = {}
-): (input: EvalStartInput) => Promise<DeferredEvalSettlement> {
-  return async (input) => {
-    const handle = createEvalRunHandle(call, input);
-    const started = await handle.start(options.receiver ?? { kind: "caller" });
-    const immediate = settledResult(started.snapshot);
-    if (immediate) return { deferred: false, result: immediate };
-    let snapshot: z.infer<typeof evalRunStatusSchema>;
-    try {
-      snapshot = await handle.get();
-    } catch (error) {
-      options.onBackstopError?.(error);
-      return { deferred: true };
-    }
-    const result = settledResult(snapshot);
-    return result ? { deferred: false, result } : { deferred: true };
-  };
 }
 
 export function settledResult(
@@ -1205,11 +703,6 @@ export function settledResult(
     );
   }
   return undefined;
-}
-
-function defaultEvalPollDelay(attempt: number): Promise<void> {
-  const delayMs = Math.min(250, 10 * 2 ** Math.min(attempt, 5));
-  return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 export function abortReason(signal: AbortSignal | undefined): Error {

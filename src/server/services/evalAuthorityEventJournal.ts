@@ -14,14 +14,14 @@ export interface EvalAuthorityEvent {
  * Ordered delivery of host-observed authority lifecycle events to the eval kernel,
  * through the session entity that hosts it.
  *
- * An EvalDO calls the host while executing a sandbox operation. Authority is
+ * An eval kernel calls the host while executing a sandbox operation. Authority is
  * evaluated on that outbound call, so the observer must never await a call
- * back into the same EvalDO: that is a causal cycle, not backpressure. This
+ * back into the same eval kernel: that is a causal cycle, not backpressure. This
  * journal accepts the observation synchronously and owns one bounded-live
- * promise tail per EvalDO. Events for an object remain ordered, failures do not
+ * promise tail per eval kernel. Events for an object remain ordered, failures do not
  * poison later delivery, and graceful shutdown drains every accepted event.
  * The authority acquisition records remain the semantic source of truth; this
- * path projects their lifecycle into the EvalDO's durable run-event journal.
+ * path projects their lifecycle into the eval kernel's durable run-event journal.
  */
 export class EvalAuthorityEventJournal {
   private readonly tails = new Map<string, Promise<void>>();
@@ -39,11 +39,13 @@ export class EvalAuthorityEventJournal {
     const previous = this.tails.get(event.objectKey) ?? Promise.resolve();
     const current = previous
       .then(async () => {
-        await this.dispatcher.dispatch(refFor(event.objectKey), "settle", "appendAuthorityEvent", [
+        await this.dispatcher.dispatch(
+          refFor(event.objectKey),
+          "recordAuthorityEvent",
           event.runId,
           event.kind,
-          event.payload,
-        ]);
+          event.payload
+        );
       })
       .catch((error) => {
         try {

@@ -44,7 +44,7 @@ export function initializeInternalDORealm(): void {
   globalThis.console = consoleFacade;
 
   // Dynamic code generation belongs to one class: the node lets only a class
-  // that declares `codegen` (EvalDO) compile from strings, and refuses it
+  // that declares `codegen` (eval kernel) compile from strings, and refuses it
   // everywhere else. The eval kernel keeps the realm's real compiler; the
   // lockdown then makes every other path to it inert, as guest code requires
   // (createPrivateGuestGlobal refuses a realm that can still compile).

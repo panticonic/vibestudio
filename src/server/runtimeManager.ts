@@ -2466,7 +2466,7 @@ export class RuntimeManager {
         className,
         rpcToken: this.ensureWorkerBearer(serviceCallerId),
         // Manifest-declared provider bindings for this class (meta/vibestudio.yml
-        // `providers.*`, e.g. EVAL_ENGINE_SOURCE for EvalDO): names of units,
+        // `providers.*`, e.g. EVAL_ENGINE_SOURCE for eval kernel): names of units,
         // not credentials.
         env: { ...this.deps.getInternalDoEnv(className) },
         codegen: builtin.runtime.codegen,

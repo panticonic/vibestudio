@@ -3873,7 +3873,7 @@ export class RpcServer {
     const causalParent = causal?.parent;
     // A causal parent authenticates invocation lineage; it does not change the
     // authorizing origin. Harness-owned tool and closure calls retain their
-    // sealed code identity. EvalDO is marked session-originated when its exact
+    // sealed code identity. eval kernel is marked session-originated when its exact
     // active runtime identity is resolved in verifiedCallerFor().
     const invocationCaller = this.callerWithInvocationAttribution(verifiedCaller, message, causal);
     const authorizingCaller = authorityParent?.authorizingCaller ?? invocationCaller;

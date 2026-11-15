@@ -1,5 +1,5 @@
 /**
- * The eval surface: what an agent `eval` session sees from the EvalDO.
+ * The eval surface: what an agent `eval` session sees from the eval kernel.
  *
  * `evalImportableSurface` is the portable runtime-instance surface — exactly what
  * `createHostedRuntime` returns and what `import { … } from "@workspace/runtime"`
@@ -8,7 +8,7 @@
  * surface including `callMain` and `getParent`/`getParentWithContract`.
  *
  * `EVAL_AMBIENT_ONLY` are the eval-only ambient globals injected as free
- * variables. EvalDO also mirrors available ones onto its owner-local runtime
+ * variables. eval kernel also mirrors available ones onto its owner-local runtime
  * module as an import compatibility form. It is the single source of truth for
  * import validation and mirroring. `rpc` is intentionally absent here:
  * imported `rpc` and ambient `rpc` are the same portable client.
@@ -31,7 +31,7 @@ export const EVAL_AMBIENT_ONLY = [
   "agent",
   "automations",
   // Provided by the manifest-declared natlang provider, and only in a cell that
-  // references them (see EvalDO natlang attachment).
+  // references them (see eval kernel natlang attachment).
   "nl",
   "natlang",
 ] as const;

@@ -45,7 +45,6 @@ function setup(
     },
     admissionKey: "code:do:host:Kernel:k1:run-1",
     taskRefFallback: "code:session:cli:run-1",
-    eventSinkNonce: "sink-1",
     ...over,
   });
   return { executionSessions, admission, input };

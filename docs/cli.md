@@ -503,7 +503,8 @@ not exist; it never guesses a checkout or reads the host filesystem directly.
 ### Headless agentic system tests
 
 Run the canonical workspace system-test catalog directly from a paired CLI
-session. Runs execute asynchronously in the session's durable EvalDO, so a
+session. Runs execute asynchronously in the session's eval kernel (hosted by its session
+entity, docs/dolt-redesign.md §7), so a
 detached run can be polled or cancelled from a later CLI invocation:
 
 ```sh

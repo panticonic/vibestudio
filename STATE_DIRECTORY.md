@@ -259,8 +259,6 @@ separately below:
 ```
 .databases/
   workerd-do/
-    vibestudio_internal:EvalDO/
-      <object-hash>.sqlite
     vibestudio_internal:WebhookStoreDO/
       <object-hash>.sqlite
     vibestudio_internal:WorkspaceDO/
@@ -273,7 +271,12 @@ separately below:
 
 The internal stores are:
 
-- `EvalDO` (per-owner object key) for eval REPL scopes.
+- Eval REPL scopes are not an internal store: each owner's kernel is a class
+  (`EvalKernel`, Dolt storage) hosted by a per-owner session entity
+  (`workers/session`), so its state lives in that entity's cell
+  (docs/dolt-redesign.md §7). The `vibestudio_internal:EvalDO/` directory of
+  earlier builds is legacy state: the upgrade drops it and the first result of
+  each affected scope says so (D5, §7.10).
 - `WebhookStoreDO` (`objectKey: "global"`) for webhook ingress subscriptions.
 - `WorkspaceDO` (`objectKey: <workspaceId>`) for entity/slot state and panel FTS (replaced `PanelStoreDO`/`ScopeStoreDO`).
 - `BrowserDataDO` (`objectKey: "global"`) for imported browser data.

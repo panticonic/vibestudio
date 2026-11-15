@@ -441,7 +441,7 @@ export function isRetryableSystemTestStatusReadFailure(error: unknown): boolean 
 
 /**
  * Own the remote lifetime of a foreground durable run. A CLI process can be
- * interrupted independently of its EvalDO, so SIGINT/SIGTERM must become the
+ * interrupted independently of its eval kernel, so SIGINT/SIGTERM must become the
  * same authenticated cancellation operation as `system-test cancel`.
  */
 function installSystemTestRunCancellation(
@@ -691,7 +691,7 @@ async function status(inv: ParsedInvocation): Promise<number> {
     // Detached runs often outlive (or are followed by a restart of) the
     // workspace they ran in. Persist the terminal summary at the moment
     // status observes it so `rerun RUN_ID` can recover failed/tool-failure test
-    // names without depending on the old EvalDO still existing.
+    // names without depending on the old eval kernel still existing.
     if (state.status === "done" && state.result?.success) {
       writeSystemTestArtifact(
         runId,
@@ -745,7 +745,7 @@ function withElapsedProgress(value: unknown): unknown {
         };
       })
     : [];
-  // Full live trajectories are retained in the authenticated EvalDO heartbeat
+  // Full live trajectories are retained in the authenticated eval kernel heartbeat
   // for inspect/trajectory, but ordinary status output must stay bounded and
   // must not expose sensitive conversation content.
   const { liveInspection: _liveInspection, ...publicProgress } = progress;

@@ -86,7 +86,7 @@ See [FILES.md](FILES.md) for remote file/VCS transport and
 
 ## Eval
 
-`vibestudio eval` runs TypeScript in the selected context's server-side EvalDO
+`vibestudio eval` runs TypeScript in the selected context's server-side eval kernel
 and retains per-session scope. It is the programmable surface for a paired
 direct caller:
 

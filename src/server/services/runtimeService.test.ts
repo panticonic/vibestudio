@@ -402,7 +402,7 @@ const appCaller = (id = "client:browser:web:desktop", _contextId = "ctx-caller")
     ],
   });
 
-const evalDoCaller = (id = "do:vibestudio/internal:EvalDO:eval") =>
+const evalDoCaller = (id = "do:workers/session:SessionDO:eval") =>
   createVerifiedCaller(id, "do", {
     callerId: id,
     callerKind: "do",
@@ -1034,7 +1034,7 @@ describe("runtimeService deferred panel activation", () => {
     const { service } = await buildDeps({ onContextCreated });
     const policy = systemTestCasePolicy();
     const mediatedCreator = createVerifiedCaller(
-      "do:vibestudio/internal:EvalDO:transient",
+      "do:workers/session:SessionDO:transient",
       "server",
       null,
       null,
@@ -2592,7 +2592,7 @@ describe("runtimeService.retireEntity", () => {
     const { service, dispatch, approvalQueue, entityCache } = await buildDeps({
       approvalDecision: "once",
     });
-    const owner = evalDoCaller("do:vibestudio/internal:EvalDO:owner");
+    const owner = evalDoCaller("do:workers/session:SessionDO:owner");
     const handle = (await service.handler({ caller: owner }, "createEntity", [
       doCreateSpec({
         source: "workers/agent-worker",
@@ -4648,7 +4648,7 @@ describe("runtimeService.destroyContext", () => {
       {
         kind: "do",
         execution: { surface: "code", source: "vibestudio/internal" },
-        className: "EvalDO",
+        className: "SessionDO",
         key: "agent-eval",
         contextId: "ctx-owned-tree",
       },

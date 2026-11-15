@@ -312,7 +312,7 @@ describe("canonical vcsService", () => {
       },
     });
     const ctx: ServiceContext = {
-      caller: createVerifiedCaller("do:EvalDO:one", "do"),
+      caller: createVerifiedCaller("do:SessionDO:one", "do"),
       causalParent: {
         kind: "trajectory-invocation",
         ...trajectory,

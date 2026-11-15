@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { InvocationSnapshot } from "@vibestudio/rpc";
-import { evalMethods } from "@vibestudio/service-schemas/eval";
+import { dynamicCodeMethods } from "@vibestudio/service-schemas/dynamicCode";
 import {
   AttachedHostEndpoint,
   digest,
@@ -20,7 +20,7 @@ const FACTS: AttachedHostSessionFacts = {
 };
 const CEILING = [
   {
-    capability: "service:eval.*",
+    capability: "service:dynamicCode.*",
     resource: { kind: "prefix" as const, prefix: "eval:" },
   },
 ];
@@ -137,8 +137,8 @@ function invocation(
   return {
     ...f.parent.createInvocation({
       sessionId: f.sessionId,
-      service: "eval",
-      method: "start",
+      service: "dynamicCode",
+      method: "admit",
       args: [{ runId: "run-1" }],
       requestId: "request-1",
       ttlMs: 10_000,
@@ -148,28 +148,31 @@ function invocation(
 }
 
 describe("attached-host owner-bound protocol", () => {
-  it("routes ordinary generated eval clients through a signed exact-generation session", async () => {
+  it("routes ordinary generated service clients through a signed exact-generation session", async () => {
     const dispatch = vi.fn(async ({ service, method }) => {
-      expect(service).toBe("eval");
-      expect(method).toBe("start");
+      expect(service).toBe("dynamicCode");
+      expect(method).toBe("admit");
       return {
         runId: "run-1",
         runDigest: "a".repeat(64),
         authorityManifestDigest: "b".repeat(64),
-        status: "accepted",
+        host: { source: "workers/session", className: "SessionDO", objectKey: "k" },
+        hostId: "do:workers/session:SessionDO:k",
+        nonce: "n",
+        start: { runId: "run-1" },
       };
     });
     const f = fixture({ dispatch });
     const evalClient = f.parent.createServiceClient(
       f.sessionId,
-      "eval",
-      evalMethods,
+      "dynamicCode",
+      dynamicCodeMethods,
       (envelope, args) => f.child.receiveInvocation(envelope, args),
       () => "request-eval"
     );
 
     await expect(
-      evalClient.start({
+      evalClient.admit({
         runId: "run-1",
         target: { kind: "caller" },
         source: { kind: "inline", code: "return 1" },
@@ -179,7 +182,7 @@ describe("attached-host owner-bound protocol", () => {
           requests: [],
         },
       })
-    ).resolves.toMatchObject({ runId: "run-1", status: "accepted" });
+    ).resolves.toMatchObject({ runId: "run-1", hostId: "do:workers/session:SessionDO:k" });
     expect(dispatch).toHaveBeenCalledOnce();
   });
 
@@ -284,7 +287,7 @@ describe("attached-host owner-bound protocol", () => {
         facts: FACTS,
         authorityCeiling: [
           {
-            capability: "service:eval.get",
+            capability: "service:dynamicCode.release",
             resource: { kind: "exact", key: "eval:run-1" },
           },
         ],

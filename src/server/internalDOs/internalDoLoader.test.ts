@@ -12,19 +12,16 @@ const bundle = internalDoProgramsForFixture;
 
 describe("internalDOExecutionIdentity", () => {
   it("fixture publication restores the existing global after consumer failure", () => {
-    const descriptor = Object.getOwnPropertyDescriptor(
-      globalThis,
-      "__VIBESTUDIO_RUNTIME_APP__"
-    );
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, "__VIBESTUDIO_RUNTIME_APP__");
     const failure = new Error("original installed admission failure");
     const read = vi.spyOn(InternalDOPrograms, "readInstalled").mockImplementation(() => {
       throw failure;
     });
     try {
       expect(() => bundle()).toThrow(failure);
-      expect(
-        Object.getOwnPropertyDescriptor(globalThis, "__VIBESTUDIO_RUNTIME_APP__")
-      ).toEqual(descriptor);
+      expect(Object.getOwnPropertyDescriptor(globalThis, "__VIBESTUDIO_RUNTIME_APP__")).toEqual(
+        descriptor
+      );
     } finally {
       read.mockRestore();
     }
@@ -44,24 +41,26 @@ describe("internalDOExecutionIdentity", () => {
   });
 
   it("seals exact bundle bytes, class entrypoint, and reviewed authority", () => {
-    const evalDo = internalDOExecutionIdentity(bundle(), "EvalDO");
+    const webhook = internalDOExecutionIdentity(bundle(), "WebhookStoreDO");
     const workspace = internalDOExecutionIdentity(bundle(), "WorkspaceDO");
 
-    expect(evalDo).toMatchObject({
+    expect(webhook).toMatchObject({
       source: "vibestudio/internal",
-      unitName: "@panticonic/builtin/eval.engine",
-      stateHash: `state:${bundle().get("EvalDO").buildKey}`,
-      buildKey: bundle().get("EvalDO").buildKey,
+      unitName: "@panticonic/builtin/webhook.engine",
+      stateHash: `state:${bundle().get("WebhookStoreDO").buildKey}`,
+      buildKey: bundle().get("WebhookStoreDO").buildKey,
       effectiveVersion: expect.stringMatching(/^[0-9a-f]{64}$/),
       executionDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
-    expect(evalDo.authority.requests).toEqual([]);
-    expect(workspace.executionDigest).not.toBe(evalDo.executionDigest);
-    expect(verifyExecutionArtifactRef(evalDo.artifact)).toEqual(evalDo.artifact);
-    expect(evalDo.artifact.sourceState).toMatchObject({
+    expect(webhook.authority.requests).toEqual([]);
+    expect(workspace.executionDigest).not.toBe(webhook.executionDigest);
+    expect(verifyExecutionArtifactRef(webhook.artifact)).toEqual(webhook.artifact);
+    expect(webhook.artifact.sourceState).toMatchObject({
       kind: "product-seed",
       state: null,
-      contentRoots: [{ repoPath: null, stateHash: `state:${bundle().get("EvalDO").buildKey}` }],
+      contentRoots: [
+        { repoPath: null, stateHash: `state:${bundle().get("WebhookStoreDO").buildKey}` },
+      ],
     });
   });
 
@@ -81,8 +80,8 @@ describe("internalDOExecutionIdentity", () => {
 
   it("rejects unreviewed exports and owns a frozen identity capture", () => {
     const programs = bundle();
-    const identity = internalDOExecutionIdentity(programs, "EvalDO");
-    expect(internalDOExecutionIdentity(programs, "EvalDO")).toBe(identity);
+    const identity = internalDOExecutionIdentity(programs, "WebhookStoreDO");
+    expect(internalDOExecutionIdentity(programs, "WebhookStoreDO")).toBe(identity);
     expect(Object.isFrozen(identity.authority)).toBe(true);
     expect(Object.isFrozen(identity.artifact.sourceState)).toBe(true);
     expect(() => internalDOExecutionIdentity(bundle(), "UnreviewedDO")).toThrow(

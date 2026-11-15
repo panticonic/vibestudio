@@ -4100,15 +4100,17 @@ async function main() {
     );
   }
 
-  // ── eval.* service (owner-scoped sandbox eval backed by per-owner EvalDO) ──
+  // ── dynamicCode service: the admission of dynamic code (docs/dolt-redesign.md §7.3), and the
+  // host's two interlocks with the session entities that host kernels (authority events, execution roots) ──
   let closeActiveEvalRuns: (() => Promise<void>) | null = null;
   let closeEvalAuthorityEvents: (() => Promise<void>) | null = null;
   {
-    const { createEvalServices } = await import("./services/evalService.js");
-    let evalDefinition: import("@vibestudio/shared/serviceDefinition").ServiceDefinition | null =
-      null;
+    const { createDynamicCodeService } = await import("./services/dynamicCodeService.js");
+    let dynamicCodeDefinition:
+      | import("@vibestudio/shared/serviceDefinition").ServiceDefinition
+      | null = null;
     container.registerManaged({
-      name: "eval",
+      name: "dynamicCode",
       dependencies: ["workerdWorkspace", "runtimeManager", "doDispatch", "runtime"],
       async start(resolve) {
         const doDispatch = assertPresent(
@@ -4118,16 +4120,6 @@ async function main() {
           resolve<import("./services/runtimeService.js").RuntimeServiceResult>("runtime")
         );
         const evalEntityStore = ensureEntityStore(doDispatch);
-        const { createEvalEventIngressService, EvalEventSinkRegistry } =
-          await import("./services/evalEventIngressService.js");
-        const evalEventSinks = new EvalEventSinkRegistry();
-        dispatcher.registerService(
-          createEvalEventIngressService({
-            entityStore: evalEntityStore,
-            eventService,
-            sinks: evalEventSinks,
-          })
-        );
         const { createEvalExecutionRootsService } =
           await import("./services/evalExecutionRootsService.js");
         dispatcher.registerService(
@@ -4149,9 +4141,7 @@ async function main() {
             for (const entity of entities) {
               const retained = (await doDispatch.dispatch(
                 { source: EVAL_HOST_SOURCE, className: EVAL_HOST_CLASS, objectKey: entity.key! },
-                "settle",
-                "listRetainedExecutionRoots",
-                []
+                "executionRoots"
               )) as Array<{
                 runId: string;
                 moduleSpecifier: string;
@@ -4190,7 +4180,7 @@ async function main() {
             },
           });
         });
-        const evalServices = createEvalServices({
+        dynamicCodeDefinition = createDynamicCodeService({
           doDispatch,
           entityStore: evalEntityStore,
           createEntity: (caller, spec, trusted) =>
@@ -4235,7 +4225,6 @@ async function main() {
               operation.method,
               operation.args
             ),
-          eventSinks: evalEventSinks,
           resolveContextSource: async (contextId, sourcePath) => {
             const contentStateHash = await workspaceVcs.resolveContextState(contextId);
             const sourceState = workspaceVcs.executionStateForContent(contentStateHash);
@@ -4257,12 +4246,10 @@ async function main() {
             };
           },
         });
-        evalDefinition = evalServices.eval;
-        dispatcher.registerService(evalServices.dynamicCode);
       },
       getServiceDefinition() {
-        if (!evalDefinition) throw new Error("eval service not initialized");
-        return evalDefinition;
+        if (!dynamicCodeDefinition) throw new Error("dynamicCode service not initialized");
+        return dynamicCodeDefinition;
       },
     });
   }
@@ -8466,10 +8453,10 @@ async function main() {
       );
 
     // Close the shared eval admission before tearing down its host-held
-    // transports. Every EvalDO run is a durable trust unit with its own
+    // transports. Every eval kernel run is a durable trust unit with its own
     // cancellation cleanup; cancelling it here lets model/tool work, child
     // runtimes, and system-test drivers unwind while the relay is still alive.
-    // Cancellation owns its cleanup until the EvalDO's actual terminal. Elapsed
+    // Cancellation owns its cleanup until the eval kernel's actual terminal. Elapsed
     // time cannot authorize tearing down transports needed by that cleanup.
     await shutdownStage(
       "active-eval-cancellation",

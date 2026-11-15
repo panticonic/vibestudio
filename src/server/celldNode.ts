@@ -416,7 +416,7 @@ export class CelldNode {
         // The default per-isolate heap (128 MB, Cloudflare's) is below what the
         // eval kernel and the agent runtime need together in one isolate; the
         // workerd runtime had no such cap. Measured on the system-test lanes: the
-        // codegen isolate (every EvalDO cell shares one heap) holds ~22 MB per
+        // codegen isolate (every eval kernel cell shares one heap) holds ~22 MB per
         // cell, 260-360 MB with 12-16 cells, and a node that had run a few
         // tests hit 512 MB ("the isolate is over its V8 heap limit"). The
         // operator may raise or lower it.

@@ -37,8 +37,6 @@ const { config, secrets } = buildRuntimeDeployment({
     className: c,
     rpcToken: `t-${c}`,
     env: {},
-    codegen: c === "EvalDO",
-    residency: c === "EvalDO",
   })),
   doLoaderSecret: "dls",
   vars: {

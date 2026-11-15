@@ -1,4 +1,3 @@
-import { evalEngineMethods } from "@vibestudio/service-schemas/evalEngine";
 import { parseSha256 } from "@vibestudio/shared/execution/identity";
 import {
   executionArtifactDigest,
@@ -7,18 +6,8 @@ import {
 } from "@vibestudio/shared/execution/retention";
 import { createHash } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
-function acceptedRunFixture(runId: string) {
-  return evalEngineMethods.startRun.returns.parse({
-    runId,
-    runDigest: "d".repeat(64),
-    scopeInputRevision: "scope:initial",
-    status: "pending",
-    existing: false,
-  });
-}
 
 import { ledgerTest } from "../../../tests/helpers/ledgerTest.js";
-import { AmbiguousDoDispatchError } from "@vibestudio/shared/doDispatcher";
 import {
   createVerifiedCaller,
   type ServiceContext,
@@ -27,7 +16,8 @@ import {
 import { channelTrajectoryFor } from "@vibestudio/trajectory-identity";
 import type { DODispatch } from "../doDispatch.js";
 import { INTERNAL_DO_SOURCE } from "../internalDOs/internalDoLoader.js";
-import { createEvalService, createEvalServices } from "./evalService.js";
+import { createDynamicCodeService } from "./dynamicCodeService.js";
+import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
 import { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 import { createActivityRegistry } from "./activityRegistry.js";
@@ -170,50 +160,30 @@ function inlineEvalStart(
   };
 }
 
-/** The kernel's admission fence, in miniature: a cancel that arrives first fences the run's identity. */
-class FakeEvalDomain {
-  private readonly runs = new Map<string, { status: string; fenced: boolean }>();
-  async startRun(args: { runId: string }) {
-    const existing = this.runs.get(args.runId);
-    if (existing?.fenced) {
-      return { runId: args.runId, runDigest: "f".repeat(64), status: "cancelled", existing: true };
-    }
-    this.runs.set(args.runId, { status: "pending", fenced: false });
-    return {
-      runId: args.runId,
-      runDigest: "d".repeat(64),
-      scopeInputRevision: "scope:initial",
-      status: "pending",
-      existing: false,
-    };
-  }
-  async cancel(runId: string) {
-    const existing = this.runs.get(runId);
-    if (!existing) this.runs.set(runId, { status: "cancelled", fenced: true });
-    else existing.status = "cancelled";
-    return { ok: true as const, forcedReset: false };
-  }
-  getRun(runId: string) {
-    const run = this.runs.get(runId);
-    if (!run) return { status: "unknown" as const };
-    return run.status === "cancelled"
-      ? {
-          status: "cancelled" as const,
-          result: { success: false, console: "", failureKind: "cancelled" },
-        }
-      : { status: run.status as "pending" };
-  }
-  getRunReceipt(runId: string) {
-    return this.runs.get(runId)?.status === "cancelled"
-      ? {
-          runId,
-          runDigest: "f".repeat(64),
-          resultDigest: "e".repeat(64),
-          result: { success: false, console: "", failureKind: "cancelled" },
-          acknowledged: false,
-        }
-      : null;
-  }
+/**
+ * What a caller does with the service: admit the run, then start it on the entity that hosts it
+ * (`dynamicCode.admit`, then the session's own `start`). The controls are the service's own.
+ */
+function callerView(dynamicCode: ServiceDefinition, doDispatch: DODispatch) {
+  return {
+    handler: async (ctx: ServiceContext, method: string, args: unknown[]) => {
+      if (method === "start") {
+        const admission = (await dynamicCode.handler(ctx, "admit", args)) as {
+          host: unknown;
+          start: unknown;
+          nonce: string;
+        };
+        await (doDispatch as unknown as { dispatch: DODispatch["dispatch"] }).dispatch(
+          admission.host as never,
+          "start",
+          admission.start,
+          admission.nonce
+        );
+        return admission;
+      }
+      return dynamicCode.handler(ctx, method, args);
+    },
+  };
 }
 
 function createHarness(
@@ -221,21 +191,15 @@ function createHarness(
   options: {
     ownerRecord?: EntityRecord;
     ownerArtifact?: ExecutionArtifactRefV1 | null;
-    rejectFirstStartRun?: boolean;
     rejectStartRun?: Error;
-    retryStartGate?: Promise<void>;
-    evalDomain?: FakeEvalDomain;
-    rejectFirstGetRun?: boolean;
-    retryGetRunGate?: Promise<void>;
     finiteEvalEntityIds?: ReadonlySet<string>;
     retiredEvalEntityIds?: ReadonlySet<string>;
-    preauthorize?: Parameters<typeof createEvalService>[0]["preauthorize"];
+    preauthorize?: Parameters<typeof createDynamicCodeService>[0]["preauthorize"];
     /** The session entity's `get` fails with this (a run it never heard of). */
     getRunError?: Error;
     systemTestHarness?: boolean;
     executeRunPending?: boolean;
     cancel?: (runId: string) => Promise<void>;
-    terminalDuringStart?: boolean;
     getRunSequence?: Array<{
       status: "pending" | "running" | "cancelling" | "done" | "cancelled" | "unknown";
       gate?: Promise<void>;
@@ -245,8 +209,6 @@ function createHarness(
   } = {}
 ) {
   const calls: Array<{ ref: unknown; method: string; args: unknown[] }> = [];
-  let rejectedStartRun = false;
-  let rejectedGetRun = false;
   let getRunSequenceIndex = 0;
   const doDispatch = {
     async dispatchHeld(
@@ -258,25 +220,15 @@ function createHarness(
       return this.dispatch(ref, method, ...args);
     },
     async dispatch(ref: unknown, rawMethod: string, ...rawArgs: unknown[]) {
-      // The service speaks to the session entity (start, get, receipt, events, settle, ...);
-      // the mock answers as the kernel, whose method names the assertions below use.
+      // The host speaks to the session entity (get, cancel, reset); the caller's `start` is
+      // played by the test shim below. The mock answers as the kernel, whose method names the
+      // assertions use.
       let method = rawMethod;
       let args = rawArgs;
       if (rawMethod === "start") {
         method = "startRun";
         args = [rawArgs[0]];
       } else if (rawMethod === "get") method = "getRun";
-      else if (rawMethod === "receipt") method = "getRunReceipt";
-      else if (rawMethod === "events") {
-        method = "getRunEvents";
-        const page = (rawArgs[1] ?? {}) as { after?: number; limit?: number };
-        args = [rawArgs[0], page.after, page.limit];
-      } else if (rawMethod === "settle") {
-        method = String(rawArgs[0]);
-        args = rawArgs[1] as unknown[];
-      } else if (rawMethod === "await") {
-        return { status: "done" };
-      }
       calls.push({ ref, method, args });
       if (method === "entityResolveContext") {
         return contexts[String(args[0])] ?? null;
@@ -341,22 +293,10 @@ function createHarness(
       }
       if (method === "cancel") {
         await options.cancel?.(String(args[0]));
-        if (options.evalDomain) return options.evalDomain.cancel(String(args[0]));
         return { ok: true, forcedReset: false };
       }
       if (method === "startRun") {
         if (options.rejectStartRun) throw options.rejectStartRun;
-        if (options.rejectFirstStartRun && !rejectedStartRun) {
-          rejectedStartRun = true;
-          throw new AmbiguousDoDispatchError("simulated lost startRun acknowledgement");
-        }
-        if (rejectedStartRun && options.retryStartGate) await options.retryStartGate;
-        if (options.evalDomain) return options.evalDomain.startRun(args[0] as { runId: string });
-        if (options.terminalDuringStart) {
-          eventSinkTerminal.get(
-            String((args[0] as { eventSinkNonce?: string }).eventSinkNonce)
-          )?.();
-        }
         return {
           runId: (args[0] as { runId: string }).runId,
           runDigest: "d".repeat(64),
@@ -371,12 +311,6 @@ function createHarness(
       }
       if (method === "getRun") {
         if (options.getRunError) throw options.getRunError;
-        if (options.evalDomain) return options.evalDomain.getRun(String(args[0]));
-        if (options.rejectFirstGetRun && !rejectedGetRun) {
-          rejectedGetRun = true;
-          throw new Error("simulated transient getRun transport failure");
-        }
-        if (rejectedGetRun && options.retryGetRunGate) await options.retryGetRunGate;
         const sequenced =
           options.getRunSequence?.[
             Math.min(getRunSequenceIndex++, options.getRunSequence.length - 1)
@@ -386,17 +320,6 @@ function createHarness(
           return { status: sequenced.status };
         }
         return { status: "done", result: { success: true, console: "", scopeKeys: [] } };
-      }
-      if (method === "getRunReceipt" && options.evalDomain)
-        return options.evalDomain.getRunReceipt(String(args[0]));
-      if (method === "readScopeTextPage") {
-        return { length: 3, encoding: "utf16le-base64", chunk: "YQBiAGMA" };
-      }
-      if (method === "deleteScopeValue") {
-        return { ok: true, existed: true };
-      }
-      if (method === "onEvalComplete") {
-        return undefined;
       }
       throw new Error(`unexpected dispatch ${method}`);
     },
@@ -480,15 +403,6 @@ function createHarness(
   const executionSessions = new AgentExecutionSessionRegistry();
   const taskAuthorities = new TaskAuthorityRegistry();
   const activity = createActivityRegistry();
-  const eventSinkTerminal = new Map<string, () => void>();
-  const eventSinks = {
-    register(route: { nonce: string; onTerminal?: () => void }) {
-      if (route.onTerminal) eventSinkTerminal.set(route.nonce, route.onTerminal);
-    },
-    close(nonce: string) {
-      eventSinkTerminal.delete(nonce);
-    },
-  };
   const retireEntity = vi.fn(async () => {});
   // `runtime.internal.createEntity`: records the spec and the caller whose lineage it joins,
   // and makes the session entity resolvable as the real path would.
@@ -501,7 +415,7 @@ function createHarness(
     }
   );
   let shutdown: (() => Promise<void>) | null = null;
-  const services = createEvalServices({
+  const dynamicCode = createDynamicCodeService({
     resolveExecutionArtifact: () =>
       options.ownerArtifact === undefined
         ? EVAL_EXECUTION_IDENTITY.artifact
@@ -514,7 +428,6 @@ function createHarness(
     ...(options.preauthorize ? { preauthorize: options.preauthorize } : {}),
     executionSessions,
     taskAuthorities,
-    eventSinks,
     activity,
     onShutdown: (callback) => {
       shutdown = callback;
@@ -527,12 +440,11 @@ function createHarness(
       contentStateHash: `state:${"c".repeat(64)}`,
     }),
   });
-  const service = services.eval;
+  const service = callerView(dynamicCode, doDispatch);
   return {
     service,
-    dynamicCode: services.dynamicCode,
+    dynamicCode,
     calls,
-    eventSinkRegistrations: eventSinkTerminal,
     executionSessions,
     taskAuthorities,
     activity,
@@ -541,15 +453,10 @@ function createHarness(
       if (!shutdown) throw new Error("shutdown callback was not registered");
       await shutdown();
     },
-    settleLiveEvent() {
-      const callbacks = [...eventSinkTerminal.values()];
-      eventSinkTerminal.clear();
-      for (const callback of callbacks) callback();
-    },
   };
 }
 
-describe("createEvalService", () => {
+describe("dynamicCode admission", () => {
   it("cancels exact preauthorization with its owning admission and releases the scope for the next run", async () => {
     const controller = new AbortController();
     const originalFailure = new Error("Owning input cancelled");
@@ -889,7 +796,7 @@ describe("createEvalService", () => {
     ).resolves.toBeDefined();
   });
 
-  ledgerTest("execution.eval-do", async () => {
+  ledgerTest("execution.eval-kernel", async () => {
     const { service, calls } = createHarness({ "session:default": "ctx_1" });
 
     await service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "start", [
@@ -1044,7 +951,7 @@ describe("createEvalService", () => {
           return String(args[0]) === "panel:p" ? "panel:tree/p" : null;
         if (method === "start") {
           calls[calls.length - 1] = { method: "startRun", args: [args[0]] };
-          return acceptedRunFixture(String((args[0] as { runId?: string }).runId));
+          return { runId: String((args[0] as { runId?: string }).runId), status: "pending" };
         }
         if (method === "get") return { status: "done" };
         throw new Error(`unexpected dispatch ${method}`);
@@ -1060,7 +967,7 @@ describe("createEvalService", () => {
       resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
     });
-    const service = createEvalService({
+    const dynamicCode = createDynamicCodeService({
       resolveExecutionArtifact: () => EVAL_EXECUTION_IDENTITY.artifact,
       doDispatch,
       entityStore,
@@ -1075,6 +982,7 @@ describe("createEvalService", () => {
       executionSessions: new AgentExecutionSessionRegistry(),
       taskAuthorities: new TaskAuthorityRegistry(),
     });
+    const service = callerView(dynamicCode, doDispatch);
 
     await service.handler(
       activeInvocationContext(authenticatedCaller("do:src:Agent:k", "do"), "c"),
@@ -1131,7 +1039,7 @@ describe("createEvalService", () => {
           }));
         if (method === "start") {
           calls[calls.length - 1] = { method: "startRun", args: [args[0]] };
-          return acceptedRunFixture(String((args[0] as { runId?: string }).runId));
+          return { runId: String((args[0] as { runId?: string }).runId), status: "pending" };
         }
         if (method === "get") return { status: "done" };
         throw new Error(`unexpected dispatch ${method}`);
@@ -1147,7 +1055,7 @@ describe("createEvalService", () => {
       resolveDurableWorkQueues: () => [],
       materializeExecution: async () => undefined,
     });
-    const service = createEvalService({
+    const dynamicCode = createDynamicCodeService({
       resolveExecutionArtifact: () => EVAL_EXECUTION_IDENTITY.artifact,
       doDispatch,
       entityStore,
@@ -1162,6 +1070,7 @@ describe("createEvalService", () => {
       executionSessions: new AgentExecutionSessionRegistry(),
       taskAuthorities: new TaskAuthorityRegistry(),
     });
+    const service = callerView(dynamicCode, doDispatch);
 
     await service.handler(
       activeInvocationContext(authenticatedCaller(agentId, "do"), "quickfire-channel"),
@@ -1235,15 +1144,13 @@ describe("createEvalService", () => {
           scopeKey: "chan_1",
           code: "return 1;",
           runId,
-          resultReceiver: { kind: "caller" },
         }),
       ]
     );
-    expect(ret).toEqual({
+    expect(ret).toMatchObject({
       runId,
-      runDigest: "d".repeat(64),
+      runDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
       authorityManifestDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
-      status: "accepted",
     });
 
     const objectKey = evalKey(ownerId, "chan_1");
@@ -1265,8 +1172,8 @@ describe("createEvalService", () => {
       (calls.find((c) => c.method === "startRun")?.args[0] as { timeoutMs?: number }).timeoutMs
     ).toBeUndefined();
 
-    // Untimed asynchronous eval has no host-held execution or completion transport. The EvalDO
-    // owns both after acknowledging startRun.
+    // The host holds no execution and delivers no completion: the hosted kernel owns the run once it
+    // acknowledges start, and the caller pulls its result.
     expect(calls.some((c) => c.method === "executeRun")).toBe(false);
     expect(calls.some((c) => c.method === "onEvalComplete")).toBe(false);
   });
@@ -1301,163 +1208,16 @@ describe("createEvalService", () => {
     expect(accepted["path"]).toBeUndefined();
   });
 
-  it("retains admission and retries the same run after an ambiguous start acknowledgement", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:ambiguous";
-    let acceptRetry!: () => void;
-    const retryStartGate = new Promise<void>((resolve) => {
-      acceptRetry = resolve;
-    });
-    const { service, calls, executionSessions, settleLiveEvent } = createHarness(
-      { [ownerId]: "ctx_agent" },
-      { rejectFirstStartRun: true, retryStartGate }
-    );
-    const runId = "effect:eval:ambiguous";
-
-    await expect(
-      service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
-        inlineEvalStart({ scopeKey: "chan_1", code: "return 1;", runId }),
-      ])
-    ).rejects.toThrow(/lost startRun acknowledgement/);
-    const objectKey = (
-      calls.find((call) => call.method === "startRun")?.ref as { objectKey: string }
-    ).objectKey;
-    const runtimeId = `do:workers/session:SessionDO:${objectKey}`;
-    expect(executionSessions.resolve(runtimeId)?.executor).toMatchObject({
-      kind: "eval",
-      evalRunId: runId,
-    });
-
-    acceptRetry();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    expect(calls.filter((call) => call.method === "startRun")).toHaveLength(2);
-    expect(calls.filter((call) => call.method === "startRun").map((call) => call.args[0])).toEqual([
-      expect.objectContaining({ runId }),
-      expect.objectContaining({ runId }),
-    ]);
-    expect(executionSessions.resolve(runtimeId)).not.toBeNull();
-    settleLiveEvent();
-    expect(executionSessions.resolve(runtimeId)).toMatchObject({
-      executor: { kind: "eval", runtimeId, evalRunId: runId },
-    });
-  });
-
-  it("fences an ambiguous original start when authenticated cancellation reaches the domain first", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:cancel-before-reconcile";
-    const domain = new FakeEvalDomain();
-    const domainStart = vi.spyOn(domain, "startRun");
-    let releaseRetry!: () => void;
-    const retryStartGate = new Promise<void>((resolve) => {
-      releaseRetry = resolve;
-    });
-    const contexts: Record<string, string> = { [ownerId]: "ctx_agent" };
-    const { service, calls, executionSessions, activity } = createHarness(contexts, {
-      rejectFirstStartRun: true,
-      retryStartGate,
-      evalDomain: domain,
-    });
-    const caller = activeInvocationContext(authenticatedCaller(ownerId, "do"));
-    const runId = "effect:eval:cancel-before-reconcile";
-    try {
-      await expect(
-        service.handler(caller, "start", [
-          inlineEvalStart({ scopeKey: "chan_1", code: "return 99;", runId }),
-        ])
-      ).rejects.toThrow("lost startRun acknowledgement");
-      const ref = calls.find((call) => call.method === "startRun")!.ref as { objectKey: string };
-      const runtimeId = `do:workers/session:SessionDO:${ref.objectKey}`;
-      expect(executionSessions.resolve(runtimeId)).not.toBeNull();
-      contexts[runtimeId] = "ctx_agent";
-      await expect(
-        service.handler(caller, "cancel", [{ runId, scopeKey: "chan_1" }])
-      ).resolves.toMatchObject({ ok: true });
-      const cancelled = domain.getRunReceipt(runId);
-      expect(cancelled?.result).toMatchObject({ failureKind: "cancelled" });
-      expect(activity.getActivity().activeRuns).toBe(0);
-      releaseRetry();
-      await vi.waitFor(() =>
-        expect(calls.filter((call) => call.method === "startRun")).toHaveLength(2)
-      );
-      await vi.waitFor(() => expect(domainStart).toHaveBeenCalledTimes(1));
-      await expect(domainStart.mock.results[0]!.value).resolves.toMatchObject({
-        status: "cancelled",
-        existing: true,
-      });
-      expect(domain.getRunReceipt(runId)).toEqual(cancelled);
-    } finally {
-      releaseRetry();
-    }
-  });
-
-  it("releases the cell slot after a definitive start rejection without discarding its history", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:rejected";
-    const { service, calls, executionSessions, activity } = createHarness(
-      { [ownerId]: "ctx_agent" },
-      { rejectStartRun: new Error("invalid eval request") }
-    );
-    const runId = "effect:eval:rejected";
-
-    await expect(
-      service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
-        inlineEvalStart({ scopeKey: "chan_1", code: "return 1;", runId }),
-      ])
-    ).rejects.toThrow("invalid eval request");
-
-    const objectKey = (
-      calls.find((call) => call.method === "startRun")?.ref as { objectKey: string }
-    ).objectKey;
-    const runtimeId = `do:workers/session:SessionDO:${objectKey}`;
-    expect(calls.filter((call) => call.method === "startRun")).toHaveLength(1);
-    expect(executionSessions.resolve(runtimeId)).toMatchObject({
-      executor: { kind: "eval", runtimeId, evalRunId: "effect:eval:rejected" },
-    });
-    expect(activity.getActivity().activeRuns).toBe(0);
-  });
-
-  it("does not poll after acceptance and releases the cell once from the trusted terminal sink", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:live-terminal";
-    const { service, calls, executionSessions, activity, settleLiveEvent } = createHarness({
-      [ownerId]: "ctx_agent",
-    });
-    const runId = "effect:eval:live-terminal";
-
-    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
-      inlineEvalStart({
-        scopeKey: "chan_1",
-        code: "return 1;",
-        runId,
-        resultReceiver: { kind: "caller" },
-      }),
-    ]);
-
-    const objectKey = (
-      calls.find((call) => call.method === "startRun")?.ref as { objectKey: string }
-    ).objectKey;
-    const runtimeId = `do:workers/session:SessionDO:${objectKey}`;
-    expect(calls.filter((call) => call.method === "getRun")).toHaveLength(0);
-    expect(executionSessions.resolve(runtimeId)?.executor).toMatchObject({
-      kind: "eval",
-      evalRunId: runId,
-    });
-    expect(activity.getActivity().activeRuns).toBe(1);
-
-    settleLiveEvent();
-    settleLiveEvent();
-    expect(executionSessions.resolve(runtimeId)).toMatchObject({
-      executor: { kind: "eval", runtimeId, evalRunId: "effect:eval:live-terminal" },
-    });
-    expect(activity.getActivity().activeRuns).toBe(0);
-    expect(calls.filter((call) => call.method === "getRun")).toHaveLength(0);
-  });
-
   it("retains root and descendant test-history trust through cancellation", async () => {
     const ownerId = "session:default";
     const runId = "system-test-runner:cancel-lifecycle";
-    const { service, calls, executionSessions, settleLiveEvent } = createHarness(
+    const { service, dynamicCode, calls, executionSessions } = createHarness(
       { [ownerId]: "ctx:orchestrator" },
       { systemTestHarness: true, executeRunPending: true }
     );
 
-    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "shell")), "start", [
+    const initiator = activeInvocationContext(authenticatedCaller(ownerId, "shell"));
+    await service.handler(initiator, "start", [
       inlineEvalStart({ code: "await new Promise(() => {});", runId }),
     ]);
     expect(calls.filter((call) => call.method === "getRun")).toHaveLength(0);
@@ -1520,39 +1280,12 @@ describe("createEvalService", () => {
     expect(executionSessions.resolve(rootRuntimeId)).not.toBeNull();
     expect(executionSessions.resolve(child.executor.runtimeId)).not.toBeNull();
 
-    settleLiveEvent();
+    // The caller releases the root's admission once its run is terminal: the case's trust outlives it.
+    await dynamicCode.handler(initiator, "release", [{ runId, hostId: rootRuntimeId }]);
     expect(executionSessions.resolve(rootRuntimeId)).not.toBeNull();
     expect(executionSessions.resolve(child.executor.runtimeId)).not.toBeNull();
     expect(executionSessions.testPolicyForContext("ctx:orchestrator")).not.toBeNull();
     expect(executionSessions.testPolicyForContext("ctx:case")).not.toBeNull();
-  });
-
-  it("does not re-enter execution for a non-agent caller and closes from the terminal event", async () => {
-    const ownerId = "session:default";
-    const { service, calls, executionSessions, activity, settleLiveEvent } = createHarness({
-      [ownerId]: "ctx:held",
-    });
-
-    const run = await service.handler(
-      activeInvocationContext(authenticatedCaller(ownerId, "shell")),
-      "start",
-      [inlineEvalStart({ code: "return 1;", runId: "run:held" })]
-    );
-    const objectKey = (
-      calls.find((call) => call.method === "startRun")?.ref as { objectKey: string }
-    ).objectKey;
-    const runtimeId = `do:workers/session:SessionDO:${objectKey}`;
-    expect(run).toMatchObject({
-      runId: "run:held",
-      status: "accepted",
-    });
-    expect(calls.some((call) => call.method === "executeRun")).toBe(false);
-    expect(executionSessions.resolve(runtimeId)).toMatchObject({
-      executor: { kind: "eval", runtimeId, evalRunId: "run:held" },
-    });
-    expect(activity.getActivity().activeRuns).toBe(1);
-    settleLiveEvent();
-    expect(activity.getActivity().activeRuns).toBe(0);
   });
 
   it("start requires a caller-owned runId", async () => {
@@ -1608,39 +1341,6 @@ describe("createEvalService", () => {
     }
   });
 
-  it("tells an agent receiver of the terminal row it pulled from the kernel, until the receiver acknowledges", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
-    const domain = new FakeEvalDomain();
-    let receipts = 0;
-    domain.getRunReceipt = (runId: string) => ({
-      runId,
-      runDigest: "d".repeat(64),
-      resultDigest: "e".repeat(64),
-      result: { success: true, console: "", failureKind: "user-code" },
-      // The receiver commits the result only on the second hint.
-      acknowledged: ++receipts > 2,
-    });
-    const { service, calls } = createHarness({ [ownerId]: "ctx_agent" }, { evalDomain: domain });
-
-    await service.handler(activeInvocationContext(authenticatedCaller(ownerId, "do")), "start", [
-      inlineEvalStart({
-        scopeKey: "chan_1",
-        runId: "run:hint",
-        code: "return 1;",
-        resultReceiver: { kind: "caller" },
-      }),
-    ]);
-
-    await vi.waitFor(
-      () => expect(calls.filter((call) => call.method === "onEvalComplete")).toHaveLength(2),
-      { timeout: 8_000 }
-    );
-    expect(calls.find((call) => call.method === "onEvalComplete")).toMatchObject({
-      ref: { source: "workers/agent-worker", className: "AiChatWorker", objectKey: "abc" },
-      args: [{ runId: "run:hint" }],
-    });
-  });
-
   it("keeps missing-scope controls from admitting work and treats reset as already empty", async () => {
     const ownerId = "session:default";
     const { service, calls } = createHarness({ [ownerId]: "ctx_1" });
@@ -1649,28 +1349,6 @@ describe("createEvalService", () => {
       target: { kind: "owner-session" as const, sessionId: ownerId },
       scopeKey: "missing",
     };
-    const controls: Array<[string, unknown]> = [
-      ["get", { ...route, runId: "unknown" }],
-      ["receipt", { ...route, runId: "unknown" }],
-      [
-        "acknowledge",
-        {
-          ...route,
-          runId: "unknown",
-          receipt: { runDigest: "a".repeat(64), resultDigest: "b".repeat(64) },
-        },
-      ],
-      ["events", { ...route, runId: "unknown" }],
-      ["cancel", { ...route, runId: "unknown" }],
-      ["readScopeTextPage", { ...route, key: "result", offset: 0, limit: 10 }],
-      ["deleteScopeValue", { ...route, key: "result" }],
-    ];
-    for (const [method, args] of controls) {
-      await expect(service.handler(ctx, method, [args])).rejects.toMatchObject({
-        code: "ENOTFOUND",
-        method,
-      });
-    }
     await expect(service.handler(ctx, "reset", [route])).resolves.toEqual({ ok: true });
     expect(
       calls.every((call) => ["entityResolveContext", "entityResolve"].includes(call.method))
@@ -1682,77 +1360,14 @@ describe("createEvalService", () => {
     const entityId = `do:workers/session:SessionDO:${evalKey(ownerId, "pinned")}`;
     const { service, calls } = createHarness({ [ownerId]: "ctx_new", [entityId]: "ctx_original" });
     await expect(
-      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "get", [
+      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "reset", [
         {
           target: { kind: "owner-session", sessionId: ownerId },
           scopeKey: "pinned",
-          runId: "original-run",
         },
       ])
     ).rejects.toMatchObject({ code: "EACCES", errorKind: "access" });
     expect(calls.every((call) => call.method === "entityResolveContext")).toBe(true);
-  });
-
-  it("getRun: routes to the owner's EvalDO by (owner, subKey)", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
-    const { service, calls } = createHarness({
-      [ownerId]: "ctx_agent",
-      [`do:workers/session:SessionDO:${evalKey(ownerId, "chan_1")}`]: "ctx_agent",
-    });
-
-    await service.handler({ caller: authenticatedCaller(ownerId, "do") }, "get", [
-      { scopeKey: "chan_1", runId: "inv-42" },
-    ]);
-
-    const objectKey = evalKey(ownerId, "chan_1");
-    expect(calls.find((c) => c.method === "getRun")).toMatchObject({
-      ref: { source: SESSION_SOURCE, className: SESSION_CLASS, objectKey },
-      args: ["inv-42"],
-    });
-  });
-
-  it("large-result scope paging stays owner-scoped and forwards only bounded page fields", async () => {
-    const ownerId = "session:default";
-    const { service, calls } = createHarness({
-      [ownerId]: "ctx_1",
-      [`do:workers/session:SessionDO:${evalKey(ownerId, "system-tests")}`]: "ctx_1",
-    });
-    const caller = { caller: authenticatedCaller("shell:dev_cli", "shell") };
-
-    const page = await service.handler(caller, "readScopeTextPage", [
-      {
-        target: { kind: "owner-session", sessionId: ownerId },
-        scopeKey: "system-tests",
-        key: "__temporary",
-        offset: 131_072,
-        limit: 4096,
-      },
-    ]);
-    expect(page).toEqual({ length: 3, encoding: "utf16le-base64", chunk: "YQBiAGMA" });
-    expect(calls.find((call) => call.method === "readScopeTextPage")).toMatchObject({
-      ref: {
-        source: SESSION_SOURCE,
-        className: SESSION_CLASS,
-        objectKey: evalKey(ownerId, "system-tests"),
-      },
-      args: ["__temporary", 131_072, 4096],
-    });
-
-    await service.handler(caller, "deleteScopeValue", [
-      {
-        target: { kind: "owner-session", sessionId: ownerId },
-        scopeKey: "system-tests",
-        key: "__temporary",
-      },
-    ]);
-    expect(calls.find((call) => call.method === "deleteScopeValue")).toMatchObject({
-      ref: {
-        source: SESSION_SOURCE,
-        className: SESSION_CLASS,
-        objectKey: evalKey(ownerId, "system-tests"),
-      },
-      args: ["__temporary"],
-    });
   });
 
   it("disposes a finite eval kernel through its runtime lifecycle owner", async () => {
@@ -1817,10 +1432,10 @@ describe("createEvalService", () => {
         }),
       ])
     ).rejects.toMatchObject({ code: "ECLOSED" });
-    await expect(
-      service.handler(caller, "get", [{ ...route, runId: "old-run" }])
-    ).rejects.toMatchObject({ code: "ECLOSED" });
-    expect(calls.some((call) => ["createEntity", "startRun", "getRun"].includes(call.method))).toBe(
+    await expect(service.handler(caller, "reset", [route])).rejects.toMatchObject({
+      code: "ECLOSED",
+    });
+    expect(calls.some((call) => ["createEntity", "startRun", "reset"].includes(call.method))).toBe(
       false
     );
   });
@@ -1838,18 +1453,16 @@ describe("createEvalService", () => {
     );
 
     await expect(
-      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "get", [
+      service.handler({ caller: authenticatedCaller("shell:dev_cli", "shell") }, "reset", [
         {
           target: { kind: "owner-session", sessionId: ownerId },
           scopeKey: "finite",
-          runId: "finite-run",
         },
       ])
-    ).resolves.toMatchObject({ status: "done" });
+    ).resolves.toEqual({ ok: true });
 
-    expect(calls.find((call) => call.method === "getRun")).toMatchObject({
+    expect(calls.find((call) => call.method === "reset")).toMatchObject({
       ref: { source: SESSION_SOURCE, className: SESSION_CLASS, objectKey },
-      args: ["finite-run"],
     });
     expect(calls.some((call) => call.method === "createEntity")).toBe(false);
     expect(calls.some((call) => call.method === "entityAdvanceExecution")).toBe(false);
@@ -1904,28 +1517,9 @@ describe("createEvalService", () => {
     expect(calls.some((call) => call.method === "createEntity")).toBe(false);
     expect(calls.some((call) => call.method === "entityAdvanceExecution")).toBe(false);
   });
-
-  it("cancel: routes to the owner's EvalDO by (owner, subKey) and forwards the runId", async () => {
-    const ownerId = "do:workers/agent-worker:AiChatWorker:abc";
-    const { service, calls } = createHarness({
-      [ownerId]: "ctx_agent",
-      [`do:workers/session:SessionDO:${evalKey(ownerId, "chan_1")}`]: "ctx_agent",
-    });
-
-    const ret = await service.handler({ caller: authenticatedCaller(ownerId, "do") }, "cancel", [
-      { scopeKey: "chan_1", runId: "inv-42" },
-    ]);
-    expect(ret).toEqual({ ok: true, forcedReset: false });
-
-    const objectKey = evalKey(ownerId, "chan_1");
-    expect(calls.find((c) => c.method === "cancel")).toMatchObject({
-      ref: { source: SESSION_SOURCE, className: SESSION_CLASS, objectKey },
-      args: ["inv-42"],
-    });
-  });
 });
 
-describe("createEvalService — agent bindings", () => {
+describe("dynamicCode admission — agent bindings", () => {
   // Plan §6.4: an `agent` caller binds to its host-verified entity binding with
   // zero flags; the EvalDO trusts the binding, not client-supplied owner/context.
   it("binds agent eval to the entity binding (owner = binding.entityId, context = binding.contextId)", async () => {
@@ -1994,7 +1588,7 @@ describe("dynamicCode (the pull model's host service)", () => {
     ...extra,
   });
 
-  it("admits a run without starting it, without an event sink, and returns what the caller starts it with", async () => {
+  it("admits a run without starting it and returns what the caller starts it with", async () => {
     const h = createHarness({ "session:default": "ctx_1" });
     const admission = (await h.dynamicCode.handler({ caller: shell() }, "admit", [
       admitInput("run:admit"),
@@ -2019,15 +1613,12 @@ describe("dynamicCode (the pull model's host service)", () => {
       contextId: "ctx_1",
       executionSessionNonce: admission.nonce,
     });
-    // A caller that pulls has no push route for the run's events.
+    // Nothing is pushed to the caller: no event route exists, it pulls `events` from the entity.
     expect(admission.start).not.toHaveProperty("eventSinkNonce");
-    expect(h.eventSinkRegistrations.size).toBe(0);
     // The host starts nothing: the caller starts the run on the session entity.
     expect(h.calls.filter((call) => call.method === "startRun")).toEqual([]);
     expect(h.activity.getActivity().activeRuns).toBe(1);
     expect(h.executionSessions.activeRunId(admission.hostId)).toBe("run:admit");
-    const executor = h.executionSessions.resolve(admission.hostId)?.executor;
-    expect(executor?.kind === "eval" && executor.eventSinkNonce).toBeFalsy();
   });
 
   it("releases an admission for its caller only, and a released slot admits the next run", async () => {

@@ -336,7 +336,7 @@ export interface RuntimeServiceDeps {
     /**
      * A resident host-attested policy carried by the verified creator. This is
      * required when a trusted deputy creates a context for a runtime id that
-     * has no entity row of its own (for example an EvalDO opening a root
+     * has no entity row of its own (for example an eval kernel opening a root
      * panel), so semantic ownership alone cannot recover the creator context.
      */
     inheritedTestPolicy?: import("@vibestudio/rpc").AgentExecutionTestPolicy;

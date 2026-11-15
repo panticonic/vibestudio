@@ -20,9 +20,9 @@ import type { HeldDoDispatcher } from "@vibestudio/shared/doDispatcher";
 import type { WorkspaceEntityStore } from "../workspaceEntityStore.js";
 
 /**
- * The EvalDO cannot mutate the host publication journal directly. This narrow
+ * The eval kernel cannot mutate the host publication journal directly. This narrow
  * ingress authenticates the exact admitted run, reserves the artifact in the
- * host journal, and finalizes only after the EvalDO's durable owner row commits.
+ * host journal, and finalizes only after the eval kernel's durable owner row commits.
  */
 export function createEvalExecutionRootsService(deps: {
   doDispatch: HeldDoDispatcher;
@@ -83,9 +83,10 @@ export function createEvalExecutionRootsService(deps: {
             deps.doDispatch
               .dispatch(
                 { source: EVAL_HOST_SOURCE, className: EVAL_HOST_CLASS, objectKey },
-                "settle",
                 "retainExecutionRoot",
-                [runId, moduleSpecifier, artifact]
+                runId,
+                moduleSpecifier,
+                artifact
               )
               .then(() => undefined)
         );

@@ -144,9 +144,10 @@ describe("eval execution root publication ingress", () => {
       });
       expect(dispatch).toHaveBeenCalledWith(
         { source: "workers/session", className: "SessionDO", objectKey: "object-one" },
-        "settle",
         "retainExecutionRoot",
-        [runId, "@workspace/example", ref]
+        runId,
+        "@workspace/example",
+        ref
       );
       expect(finalize).toHaveBeenCalledWith({ reservationId: "reservation:one", epoch: 1 });
     }

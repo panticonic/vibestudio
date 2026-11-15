@@ -76,9 +76,9 @@ async function resolveCode(
 
 function parseTimeout(inv: ParsedInvocation): number | undefined {
   const raw = inv.flags["timeout"];
-  // Default: unbounded. The CLI follows the EvalDO run without an implicit client cap.
+  // Default: unbounded. The CLI follows the eval kernel run without an implicit client cap.
   // `--timeout` opts into BOTH a server-side abort
-  // (the EvalDO honors `timeoutMs`) and a local wait cap (exit 4 if the server doesn't respond).
+  // (the eval kernel honors `timeoutMs`) and a local wait cap (exit 4 if the server doesn't respond).
   if (typeof raw !== "string") return undefined;
   const value = Number(raw);
   if (!Number.isInteger(value) || value <= 0) {

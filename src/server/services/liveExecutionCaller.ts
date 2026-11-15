@@ -5,7 +5,7 @@ import { codePrincipalMatches } from "@vibestudio/shared/authority/codePrincipal
 
 /**
  * Materialize the code identity of the host-admitted harness for one marked
- * evaluated effect. The transport runtime remains the concrete EvalDO, but the
+ * evaluated effect. The transport runtime remains the concrete eval kernel, but the
  * code executing inside it is the exact harness sealed into the admission.
  */
 export function executionHarnessCodeIdentity(input: {

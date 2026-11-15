@@ -12,8 +12,8 @@ export const runtimeFoundationEvidence = Object.freeze({
     "execution.panel": {
       path: "hosts/desktop/main/panelOrchestrator.test.ts",
     },
-    "execution.eval-do": {
-      path: "src/server/services/evalService.test.ts",
+    "execution.eval-kernel": {
+      path: "src/server/services/dynamicCodeService.test.ts",
     },
     "execution.extension": {
       path: "packages/extension-host/src/service.test.ts",

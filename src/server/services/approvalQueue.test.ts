@@ -616,7 +616,7 @@ describe("approvalQueue", () => {
     });
     void queue.request({
       kind: "capability",
-      callerId: "do:vibestudio/internal:EvalDO:one",
+      callerId: "do:workers/session:SessionDO:one",
       callerKind: "do",
       requestedByUserId: "test-user",
       repoPath: "vibestudio/internal",

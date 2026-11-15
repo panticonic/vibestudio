@@ -1,125 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
-import type { RpcCaller } from "@vibestudio/rpc";
+import { describe, expect, it } from "vitest";
 import {
-  createEvalExecutor,
-  createDeferredEvalExecutor,
   evalAuthorityInputSchema,
   evalLifecycleFailureCodes,
-  evalMethods,
-  evalOwnerCallbackMethods,
-  evalOwnerCallbackRpcMethods,
   evalStartInputSchema,
+  settledResult,
   captureEvalRpcFingerprint,
   fingerprintEvalRpcValue,
   evalRpcCallObservationSchema,
   evalWorkerLifecycleObservationSchema,
-  type EvalCall,
 } from "./eval.js";
-
-const SUCCESS = { success: true, console: "", returnValue: 42 };
-
-describe("eval owner callback RPC contracts", () => {
-  it("shares namesless descriptors with strict completion and progress payload schemas", async () => {
-    expect(evalOwnerCallbackRpcMethods.onEvalComplete.name).toBe("onEvalComplete");
-    expect(evalOwnerCallbackRpcMethods.onEvalProgress.name).toBe("onEvalProgress");
-
-    const completionArgs = [{ runId: "run:1" }];
-    expect(evalOwnerCallbackMethods.onEvalComplete.args.safeParse(completionArgs).success).toBe(
-      true
-    );
-    expect(
-      evalOwnerCallbackMethods.onEvalComplete.args.safeParse([
-        { ...completionArgs[0], result: SUCCESS },
-      ]).success
-    ).toBe(false);
-    expect(
-      evalOwnerCallbackMethods.onEvalComplete.returns.safeParse({ accepted: true }).success
-    ).toBe(true);
-    expect(
-      evalOwnerCallbackMethods.onEvalComplete.returns.safeParse({ accepted: "yes" }).success
-    ).toBe(false);
-
-    const progress = {
-      runId: "run:1",
-      agentInvocationId: "invocation:1",
-      channelId: "channel:1",
-      activity: { kind: "authority-requested", detail: { capability: "browser.read" } },
-    };
-    expect(evalOwnerCallbackMethods.onEvalProgress.args.safeParse([progress]).success).toBe(true);
-    expect(
-      evalOwnerCallbackMethods.onEvalProgress.args.safeParse([
-        { ...progress, activity: { ...progress.activity, kind: "arbitrary" } },
-      ]).success
-    ).toBe(false);
-    expect(
-      evalOwnerCallbackMethods.onEvalProgress.args.safeParse([{ ...progress, unexpected: true }])
-        .success
-    ).toBe(false);
-    expect(evalOwnerCallbackMethods.onEvalProgress.returns.safeParse(undefined).success).toBe(true);
-  });
-
-  it("validates callback arguments before dispatch and validates receiver results", async () => {
-    const completion = evalOwnerCallbackRpcMethods.onEvalComplete;
-    const completionDispatch = vi.fn(async () => ({ accepted: true }));
-    await expect(
-      completion.invoke(
-        [
-          {
-            runId: "run:1",
-            // @ts-expect-error completion callbacks receive only their owner run id
-            result: SUCCESS,
-          },
-        ],
-        completionDispatch
-      )
-    ).rejects.toThrow();
-    expect(completionDispatch).not.toHaveBeenCalled();
-
-    await expect(
-      completion.invoke([{ runId: "run:1" }], async () => ({ accepted: "yes" }))
-    ).rejects.toThrow();
-
-    const progress = evalOwnerCallbackRpcMethods.onEvalProgress;
-    const progressDispatch = vi.fn(async () => undefined);
-    await expect(
-      progress.invoke(
-        [
-          {
-            runId: "run:1",
-            agentInvocationId: "invocation:1",
-            channelId: "channel:1",
-            activity: {
-              // @ts-expect-error progress activity is restricted to the owner protocol
-              kind: "not-an-authority-event",
-            },
-          },
-        ],
-        progressDispatch
-      )
-    ).rejects.toThrow();
-    expect(progressDispatch).not.toHaveBeenCalled();
-    await expect(
-      progress.invoke(
-        [{ runId: "run:1", agentInvocationId: "invocation:1", channelId: "channel:1" }],
-        async () => undefined
-      )
-    ).resolves.toBeUndefined();
-  });
-
-  it("keeps compile-time callback result types exact", () => {
-    void callbackRpcTypecheck;
-  });
-});
-
-function callbackRpcTypecheck(caller: Pick<RpcCaller, "call">): void {
-  // @ts-expect-error a caller cannot substitute its own completion result type
-  const wrongCompletionResult: Promise<{ accepted: "yes" }> = caller.call(
-    "do:agent:owner",
-    evalOwnerCallbackRpcMethods.onEvalComplete,
-    [{ runId: "run:1" }]
-  );
-  void wrongCompletionResult;
-}
 
 describe("eval RPC observation fingerprints", () => {
   it("sorts canonical object keys while preserving exact Unicode code points", () => {
@@ -319,159 +208,6 @@ describe("eval lifecycle contract", () => {
     ).toBe(false);
   });
 
-  it("settles a terminal start without a backstop read", async () => {
-    const call = vi.fn(async (method: string) => {
-      expect(method).toBe("eval.start");
-      return {
-        runId: "run:1",
-        status: "terminal",
-        snapshot: { status: "done", result: SUCCESS },
-      };
-    });
-    const execute = createEvalExecutor(call as unknown as EvalCall);
-
-    await expect(
-      execute({ runId: "run:1", source: { kind: "inline", code: "return 42" } })
-    ).resolves.toEqual(SUCCESS);
-    expect(call).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses get only as the accepted run's settlement backstop", async () => {
-    const call = vi
-      .fn()
-      .mockResolvedValueOnce({ runId: "run:1", status: "accepted" })
-      .mockResolvedValueOnce({ status: "running" })
-      .mockResolvedValueOnce({ status: "done", result: SUCCESS });
-    const execute = createEvalExecutor(call, { pollDelay: async () => undefined });
-
-    await expect(
-      execute({ runId: "run:1", source: { kind: "inline", code: "return 42" } })
-    ).resolves.toEqual(SUCCESS);
-    expect(call.mock.calls.map(([method]) => method)).toEqual([
-      "eval.start",
-      "eval.get",
-      "eval.get",
-    ]);
-    expect(call.mock.calls[1]?.[1]).toEqual([{ runId: "run:1" }]);
-  });
-
-  it("preserves a pre-start abort without manufacturing an external run or cancellation", async () => {
-    const abort = new AbortController();
-    const reason = new Error("stop before admission");
-    abort.abort(reason);
-    const call = vi.fn();
-    const execute = createEvalExecutor(call, { signal: abort.signal });
-    await expect(
-      execute({
-        runId: "run:unstarted",
-        source: { kind: "inline", code: "return 42" },
-      })
-    ).rejects.toBe(reason);
-    expect(call).not.toHaveBeenCalled();
-  });
-
-  it("uses the installed AbortSignal default without a DOMException global", async () => {
-    const signal = AbortSignal.abort("stop before admission");
-    const call = vi.fn();
-    vi.stubGlobal("DOMException", undefined);
-    try {
-      const execute = createEvalExecutor(call, { signal });
-      await expect(
-        execute({ runId: "run:unstarted", source: { kind: "inline", code: "return 42" } })
-      ).rejects.toMatchObject({ name: "AbortError" });
-      expect(call).not.toHaveBeenCalled();
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it("cancels the same caller-owned run when aborted", async () => {
-    const abort = new AbortController();
-    const call = vi.fn(async (method: string) => {
-      if (method === "eval.start") {
-        abort.abort(new Error("stop"));
-        return { runId: "run:1", status: "accepted" };
-      }
-      if (method === "eval.cancel") return { ok: true, forcedReset: false };
-      throw new Error(`unexpected ${method}`);
-    });
-    const execute = createEvalExecutor(call as unknown as EvalCall, { signal: abort.signal });
-
-    await expect(
-      execute({ runId: "run:1", source: { kind: "inline", code: "return 42" } })
-    ).rejects.toThrow("stop");
-    expect(call.mock.calls.map(([method]) => method)).toEqual(["eval.start", "eval.cancel"]);
-  });
-
-  it("registers a caller receiver and lets its terminal push win the polling race", async () => {
-    let resolveReceiver!: (result: typeof SUCCESS) => void;
-    let releasePollDelay!: () => void;
-    const call = vi
-      .fn()
-      .mockResolvedValueOnce({ runId: "run:1", status: "accepted" })
-      .mockResolvedValueOnce({ status: "running" });
-    const execute = createEvalExecutor(call, {
-      receiver: { kind: "caller" },
-      waitForReceiver: async () =>
-        new Promise((resolve) => {
-          resolveReceiver = resolve;
-        }),
-      pollDelay: async () =>
-        new Promise((resolve) => {
-          releasePollDelay = resolve;
-        }),
-    });
-
-    const result = execute({
-      runId: "run:1",
-      source: { kind: "inline", code: "return 42" },
-    });
-    await vi.waitFor(() => expect(releasePollDelay).toBeTypeOf("function"));
-    resolveReceiver(SUCCESS);
-    await expect(result).resolves.toEqual(SUCCESS);
-    releasePollDelay();
-    await Promise.resolve();
-
-    expect(call.mock.calls[0]?.[1]).toEqual([
-      expect.objectContaining({ resultReceiver: { kind: "caller" } }),
-    ]);
-    expect(call.mock.calls.map(([method]) => method)).toEqual(["eval.start", "eval.get"]);
-  });
-
-  it("composes push-primary agent deferral over a bare call function", async () => {
-    const call = vi
-      .fn()
-      .mockResolvedValueOnce({ runId: "run:1", status: "accepted" })
-      .mockResolvedValueOnce({ status: "running" });
-    const execute = createDeferredEvalExecutor(call);
-
-    await expect(
-      execute({
-        runId: "run:1",
-        source: { kind: "inline", code: "return 42" },
-        scope: { key: "channel:1" },
-      })
-    ).resolves.toEqual({ deferred: true });
-    expect(call.mock.calls).toEqual([
-      [
-        "eval.start",
-        [
-          expect.objectContaining({
-            resultReceiver: { kind: "caller" },
-            scope: { key: "channel:1" },
-          }),
-        ],
-      ],
-      ["eval.get", [{ runId: "run:1", scopeKey: "channel:1" }]],
-    ]);
-  });
-
-  it("exposes no retired public lifecycle methods", () => {
-    expect(Object.keys(evalMethods)).not.toEqual(
-      expect.arrayContaining(["run", "startRun", "getRun"])
-    );
-  });
-
   it("declares the typed lifecycle failure codes drivers branch on", () => {
     // Driver code references these literals; the spellings are load-bearing.
     expect(evalLifecycleFailureCodes.runtimeGenerationLost).toBe("runtime_generation_lost");
@@ -480,7 +216,7 @@ describe("eval lifecycle contract", () => {
     expect(evalLifecycleFailureCodes.deadlineExceeded).toBe("eval_deadline_exceeded");
   });
 
-  it("carries a lifecycle-stamped result through a cancelled settlement, defaulting to user cancel", async () => {
+  it("carries a lifecycle-stamped result through a cancelled settlement, defaulting to user cancel", () => {
     const generationLost = {
       success: false,
       console: "",
@@ -490,30 +226,20 @@ describe("eval lifecycle contract", () => {
       },
       failureKind: "infrastructure",
       failureCode: evalLifecycleFailureCodes.runtimeGenerationLost,
-    };
-    const stamped = vi
-      .fn()
-      .mockResolvedValueOnce({ runId: "run:1", status: "accepted" })
-      .mockResolvedValueOnce({ status: "cancelled", result: generationLost });
-    await expect(
-      createEvalExecutor(stamped, { pollDelay: async () => undefined })({
-        runId: "run:1",
-        source: { kind: "inline", code: "return 1" },
-      })
-    ).resolves.toEqual(generationLost);
-
-    const bare = vi
-      .fn()
-      .mockResolvedValueOnce({ runId: "run:2", status: "accepted" })
-      .mockResolvedValueOnce({ status: "cancelled" });
-    await expect(
-      createEvalExecutor(bare, { pollDelay: async () => undefined })({
-        runId: "run:2",
-        source: { kind: "inline", code: "return 1" },
-      })
-    ).resolves.toMatchObject({
+    } as const;
+    expect(settledResult({ status: "cancelled", result: generationLost })).toEqual(generationLost);
+    expect(settledResult({ status: "cancelled" })).toMatchObject({
       failureKind: "cancelled",
       failureCode: evalLifecycleFailureCodes.cancelled,
     });
+    expect(settledResult({ status: "running" })).toBeUndefined();
+    expect(() => settledResult({ status: "done" })).toThrow(/no result/);
+  });
+
+  it("has no result receiver: a result is pulled by run id", () => {
+    const base = { runId: "run:1", source: { kind: "inline", code: "return 42" } };
+    expect(
+      evalStartInputSchema.safeParse({ ...base, resultReceiver: { kind: "caller" } }).success
+    ).toBe(false);
   });
 });

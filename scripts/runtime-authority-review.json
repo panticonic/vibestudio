@@ -1,5 +1,5 @@
 {
-  "censusDigest": "sha256:c9f2fdc1266acbec10ca68aae44d33db46bb5818f4577357844f26c41675e637",
+  "censusDigest": "sha256:571f2b63d03046c72c3ef79c38de00cd6058220e260b01145c281c8916198f7f",
   "decisions": {
     "host:terminalApps.launch": {
       "review": "single-prepared-terminal-program-consent",
@@ -589,53 +589,9 @@
       "review": "bounded-payload-free-scheduler-diagnostics",
       "change": "Adds an open, read-only bounded inspection of host durable-work counters and phase timings. It exposes no work payloads, transcript content, credentials, or mutation authority."
     },
-    "host:eval.acknowledge": {
-      "review": "owner-authenticated-eval-acknowledgement-relay",
-      "change": "Routes exact immutable run/result digest acknowledgement to its owning EvalDO. Preserves terminal history and rejects mismatched receipt identity rather than treating it as successful cleanup."
-    },
-    "host:eval.cancel": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.deleteScopeValue": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.dispose": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds explicit release for an EvalDO whose immutable first activation declared it finite. The receiver derives the exact object from the verified owner and subkey, rejects persistent scopes, erases the finite object's durable records and loaded runtime, and retires it through the normal sealed lifecycle and cleanup reaper. Closing this owned finite resource is open and cannot address another caller's eval state. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.events": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the bounded durable cursor catch-up page for one caller-owned eval run. Live delivery remains on watched events; this read performs no execution, cancellation, reset, or authority acquisition. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.get": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Replaces the former asynchronous status method with the sole read-only recovery backstop for the caller-owned run id. The receiver derives the exact owner-scoped EvalDO from verified caller or live owner-session binding and returns only its bounded durable status, progress, and terminal result. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.readScopeTextPage": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.receipt": {
-      "review": "owner-authenticated-eval-receipt-relay",
-      "change": "Routes receipt inspection to the exact retained Eval run under the existing authenticated owner relationship. Receipt delivery never trusts a hint's result or imports foreign run ownership."
-    },
-    "host:eval.reset": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:eval.start": {
-      "review": "scoped-website-public-workspace-rpc",
-      "change": "Replaces the split blocking and asynchronous public eval entry points with one gated owner-scoped acceptance method. The caller must choose the run id before transport; the receiver derives owner, context, channel binding, and execution admission from verified host state, rejects semantic replay drift, and preserves the existing EvalDO terminal push. Adds the website principal to the ordinary workspace receiver contract where eligible. Connection alone grants no protected effect: receiver eligibility, capability/resource checks, ownership, context boundaries, and approvals still apply. Website-launched arbitrary execution retains its immutable subject and generation after document disconnect; revocation blocks subsequent protected effects. Closed administrative methods remain closed even when their service accepts website principals."
-    },
-    "host:evalEventIngress.publish": {
-      "review": "sealed-eval-kernel-observability",
-      "change": "Adds a host-only internal publication path for a persisted EvalDO event. The receiver validates the nonce-bound run and re-derives owner and initiating caller before emitting to watched transports; it accepts no caller-supplied audience. Only the live sealed EvalDO may publish through the host-minted sink for its exact runtime, context, and run. Guest execution sessions cannot impersonate kernel bookkeeping. Callback lifetime is detached from the completed initiating RPC."
-    },
     "host:evalExecutionRoots.retain": {
       "review": "sealed-eval-kernel-retention",
-      "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention. Retention is authenticated as the live sealed EvalDO and rechecks the exact active execution admission, run, and immutable imported artifact. Evaluated code cannot call this kernel-only bookkeeping receiver."
+      "change": "Adds host-only typed lifecycle bookkeeping that retains the exact validated execution artifact for the originating eval run. It creates no executable admission, changes no workspace or user state, and cannot widen or delete retention. Retention is authenticated as the live sealed session entity that hosts the kernel and rechecks the exact active execution admission, run, and immutable imported artifact. Evaluated code cannot call this kernel-only bookkeeping receiver."
     },
     "host:extensions.fetchRequestBodyChunk": {
       "review": "authenticated-website-extension-boundary",

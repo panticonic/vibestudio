@@ -742,7 +742,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
 
   /**
    * Like `dispatch`, but labels a deliberately long-running handler (the
-   * EvalDO's `executeRun`) so slow-call reporting is informational and coarse.
+   * eval kernel's `executeRun`) so slow-call reporting is informational and coarse.
    * All process-local DO dispatches leave semantic lifetime to their owner;
    * this method expresses observability intent, not a separate transport path.
    */
@@ -832,7 +832,7 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     // `DODispatch.dispatch` is the SERVER's internal service→DO channel (eval.start,
     // workspace methods, …), so the caller is always the server — stamp it so the
     // DO's converged envelope dispatch surfaces `callerKind: "server"` (e.g. the
-    // EvalDO server-only gate). Mirrors dispatchLifecycle/dispatchAlarm.
+    // eval kernel server-only gate). Mirrors dispatchLifecycle/dispatchAlarm.
     const serverCaller = await this.serverCaller(ref, method, args);
     signal?.throwIfAborted();
     const authorization = assertPresent(serverCaller.authorization);

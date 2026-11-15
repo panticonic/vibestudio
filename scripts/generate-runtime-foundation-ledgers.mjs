@@ -237,7 +237,7 @@ const directCapability = (source, method, sensitivity, declaration = "") => {
 };
 const builtinClassForFile = (file) => {
   if (!file.startsWith(path.join(root, "packages", "builtin"))) return null;
-  for (const className of ["WorkspaceStateDO", "WorkspaceDO", "BrowserDataDO", "EvalDO", "WebhookStoreDO"]) {
+  for (const className of ["WorkspaceStateDO", "WorkspaceDO", "BrowserDataDO", "WebhookStoreDO"]) {
     if (
       path.basename(file) === `${className}.ts` &&
       productBuiltinByIdentity("vibestudio/internal", className)
@@ -606,7 +606,7 @@ const executionRows = [
     "next-request",
     "execution.durable-object-push-rebuild",
   ],
-  ["eval-do", "exact-product-seed", "new-eval-incarnation", "execution.eval-do"],
+  ["eval-kernel", "resolved-exact-artifact", "new-eval-incarnation", "execution.eval-kernel"],
   ["vcs-store", "exact-product-seed", "bootstrap-manifest", "execution.vcs-store"],
   ["panel", "selected-source-ref", "explicit-reload-or-navigation", "execution.panel"],
   ["web-client", "resolved-exact-artifact", "load-update", "execution.client-web"],
@@ -655,7 +655,7 @@ const bootstrap = {
     ["context-binding", "ordinary-product-seeds"],
   ],
   forbiddenAboveRoot: [
-    "EvalDO",
+    "eval kernel",
     "VCS product service",
     "browser data",
     "webhook handlers",

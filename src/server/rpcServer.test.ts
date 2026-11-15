@@ -919,7 +919,7 @@ describe("RpcServer relay behavior", () => {
     const { server } = createServer();
     await expect(
       testServer(server).relayCall(
-        "do:workers/eval:EvalDO:eval",
+        "do:workers/session:SessionDO:eval",
         "do",
         {
           kind: "durable-object",
@@ -3242,10 +3242,10 @@ describe("RpcServer relay behavior", () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({}), { status: 200 }));
     vi.stubGlobal("fetch", fetchMock);
 
-    // A connectionless DO participant (e.g. an EvalDO subscribed to a channel via
+    // A connectionless DO participant (e.g. an internal DO subscribed to a channel via
     // connectViaRpc) holds NO ws connection. Pre-fix, this event was silently dropped
     // (getCallerConnections empty → the WS loop no-ops), hanging the subscriber.
-    handleRoute(server, createClient(), "do:vibestudio/internal:EvalDO:k", {
+    handleRoute(server, createClient(), "do:vibestudio/internal:WebhookStoreDO:k", {
       type: "event",
       fromId: "panel:nav-a",
       event: "channel:message",
@@ -3255,7 +3255,7 @@ describe("RpcServer relay behavior", () => {
     // Fire-and-forget HTTP delivery — assert the postToDO actually happened.
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const [url, init] = fetchMock.mock.calls[0]!;
-    expect(String(url)).toContain("EvalDO");
+    expect(String(url)).toContain("WebhookStoreDO");
     const body = String((init as RequestInit | undefined)?.body ?? "");
     expect(body).toContain("channel:message");
     expect(body).toContain("world");
@@ -4068,7 +4068,7 @@ describe("RpcServer relay behavior", () => {
   it("preserves admitted test-session policy in direct workspace-service acquisitions", async () => {
     const request = vi.fn(() => ({
       acquisitionId: "acq:test-models",
-      ownerRuntimeId: "do:vibestudio/internal:EvalDO:test-run",
+      ownerRuntimeId: "do:workers/session:SessionDO:test-run",
       snapshotDigest: "d".repeat(64),
       capability: "workspace-service:models",
       resourceKey: "do:workers/model-settings:ModelSettingsDO:workspace-model-settings",
@@ -4101,7 +4101,7 @@ describe("RpcServer relay behavior", () => {
         invalidate: vi.fn(),
       },
     });
-    const runtimeId = "do:vibestudio/internal:EvalDO:test-run";
+    const runtimeId = "do:workers/session:SessionDO:test-run";
     const digest = "a".repeat(64);
     const caller = createVerifiedCaller(
       runtimeId,
@@ -4298,10 +4298,10 @@ describe("RpcServer relay behavior", () => {
   it("admits hidden workspace-service test seams only for an attested system-test harness", async () => {
     const capability = "service:development.faultFailBuildAfterSnapshotRetained";
     const caller = createVerifiedCaller(
-      "do:vibestudio/internal:EvalDO:test-development-fault",
+      "do:workers/session:SessionDO:test-development-fault",
       "do",
       {
-        callerId: "do:vibestudio/internal:EvalDO:test-development-fault",
+        callerId: "do:workers/session:SessionDO:test-development-fault",
         callerKind: "do",
         repoPath: "workers/system-test-runner",
         effectiveVersion: "ev-runner",
@@ -4377,8 +4377,8 @@ describe("RpcServer relay behavior", () => {
     });
   });
 
-  it("attributes only explicitly marked EvalDO effects to the admitted execution", async () => {
-    const runtimeId = "do:vibestudio/internal:EvalDO:session-boundary";
+  it("attributes only explicitly marked eval kernel effects to the admitted execution", async () => {
+    const runtimeId = "do:workers/session:SessionDO:session-boundary";
     const nonce = "eval-session-nonce-1234";
     const session = {
       v: 2,
@@ -4968,7 +4968,7 @@ describe("RpcServer relay behavior", () => {
 
   it("does not inherit builtin requests for a userland class-name collision", () => {
     const { server } = createServer();
-    const receiver = "do:workers/untrusted:EvalDO:owner";
+    const receiver = "do:workers/untrusted:SessionDO:owner";
     const nonce = "host-minted-userland-eval-collision-nonce";
     const release = testServer(server).beginAuthorityParent(receiver, {
       nonce,

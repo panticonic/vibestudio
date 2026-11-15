@@ -55,7 +55,7 @@ Useful flags:
 - While that teardown is active the durable eval status is `cancelling`, not
   `cancelled`. Status waiters keep polling and the orchestrator plus descendant
   execution admissions remain authorized until cleanup settles.
-- `--detach` starts the durable EvalDO job and immediately returns its run ID.
+- `--detach` starts the durable eval run and immediately returns its run ID.
 - `--out-dir DIR` writes result artifacts below `DIR/<run-id>/`. The default is
   the CLI config root with mode `0600` files.
 
@@ -90,7 +90,7 @@ its ergonomic alias. `--poll-ms` controls the interval for either spelling.
 
 Each result records the channel ID, branch ID, agent entity/target, isolated
 context ID, model selection, and system-testing build provenance. The CLI keeps
-local routing metadata so status and inspection can address the same EvalDO
+local routing metadata so status and inspection can address the same eval
 scope across separate invocations.
 
 ## Repair loop

@@ -62,9 +62,7 @@ import type { panelRuntimeMethods } from "./panelRuntime.js";
 import type { phoneNativeEndpointMethods } from "./phoneNativeEndpoint.js";
 import type { remoteCredMethods } from "./remoteCred.js";
 import type { browserVaultNativeMethods } from "./browserVaultNative.js";
-import type { evalEventIngressMethods } from "./evalEventIngress.js";
 import type { autofillMethods } from "./autofill.js";
-import type { evalMethods } from "./eval.js";
 import type { dynamicCodeMethods } from "./dynamicCode.js";
 import type { browserEnvironmentMethods } from "./browserEnvironment.js";
 import type { hostPerformanceMethods } from "./hostPerformance.js";
@@ -78,7 +76,6 @@ import type { panelMethods } from "./panel.js";
 import type { fsMethods } from "./fs.js";
 import type { gitInteropMethods } from "./gitInterop.js";
 import type { mirrorMethods } from "./mirror.js";
-import type { evalEngineMethods } from "./evalEngine.js";
 import type { workspacePresenceMethods } from "./workspacePresence.js";
 import type { workspaceHubControlMethods } from "./workspaceHubControl.js";
 
@@ -142,9 +139,7 @@ export type MainRpcMethods = Methods<"governance", typeof governanceMethods> &
   Methods<"phoneNativeEndpoint", typeof phoneNativeEndpointMethods> &
   Methods<"remoteCred", typeof remoteCredMethods> &
   Methods<"browserVaultNative", typeof browserVaultNativeMethods> &
-  Methods<"evalEventIngress", typeof evalEventIngressMethods> &
   Methods<"autofill", typeof autofillMethods> &
-  Methods<"eval", typeof evalMethods> &
   Methods<"dynamicCode", typeof dynamicCodeMethods> &
   Methods<"browserEnvironment", typeof browserEnvironmentMethods> &
   Methods<"hostPerformance", typeof hostPerformanceMethods> &
@@ -158,7 +153,6 @@ export type MainRpcMethods = Methods<"governance", typeof governanceMethods> &
   Methods<"fs", typeof fsMethods> &
   Methods<"gitInterop", typeof gitInteropMethods> &
   Methods<"mirror", typeof mirrorMethods> &
-  Methods<"evalEngine", typeof evalEngineMethods> &
   Methods<"workspacePresence", typeof workspacePresenceMethods> &
   Methods<"hubControl", typeof workspaceHubControlMethods> &
   Methods<"panelCdp", typeof panelCdpMethods> &
@@ -236,9 +230,7 @@ const loaders = {
   remoteCred: async () => (await import("./remoteCred.js")).remoteCredMethods,
   browserVaultNative: async () =>
     (await import("./browserVaultNative.js")).browserVaultNativeMethods,
-  evalEventIngress: async () => (await import("./evalEventIngress.js")).evalEventIngressMethods,
   autofill: async () => (await import("./autofill.js")).autofillMethods,
-  eval: async () => (await import("./eval.js")).evalMethods,
   dynamicCode: async () => (await import("./dynamicCode.js")).dynamicCodeMethods,
   browserEnvironment: async () =>
     (await import("./browserEnvironment.js")).browserEnvironmentMethods,
@@ -253,7 +245,6 @@ const loaders = {
   fs: async () => (await import("./fs.js")).fsMethods,
   gitInterop: async () => (await import("./gitInterop.js")).gitInteropMethods,
   mirror: async () => (await import("./mirror.js")).mirrorMethods,
-  evalEngine: async () => (await import("./evalEngine.js")).evalEngineMethods,
   workspacePresence: async () => (await import("./workspacePresence.js")).workspacePresenceMethods,
   hubControl: async () => (await import("./workspaceHubControl.js")).workspaceHubControlMethods,
 };

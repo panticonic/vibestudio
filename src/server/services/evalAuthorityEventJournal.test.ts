@@ -15,7 +15,7 @@ function event(
 }
 
 describe("EvalAuthorityEventJournal", () => {
-  it("accepts a re-entrant observation without awaiting its EvalDO write", async () => {
+  it("accepts a re-entrant observation without awaiting its eval kernel write", async () => {
     let release!: () => void;
     const pending = new Promise<void>((resolve) => {
       release = resolve;
@@ -30,7 +30,7 @@ describe("EvalAuthorityEventJournal", () => {
     await journal.close();
   });
 
-  it("preserves per-EvalDO event order without serializing independent EvalDOs", async () => {
+  it("preserves per-eval kernel event order without serializing independent eval kernels", async () => {
     let releaseFirst!: () => void;
     const first = new Promise<void>((resolve) => {
       releaseFirst = resolve;
@@ -51,11 +51,12 @@ describe("EvalAuthorityEventJournal", () => {
     await journal.close();
 
     expect(dispatch).toHaveBeenCalledTimes(3);
-    // Through the session entity that hosts the kernel, on its host-only settlement path.
-    expect(dispatch.mock.calls[2]?.slice(1, 4)).toEqual([
-      "settle",
-      "appendAuthorityEvent",
-      ["run-1", "authority-decided", expect.anything()],
+    // Through the session entity that hosts the kernel, on its host-only method for host-observed facts.
+    expect(dispatch.mock.calls[2]?.slice(1, 5)).toEqual([
+      "recordAuthorityEvent",
+      "run-1",
+      "authority-decided",
+      expect.anything(),
     ]);
   });
 

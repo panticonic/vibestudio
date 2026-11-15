@@ -26,7 +26,7 @@ import {
 import { createMainRpcCaller } from "./mainRpc.js";
 
 /** The run's intent: what to run and the authority it may use. The host adds every trusted fact. */
-export const dynamicCodeAdmitInputSchema = evalStartInputSchema.omit({ resultReceiver: true });
+export const dynamicCodeAdmitInputSchema = evalStartInputSchema;
 export type DynamicCodeAdmitInput = z.infer<typeof dynamicCodeAdmitInputSchema>;
 
 export const dynamicCodeHostRefSchema = z
@@ -258,8 +258,7 @@ export async function startDynamicCodeRun(
   started: { runId: string; runDigest?: string; status: string };
 }> {
   const main = createMainRpcCaller(rpc);
-  const { resultReceiver: _receiver, ...intent } = input;
-  const admission = await main("dynamicCode.admit", [intent]);
+  const admission = await main("dynamicCode.admit", [input]);
   const observer = createDynamicCodeRunObserver(rpc, {
     hostId: admission.hostId,
     runId: admission.runId,

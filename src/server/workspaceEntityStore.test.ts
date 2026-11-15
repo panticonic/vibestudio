@@ -5,7 +5,7 @@ import type { DODispatch } from "./doDispatch.js";
 import { WorkspaceEntityStore, type WorkspaceEntityStoreDeps } from "./workspaceEntityStore.js";
 
 const RECORD: EntityRecord = {
-  id: "do:vibestudio/internal:EvalDO:abc",
+  id: "do:vibestudio/internal:SessionDO:abc",
   authoritySessionId: "authority:entity-test",
   kind: "do",
   source: { repoPath: "vibestudio/internal", effectiveVersion: "internal" },
@@ -48,7 +48,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do" as const,
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
       activeExecutionDigest: "e".repeat(64),
     };
@@ -89,7 +89,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do" as const,
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
     };
     const result = await store.activate(input);
@@ -126,7 +126,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do",
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
       agentBinding,
     });
@@ -272,7 +272,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do",
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
     });
 
@@ -290,7 +290,7 @@ describe("WorkspaceEntityStore", () => {
             kind: "do",
             source: RECORD.source,
             contextId: RECORD.contextId,
-            className: "EvalDO",
+            className: "SessionDO",
             key: RECORD.key,
           },
         ],
@@ -309,7 +309,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do",
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
     });
 
@@ -334,7 +334,7 @@ describe("WorkspaceEntityStore", () => {
       kind: preparing.kind,
       source: preparing.source,
       contextId: preparing.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: preparing.key,
     });
 
@@ -352,7 +352,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do",
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
     });
     expect(entityCache.resolveActive(RECORD.id)).toEqual(RECORD);
@@ -397,7 +397,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do",
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
     });
     returned.source.effectiveVersion = "tampered";
@@ -420,7 +420,7 @@ describe("WorkspaceEntityStore", () => {
         kind: "do",
         source: RECORD.source,
         contextId: RECORD.contextId,
-        className: "EvalDO",
+        className: "SessionDO",
         key: RECORD.key,
       });
       const original = await store.resolveInvocationRecord(RECORD.id);
@@ -451,7 +451,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do",
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
     });
     entityCache.hydrate([], entityCache.beginHydration());
@@ -516,7 +516,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do",
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
     });
     const retirement = store.retire(RECORD.id);
@@ -550,7 +550,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do",
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
     });
     const write = store.retire(RECORD.id);
@@ -574,7 +574,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do" as const,
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
     };
     const next = { ...RECORD, source: { ...RECORD.source, effectiveVersion: "replacement" } };
@@ -613,7 +613,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do" as const,
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
     };
     const replacement = { ...RECORD, activeExecutionDigest: "e".repeat(64) };
@@ -645,7 +645,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do" as const,
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
     };
     const { store, entityCache } = makeStore({
@@ -670,7 +670,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do",
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
     });
     const changes: string[] = [];
@@ -726,7 +726,7 @@ describe("WorkspaceEntityStore", () => {
       kind: "do" as const,
       source: RECORD.source,
       contextId: RECORD.contextId,
-      className: "EvalDO",
+      className: "SessionDO",
       key: RECORD.key,
     };
     await store.activate(current);
@@ -774,7 +774,7 @@ describe("WorkspaceEntityStore", () => {
         kind: "do",
         source: RECORD.source,
         contextId: RECORD.contextId,
-        className: "EvalDO",
+        className: "SessionDO",
         key: RECORD.key,
         activeBuildKey: "b".repeat(64),
         activeExecutionDigest: "e".repeat(64),

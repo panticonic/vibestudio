@@ -1753,11 +1753,11 @@ resolves exact source by the host service it already calls).
   `onEvalComplete`, `onEvalProgress`, the event-sink push routes
   (`evalEventIngress`, `eventSinks`), `acknowledge`, `eval_result_redeliveries`
   with its 5 s to 5 min backoff and its alarm.
-- **Consumers of the push model today:** Base's `agentic-do`
+- **Consumers of the push model** were Base's `agentic-do`
   (`native-eval-tool.ts`, `native-agent-owner.ts`, `agent-vessel.ts`,
   `rpc-contract.ts`), `harness/src/tools/eval.ts`, the CLI (`evalCommand.ts`),
-  and the system-test runner. About 51 files in Base reference the eval client.
-  They move to `await`.
+  the natlang panel, the system-test runner and the website acceptance spec.
+  All of them pull now (§7.5.2); none of the deleted pieces has a caller.
 
 #### 7.5.1 The kernel call contract (decided 2026-11-14, before step 3c and 4)
 
@@ -1827,7 +1827,7 @@ happens" polls `events` or issues `await` with a short `waitMs`.
 
 #### 7.5.2 As built: the pull callers (2026-11-15)
 
-**The host service `dynamicCode`** (`src/server/services/evalService.ts`, schema
+**The host service `dynamicCode`** (`src/server/services/dynamicCodeService.ts`, schema
 `packages/service-schemas/src/dynamicCode.ts`) has four methods and is the only host surface a pull caller uses:
 
 | Method    | What it does                                                                                                                                                                                                                                                                                                                         |
@@ -1847,7 +1847,7 @@ release; abort cancels on the entity), and `startDynamicCodeRun` + `createDynami
 `createDynamicCodeScope` for a caller that outlives one call (the system-test runner keeps the entity's id and
 pulls from a later activation).
 
-**A pull caller has no event sink** (`eventSinkNonce` is optional in the admission and the executor fact), so
+**A pull caller has no event sink** (the `eventSinkNonce` of the admission and the executor fact is gone), so
 nothing tells the host that its run ended. The execution session is released by `release`; if the caller died
 between `admit` and `release`, **the admission of the next run reconciles**: a run that waits for the entity's one
 live admission asks the hosting entity (`get`, a pull of the host's own) every 2 s whether the holder ended and
@@ -1858,16 +1858,43 @@ running run is never taken.
 `repl-reset`: `evalCommand.ts`; the approval observer reads `authority-requested` and `authority-decided` from
 the pulled events; `mobile-smoke.mjs` only runs the CLI), the natlang panel (`runtimePorts.ts`), the system-test
 runner worker and the harness probes (`probeEvalCancellation`, `probeEvalEventPages`, the new
-`probeEvalDeadlineRecovery`).
+`probeEvalDeadlineRecovery`), the agent, and the website acceptance spec (below).
 
-**Not moved, so the push machinery stays:** the agent (`native-eval-tool.ts`, `native-eval-receipts.ts`,
-`native-agent-owner.ts`, `agent-vessel.ts`, `harness/src/tools/eval.ts`) and the website acceptance spec. They use
-the `eval` service, `resultReceiver`, `onEvalComplete` and `onEvalProgress`, `eval.acknowledge`, and through them
-the host tail, `settle`, the ingress, roots and journal services. The reasons and the design are in the
-handoff; the three channels still pushed are (a) live events (`evalEventIngress`, `onEvalProgress`), (b) authority
-events (`EvalAuthorityEventJournal` through `SessionDO.settle`; the kernel keeps them in `run_events`, so a pull
-caller already sees them in `events`), and (c) execution roots (`evalExecutionRoots.retain`, `listRetainedExecutionRoots`
-through `settle`).
+**The agent pulls too** (Base `packages/agentic-do`, 2026-11-15). The owner is durable and may restart in the
+middle of a run, so its pull is a durable background task and the receipt is accepted in one transaction:
+
+- `native-eval-tool.ts` `execute`: `dynamicCode.admit`, then `start` on the session entity (the same
+  `startDynamicCodeRun`, with `keepAdmissionOnFailure` so a lost start response is retried under the same
+  admission), records the run's digest in its retained admission document, reads `receipt`; a run that is
+  already terminal is accepted at once, otherwise it creates the **`vibestudio.eval-await` task** (once; the
+  admission document remembers its id) and parks the tool call on the receipt wait it always had.
+- **The await task** (`native-eval-receipts.ts` `createNativeEvalAwait`, `background: true`) pulls `await` and
+  `events` from the session entity for at most 15 s, hands each page of events to the vessel
+  (`publishEvalEvents`: console becomes `invocation.output`, authority events become `invocation.progress`),
+  checkpoints the last handed-over sequence, and then sleeps 0.5 s (`sleepUntil`) so that the owner's wake-up
+  pass, which waits for every live invocation, is never held for the length of a run. A failed pull sleeps and
+  retries with backoff (2 s to 60 s); a refusal that retrying cannot change (`ENOTFOUND`, `EACCES`, `EINVAL`,
+  or a run its kernel does not know) is parked as an exact repair incident. On a terminal row it releases the
+  admission and commits, in **one transaction**, the receipt acceptance that resolves the parked call, the
+  acknowledgement task, and its own completion. A restart of the owner finds the task still live and pulls
+  again: the committed row is read once, the receipt is accepted once, the cell is not started again.
+- **Acknowledgement** is `SessionDO.acknowledge(runId, identity)`, a relay to the kernel's
+  `acknowledgeRunResult` under the run's nonce, called by the existing acknowledgement task. It is the
+  durable record that the owner consumed exactly this result; the kernel refuses a changed result afterwards.
+- **Cancellation** (`cancel` of the tool, and the chat pill's `cancelEval`) is `cancel` on the entity, a
+  `receipt` read, the receipt accepted, and `release`.
+- Gone from the agent: `resultReceiver`, `onEvalComplete`, `onEvalProgress`, `consumeEvalReceipt`, the
+  completion hint's caller checks. Gone from the kernel: the console streamer, the progress push, the live
+  event push to the ingress, `failPendingRun`.
+
+**What the host keeps, and why it is not delivery.** Two interlocks involve facts only the host holds, and
+they are calls from the host to the hosting entity, never a result or event delivery to a caller:
+(b) the authority events its observer sees (`EvalAuthorityEventJournal` calls the session's host-only
+`recordAuthorityEvent`; the kernel stores them in `run_events` so every puller already sees them in `events`),
+and (c) the publication interlock for workspace bundles a notebook imports (`evalExecutionRoots.retain`
+calls the session's host-only `retainExecutionRoot`; the root provider lists `executionRoots`). The earlier
+string-dispatched `settle` is gone. Moving (b) to a pull (the kernel asking the host for the events of its
+runs on each `events` call) costs a host round trip per poll and a second cursor, and was not done.
 
 ### 7.6 Eval is ordinary code
 
@@ -2061,12 +2088,21 @@ Rebuild what you need from stable IDs, files, or durable records ...`, directly 
 | tests of removed paths (`evalService.test.ts`, ingress and roots tests, part of `EvalDO.redelivery.test.ts`)                                                                                                     | ~3,100                   |
 | the per-run liveness supervisor and its `activity` lease (D4, §7.8)                                                                                                                                              | ~110                     |
 
-Deleted outright: `appendAuthorityEvent`, `failPendingRun`,
-`acknowledgeRunResult`, `retainExecutionRoot`, `listRetainedExecutionRoots`, the
-callbacks `evalEventIngress.publish` and `evalExecutionRoots.retain`, and the
-three lease methods (P2a). Kept as the kernel's ordinary methods: `start`,
-`await`, `get`, `receipt`, `events`, `cancel`, `reset`, `readScopeTextPage`,
-`deleteScopeValue`.
+**As done (2026-11-15).** Deleted: the `eval` host service and its file (`evalService.ts` is now
+`dynamicCodeService.ts`, the `dynamicCode` service alone: admission, release, reset, dispose), the host tail and
+its backoff redelivery, `resultReceiver`, `onEvalComplete` and `onEvalProgress`, `eval.acknowledge`, the
+`evalEngine` schema (`EVAL_ENGINE_HOST_CONTRACT_VERSION` too: nothing compared it), `evalEventIngress` (the
+service, its schema, the event-sink registry, the kernel's live push), `evalMethods`, `createEvalExecutor` and
+the other push-era client helpers, `failPendingRun`, the string-dispatched `settle`, the `eventSinkNonce` of the
+executor fact, ten `host:eval.*` and the `host:evalEventIngress.publish` review rows, and the three lease methods
+(P2a). **Kept, with a different shape:** `acknowledgeRunResult` (the principal's durable acknowledgement,
+through `SessionDO.acknowledge`), and `appendAuthorityEvent`, `retainExecutionRoot`,
+`listRetainedExecutionRoots` (host-to-entity calls for facts only the host holds, now the session's host-only
+`recordAuthorityEvent`, `retainExecutionRoot` and `executionRoots`; §7.5.2). Kept as the kernel's ordinary
+methods: `start`, `await`, `get`, `receipt`, `events`, `cancel`, `reset`, `readScopeTextPage`,
+`deleteScopeValue`. `eval_result_redeliveries` and the product `EvalDO` went with step 4; the legacy
+`EvalDO` entity id survives only in the D5 migration (`legacyEvalDoRuntimeId`, the admission's
+`legacyNotebookDropped`).
 
 ### 7.12 Order, and where P2b stands
 
@@ -2105,15 +2141,20 @@ Each step is a complete cut that keeps the system working.
    packages (`@workspace/eval`, `@workspace/runtime`, `@workspace/natlang`,
    `@workspace/cdp-client`), overridable by the class's env.
 5. **Pull** (§7.5) for each consumer in turn, with the push machinery deleted when the last has moved.
-   **Done:** the admission as a host service (`dynamicCode`, §7.5.2), the CLI, the natlang panel, the system-test
-   runner and its harness probes. **Not done:** the agent and the website acceptance spec.
+   **Done** (2026-11-15): the admission as a host service (`dynamicCode`, §7.5.2), the CLI, the natlang panel,
+   the system-test runner and its harness probes, **the agent** (an `eval-await` background task and
+   `SessionDO.acknowledge`, §7.5.2) and the website acceptance spec (type-checked; it needs the desktop app
+   and was not run).
 6. **The liveness supervisor** went with step 4 (the kernel's unit carries `limits.cpuMs`; a run's `timeoutMs`
-   bounds its call, §7.8); **`evalService` and the push machinery are deleted when the last caller has moved**
-   (`evalService` down to `dynamicCode`, the ingress, roots and journal services, `settle`, the host tail,
-   `evalEngineMethods`, `resultReceiver`, the push routes, `eval_result_redeliveries`, their schemas, catalog and
-   ledger rows). **Not started.** Done since step 4: a run's `timeoutMs` bounds its CPU (§7.8, celld `ec0d6f5`),
-   a run ended by its CPU limit is settled by its deadline (§7.8, celld `2d1749d`, Base `bd89d94`), the D5 restart
-   report is a message (§7.10), the cost of a kernel run is measured (§7.7).
+   bounds its call, §7.8); **`evalService` and the push machinery are deleted** (§7.11 "As done"). **Done.**
+   Done since step 4: a run's `timeoutMs` bounds its CPU (§7.8, celld `ec0d6f5`), a run ended by its CPU limit
+   is settled by its deadline (§7.8, celld `2d1749d`, Base `bd89d94`), the D5 restart report is a message
+   (§7.10), the cost of a kernel run is measured (§7.7).
+7. **Not done:** the agent hosting its own kernel (`hosts` in the agent classes' manifests, `onHostedRevoked`,
+   the executor fact renamed from `kind: "eval"`). The agent's kernel is hosted by its session entity, which is
+   what the host places that name the session entity (`isEvalHostRecord`: approvals, webhooks, authority
+   runtime, live caller) and `chatOp`'s `assertOwnEvalCaller` already expect; self-hosting is a change to all of
+   them and is not needed for any deletion above.
 
 ---
 

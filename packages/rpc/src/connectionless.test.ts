@@ -8,7 +8,7 @@ import {
 import { bindExecutionSession, createInternalConnectionlessRpcClient } from "./internal.js";
 import type { RpcEnvelope } from "./types.js";
 
-const SELF = "do:test:EvalDO:obj1";
+const SELF = "do:test:SessionDO:obj1";
 
 function caller() {
   return { callerId: "main", callerKind: "server" as const };

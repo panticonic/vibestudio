@@ -692,7 +692,7 @@ describe.skipIf(!celldBinary)("UniversalDO facet host (real celld)", () => {
   });
   it("confines code generation: a userland object cannot compile what it was not deployed with", async () => {
     // P2 confinement gate (docs/dolt-redesign.md section 10): only the isolate pool of a class the
-    // deployment declares `codegen` (EvalDO today, the kernel facet's loader grant later) compiles.
+    // deployment declares `codegen` (eval kernel today, the kernel facet's loader grant later) compiles.
     active = await createHarness({ "workers/counter": doBuild("workers/counter", "ev-1") });
     const { manager, dispatch } = active;
     await manager.ensureDOClass("workers/counter", "CounterDO");
@@ -1805,7 +1805,13 @@ export default { fetch() { return new Response("chunked host"); } };`;
       await code(dispatch, a, callKernel("run", "1"));
       await code(dispatch, a, callKernel("run", "2"));
       const restarted = JSON.parse(
-        (await code(dispatch, a, { op: "restart", name: "repl:default", executable: hostKernel.executable })).body
+        (
+          await code(dispatch, a, {
+            op: "restart",
+            name: "repl:default",
+            executable: hostKernel.executable,
+          })
+        ).body
       );
       expect(restarted).toEqual({ restarted: true });
       // The heap is new (the run counter starts over) and the committed history is intact.
@@ -1816,7 +1822,11 @@ export default { fetch() { return new Response("chunked host"); } };`;
       expect(
         JSON.parse(
           (
-            await code(dispatch, a, { op: "restart", name: "repl:other", executable: hostKernel.executable })
+            await code(dispatch, a, {
+              op: "restart",
+              name: "repl:other",
+              executable: hostKernel.executable,
+            })
           ).body
         )
       ).toEqual({ restarted: false });

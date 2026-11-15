@@ -247,7 +247,7 @@ export interface VerifiedCodeIdentity {
   /** Immutable requests sealed into the exact execution recipe. */
   requested?: readonly import("@vibestudio/rpc").CapabilityScope[];
   /**
-   * Host-verified owner projection for a concrete EvalDO. This is attribution
+   * Host-verified owner projection for a concrete eval kernel. This is attribution
    * only; dynamic authority comes from an ExecutionAdmissionFact.
    */
   evalOrigin?: {
@@ -445,7 +445,7 @@ export type ServiceContext = {
    * can never populate this field.
    */
   attachedHost?: import("@vibestudio/rpc").AttachedHostExecutionFact;
-  /** Verified root initiator for prompts/audit when a deputy (notably EvalDO)
+  /** Verified root initiator for prompts/audit when a deputy (notably eval kernel)
    * transports the operation. Domain routing still uses `caller`. */
   authorizingCaller?: VerifiedCaller;
   /** Immediate authenticated caller entering this live deputy invocation. Artifact ownership only; never domain routing or grants. */

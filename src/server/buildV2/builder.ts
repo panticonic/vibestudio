@@ -939,7 +939,7 @@ export function createWorkspaceResolvePlugin(
   // source would be bundled even when listed in `external`. Honor the externals
   // here (exact match) so caller-provided externals actually win. Used by eval
   // library builds to keep `@workspace/runtime` (and other host-provided modules)
-  // OUT of the bundle: they must resolve at runtime to the EvalDO's hosted `rt`,
+  // OUT of the bundle: they must resolve at runtime to the eval kernel's hosted `rt`,
   // not the panel entry (whose top-level `initRuntime()` crashes in a DO isolate).
   const externalSet = new Set(externalSpecifiers);
   return {
@@ -5824,7 +5824,7 @@ async function buildLibraryBundle(
   try {
     // A library's provided peers belong to the realm that loads it, so they are
     // external here whether or not this caller named them. `externals` is what
-    // the loading realm already has (a panel's module map, EvalDO's private
+    // the loading realm already has (a panel's module map, eval kernel's private
     // map) and is empty when the build is only verifying the unit -- so absence
     // from it says nothing. What matters is that the bundle never carries its
     // own copy: a package the realm also has would become a second live
@@ -5867,7 +5867,7 @@ async function buildLibraryBundle(
           // `conditions` selects each workspace package's export entry by execution
           // target (panel vs worker/eval). Pass `externals` to the resolve plugin
           // too: esbuild's `external` option alone is bypassed because this plugin's
-          // onResolve handles `@workspace/*` first. The host (EvalDO) provides those
+          // onResolve handles `@workspace/*` first. The host (eval kernel) provides those
           // externals at runtime via its module map.
           createWorkspaceResolvePlugin(graph, sourceRoot, conditions, libraryExternals),
           createTsExtensionPlugin(sourceRoot),

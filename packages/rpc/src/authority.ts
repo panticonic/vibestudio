@@ -202,7 +202,6 @@ export type ExecutionAdmissionExecutor =
       runtimeId: string;
       evalRunId: string;
       authorityManifest: EvalAuthorityManifest;
-      eventSinkNonce?: string;
     }
   | {
       kind: "method";
@@ -278,7 +277,7 @@ export interface AgentExecutionTestPolicySpec {
 }
 
 /**
- * Host-created proof that one concrete EvalDO run belongs to a live task,
+ * Host-created proof that one concrete eval kernel run belongs to a live task,
  * approved mission, or test policy. It is relationship evidence, never a
  * capability token and never accepted from caller input.
  */

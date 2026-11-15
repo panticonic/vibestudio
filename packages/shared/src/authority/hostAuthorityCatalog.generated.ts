@@ -3427,139 +3427,6 @@ export const HOST_AUTHORITY_METHODS = {
       },
     },
   },
-  "eval.acknowledge": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.control",
-      rationale: "Owner-scoped acknowledgement neither executes code nor deletes retained data.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "eval.cancel": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.retire",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "eval.deleteScopeValue": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.retire",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "eval.dispose": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.control",
-      rationale:
-        "Owned-resource release: the host admits disposal only when this caller declared the isolated EvalDO finite at its immutable first activation",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "eval.events": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.control",
-      rationale: "Owner-scoped bounded read of durable eval lifecycle events",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "eval.get": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.read",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "eval.readScopeTextPage": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.read",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "eval.receipt": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.read",
-      rationale: "Owner-scoped read of an immutable result; no new execution or authority.",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "eval.reset": {
-    tier: {
-      tier: "critical",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.control",
-      rationale:
-        "C3: irreversible destruction outside VCS protection; §2 default {code, session} family",
-    },
-    capability: "code-runner.reset",
-    presentation: {
-      title: "Reset the code runner",
-      action: "reset the code runner",
-      description: "Clear the code runner and start fresh.",
-      group: "runtime",
-      authorityCategory: {
-        domain: "automation",
-        verb: "act",
-      },
-    },
-  },
-  "eval.start": {
-    tier: {
-      tier: "open",
-      session: "family",
-      residency: "untrusted-execution",
-      family: "eval.create",
-      rationale: "Open bias: no C1-C4 or G1-G5 rule applies; §2 default {code, session} family",
-    },
-    capability: null,
-    presentation: null,
-  },
-  "evalEventIngress.publish": {
-    tier: {
-      tier: "open",
-      session: "codeOnly",
-      residency: "observability",
-      family: "evalEventIngress.mutate",
-      rationale:
-        "Host-internal observability ingress; exact EvalDO/run/owner session binding is re-derived by the receiver",
-    },
-    capability: null,
-    presentation: null,
-  },
   "evalExecutionRoots.retain": {
     tier: {
       tier: "open",
@@ -3567,7 +3434,7 @@ export const HOST_AUTHORITY_METHODS = {
       residency: "untrusted-execution",
       family: "evalExecutionRoots.control",
       rationale:
-        "Sealed eval kernel bookkeeping; exact live EvalDO/run admission and immutable artifact identity are re-derived and verified",
+        "Sealed eval kernel bookkeeping; exact live eval kernel/run admission and immutable artifact identity are re-derived and verified",
     },
     capability: null,
     presentation: null,

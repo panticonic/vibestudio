@@ -166,7 +166,7 @@ function workerCaller(
 }
 
 function evalCaller(agentId: string, effectiveVersion = "hash-1") {
-  const callerId = `do:vibestudio/internal:EvalDO:${effectiveVersion}`;
+  const callerId = `do:workers/session:SessionDO:${effectiveVersion}`;
   return createVerifiedCaller(
     callerId,
     "do",

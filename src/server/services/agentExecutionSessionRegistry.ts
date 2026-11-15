@@ -204,7 +204,7 @@ export class AgentExecutionSessionRegistry {
       authoritySessionVersion: (retained?.authoritySessionVersion ?? 0) + 1,
       ...input,
       issuedAt,
-      // A warm EvalDO is a notebook history, not a sequence of unrelated
+      // A warm eval kernel is a notebook history, not a sequence of unrelated
       // programs. Keep its trust identity for the same retention window as its
       // live heap; individual cell completion only releases the execution slot.
       expiresAt: input.expiresAt ?? issuedAt + 7 * 24 * 60 * 60 * 1_000,
@@ -302,9 +302,9 @@ export class AgentExecutionSessionRegistry {
   }
 
   /**
-   * Acquire the one live admission for an EvalDO in FIFO order.
+   * Acquire the one live admission for an eval kernel in FIFO order.
    *
-   * EvalDO deliberately serializes runs because they share one persistent
+   * eval kernel deliberately serializes runs because they share one persistent
    * scope. Admission mirrors that existing execution queue instead of rejecting
    * concurrent callers before they reach it. There is no invented wait
    * deadline: the inbound RPC's cancellation signal owns abandonment.
@@ -369,7 +369,7 @@ export class AgentExecutionSessionRegistry {
 
   /**
    * Resolve the admission claimed by one outbound evaluated-execution effect.
-   * Runtime identity alone is insufficient: the EvalDO also performs its own
+   * Runtime identity alone is insufficient: the eval kernel also performs its own
    * lifecycle work while a run is admitted.
    */
   resolveInvocation(runtimeId: string, nonce: string): ExecutionAdmissionFact | null {
@@ -565,8 +565,6 @@ export class AgentExecutionSessionRegistry {
 
 function sameAdmission(fact: ExecutionAdmissionFact, input: AdmissionInput): boolean {
   if (fact.executor.kind !== "eval") return false;
-  const { eventSinkNonce: _factSink, ...factEval } = fact.executor;
-  const { eventSinkNonce: _inputSink, ...inputEval } = input.executor;
   return (
     JSON.stringify(fact.authorityOrigin ?? null) ===
       JSON.stringify(input.authorityOrigin ?? null) &&
@@ -579,7 +577,7 @@ function sameAdmission(fact: ExecutionAdmissionFact, input: AdmissionInput): boo
     fact.taskAuthority === input.taskAuthority &&
     JSON.stringify(fact.agentBinding) === JSON.stringify(input.agentBinding) &&
     JSON.stringify(fact.executionImage) === JSON.stringify(input.executionImage) &&
-    JSON.stringify(factEval) === JSON.stringify(inputEval) &&
+    JSON.stringify(fact.executor) === JSON.stringify(input.executor) &&
     JSON.stringify(fact.attachedHost ?? null) === JSON.stringify(input.attachedHost ?? null) &&
     JSON.stringify(fact.causalParent) === JSON.stringify(input.causalParent) &&
     JSON.stringify(fact.parent) === JSON.stringify(input.parent) &&
@@ -614,7 +612,7 @@ function sameGenericAdmission(
 }
 
 /**
- * Identity that owns one warm EvalDO notebook heap. Cell-local provenance
+ * Identity that owns one warm eval kernel notebook heap. Cell-local provenance
  * (run id, task ref, causal parent, manifest and event sink) deliberately does
  * not participate: those facts advance on every cell without changing who
  * owns the surviving modules and objects.

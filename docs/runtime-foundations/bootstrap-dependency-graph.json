@@ -66,7 +66,7 @@
     ]
   ],
   "forbiddenAboveRoot": [
-    "EvalDO",
+    "eval kernel",
     "VCS product service",
     "browser data",
     "webhook handlers",

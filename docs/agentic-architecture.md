@@ -159,7 +159,7 @@ lease expiry, or recovery scan.
 Workspace and framework state lives in Durable Objects:
 
 - Agent and channel workers own their own `this.sql` schema.
-- `EvalDO` runs sandbox eval server-side and stores per-owner REPL scope (one per caller, behind the `eval` service).
+- The eval kernel (`EvalKernel`, hosted by a per-owner session entity, admitted through the `dynamicCode` service) runs sandbox eval server-side and stores per-owner REPL scope (one per caller and scope key; docs/dolt-redesign.md §7).
 - `WorkspaceDO` stores panel tree state and panel search FTS (replaced the former `PanelStoreDO`).
 - `BrowserDataDO` stores imported browser data and history FTS.
 - `WebhookStoreDO` stores webhook ingress subscriptions.

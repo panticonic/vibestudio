@@ -129,7 +129,7 @@ model-call evidence by `native-model-evidence.ts`.
 Agent session state is owned by the pi-durable `Harness` and persisted in the
 agent DO's storage. Vibestudio framework state uses internal Durable Objects:
 
-- `EvalDO` for per-owner sandbox-eval REPL scopes (behind the `eval` service).
+- Eval REPL scopes are not an internal DO: each owner's kernel (`EvalKernel`, a Dolt class) is hosted by a per-owner session entity (`workers/session`), admitted through the `dynamicCode` service (docs/dolt-redesign.md §7).
 - `WorkspaceDO` for panel tree and search (replaced the former `PanelStoreDO`).
 - `BrowserDataDO` for imported browser data.
 - `WebhookStoreDO` for webhook subscriptions.

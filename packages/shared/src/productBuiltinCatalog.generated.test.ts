@@ -49,10 +49,16 @@ describe("generated product builtin catalog", () => {
   });
 
   it("does not confer builtin identity on a userland class-name collision", () => {
-    expect(productBuiltinByIdentity("workers/untrusted", "EvalDO")).toBeNull();
-    expect(productBuiltinMethodCapability("workers/untrusted", "EvalDO", "executeRun")).toBeNull();
-    expect(productBuiltinMethodPolicy("workers/untrusted", "EvalDO", "executeRun")).toBeNull();
-    expect(productBuiltinMethodRequests("workers/untrusted", "EvalDO", "executeRun")).toEqual([]);
+    expect(productBuiltinByIdentity("workers/untrusted", "WorkspaceStateDO")).toBeNull();
+    expect(
+      productBuiltinMethodCapability("workers/untrusted", "WorkspaceStateDO", "entityResolve")
+    ).toBeNull();
+    expect(
+      productBuiltinMethodPolicy("workers/untrusted", "WorkspaceStateDO", "entityResolve")
+    ).toBeNull();
+    expect(
+      productBuiltinMethodRequests("workers/untrusted", "WorkspaceStateDO", "entityResolve")
+    ).toEqual([]);
   });
 
   it("projects no outbound authority for a product method: eval is hosted code, not a product class", () => {

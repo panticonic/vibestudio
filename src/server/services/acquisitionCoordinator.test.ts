@@ -2471,7 +2471,7 @@ describe("AcquisitionCoordinator", () => {
     });
     const notifyOwner = vi.fn();
     const snap = snapshot();
-    const caller = createVerifiedCaller("do:vibestudio/internal:EvalDO:test", "do");
+    const caller = createVerifiedCaller("do:workers/session:SessionDO:test", "do");
     const coordinator = new AcquisitionCoordinator({
       approvalQueue: { request: vi.fn(async () => "deny" as const) } as never,
       grantStore,
@@ -2540,7 +2540,7 @@ describe("AcquisitionCoordinator", () => {
       settle = resolve;
     });
     const snap = snapshot();
-    const caller = createVerifiedCaller("do:vibestudio/internal:EvalDO:test", "do");
+    const caller = createVerifiedCaller("do:workers/session:SessionDO:test", "do");
     const coordinator = new AcquisitionCoordinator({
       approvalQueue: { request: vi.fn(async () => presented) } as never,
       grantStore,

@@ -415,7 +415,7 @@ export interface WorkspaceExtensionProviderDecl {
  * a hardcoded unit name.
  */
 export interface WorkspaceProvidersDecl {
-  /** The eval engine library the EvalDO loads (executeSandbox/ScopeManager/…). */
+  /** The eval engine library the eval kernel loads (executeSandbox/ScopeManager/…). */
   evalEngine?: WorkspaceUnitProviderDecl;
   /**
    * The portable runtime package backing the eval sandbox's
