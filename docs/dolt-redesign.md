@@ -1825,6 +1825,50 @@ Events and progress are rows, not pushes: `run_events` is appended in the same
 transaction as the state it describes, and a consumer that wants "as it
 happens" polls `events` or issues `await` with a short `waitMs`.
 
+#### 7.5.2 As built: the pull callers (2026-11-15)
+
+**The host service `dynamicCode`** (`src/server/services/evalService.ts`, schema
+`packages/service-schemas/src/dynamicCode.ts`) has four methods and is the only host surface a pull caller uses:
+
+| Method    | What it does                                                                                                                                                                                                                                                                                                                         |
+| --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `admit`   | The one admission (§7.3) plus what only the host knows: owner resolution, the session entity (created through `runtime.createEntity` when absent), exact source, the owning panel, the harness identity, the run digest. Returns `{ runId, runDigest, authorityManifestDigest, host, hostId, nonce, start }`; **it starts nothing**. |
+| `release` | Closes the run's execution session and activity lease. Only the admitting caller (or the host) may; unknown or already released answers `released: false`.                                                                                                                                                                           |
+| `reset`   | The scope reset, behind the `code-runner.reset` approval (critical). The session's own `reset` is host-only, so no principal can reach it without the gate.                                                                                                                                                                          |
+| `dispose` | Retires a scope declared `finite` at creation, through the host lifecycle owner.                                                                                                                                                                                                                                                     |
+
+The caller then talks to the hosting entity, never through the host: `start(input, nonce)`, `await(runId,
+{ waitMs })`, `events(runId, { after, limit })`, `cancel(runId)`, `get`, `receipt`, `readScopeTextPage`,
+`deleteScopeValue` (the session relays them with the run's nonce; §7.5.1 is the contract). The session accepts its
+principal, the host, and the user's own shell (the host's rule for a shell selecting a live session owner at
+admission); its run-scoped methods are website-eligible because the principal it serves may be a website. One
+client composes it: `createDynamicCodeExecutor(rpc, { signal, onEvents })` (admit, start, tail `events`, `await`,
+release; abort cancels on the entity), and `startDynamicCodeRun` + `createDynamicCodeRunObserver` +
+`createDynamicCodeScope` for a caller that outlives one call (the system-test runner keeps the entity's id and
+pulls from a later activation).
+
+**A pull caller has no event sink** (`eventSinkNonce` is optional in the admission and the executor fact), so
+nothing tells the host that its run ended. The execution session is released by `release`; if the caller died
+between `admit` and `release`, **the admission of the next run reconciles**: a run that waits for the entity's one
+live admission asks the hosting entity (`get`, a pull of the host's own) every 2 s whether the holder ended and
+closes it when it has, or when the entity never heard of it for 30 s (the caller died before `start`). A held,
+running run is never taken.
+
+**Callers moved** (each with its gate in `HANDOFF-dolt-redesign.md`): the CLI (`vibestudio eval run`,
+`repl-reset`: `evalCommand.ts`; the approval observer reads `authority-requested` and `authority-decided` from
+the pulled events; `mobile-smoke.mjs` only runs the CLI), the natlang panel (`runtimePorts.ts`), the system-test
+runner worker and the harness probes (`probeEvalCancellation`, `probeEvalEventPages`, the new
+`probeEvalDeadlineRecovery`).
+
+**Not moved, so the push machinery stays:** the agent (`native-eval-tool.ts`, `native-eval-receipts.ts`,
+`native-agent-owner.ts`, `agent-vessel.ts`, `harness/src/tools/eval.ts`) and the website acceptance spec. They use
+the `eval` service, `resultReceiver`, `onEvalComplete` and `onEvalProgress`, `eval.acknowledge`, and through them
+the host tail, `settle`, the ingress, roots and journal services. The reasons and the design are in the
+handoff; the three channels still pushed are (a) live events (`evalEventIngress`, `onEvalProgress`), (b) authority
+events (`EvalAuthorityEventJournal` through `SessionDO.settle`; the kernel keeps them in `run_events`, so a pull
+caller already sees them in `events`), and (c) execution roots (`evalExecutionRoots.retain`, `listRetainedExecutionRoots`
+through `settle`).
+
 ### 7.6 Eval is ordinary code
 
 - **The kernel class** (`EvalKernel`) lives next to the engine in Base
@@ -1863,15 +1907,15 @@ happens" polls `events` or issues `await` with a short `waitMs`.
 one session of a fresh instance, the node under `strace -f -e fsync,fdatasync,sync_file_range`;
 an idle 20 s window as the baseline: 0.95 flushes per second for the whole node):
 
-| What                                                                 | Per run                                                                                                                                              |
-| -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| flushes (`fsync`) of the kernel's own cell file (`db.sqlite`)        | **11.0** (220 over 20 runs)                                                                                                                          |
-| of which named commits                                               | 2 by construction (`eval: <runId> accepted`, `eval: <runId> done`); the other 9 are writes outside a commit (run events, checkpoints, state), each its own transaction and flush |
-| flushes of the node index WAL (shared by every cell, so an upper bound) | 5.0 (99 over 20 runs)                                                                                                                              |
-| replication segments written (`ltx`)                                 | about 0.25 (the node batches them)                                                                                                                   |
-| the session entity's own SQLite cell                                 | 0.15 (3 WAL flushes in the window)                                                                                                                   |
-| `SessionDO.start` (route, hold check, `accepted` commit, schedule)   | 78.7 ms mean                                                                                                                                         |
-| the pull until the terminal row (`get`: execution plus the terminal commit) | 121.5 ms mean                                                                                                                                  |
+| What                                                                        | Per run                                                                                                                                                                          |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| flushes (`fsync`) of the kernel's own cell file (`db.sqlite`)               | **11.0** (220 over 20 runs)                                                                                                                                                      |
+| of which named commits                                                      | 2 by construction (`eval: <runId> accepted`, `eval: <runId> done`); the other 9 are writes outside a commit (run events, checkpoints, state), each its own transaction and flush |
+| flushes of the node index WAL (shared by every cell, so an upper bound)     | 5.0 (99 over 20 runs)                                                                                                                                                            |
+| replication segments written (`ltx`)                                        | about 0.25 (the node batches them)                                                                                                                                               |
+| the session entity's own SQLite cell                                        | 0.15 (3 WAL flushes in the window)                                                                                                                                               |
+| `SessionDO.start` (route, hold check, `accepted` commit, schedule)          | 78.7 ms mean                                                                                                                                                                     |
+| the pull until the terminal row (`get`: execution plus the terminal commit) | 121.5 ms mean                                                                                                                                                                    |
 
 At 6.5 ms per commit-sized flush (§4.2: write 6.5 ms, one root record, one flush) the 11 flushes are
 about 70 ms of the 200 ms from accepting a trivial run to its terminal row, a third. **The lever is
@@ -1903,10 +1947,10 @@ limit on **one call**, the third argument of `ctx.facets.get(name, startup, { li
 The root takes the stub for each call, so the facet is not restarted and the
 kernel keeps its heap. Measured (same probe, no unit limit):
 
-| Setup                                                                                              | Result                                                                                                                              |
-| -------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| no limit at all, a call that spins                                                                 | never ends (the 6 s window)                                                                                                         |
-| the same call through a stub with `limits: { cpuMs: 1500 }`                                        | fails after **1658 ms** with `Worker exceeded CPU limit of 1500 ms`; the same kernel answers the next call with its heap           |
+| Setup                                                                                                  | Result                                                                                                                              |
+| ------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| no limit at all, a call that spins                                                                     | never ends (the 6 s window)                                                                                                         |
+| the same call through a stub with `limits: { cpuMs: 1500 }`                                            | fails after **1658 ms** with `Worker exceeded CPU limit of 1500 ms`; the same kernel answers the next call with its heap            |
 | a call that answers at once and spins under `ctx.waitUntil` (what a kernel's `start` does), same limit | `start` answers in 130 ms; the next call to the kernel is answered after **1472 ms**: the limit of the call bounds the work it left |
 
 So `start` carries the run's `timeoutMs` as its CPU limit
@@ -1914,33 +1958,39 @@ So `start` carries the run's `timeoutMs` as its CPU limit
 `hostCode(...).limited`), and a run's own timeout timer, already due when the
 spin is ended, settles it. The decision:
 
-**What the product kernel does after the limit ends its run (found by driving it, not by the
-probe).** `vibestudio eval run` of `while (true) {}` with `--timeout 4000` on a fresh instance, kernel
-as built:
+**What the product kernel did after the limit ended its run, and the fix (celld `2d1749d`, Base `bd89d94`).**
+`vibestudio eval run` of `while (true) {}` with `--timeout 4000` on a fresh instance, kernel as first built:
 
-- the spin ends at about 4 s (`celld::ops: an op was handed to an event that no longer takes ops` at
-  +4.0 s, the deadline timer's continuation): the limit works on the real kernel;
-- **the next calls to that kernel's entity never return**: not another `eval run` (waited 100 s), not
-  `eval repl-reset`. Another session's kernel (another cell, same loaded unit) is unaffected. Whether the
-  same hang follows the unit's own 600 s limit was not run (it is likely, since the mechanism is the
-  same); it is the failure the host's liveness supervisor used to turn into a node restart, and
-  nothing does now;
-- the minimal probe (`celldCpuWatchdogCelld.test.ts`: a Dolt facet in a loaded worker, root with a hold,
-  `codegen`, a spin inside `new Function`, a deadline timer, a commit on both sides, requests queued
-  during the spin) does **not** reproduce it: the facet and root answer afterwards. It does show that the
-  continuation of work left under `waitUntil` (the timer callback, the terminal commit) never runs after
-  the limit ends the call. What differs in the product kernel is not known (SES, the shared unit, the
-  outbound RPC path are the candidates). So this is a **fork gap without a minimal repro**: the repro is
-  the CLI sequence above against the product build (instance, `agent attach`, the two commands), and the
-  celld request is that a call ended by its CPU limit must leave its cell able to take the next event.
+- the spin ended at about 4 s (`celld::ops: an op was handed to an event that no longer takes ops`): the
+  limit worked, but the deadline timer's continuation was dropped with the ended event, and **the next
+  `eval run` of the session never returned**. The cause had two parts. celld discarded the pending ops
+  (timers, subrequests, reads) of a CPU-limited event (fork finding E12), and, once they survive, the kernel
+  still awaited the run's promise, which a unwound JavaScript stack never settles, so the run chain (one
+  scope runs one cell at a time) never advanced (fork finding E13 is the sibling case, a termination
+  inside a transaction).
+- celld `2d1749d` keeps a limited event's pending ops, so the deadline timer fires after the limit and its
+  abort is delivered. `probe: a run ended by its call's CPU limit is settled by its own deadline timer`
+  (`celldCpuWatchdogCelld.test.ts`, real fork) pins it: the run is settled at the deadline's turn, about
+  1.5 s after a 1.5 s limit, and the kernel answers the next call.
+- the kernel (`EvalKernel.awaitRunOrAbandon`) no longer awaits a run past its **deadline abort**: after the
+  abort and the cleanup handlers, the guest has `OVERDUE_RUN_GRACE_MS` (1.5 s) to unwind; if its promise has
+  not settled it is abandoned, the run's row takes the typed `eval_deadline_exceeded` result, and the run
+  chain is released (a per-run `abandoned` promise races the run in `runChain`), so the runs queued behind it
+  and every later one are admitted. A user cancellation keeps its own bounded recovery (`cancel`'s
+  force reset); only the deadline abort abandons.
+- verified on the product: spin with a 4 s timeout, then `eval run` of `return 40+2` on the same session
+  answers in 5.9 s with the same kernel incarnation (the heap is kept); the server log has the one
+  warning `did not unwind within 1500ms of its deadline abort; abandoning it`. The system scenario
+  `eval-deadline-recovery` (system-testing template, `probeEvalDeadlineRecovery`) does the same through
+  the pull model. (The earlier note that `eval repl-reset` never returned was a critical approval,
+  `code-runner.reset`, that a bare CLI has nobody to answer; it was not a wedge.)
 
-What is built because of it, each tested and none of it sufficient alone: a run's own timer cannot be trusted
-to settle it, so the kernel settles an overdue run on the next pull (`reapOverdueRuns`, for runs with a
-`timeoutMs`; a run with none is ended by `cancel`); a hosted instance can be restarted without losing its
-storage (`hostCode(...).restart()`, root op `restart`), and `callOrRestart` asks for that when a call overruns
-a generous budget and answers the caller with `EUNRESPONSIVE`. If it is the cell and not the facet that
-stopped, the restart request does not return either, which the caller no longer waits for; the node-level
-`recoverUnresponsiveSandbox` is then the only recovery, and no caller has it.
+What was built before the fix and stays, each tested: the kernel settles an overdue run on the next pull
+(`reapOverdueRuns`, for runs with a `timeoutMs`; a run with none is ended by `cancel`); a hosted instance can
+be restarted without losing its storage (`hostCode(...).restart()`, root op `restart`), and `callOrRestart`
+asks for that when a call overruns a generous budget and answers the caller with `EUNRESPONSIVE`.
+`recoverUnresponsiveSandbox` (node-level) is the only recovery if it is the whole cell that stops, and no
+caller has it.
 
 - the executable admission sets `limits.cpuMs` for every unit that holds
   `codegen` (a bounded CPU budget per invocation, a manifest value; the kernel's
@@ -1992,8 +2042,8 @@ scope that had a legacy notebook carries it in its result:
   of the heap does not repeat it (`evalKernelStatusSchema`).
 - **Shown by every surface of the result.** The agent's eval tool text (Base
   `harness/src/tools/eval.ts`) adds: `[kernel] This notebook was upgraded: scope values
-  and db tables from the previous version (its EvalDO) were not carried over and are gone.
-  Rebuild what you need from stable IDs, files, or durable records ...`, directly under
+and db tables from the previous version (its EvalDO) were not carried over and are gone.
+Rebuild what you need from stable IDs, files, or durable records ...`, directly under
   `[kernel] Restarted`, which is the surface the user and the agent read. Tests: the
   admission (`dynamicCodeAdmission.test.ts`), the service (`evalService.test.ts`), the
   kernel (`EvalKernel.cancel.test.ts`) and the tool (`eval.test.ts`).
@@ -2054,18 +2104,16 @@ Each step is a complete cut that keeps the system working.
    new kernel starts empty. **Provider sources** are the template's own
    packages (`@workspace/eval`, `@workspace/runtime`, `@workspace/natlang`,
    `@workspace/cdp-client`), overridable by the class's env.
-5. **Pull** (§7.5) for each consumer in turn (agent loop, harness tool, CLI,
-   runner), with the push machinery deleted when the last has moved.
-6. **The liveness supervisor** went with step 4 (the kernel's unit carries
-   `limits.cpuMs`; the unit-wide limit is the fork gap of §7.8); `evalService`
-   is deleted when the last caller has moved.
-   Steps 5 and 6 are **not done**. Done since: a run's `timeoutMs` bounds its CPU (§7.8,
-   celld `ec0d6f5`), the D5 restart report is a message (§7.10), the cost of a kernel run
-   is measured (§7.7). Found and still open: the kernel's entity stops answering after the
-   CPU limit ends a run (§7.8, a fork gap without a minimal repro). `HANDOFF-dolt-redesign.md`
-   records where each step stands and what the callers' pull needs decided first (a host
-   admission service, the replacement of the live-event, authority-event and execution-root
-   pushes).
+5. **Pull** (§7.5) for each consumer in turn, with the push machinery deleted when the last has moved.
+   **Done:** the admission as a host service (`dynamicCode`, §7.5.2), the CLI, the natlang panel, the system-test
+   runner and its harness probes. **Not done:** the agent and the website acceptance spec.
+6. **The liveness supervisor** went with step 4 (the kernel's unit carries `limits.cpuMs`; a run's `timeoutMs`
+   bounds its call, §7.8); **`evalService` and the push machinery are deleted when the last caller has moved**
+   (`evalService` down to `dynamicCode`, the ingress, roots and journal services, `settle`, the host tail,
+   `evalEngineMethods`, `resultReceiver`, the push routes, `eval_result_redeliveries`, their schemas, catalog and
+   ledger rows). **Not started.** Done since step 4: a run's `timeoutMs` bounds its CPU (§7.8, celld `ec0d6f5`),
+   a run ended by its CPU limit is settled by its deadline (§7.8, celld `2d1749d`, Base `bd89d94`), the D5 restart
+   report is a message (§7.10), the cost of a kernel run is measured (§7.7).
 
 ---
 

@@ -233,7 +233,13 @@ it.skipIf(!celldTestBinary())(
       if (state.run && state.run.status !== "running") break;
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
-    console.log("run state after the limit:", JSON.stringify(state), "after", Date.now() - startedAt, "ms");
+    console.log(
+      "run state after the limit:",
+      JSON.stringify(state),
+      "after",
+      Date.now() - startedAt,
+      "ms"
+    );
     expect(state.run?.status).toBe("settled-by-deadline");
     expect(Date.now() - startedAt).toBeLessThan(15_000);
     // The next run on the same kernel is admitted and settles the same way.
