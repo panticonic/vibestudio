@@ -2422,10 +2422,17 @@ export default { fetch() { return new Response("chunked host"); } };`;
         JSON.stringify({ turns, writes, bytes })
       )) as { perTurnMs: number[] };
       const afterLoad = fileBytes();
+      const beforeGc = await state("parent");
       const gcStarted = performance.now();
       await dispatch(cellRef("parent"), "gc", "{}");
       const gcMs = performance.now() - gcStarted;
       const afterGc = fileBytes();
+      // A collection changes no state: the same entries, the same commits, nothing dirty.
+      const collected = await state("parent");
+      expect(collected.entries).toBe(beforeGc.entries);
+      expect(collected.commits).toEqual(beforeGc.commits);
+      expect(collected.dirty).toBe(0);
+      expect(afterGc).toBeLessThan(afterLoad);
       const sorted = [...run.perTurnMs].sort((x, y) => x - y);
       // A fork of the loaded cell at its newest turn commit: a copy of the whole file.
       const latest = (await state("parent")).commits.find(([, message]) =>
@@ -2438,6 +2445,34 @@ export default { fetch() { return new Response("chunked host"); } };`;
         at: latest,
       });
       const forkMs = performance.now() - forkStarted;
+      // The cell still works after the collection, and so does a fork of it: the parent closes another turn, and
+      // the fork holds exactly what the parent held at the commit it was cut at, then continues on its own.
+      await dispatch(
+        cellRef("parent"),
+        "turns",
+        JSON.stringify({ turns: 1, writes: 4, bytes: 500 })
+      );
+      const afterTurn = await state("parent");
+      expect(afterTurn.commits).toHaveLength(collected.commits.length + 1);
+      expect(afterTurn.dirty).toBe(0);
+      await bindConfiguredObject(manager, cellRef("child-big"), {});
+      const heldAtLatest = (await dispatch(
+        cellRef("parent"),
+        "entriesAt",
+        JSON.stringify({ commit: latest })
+      )) as { entries: number };
+      expect((await state("child-big")).entries).toBe(heldAtLatest.entries);
+      expect(heldAtLatest.entries).toBe(collected.entries);
+      await dispatch(
+        cellRef("child-big"),
+        "turns",
+        JSON.stringify({ turns: 1, writes: 4, bytes: 500 })
+      );
+      const bigAfter = await state("child-big");
+      expect(bigAfter.dirty).toBe(0);
+      expect(bigAfter.commits.filter(([, m]) => m.startsWith("agent: turn closed"))).toHaveLength(
+        collected.commits.filter(([, m]) => m.startsWith("agent: turn closed")).length + 1
+      );
       // eslint-disable-next-line no-console
       console.info(
         "R1-AGENT",

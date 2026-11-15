@@ -85,13 +85,19 @@ import {
 import { InvocationContext } from "./invocation-context.js";
 import {
   assertCleanWorkingSet,
+  collectDoltGarbage,
   committedTransactionSync,
+  DEFAULT_DOLT_GC_POLICY,
   doltStorageOf,
+  type DoltGcPolicy,
   type DoltStorage,
   type DoltTransactionCommit,
   type DoltTransactionOptions,
 } from "./dolt.js";
 export type { DoltStorage, DoltTransactionCommit, DoltTransactionOptions } from "./dolt.js";
+
+/** How long after a commit the compaction check waits, so the event that committed finishes first. */
+const DOLT_GC_IDLE_MS = 250;
 import {
   createCodeHostClient,
   isHostedCall,
@@ -301,9 +307,65 @@ export abstract class DurableObjectBase {
    * Not for a nested transaction on a Dolt cell (the fork refuses it).
    */
   protected committedTransaction<T>(describe: DoltTransactionCommit<T>, fn: () => T): T {
-    return this.withCallNonce(
+    const result = this.withCallNonce(
       (body) => committedTransactionSync(this.ctx.storage, describe, body),
       fn
+    );
+    this.scheduleDoltGc(8);
+    return result;
+  }
+
+  /**
+   * When this cell is compacted (§6.11.8), or `null` to never compact it. Every Dolt class is collected
+   * on the default schedule: nothing else frees what a commit supersedes.
+   */
+  protected doltGcPolicy(): DoltGcPolicy | null {
+    return DEFAULT_DOLT_GC_POLICY;
+  }
+
+  private doltGcTicks = 0;
+  private doltGcScheduled = false;
+
+  /**
+   * Ask for a compaction check after a commit. The check itself runs later, in the object's own idle time:
+   * after the event that committed has had a moment to finish, inside a block of the object (no other event
+   * runs, no transaction is open), and only when the working set holds nothing uncommitted. `every` thins
+   * the check for a cell that commits per event: it reads the log, which is cheap but not free.
+   */
+  protected scheduleDoltGc(every = 1): void {
+    if (!this.dolt || this.doltGcScheduled || typeof this.ctx.waitUntil !== "function") return;
+    if (++this.doltGcTicks % every !== 0) return;
+    const policy = this.doltGcPolicy();
+    if (!policy) return;
+    this.doltGcScheduled = true;
+    this.ctx.waitUntil(
+      new Promise<void>((resolve) => setTimeout(resolve, DOLT_GC_IDLE_MS))
+        .then(() => this.collectGarbageIfDue(policy))
+        .catch((error) => {
+          console.warn(
+            "[DurableObjectBase] compaction failed:",
+            error instanceof Error ? error.message : String(error)
+          );
+        })
+        .finally(() => {
+          this.doltGcScheduled = false;
+        })
+    );
+  }
+
+  /** Compact the cell now if it is due (a block of the object, so no transaction is open). */
+  protected collectGarbageIfDue(policy: DoltGcPolicy | null = this.doltGcPolicy()) {
+    const dolt = this.dolt;
+    if (!dolt || !policy) return Promise.resolve({ ran: false, reason: "not-due" } as const);
+    return this.ctx.blockConcurrencyWhile(async () =>
+      collectDoltGarbage(
+        dolt,
+        {
+          get: (key) => this.getStateValue(key),
+          set: (key, value) => this.setStateValue(key, value),
+        },
+        policy
+      )
     );
   }
 

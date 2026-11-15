@@ -496,6 +496,78 @@ export function assertCleanWorkingSet(dolt: DoltStorage): void {
   if (dirty.length > 0) throw new DoltDriftError(dirty.map((entry) => entry.table));
 }
 
+// --- Compaction (docs/dolt-redesign.md §6.11.8) --------------------------------
+
+/**
+ * When a Dolt cell is compacted. A commit appends to the file and nothing frees what it superseded, so an
+ * agent cell that is never collected grows by 635 KB a turn (41 KB after `gc`, R1). `gc` rewrites the whole
+ * file, so its cost is the size of the file: collecting every N commits would make N small and the total
+ * quadratic. The cell is collected after `minCommits` commits, and after that when the commits since its
+ * last collection reach `growth` times the commits it held then: the total cost stays linear in the history
+ * (a geometric schedule), and a young cell is collected early, when it is cheap.
+ */
+export interface DoltGcPolicy {
+  readonly minCommits: number;
+  readonly growth: number;
+}
+
+export const DEFAULT_DOLT_GC_POLICY: DoltGcPolicy = { minCommits: 64, growth: 0.5 };
+
+/** Where a cell remembers its last collection: its own local state (never versioned, never forked). */
+export interface DoltGcMemory {
+  get(key: string): string | null;
+  set(key: string, value: string): void;
+}
+
+const GC_HEAD_KEY = "__dolt_gc_head";
+const GC_COMMITS_KEY = "__dolt_gc_commits";
+/** `dolt.log` answers at most this many commits. */
+const DOLT_LOG_MAX = 10_000;
+
+/** The number of commits since the last collection after which the cell is due. */
+export function doltGcThreshold(memory: DoltGcMemory, policy: DoltGcPolicy): number {
+  const held = Number(memory.get(GC_COMMITS_KEY) ?? 0);
+  const grown = Number.isFinite(held) ? Math.ceil(held * policy.growth) : 0;
+  return Math.min(DOLT_LOG_MAX, Math.max(policy.minCommits, grown));
+}
+
+/** Whether enough commits have landed since the last collection (a bounded read of the log). */
+export function doltGcDue(
+  dolt: DoltStorage,
+  memory: DoltGcMemory,
+  policy: DoltGcPolicy = DEFAULT_DOLT_GC_POLICY
+): boolean {
+  const threshold = doltGcThreshold(memory, policy);
+  const log = dolt.log({ limit: threshold });
+  if (log.length < threshold) return false;
+  const last = memory.get(GC_HEAD_KEY);
+  // The last collection's HEAD is among the newest `threshold` commits: fewer than that have landed since.
+  return last === null || !log.some((entry) => entry.hash === last);
+}
+
+export type DoltGcOutcome =
+  | { readonly ran: true; readonly commits: number }
+  | { readonly ran: false; readonly reason: "not-due" | "dirty" };
+
+/**
+ * Compact the cell if it is due. Call it at an idle point: outside every transaction, and not while a turn
+ * holds uncommitted work. A working set with uncommitted application changes is left alone (the cell is
+ * collected after its next commit instead), because the engine rewrites the file it is writing to.
+ */
+export function collectDoltGarbage(
+  dolt: DoltStorage,
+  memory: DoltGcMemory,
+  policy: DoltGcPolicy = DEFAULT_DOLT_GC_POLICY
+): DoltGcOutcome {
+  if (!doltGcDue(dolt, memory, policy)) return { ran: false, reason: "not-due" };
+  if (dirtyApplicationTables(dolt).length > 0) return { ran: false, reason: "dirty" };
+  dolt.gc();
+  const commits = dolt.log({ limit: DOLT_LOG_MAX }).length;
+  memory.set(GC_HEAD_KEY, dolt.hashOf("HEAD"));
+  memory.set(GC_COMMITS_KEY, String(commits));
+  return { ran: true, commits };
+}
+
 // --- Local tables and deployment declarations --------------------------------
 
 /**

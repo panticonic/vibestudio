@@ -1,11 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  DEFAULT_DOLT_GC_POLICY,
   DOLT_FRAMEWORK_LOCAL_PATTERNS,
   DoltDriftError,
   assertCleanWorkingSet,
+  collectDoltGarbage,
   committedTransaction,
   committedTransactionSync,
   dirtyApplicationTables,
+  doltGcDue,
+  doltGcThreshold,
   doltLocalPatternProblem,
   doltLocalPatterns,
   doltRemotesOf,
@@ -223,5 +227,74 @@ describe("the drift check", () => {
       status: () => [{ table: "dolt_ignore", staged: 0, status: "modified" }],
     } as unknown as DoltStorage;
     expect(() => assertCleanWorkingSet(stub)).not.toThrow();
+  });
+});
+
+describe("the compaction schedule of a Dolt cell (§6.11.8)", () => {
+  const memoryOf = () => {
+    const map = new Map<string, string>();
+    return {
+      map,
+      get: (key: string) => map.get(key) ?? null,
+      set: (k: string, v: string) => void map.set(k, v),
+    };
+  };
+  async function cell(commits: number) {
+    const fake = await FakeDoltStorage.create();
+    fake.sql.exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT NOT NULL)");
+    fake.dolt.commit("create notes");
+    for (let i = 0; i < commits; i++) {
+      fake.sql.exec("INSERT OR REPLACE INTO notes(id, body) VALUES (1, ?)", `v${i}`);
+      fake.dolt.commit(`note ${i}`);
+    }
+    return fake;
+  }
+  const policy = { minCommits: 5, growth: 0.5 };
+
+  it("is due after the minimum number of commits, and not before", async () => {
+    const memory = memoryOf();
+    const young = await cell(2);
+    expect(doltGcDue(young.dolt, memory, policy)).toBe(false);
+    const grown = await cell(6);
+    expect(doltGcDue(grown.dolt, memory, policy)).toBe(true);
+    expect(doltGcThreshold(memory, DEFAULT_DOLT_GC_POLICY)).toBe(DEFAULT_DOLT_GC_POLICY.minCommits);
+  });
+
+  it("collects, remembers where, and is then due again after half as many commits as it held", async () => {
+    const memory = memoryOf();
+    const fake = await cell(10);
+    const gc = vi.spyOn(fake.dolt, "gc");
+    const outcome = collectDoltGarbage(fake.dolt, memory, policy);
+    expect(outcome.ran).toBe(true);
+    expect(gc).toHaveBeenCalledOnce();
+    expect(memory.map.get("__dolt_gc_head")).toBe(fake.dolt.hashOf("HEAD"));
+    const held = Number(memory.map.get("__dolt_gc_commits"));
+    expect(held).toBeGreaterThanOrEqual(11);
+    // Not due again until half the commits it then held have landed (the schedule grows with the history).
+    const wanted = Math.ceil(held * policy.growth);
+    expect(doltGcThreshold(memory, policy)).toBe(wanted);
+    for (let i = 0; i < wanted - 1; i++) {
+      fake.sql.exec("INSERT OR REPLACE INTO notes(id, body) VALUES (1, ?)", `later${i}`);
+      fake.dolt.commit(`later ${i}`);
+    }
+    expect(collectDoltGarbage(fake.dolt, memory, policy)).toEqual({
+      ran: false,
+      reason: "not-due",
+    });
+    fake.sql.exec("INSERT OR REPLACE INTO notes(id, body) VALUES (1, 'last')");
+    fake.dolt.commit("last");
+    expect(collectDoltGarbage(fake.dolt, memory, policy).ran).toBe(true);
+    expect(gc).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves a cell with uncommitted application changes alone, and collects it once they are committed", async () => {
+    const memory = memoryOf();
+    const fake = await cell(8);
+    const gc = vi.spyOn(fake.dolt, "gc");
+    fake.sql.exec("INSERT OR REPLACE INTO notes(id, body) VALUES (1, 'pending')");
+    expect(collectDoltGarbage(fake.dolt, memory, policy)).toEqual({ ran: false, reason: "dirty" });
+    expect(gc).not.toHaveBeenCalled();
+    fake.dolt.commit("keep pending");
+    expect(collectDoltGarbage(fake.dolt, memory, policy).ran).toBe(true);
   });
 });
