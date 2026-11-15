@@ -304,6 +304,7 @@ export class AgentCellDO extends DurableObject {
       } });
     }
     if (method === "mint") return Response.json({ result: { id: await this.storage.mintId() } });
+    if (method === "entriesAt") return Response.json({ result: { entries: Number(sql.exec("SELECT count(*) AS n FROM dolt_at_entries('" + input.commit + "')").one().n) } });
     if (method === "gc") { dolt.gc(); return Response.json({ result: {} }); }
     return Response.json({ error: { message: "no such method " + method } }, { status: 404 });
   }
@@ -2384,6 +2385,13 @@ export default { fetch() { return new Response("chunked host"); } };`;
       const child = await state("child");
       expect(child.localTasks).toBe(0);
       expect(child.entries).toBeLessThan(parent.entries);
+      // Fork at N equals the parent's state at N: the fork holds exactly the entries the parent held at that commit.
+      const heldThen = (await dispatch(
+        cellRef("parent"),
+        "entriesAt",
+        JSON.stringify({ commit: secondTurn })
+      )) as { entries: number };
+      expect(child.entries).toBe(heldThen.entries);
       expect(entriesAtSecond).toBeGreaterThan(0);
       // The counters restart above everything the fork's versioned set stores: no ID of the fork is the parent's.
       const minted = ((await dispatch(cellRef("child"), "mint", "{}")) as { id: number }).id;
