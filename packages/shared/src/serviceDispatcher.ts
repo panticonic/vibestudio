@@ -2103,7 +2103,7 @@ export class ServiceDispatcher {
       }
       const admissionExecutor = resolved.context.executionSession?.executor;
       const runManifest =
-        admissionExecutor?.kind === "eval" ? admissionExecutor.authorityManifest : undefined;
+        admissionExecutor?.kind === "dynamic-code" ? admissionExecutor.authorityManifest : undefined;
       if (
         runManifest &&
         reviewedTier !== "open" &&

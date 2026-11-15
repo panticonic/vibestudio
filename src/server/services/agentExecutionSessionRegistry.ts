@@ -11,12 +11,12 @@ type AdmissionInput = Omit<
   | "nonce"
   | "executor"
 > & {
-  executor: Extract<ExecutionAdmissionFact["executor"], { kind: "eval" }>;
+  executor: Extract<ExecutionAdmissionFact["executor"], { kind: "dynamic-code" }>;
   taskAuthority: import("@vibestudio/rpc").TaskGrantPrincipal;
   expiresAt?: number;
 };
 type EvalAdmissionFact = ExecutionAdmissionFact & {
-  executor: Extract<ExecutionAdmissionFact["executor"], { kind: "eval" }>;
+  executor: Extract<ExecutionAdmissionFact["executor"], { kind: "dynamic-code" }>;
 };
 
 interface AdmissionWaiter {
@@ -172,17 +172,17 @@ export class AgentExecutionSessionRegistry {
   admit(input: AdmissionInput): EvalAdmissionFact {
     const issuedAt = Date.now();
     const retained = this.resolve(input.executor.runtimeId, issuedAt);
-    if (retained && retained.executor.kind !== "eval") {
+    if (retained && retained.executor.kind !== "dynamic-code") {
       throw new Error(
         `Execution runtime ${input.executor.runtimeId} is already admitted by a non-eval executor`
       );
     }
     const activeRunId = this.activeRunByRuntime.get(input.executor.runtimeId);
     if (retained && activeRunId) {
-      if (activeRunId === input.executor.evalRunId) {
+      if (activeRunId === input.executor.runId) {
         if (!sameAdmission(retained, input)) {
           throw new Error(
-            `Evaluated run ${input.executor.evalRunId} was replayed with different admission facts`
+            `Evaluated run ${input.executor.runId} was replayed with different admission facts`
           );
         }
         return retained as EvalAdmissionFact;
@@ -214,7 +214,7 @@ export class AgentExecutionSessionRegistry {
     this.byAdmissionKey.set(fact.admissionKey, fact);
     this.byNonce.set(fact.nonce, fact);
     this.priorFactByActiveRuntime.set(fact.executor.runtimeId, retained);
-    this.activeRunByRuntime.set(fact.executor.runtimeId, fact.executor.evalRunId);
+    this.activeRunByRuntime.set(fact.executor.runtimeId, fact.executor.runId);
     if (fact.mode === "test" && fact.testPolicy) {
       const rootPolicyId = orchestratorPolicyId(fact.testPolicy);
       const root = this.orchestratorRuns.get(rootPolicyId);
@@ -230,13 +230,13 @@ export class AgentExecutionSessionRegistry {
         }
         this.orchestratorRuns.set(rootPolicyId, {
           runtimeId: fact.executor.runtimeId,
-          runId: fact.executor.evalRunId,
+          runId: fact.executor.runId,
         });
       } else if (
         fact.testPolicy.kind === "orchestrator" &&
         root.runtimeId === fact.executor.runtimeId
       ) {
-        root.runId = fact.executor.evalRunId;
+        root.runId = fact.executor.runId;
       }
       this.markTestContext(fact.contextId, fact.testPolicy);
     }
@@ -249,7 +249,7 @@ export class AgentExecutionSessionRegistry {
       "v" | "authoritySessionId" | "authoritySessionVersion" | "issuedAt" | "expiresAt" | "nonce"
     > & { expiresAt?: number }
   ): ExecutionAdmissionFact {
-    if (input.executor.kind === "eval") return this.admit(input as AdmissionInput);
+    if (input.executor.kind === "dynamic-code") return this.admit(input as AdmissionInput);
     const existing = this.byAdmissionKey.get(input.admissionKey);
     if (existing) {
       if (existing.expiresAt <= Date.now()) this.removeGeneric(existing);
@@ -287,8 +287,8 @@ export class AgentExecutionSessionRegistry {
     if (fact.controllerRuntimeId !== controllerRuntimeId) {
       throw new Error("Only the admission controller can finish this execution");
     }
-    if (fact.executor.kind === "eval")
-      return this.close(fact.executor.runtimeId, fact.executor.evalRunId);
+    if (fact.executor.kind === "dynamic-code")
+      return this.close(fact.executor.runtimeId, fact.executor.runId);
     await closeSession(fact.authoritySessionId);
     this.removeGeneric(fact);
     return true;
@@ -317,7 +317,7 @@ export class AgentExecutionSessionRegistry {
     if ((!queued || queued.length === 0) && !activeRunId) {
       return Promise.resolve(this.admit(input));
     }
-    if (retained && activeRunId === input.executor.evalRunId) {
+    if (retained && activeRunId === input.executor.runId) {
       return Promise.resolve(this.admit(input));
     }
     if (signal?.aborted) return Promise.reject(admissionAbortError(runtimeId));
@@ -356,8 +356,8 @@ export class AgentExecutionSessionRegistry {
       if (
         !root ||
         !rootFact ||
-        rootFact.executor.kind !== "eval" ||
-        rootFact.executor.evalRunId !== root.runId ||
+        rootFact.executor.kind !== "dynamic-code" ||
+        rootFact.executor.runId !== root.runId ||
         rootFact.expiresAt <= now
       ) {
         this.revokeOrchestrator(rootPolicyId);
@@ -374,11 +374,11 @@ export class AgentExecutionSessionRegistry {
    */
   resolveInvocation(runtimeId: string, nonce: string): ExecutionAdmissionFact | null {
     const candidate = this.byNonce.get(nonce);
-    if (candidate?.executor.kind === "eval") {
+    if (candidate?.executor.kind === "dynamic-code") {
       const fact = this.resolve(runtimeId);
       return fact?.nonce === nonce &&
-        fact.executor.kind === "eval" &&
-        this.activeRunByRuntime.get(runtimeId) === fact.executor.evalRunId
+        fact.executor.kind === "dynamic-code" &&
+        this.activeRunByRuntime.get(runtimeId) === fact.executor.runId
         ? fact
         : null;
     }
@@ -406,7 +406,7 @@ export class AgentExecutionSessionRegistry {
   ): ExecutionAdmissionFact | null {
     const candidate = this.byNonce.get(nonce);
     if (!candidate || candidate.expiresAt <= Date.now()) {
-      if (candidate && candidate.executor.kind !== "eval") this.removeGeneric(candidate);
+      if (candidate && candidate.executor.kind !== "dynamic-code") this.removeGeneric(candidate);
       return null;
     }
     if (
@@ -477,7 +477,7 @@ export class AgentExecutionSessionRegistry {
   private remove(fact: ExecutionAdmissionFact): void {
     this.byAdmissionKey.delete(fact.admissionKey);
     this.byNonce.delete(fact.nonce);
-    if (fact.executor.kind !== "eval") {
+    if (fact.executor.kind !== "dynamic-code") {
       this.removeGeneric(fact);
       return;
     }
@@ -490,7 +490,7 @@ export class AgentExecutionSessionRegistry {
     }
     const rootPolicyId = orchestratorPolicyId(policy);
     const root = this.orchestratorRuns.get(rootPolicyId);
-    if (root?.runtimeId === fact.executor.runtimeId && root.runId === fact.executor.evalRunId) {
+    if (root?.runtimeId === fact.executor.runtimeId && root.runId === fact.executor.runId) {
       this.revokeOrchestrator(rootPolicyId);
       return;
     }
@@ -564,7 +564,7 @@ export class AgentExecutionSessionRegistry {
 }
 
 function sameAdmission(fact: ExecutionAdmissionFact, input: AdmissionInput): boolean {
-  if (fact.executor.kind !== "eval") return false;
+  if (fact.executor.kind !== "dynamic-code") return false;
   return (
     JSON.stringify(fact.authorityOrigin ?? null) ===
       JSON.stringify(input.authorityOrigin ?? null) &&

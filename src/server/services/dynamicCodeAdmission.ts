@@ -88,7 +88,7 @@ export interface DynamicCodeRunInput {
 export interface AdmittedDynamicCodeRun {
   /** The session the call into the hosted class carries. */
   executionSession: ExecutionAdmissionFact & {
-    executor: Extract<ExecutionAdmissionFact["executor"], { kind: "eval" }>;
+    executor: Extract<ExecutionAdmissionFact["executor"], { kind: "dynamic-code" }>;
   };
   nonce: string;
   authorityManifest: EvalAuthorityManifest;
@@ -247,9 +247,9 @@ export function createDynamicCodeAdmission(deps: DynamicCodeAdmissionDeps) {
             executionDigest: image.executionDigest,
           },
           executor: {
-            kind: "eval",
+            kind: "dynamic-code",
             runtimeId: input.hostRuntimeId,
-            evalRunId: input.runId,
+            runId: input.runId,
             authorityManifest: normalizeAuthorityManifest(
               input.authority,
               ctx.caller.code?.requested ?? []
@@ -281,7 +281,7 @@ export function createDynamicCodeAdmission(deps: DynamicCodeAdmissionDeps) {
       try {
         deps.taskAuthorities.bindExecution(executionSession);
         const executor = executionSession.executor;
-        if (executor.kind !== "eval") {
+        if (executor.kind !== "dynamic-code") {
           throw new Error("Dynamic-code admission did not produce an eval executor");
         }
         const intent = normalizeEvalAuthorityIntent(input.authority);

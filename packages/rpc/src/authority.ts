@@ -198,9 +198,9 @@ export type ExecutionAdmissionExecutor =
       turnId: string;
     }
   | {
-      kind: "eval";
+      kind: "dynamic-code";
       runtimeId: string;
-      evalRunId: string;
+      runId: string;
       authorityManifest: EvalAuthorityManifest;
     }
   | {

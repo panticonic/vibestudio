@@ -110,7 +110,7 @@ export async function resolveLiveExecutionCaller(input: {
 
   if (
     executionSession &&
-    (executionSession.executor.kind !== "eval" ||
+    (executionSession.executor.kind !== "dynamic-code" ||
       executionSession.executor.runtimeId !== registered.runtime.id ||
       executionSession.contextId !== activeEntity?.contextId ||
       executionSession.agentBinding?.entityId !== agentBinding?.entityId ||

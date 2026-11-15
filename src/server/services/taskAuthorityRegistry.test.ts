@@ -26,9 +26,9 @@ function execution(runtimeId: string, taskAuthority: `task:${string}`): Executio
       executionDigest: "a".repeat(64),
     },
     executor: {
-      kind: "eval",
+      kind: "dynamic-code",
       runtimeId,
-      evalRunId: "run:one",
+      runId: "run:one",
       authorityManifest: {
         mode: "adaptive",
         effects: "read-write",

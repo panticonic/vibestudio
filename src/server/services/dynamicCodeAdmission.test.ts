@@ -57,7 +57,7 @@ describe("admitDynamicCode", () => {
     expect(admitted.nonce).toBe(admitted.executionSession.nonce);
     expect(admitted.executionSession.executor).toMatchObject({
       runtimeId: "do:host:Kernel:k1",
-      evalRunId: "run-1",
+      runId: "run-1",
     });
     expect(admitted.authorityManifestDigest).toBe(admitted.authorityManifest.digest);
     expect(executionSessions.resolve("do:host:Kernel:k1")).toBeTruthy();

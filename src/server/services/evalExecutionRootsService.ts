@@ -49,9 +49,9 @@ export function createEvalExecutionRootsService(deps: {
         );
         if (
           !execution ||
-          execution.executor.kind !== "eval" ||
+          execution.executor.kind !== "dynamic-code" ||
           execution.executor.runtimeId !== ctx.caller.runtime.id ||
-          execution.executor.evalRunId !== runId ||
+          execution.executor.runId !== runId ||
           !isEvalHostRuntimeId(ctx.caller.runtime.id) ||
           !entity ||
           !isEvalHostRecord(entity) ||

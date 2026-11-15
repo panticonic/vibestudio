@@ -63,9 +63,9 @@ function execution(): ExecutionAdmissionFact {
       executionDigest: "d".repeat(64),
     },
     executor: {
-      kind: "eval",
+      kind: "dynamic-code",
       runtimeId,
-      evalRunId: runId,
+      runId,
       authorityManifest: {
         mode: "adaptive",
         effects: "read-write",

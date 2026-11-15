@@ -33,13 +33,13 @@ export function isAttestedSystemTestHarness(
 ): boolean {
   const executionSession = caller.executionSession;
   const executor = executionSession?.executor;
-  const outerRunId = executor?.kind === "eval" ? executor.evalRunId : null;
+  const outerRunId = executor?.kind === "dynamic-code" ? executor.runId : null;
   const code = caller.code;
   const executionImage = executionSession?.executionImage;
   return Boolean(
     caller.runtime.kind === "do" &&
     isEvalHostRuntimeId(caller.runtime.id) &&
-    executor?.kind === "eval" &&
+    executor?.kind === "dynamic-code" &&
     executor.runtimeId === caller.runtime.id &&
     outerRunId?.startsWith("system-test-runner:") &&
     code?.repoPath === "workers/system-test-runner" &&

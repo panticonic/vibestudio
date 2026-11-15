@@ -4165,12 +4165,12 @@ async function main() {
         closeEvalAuthorityEvents = () => authorityEvents.close();
         dispatcher.setAuthorityObserver(({ executionSession, kind, payload }) => {
           const executor = executionSession.executor;
-          if (executor.kind !== "eval") return;
+          if (executor.kind !== "dynamic-code") return;
           const objectKey = evalHostObjectKeyOf(executor.runtimeId);
           if (!objectKey) return;
           authorityEvents.append({
             objectKey,
-            runId: executor.evalRunId,
+            runId: executor.runId,
             kind,
             payload: {
               ...payload,

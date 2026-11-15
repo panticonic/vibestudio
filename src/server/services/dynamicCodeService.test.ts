@@ -1259,9 +1259,9 @@ describe("dynamicCode admission", () => {
       },
       admissionKey: "test:cancel-lifecycle-child",
       executor: {
-        kind: "eval",
+        kind: "dynamic-code",
         runtimeId: "do:workers/session:SessionDO:cancel-lifecycle-child",
-        evalRunId: "system-test-runner:cancel-lifecycle-child",
+        runId: "system-test-runner:cancel-lifecycle-child",
         authorityManifest: {
           mode: "adaptive",
           effects: "read-write",

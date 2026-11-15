@@ -4139,9 +4139,9 @@ describe("RpcServer relay behavior", () => {
           executionDigest: digest,
         },
         executor: {
-          kind: "eval",
+          kind: "dynamic-code",
           runtimeId,
-          evalRunId: "doctor",
+          runId: "doctor",
           authorityManifest: {
             mode: "adaptive",
             effects: "read-write",
@@ -4401,9 +4401,9 @@ describe("RpcServer relay behavior", () => {
         executionDigest: "b".repeat(64),
       },
       executor: {
-        kind: "eval",
+        kind: "dynamic-code",
         runtimeId,
-        evalRunId: "run:session-boundary",
+        runId: "run:session-boundary",
         authorityManifest: {
           mode: "adaptive",
           effects: "read-write",
