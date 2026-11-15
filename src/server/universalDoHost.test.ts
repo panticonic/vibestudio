@@ -2425,6 +2425,16 @@ export default { fetch() { return new Response("chunked host"); } };`;
       const gcMs = performance.now() - gcStarted;
       const afterGc = fileBytes();
       const sorted = [...run.perTurnMs].sort((x, y) => x - y);
+      // A fork of the loaded cell at its newest turn commit: a copy of the whole file.
+      const latest = (await state("parent")).commits.find(([, message]) => message.startsWith("agent: turn closed"))![0];
+      const bigReservation = cloneReservation(cellRef("parent"), "child-big", manager);
+      const forkStarted = performance.now();
+      await manager.forkObjectStorage(cellRef("parent"), "child-big", {
+        reservation: bigReservation,
+        resolveSource: async () => sourceOwner(bigReservation),
+        at: latest,
+      });
+      const forkMs = performance.now() - forkStarted;
       // eslint-disable-next-line no-console
       console.info(
         "R1-AGENT",
@@ -2441,6 +2451,7 @@ export default { fetch() { return new Response("chunked host"); } };`;
           bytesPerTurnOnDisk: Math.round((afterLoad - before) / turns),
           gcMs: Math.round(gcMs),
           forkCopiesBytes: afterGc,
+          forkMs: Math.round(forkMs),
         })
       );
     }, 900_000);
