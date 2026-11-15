@@ -1519,6 +1519,151 @@ describe("dynamicCode admission", () => {
   });
 });
 
+describe("dynamicCode admission — an entity that hosts its own kernel (§6.11.6)", () => {
+  const AGENT_ID = "do:workers/agent-worker:AiChatWorker:k";
+  // The owner's own sealed image (an agent has code of its own, so it is its own harness).
+  const agentRoots = [{ repoPath: "workers/agent-worker", stateHash: `state:${"e".repeat(64)}` }];
+  const agentArtifactUnsigned = {
+    ...sessionArtifactUnsigned,
+    sourceState: {
+      ...sessionArtifactUnsigned.sourceState,
+      contentRoots: agentRoots,
+      sourceClosureDigest: executionSourceClosureDigest(agentRoots),
+    },
+  };
+  const agentArtifact = {
+    ...agentArtifactUnsigned,
+    executionDigest: executionArtifactDigest(agentArtifactUnsigned),
+  } as ExecutionArtifactRefV1;
+  function selfHostingHarness(hostsEvalKernel: boolean) {
+    const agent: EntityRecord = {
+      id: AGENT_ID,
+      kind: "do",
+      source: {
+        repoPath: "workers/agent-worker",
+        effectiveVersion: EVAL_EXECUTION_IDENTITY.effectiveVersion,
+      },
+      contextId: "ctx_agent",
+      className: "AiChatWorker",
+      key: "k",
+      activeBuildKey: agentArtifact.buildKey,
+      activeExecutionDigest: agentArtifact.executionDigest,
+      activeAuthority: EVAL_EXECUTION_IDENTITY.authority,
+      agentBinding: { entityId: "session:agent", contextId: "ctx_agent", channelId: "c" },
+      authoritySessionId: "authority:eval-test",
+      createdAt: 0,
+      status: "active",
+      cleanupComplete: true,
+    };
+    const records: Record<string, EntityRecord> = { [AGENT_ID]: agent };
+    const calls: Array<{ ref: unknown; method: string; args: unknown[] }> = [];
+    const doDispatch = {
+      async dispatchHeld(
+        this: { dispatch: (ref: unknown, method: string, ...args: unknown[]) => Promise<unknown> },
+        ref: unknown,
+        method: string,
+        ...args: unknown[]
+      ) {
+        return this.dispatch(ref, method, ...args);
+      },
+      async dispatch(ref: unknown, method: string, ...args: unknown[]) {
+        calls.push({ ref, method, args });
+        if (method === "entityResolve") return records[String(args[0])] ?? null;
+        if (method === "slotResolveByEntity") return null;
+        if (method === "runtimeResourceBindingsForEntity") return [];
+        if (method === "start")
+          return { runId: String((args[0] as { runId: string }).runId), status: "pending" };
+        if (method === "get") return { status: "done" };
+        if (method === "reset") return { ok: true };
+        throw new Error(`unexpected dispatch ${method}`);
+      },
+    } as unknown as DODispatch;
+    const entityCache = new EntityCache();
+    entityCache.hydrate(Object.values(records));
+    const entityStore = new WorkspaceEntityStore({
+      doDispatch,
+      workspaceId: "ws",
+      entityCache,
+      resolveNativeOwner: () => null,
+      resolveDurableWorkQueues: () => [],
+      materializeExecution: async () => undefined,
+    });
+    const createEntity = vi.fn(async (_caller: VerifiedCaller, spec: { key?: string }) => {
+      const record = sessionRecord(spec, AGENT_ID);
+      records[record.id] = record;
+      entityCache.hydrate([record]);
+      return { id: record.id };
+    });
+    const executionSessions = new AgentExecutionSessionRegistry();
+    const dynamicCode = createDynamicCodeService({
+      resolveExecutionArtifact: (code) =>
+        code.callerId === AGENT_ID ? agentArtifact : EVAL_EXECUTION_IDENTITY.artifact,
+      doDispatch,
+      entityStore,
+      createEntity,
+      retireEntity: vi.fn(async () => {}),
+      workspaceId: "ws",
+      executionSessions,
+      taskAuthorities: new TaskAuthorityRegistry(),
+      ...(hostsEvalKernel
+        ? {
+            hostsEvalKernel: (source: string, className: string) =>
+              source === "workers/agent-worker" && className === "AiChatWorker",
+          }
+        : {}),
+    });
+    return { dynamicCode, calls, createEntity, executionSessions };
+  }
+  const agentCtx = () =>
+    activeInvocationContext(authenticatedCaller(AGENT_ID, "do"), "c", "invocation:self-host");
+
+  it("runs on the owner itself: no session entity is created and the owner is the executor", async () => {
+    const h = selfHostingHarness(true);
+    const admission = (await h.dynamicCode.handler(agentCtx(), "admit", [
+      inlineEvalStart({ runId: "run:self", code: "return 1;" }),
+    ])) as { host: unknown; hostId: string; nonce: string; start: Record<string, unknown> };
+    expect(h.createEntity).not.toHaveBeenCalled();
+    expect(admission.hostId).toBe(AGENT_ID);
+    expect(admission.host).toEqual({
+      source: "workers/agent-worker",
+      className: "AiChatWorker",
+      objectKey: "k",
+    });
+    // The harness identity is the owner's own sealed code, and the executor is the owner.
+    expect(h.executionSessions.activeRunId(AGENT_ID)).toBe("run:self");
+    expect(h.executionSessions.resolve(AGENT_ID)?.executor).toMatchObject({
+      kind: "dynamic-code",
+      runtimeId: AGENT_ID,
+      runId: "run:self",
+    });
+    // A scope reset, a host call, reaches the owner's own entity.
+    await h.dynamicCode.handler(
+      { caller: authenticatedCaller(AGENT_ID, "do"), causalParent: agentCtx().causalParent },
+      "reset",
+      [{}]
+    );
+    expect(h.calls.find((call) => call.method === "reset")?.ref).toMatchObject({
+      className: "AiChatWorker",
+      objectKey: "k",
+    });
+    // The finite scope is a session entity's: the owner keeps its kernel for its own life.
+    await expect(
+      h.dynamicCode.handler(agentCtx(), "admit", [
+        inlineEvalStart({ runId: "run:finite", code: "return 1;", lifecycle: "finite" }),
+      ])
+    ).rejects.toThrow(/finite scope is a session entity/);
+  });
+
+  it("keeps a session entity for an owner whose class does not declare that it hosts the kernel", async () => {
+    const h = selfHostingHarness(false);
+    const admission = (await h.dynamicCode.handler(agentCtx(), "admit", [
+      inlineEvalStart({ runId: "run:session", code: "return 1;" }),
+    ])) as { hostId: string };
+    expect(h.createEntity).toHaveBeenCalledOnce();
+    expect(admission.hostId).toMatch(/^do:workers\/session:SessionDO:/);
+  });
+});
+
 describe("dynamicCode admission — agent bindings", () => {
   // Plan §6.4: an `agent` caller binds to its host-verified entity binding with
   // zero flags; the kernel trusts the binding, not client-supplied owner/context.

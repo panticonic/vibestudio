@@ -34,6 +34,7 @@ import { codePrincipal } from "@vibestudio/shared/authority/codePrincipal";
 import type { TaskAuthorityRegistry } from "./taskAuthorityRegistry.js";
 import { assertAgentCausalParent, createDynamicCodeAdmission } from "./dynamicCodeAdmission.js";
 import { resolveCodeIdentity } from "./principalIdentity.js";
+import { entityHostRef } from "@vibestudio/shared/evalRuntimeIdentity";
 
 type SessionRef = { source: string; className: string; objectKey: string };
 
@@ -104,6 +105,12 @@ export function createDynamicCodeService(deps: {
    * release, relay-drain, cleanup, and durable-reaper path. */
   retireEntity: (id: string) => Promise<void>;
   workspaceId: string;
+  /**
+   * Whether a class declares (in its manifest) that it hosts the eval kernel in its own cell. An
+   * owner of such a class hosts its own runs (§6.11.6): its runtime id is the executor and no session
+   * entity is created.
+   */
+  hostsEvalKernel?: (source: string, className: string) => boolean;
   /** Resolve the actual sealed artifact, including source provenance, for a live code identity. */
   resolveExecutionArtifact: (
     code: VerifiedCodeIdentity
@@ -156,6 +163,31 @@ export function createDynamicCodeService(deps: {
   /** The session entity's identity and object-key derivation share one canonical helper. */
   const sessionEntityId = (objectKey: string): string =>
     `do:${EVAL_HOST_SOURCE}:${EVAL_HOST_CLASS}:${objectKey}`;
+
+  const entityIdOfRef = (ref: SessionRef): string =>
+    `do:${ref.source}:${ref.className}:${ref.objectKey}`;
+
+  /**
+   * The owner itself, when its class declares that it hosts the kernel: the kernel acts as the owner
+   * and its runs are the owner's own, so no session entity stands between them.
+   */
+  async function selfHostOf(
+    ownerId: string
+  ): Promise<{ ref: SessionRef; contextId: string } | null> {
+    if (!deps.hostsEvalKernel) return null;
+    const record = store.cache.resolveActive(ownerId) ?? (await store.resolveRecord(ownerId));
+    if (!record || record.kind !== "do" || record.status !== "active" || !record.className)
+      return null;
+    if (!deps.hostsEvalKernel(record.source.repoPath, record.className)) return null;
+    const ref = entityHostRef(record);
+    return ref ? { ref, contextId: record.contextId } : null;
+  }
+
+  const sessionRef = (objectKey: string): SessionRef => ({
+    source: EVAL_HOST_SOURCE,
+    className: EVAL_HOST_CLASS,
+    objectKey,
+  });
 
   const activeRunKey = (evalRuntimeId: string, runId: string): string =>
     `${evalRuntimeId}\0${runId}`;
@@ -304,8 +336,30 @@ export function createDynamicCodeService(deps: {
     subKey: string,
     requestedLifecycle: "finite" | "persistent",
     agentBinding: RuntimeAgentBinding | undefined
-  ): Promise<{ objectKey: string }> {
+  ): Promise<{ ref: SessionRef }> {
     const { ownerId, contextId } = owner;
+    const selfHost = await selfHostOf(ownerId);
+    if (selfHost) {
+      if (selfHost.contextId !== contextId)
+        throw new ServiceError(
+          "dynamicCode",
+          "admit",
+          "A self-hosting owner's kernel cannot change the owner's context",
+          "EACCES",
+          undefined,
+          "access"
+        );
+      if (requestedLifecycle === "finite")
+        throw new ServiceError(
+          "dynamicCode",
+          "admit",
+          "An entity that hosts its own kernel keeps it for its own life: a finite scope is a session entity's",
+          "EINVAL",
+          undefined,
+          "application"
+        );
+      return { ref: selfHost.ref };
+    }
     const objectKey = sessionObjectKey(ownerId, subKey);
     // Eviction preserves a scope; retirement closes it. A cache miss must read
     // durable ownership before deciding that these coordinates are unused.
@@ -350,7 +404,7 @@ export function createDynamicCodeService(deps: {
       activeStateArgs?.["ownerPrincipalId"] === ownerId &&
       typeof activeStateArgs["agentExecutionAdmission"] === "object"
     ) {
-      return { objectKey };
+      return { ref: sessionRef(objectKey) };
     }
     // Create the session entity through the ordinary path, with the owner as its
     // parent and its context as the owner's, so the kernel's own fs/git/vcs
@@ -378,7 +432,7 @@ export function createDynamicCodeService(deps: {
       },
       agentBinding ? { agentBinding } : undefined
     );
-    return { objectKey };
+    return { ref: sessionRef(objectKey) };
   }
 
   /**
@@ -391,7 +445,7 @@ export function createDynamicCodeService(deps: {
     ctx: ServiceContext;
     activityId: string | undefined;
   }): () => void {
-    const evalRuntimeId = sessionEntityId(input.evalDoRef.objectKey);
+    const evalRuntimeId = entityIdOfRef(input.evalDoRef);
     const activeKey = activeRunKey(evalRuntimeId, input.runId);
     let admissionClosed = false;
     const closeAdmission = () => {
@@ -490,6 +544,8 @@ export function createDynamicCodeService(deps: {
   ): Promise<{ source: string; className: string; objectKey: string } | null> {
     const owner = await resolveOwnerForCaller(ctx, route);
     const scopeKey = route.scopeKey ?? "default";
+    const selfHost = await selfHostOf(owner.ownerId);
+    if (selfHost) return selfHost.ref;
     const objectKey = sessionObjectKey(owner.ownerId, scopeKey);
     const entityId = sessionEntityId(objectKey);
     const existing = store.cache.resolveActive(entityId) ?? (await store.resolveRecord(entityId));
@@ -557,7 +613,7 @@ export function createDynamicCodeService(deps: {
     assertAgentCausalParent(ctx, agentBinding);
     // Refuse an unscoped or trajectory-drifting agent relay before creating
     // a session or exposing any presenter authority ceiling.
-    const { objectKey } = await ensureSession(
+    const { ref: hostRef } = await ensureSession(
       ctx,
       owner,
       runArgs.scope?.key ?? "default",
@@ -568,7 +624,7 @@ export function createDynamicCodeService(deps: {
     const timeoutMs = runArgs.timeoutMs;
     const chatBinding = isAgentDo ? { channelId: agentBinding.channelId, agentRef: ownerId } : {};
     const parent = (await resolveParentPanel(ownerId)) ?? undefined;
-    const evalRuntimeId = sessionEntityId(objectKey);
+    const evalRuntimeId = entityIdOfRef(hostRef);
     // The harness is the owner's own sealed code when it has one; an owner with
     // none (a user or CLI session) is mediated by the session entity's sealed image.
     const ownerHarness = resolveCodeIdentity(store.cache, ownerId);
@@ -614,7 +670,6 @@ export function createDynamicCodeService(deps: {
       );
     }
 
-    const hostRef = { source: EVAL_HOST_SOURCE, className: EVAL_HOST_CLASS, objectKey };
     const stopReconcile = reconcileWhileWaiting(evalRuntimeId, hostRef, runId);
     let admitted: Awaited<ReturnType<typeof admission.admit>>;
     try {
@@ -693,9 +748,8 @@ export function createDynamicCodeService(deps: {
           ctx.caller.code?.executionDigest ? codePrincipal(ctx.caller.code) : null,
         ].filter((value): value is string => value !== null),
       });
-      const evalDoRef = { source: EVAL_HOST_SOURCE, className: EVAL_HOST_CLASS, objectKey };
       return {
-        evalDoRef,
+        evalDoRef: hostRef,
         assembledArgs: {
           runId,
           code: exactSource.code,
@@ -784,7 +838,7 @@ export function createDynamicCodeService(deps: {
           );
         }
         const prepared = await prepareRun(ctx, input, input.runId);
-        const evalRuntimeId = sessionEntityId(prepared.evalDoRef.objectKey);
+        const evalRuntimeId = entityIdOfRef(prepared.evalDoRef);
         trackAdmission({
           evalDoRef: prepared.evalDoRef,
           runId: input.runId,

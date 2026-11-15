@@ -6,7 +6,7 @@ function event(
   overrides: Partial<EvalAuthorityEvent> = {}
 ): EvalAuthorityEvent {
   return {
-    objectKey: "owner",
+    host: { source: "workers/session", className: "SessionDO", objectKey: "owner" },
     runId: "run-1",
     kind,
     payload: { kind },
@@ -43,10 +43,23 @@ describe("EvalAuthorityEventJournal", () => {
 
     journal.append(event("authority-requested"));
     journal.append(event("authority-decided"));
-    journal.append(event("authority-requested", { objectKey: "other-owner", runId: "other-run" }));
+    journal.append(
+      event("authority-requested", {
+        host: {
+          source: "workers/agent-worker",
+          className: "AiChatWorker",
+          objectKey: "other-owner",
+        },
+        runId: "other-run",
+      })
+    );
 
     await vi.waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
-    expect(dispatch.mock.calls.map((call) => call[0].objectKey)).toEqual(["owner", "other-owner"]);
+    // The entity that hosts the kernel is a session entity or an entity that hosts its own kernel.
+    expect(dispatch.mock.calls.map((call) => call[0].className)).toEqual([
+      "SessionDO",
+      "AiChatWorker",
+    ]);
     releaseFirst();
     await journal.close();
 

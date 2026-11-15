@@ -116,6 +116,7 @@ describe("eval execution root publication ingress", () => {
               id: runtimeId,
               kind: "do",
               className: "SessionDO",
+              key: "object-one",
               source: { repoPath: "workers/session", effectiveVersion: "one" },
               contextId: "context:one",
               activeExecutionDigest: "d".repeat(64),
@@ -152,6 +153,46 @@ describe("eval execution root publication ingress", () => {
       expect(finalize).toHaveBeenCalledWith({ reservationId: "reservation:one", epoch: 1 });
     }
   );
+
+  it("serves an entity that hosts its own kernel, and reaches that entity", async () => {
+    const hostId = "do:workers/agent-worker:AiChatWorker:agent-one";
+    const reserve = vi.fn(() => ({ reservationId: "reservation:one", epoch: 1 }));
+    const dispatch = vi.fn(async () => undefined);
+    const fact = { ...execution(), executor: { ...execution().executor, runtimeId: hostId } };
+    const service = createEvalExecutionRootsService({
+      executionSessions: { resolve: () => fact, resolveInvocation: () => fact },
+      publicationPort: { reserve, finalize: vi.fn() },
+      doDispatch: { dispatch } as never,
+      hostsEvalKernel: (source, className) =>
+        source === "workers/agent-worker" && className === "AiChatWorker",
+      entityStore: {
+        cache: {
+          resolveActive: () => ({
+            id: hostId,
+            kind: "do",
+            className: "AiChatWorker",
+            key: "agent-one",
+            source: { repoPath: "workers/agent-worker", effectiveVersion: "one" },
+            contextId: "context:one",
+            activeExecutionDigest: "d".repeat(64),
+          }),
+        },
+      } as never,
+    });
+    const ctx = context();
+    ctx.caller.runtime = { id: hostId, kind: "do" };
+    const ref = artifact();
+    await expect(
+      service.handler(ctx, "retain", [runId, "@workspace/example", ref])
+    ).resolves.toEqual({ retained: true });
+    expect(dispatch).toHaveBeenCalledWith(
+      { source: "workers/agent-worker", className: "AiChatWorker", objectKey: "agent-one" },
+      "retainExecutionRoot",
+      runId,
+      "@workspace/example",
+      ref
+    );
+  });
 
   it.each(["wrong-run", "evaluated-code", "website-code", "wrong-kernel"])(
     "rejects %s at the sealed kernel boundary",

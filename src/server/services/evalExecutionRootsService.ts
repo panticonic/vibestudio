@@ -1,11 +1,5 @@
-import { requireEvalKernel } from "./evalKernelAuthority.js";
-import {
-  EVAL_HOST_CLASS,
-  EVAL_HOST_SOURCE,
-  evalHostObjectKeyOf,
-  isEvalHostRecord,
-  isEvalHostRuntimeId,
-} from "@vibestudio/shared/evalRuntimeIdentity";
+import { isEvalHost, requireEvalKernel, type HostsEvalKernel } from "./evalKernelAuthority.js";
+import { entityHostRef } from "@vibestudio/shared/evalRuntimeIdentity";
 import type { AgentExecutionSessionRegistry } from "./agentExecutionSessionRegistry.js";
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { ServiceAccessError } from "@vibestudio/shared/serviceDispatcher";
@@ -29,6 +23,8 @@ export function createEvalExecutionRootsService(deps: {
   entityStore: WorkspaceEntityStore;
   publicationPort: ExecutionPublicationPort;
   executionSessions: Pick<AgentExecutionSessionRegistry, "resolve" | "resolveInvocation">;
+  /** Classes that host their own kernel (§6.11.6) are eval hosts like a session entity. */
+  hostsEvalKernel?: HostsEvalKernel;
 }): ServiceDefinition {
   return {
     name: "evalExecutionRoots",
@@ -45,16 +41,16 @@ export function createEvalExecutionRootsService(deps: {
           ctx.caller,
           deps.entityStore.cache,
           "evalExecutionRoots",
-          "retain"
+          "retain",
+          deps.hostsEvalKernel
         );
         if (
           !execution ||
           execution.executor.kind !== "dynamic-code" ||
           execution.executor.runtimeId !== ctx.caller.runtime.id ||
           execution.executor.runId !== runId ||
-          !isEvalHostRuntimeId(ctx.caller.runtime.id) ||
           !entity ||
-          !isEvalHostRecord(entity) ||
+          !isEvalHost(entity, deps.hostsEvalKernel) ||
           entity.contextId !== execution.contextId
         ) {
           throw new ServiceAccessError(
@@ -65,7 +61,7 @@ export function createEvalExecutionRootsService(deps: {
           );
         }
         const artifact = verifyExecutionArtifactRef(artifactInput);
-        const objectKey = evalHostObjectKeyOf(ctx.caller.runtime.id)!;
+        const host = entityHostRef(entity)!;
         const ownerId = `${ctx.caller.runtime.id}:${runId}:${moduleSpecifier}`;
         await publishExecutionOwnerAsync(
           deps.publicationPort,
@@ -81,13 +77,7 @@ export function createEvalExecutionRootsService(deps: {
           },
           () =>
             deps.doDispatch
-              .dispatch(
-                { source: EVAL_HOST_SOURCE, className: EVAL_HOST_CLASS, objectKey },
-                "retainExecutionRoot",
-                runId,
-                moduleSpecifier,
-                artifact
-              )
+              .dispatch(host, "retainExecutionRoot", runId, moduleSpecifier, artifact)
               .then(() => undefined)
         );
         return { retained: true as const };

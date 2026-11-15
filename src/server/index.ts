@@ -141,11 +141,11 @@ import {
 import { WorkspaceCreationDescriptorSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import { getCentralDataPath } from "@vibestudio/env-paths";
 import {
-  EVAL_HOST_CLASS,
-  EVAL_HOST_SOURCE,
-  evalHostObjectKeyOf,
+  declaresEvalKernel,
+  entityHostRef,
   isEvalHostRecord,
 } from "@vibestudio/shared/evalRuntimeIdentity";
+import { isEvalHost } from "./services/evalKernelAuthority.js";
 import { entityOfCodeIdentity } from "./services/principalIdentity.js";
 import {
   resolveHistoricalWorkspaceHost,
@@ -4111,7 +4111,7 @@ async function main() {
       | null = null;
     container.registerManaged({
       name: "dynamicCode",
-      dependencies: ["workerdWorkspace", "runtimeManager", "doDispatch", "runtime"],
+      dependencies: ["workerdWorkspace", "runtimeManager", "doDispatch", "runtime", "buildSystem"],
       async start(resolve) {
         const doDispatch = assertPresent(
           resolve<import("./doDispatch.js").DODispatch>("doDispatch")
@@ -4119,6 +4119,23 @@ async function main() {
         const runtime = assertPresent(
           resolve<import("./services/runtimeService.js").RuntimeServiceResult>("runtime")
         );
+        const evalBuildSystem = assertPresent(
+          resolve<import("./buildV2/index.js").BuildSystemV2>("buildSystem")
+        );
+        // A class that declares, in its manifest, that it hosts the eval kernel hosts its own runs
+        // (docs/dolt-redesign.md §6.11.6): the entity is the executor and its own eval host.
+        const hostsEvalKernel = (source: string, className: string): boolean =>
+          evalBuildSystem
+            .getGraph()
+            .allNodes()
+            .some(
+              (node) =>
+                node.kind === "worker" &&
+                node.relativePath === source &&
+                (node.manifest.durable?.classes ?? []).some(
+                  (entry) => entry.className === className && declaresEvalKernel(entry.hosts)
+                )
+            );
         const evalEntityStore = ensureEntityStore(doDispatch);
         const { createEvalExecutionRootsService } =
           await import("./services/evalExecutionRootsService.js");
@@ -4128,6 +4145,7 @@ async function main() {
             executionSessions: agentExecutionSessions,
             entityStore: evalEntityStore,
             publicationPort: executionPublicationJournal,
+            hostsEvalKernel,
           })
         );
         evalRunRootProvider.bind({
@@ -4135,12 +4153,12 @@ async function main() {
           mandatory: true,
           async snapshotRoots() {
             const entities = (await evalEntityStore.listActive("do")).filter(
-              (entity) => isEvalHostRecord(entity) && typeof entity.key === "string"
+              (entity) => isEvalHost(entity, hostsEvalKernel) && typeof entity.key === "string"
             );
             const roots = [];
             for (const entity of entities) {
               const retained = (await doDispatch.dispatch(
-                { source: EVAL_HOST_SOURCE, className: EVAL_HOST_CLASS, objectKey: entity.key! },
+                entityHostRef(entity)!,
                 "executionRoots"
               )) as Array<{
                 runId: string;
@@ -4166,10 +4184,11 @@ async function main() {
         dispatcher.setAuthorityObserver(({ executionSession, kind, payload }) => {
           const executor = executionSession.executor;
           if (executor.kind !== "dynamic-code") return;
-          const objectKey = evalHostObjectKeyOf(executor.runtimeId);
-          if (!objectKey) return;
+          const record = entityCache.resolveActive(executor.runtimeId);
+          const host = record && isEvalHost(record, hostsEvalKernel) ? entityHostRef(record) : null;
+          if (!host) return;
           authorityEvents.append({
-            objectKey,
+            host,
             runId: executor.runId,
             kind,
             payload: {
@@ -4183,6 +4202,7 @@ async function main() {
         dynamicCodeDefinition = createDynamicCodeService({
           doDispatch,
           entityStore: evalEntityStore,
+          hostsEvalKernel,
           createEntity: (caller, spec, trusted) =>
             runtime.internal.createEntity(caller, spec, trusted),
           retireEntity: (id) => runtime.internal.retireEntity(id),

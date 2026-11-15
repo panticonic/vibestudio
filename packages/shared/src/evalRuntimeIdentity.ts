@@ -7,6 +7,9 @@ import { createHash } from "node:crypto";
  * eval run's executor.
  */
 export const EVAL_HOST_SOURCE = "workers/session";
+/** The class of dynamic code an eval host hosts: a session entity, or any entity whose manifest `hosts` it. */
+export const EVAL_KERNEL_SOURCE = "workers/eval-kernel";
+export const EVAL_KERNEL_CLASS = "EvalKernel";
 export const EVAL_HOST_CLASS = "SessionDO";
 const EVAL_HOST_PREFIX = `do:${EVAL_HOST_SOURCE}:${EVAL_HOST_CLASS}:`;
 
@@ -44,6 +47,32 @@ export function isEvalHostRecord(record: {
     record.className === EVAL_HOST_CLASS &&
     record.source.repoPath === EVAL_HOST_SOURCE
   );
+}
+
+/**
+ * Whether a manifest's `hosts` entries name the eval kernel: the class hosts its own kernel
+ * (docs/dolt-redesign.md §6.11.6). Such an entity is an eval host itself: the kernel acts as it, so
+ * its runtime id is the executor of its runs and no session entity stands between them.
+ */
+export function declaresEvalKernel(
+  hosts: ReadonlyArray<{ source: string; className: string }> | undefined
+): boolean {
+  return (
+    hosts?.some(
+      (entry) => entry.source === EVAL_KERNEL_SOURCE && entry.className === EVAL_KERNEL_CLASS
+    ) === true
+  );
+}
+
+/** The call coordinate of the entity a record describes. */
+export function entityHostRef(record: {
+  className?: string;
+  key?: string;
+  source: { repoPath: string };
+}): { source: string; className: string; objectKey: string } | null {
+  return record.className && record.key
+    ? { source: record.source.repoPath, className: record.className, objectKey: record.key }
+    : null;
 }
 
 /**
