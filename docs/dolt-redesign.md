@@ -1792,51 +1792,56 @@ conversation for its task channel with the same `adoptChannelKnowledge`.
 **S6a.** The executor fact is `kind: "dynamic-code"` with a `runId` (it was `kind: "eval"` with an `evalRunId`),
 in the wire type, the registry, the admission, the roots and live-caller consumers and their tests.
 
-**S6b, as built (2026-11-15).** An agent hosts its own eval kernel; no session entity stands between an agent
-and its runs.
+**S6b (2026-11-15): the host side is done; the agent side was built, run on the real stack, found to hang, and
+is held on a branch.** The design: an agent hosts its own eval kernel, and no session entity stands between an
+agent and its runs.
 
-- **Manifests.** `AiChatWorker` and `SilentAgentWorker` declare `hosts: [{ source: "workers/eval-kernel",
-className: "EvalKernel" }]`. The host recognises an eval host by that declaration, not by a class name:
-  `declaresEvalKernel` (shared) over the build graph's `durable.classes[].hosts`, behind one predicate
-  (`hostsEvalKernel`, `index.ts`) that `dynamicCode`, `evalExecutionRoots`, the root provider and the authority
-  observer take. `isEvalHost(record, hostsEvalKernel)` is the session entity or such a class
-  (`evalKernelAuthority.ts`); `isEvalHostRecord` stays the session entity's own test.
-- **Admission.** `dynamicCode.admit` resolves the owner; when the owner's class hosts the kernel, the host entity
-  is the owner (`selfHostOf`): the executor's runtime id is the agent's own, the harness identity is the agent's
-  own sealed code (as it already was for an agent), and no session entity is created. This holds only when
-  **the owner itself asks, for a persistent scope**: a shell, the server or a test runner that selects the
-  agent as the target of its run (`owner-session`) is another principal with its own scope, and a **finite**
-  scope is a utility scope with a life of its own (the system-test harness runs its probes as the headless
-  agent and disposes them); both stay session entities, as before (found by `eval-events`, whose harness
-  probes run as an `AiChatWorker`). Host controls reach the agent's methods by their names (`get`, `cancel`,
-  `reset`, `recordAuthorityEvent`, `retainExecutionRoot`, `executionRoots`).
-- **The agent.** `HostedEvalKernel` (`packages/agentic-do/src/hosted-eval-kernel.ts`) holds the relay once; the
-  vessel exposes `start`, `await`, `events`, `cancel`, `get`, `receipt`, `acknowledge`, `readScopeTextPage`,
-  `deleteScopeValue`, `end` (the agent itself or the host) and `reset`, `recordAuthorityEvent`,
-  `retainExecutionRoot`, `executionRoots` (the host only). Every call to the kernel is `{ kind: "host" }`: no
-  admission nonce, the agent is the kernel's only principal (§7.5.1). The agent's tool, await task and
-  acknowledgement address `evalHostId(ownerId)`, which is the owner. A call an agent makes to its own id is
-  delivered in-process by its rpc client with **no verified caller**; the vessel accepts exactly that and the
-  host (a call from outside always carries the caller the host verified). The chat/describe relays
-  (`chatOp`, `describeEvalOwner`, ...) now check that the caller is the agent itself, because the kernel acts as
-  the agent.
-- **Lifecycle.** `releaseForLifecycle` relays each phase to the kernel first (runs cancelled, panels it opened
-  retired, the residency hold released on `release`), then to the agent's own release. `onHostedRevoked` needs
-  nothing in the agent: the root relays a drain or swap to each hosted facet, and the kernel class owns the
-  callback.
-- **Deviations from §7.2 and §7.5.1, each forced.** (1) **One kernel per agent, one notebook scope for the whole
-  agent.** The execution-session registry admits one live run per executing runtime id, and a kernel's outbound
-  calls are attributed to its entity; several kernels in one entity (one per conversation scope, as session
-  entities give) would need the registry keyed by (entity, scope). The agent's former per-conversation
-  notebooks are therefore one; runs of different conversations queue behind each other at admission, as the
-  runs of one conversation always did. (2) **Approvals of an agent's own eval are titled as the agent's** (the
-  requester is the agent entity; `approvalCallerTitle`'s "eval sandbox" title is for session entities).
-  (3) **The kernel's channel-delivery relay** (resident sessions) is not on the agent: an agent's eval reaches
-  channels through `chatOp`, never through resident sessions. (4) The kernel's infrastructure calls run under
-  the agent's sealed authority, as the design says; the agent's manifest was not widened for it (see the lanes).
-  (5) **The census activates every self-hosting agent**: `executionRoots` is a call on each active agent entity
-  (the session entity answered `[]` without starting a kernel and so does the agent, but the agent's own
-  activation is the cost).
+_Done and kept (host, `main` of this branch):_
+
+- The host recognises an eval host by the manifest, not a class name: `declaresEvalKernel` (shared) over the build
+  graph's `durable.classes[].hosts`, behind one predicate (`hostsEvalKernel`, `index.ts`) that `dynamicCode`,
+  `evalExecutionRoots`, the root provider and the authority observer take; `isEvalHost(record, hostsEvalKernel)` is a
+  session entity or such a class (`evalKernelAuthority.ts`); the authority-event journal and the roots service name
+  the host entity from its record instead of assuming a session entity.
+- `dynamicCode.admit` hosts a run on **the owner itself when the owner asks, for a persistent scope** (`selfHostOf`):
+  the executor's runtime id is the owner's, the harness identity the owner's own sealed code, no session entity. A
+  principal that targets the owner (`owner-session`: a shell, the server, a test runner) and a **finite** scope stay
+  session entities (found by `eval-events`: the system-test harness runs its probes as the headless `AiChatWorker`
+  with finite scopes). No class declares `hosts` for the kernel except the session class, so nothing changes in
+  the product yet; tests: `dynamicCodeService.test.ts`, `evalExecutionRootsService.test.ts`,
+  `evalAuthorityEventJournal.test.ts`.
+
+_Built and held (Base branch `feat/dolt-p2-s6b-agent-hosting`, host branch `feat/dolt-p0-s6b-agent-hosting`):_
+`hosts` in the manifests of `AiChatWorker` and `SilentAgentWorker`; `HostedEvalKernel`
+(`packages/agentic-do/src/hosted-eval-kernel.ts`), the relay once, and the vessel's `start`, `await`, `events`,
+`cancel`, `get`, `receipt`, `acknowledge`, `readScopeTextPage`, `deleteScopeValue`, `end` (the agent itself or the
+host), `reset`, `recordAuthorityEvent`, `retainExecutionRoot`, `executionRoots` (the host only), every call to the
+kernel `{ kind: "host" }` with no nonce; the tool, the await task and the acknowledgement address the owner
+(`evalHostId`); the lifecycle relays each phase to the kernel first. `onHostedRevoked` needed nothing in the agent
+(the root relays a drain or swap to each hosted facet, and the kernel owns the callback).
+
+_What the real stack found (each is in the branch, with its test):_ (1) a call an agent makes to its own id is
+delivered **in-process by its rpc client with no verified caller**; the vessel accepts exactly that and the host.
+(2) The kernel acts as the agent, so **its calls to the agent are addressed to its own `selfId` and the kernel's
+client answers them itself** ("Method `describeEvalOwner` is not exposed by this endpoint": every `agent.*`,
+`chat.*` and outside-content report of an agent's eval). `loopback: false` on the rpc client of a hosted class
+(`client-core.ts`, `connectionless-core.ts`, both durable bases; rpc test) sends them out.
+(3) **With that, the call hangs.** The host receives it (`handleEnvelopeRequest`: the caller resolves, the
+execution session is the run's) and the call never reaches the agent (a log line at the method's entry never
+prints, `DOTrace` shows no `describeEvalOwner`), so `agent-debug-state-method` never finishes and the
+harness's retire of the headless session hangs after it (`DurableWorkDriver readiness scan failed ... not
+registered as an active runtime entity`, repeated). The wait is between `resolveCaller` and the dispatch into the
+DO: the authority attestation of a guest's call to a userland method (an acquisition the kernel's client waits
+on: `authorityAcquisition: "wait"`) or the target's readiness are the two candidates, and nothing in this pass
+told them apart. Under a session entity the same call carries `evalOrigin` (the owner), which the agent-owned
+runs lost when the entity became the agent: **that is the first thing to read** (`principalIdentity.ts`
+`evalOwner`, `credentialGrantIdentity.ts`, the relay's attestation), then the readiness gate for a call whose
+caller is its own target.
+
+- **Deviations from §7.2 and §7.5.1 the branch makes (each forced):** one kernel per agent and one notebook scope for
+  the whole agent (the registry admits one live run per executing runtime id and attributes a kernel's calls to its
+  entity); approvals of an agent's own eval are titled as the agent's; no resident-session relay on the agent; the
+  census activates every self-hosting agent.
 
 #### 6.11.7 What the product lanes found (the last of the pass)
 
@@ -2547,8 +2552,10 @@ Each step is a complete cut that keeps the system working.
    Done since step 4: a run's `timeoutMs` bounds its CPU (§7.8, celld `ec0d6f5`), a run ended by its CPU limit
    is settled by its deadline (§7.8, celld `2d1749d`, Base `bd89d94`), the D5 restart report is a message
    (§7.10), the cost of a kernel run is measured (§7.7).
-7. **Done** (2026-11-15, §6.11.6 "S6b, as built"): the agent hosts its own kernel (`hosts` in the agent classes'
-   manifests, the host's manifest-based eval-host recognition, the executor fact `kind: "dynamic-code"`).
+7. **Host side done, agent side held** (2026-11-15, §6.11.6): the host's manifest-based eval-host recognition and the
+   owner-hosted admission are in; the agent hosting its own kernel hangs on the kernel's calls to the agent and is on
+   branches (`feat/dolt-p2-s6b-agent-hosting`, `feat/dolt-p0-s6b-agent-hosting`). The executor fact is `kind:
+"dynamic-code"` (S6a).
 
 ---
 
