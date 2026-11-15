@@ -2332,6 +2332,8 @@ export default { fetch() { return new Response("chunked host"); } };`;
         contextId: "source-context",
       });
       const reservation = cloneReservation(cellRef("parent"), "child", manager);
+      // The second fork of the measurement below, reserved while the source image is known.
+      const bigReservation = cloneReservation(cellRef("parent"), "child-big", manager);
       await manager.restoreDurableObjectEntity({
         ...sourceOwner(reservation),
         source: { repoPath: CELL, effectiveVersion: prepared.effectiveVersion },
@@ -2426,8 +2428,9 @@ export default { fetch() { return new Response("chunked host"); } };`;
       const afterGc = fileBytes();
       const sorted = [...run.perTurnMs].sort((x, y) => x - y);
       // A fork of the loaded cell at its newest turn commit: a copy of the whole file.
-      const latest = (await state("parent")).commits.find(([, message]) => message.startsWith("agent: turn closed"))![0];
-      const bigReservation = cloneReservation(cellRef("parent"), "child-big", manager);
+      const latest = (await state("parent")).commits.find(([, message]) =>
+        message.startsWith("agent: turn closed")
+      )![0];
       const forkStarted = performance.now();
       await manager.forkObjectStorage(cellRef("parent"), "child-big", {
         reservation: bigReservation,
