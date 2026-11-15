@@ -217,6 +217,26 @@ function looseShape(shape: string): string {
   }
 }
 
+/**
+ * A Dolt store drops `--` comments from the DDL it keeps, and the shape of an object is taken from
+ * text whose line breaks are already gone, so a line comment swallows the rest of its statement in
+ * the fingerprint the build trusts and the shape no longer matches once the engine has rendered the
+ * text. Refuse it where it is written, not at a later activation.
+ */
+function assertNoLineComments(definition: DurableObjectSchemaDefinition): void {
+  const rows = definition.storage.sql
+    .exec(`SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL AND ${APPLICATION_OBJECT}`)
+    .toArray();
+  for (const row of rows) {
+    const text = String(row["sql"]).replace(/'(?:[^']|'')*'/gu, "''");
+    if (/--/u.test(text))
+      throw new Error(
+        `${definition.className}: the DDL of ${String(row["name"])} has a "--" comment. A Dolt store drops ` +
+          "comments, so its shape would not match the fingerprint the build trusts: move it out of the SQL"
+      );
+  }
+}
+
 function normalizeIndexSql(value: string): string {
   // Index definitions are compared loosely everywhere: the declared text is
   // code, so equality under looser spacing admits nothing a store could forge,
@@ -440,6 +460,7 @@ export async function installDurableObjectSchema(
       definition.storage.sql.exec(`CREATE TABLE state (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
       await definition.createSchema();
       await definition.validateSchema();
+      if (dolt) assertNoLineComments(definition);
       const shape = shapeNow();
       validateTargetFingerprint(definition, shape, comparable);
       createMetadata(definition, shape);

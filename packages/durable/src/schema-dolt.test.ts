@@ -352,4 +352,31 @@ describe("the rendering rule of celld's dolt-cells.md, 'Schema text'", () => {
       looseSql("CREATE TABLE t (a TEXT DEFAULT 'y')")
     );
   });
+
+  it("refuses DDL with a line comment on a Dolt store, where a later activation would find its shape drifted", async () => {
+    const fake = await dolt();
+    const base = definition(fake);
+    await expect(
+      installDurableObjectSchema({
+        ...base,
+        createSchema: () => {
+          fake.sql.exec(
+            "CREATE TABLE items (id TEXT PRIMARY KEY, -- the key\n body TEXT NOT NULL)"
+          );
+        },
+        validateSchema: () => {},
+      })
+    ).rejects.toThrow(/"--" comment/);
+    // A dash pair inside a string literal is not a comment.
+    const quoted = await dolt();
+    await installDurableObjectSchema({
+      ...definition(quoted),
+      createSchema: () => {
+        quoted.sql.exec(
+          "CREATE TABLE items (id TEXT PRIMARY KEY, body TEXT NOT NULL DEFAULT 'a--b')"
+        );
+      },
+      validateSchema: () => {},
+    });
+  });
 });
