@@ -172,9 +172,12 @@ export function createDynamicCodeService(deps: {
    * and its runs are the owner's own, so no session entity stands between them.
    */
   async function selfHostOf(
-    ownerId: string
+    ownerId: string,
+    callerId: string
   ): Promise<{ ref: SessionRef; contextId: string } | null> {
-    if (!deps.hostsEvalKernel) return null;
+    // Only the owner itself: a shell, the server or a test runner that selects the owner as the target of its
+    // own run (an `owner-session` target) is another principal with its own scope, and gets a session entity.
+    if (!deps.hostsEvalKernel || ownerId !== callerId) return null;
     const record = store.cache.resolveActive(ownerId) ?? (await store.resolveRecord(ownerId));
     if (!record || record.kind !== "do" || record.status !== "active" || !record.className)
       return null;
@@ -338,7 +341,7 @@ export function createDynamicCodeService(deps: {
     agentBinding: RuntimeAgentBinding | undefined
   ): Promise<{ ref: SessionRef }> {
     const { ownerId, contextId } = owner;
-    const selfHost = await selfHostOf(ownerId);
+    const selfHost = await selfHostOf(ownerId, ctx.caller.runtime.id);
     if (selfHost) {
       if (selfHost.contextId !== contextId)
         throw new ServiceError(
@@ -544,7 +547,7 @@ export function createDynamicCodeService(deps: {
   ): Promise<{ source: string; className: string; objectKey: string } | null> {
     const owner = await resolveOwnerForCaller(ctx, route);
     const scopeKey = route.scopeKey ?? "default";
-    const selfHost = await selfHostOf(owner.ownerId);
+    const selfHost = await selfHostOf(owner.ownerId, ctx.caller.runtime.id);
     if (selfHost) return selfHost.ref;
     const objectKey = sessionObjectKey(owner.ownerId, scopeKey);
     const entityId = sessionEntityId(objectKey);

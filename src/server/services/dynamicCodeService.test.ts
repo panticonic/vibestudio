@@ -1654,6 +1654,21 @@ describe("dynamicCode admission — an entity that hosts its own kernel (§6.11.
     ).rejects.toThrow(/finite scope is a session entity/);
   });
 
+  it("keeps a session entity when another principal selects the entity as its target: that run is not the entity's own", async () => {
+    const h = selfHostingHarness(true);
+    const shell = authenticatedCaller("shell:dev_cli", "shell");
+    const admission = (await h.dynamicCode.handler({ caller: shell }, "admit", [
+      {
+        runId: "run:targeted",
+        target: { kind: "owner-session" as const, sessionId: AGENT_ID },
+        scope: { key: "probe", lifecycle: "finite" as const },
+        source: { kind: "inline" as const, code: "return 1;" },
+      },
+    ])) as { hostId: string };
+    expect(h.createEntity).toHaveBeenCalledOnce();
+    expect(admission.hostId).toMatch(/^do:workers\/session:SessionDO:/);
+  });
+
   it("keeps a session entity for an owner whose class does not declare that it hosts the kernel", async () => {
     const h = selfHostingHarness(false);
     const admission = (await h.dynamicCode.handler(agentCtx(), "admit", [
