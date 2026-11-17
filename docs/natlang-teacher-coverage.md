@@ -89,7 +89,7 @@ by its parent is not automatically a correct local target merely because the roo
 
 ## Splits and breadth
 
-The initial inventory has 38 `.nl` files and 450 cases: 186 train, 128 validation, and 136 test. All 450 exact
+The current inventory has 39 `.nl` files (including the documentation search-term policy) and 450 cases: 186 train, 128 validation, and 136 test. All 450 exact
 inputs are distinct, and no declared group crosses partitions within a suite. This does not establish that
 authored scenarios are independent source worlds. Namespace groups by template and suite and preserve their
 source-family relationships when adding variants. Validation and test cases must never become training rows.

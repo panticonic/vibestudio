@@ -78,7 +78,7 @@ test("all eighteen authored suites and all450 cases have explicit portable IR en
     }
   }
   assert.equal(count, 450);
-  assert.equal(namedSources.size, 38);
+  assert.equal(namedSources.size, 39);
 });
 
 test("authored TypeScript workflows keep genuine semantic anchors and full workflow contracts", () => {

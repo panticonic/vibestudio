@@ -308,7 +308,7 @@ test("documentation lookup never searches or reads evaluation-feedback Markdown"
 });
 
 /** Load original crisp retrieval helpers with only their real service/semantic boundaries substituted. */
-function sourceRetrieval(services, judge) {
+function sourceRetrieval(services, judge, focus) {
   const root = path.join(base, "skills/sandbox/help/docHelp");
   const cache = new Map();
   const load = (file) => {
@@ -323,6 +323,11 @@ function sourceRetrieval(services, judge) {
     cache.set(file, module);
     const imported = (specifier) => {
       if (specifier === "natlang:services") return services;
+      if (specifier === "./keywords.nl")
+        return {
+          default: focus ?? ((question) => load(path.join(root, "tokens.ts")).default(question)),
+          __esModule: true,
+        };
       if (specifier === "./fits.nl") return { default: judge, __esModule: true };
       if (specifier.startsWith("./"))
         return load(path.resolve(path.dirname(file), specifier.replace(/\.js$/, ".ts")));
@@ -343,12 +348,16 @@ test("the original document world remains searchable beyond the grep result boun
         maxMatches: 1000,
       });
       assert.equal(broad.truncated, true);
-      const locate = sourceRetrieval(services, async (_question, text) => {
-        visited.push(text);
-        return text.includes("@workspace-extensions/typecheck-service.checkPanel")
-          ? "answers"
-          : "no";
-      });
+      const locate = sourceRetrieval(
+        services,
+        async (_question, text) => {
+          visited.push(text);
+          return text.includes("@workspace-extensions/typecheck-service.checkPanel")
+            ? "answers"
+            : "no";
+        },
+        async () => ["typecheck", "panel"]
+      );
       return locate("How do I typecheck a single panel before I publish it?");
     },
     [
@@ -361,6 +370,7 @@ test("the original document world remains searchable beyond the grep result boun
   assert.equal(metric.quality, 1, JSON.stringify({ metric, result }));
   assert.ok(result.found.some((entry) => entry.source === "skills/workspace-dev/TOOLS.md"));
   assert.ok(visited.some((text) => text.includes("getBuildReport")));
+  assert.ok(visited.length <= 12, `Relevant passage rank required ${visited.length} decisions`);
 });
 
 test("retrieval continues after an entire rejected batch and keeps source quotes exact", async () => {
@@ -434,4 +444,43 @@ test("retrieval reads every line page before ranking exact section quotes", asyn
   assert.deepEqual(offsets, [1, 4]);
   assert.ok(result.found[0].quote.includes("actionable instruction"));
   assert.ok(pages.join("\n").includes(result.found[0].quote));
+});
+
+test("truncated scoped retrieval resolves recursive directory entries relative to the listed scope", async () => {
+  const source = "skills/workspace-dev/TOOLS.md";
+  const { result, metric } = await scoreDocumentation(
+    async (services) => {
+      const entries = await services.fs.readdir("skills/workspace-dev", {
+        recursive: true,
+        withFileTypes: true,
+      });
+      assert.ok(entries.some((entry) => entry.name === "TOOLS.md"));
+      assert.ok(entries.every((entry) => !entry.name.startsWith("skills/workspace-dev/")));
+      const scoped = {
+        ...services,
+        fs: {
+          ...services.fs,
+          grep: (pattern, options) => services.fs.grep(pattern, { ...options, maxMatches: 1 }),
+        },
+      };
+      const locate = sourceRetrieval(
+        scoped,
+        async (_question, text) =>
+          text.includes("@workspace-extensions/typecheck-service.checkPanel") ? "answers" : "no",
+        async () => ["typecheck", "panel"]
+      );
+      return locate("How do I typecheck a panel?", { paths: ["skills/workspace-dev"] });
+    },
+    [source]
+  );
+  assert.equal(metric.quality, 1);
+  assert.ok(result.found.every((entry) => entry.source.startsWith("skills/workspace-dev/")));
+});
+
+test("selected search terms must be nonempty literal question tokens", async () => {
+  const services = { fs: {}, docs: {} };
+  for (const focus of [async () => [], async () => ["inventedToolName"]]) {
+    const locate = sourceRetrieval(services, async () => "no", focus);
+    await assert.rejects(() => locate("How do I typecheck a panel?"), /literal content words/);
+  }
 });
