@@ -97,6 +97,61 @@ Both changed filesystem files pass focused Prettier/oxlint. The commit uses the
 handover's allowed `--no-verify` exception only for that formatting baseline.
 `p4-materialize-live` was stopped and joined before these checks.
 
+**Worker validator defect found while resuming the untouched lanes.**
+`call-do-method` on `p4-workers-resilience`
+(`st_a8783784b6794fae97bb06a153457f67`, 112 s) failed with no tool failures.
+The model created the correct object with `stateArgs.probe`, called the actual
+`inspectProbe`, observed its value, and retired it. Its creation cell and cleanup
+cell each declared `const h`. The validator concatenated all cells before Babel
+parsing, so the valid local declarations became an invalid duplicate binding and
+it falsely reported missing state arguments. The check now parses each completed
+eval independently. The cross-cell regression fails before the fix; all 25
+worker-validator tests pass after it, including rejection of a duplicate binding
+within one cell. Full inspected trajectory and bounded inspection are retained
+as `trajectory-resume.json` and `inspect-resume.json` in the run artifacts.
+The instance was stopped and joined before conventional verification; the other
+three tests queued for that group did not start.
+The fix is local system-testing commit `d21afc8`, fast-forwarded onto both
+feature branches. Template typecheck passes all three configurations.
+`call-do-method` then passed on a fresh instance, `p4-workers-resilience2`
+(`st_e7a2b06975284012a58147baf19bff38`, 122 s), with no tool failures.
+
+**Installed consumer validator defect.** The next case,
+`installed-workspace-service-consumer`
+(`st_cb7f1235a59844e0aaba8a8e36213a00`, 238 s), also completed with zero tool
+failures but was rejected by a syntax-only predicate. Creation used `const h =
+await workers.create(...)`; the agent retained it in `scope.workerHandle` and
+called `scope.workerHandle.targetId` in a later eval. The validator required the
+RPC receiver to use the creation cell's local variable. That redundant predicate
+is removed: the existing native receipt join proves successful creation,
+ordered invocation on the exact target under the same owner, result fingerprint,
+and matching retirement. The regression fails before the change; all 25
+worker-validator tests pass after it, including rejection of unrelated targets
+and missing receipts.
+
+The actual retained executions for all three validator defects were revalidated
+against the fixed validators in the host-owned userland projection: **3 of 3
+pass** (`eval-exact-authority`, `call-do-method`, and the installed consumer).
+This is revalidation of captured real-stack evidence, not another model run.
+The temporary local replay test was deleted; private trajectories stay with the
+run artifacts. `p4-workers-resilience2` was stopped and joined. Neither of the
+two resilience cases queued behind the consumer started.
+This fix is local system-testing `ea84ad3`, fast-forwarded onto both feature
+branches; template typecheck passes all three configurations.
+
+**Harness resilience: 5 of 5 pass**, on fresh instance `p4-resilience`, one
+test per invocation, concurrency 1, 420 s test bounds, fork `75f1700`:
+
+| Test | Run | Duration |
+| --- | --- | --- |
+| `eval-thrown-error-then-continues` | `st_bf34a73da4cf4cd697010da5755312d8` | 39 s |
+| `eval-huge-return-bounded-terminal` | `st_c1314a0dd5d94975bdeced137317d63d` | 59 s |
+| `eval-timeout-error-visible` | `st_cd42295bc0be41f591ddcffa95c79589` | 57 s |
+| `invalid-tool-args-visible-retry` | `st_7c150d5cf631433c87a069e501327953` | 42 s |
+| `post-tool-followup-turn` | `st_95474f85c5fc40c0891f5e3b188c8023` | 37 s |
+
+No unexpected tool failures in this lane. The instance was stopped and joined.
+
 `p4-resume` was stopped and joined. Its shutdown reported
 `active-eval-cancellation` errors for three already-retired session objects;
 the supervisor still retired. Keep this evidence separate from successful
