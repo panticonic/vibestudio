@@ -887,11 +887,17 @@ export class DODispatch implements AlarmDoDispatcher, HeldDoDispatcher, Lifecycl
     arg: unknown
   ): Promise<unknown> {
     const label = `${doRefKey(ref)}.__lifecycle/${method}`;
-    const input = arg as { mode?: unknown; reason?: unknown; epoch?: unknown } | null;
+    const input = arg as {
+      mode?: unknown;
+      reason?: unknown;
+      epoch?: unknown;
+      phase?: unknown;
+    } | null;
     console.info(`[DODispatch] lifecycle started ${label}`, {
       mode: input?.mode,
       reason: input?.reason,
       epoch: input?.epoch,
+      phase: input?.phase,
     });
     try {
       const result = await this.withProgressReport(label, () =>

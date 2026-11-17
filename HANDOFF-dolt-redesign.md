@@ -55,14 +55,29 @@ correct model answer or an end-to-end latency improvement. Do not report P4
 complete from this pass. The exact-authority case then passed in 109 s
 (`st_81e5f0f25b7740688509c13b671c6624`), with zero tool failures.
 
+**Retirement contract defect found independently.** The parent-authenticated
+`retireSubagentExecution` used the conversation's flush path. That joins the
+current input generation but leaves separately owned tools alive; it may also
+advance queued input. A real native-harness regression showed `{retired:true}`
+with a waiting tool still in the child's live task set. Retirement now uses the
+existing abort-and-join path, including background ownership. Regressions cover
+both foreground and background tools after quiescence. The three focused suites
+(native subagent settlement/spawning and native agent ownership) pass all 93
+tests; Base's four typecheck configurations pass. Local Base commit `724b34e`
+is on both `feat/dolt-p2-s3` and `feat/dolt-p2`. This repairs a concrete lifecycle
+contract but does not by itself prove the cause of the earlier slow prepares.
+Real-stack verification is next. Host lifecycle-start logging now includes the
+phase; its 25 dispatch tests pass.
+
 Evidence is private at `~/.local/state/celld-p4-steering/` (baseline/comparison
 inspection and full trajectory, event summaries, refusal drain summary,
 producer profiles and commit-gate log). The complete release was rebuilt for
 the development host generation. A producer first used the production host
 generation and the consumer correctly rejected it; that producer and failed
 consumer were stopped before their scratch release was replaced. Do not bypass
-that fingerprint check. The current consumer, observer and registry still
-belong to this ongoing investigation and must be joined before final cleanup.
+that fingerprint check. The comparison consumer and observer have been stopped and joined. The
+registry and private release/helper still belong to this ongoing investigation
+and must be retired after the next consumer finishes.
 
 
 Resumed from `celld/docs/fork/HANDOVER.md`, single-track. Host starts at
