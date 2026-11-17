@@ -292,3 +292,17 @@ test("log response writes cannot alter later queries, statistics, or the oracle 
   );
   assert.deepEqual(testCase.input.recording.records, original);
 });
+
+test("documentation lookup never searches or reads evaluation-feedback Markdown", async () => {
+  const { result } = await scoreDocumentation(async (services) => {
+    const search = await services.fs.grep(".*", { maxMatches: 1_000_000 });
+    await assert.rejects(
+      () => services.fs.readText("skills/sandbox/help/DECOMPOSITION.md"),
+      /workspace Markdown file/
+    );
+    assert.ok(search.matches.some((match) => match.file === "skills/sandbox/EVAL.md"));
+    assert.ok(search.matches.every((match) => !match.file.endsWith("/DECOMPOSITION.md")));
+    return { found: [], tried: [] };
+  }, []);
+  assert.deepEqual(result.found, []);
+});

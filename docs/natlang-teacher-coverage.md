@@ -52,15 +52,15 @@ the composed workspace root from that authored source folder; icon lookup reads 
 Read-only fixture services return snapshots so model writes cannot change later service responses or the oracle's
 source input. The complete service-return inventory is:
 
-| Suite service | Snapshot mechanism |
-| --- | --- |
-| Documentation `fs.grep`/`fs.readText` | Fresh records/arrays containing strings and numbers; reads are confined to the Markdown inventory. |
-| Documentation `docs.search`/`docs.describe` | Search projects fresh records; describe deep-clones its catalog entry before returning it. Source authentication retains the original description. |
-| Research `web.search`/`web.fetch`/`web.read` | Every method constructs new objects/arrays from primitive page fields. No page object escapes the recorded map. |
-| Memory `memory.recall` | Returns a new array and new records; every field in its `Result` contract is a string or null. |
-| Icons `catalog.readdir` | Each filesystem listing returns a fresh array of names. |
-| Readiness `localModels.listModels` | Deep-clones the rows, including nested fit and download fields. |
-| Logs `serverLog.tail`/`serverLog.query` | Deep-clones the selected records. Statistics construct fresh aggregate objects/arrays. |
+| Suite service                                | Snapshot mechanism                                                                                                                                 |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Documentation `fs.grep`/`fs.readText`        | Fresh records/arrays containing strings and numbers; reads are confined to the Markdown inventory.                                                 |
+| Documentation `docs.search`/`docs.describe`  | Search projects fresh records; describe deep-clones its catalog entry before returning it. Source authentication retains the original description. |
+| Research `web.search`/`web.fetch`/`web.read` | Every method constructs new objects/arrays from primitive page fields. No page object escapes the recorded map.                                    |
+| Memory `memory.recall`                       | Returns a new array and new records; every field in its `Result` contract is a string or null.                                                     |
+| Icons `catalog.readdir`                      | Each filesystem listing returns a fresh array of names.                                                                                            |
+| Readiness `localModels.listModels`           | Deep-clones the rows, including nested fit and download fields.                                                                                    |
+| Logs `serverLog.tail`/`serverLog.query`      | Deep-clones the selected records. Statistics construct fresh aggregate objects/arrays.                                                             |
 
 The other twelve suites bind no fixture services. Their model inputs are program arguments, rather than a mutable
 backing store exposed through service responses. Adversarial fixture tests mutate returned catalog descriptions,
@@ -122,10 +122,11 @@ pnpm natlang:teacher -- --all --out /path/to/teacher-campaign
 The default teacher and separate verifier are `openai-codex:gpt-6-luna` at low effort, using natlang's existing
 provider credentials on the collection host. Provider credentials are never copied into the dataset. A focused
 pilot can select `--template personal --suite skills/github/natlang/suite.ts --case CASE_ID`; `--limit N` bounds the
-number of training roots. `--natlang-commit SHA` pins the staged runtime. Every suite directory has its own closed
-split inventory, immutable source/teacher binding, per-case records and `episodes.jsonl` manifest. Reusing its
+number of training roots. `--natlang-commit SHA` pins both the staged runtime and the canonical collector scripts. Every suite directory
+contains `pool.jsonl` (selected training ProgramRecords), `inventory.jsonl` (all protected splits), an immutable
+`source.json` binding, and the standard teacher campaign under `teacher/`. Add `--export-only` to stop after IR export. Reusing its
 output directory resumes the same campaign; changed sources, teacher or `--replicate` require a new directory.
-Collection uses a kernel advisory lock (`flock`, on the project's Linux collection hosts). It releases when the owner exits, including SIGKILL, without expiring live work. Interrupted attempts retain their exact model request/reply journal for diagnosis; completed episodes replace those drafts.
+Collection uses a kernel advisory lock (`flock`, on the project's Linux collection hosts). It releases when the owner exits, including SIGKILL, without expiring live work. The canonical collector retains native execution records and provider exchanges for diagnosis and replay.
 
 Collection selects only training cases. Failed outcomes and rejected semantic reviews stay in the records.
 The initial admission conservatively excludes episodes with failed child calls or tool actions; it does not train
@@ -135,22 +136,33 @@ receipts. A separate verifier receives the reference requirements and fixture ob
 conversation or reasoning. It can reject or mark an answer uncertain. This is independent model review, not an
 exact oracle for free-form prose.
 
-On the training host, use the existing converter to build one corpus from completed suite directories:
+The durable task format is `natlang.program/2`, with an `evaluation_fixture` execution frontend. Its model files
+are the actual authored Natlang functions and their crisp dependencies. The original evaluator, selected case,
+and fixture assets occupy a separate host bundle. Authored TypeScript entry points remain entry points where
+needed; their `.nl` root is explicitly a semantic anchor rather than a claim that a wrapper is a Natlang function.
+Expected answers and evaluation code do not enter the model-owned file tree.
+
+Natlang's existing `teacher_gen.py` executes those records with `--root-mode authored`. The outputs are the ordinary
+`natlang.teacher_trajectory.native/1` execution records and `natlang.rollout/1` rollouts. “Native” names the execution
+protocol; the executor can be a hosted Luna model. The existing `sft_sources.py` extraction, exact replay and build
+path renders accepted executor turns for the student's real tokenizer. There is no separate Vibestudio trajectory
+to SFT converter. Supplemental `natlang.teacher-admission/1` receipts bind source inventory, canonical result and
+rollout hashes, original suite scores, exact replay, and the isolated semantic review; reviews are evidence, not
+training targets.
+
+Run the shared SFT stages on completed canonical teacher pools (repeat `--teacher` / `--teacher-pool` for more pools):
 
 ```sh
-python scripts/neuralese_data/vibestudio_sft.py \
-  --collection /path/to/teacher-campaign/personal/skills_github_natlang \
-  --collection /path/to/another/completed-suite \
-  --tokenizer /path/to/lfm3-tokenizer --held-manifest /path/to/held-v3/manifest.json \
-  --out /path/to/new-immutable-build
+python scripts/neuralese_data/sft_sources.py extract --work SFT_WORK --teacher CAMPAIGN/teacher
+python scripts/neuralese_data/sft_sources.py replay --work SFT_WORK --runtime-repo PIN --workers 1
+python scripts/neuralese_data/sft_sources.py build --work SFT_WORK --out BUILD \
+  --teacher-pool CAMPAIGN/teacher --tokenizer LFM3_TOKENIZER \
+  --held-manifest HELD_MANIFEST
 ```
 
-`chains.pkl` is the ordinary `exp0_sft.py train --chains` input. `build.json` reports admission, exclusions,
-renderer identity and file hashes; source collection files are snapshotted alongside it. Publish through
-`vibestudio_sft.py register --out BUILD --register-id ID --register-owner dgx` only after the artifact is present
-on that actual owner. The shared corpus publisher records immutable manifests. Collection, admission, rendering
-and actual learner exposure remain separate; a successful build does not claim the data has been trained on.
-
+`chains.pkl` is the ordinary `exp0_sft.py train --chains` input. Publish additions with the shared corpus publisher
+and immutable manifests only after artifacts reach their declared owner. Collection, admission, rendering and actual
+learner exposure remain separate; a successful build does not claim the data has been trained on.
 
 A campaign resolves its natlang commit once and shares one staged runtime module across suites. Repeated bundle
 imports previously retained one native-server exit hook per copy, producing an exit-listener warning in a long

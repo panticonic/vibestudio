@@ -233,7 +233,8 @@ export function layoutEvalBundle({ stagedDir, repository, runRoot }) {
   const marker = path.join(runRoot, "natlang-pin.json");
   const sourcePin = fs.readFileSync(path.join(stagedDir, "natlang-pin.json"), "utf8");
   if (fs.existsSync(marker)) {
-    if (fs.readFileSync(marker, "utf8") !== sourcePin) throw new UsageError("one collection context must use one pinned natlang bundle");
+    if (fs.readFileSync(marker, "utf8") !== sourcePin)
+      throw new UsageError("one collection context must use one pinned natlang bundle");
     return path.join(runRoot, "ts-host", EVAL_BUNDLE);
   }
   const tsHost = path.join(runRoot, "ts-host");
@@ -545,6 +546,7 @@ export async function runNatlangEval(options, context, dependencies = defaultDep
             deps,
             commit,
             suiteRelative,
+            workspaceRoot: composition.root,
             recorder,
             selected,
           }),

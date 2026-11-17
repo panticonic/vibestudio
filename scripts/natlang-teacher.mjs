@@ -6,20 +6,11 @@ import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { runNatlangEval, resolveNatlangCommit } from "./natlang-eval.mjs";
-import { natlangRepository } from "./lib/natlang-stage.mjs";
-import { ownedEntry } from "./lib/owned-entry.mjs";
-import {
-  canonical,
-  sha256,
-  requestHash,
-  replayDriver,
-  trainingTurn,
-  eligibility,
-  toolErrorCount,
-  verifySemantics,
-  validateEpisode,
-  acquireCollectionLock,
-} from "./lib/natlang-teacher-data.mjs";
+import { natlangRepository, withNatlangWorktree } from "./lib/natlang-stage.mjs";
+import { ownedEntry, retireOnAbort } from "./lib/owned-entry.mjs";
+import { canonical, sha256, verifySemantics, acquireCollectionLock } from "./lib/natlang-teacher-data.mjs";
+import { serializeTeacherIR } from "./lib/natlang-teacher-ir.mjs";
+import { joinChildProcess } from "./lib/join-child-process.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const catalogPath = path.join(root, "scripts/natlang-teacher-suites.json");
@@ -50,6 +41,7 @@ export function parseArguments(argv) {
     "effort",
     "natlang-commit",
     "case",
+    "held-manifest",
   ]);
   const numbers = new Set(["limit", "replicate"]);
   const seen = new Set();
@@ -60,11 +52,11 @@ export function parseArguments(argv) {
       throw new Error(`unknown or duplicate option ${arg}`);
     seen.add(arg);
     const name = arg.slice(2);
-    if (["all", "list", "preflight"].includes(name)) options[name] = true;
+    if (["all", "list", "preflight", "export-only"].includes(name)) options[name === "export-only" ? "exportOnly" : name] = true;
     else if (strings.has(name) || numbers.has(name)) {
       const value = argv[++i];
       if (!value || value.startsWith("--")) throw new Error(`missing value for ${arg}`);
-      const key = name === "natlang-commit" ? "natlangCommit" : name;
+      const key = name === "natlang-commit" ? "natlangCommit" : name === "export-only" ? "exportOnly" : name;
       options[key] = numbers.has(name) ? Number(value) : value;
       if (numbers.has(name) && (!Number.isSafeInteger(options[key]) || options[key] < 0))
         throw new Error(`${arg} needs a nonnegative integer`);
@@ -107,280 +99,187 @@ function sourceCase(template, suite, testCase, commit) {
   };
 }
 
-/** The same owned fixture projection and model session implementation as evaluation; no second compiler path. */
+/** Children and their descendants share the launcher's ownership, including on interruption. */
+async function runOwned(context, executable, args, cwd, env = process.env) {
+  const owned = context.ownership.spawn(executable, args, {
+    kill: "immediate", label: "natlang-teacher", cwd, env, stdio: "inherit",
+  });
+  retireOnAbort(context.ownership, context.signal, owned);
+  const result = await joinChildProcess(owned.child);
+  await owned.join();
+  context.signal.throwIfAborted();
+  if (result.error || result.code !== 0)
+    throw new Error(`teacher subprocess failed (${result.signal ?? result.code}): ${executable}`, {
+      cause: result.error,
+    });
+}
+
+async function completeAdmission({ directory, work, pin, python, env, context, models, signal,
+  cases, source, assertSourceSnapshot }) {
+  const helper = path.join(pin, "scripts/neuralese_data/teacher_admission.py");
+  const draftFile = path.join(directory, "admission-drafts.json");
+  await runOwned(context, python, [helper, "replay", "--pool", work, "--out", draftFile,
+    "--runtime-repo", pin, "--work", path.join(directory, "admission-replay"), "--workers", "1"], pin, env);
+  const drafts = JSON.parse(fs.readFileSync(draftFile, "utf8"));
+  const manifestFile = path.join(work, "manifest.jsonl");
+  const manifest = fs.readFileSync(manifestFile, "utf8").trim().split("\n").filter(Boolean).map(JSON.parse);
+  const bind = (file) => ({ path: path.resolve(file), sha256: sha256(fs.readFileSync(file, "utf8")) });
+  const admissions = path.join(directory, "admissions");
+  fs.mkdirSync(admissions, { recursive: true, mode: 0o700 });
+  for (const draft of drafts.records) {
+    const receipt = draft.receipt;
+    receipt.inventory = bind(path.join(directory, "inventory.jsonl"));
+    receipt.source = source;
+    receipt.rejected_samples = [];
+    const accepted = [];
+    for (const sample of receipt.samples) {
+      signal.throwIfAborted();
+      const evidence = sample.outcome;
+      let reason = !sample.replay.request_hashes?.length ? "no-model-turns"
+        : !sample.replay.verified ? "replay-failed"
+        : evidence.quality !== 1 ? "quality-below-one"
+        : !Object.keys(evidence.gates ?? {}).length || !Object.values(evidence.gates).every((value) => value === true)
+          ? "gate-failed" : evidence.tool_error_count ? "failed-action" : null;
+      if (!reason) {
+        const result = evidence.evaluation;
+        const testCase = cases.find((item) => sample.task_id.endsWith(`:${item.id}`));
+        if (!testCase) throw new Error(`canonical result has unknown source case ${sample.task_id}`);
+        const reviewJournal = path.join(admissions, `${sha256({ result: sample.result,
+          teacher: receipt.teacher, task_id: sample.task_id, sample: sample.sample })}.review.jsonl`);
+        const auditedReviewer = async (request, callSignal) => {
+          const append = (event) => fs.appendFileSync(reviewJournal, `${JSON.stringify(event)}\n`, { mode: 0o600 });
+          append({ phase: "request", request });
+          try {
+            const reply = await models.judge(request, callSignal);
+            append({ phase: "reply", reply });
+            return reply;
+          } catch (error) {
+            append({ phase: "error", error: error.stack ?? String(error) });
+            throw error;
+          }
+        };
+        const semantic = await verifySemantics(auditedReviewer, testCase, result, signal);
+        const requestCanonical = canonical(semantic.request);
+        sample.semantic = { ...semantic, reviewer: { ...receipt.teacher, identity: models.identity },
+          request_canonical: requestCanonical, request_sha256: sha256(requestCanonical) };
+        if (semantic.verdict !== "accepted") reason = `semantic-${semantic.verdict}`;
+      }
+      (reason ? receipt.rejected_samples : accepted).push(reason ? { ...sample, rejection: reason } : sample);
+    }
+    receipt.samples = accepted;
+    const receiptFile = path.join(admissions, `t${String(draft.manifest_index).padStart(6, "0")}.json`);
+    assertSourceSnapshot();
+    writeJSON(receiptFile, receipt);
+    const entry = manifest[draft.manifest_index];
+    if (!entry || path.resolve(entry.rollouts) !== path.resolve(draft.rollouts))
+      throw new Error("canonical teacher manifest changed during admission");
+    entry.admission = bind(receiptFile);
+    console.log(JSON.stringify({ event: "admission", task: entry.task_id,
+      accepted: accepted.length, rejected: receipt.rejected_samples.length }));
+  }
+  assertSourceSnapshot();
+  fs.writeFileSync(`${manifestFile}.tmp`, manifest.map((row) => JSON.stringify(row)).join("\n") + "\n", { mode: 0o600 });
+  fs.renameSync(`${manifestFile}.tmp`, manifestFile);
+  await runOwned(context, python, [helper, "check", "--pool", work], pin, env);
+}
+
+/** Export the original suite as program IR, then use Natlang's canonical collector and admission path. */
 export async function collectSuite(options, context, dependencies = {}) {
   const directory = path.resolve(options.out);
-  fs.mkdirSync(path.join(directory, "episodes"), { recursive: true, mode: 0o700 });
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const releaseLock = acquireCollectionLock(path.join(directory, ".collect.lock"));
   const sessions = [];
   try {
     const configured = createRequire(import.meta.url)(
       "../src/dev/developmentTemplateConfig.cjs"
     ).requireDevelopmentTemplateCheckouts(root);
-    const templateCommit = provenance(
-      configured.checkouts[options.template],
-      options.template,
-      options.preflight
-    );
+    const templateCommit = provenance(configured.checkouts[options.template], options.template, options.preflight);
     const baseCommit = provenance(configured.checkouts.base, "base", options.preflight);
     const hostCommit = provenance(root, "vibestudio", options.preflight);
     const assertSourceSnapshot = () => {
       if (options.preflight) return;
-      if (
-        provenance(configured.checkouts[options.template], options.template) !== templateCommit ||
-        provenance(configured.checkouts.base, "base") !== baseCommit ||
-        provenance(root, "vibestudio") !== hostCommit
-      ) {
-        throw new Error(
-          "source changed during collection; use a fresh pinned snapshot and output directory"
-        );
-      }
+      if (provenance(configured.checkouts[options.template], options.template) !== templateCommit ||
+          provenance(configured.checkouts.base, "base") !== baseCommit ||
+          provenance(root, "vibestudio") !== hostCommit)
+        throw new Error("source changed during collection; use a fresh pinned snapshot and output directory");
     };
     const openModels = async (natlang) => {
-      // Explicit provider selection cannot accidentally start a local student server or use its credentials.
       const choice = {
-        kind: "pi-provider",
-        provider: options.provider,
-        model: options.model,
-        piMode: "native",
-        promptRendering: "full",
-        piOptions: { reasoningEffort: options.effort },
+        kind: "pi-provider", provider: options.provider, model: options.model,
+        piMode: "native", promptRendering: "full", piOptions: { reasoningEffort: options.effort },
       };
       const session = natlang.createResolvedModelSession(choice, process.env, process.stderr);
       sessions.push(session);
-      const backend = natlang.sessionDriver(session);
-      // A hosted teacher demonstrates a choice through the normal tool loop; it does not fabricate scoring receipts.
-      const driver = (request, signal) => backend(request, signal);
       return {
         identity: natlang.executorIdentityForChoice(choice),
-        driver,
-        judge: driver,
-        close: async () => {
-          for (const owned of sessions.splice(0)) await owned.close();
-        },
+        judge: natlang.sessionDriver(session),
+        close: async () => { for (const owned of sessions.splice(0)) await owned.close(); },
       };
     };
     return await runNatlangEval(
-      { template: options.template, suite: options.suite, natlangCommit: options.natlangCommit },
-      context,
-      {
-        ...dependencies,
-        openModels,
-        evaluateSuite: async ({ natlang, prepared, models, signal, commit, suiteRelative }) => {
+      { template: options.template, suite: options.suite, natlangCommit: options.natlangCommit }, context,
+      { ...dependencies, openModels,
+        evaluateSuite: async ({ natlang, prepared, models, signal, commit, suiteRelative, workspaceRoot }) => {
           assertSourceSnapshot();
-          const suite = { id: prepared.suite.id, hash: prepared.suiteHash };
+          const suite = { id: prepared.suite.id, hash: prepared.suiteHash, path: suiteRelative };
           const source = {
-            template: options.template,
-            template_commit: templateCommit,
-            base_commit: baseCommit,
-            program_sha256: prepared.program.buildHash,
-            natlang_commit: commit,
-            vibestudio_commit: hostCommit,
-            dirty: false,
+            template: options.template, template_commit: templateCommit, base_commit: baseCommit,
+            program_sha256: prepared.program.buildHash, natlang_commit: commit,
+            vibestudio_commit: hostCommit, dirty: Boolean(options.preflight),
           };
-          const teacher = {
-            provider: options.provider,
-            model_id: options.model,
-            identity: models.identity,
-          };
-          const cases = prepared.cases.map((testCase) =>
-            sourceCase(options.template, suite, testCase, templateCommit)
+          const selection = JSON.parse(fs.readFileSync(catalogPath, "utf8")).find(
+            (item) => item.template === options.template && item.path === suiteRelative
           );
-          const binding = {
-            schema: "vibestudio.teacher-collection/1",
-            suite: { ...suite, path: suiteRelative },
-            source,
-            teacher,
-            replicate: options.replicate,
-            cases,
+          if (!selection) throw new Error(`suite has no reviewed IR decomposition: ${suiteRelative}`);
+          const records = prepared.cases.map((testCase) => serializeTeacherIR({
+            selection, testCase, workspaceRoot, source,
+            sourceCase: sourceCase(options.template, suite, testCase, templateCommit),
+          }));
+          const selected = records.filter((record) => record.split === "train" &&
+            (!options.case || record.id === options.case || record.id.endsWith(`:${options.case}`)))
+            .slice(0, options.limit || undefined);
+          if (!selected.length) throw new Error("no selected training cases; validation and test cases are protected");
+          const content = (rows) => rows.map((row) => JSON.stringify(row)).join("\n") + "\n";
+          const inventory = content(records), pool = content(selected);
+          const binding = { schema: "vibestudio.teacher-ir-export/1", suite, source,
+            teacher: { provider: options.provider, model_id: options.model, reasoning_effort: options.effort },
+            replicate: options.replicate, inventory_sha256: sha256(inventory), pool_sha256: sha256(pool),
           };
-          const manifestPath = path.join(directory, "manifest.json");
-          if (fs.existsSync(manifestPath)) {
-            const prior = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
-            if (sha256(prior.binding) !== sha256(binding))
-              throw new Error(
-                "collection source, teacher, split inventory or replicate changed; use a new --out"
-              );
-          }
+          const manifestPath = path.join(directory, "source.json");
+          if (fs.existsSync(manifestPath) && canonical(JSON.parse(fs.readFileSync(manifestPath, "utf8"))) !== canonical(binding))
+            throw new Error("IR source, teacher, split inventory or replicate changed; use a new --out");
+          fs.writeFileSync(path.join(directory, "inventory.jsonl"), inventory, { mode: 0o600 });
+          fs.writeFileSync(path.join(directory, "pool.jsonl"), pool, { mode: 0o600 });
+          writeJSON(manifestPath, binding);
           if (options.preflight) {
             const result = await natlang.preflightEvaluation(prepared);
-            console.log(JSON.stringify({ event: "preflight", suite: suite.id, ...result }));
+            console.log(JSON.stringify({ event: "preflight", suite: suite.id, ir_records: records.length, ...result }));
             return { exitCode: 0 };
           }
-          const selected = prepared.cases
-            .filter(
-              (testCase) =>
-                testCase.split === "train" && (!options.case || testCase.id === options.case)
-            )
-            .slice(0, options.limit || undefined);
-          if (!selected.length)
-            throw new Error("no selected training cases; validation and test cases are protected");
-          const persist = () => {
-            assertSourceSnapshot();
-            const episodes = fs
-              .readdirSync(path.join(directory, "episodes"))
-              .filter((name) => name.endsWith(".json"))
-              .sort()
-              .map((name) =>
-                validateEpisode(
-                  JSON.parse(fs.readFileSync(path.join(directory, "episodes", name), "utf8")),
-                  binding,
-                  name
-                )
-              );
-            const content =
-              episodes.map((episode) => JSON.stringify(episode)).join("\n") +
-              (episodes.length ? "\n" : "");
-            fs.writeFileSync(path.join(directory, "episodes.jsonl.tmp"), content, { mode: 0o600 });
-            fs.renameSync(
-              path.join(directory, "episodes.jsonl.tmp"),
-              path.join(directory, "episodes.jsonl")
-            );
-            writeJSON(manifestPath, {
-              ...binding,
-              binding,
-              episodes: { path: "episodes.jsonl", sha256: sha256(content) },
-            });
-          };
-          persist();
-          for (const testCase of selected) {
-            signal.throwIfAborted();
-            const id = sha256({ binding, case: testCase.id });
-            const file = path.join(directory, "episodes", `${id}.json`);
-            if (fs.existsSync(file)) continue;
-            console.error(`teacher ${suite.id}/${testCase.id}`);
-            const attempts = path.join(directory, "attempts");
-            fs.mkdirSync(attempts, { recursive: true, mode: 0o700 });
-            const attempt = fs.mkdtempSync(path.join(attempts, `${id}-`));
-            const journal = path.join(attempt, "model-events.jsonl");
-            const judgeTurns = [];
-            let requests = 0;
-            const audited = (role, driver) => async (request, callSignal) => {
-              const sequence = ++requests;
-              const emit = (event) =>
-                fs.appendFileSync(journal, `${JSON.stringify({ role, sequence, ...event })}\n`, {
-                  mode: 0o600,
-                });
-              emit({ phase: "request", request });
-              try {
-                const reply = await driver(request, callSignal);
-                emit({ phase: "reply", reply });
-                if (role === "fixture-judge")
-                  judgeTurns.push({
-                    request: structuredClone(request),
-                    reply: structuredClone(reply),
-                  });
-                return reply;
-              } catch (error) {
-                emit({ phase: "error", error: error.stack ?? String(error) });
-                throw error;
-              }
-            };
-            writeJSON(path.join(attempt, "source.json"), { binding, case: testCase.id });
-            const evaluate = (driver, judge = models.judge) =>
-              natlang.evaluate(prepared, {
-                caseIds: [testCase.id],
-                driver,
-                judge,
-                executorIdentity: models.identity,
-                capture: true,
-                replicate: options.replicate,
-                seed: 20261117,
-                signal,
-                timeoutMs: 2 ** 31 - 1,
-              });
-            const batch = await evaluate(
-                audited("executor", models.driver),
-                audited("fixture-judge", models.judge)
-              ),
-              result = batch.results[0];
-            writeJSON(path.join(attempt, "evaluation.json"), result);
-            let reason = eligibility(result),
-              replay = { verified: false, request_hashes: [] },
-              verification = null;
-            if (!reason) {
-              const recorded = replayDriver(result.modelTurns);
-              const recordedJudge = replayDriver(judgeTurns);
-              const repeated = (await evaluate(recorded.driver, recordedJudge.driver)).results[0];
-              recorded.finish();
-              recordedJudge.finish();
-              if (
-                eligibility(repeated) ||
-                canonical(repeated.outcome) !== canonical(result.outcome) ||
-                canonical(repeated.gates) !== canonical(result.gates) ||
-                repeated.quality !== result.quality
-              ) {
-                throw new Error(`teacher replay changed the verified result of ${testCase.id}`);
-              }
-              replay = {
-                verified: true,
-                request_hashes: result.modelTurns.map((turn) => requestHash(turn.request)),
-                judge_request_hashes: judgeTurns.map((turn) => requestHash(turn.request)),
-              };
-              verification = {
-                ...(await verifySemantics(
-                  audited("semantic-review", models.judge),
-                  testCase,
-                  result,
-                  signal
-                )),
-                method: "independent-model-review",
-                teacher,
-              };
-              if (verification.verdict !== "accepted") reason = `semantic-${verification.verdict}`;
-            }
-            const inventory = sourceCase(options.template, suite, testCase, templateCommit);
-            const episode = {
-              schema: "vibestudio.teacher-episode/1",
-              id,
-              suite,
-              source,
-              teacher,
-              case: {
-                id: testCase.id,
-                group: testCase.group,
-                split: testCase.split,
-                input_sha256: sha256(testCase.input),
-              },
-              source_ids: inventory.source_ids,
-              source_groups: inventory.source_groups,
-              source_revisions: inventory.source_revisions,
-              outcome: {
-                ...result.outcome,
-                quality: result.quality,
-                gates: { ...result.gates, semantic: verification?.verdict === "accepted" },
-                tool_error_count: toolErrorCount(result),
-              },
-              replay,
-              verification,
-              rejection: reason,
-              turns: (result.modelTurns ?? []).map(trainingTurn),
-              evaluation: result,
-            };
-            writeJSON(file, episode);
-            persist();
-            fs.rmSync(attempt, { recursive: true, force: true });
-            console.log(
-              JSON.stringify({
-                event: "collected",
-                suite: suite.id,
-                case: testCase.id,
-                admitted: !reason,
-                reason,
-                turns: episode.turns.length,
-              })
-            );
-          }
-          return { exitCode: 0, resultPath: manifestPath };
+          if (options.exportOnly) return { exitCode: 0, resultPath: manifestPath };
+          const pin = options.runtimePin;
+          if (!pin) throw new Error("teacher collection requires its pinned Natlang checkout");
+          const python = path.join(natlangRepository(), ".venv-neuralese/bin/python");
+          const work = path.join(directory, "teacher");
+          const env = { ...process.env, NATLANG_REPO: pin,
+            PYTHONPATH: `${pin}/training/neuralese:${pin}`, OMP_NUM_THREADS: "1", MKL_NUM_THREADS: "1" };
+          await runOwned(context, python, [path.join(pin, "scripts/neuralese_data/teacher_gen.py"),
+            "--work", work, "--pool", path.join(directory, "pool.jsonl"), "--root-mode", "authored",
+            "--teacher", JSON.stringify({ ...binding.teacher, slots: 1 }),
+            "--samples", "1", "--seed-base", String(50000000 + options.replicate * 1000000),
+            ...(options["held-manifest"] ? ["--held-manifest", path.resolve(options["held-manifest"])] : []),
+          ], pin, env);
+          assertSourceSnapshot();
+          // Replay and semantic receipts are bound to canonical program IR, native results and rollout bytes.
+          await completeAdmission({ directory, work, pin, python, env, context, models, signal,
+            cases: prepared.cases, source, assertSourceSnapshot });
+          return { exitCode: 0, resultPath: path.join(work, "manifest.jsonl") };
         },
       }
     );
   } finally {
-    try {
-      for (const session of sessions.splice(0)) await session.close();
-    } finally {
-      releaseLock();
-    }
+    try { for (const session of sessions.splice(0)) await session.close(); }
+    finally { releaseLock(); }
   }
 }
 
@@ -393,25 +292,25 @@ export async function main(argv = process.argv.slice(2)) {
   }
   options.natlangCommit = resolveNatlangCommit(natlangRepository(), options.natlangCommit);
   const selections = options.all ? catalog : [{ template: options.template, path: options.suite }];
-  await ownedEntry(
-    async (context) => {
+  await ownedEntry(async (context) => {
+    const collect = async (runtimePin) => {
       for (const selection of selections) {
         const out = options.all
-          ? path.join(
-              options.out,
-              selection.template,
-              path.dirname(selection.path).replaceAll("/", "_")
-            )
+          ? path.join(options.out, selection.template, path.dirname(selection.path).replaceAll("/", "_"))
           : options.out;
-        const result = await collectSuite(
-          { ...options, template: selection.template, suite: selection.path, out },
-          context
-        );
+        const result = await collectSuite({ ...options, runtimePin,
+          template: selection.template, suite: selection.path, out }, context);
         if (result?.exitCode) throw new Error(`teacher suite failed: ${selection.path}`);
       }
-    },
-    { appRoot: root, scratchPrefix: "natlang-teacher-" }
-  );
+    };
+    if (options.preflight || options.exportOnly) return collect();
+    await withNatlangWorktree(natlangRepository(), options.natlangCommit, async (tsHost) => {
+      const runtimePin = path.dirname(tsHost);
+      await runOwned(context, path.join(path.dirname(process.execPath), "npm"),
+        ["run", "build:node"], tsHost);
+      await collect(runtimePin);
+    }, context.scratchRoot);
+  }, { appRoot: root, scratchPrefix: "natlang-teacher-" });
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
   main().catch((error) => {
