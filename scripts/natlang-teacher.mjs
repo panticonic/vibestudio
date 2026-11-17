@@ -265,6 +265,7 @@ export async function collectSuite(options, context, dependencies = {}) {
             PYTHONPATH: `${pin}/training/neuralese:${pin}`, OMP_NUM_THREADS: "1", MKL_NUM_THREADS: "1" };
           await runOwned(context, python, [path.join(pin, "scripts/neuralese_data/teacher_gen.py"),
             "--work", work, "--pool", path.join(directory, "pool.jsonl"), "--root-mode", "authored",
+            "--base-rates", "",
             "--teacher", JSON.stringify({ ...binding.teacher, slots: 1 }),
             "--samples", "1", "--seed-base", String(50000000 + options.replicate * 1000000),
             ...(options["held-manifest"] ? ["--held-manifest", path.resolve(options["held-manifest"])] : []),
