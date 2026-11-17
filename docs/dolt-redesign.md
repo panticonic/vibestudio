@@ -1875,9 +1875,14 @@ class does, from its base (`@vibestudio/durable` and Base's `durable-base.ts`; h
   asserts that a collection changes no state (entries and commits identical, nothing dirty), that the parent
   closes another turn afterwards, and that a fork cut after the collection holds exactly what the parent held at
   its commit and continues on its own.
-- **Not done:** `WorkspaceStateDO` (a product class, not this base) is not on the schedule; a byte threshold
-  (the engine reports no file size to the cell; `sql.databaseSize` was not probed); gc under concurrent writes
-  to other objects of the same node.
+- **Verified on the product class (2026-11-17):** `WorkspaceStateDO` already inherits this base's
+  `committedTransaction` schedule. The real-fork `workspaceStateCelld.test.ts` now drives 65 ordinary
+  context-edge mutations through its unchanged default policy, observes scheduled collection, and checks
+  that all history, application rows and local operational identity survive collection and a node crash.
+  It then commits again. All four workspace-state real-fork tests pass. No additional scheduler was needed.
+- **Not done:** a byte threshold (the engine reports no file size to the cell; `sql.databaseSize` was not
+  probed); gc under concurrent writes to other objects of the same node; the actual agent-cell soak past
+  64 closed turns.
 
 ---
 

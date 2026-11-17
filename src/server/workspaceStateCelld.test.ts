@@ -60,6 +60,9 @@ function probeSource(): string {
           const rows = (sql) => this.sql.exec(sql).toArray();
           return json({
             branch: dolt.branch.current(),
+            gcHead: this.getStateValue('__dolt_gc_head') ?? null,
+            gcCommits: this.getStateValue('__dolt_gc_commits') ?? null,
+            alarmWorker: this.getStateValue('alarm-active-worker') ?? null,
             log: dolt.log({ limit: 500 }).map((commit) => ({ message: commit.message, date: commit.date, hash: commit.hash })),
             status: dolt.status(),
             tables: rows("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").map((row) => row.name),
@@ -187,6 +190,9 @@ async function startWorkspaceProbe() {
     info: () =>
       rpc<{
         branch: string;
+        gcHead: string | null;
+        gcCommits: string | null;
+        alarmWorker: string | null;
         log: Array<{ message: string; date: string; hash: string }>;
         status: Array<{ table: string; status: string }>;
         tables: string[];
@@ -542,6 +548,57 @@ it.skipIf(!celldTestBinary())(
     expect(result.outcome).toBe("skipped");
     const entity = await target.call<Entity>("entityActivate", panel("first"));
     expect(entity.key).toBe("first");
+  },
+  120_000
+);
+
+it.skipIf(!celldTestBinary())(
+  "the product workspace store compacts on the inherited default schedule and keeps history and local state across a crash",
+  async () => {
+    const { probe, state } = await startWorkspaceProbe();
+    const workspace = state("ws-default-gc");
+    const initial = await workspace.info();
+    const edge = (n: number) => ({
+      contextId: `gc-child-${n}`,
+      ownerContextId: "gc-owner",
+      kind: "lineage",
+    });
+    for (let n = 1; n <= 48; n++) await workspace.call("contextEdgeUpsert", edge(n));
+    const young = await workspace.info();
+    expect(young.log).toHaveLength(initial.log.length + 48);
+    expect(young.gcHead).toBeNull();
+    await workspace.call("alarmAdoptWorker", "gc-probe-driver");
+    for (let n = 49; n <= 65; n++) await workspace.call("contextEdgeUpsert", edge(n));
+
+    // Observe the scheduled production check; do not lower the threshold or call gc from the test.
+    await expect
+      .poll(async () => (await workspace.info()).gcHead, {
+        timeout: 20_000,
+        interval: 200,
+      })
+      .not.toBeNull();
+    const collected = await workspace.info();
+    expect(collected.log).toHaveLength(initial.log.length + 65);
+    expect(collected.log.map((commit) => commit.hash)).toContain(collected.gcHead);
+    expect(Number(collected.gcCommits)).toBeGreaterThanOrEqual(64);
+    expect(Number(collected.gcCommits)).toBeLessThanOrEqual(collected.log.length);
+    expect(collected.rows["context_edges"]).toHaveLength(65);
+    expect(collected.alarmWorker).toBe("gc-probe-driver");
+    expect(collected.status.filter((entry) => !entry.table.startsWith("dolt_"))).toEqual([]);
+
+    await probe.kill();
+    await probe.start();
+    const restored = await workspace.info();
+    expect(restored.log).toEqual(collected.log);
+    expect(restored.rows).toEqual(collected.rows);
+    expect(restored.gcHead).toBe(collected.gcHead);
+    expect(restored.gcCommits).toBe(collected.gcCommits);
+    expect(restored.alarmWorker).toBe(collected.alarmWorker);
+    await workspace.call("contextEdgeUpsert", edge(66));
+    const continued = await workspace.info();
+    expect(continued.log).toHaveLength(initial.log.length + 66);
+    expect(continued.rows["context_edges"]).toHaveLength(66);
+    expect(continued.gcHead).toBe(restored.gcHead);
   },
   120_000
 );

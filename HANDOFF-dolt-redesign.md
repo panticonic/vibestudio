@@ -94,6 +94,23 @@ and the system-test artifacts. The owned registry remains for the next P4 slice.
 Nothing pushed; runtime pin remains `75f1700`. Next: product compaction soak,
 restart probe and 10k-turn measurement; steering/model completion remains open.
 
+### WorkspaceStateDO default compaction verified
+
+`WorkspaceStateDO` already inherits `committedTransaction`'s default geometric
+schedule; no second scheduler or product implementation change is needed.
+The new real-fork test in `workspaceStateCelld.test.ts` makes 65 ordinary
+`contextEdgeUpsert` mutations without lowering the 64-commit threshold or
+calling gc. It observes the scheduled marker, checks every commit and row plus
+the local alarm-worker identity, crashes/restarts the node, compares them all,
+and commits another mutation. The complete workspace-state real-fork suite
+passes 4/4 (9 s), including migration/crash recovery. Gate checks through
+workflows passed; a new test's index-signature access typo was corrected, then
+host types and lint pass and formatting reaches only the same eight untouched
+baseline files. No native binary change. Next is the actual agent-cell
+model-free soak past 64 turns, whole-product restart probe and 10k-turn fork
+measurement. The earlier activation-loss replay pass is narrower than a whole
+workspace-node restart.
+
 ### Steering investigation resumed after the checkpoint
 
 Native event tracing now works with both native DEBUG and host verbose logging.
