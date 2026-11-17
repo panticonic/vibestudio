@@ -224,6 +224,77 @@ gate was repeated for the shared query change; every check passed except the
 same eight untouched formatting-baseline files. The gate log is retained as
 `~/.local/state/celld-p4-continuation/console-commit-gate.log`.
 
+**Subagents/channel checks before steering: 3/3 pass**, with DO-call tracing on
+the prepared-release instance `p4-subagents`:
+
+| Test | Run | Duration |
+| --- | --- | --- |
+| `subagent-followup-after-report` | `st_ed0b07c2987f477b98bb9286411c586e` | 276 s |
+| `subagent-diff-inspection` | `st_53f0f10298f347c8b70eceda4a6c6c5a` | 172 s |
+| `gad-channel-health` | `st_77b12fef17fe49468c3daa5c3fa9aee6` | 62 s |
+
+`steer-a-running-child` (`st_173afc94b7614ac08ca73454fbd914b0`) reproduced the
+failure: three transient `in_flight=64` refusals on the child's channel, followed
+by a correct parent answer (117 Markdown files, 22,508 newline-terminated lines)
+and headless cleanup timeouts. The failed run lasted 189 s, not the 450 s test
+bound. The task itself completed; the run errored in `session-close` and
+`destroyHeadlessAgentContext`, each with the existing 30 s RPC deadline.
+
+The trace narrows the hotspot: the child's channel received 621 completed
+`getEnvelope` calls in the steering window, mostly provenance reads paired with
+`inspectNativeInvocationSource`. Successful calls continued after the refusal
+burst, so this does not establish a permanent 64-request leak. The host currently
+resolves the same exact causal invocation independently on every ingress
+(`workspaceSourceProvider.ts:resolveExactCausalInvocation`, ingress wiring in
+`index.ts` near the local-model authority and RpcServer construction).
+
+Retirement is a separate observed problem: most lifecycle prepares complete in
+30–900 ms, but the child's later prepare took 28,859 ms while alarms were refused
+with `Pi activation is sealed for lifecycle release`. `retireContextRecords`
+already has staged quiesce/peer/owner/release barriers; do not assume it simply
+retires everything concurrently. The run's complete inspection and trajectory
+are retained as `inspect-resume.json` and `trajectory-resume.json`. The instance
+was stopped and joined. A fresh required rerun uses both DO-call tracing and
+`RUST_LOG=info,celld::cell_event=debug` to distinguish queued calls from retained
+cell-event lifetimes. No retry, raised request cap, timeout extension, or
+provenance cache has been added to product code.
+
+**Required fresh steering rerun:** `st_9865195d85204b4282b7ca1dfd5a7970`
+on `p4-steer-trace` failed validation in 144 s, with zero tool failures and no
+cleanup error. The parent ended with “It hasn’t reported the counts yet,” so
+this is not a successful task. The log again records five transient saturated
+cell refusals across two cells, three sealed-activation alarm failures, and a
+14,240 ms child lifecycle prepare. This reproduces both warning patterns but
+does not prove that either one caused the parent's premature final response.
+
+The requested native DEBUG trace was **not captured**: `RUST_LOG` reached the
+native process, but the managed host routes native stdout through
+`RuntimeManager`'s `log.verbose`; the host defaults to `info` in
+`packages/dev-log/src/index.ts`. For the next controlled repro, enable
+`VIBESTUDIO_LOG_LEVEL=verbose` as well as `RUST_LOG=info,celld::cell_event=debug`
+and confirm a queued/delivered/finished line before treating it as a trace.
+Do not infer queued-versus-retained event lifetimes from this run. Its full
+inspection, trajectory and bounded summary are retained under
+`~/.local/state/celld-p4-continuation/steer-rerun-*.json`; the supervisor log is
+`~/.config/vibestudio/instance-state/122394aeedcbfe99/system-test-logs/p4-steer-trace.log`.
+
+**Continuation checkpoint and cleanup.** The stopped-sweep reruns and all
+previously unfinished lane selections are now attempted. Resilience is 5/5,
+applicable panels 4/4, and non-steering subagent/channel cases 3/3 green.
+`worker-env` retains its inspected guest descriptor-export error; BrowserImport
+is inapplicable; steering remains an unresolved P4 blocker. Next investigate
+causal-read fanout and child retirement with the complete native event trace,
+then S6b, compaction soak/scheduling, restart and 10k-turn measurement. No cap,
+retry, timeout or authority-cache workaround was added.
+
+All owned instances, their observers, the exhaustive release producer and the
+local npm registry have been stopped and joined. The private 669 MiB release
+and preparation helper at `~/.cache/celld-p4-console-verify` were removed only
+after all consumers stopped. Bounded logs/profiles remain in the private state
+directory; no producer or verification scope is left running. Host source is
+`025cea4bd` before this handover commit; both system-testing branches are
+`ea84ad3`. No runtime changes or binary repin: fork remains `75f1700`.
+
 `p4-resume` was stopped and joined. Its shutdown reported
 `active-eval-cancellation` errors for three already-retired session objects;
 the supervisor still retired. Keep this evidence separate from successful
@@ -1303,7 +1374,7 @@ and `/home/werg/celld` untouched, nothing pushed.
 
 ## Next steps (end of the third pass)
 
-1. **Re-run what the stopped sweep did not**: `file-search-read-tools`, `call-do-method`, `installed-workspace-service-consumer`, harness-resilience (5), panels (5), subagents (4, incl. the flaky `steer-a-running-child`), and re-run once each failure above (`eval-exact-authority`, `channel-envelope-inspection-bounded`, `workspace-test-runner-extension`, `worker-env`, `dynamic-workspace-service`); start from `lg5.sh`-style one-test-per-run groups with a registry server (`scripts/serve-vibestudio-registry.mjs` on 4873, `VIBESTUDIO_DEV_NPM_REGISTRY`).
+1. **Historical queue, completed in the Nov 17 continuation above**: `file-search-read-tools`, `call-do-method`, `installed-workspace-service-consumer`, harness-resilience (5), panels (5), subagents (4, incl. the unresolved `steer-a-running-child`), and re-run once each failure above (`eval-exact-authority`, `channel-envelope-inspection-bounded`, `workspace-test-runner-extension`, `worker-env`, `dynamic-workspace-service`); start from `lg5.sh`-style one-test-per-run groups with a registry server (`scripts/serve-vibestudio-registry.mjs` on 4873, `VIBESTUDIO_DEV_NPM_REGISTRY`).
 2. **S6b agent side**: see "2. S6b" above: find why a hosted kernel's self-addressed call to the agent never reaches the DO (add a log between `resolveCaller` and `relayCall`; look at `evalOrigin` loss and readiness), then merge the two `*-s6b-agent-hosting` branches. Nothing half-migrated is live: no class declares `hosts` for the kernel and the agent uses session entities.
 3. **`steer-a-running-child`**: the cell is saturated (`in_flight=64 limit=64`); why 64 events are in flight is a host or fork question.
 4. **Compaction in the product**: no lane reaches 64 commits, so the agent's hook is unit-level only; a model-free soak of an agent cell past 64 turns on the real stack would close it. `WorkspaceStateDO` is not on the schedule.
