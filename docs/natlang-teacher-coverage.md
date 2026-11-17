@@ -150,3 +150,9 @@ renderer identity and file hashes; source collection files are snapshotted along
 `vibestudio_sft.py register --out BUILD --register-id ID --register-owner dgx` only after the artifact is present
 on that actual owner. The shared corpus publisher records immutable manifests. Collection, admission, rendering
 and actual learner exposure remain separate; a successful build does not claim the data has been trained on.
+
+
+A campaign resolves its natlang commit once and shares one staged runtime module across suites. Repeated bundle
+imports previously retained one native-server exit hook per copy, producing an exit-listener warning in a long
+campaign even though no native server was started. Sharing the immutable bundle avoids duplicate modules and
+keeps suite workers isolated without copying a runtime for every suite.

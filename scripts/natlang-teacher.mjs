@@ -5,7 +5,8 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { runNatlangEval } from "./natlang-eval.mjs";
+import { runNatlangEval, resolveNatlangCommit } from "./natlang-eval.mjs";
+import { natlangRepository } from "./lib/natlang-stage.mjs";
 import { ownedEntry } from "./lib/owned-entry.mjs";
 import {
   canonical,
@@ -390,6 +391,7 @@ export async function main(argv = process.argv.slice(2)) {
     console.log(JSON.stringify(catalog, null, 2));
     return;
   }
+  options.natlangCommit = resolveNatlangCommit(natlangRepository(), options.natlangCommit);
   const selections = options.all ? catalog : [{ template: options.template, path: options.suite }];
   await ownedEntry(
     async (context) => {
@@ -401,16 +403,10 @@ export async function main(argv = process.argv.slice(2)) {
               path.dirname(selection.path).replaceAll("/", "_")
             )
           : options.out;
-        const scratchRoot = fs.mkdtempSync(path.join(context.scratchRoot, "suite-"));
-        let result;
-        try {
-          result = await collectSuite(
-            { ...options, template: selection.template, suite: selection.path, out },
-            { ...context, scratchRoot }
-          );
-        } finally {
-          fs.rmSync(scratchRoot, { recursive: true, force: true });
-        }
+        const result = await collectSuite(
+          { ...options, template: selection.template, suite: selection.path, out },
+          context
+        );
         if (result?.exitCode) throw new Error(`teacher suite failed: ${selection.path}`);
       }
     },
