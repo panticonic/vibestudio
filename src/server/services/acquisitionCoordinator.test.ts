@@ -1762,84 +1762,92 @@ describe("AcquisitionCoordinator", () => {
     grantStore.close();
   });
 
-  it("admits only an exact case rule and fails an unexpected test prompt", () => {
-    const grantStore = new CapabilityGrantStore({
-      statePath: mkdtempSync(join(tmpdir(), "authority-acq-test-case-")),
-    });
-    const coordinator = new AcquisitionCoordinator({
-      approvalQueue: { request: vi.fn() } as never,
-      grantStore,
-    });
-    const snap = {
-      ...snapshot(),
-      capability: "permissions.revoke",
-      resourceKey: "permissions.revoke",
-      callerPrincipal: "session:chat-1" as const,
-      executionMode: "test" as const,
-      testPolicyId: "test:run-123:case:approval",
-    };
-    const caller = {
-      ...createVerifiedCaller("do:test-runner", "do", {
-        callerId: "do:test-runner",
-        callerKind: "do",
-        repoPath: "workers/test-infrastructure",
-        effectiveVersion: "ev-test",
-        executionDigest: "d".repeat(64),
-        requested: [],
-      }),
-      testPolicy: {
-        policyId: snap.testPolicyId,
-        kind: "case" as const,
-        orchestratorPolicyId: "test:run-123",
-        case: {
-          testId: "approval",
-          agent: {
-            model: "openai-codex:gpt-5.3-codex-spark",
-            approvalLevel: 2 as const,
-            fallback: "disabled" as const,
-          },
-          authority: [
-            {
-              ruleId: "revoke",
-              capability: { kind: "exact" as const, key: snap.capability },
-              resource: { kind: "exact" as const, key: snap.resourceKey },
-              tier: "critical" as const,
-              decision: "once" as const,
-            },
-          ],
-          unexpectedPrompts: "fail" as const,
-        },
-      },
-    };
-    const input = {
-      snapshot: snap,
-      snapshotDigest: invocationSnapshotDigest(snap),
-      tier: "critical" as const,
-      caller,
-      renderedAction: "remove a test decision",
-      resource: { kind: "exact" as const, key: snap.resourceKey },
-    };
-
-    expect(coordinator.request(input)).toMatchObject({ preauthorized: true, pending: false });
-    expect(grantStore.listAuthorityGrants()).toEqual([
-      expect.objectContaining({
-        capability: snap.capability,
-        provenance: "critical-confirmation",
-        issuedBy: expect.stringContaining(":revoke"),
-      }),
-    ]);
-    expect(() =>
-      coordinator.request({
-        ...input,
-        snapshot: { ...snap, capability: "unexpected.capability" },
-        snapshotDigest: invocationSnapshotDigest({
-          ...snap,
-          capability: "unexpected.capability",
+  it.each(["session:chat-1", `code:workers/test-infrastructure@${"d".repeat(64)}`] as const)(
+    "admits only an exact critical case rule for %s and fails an unexpected test prompt",
+    (callerPrincipal) => {
+      const grantStore = new CapabilityGrantStore({
+        statePath: mkdtempSync(join(tmpdir(), "authority-acq-test-case-")),
+      });
+      const coordinator = new AcquisitionCoordinator({
+        approvalQueue: { request: vi.fn() } as never,
+        grantStore,
+      });
+      const snap = {
+        ...snapshot(),
+        capability: "permissions.revoke",
+        resourceKey: "permissions.revoke",
+        callerPrincipal,
+        executionMode: "test" as const,
+        testPolicyId: "test:run-123:case:approval",
+      };
+      const caller = {
+        ...createVerifiedCaller("do:test-runner", "do", {
+          callerId: "do:test-runner",
+          callerKind: "do",
+          repoPath: "workers/test-infrastructure",
+          effectiveVersion: "ev-test",
+          executionDigest: "d".repeat(64),
+          requested: [],
         }),
-      })
-    ).toThrow(/Unexpected authority prompt/);
-    grantStore.close();
-  });
+        testPolicy: {
+          policyId: snap.testPolicyId,
+          kind: "case" as const,
+          orchestratorPolicyId: "test:run-123",
+          case: {
+            testId: "approval",
+            agent: {
+              model: "openai-codex:gpt-5.3-codex-spark",
+              approvalLevel: 2 as const,
+              fallback: "disabled" as const,
+            },
+            authority: [
+              {
+                ruleId: "revoke",
+                capability: { kind: "exact" as const, key: snap.capability },
+                resource: { kind: "exact" as const, key: snap.resourceKey },
+                tier: "critical" as const,
+                decision: "once" as const,
+              },
+            ],
+            unexpectedPrompts: "fail" as const,
+          },
+        },
+      };
+      const input = {
+        snapshot: snap,
+        snapshotDigest: invocationSnapshotDigest(snap),
+        tier: "critical" as const,
+        caller,
+        renderedAction: "remove a test decision",
+        resource: { kind: "exact" as const, key: snap.resourceKey },
+      };
+
+      expect(coordinator.request(input)).toMatchObject({ preauthorized: true, pending: false });
+      expect(grantStore.listAuthorityGrants()).toEqual([
+        expect.objectContaining({
+          capability: snap.capability,
+          provenance: "critical-confirmation",
+          subject: "session:chat-1",
+          scope: "once",
+          constraints: expect.objectContaining({
+            invocationDigest: invocationSnapshotDigest(snap),
+          }),
+          issuedBy: expect.stringContaining(":revoke"),
+        }),
+      ]);
+      expect(() =>
+        coordinator.request({
+          ...input,
+          snapshot: { ...snap, capability: "unexpected.capability" },
+          snapshotDigest: invocationSnapshotDigest({
+            ...snap,
+            capability: "unexpected.capability",
+          }),
+        })
+      ).toThrow(/Unexpected authority prompt/);
+      grantStore.close();
+    }
+  );
 
   it("lets a case declare a critical prompt the person answers: no failure, no policy grant", async () => {
     const path = mkdtempSync(join(tmpdir(), "authority-acq-test-queue-"));

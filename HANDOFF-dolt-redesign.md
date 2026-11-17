@@ -214,6 +214,37 @@ SQLite registry from celld. Node's `withBlobContentLock` is process-local.
 Do not claim that this caused the observed error until a cleanup-stage stack
 or focused interop repro proves it; do not raise SQLite waits or retry away it.
 
+The diagnostic run `st_ee67575c9ef94e20a62a41cd864e54db` retains 65 unique
+native receipts, counter 1–65, default collection at 64 commits, and zero model
+calls. It remains **red**: mission retirement failed because the case-policy
+path minted a critical confirmation to a code principal; critical confirmations
+must be session facts bound to the invocation. The parameterized regression
+reproduces the actual code-principal failure while the session caller passes.
+The repaired path uses the same session-bound confirmation as interactive
+approval; ordinary gated grants retain their original code principal. All 81
+focused acquisition, grant-store and authority-runtime tests pass. The complete
+host commit gate passes through lint and fails only the same eight untouched
+formatting baselines.
+
+The same run confirms the SQLite failure is the `release blob retentions`
+stage: its first `sqlite_schema` read fails in `openCanonicalSqliteDatabase`.
+The native connection points to the exact private workspace registry (one
+link, no symlink/global-CAS collision); the file is stock rollback-journal
+SQLite, about 2 MiB, with 762 rows in one namespace at the idle snapshot.
+This proves the failing boundary, not the competing lock owner. A simple
+65-write/2,000-retention interop probe passed; a denser probe hit native fencing
+and is inconclusive for the schema-read fault. Do not increase waits or change
+journal mode without a causal reproduction.
+
+The diagnostic instance and all its processes are stopped/joined. Its memory
+scope peaked at 3,927,330,816 bytes (3.66 GiB), fell below 2.85 GiB, and recorded
+zero quota hits/OOM kills. Host available memory rose to about 21 GiB after
+retirement. This shows substantial per-instance overhead, not a proven leak.
+Keep heavy work serial under 6 GiB with zero swap; keep the observer outside
+the group, retire each exact instance, and retain bounded evidence only.
+Private proofs: `soak5-workload-evidence.json`, `soak5-memory-summary.json`,
+inspect/trajectory and native supervisor logs in the existing evidence dirs.
+
 For the later 10k measurement, use the existing TestCase `explicitOnly` and
 `timeoutMs` metadata rather than inventing a job API or a product timeout.
 EvalKernel's timeout is opt-in: absent means unbounded, confirmed in its

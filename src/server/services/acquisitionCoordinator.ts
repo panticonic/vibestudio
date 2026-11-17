@@ -1176,12 +1176,13 @@ export class AcquisitionCoordinator {
               effect: rule.decision === "deny" ? "deny" : "allow",
               capability: facet.snapshot.capability,
               resource: facet.resource,
-              // Test policy may be inherited by reviewed infrastructure code without
-              // changing its authorizing origin into a session. Mint the invocation
-              // grant to the exact principal the immutable snapshot evaluated; keep
-              // the execution/session identity as a constraint, never as a substitute
-              // principal.
-              subject: taskSubject ?? facet.snapshot.callerPrincipal,
+              // Critical confirmations use the same session-bound invocation fact
+              // as the interactive approval path. Ordinary test grants retain the
+              // caller's authorizing principal, including reviewed infrastructure.
+              subject:
+                facet.tier === "critical" && rule.decision === "once"
+                  ? `session:${facet.snapshot.sessionId}`
+                  : (taskSubject ?? facet.snapshot.callerPrincipal),
               constraints:
                 rule.decision === "task"
                   ? {
