@@ -360,7 +360,7 @@ test("the original document world remains searchable beyond the grep result boun
             ? "answers"
             : "no";
         },
-        async () => ["typecheck", "panel"]
+        async () => ["typecheck a single panel", "check panel before publishing"]
       );
       return locate("How do I typecheck a single panel before I publish it?");
     },
@@ -540,7 +540,7 @@ test("a useful search synonym absent from the question reaches its grounded sour
     async () => ["static analysis"]
   );
   const result = await locate("How do I typecheck a panel?");
-  assert.equal(pattern, "static analysis");
+  assert.equal(pattern, "static analysis|static|analysis");
   assert.equal(result.found.length, 1);
   assert.ok(text.includes(result.found[0].quote));
 });
