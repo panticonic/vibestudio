@@ -394,4 +394,28 @@ describe("a call to the client's own id", () => {
     await expect(connectionless.client.call(SELF, "chatOp", [])).resolves.toBe("hosting entity");
     expect(fetch).toHaveBeenCalledTimes(1);
   });
+  it("returns an owner reply to its hosted endpoint through the held HTTP request", async () => {
+    const owner = makeClient(vi.fn());
+    owner.client.expose("describe", () => "owner snapshot", {
+      kind: "closed",
+      reason: "Internal test",
+    });
+    const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as RpcEnvelope;
+      const response = await owner.respond(request).completion;
+      return new Response(JSON.stringify(response));
+    });
+    const hosted = createInternalConnectionlessRpcClient({
+      selfId: SELF,
+      serverUrl: "http://gw.test",
+      authToken: "T",
+      callerKind: "do",
+      loopback: false,
+      fetch,
+    });
+    await expect(hosted.client.call(SELF, "describe", [])).resolves.toBe("owner snapshot");
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await expect(owner.client.call(SELF, "describe", [])).resolves.toBe("owner snapshot");
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
 });

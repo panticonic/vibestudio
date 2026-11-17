@@ -493,11 +493,21 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
   >();
   const activeStreamingHandlers = new Map<
     string,
-    { abort: AbortController; caller: AuthenticatedCaller; envelope: RpcEnvelope }
+    {
+      abort: AbortController;
+      caller: AuthenticatedCaller;
+      envelope: RpcEnvelope;
+      reply: (envelope: RpcEnvelope) => Promise<void>;
+    }
   >();
   const activeRequestHandlers = new Map<
     string,
-    { abort: AbortController; caller: AuthenticatedCaller; envelope: RpcEnvelope }
+    {
+      abort: AbortController;
+      caller: AuthenticatedCaller;
+      envelope: RpcEnvelope;
+      reply: (envelope: RpcEnvelope) => Promise<void>;
+    }
   >();
   const streamIdleTimeoutMs = config.streamIdleTimeoutMs ?? null;
 
@@ -650,7 +660,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       envelope.target === config.selfId &&
       isLocalRpcDestination(envelope.destination, config.workspaceId)
     ) {
-      queueMicrotask(() => handleEnvelope(envelope));
+      queueMicrotask(() => handleEnvelope(envelope, true));
       return;
     }
     await config.transport.send(envelope, signal);
@@ -984,7 +994,12 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
     }
   }
 
-  function handleRequest(envelope: RpcEnvelope, request: RpcRequest): void {
+  function handleRequest(
+    envelope: RpcEnvelope,
+    request: RpcRequest,
+    locallyDelivered: boolean
+  ): void {
+    const reply = replyDelivery(locallyDelivered);
     if (retired) return;
     const handler = exposedMethods.get(request.method);
     // A failed response send means the caller's awaiter will hang. We can't
@@ -998,7 +1013,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       );
     };
     if (!handler) {
-      void deliverEnvelope(
+      void reply(
         responseEnvelopeFor(envelope, selfCaller, {
           type: "response",
           requestId: request.requestId,
@@ -1021,6 +1036,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       abort,
       caller: publicCaller(envelope.delivery.caller),
       envelope,
+      reply,
     });
     Promise.resolve()
       .then(() => {
@@ -1031,7 +1047,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         (result) => {
           if (activeRequestHandlers.get(request.requestId)?.abort !== abort) return;
           activeRequestHandlers.delete(request.requestId);
-          return deliverEnvelope(
+          return reply(
             responseEnvelopeFor(envelope, selfCaller, {
               type: "response",
               requestId: request.requestId,
@@ -1042,7 +1058,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         (error) => {
           if (activeRequestHandlers.get(request.requestId)?.abort !== abort) return;
           activeRequestHandlers.delete(request.requestId);
-          return deliverEnvelope(
+          return reply(
             responseEnvelopeFor(envelope, selfCaller, {
               type: "response",
               requestId: request.requestId,
@@ -1058,11 +1074,16 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       });
   }
 
-  function handleStreamRequest(envelope: RpcEnvelope, request: RpcStreamRequest): void {
+  function handleStreamRequest(
+    envelope: RpcEnvelope,
+    request: RpcStreamRequest,
+    locallyDelivered: boolean
+  ): void {
+    const reply = replyDelivery(locallyDelivered);
     if (retired) return;
     const handler = streamingHandlers.get(request.method);
     const sendFrame = (frameType: number, payload: string): Promise<void> =>
-      deliverEnvelope(
+      reply(
         responseEnvelopeFor(envelope, selfCaller, {
           type: "stream-frame",
           requestId: request.requestId,
@@ -1089,6 +1110,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       abort,
       caller: publicCaller(envelope.delivery.caller),
       envelope,
+      reply,
     });
     const sink = (frame: StreamingMethodFrame): Promise<void> | void => {
       if (activeStreamingHandlers.get(request.requestId)?.abort !== abort) return;
@@ -1140,13 +1162,22 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
       });
   }
 
-  function handleEnvelope(envelope: RpcEnvelope): void {
+  // A shared principal id does not identify an endpoint. Replies to a transport
+  // request must return through that transport, even when its sender has our id.
+  // Only a request delivered by our own loopback may receive a loopback reply.
+  function replyDelivery(locallyDelivered: boolean): (envelope: RpcEnvelope) => Promise<void> {
+    return locallyDelivered
+      ? (envelope) => deliverEnvelope(envelope)
+      : (envelope) => config.transport.send(envelope);
+  }
+
+  function handleEnvelope(envelope: RpcEnvelope, locallyDelivered = false): void {
     if (retired) return;
     if (!isLocalRpcDestination(envelope.destination, config.workspaceId)) return;
     const message = envelope.message;
     switch (message.type) {
       case "request":
-        handleRequest(envelope, message);
+        handleRequest(envelope, message, locallyDelivered);
         return;
       case "response":
         handleResponse(envelope, message);
@@ -1155,7 +1186,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
         handleEvent(envelope, message);
         return;
       case "stream-request":
-        handleStreamRequest(envelope, message);
+        handleStreamRequest(envelope, message, locallyDelivered);
         return;
       case "stream-frame":
         handleStreamFrame(envelope, message);
@@ -1799,29 +1830,33 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
     for (const [requestId, active] of [...activeRequestHandlers]) {
       activeRequestHandlers.delete(requestId);
       active.abort.abort(error);
-      void deliverEnvelope(
-        responseEnvelopeFor(active.envelope, selfCaller, {
-          type: "response",
-          requestId,
-          error: { message: error.message, errorKind: "transport" },
-        })
-      ).catch(() => {});
+      void active
+        .reply(
+          responseEnvelopeFor(active.envelope, selfCaller, {
+            type: "response",
+            requestId,
+            error: { message: error.message, errorKind: "transport" },
+          })
+        )
+        .catch(() => {});
     }
     for (const [requestId, active] of [...activeStreamingHandlers]) {
       activeStreamingHandlers.delete(requestId);
       active.abort.abort(error);
-      void deliverEnvelope(
-        responseEnvelopeFor(active.envelope, selfCaller, {
-          type: "stream-frame",
-          requestId,
-          fromId: config.selfId,
-          frameType: FRAME_ERROR,
-          payload: JSON.stringify({
-            status: 503,
-            error: { message: error.message, errorKind: "transport" },
-          }),
-        })
-      ).catch(() => {});
+      void active
+        .reply(
+          responseEnvelopeFor(active.envelope, selfCaller, {
+            type: "stream-frame",
+            requestId,
+            fromId: config.selfId,
+            frameType: FRAME_ERROR,
+            payload: JSON.stringify({
+              status: 503,
+              error: { message: error.message, errorKind: "transport" },
+            }),
+          })
+        )
+        .catch(() => {});
     }
     eventListeners.clear();
     exposedMethods.clear();

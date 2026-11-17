@@ -26,6 +26,26 @@ symlink root `root-dolt-p2`, not pushed). Fork binary: `unified-fork` `2d1749d`
 
 ### S6b restoration in progress
 
+The first restored real run (`st_afca831d14e945a49420f64e3dd3e053`) reached
+`await agent.describe()` and stalled. Admission trace proves caller resolution,
+causal proof, target readiness and authority all completed; the receiver request
+was sent. Repeated approval inspection while pending was empty. The existing
+DOTrace only reports completed host dispatches, so its silence does not prove
+that a direct RPC never entered the method. The managed deadline/cancellation
+and later graceful shutdown also stalled; the exact owned server PID 120115
+was killed, and the supervisor, test caller and observer were joined.
+
+A conventional repro identifies a second loopback defect in the host RPC core:
+a transport-delivered request from another endpoint with the same principal id
+has its reply looped into the receiver, bypassing the HTTP transport's held
+response capture. All three success/error/unexposed repro variants fail before
+the fix. Replies now retain ingress delivery: local requests use local replies;
+transport requests, including stream and retirement terminals, use the transport.
+No authority identity or wire field changed. All 117 focused RPC/HTTP tests pass,
+including an actual pair of connectionless clients sharing an id and a local
+self-call control. Real-stack verification of this second fix is next.
+
+
 The previous source restore was reverted on Base as `cd334fb`, then the held
 hosted-client change was merged as `1036ecd` on `feat/dolt-p2-s3`. This restores
 agent-owned kernels while keeping the later child-retirement repair and gateway

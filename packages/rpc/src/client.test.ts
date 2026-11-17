@@ -3262,3 +3262,128 @@ describe("public RPC method descriptor validation", () => {
     expect(observed).toHaveLength(4);
   });
 });
+
+describe("same-principal endpoint replies", () => {
+  it.each(["success", "error", "missing"])(
+    "returns %s replies through their incoming transport",
+    async (outcome) => {
+      const t = controllableTransport();
+      const lifetime = new AbortController();
+      const client = createInternalRpcClient({
+        selfId: "owner",
+        transport: t.transport,
+        lifetime: lifetime.signal,
+      });
+      if (outcome !== "missing")
+        client.expose(
+          "inspect",
+          () => {
+            if (outcome === "error") throw new Error("inspection failed");
+            return "owner state";
+          },
+          { kind: "closed", reason: "Internal test" }
+        );
+      try {
+        t.emitMessage({
+          from: "owner",
+          target: "owner",
+          delivery: { caller: { callerId: "owner", callerKind: "do" } },
+          provenance: [],
+          message: {
+            type: "request",
+            requestId: "external-self",
+            fromId: "owner",
+            method: "inspect",
+            args: [],
+          },
+        });
+        await vi.waitFor(() => expect(t.sent).toHaveLength(1));
+        expect(t.sent[0]?.message).toMatchObject({
+          type: "response",
+          requestId: "external-self",
+          ...(outcome === "success"
+            ? { result: "owner state" }
+            : {
+                error: {
+                  message: expect.stringMatching(
+                    outcome === "error" ? /inspection failed/ : /not exposed/
+                  ),
+                },
+              }),
+        });
+      } finally {
+        lifetime.abort();
+      }
+    }
+  );
+  it.each(["request", "stream-request"] as const)(
+    "returns retirement of a same-principal %s to its transport",
+    async (type) => {
+      const t = controllableTransport();
+      const lifetime = new AbortController();
+      const client = createInternalRpcClient({
+        selfId: "owner",
+        transport: t.transport,
+        lifetime: lifetime.signal,
+      });
+      const handler = vi.fn(() => new Promise<void>(() => {}));
+      if (type === "request")
+        client.expose("inspect", handler, { kind: "closed", reason: "Internal test" });
+      else client.exposeStreaming("inspect", handler, { kind: "closed", reason: "Internal test" });
+      t.emitMessage({
+        from: "owner",
+        target: "owner",
+        delivery: { caller: { callerId: "owner", callerKind: "do" } },
+        provenance: [],
+        message: { type, requestId: "retiring-self", fromId: "owner", method: "inspect", args: [] },
+      });
+      await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+      lifetime.abort();
+      await vi.waitFor(() => expect(t.sent).toHaveLength(1));
+      expect(t.sent[0]?.message).toMatchObject({
+        type: type === "request" ? "response" : "stream-frame",
+        requestId: "retiring-self",
+      });
+    }
+  );
+
+  it("returns same-principal stream frames to their incoming transport", async () => {
+    const t = controllableTransport();
+    const lifetime = new AbortController();
+    const client = createInternalRpcClient({
+      selfId: "owner",
+      transport: t.transport,
+      lifetime: lifetime.signal,
+    });
+    client.exposeStreaming(
+      "inspect",
+      async (_request, sink) => {
+        await sink({ kind: "head", status: 200, statusText: "OK", headerPairs: [], finalUrl: "" });
+        await sink({ kind: "end", bytesIn: 0 });
+      },
+      { kind: "closed", reason: "Internal test" }
+    );
+    try {
+      t.emitMessage({
+        from: "owner",
+        target: "owner",
+        delivery: { caller: { callerId: "owner", callerKind: "do" } },
+        provenance: [],
+        message: {
+          type: "stream-request",
+          requestId: "stream-self",
+          fromId: "owner",
+          method: "inspect",
+          args: [],
+        },
+      });
+      await vi.waitFor(() => expect(t.sent).toHaveLength(2));
+      expect(t.sent.map((envelope) => envelope.message)).toMatchObject([
+        { type: "stream-frame", requestId: "stream-self", frameType: FRAME_HEAD },
+        { type: "stream-frame", requestId: "stream-self", frameType: FRAME_END },
+      ]);
+    } finally {
+      lifetime.abort();
+    }
+  });
+});
