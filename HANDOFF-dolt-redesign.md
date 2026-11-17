@@ -91,8 +91,8 @@ fingerprint `f802ca4972ebbd6ce0fe9a7da8d76cc8472df759b847080a77ea79ef80c691b7`.
 All S6b instances/producers/observers are stopped and joined, and private release
 scratch is removed. Bounded private evidence is `~/.local/state/celld-p4-s6b/`
 and the system-test artifacts. The owned registry remains for the next P4 slice.
-Nothing pushed; runtime pin remains `75f1700`. Next: product compaction soak,
-restart probe and 10k-turn measurement; steering/model completion remains open.
+Nothing pushed; runtime pin remains `75f1700`. Next: product compaction soak
+and 10k-turn measurement; the agent-cell restart probe already passes; steering/model completion remains open.
 
 ### WorkspaceStateDO default compaction verified
 
@@ -120,9 +120,32 @@ passes 4/4 (9 s), including migration/crash recovery. Gate checks through
 workflows passed; a new test's index-signature access typo was corrected, then
 host types and lint pass and formatting reaches only the same eight untouched
 baseline files. No native binary change. Next is the actual agent-cell
-model-free soak past 64 turns, whole-product restart probe and 10k-turn fork
-measurement. The earlier activation-loss replay pass is narrower than a whole
-workspace-node restart.
+model-free soak past 64 turns and 10k-turn fork measurement. The passed
+activation-loss replay is the requested agent-cell restart probe: the fault
+aborts the actual vessel facets, and the next ordinary request constructs a
+fresh vessel over the same durable storage, completing once without duplicate
+execution. A whole workspace-node restart is outside that requirement.
+
+### Actual agent soak in progress
+
+System-testing P4 now contains the model-free 65-turn test
+`agent-cell-compaction-soak` (`2f18674`, manifest correction `8cea9f0`).
+The first live run `st_48fa1a31f8bf48838c660d35483654b7` errored before
+any turns: `authority.compileAuthorityPlan` requires durable code identity;
+the ordinary harness itself runs in a finite eval session. Imported installed
+code does not change that caller identity. Cleanup completed with no errors.
+This is a harness ownership defect, not evidence about agent compaction.
+
+`f721f82` moves complete session/mission ownership to a bounded installed
+SystemTestRunnerDO operation, using the same native workload helper. Its eval
+caller only awaits that operation and passes cancellation. `c609293` gives
+cleanup the worker's independent invocation lifetime; workload cancellation
+still uses the caller signal explicitly. No codeOnly policy exception, prompt
+override, lowered collection threshold or production deadline change.
+All 26 focused validator/worker tests, three composition typechecks and 970
+production import graphs pass. The new worker operation still needs its live
+run before either P2 template branch advances. Evidence and producer logs are
+private under `~/.local/state/celld-p4-compaction/`.
 
 ### Steering investigation resumed after the checkpoint
 
