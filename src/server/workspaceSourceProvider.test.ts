@@ -10,7 +10,10 @@ import {
   commandIdForTrajectoryInvocation,
 } from "@vibestudio/trajectory-identity";
 import type { EntityRecord } from "@vibestudio/shared/runtime/entitySpec";
-import { resolveExactCausalInvocation } from "./workspaceSourceProvider.js";
+import {
+  createCausalEnvelopeReader,
+  resolveExactCausalInvocation,
+} from "./workspaceSourceProvider.js";
 
 function setup(operation?: NativeInvocationSource["operation"], channelId = "channel:one") {
   const binding = {
@@ -120,6 +123,86 @@ function setup(operation?: NativeInvocationSource["operation"], channelId = "cha
 }
 
 describe("native exact causal invocation", () => {
+  it("shares concurrent original-envelope reads while checking every task and owner", async () => {
+    const state = setup();
+    let deliver!: (value: unknown) => void;
+    state.getEnvelope.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          deliver = resolve;
+        })
+    );
+    const getEnvelope = createCausalEnvelopeReader(state.getEnvelope);
+    const resolve = () => resolveExactCausalInvocation(state.parent, { ...state, getEnvelope });
+    const calls = Array.from({ length: 96 }, resolve);
+    await vi.waitFor(() => expect(state.inspect).toHaveBeenCalledTimes(96));
+    expect(state.getEnvelope).toHaveBeenCalledTimes(1);
+    deliver(state.originalEvent);
+    await expect(Promise.all(calls)).resolves.toHaveLength(96);
+    state.getEnvelope.mockResolvedValue(state.originalEvent);
+    await resolve();
+    expect(state.getEnvelope).toHaveBeenCalledTimes(2);
+    expect(state.inspect).toHaveBeenCalledTimes(97);
+  });
+
+  it("rejects a retired owner after a shared read and retains no failed read", async () => {
+    const state = setup();
+    let fail!: (reason: unknown) => void;
+    state.getEnvelope.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          fail = reject;
+        })
+    );
+    const getEnvelope = createCausalEnvelopeReader(state.getEnvelope);
+    const resolve = () => resolveExactCausalInvocation(state.parent, { ...state, getEnvelope });
+    const failure = new Error("original channel unavailable");
+    const result = Promise.allSettled([resolve(), resolve()]);
+    await vi.waitFor(() => expect(state.getEnvelope).toHaveBeenCalledTimes(1));
+    fail(failure);
+    expect(await result).toEqual([
+      { status: "rejected", reason: failure },
+      { status: "rejected", reason: failure },
+    ]);
+    let deliver!: (value: unknown) => void;
+    state.getEnvelope.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          deliver = resolve;
+        })
+    );
+    const next = Promise.allSettled([resolve(), resolve()]);
+    await vi.waitFor(() => expect(state.getEnvelope).toHaveBeenCalledTimes(2));
+    state.entities.resolveActive.mockReturnValue(null);
+    deliver(state.originalEvent);
+    for (const outcome of await next) {
+      expect(outcome.status).toBe("rejected");
+      if (outcome.status === "rejected") expect(outcome.reason.message).toContain("retired");
+    }
+  });
+
+  it("does not share an envelope read across distinct canonical targets", async () => {
+    const state = setup();
+    const deliveries: Array<(value: unknown) => void> = [];
+    const read = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          deliveries.push(resolve);
+        })
+    );
+    const getEnvelope = createCausalEnvelopeReader(read);
+    const ref = state.origin.channelRef;
+    const calls = [
+      getEnvelope(ref, "one"),
+      getEnvelope(ref, "two"),
+      getEnvelope({ ...ref, objectKey: "other" }, "one"),
+      getEnvelope({ ...ref, source: "other" }, "one"),
+      getEnvelope({ ...ref, className: "Other" }, "one"),
+    ];
+    expect(read).toHaveBeenCalledTimes(5);
+    for (const deliver of deliveries) deliver(null);
+    await Promise.all(calls);
+  });
   it("authenticates the actual task and accepted original sender before any channel journal retention", async () => {
     const state = setup();
     await expect(state.resolve()).resolves.toEqual({

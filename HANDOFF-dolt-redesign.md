@@ -23,6 +23,48 @@ symlink root `root-dolt-p2`, not pushed). Fork binary: `unified-fork` `2d1749d`
 
 ## P4 continuation (2026-11-17)
 
+### Steering investigation resumed after the checkpoint
+
+Native event tracing now works with both native DEBUG and host verbose logging.
+Baseline `p4-steering-events`, `st_a09c26cf17464714a447bc464b984c72`, failed in
+215 s with a concrete `find` tool failure: its original-envelope provenance read
+returned 503. Eight saturation warnings were captured. At refusal, the 64 held
+channel events had arrived within 0.3–0.4 s; every one finished later (the first
+burst drained in another 6.23 s). This is burst pressure, not retained completed
+events. Native task inspections precede the repeated channel-envelope reads;
+`find`'s visibility filtering fans metadata reads out across all matches.
+
+The host now shares only outstanding reads of the same canonical original
+envelope, scoped to one workspace host. Keys include source, class, object key
+and envelope ID. Every ingress independently inspects its task and rechecks its
+owner after the shared read. Successes and failures leave no cache after read
+settlement. Both host verification entry points use the same reader. No native
+request cap, retry or deadline changed. All 35 causal-proof tests pass,
+including 96 concurrent callers, failure propagation/re-read, owner retirement
+during a shared read and distinct targets. Host typechecks pass. The complete
+commit gate again reaches only the eight untouched formatting-baseline files.
+
+Fresh comparison `p4-steering-shared2`, `st_640768386efc41f59407454f668b9832`,
+passed the steering harness in 212 s with zero tool failures and successful
+cleanup. There were **zero saturation refusals**, and the first child's channel
+peaked at seven native events rather than 64. All task evidence checks still
+ran separately. **Semantic caveat:** the full final answer reports conflicting
+child file counts (92 vs 117, with 22,508 lines), so the harness's weak numeric
+check passes an unresolved answer. This proves infrastructure recovery, not a
+correct model answer or an end-to-end latency improvement. Do not report P4
+complete from this pass. The exact-authority case then passed in 109 s
+(`st_81e5f0f25b7740688509c13b671c6624`), with zero tool failures.
+
+Evidence is private at `~/.local/state/celld-p4-steering/` (baseline/comparison
+inspection and full trajectory, event summaries, refusal drain summary,
+producer profiles and commit-gate log). The complete release was rebuilt for
+the development host generation. A producer first used the production host
+generation and the consumer correctly rejected it; that producer and failed
+consumer were stopped before their scratch release was replaced. Do not bypass
+that fingerprint check. The current consumer, observer and registry still
+belong to this ongoing investigation and must be joined before final cleanup.
+
+
 Resumed from `celld/docs/fork/HANDOVER.md`, single-track. Host starts at
 `c8e2511a3`, Base at `adc9993`, system-testing at `1c16e49`, fork `75f1700`,
 Pi `.dolt.5`. Main checkouts and the owner's processes remain untouched.

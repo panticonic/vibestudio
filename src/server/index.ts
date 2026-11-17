@@ -1360,6 +1360,12 @@ async function main() {
     credentialStore,
     clientConfigStore,
   });
+  const { createCausalEnvelopeReader } = await import("./workspaceSourceProvider.js");
+  const readCausalEnvelope = createCausalEnvelopeReader((ref, envelopeId) =>
+    container
+      .get<import("./doDispatch.js").DODispatch>("doDispatch")
+      .dispatch(ref, "getEnvelope", envelopeId)
+  );
   const resolveNativeInvocation = async (
     caller: import("@vibestudio/shared/serviceDispatcher").VerifiedCaller
   ) => {
@@ -1383,7 +1389,7 @@ async function main() {
           { taskId: locator.task.taskId, invocationId }
         );
       },
-      getEnvelope: (ref, envelopeId) => doDispatch.dispatch(ref, "getEnvelope", envelopeId),
+      getEnvelope: readCausalEnvelope,
     });
     if (!fact) return null;
     return { nativeInvocation: fact.nativeInvocation, active: fact.active };
@@ -5814,7 +5820,7 @@ async function main() {
                 { taskId: locator.task.taskId, invocationId }
               );
             },
-            getEnvelope: (ref, envelopeId) => doDispatch.dispatch(ref, "getEnvelope", envelopeId),
+            getEnvelope: readCausalEnvelope,
           });
           if (!fact) return null;
           const user = fact.initiatingUserId ? userStore.getUser(fact.initiatingUserId) : null;

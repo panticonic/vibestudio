@@ -24,6 +24,23 @@ export interface WorkspaceSourceProviderRef {
   objectKey: string;
 }
 
+/** Share only an outstanding read of the same canonical original input.
+ * Each ingress still inspects its native task and rechecks its runtime owner.
+ * Neither successful evidence nor failures survive the read's settlement. */
+export function createCausalEnvelopeReader(
+  read: (ref: WorkspaceSourceProviderRef, envelopeId: string) => Promise<unknown>
+): (ref: WorkspaceSourceProviderRef, envelopeId: string) => Promise<unknown> {
+  const pending = new Map<string, Promise<unknown>>();
+  return (ref, envelopeId) => {
+    const key = canonicalJson([ref.source, ref.className, ref.objectKey, envelopeId]);
+    const existing = pending.get(key);
+    if (existing) return existing;
+    const flight = read(ref, envelopeId).finally(() => pending.delete(key));
+    pending.set(key, flight);
+    return flight;
+  };
+}
+
 /**
  * The complete bootstrap ABI required by the generic host. Product semantic
  * operations deliberately do not enter this interface.
