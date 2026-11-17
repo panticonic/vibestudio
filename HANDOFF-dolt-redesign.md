@@ -69,6 +69,85 @@ contract but does not by itself prove the cause of the earlier slow prepares.
 Real-stack verification is next. Host lifecycle-start logging now includes the
 phase; its 25 dispatch tests pass.
 
+**Real-stack retirement results.** On `p4-retirement-live`, Base `724b34e`,
+steering `st_9ee4d6f1a05644e183a677926705cb1f` passed the old harness in 185 s,
+with zero tool failures/refusals and successful cleanup. Child prepares took
+33.6/447.9/67.8 ms. Its final report was again unresolved (93 vs 117 files,
+22,625 lines). The pending report-claim change requires a single resolved file
+count and a line total for the same set, through the existing semantic claim
+checker; it does not change the prompt or replace native steering checks.
+Do not call these numeric-only harness passes correct task answers.
+
+The related follow-up case `st_b5659669c216479bae7ea32f2653d597` reached its
+420 s test deadline (436 s including cleanup), with zero tool failures/refusals
+and no cleanup errors. The transcript shows the parent merging early, then
+asking again for a distinct committed follow-up while the child still worked.
+Its child prepares took 30.6/280.4/69.2 ms. This does not establish a retirement
+regression. The cancellation diagnostics did have a concrete harness defect:
+the deadline's own `RPC_ABORTED` wrapper was counted again as a failed owned
+operation and observation. A synchronous abort listener could also win the
+race and replace the primary deadline. Local system-testing `34b45b1` uses the
+existing exact-owner `isRpcAbortedBy` helper, always preserves the expired
+deadline, and retains foreign cancellation and mixed cleanup errors. Four
+regression variants plus existing runner/report-claim coverage: 46 pass;
+System-testing's three typecheck configurations pass. Both feature branches
+contain this commit. The report-claim data edit was held until its real semantic path worked
+(verified and committed below).
+
+**Resolved diagnostic: first-use gateway credential approval.** A normal CLI
+eval of `claimCheck.nl` reached its 120 s caller wait budget, and a direct
+ModelGateway READY request did not finish within a 90 s external diagnostic
+budget. Neither result established a provider stall. An early inspection of
+approvals happened after cancellation had already removed the pending card.
+The fresh instrumented repro showed a running native helper, zero open model
+connections, and **one pending credential-use approval** for the ModelGateway
+source. Credentialed Luna is available, but that alone does not grant a new
+managed source permission to use its account.
+
+The known request in this isolated verification instance was approved through
+the normal trusted CLI with a **session-scoped** decision, after matching its
+source/version and account to the owned probe. That grant is local to this
+instance's credential-use session store; no persistent credential grant was
+written. The helper then completed and released its connection. A killed CLI
+`agent call` does not itself cancel a retained gateway turn; use the owned
+turn's `cancel` or retire its instance. Do not assume a caller wait deadline
+joined the operation. The prior instance and observer were retired; its final
+native trace has zero outstanding events and zero saturation warnings. This
+finding does not reclassify every older archived ModelGateway hang.
+
+Base `13085f3` (both feature branches) extends `inspectTurns` with pending task
+identity/state/conditions and an open-connection count, without task inputs.
+The 15 gateway tests and all four Base typecheck configurations pass. Those
+diagnostics distinguish active model work from pre-connection waiting.
+
+With the owned session grant established, the **actual Base semantic checker**
+replayed three retained final reports through normal natlang/model execution:
+the resolved 117-file answer is accepted; the conflicting 92/117 and 93/117
+answers are both rejected as contradictions. Private result:
+`retained-claim-verdicts-approved.json`. System-testing `8b0f329`, on both
+feature branches, adds the semantic resolved-counts claim to the steering
+case while retaining its native steering checks. No prompt or output format
+changed. The full run with the installed claim,
+`st_a584ecee9e6a428a9eb687289f0a4488`, failed correctly in 51 s: the model
+ended with a promise to report later and returned no numbers. There were zero
+tool failures, saturation warnings or cleanup failures. Both inspection and
+full trajectory are retained as `inspect-strict-steer.json` and
+`trajectory-strict-steer.json`. This is an unpassed model-completion case, not a
+green steering lane. It is not justification for a prompt override, retry
+loop, cap raise, or a runtime rule that blocks legitimate background work.
+
+The gateway instance, its external observer and all release producers have
+been stopped and joined. The private release/helper scratch at
+`~/.cache/celld-p4-steering` was removed after consumers stopped; the bounded
+preparation recipe is retained in the state directory. Only the owned registry
+remains live (node 64646, timeout parent 64582, exec 71326); verify its command
+before stopping. It is needed for the next P4 slice and must be joined at final
+cleanup. Host source is `1f1dc3e31` (after `d155d0093`), Base `13085f3`,
+system-testing `8b0f329`. Continue S6b and the remaining P4 gates; the strict
+steering/model-completion case remains unpassed. A passing subset is not
+completion. Main checkouts remain untouched; no fork runtime change or binary
+repin; nothing pushed.
+
 Evidence is private at `~/.local/state/celld-p4-steering/` (baseline/comparison
 inspection and full trajectory, event summaries, refusal drain summary,
 producer profiles and commit-gate log). The complete release was rebuilt for
