@@ -21,6 +21,19 @@ import {
   type PanelEvaluateResult,
 } from "@vibestudio/shared/panel/evaluate";
 import { PanelDocumentBootTransport } from "@vibestudio/shared/panel/bootTransport";
+import {
+  queryPanelConsoleHistory,
+  type PanelConsoleHistoryEntry,
+  type PanelConsoleHistoryLevel,
+  type PanelConsoleHistoryOptions,
+  type PanelConsoleHistoryResult,
+} from "@vibestudio/shared/panel/consoleHistory";
+export type {
+  PanelConsoleHistoryEntry,
+  PanelConsoleHistoryLevel,
+  PanelConsoleHistoryOptions,
+  PanelConsoleHistoryResult,
+};
 import type { ViewManager } from "./viewManager.js";
 import type {
   RuntimeDiagnosticRecord,
@@ -83,45 +96,6 @@ export interface CdpHostProviderSocket {
 export interface CdpHostProviderTarget {
   targetId: string;
   webContentsId: number;
-}
-
-export type PanelConsoleHistoryLevel = "debug" | "info" | "warning" | "error" | "unknown";
-
-export interface PanelConsoleHistoryEntry {
-  seq?: number;
-  timestamp: number;
-  level: PanelConsoleHistoryLevel;
-  message: string;
-  line: number;
-  sourceId: string;
-  url: string;
-  source?: "console" | "lifecycle";
-  fields?: Record<string, unknown>;
-}
-
-export interface PanelConsoleHistoryResult {
-  entries: PanelConsoleHistoryEntry[];
-  errors: PanelConsoleHistoryEntry[];
-  page: { nextBeforeSeq: number | null; hasOlder: boolean };
-  dropped: {
-    entries: number;
-    errors: number;
-  };
-  capacity: {
-    entries: number;
-    errors: number;
-  };
-}
-
-export interface PanelConsoleHistoryOptions {
-  limit?: number;
-  errorLimit?: number;
-  levels?: PanelConsoleHistoryLevel[];
-  sources?: Array<"console" | "lifecycle">;
-  contains?: string;
-  since?: number;
-  until?: number;
-  beforeSeq?: number;
 }
 
 export interface CdpHostProviderOptions {
@@ -458,30 +432,21 @@ export class CdpHostProvider {
       stored?.entries.map(runtimeDiagnosticToPanelConsoleHistoryEntry) ?? history.entries;
     const rawErrors =
       stored?.errors.map(runtimeDiagnosticToPanelConsoleHistoryEntry) ?? history.errors;
-    const entries = stored ? rawEntries : filterConsoleEntries(rawEntries, options);
-    const errors = stored
-      ? rawErrors
-      : filterConsoleEntries(rawErrors, { ...options, levels: undefined });
-    const limit = normalizeLimit(options.limit, entries.length);
-    const errorLimit = normalizeLimit(options.errorLimit, errors.length);
-    const pageEntries = limit > 0 ? entries.slice(-limit) : [];
-    const hasOlder = entries.length > pageEntries.length;
-    return {
-      entries: pageEntries,
-      errors: errorLimit > 0 ? errors.slice(-errorLimit) : [],
-      page: {
-        nextBeforeSeq: hasOlder ? (pageEntries[0]?.seq ?? null) : null,
-        hasOlder,
+    return queryPanelConsoleHistory(
+      {
+        entries: rawEntries,
+        errors: rawErrors,
+        dropped: {
+          entries: stored?.dropped.entries ?? history.droppedEntries,
+          errors: stored?.dropped.errors ?? history.droppedErrors,
+        },
+        capacity: {
+          entries: stored?.capacity.entries ?? CONSOLE_LOG_HISTORY_CAPACITY,
+          errors: stored?.capacity.errors ?? CONSOLE_ERROR_HISTORY_CAPACITY,
+        },
       },
-      dropped: {
-        entries: stored?.dropped.entries ?? history.droppedEntries,
-        errors: stored?.dropped.errors ?? history.droppedErrors,
-      },
-      capacity: {
-        entries: stored?.capacity.entries ?? CONSOLE_LOG_HISTORY_CAPACITY,
-        errors: stored?.capacity.errors ?? CONSOLE_ERROR_HISTORY_CAPACITY,
-      },
-    };
+      stored ? { limit: options.limit, errorLimit: options.errorLimit } : options
+    );
   }
 
   /** Both screenshot entry points use Chrome's capture command on the same CDP owner. */
@@ -1189,11 +1154,6 @@ function normalizeEvaluateOptions(value: unknown): PanelEvaluateOptions {
   };
 }
 
-function normalizeLimit(value: unknown, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  return Math.max(0, Math.floor(value));
-}
-
 function normalizeConsoleLevel(level: unknown): PanelConsoleHistoryLevel {
   if (level === "debug" || level === "info" || level === "warning" || level === "error") {
     return level;
@@ -1228,36 +1188,6 @@ function runtimeDiagnosticToPanelConsoleHistoryEntry(
     source: record.source === "lifecycle" ? "lifecycle" : "console",
     fields: record.fields,
   };
-}
-
-function filterConsoleEntries(
-  entries: PanelConsoleHistoryEntry[],
-  options: PanelConsoleHistoryOptions
-): PanelConsoleHistoryEntry[] {
-  const levels = options.levels ? new Set(options.levels) : null;
-  const sources = options.sources ? new Set(options.sources) : null;
-  const contains = options.contains?.trim().toLocaleLowerCase();
-  return entries.filter((entry) => {
-    if (levels && !levels.has(entry.level)) return false;
-    if (sources && !sources.has(entry.source ?? "console")) return false;
-    if (options.since !== undefined && entry.timestamp < options.since) return false;
-    if (options.until !== undefined && entry.timestamp > options.until) return false;
-    if (options.beforeSeq !== undefined && (entry.seq ?? 0) >= options.beforeSeq) return false;
-    if (!contains) return true;
-    return [entry.message, entry.url, entry.sourceId, safeJson(entry.fields)]
-      .join("\n")
-      .toLocaleLowerCase()
-      .includes(contains);
-  });
-}
-
-function safeJson(value: unknown): string {
-  if (value === undefined) return "";
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
 }
 
 function runtimeLevelToPanelLevel(

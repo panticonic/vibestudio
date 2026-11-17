@@ -152,6 +152,78 @@ test per invocation, concurrency 1, 420 s test bounds, fork `75f1700`:
 
 No unexpected tool failures in this lane. The instance was stopped and joined.
 
+**Headless console-history contract defect, found in panels.**
+`create-panel` failed on `p4-panels` twice:
+`st_6af2b69ffd7a44c987526c0a3a14f2b9` (102 s) and
+`st_0ad463cccdac4ff98b6e6fc8f139241f` (186 s). The bounded packet initially looked
+like bad model arguments. The full trajectory disproves that classification:
+the first call was the documented `h.cdp.consoleHistory()`; `page` was missing
+from the **return value**, not from its arguments. Later incorrect calls were
+the model's attempts to recover. The headless `ConsoleHistoryStore` still
+returned the old non-paginated shape and silently ignored source/text/time/cursor
+filters that the desktop provider supports. This explains an infrastructure
+component of the previously recorded `create-panel` baseline.
+
+The desktop and headless providers now share query types, filtering and cursor
+pagination in `packages/shared/src/panel/consoleHistory.ts`. Headless entries
+receive monotonic per-panel sequence numbers. Ring capacities, dropped counters
+and the independent error-history filter are retained. Three regressions fail
+before the fix, including parsing an empty history through the actual service
+schema. All 184 tests across the headless renderer, desktop CDP provider and
+panel service pass; host typechecks and lint pass. The old instance was stopped
+and joined; a fresh instance is used to verify the repaired product path.
+
+The first repaired-tree instance (`p4-panels-fixed`) hit its 6 GiB scope's OOM
+limit while exhaustive release preparation overlapped the panel run. Its CLI
+lost the server (`st_27a94e21f9004ef6a8343361b2ae46b8`); this is **not** a result
+for the console fix. The scope retired, `system-test stop` confirms it is no
+longer running, and its instance scratch is absent. The quota was not raised.
+
+Following the configured System performance skill, the canonical
+`prepareWorkspaceRelease` producer was run separately with the existing
+`VIBESTUDIO_MAX_CONCURRENT_BUILDS=1` budget, under a 6 GiB scope. It consumed
+the exact development template snapshots and current host generation, joined
+all 135 runtime builds (32 Base, 49 Personal, 54 System), and published the
+complete immutable release before the next application startup. This was warm
+preparation after the failed attempt, not a cold-build performance comparison.
+The cgroup recorded a **4.08 GiB peak**; an observer outside the quota retained
+per-process PID/PPID/RSS samples (including esbuild). Evidence is private at
+`~/.local/state/celld-p4-continuation/producer.log` and
+`producer-memory.jsonl`. No claim about the failed run's dominant allocation
+can be made from its 6 GiB peak alone.
+
+The next managed instance, `p4-panels-prepared`, consumes that complete release
+through normal validation, using
+`VIBESTUDIO_WORKSPACE_RELEASE_ROOT=~/.cache/celld-p4-console-verify/release`
+and the same one-build admission budget. The private release and helper are
+owned verification scratch: stop all consumers, then remove
+`~/.cache/celld-p4-console-verify` before finishing. Retain the bounded evidence,
+not the release tree. The resource observer for this instance also runs outside
+its quota and must be joined after the instance stops.
+
+**Repaired panels lane: 4/4 applicable cases pass**, zero tool failures, on
+`p4-panels-prepared`:
+
+| Test | Run | Duration |
+| --- | --- | --- |
+| `create-panel` | `st_33d87eed3a0d4b8c98f087d8cc6984ae` | 92 s |
+| `browser-panel` | `st_5aa3f49b516441cdb91080447a4a41d4` | 86 s |
+| `panel-tree-navigation` | `st_38e8a1d19d624add9a8e7a35faea1d9a` | 84 s |
+| `panel-list-sources` | `st_e94c24964f5d4728ae836075a7bc088d` | 43 s |
+
+`browser-import-panel-lifecycle` (`st_5fcbba1c8b7a4d028310c43d81f478e0`) did not
+run: the System workspace lacks `about/browser-import-inspector`, as in the
+prior passes. Since the invocation selected only that inapplicable test, the
+CLI returns an error rather than a skipped-test count; it is not a passing case.
+The instance recorded memory pressure but **zero OOM kills**. Its external
+resource samples and final cgroup counters are retained in
+`panels-memory.jsonl` and `panels-memory-summary.json` beside the producer
+evidence. No other heavy host work overlapped the agentic cases.
+The instance and its external observer were stopped and joined. The full commit
+gate was repeated for the shared query change; every check passed except the
+same eight untouched formatting-baseline files. The gate log is retained as
+`~/.local/state/celld-p4-continuation/console-commit-gate.log`.
+
 `p4-resume` was stopped and joined. Its shutdown reported
 `active-eval-cancellation` errors for three already-retired session objects;
 the supervisor still retired. Keep this evidence separate from successful
