@@ -185,6 +185,47 @@ formatting baselines. Template authority/dependency gates, all 50 focused
 worker/runner tests and three composition typechecks pass; a new test mock
 needed an explicit undefined return for noImplicitReturns, now corrected.
 
+The repaired run `st_33fb78f2bd794d9bac982cbf348a0a5e` failed at outer
+case-context retirement (260.8 s), with `ERR_SQLITE_ERROR: database is locked`
+while cleaning up its exact SystemTestRunnerDO worker. The generic context
+helper discarded the worker's returned execution when retirement threw, so
+this run does not retain a usable zero-model receipt and remains red. Full
+inspect/trajectory and live SQLite lock snapshots are private in the compaction
+state directory. A smaller normal create/list/retire worker probe passed;
+that narrows the next diagnostic without resolving the lock. The instance and
+all its children are stopped/joined; private release output remains only for
+the immediate corrected comparison.
+
+System-testing `1d8104e` retains the completed worker execution and records
+context retirement failures in its ordinary cleanup fields. Two red-before
+regressions also proved the common TestRunner accepted a passing validator
+when an orchestration reported cleanup failure. It now rejects both string
+and structured cleanup reports while retaining native evidence and original
+errors. All 95 focused tests and three composition typechecks pass. Host
+cleanup now names every failed stage without replacing original exception
+objects and logs its original stack; 17 focused host cleanup/owner tests pass.
+This is diagnosis and failure-propagation repair; the SQLite lock itself is
+not fixed yet. The full host gate passes through lint and reaches only the
+same eight untouched formatting baseline files.
+
+A concrete shared-writer boundary to investigate is `state/blobs/retentions.db`:
+`crates/vibestore/src/retention.rs` intentionally writes the host's same stock
+SQLite registry from celld. Node's `withBlobContentLock` is process-local.
+Do not claim that this caused the observed error until a cleanup-stage stack
+or focused interop repro proves it; do not raise SQLite waits or retry away it.
+
+For the later 10k measurement, use the existing TestCase `explicitOnly` and
+`timeoutMs` metadata rather than inventing a job API or a product timeout.
+EvalKernel's timeout is opt-in: absent means unbounded, confirmed in its
+RunArgs and the host eval schema. The root system-test bootstrap supplies no
+timeout. The earlier assumption that an outer kernel deadline necessarily
+blocks a long benchmark was wrong. An explicit benchmark can have its own
+investigation bound while the 65-turn case keeps 420 s. Keep its returned
+snapshot bounded; avoid scanning every historical invocation for every turn.
+Normal channel fork supports `locus:{kind:"head"}`; native `cell_runtime.rs`
+already logs fork-export facet byte counts, so no instrumentation binary is
+needed merely to observe exported size.
+
 ### Steering investigation resumed after the checkpoint
 
 Native event tracing now works with both native DEBUG and host verbose logging.

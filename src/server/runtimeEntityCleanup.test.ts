@@ -262,7 +262,8 @@ describe("cleanupRuntimeEntity", () => {
 
   it("reports a failed facet retirement instead of losing the live userland object", async () => {
     const d = deps();
-    d.runtimeManager.retireDOEntity.mockRejectedValue(new Error("facet abort failed"));
+    const original = new Error("facet abort failed");
+    d.runtimeManager.retireDOEntity.mockRejectedValue(original);
 
     await expect(
       cleanupRuntimeEntity(record("do", "do:one"), {
@@ -278,7 +279,10 @@ describe("cleanupRuntimeEntity", () => {
         getWebhookIngress: () => d.webhookIngress,
         getRuntimeManager: () => d.runtimeManager as never,
       })
-    ).rejects.toThrow("Runtime entity cleanup failed for do:one");
+    ).rejects.toMatchObject({
+      message: expect.stringContaining("retire Durable Object facets"),
+      errors: [original],
+    });
 
     expect(d.runtimeManager.retireDOEntity).toHaveBeenCalledOnce();
     expect(d.releaseBlobRetentions).not.toHaveBeenCalled();
