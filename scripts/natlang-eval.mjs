@@ -125,8 +125,14 @@ export function parseArguments(argv) {
   }
   if (options.caseDeadlineMs !== undefined) {
     options.caseDeadlineMs = Number(options.caseDeadlineMs);
-    if (!Number.isInteger(options.caseDeadlineMs) || options.caseDeadlineMs < 1 || options.caseDeadlineMs > MAX_TIMER_MS) {
-      throw new UsageError(`--case-deadline-ms must be a whole number of milliseconds between 1 and ${MAX_TIMER_MS}`);
+    if (
+      !Number.isInteger(options.caseDeadlineMs) ||
+      options.caseDeadlineMs < 1 ||
+      options.caseDeadlineMs > MAX_TIMER_MS
+    ) {
+      throw new UsageError(
+        `--case-deadline-ms must be a whole number of milliseconds between 1 and ${MAX_TIMER_MS}`
+      );
     }
   }
   return options;
@@ -440,6 +446,7 @@ export const defaultDependencies = {
   },
   loadEval: (entry) => import(pathToFileURL(entry).href),
   openModels: openNatlangModels,
+  evaluateSuite,
   openInstanceRecorder,
   stdout: (text) => process.stdout.write(`${text}\n`),
   progress: (text) => process.stderr.write(`${text}\n`),
@@ -497,6 +504,13 @@ export async function runNatlangEval(options, context, dependencies = defaultDep
       );
       retirements.push(composition.release);
       await ownership.own(composition.root, "template composition");
+      // Workspace source runs as ES modules in workerd. The host-owned Node projection must declare that same
+      // module boundary: otherwise NodeNext treats package-less skill folders as CommonJS (and rejects import.meta).
+      const packagePath = path.join(composition.root, "package.json");
+      const packageManifest = fs.existsSync(packagePath)
+        ? JSON.parse(fs.readFileSync(packagePath, "utf8"))
+        : {};
+      fs.writeFileSync(packagePath, `${JSON.stringify({ ...packageManifest, type: "module" })}\n`);
       signal.throwIfAborted();
       const projection = await projectionTools.prepareUserlandDependencyProjection({
         appRoot,
@@ -515,7 +529,7 @@ export async function runNatlangEval(options, context, dependencies = defaultDep
       const models = await deps.openModels(natlang, prepared.suite);
       return runWithOwnedCleanup(
         () =>
-          evaluateSuite({
+          deps.evaluateSuite({
             natlang,
             prepared,
             models,
@@ -525,6 +539,7 @@ export async function runNatlangEval(options, context, dependencies = defaultDep
             commit,
             suiteRelative,
             recorder,
+            selected,
           }),
         () => models.close(),
         "Model session cleanup failed"
@@ -620,7 +635,12 @@ async function evaluateSuite({
 /** The exit status of a failed run. */
 export function exitCodeFor(error) {
   const failures = error instanceof AggregateError ? error.errors : [error];
-  if (failures.some((failure) => ["EvaluationInfrastructureError", "RecordingError"].includes(failure?.name))) return 4;
+  if (
+    failures.some((failure) =>
+      ["EvaluationInfrastructureError", "RecordingError"].includes(failure?.name)
+    )
+  )
+    return 4;
   return 2;
 }
 

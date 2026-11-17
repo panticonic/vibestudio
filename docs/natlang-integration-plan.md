@@ -1,6 +1,9 @@
 # Natlang in Vibestudio: investigation and plan
 
-Status: proposal, 2026-10-30. Nothing here is implemented. Sources: `~/natlang` at
+Status: historical design, written 2026-10-30. The runtime, gateway, records, panel, local-engine integration
+and initial skill programs have since landed. Current scope and remaining gaps are in
+[natlang-teacher-coverage.md](natlang-teacher-coverage.md). This is not a current implementation checklist.
+Original sources: `~/natlang` at
 `464e21031` (with uncommitted dashboard work in progress by another agent), Vibestudio
 `33042acfd`, templates checkout `~/vibestudio-templates`.
 

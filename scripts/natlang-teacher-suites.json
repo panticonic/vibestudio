@@ -1,0 +1,110 @@
+[
+  {
+    "template": "base",
+    "suite": "automations-v1",
+    "path": "skills/automations/suite.ts",
+    "verification": "authored-exact"
+  },
+  {
+    "template": "base",
+    "suite": "messaging-v1",
+    "path": "skills/messaging/alert/suite.ts",
+    "verification": "authored-exact"
+  },
+  {
+    "template": "base",
+    "suite": "problem-reporting-v1",
+    "path": "skills/problem-reporting/natlang/suite.ts",
+    "verification": "authored-exact"
+  },
+  {
+    "template": "base",
+    "suite": "provenance-orientation-v1",
+    "path": "skills/provenance-orientation/suite.ts",
+    "verification": "authored-exact"
+  },
+  {
+    "template": "base",
+    "suite": "claim-check-v1",
+    "path": "skills/sandbox/claims/suite.ts",
+    "verification": "authored-verdicts-and-quote-membership"
+  },
+  {
+    "template": "base",
+    "suite": "doc-help-v1",
+    "path": "skills/sandbox/help/suite.ts",
+    "verification": "authored-source-set-with-authenticated-quotes-or-exact-cause"
+  },
+  {
+    "template": "base",
+    "suite": "sandbox-v1",
+    "path": "skills/sandbox/natlang/suite.ts",
+    "verification": "authored-exact"
+  },
+  {
+    "template": "base",
+    "suite": "templates-v1",
+    "path": "skills/templates/suite.ts",
+    "verification": "authored-exact"
+  },
+  {
+    "template": "base",
+    "suite": "vcs-changes-v1",
+    "path": "skills/vibestudio-vcs/changes/suite.ts",
+    "verification": "authored-fields-and-keyword-coverage"
+  },
+  {
+    "template": "base",
+    "suite": "visualize-v1",
+    "path": "skills/visualize/suite.ts",
+    "verification": "authored-choice-or-prop-coverage"
+  },
+  {
+    "template": "base",
+    "suite": "research-brief-v1",
+    "path": "skills/web-research/research/suite.ts",
+    "verification": "authored-keywords-and-citation-membership"
+  },
+  {
+    "template": "base",
+    "suite": "workspace-dev-icons-v1",
+    "path": "skills/workspace-dev/natlang/suite.ts",
+    "verification": "authored-family-and-catalog-membership"
+  },
+  {
+    "template": "personal",
+    "suite": "github-v1",
+    "path": "skills/github/natlang/suite.ts",
+    "verification": "authored-exact"
+  },
+  {
+    "template": "personal",
+    "suite": "recall-summary-v1",
+    "path": "skills/memory/recall/suite.ts",
+    "verification": "authored-keywords-caveats-and-evidence-membership"
+  },
+  {
+    "template": "system",
+    "suite": "local-models-readiness-v1",
+    "path": "skills/local-models/suite.ts",
+    "verification": "authored-fields-over-recorded-models"
+  },
+  {
+    "template": "system",
+    "suite": "remote-access-v1",
+    "path": "skills/remote-access/suite.ts",
+    "verification": "authored-exact"
+  },
+  {
+    "template": "system",
+    "suite": "server-logs-brief-v1",
+    "path": "skills/server-logs/suite.ts",
+    "verification": "authored-classes-and-log-identity"
+  },
+  {
+    "template": "system-testing",
+    "suite": "triage-failure-v1",
+    "path": "skills/system-testing/triage/suite.ts",
+    "verification": "authored-class-and-evidence-source"
+  }
+]
