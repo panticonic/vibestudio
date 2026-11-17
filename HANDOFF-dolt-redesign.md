@@ -19,55 +19,80 @@ symlink root `root-dolt-p2`, not pushed). Fork binary: `unified-fork` `2d1749d`
 | 3. P2a: heap residency by a hold; the host kernel lease deleted                                                        | **done and gated** (below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | 4. P2b: general dynamic code (§7 rewritten 2026-11-14 to the user's decisions)                                         | **steps 0 to 6 done** (third pass, 2026-11-15, "third pass" below): the agent settles by pull (a background `eval-await` task and `SessionDO.acknowledge`), the website spec pulls, and the push model is deleted (`evalService` is `dynamicCodeService`, the `eval` service, `resultReceiver`, `onEvalComplete`, `onEvalProgress`, `evalEngine`, `evalEventIngress`, `settle`). **Not done:** the agent hosting its own kernel (optional step 4 of the task; documented in §7.12 item 7) |
 | 5. P3 Durable services: `WorkspaceStateDO` (Dolt), the replaying import, the maintenance journal and `cloneDO` deleted | **done and gated**; the `panel-tree-navigation` "regression" was a pre-P3 gap in browser-panel agent calls ("P3 follow-up" below), and every call to a Dolt object costs about three flushes (measured, a decision for the user)                                                                                                                                                                                                                                                          |
-| 6. P4 Agent system (2026-11-15)                                                                                        | **slices S1 to S5 done and gated, S6 partly done** (second pass, "P4 second pass" below): the hash chain is deleted (S1); the agent cell is a Dolt cell on Pi's composite storage (S3); the conversation fork forks the agents' cells at a commit (S4); a subagent fork is a fork of its parent's cell (S5); the executor fact is renamed (S6a). **Not done:** agent self-hosting (S6b). P5 onward not started                                                                            |
+| 6. P4 Agent system (2026-11-15)                                                                                        | **slices S1 to S5 done and gated, S6 partly done** (second pass, "P4 second pass" below): the hash chain is deleted (S1); the agent cell is a Dolt cell on Pi's composite storage (S3); the conversation fork forks the agents' cells at a commit (S4); a subagent fork is a fork of its parent's cell (S5); the executor fact is renamed (S6a). **S6b now complete** (Nov 17 continuation below). Product compaction soak, restart/10k-turn measurements and strict steering completion remain open. P5 onward not started                                                                            |
 
 ## P4 continuation (2026-11-17)
 
 
-### S6b restoration in progress
+### S6b complete: agents host their persistent eval kernels
 
-The first restored real run (`st_afca831d14e945a49420f64e3dd3e053`) reached
-`await agent.describe()` and stalled. Admission trace proves caller resolution,
-causal proof, target readiness and authority all completed; the receiver request
-was sent. Repeated approval inspection while pending was empty. The existing
-DOTrace only reports completed host dispatches, so its silence does not prove
-that a direct RPC never entered the method. The managed deadline/cancellation
-and later graceful shutdown also stalled; the exact owned server PID 120115
-was killed, and the supervisor, test caller and observer were joined.
+Base `feat/dolt-p2` and `feat/dolt-p2-s3` are both `4132392`. The held agent
+implementation was restored by `cd334fb`, the hosted-client change merged by
+`1036ecd`, and its durable runtime dependency corrected by `4132392`. It keeps
+all later child-retirement and ModelGateway diagnostics. Host `11be2a5a0`
+merges the held client transport change; `ddb4b356d` fixes the reply path.
 
-A conventional repro identifies a second loopback defect in the host RPC core:
-a transport-delivered request from another endpoint with the same principal id
-has its reply looped into the receiver, bypassing the HTTP transport's held
-response capture. All three success/error/unexposed repro variants fail before
-the fix. Replies now retain ingress delivery: local requests use local replies;
-transport requests, including stream and retirement terminals, use the transport.
-No authority identity or wire field changed. All 117 focused RPC/HTTP tests pass,
-including an actual pair of connectionless clients sharing an id and a local
-self-call control. Real-stack verification of this second fix is next.
+Two independent loopbacks caused the hang. The hosted kernel presents its
+agent's principal id but is a separate endpoint: its requests to the agent must
+leave its client (`loopback:false`). The agent's replies to that same id also
+must return through the incoming transport. Previously the receiving client
+looped the reply into itself and bypassed the HTTP transport's held response
+capture. Replies now retain ingress delivery, including errors, unexposed
+methods, stream frames and retirement terminals. Ordinary local self-calls keep
+their local delivery. No authority identity or wire field changed.
 
+The original restored run `st_afca831d14e945a49420f64e3dd3e053` stalls on
+`await agent.describe()`. Admission trace proves caller resolution, causal
+proof, target readiness and authority completed; approvals were empty while
+pending. Cancellation and graceful shutdown also stalled, requiring termination
+of the exact owned server PID 120115; its supervisor, caller and observer joined.
+All three success/error/unexposed conventional repro variants fail before the
+reply repair. The existing DOTrace reports completed host dispatches, so its
+silence never established that a direct RPC did not enter the method.
 
-The previous source restore was reverted on Base as `cd334fb`, then the held
-hosted-client change was merged as `1036ecd` on `feat/dolt-p2-s3`. This restores
-agent-owned kernels while keeping the later child-retirement repair and gateway
-diagnostics. Base `feat/dolt-p2` still remains at `13085f3` until the restored
-slice is gated. The host merge of `feat/dolt-p0-s6b-agent-hosting` restores the hosted-client
-transport flag. Its only conflict was this handover's historical text, resolved
-by retaining the current, more complete record. The unrelated
-`bridgeStream.test.ts` reformat is dropped. The new self-call regression now
-joins a complete transport response instead of leaving a detached call behind
-a short sleep. Admission tracing at the existing trace log level marks caller,
-causal, target-readiness, authority and receiver phases without request args.
+Verification on the repaired tree:
 
-Conventional checks: 175 Base hosted-kernel/eval/owner tests, 102 RPC tests,
+| Case | Run | Result |
+| --- | --- | --- |
+| Self-addressed debug inspection | `st_cce9a28c7b024664b0bb31ed3481914c` | Pass, 104.9 s; actual `chat.getParticipants()` and `agent.describe()`; both same-principal receiver calls finish in 23 ms |
+| Exact authority | `st_fc13dbdef0c1440a8df7f78de1c03e80` | Pass, 108.8 s |
+| Live kernel continuity | `st_93c25dd7b13a4018a6781ef96b57f9ca` | Pass, 56.8 s; live object method survives the idle interval |
+| Exact activation-loss replay | `st_26758cb61f3d4874a15967998c27d081` | Pass, 43.3 s; retained fault evidence `aborted:true`, no duplicate execution |
+| Finite-scope cancellation | `st_96ad91826bfb49f5a5c2d0feb3430227` | Pass, 1.5 s; finite scopes remain session entities |
+| Forked subagent inheritance | `st_5c95b1d2a39c49398431e81a41249bac` | Pass, 58.5 s |
+
+Every passing run has zero tool failures; inspected trajectories have no cleanup
+errors. The self-call group has zero overload refusals and zero outstanding
+native events at completion. The initial post-fix debug sample
+`st_a8f42e37853a4be686ae530e26e73eb6` used `gad.inspectAgent` instead and hit
+the known channel.admin approval baseline; it never exercised the self-call.
+Its required single rerun above proves the repair. The final answer accurately
+limits its observations to the bounded preview of a 78,990-character snapshot.
+No evalOrigin change, prompt override, cap/deadline increase or authority bypass
+was needed.
+
+Conventional checks: 175 Base hosted-kernel/eval/owner tests, 117 RPC/HTTP tests,
 226 HTTP/RPC admission tests, host types and all four Base typecheck
-configurations pass. The full commit gate found two missing production imports:
-Base agentic-do's durable dependency (fixed as `4132392`) and system-testing's
-RPC helper dependency (fixed as `b2e01ac`, on both branches). Its repeat passes
-through lint and fails only the same eight untouched formatting files. A
-complete release was prepared separately with the corrected manifests.
-Next trace the exact agent self-call reproduction before claiming S6b complete.
-No live verification instance remains; the registry from the preceding slice
-is still owned.
+configurations pass. The reply repair's full commit gate passes through lint
+and stops only at eight untouched formatting-baseline files. Missing production
+imports found during restoration were fixed in Base `4132392` and
+system-testing `b2e01ac` (both system-testing branches).
+
+Development release preparation must use the existing canonical producer:
+`NODE_ENV=development node build.mjs --source-server-prereqs`, then
+`node scripts/prepare-development-workspace-release.mjs --output ... --scratch ... --template-checkouts ...`.
+A plain `node build.mjs` can leave the source-generation pointer on its previous
+publication even though shared build outputs are current. The private helper
+used earlier consumed that stale pointer; startup correctly refused its release.
+The canonical producer checks current generation identity before compiling and
+owns its scratch cleanup. The verified release had 135 runtime builds and host
+fingerprint `f802ca4972ebbd6ce0fe9a7da8d76cc8472df759b847080a77ea79ef80c691b7`.
+
+All S6b instances/producers/observers are stopped and joined, and private release
+scratch is removed. Bounded private evidence is `~/.local/state/celld-p4-s6b/`
+and the system-test artifacts. The owned registry remains for the next P4 slice.
+Nothing pushed; runtime pin remains `75f1700`. Next: product compaction soak,
+restart probe and 10k-turn measurement; steering/model completion remains open.
 
 ### Steering investigation resumed after the checkpoint
 

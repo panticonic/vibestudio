@@ -1792,82 +1792,32 @@ conversation for its task channel with the same `adoptChannelKnowledge`.
 **S6a.** The executor fact is `kind: "dynamic-code"` with a `runId` (it was `kind: "eval"` with an `evalRunId`),
 in the wire type, the registry, the admission, the roots and live-caller consumers and their tests.
 
-**S6b (2026-11-15): the host side is done; the agent side was built, run on the real stack, found to hang, and
-is held on a branch.** The design: an agent hosts its own eval kernel, and no session entity stands between an
-agent and its runs.
+**S6b is complete (2026-11-17).** An agent hosts its own persistent eval kernel;
+no session entity stands between an agent and its persistent notebook. Host branches are
+merged locally (`11be2a5a0`, reply repair `ddb4b356d`); both Base feature branches
+are `4132392`. Finite scopes and `owner-session` targets deliberately remain session entities.
 
-_Done and kept (host, `main` of this branch):_
+The host recognizes a hosting class through its manifest's `hosts`, not a class name.
+`dynamicCode.admit` uses the owner only when that owner asks for a persistent scope.
+`HostedEvalKernel` relays the ordinary kernel methods through `hostCode`; the vessel
+checks their callers. The eval tool, await task and durable acknowledgement address
+the actual `evalHostId`, and lifecycle control reaches the kernel through its owner.
 
-- The host recognises an eval host by the manifest, not a class name: `declaresEvalKernel` (shared) over the build
-  graph's `durable.classes[].hosts`, behind one predicate (`hostsEvalKernel`, `index.ts`) that `dynamicCode`,
-  `evalExecutionRoots`, the root provider and the authority observer take; `isEvalHost(record, hostsEvalKernel)` is a
-  session entity or such a class (`evalKernelAuthority.ts`); the authority-event journal and the roots service name
-  the host entity from its record instead of assuming a session entity.
-- `dynamicCode.admit` hosts a run on **the owner itself when the owner asks, for a persistent scope** (`selfHostOf`):
-  the executor's runtime id is the owner's, the harness identity the owner's own sealed code, no session entity. A
-  principal that targets the owner (`owner-session`: a shell, the server, a test runner) and a **finite** scope stay
-  session entities (found by `eval-events`: the system-test harness runs its probes as the headless `AiChatWorker`
-  with finite scopes). No class declares `hosts` for the kernel except the session class, so nothing changes in
-  the product yet; tests: `dynamicCodeService.test.ts`, `evalExecutionRootsService.test.ts`,
-  `evalAuthorityEventJournal.test.ts`.
+A shared principal is not a shared endpoint. The kernel's RPC client therefore sends
+self-addressed requests through the host (`loopback:false`); replies to transport-delivered
+requests return through that transport, including streaming and retirement terminals.
+The old generic reply loopback swallowed the owner's same-principal response before
+HTTP response capture. Ordinary local self-calls still loop back. Neither authority
+identity nor the wire protocol changed; the suspected loss of `evalOrigin` did not
+require a fix.
 
-_Built and held (Base branch `feat/dolt-p2-s6b-agent-hosting`, host branch `feat/dolt-p0-s6b-agent-hosting`):_
-`hosts` in the manifests of `AiChatWorker` and `SilentAgentWorker`; `HostedEvalKernel`
-(`packages/agentic-do/src/hosted-eval-kernel.ts`), the relay once, and the vessel's `start`, `await`, `events`,
-`cancel`, `get`, `receipt`, `acknowledge`, `readScopeTextPage`, `deleteScopeValue`, `end` (the agent itself or the
-host), `reset`, `recordAuthorityEvent`, `retainExecutionRoot`, `executionRoots` (the host only), every call to the
-kernel `{ kind: "host" }` with no nonce; the tool, the await task and the acknowledgement address the owner
-(`evalHostId`); the lifecycle relays each phase to the kernel first. `onHostedRevoked` needed nothing in the agent
-(the root relays a drain or swap to each hosted facet, and the kernel owns the callback).
-
-_What the real stack found (each is in the branch, with its test):_ (1) a call an agent makes to its own id is
-delivered **in-process by its rpc client with no verified caller**; the vessel accepts exactly that and the host.
-(2) The kernel acts as the agent, so **its calls to the agent are addressed to its own `selfId` and the kernel's
-client answers them itself** ("Method `describeEvalOwner` is not exposed by this endpoint": every `agent.*`,
-`chat.*` and outside-content report of an agent's eval). `loopback: false` on the rpc client of a hosted class
-(`client-core.ts`, `connectionless-core.ts`, both durable bases; rpc test) sends them out.
-(3) **With that, the call hangs.** The host receives it (`handleEnvelopeRequest`: the caller resolves, the
-execution session is the run's) and the call never reaches the agent (a log line at the method's entry never
-prints, `DOTrace` shows no `describeEvalOwner`), so `agent-debug-state-method` never finishes and the
-harness's retire of the headless session hangs after it (`DurableWorkDriver readiness scan failed ... not
-registered as an active runtime entity`, repeated). The wait is between `resolveCaller` and the dispatch into the
-DO: the authority attestation of a guest's call to a userland method (an acquisition the kernel's client waits
-on: `authorityAcquisition: "wait"`) or the target's readiness are the two candidates, and nothing in this pass
-told them apart. Under a session entity the same call carries `evalOrigin` (the owner), which the agent-owned
-runs lost when the entity became the agent: **that is the first thing to read** (`principalIdentity.ts`
-`evalOwner`, `credentialGrantIdentity.ts`, the relay's attestation), then the readiness gate for a call whose
-caller is its own target.
-
-- **Deviations from §7.2 and §7.5.1 the branch makes (each forced):** one kernel per agent and one notebook scope for
-  the whole agent (the registry admits one live run per executing runtime id and attributes a kernel's calls to its
-  entity); approvals of an agent's own eval are titled as the agent's; no resident-session relay on the agent; the
-  census activates every self-hosting agent.
-
-#### 6.11.7 What the product lanes found (the last of the pass)
-
-The unit and real-fork tests passed before the lanes ran; the lanes found what they could not.
-
-- **Fork selection was wrong in the design and in the code before it.** §6.4 and the channel's fork saga asked
-  every `entity` participant for its knowledge. A headless client (the CLI and the system-test session) is an
-  entity too (`kind: "external"`) with no agent cell: the call was refused by default-deny, so **a conversation
-  fork from a headless session never worked**, before this pass as well. The saga now selects participants whose
-  `ref.kind` is `agent` (the multi-agent test has a headless entity in the channel). The lane scenario
-  `conversation-fork-adopts-agent-cell` is the first test that forks through the channel's own `fork` RPC on the
-  real stack.
-- **An adoption must bind exactly what the open that follows binds.** The projection binding is immutable
-  (`native-channel-publication.ts`, `bind`). A subagent's open binds `reportTo` (its parent) on the task
-  channel; the fork's adoption bound the same projection without it, and the first open after the adoption was
-  refused. Both paths now take `reportTo` from one function (`nativeReportTo`). §6.8's note that the adoption "is
-  one binding" holds only if the candidate is the same value on both paths.
-- **A commit with nothing to commit throws on the real engine** (found by the first lane, fixed with
-  `versionedChangesPending`): §6.3's "a commit at each turn" is a commit when a versioned table changed.
-- **Cost of the cell that the design did not give a number for (R1).** A turn of 23 storage transactions and one
-  Dolt commit is 558 ms and **635 KB of file before gc** (41 KB after); a fork copies the file (247 ms at 3 MB). The
-  design's "gc is cheap, run it sometimes" (§11) is now a requirement: nothing schedules it.
-- **The input gate refuses a transaction from a continuation without a live driver, whatever the gate holds.**
-  Agent cells hit it rarely and persistently (§6.11.3's agent runs many transactions from chained promises); a
-  retry does not cure it. The evidence and the pointer into celld are in `HANDOFF-dolt-redesign.md`
-  ("Input-gate refusals in agent cells"); it is the fork's to fix, and Pi's 8-attempt retry should go when it does.
+On the real stack, `chatOp` and `describeEvalOwner` each complete their same-principal
+receiver call in 23 ms. The exact debug-state case, exact authority, live heap continuity,
+activation-loss replay without duplication, finite cancellation and forked subagent
+inheritance all pass with zero tool failures. Conventional hosted-kernel/eval/owner,
+RPC/HTTP and admission tests pass; host and Base typechecks pass. See the Nov 17 S6b
+record in `HANDOFF-dolt-redesign.md` for run ids and the distinct known channel.admin
+baseline encountered by one debug-state sample.
 
 #### 6.11.8 Compaction of Dolt cells
 
