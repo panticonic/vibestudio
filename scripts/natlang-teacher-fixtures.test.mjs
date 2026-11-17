@@ -325,7 +325,11 @@ function sourceRetrieval(services, judge, focus) {
       if (specifier === "natlang:services") return services;
       if (specifier === "./keywords.nl")
         return {
-          default: focus ?? ((question) => load(path.join(root, "tokens.ts")).default(question)),
+          default:
+            focus ??
+            (() => {
+              throw new Error("Supply a scripted search policy in retrieval boundary tests.");
+            }),
           __esModule: true,
         };
       if (specifier === "./fits.nl") return { default: judge, __esModule: true };
@@ -387,10 +391,14 @@ test("retrieval continues after an entire rejected batch and keeps source quotes
     },
     docs: { search: async () => [] },
   };
-  const locate = sourceRetrieval(services, async (_question, text) => {
-    judgments++;
-    return text.includes("actionable instruction") ? "answers" : "no";
-  });
+  const locate = sourceRetrieval(
+    services,
+    async (_question, text) => {
+      judgments++;
+      return text.includes("actionable instruction") ? "answers" : "no";
+    },
+    async () => ["needle"]
+  );
   const result = await locate("Where is the needle located?");
   assert.ok(judgments > 6);
   assert.equal(result.found.length, 1);
@@ -439,7 +447,11 @@ test("retrieval reads every line page before ranking exact section quotes", asyn
     },
     docs: { search: async () => [] },
   };
-  const locate = sourceRetrieval(services, async () => "answers");
+  const locate = sourceRetrieval(
+    services,
+    async () => "answers",
+    async () => ["needle"]
+  );
   const result = await locate("Where is the needle?");
   assert.deepEqual(offsets, [1, 4]);
   assert.ok(result.found[0].quote.includes("actionable instruction"));
@@ -477,10 +489,58 @@ test("truncated scoped retrieval resolves recursive directory entries relative t
   assert.ok(result.found.every((entry) => entry.source.startsWith("skills/workspace-dev/")));
 });
 
-test("selected search terms must be nonempty literal question tokens", async () => {
-  const services = { fs: {}, docs: {} };
-  for (const focus of [async () => [], async () => ["inventedToolName"]]) {
-    const locate = sourceRetrieval(services, async () => "no", focus);
-    await assert.rejects(() => locate("How do I typecheck a panel?"), /literal content words/);
-  }
+test("empty search requests fail with a corrective error", async () => {
+  const locate = sourceRetrieval(
+    { fs: {}, docs: {} },
+    async () => "no",
+    async () => [" "]
+  );
+  await assert.rejects(
+    () => locate("How do I typecheck a panel?"),
+    /nonempty search word or phrase/
+  );
+});
+
+test("literal multiword search terms execute without a recovered failed action", async () => {
+  const text = "# Guide\n\nTypecheck a single panel by obtaining its diagnostic report.";
+  const services = {
+    fs: {
+      grep: async () => ({ matches: [{ file: "guide.md" }], truncated: false }),
+      readText: async () => ({ text, truncated: false, contentHash: "fixed" }),
+    },
+    docs: { search: async () => [] },
+  };
+  const locate = sourceRetrieval(
+    services,
+    async () => "answers",
+    async () => ["typecheck", "single panel"]
+  );
+  const result = await locate("How do I typecheck a single panel?");
+  assert.equal(result.found.length, 1);
+  assert.ok(text.includes(result.found[0].quote));
+});
+
+test("a useful search synonym absent from the question reaches its grounded source", async () => {
+  const text =
+    "# Validation\n\nRun static analysis to find type errors before opening the component.";
+  let pattern;
+  const services = {
+    fs: {
+      grep: async (chosen) => {
+        pattern = chosen;
+        return { matches: [{ file: "guide.md" }], truncated: false };
+      },
+      readText: async () => ({ text, truncated: false, contentHash: "fixed" }),
+    },
+    docs: { search: async () => [] },
+  };
+  const locate = sourceRetrieval(
+    services,
+    async () => "answers",
+    async () => ["static analysis"]
+  );
+  const result = await locate("How do I typecheck a panel?");
+  assert.equal(pattern, "static analysis");
+  assert.equal(result.found.length, 1);
+  assert.ok(text.includes(result.found[0].quote));
 });
