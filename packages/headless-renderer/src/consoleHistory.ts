@@ -5,36 +5,27 @@
  * lifecycle records (crashes, failed loads) marked source:"lifecycle".
  */
 
-export type ConsoleLevel = "debug" | "info" | "warning" | "error" | "unknown";
+import {
+  filterConsoleHistoryEntries,
+  pageConsoleHistory,
+  type PanelConsoleHistoryOptions,
+} from "@vibestudio/shared/panel/consoleHistory";
+import type {
+  PanelConsoleHistoryEntry,
+  PanelConsoleHistoryResult,
+  PanelConsoleHistoryLevel,
+} from "@vibestudio/shared/panel/observation";
 
-export interface ConsoleHistoryEntry {
-  timestamp: number;
-  level: ConsoleLevel;
-  message: string;
-  line: number;
-  sourceId: string;
-  url: string;
-  source?: "console" | "lifecycle";
-  fields?: Record<string, unknown>;
-}
-
-export interface ConsoleHistoryResult {
-  entries: ConsoleHistoryEntry[];
-  errors: ConsoleHistoryEntry[];
-  dropped: { entries: number; errors: number };
-  capacity: { entries: number; errors: number };
-}
-
-export interface ConsoleHistoryOptions {
-  limit?: number;
-  errorLimit?: number;
-  levels?: ConsoleLevel[];
-}
+export type ConsoleLevel = PanelConsoleHistoryLevel;
+export type ConsoleHistoryEntry = PanelConsoleHistoryEntry;
+export type ConsoleHistoryResult = PanelConsoleHistoryResult;
+export type ConsoleHistoryOptions = PanelConsoleHistoryOptions;
 
 const ENTRY_CAPACITY = 1_000;
 const ERROR_CAPACITY = 500;
 
 class PanelHistory {
+  nextSeq = 1;
   entries: ConsoleHistoryEntry[] = [];
   errors: ConsoleHistoryEntry[] = [];
   droppedEntries = 0;
@@ -47,13 +38,14 @@ export class ConsoleHistoryStore {
   record(slotId: string, entry: ConsoleHistoryEntry): void {
     const history = this.panels.get(slotId) ?? new PanelHistory();
     this.panels.set(slotId, history);
-    history.entries.push(entry);
+    const recorded = { ...entry, seq: history.nextSeq++ };
+    history.entries.push(recorded);
     while (history.entries.length > ENTRY_CAPACITY) {
       history.entries.shift();
       history.droppedEntries += 1;
     }
     if (entry.level === "error") {
-      history.errors.push(entry);
+      history.errors.push(recorded);
       while (history.errors.length > ERROR_CAPACITY) {
         history.errors.shift();
         history.droppedErrors += 1;
@@ -76,15 +68,11 @@ export class ConsoleHistoryStore {
 
   query(slotId: string, options: ConsoleHistoryOptions = {}): ConsoleHistoryResult {
     const history = this.panels.get(slotId) ?? new PanelHistory();
-    const levels = options.levels ? new Set(options.levels) : null;
-    const entries = levels
-      ? history.entries.filter((entry) => levels.has(entry.level))
-      : history.entries;
-    const limit = clampLimit(options.limit, entries.length, ENTRY_CAPACITY);
-    const errorLimit = clampLimit(options.errorLimit, history.errors.length, ERROR_CAPACITY);
+    const entries = filterConsoleHistoryEntries(history.entries, options);
+    // Level selection must not hide separately retained failures.
+    const errors = filterConsoleHistoryEntries(history.errors, { ...options, levels: undefined });
     return {
-      entries: limit > 0 ? entries.slice(-limit) : [],
-      errors: errorLimit > 0 ? history.errors.slice(-errorLimit) : [],
+      ...pageConsoleHistory(entries, errors, options),
       dropped: { entries: history.droppedEntries, errors: history.droppedErrors },
       capacity: { entries: ENTRY_CAPACITY, errors: ERROR_CAPACITY },
     };
@@ -93,11 +81,6 @@ export class ConsoleHistoryStore {
   clear(slotId: string): void {
     this.panels.delete(slotId);
   }
-}
-
-function clampLimit(value: number | undefined, fallback: number, max: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return Math.min(fallback, max);
-  return Math.max(0, Math.min(Math.floor(value), max));
 }
 
 /** Map a CDP Runtime.consoleAPICalled type to our level vocabulary. */

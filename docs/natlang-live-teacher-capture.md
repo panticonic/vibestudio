@@ -41,3 +41,9 @@ await program(actualInput);
 ```
 
 Use the completed run's actual root IDs and raw traces. Export rejects incomplete records, a different run, missing parents or mixed owners. The panel-teacher runner also rejects any captured generation whose actual returned model differs from the chosen teacher. If a call is missing, treat the episode as incomplete and rerun it in a fresh owned fixture; do not synthesize a request or reply.
+
+## Console history provider parity
+
+The first direct live teacher reached the real panel service, then failed because the headless console store returned the pre-pagination result while `panelCdp.consoleHistory` requires a `page` object. The schema and panel observation contracts already describe a stable sequence cursor. Desktop's CDP provider implements that cursor and every advertised source/text/time filter; headless previously implemented only level filtering and limits.
+
+The mechanism inventory covers the headless `ConsoleHistoryStore` and its `HeadlessHost` dispatcher, desktop `CdpHostProvider` (including its durable runtime-diagnostics-backed history), the shared panel observation contract, and the validating `panelCdp` RPC schema. Mobile-held panels do not provide CDP (`src/server/panelRuntimeRegistration.ts`); they do not implement a third console-history store. Shared filtering/paging is exact observation plumbing, not a model policy. Both providers use the same filter/page functions, while each retains its own ingestion and storage. The desktop durable diagnostic store keeps its existing filtering before shared pagination.
