@@ -12,7 +12,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { build } from "esbuild";
 import { expect, it, onTestFinished } from "vitest";
-import { doltLocalPatterns } from "../../packages/durable/src/dolt.js";
+import { doltLocalPatterns, type DoltGcState } from "../../packages/durable/src/dolt.js";
 import { WORKSPACE_STATE_LOCAL_TABLES } from "../../packages/service-schemas/src/workspaceStateStorage.js";
 import {
   LEGACY_COLUMNS,
@@ -60,8 +60,7 @@ function probeSource(): string {
           const rows = (sql) => this.sql.exec(sql).toArray();
           return json({
             branch: dolt.branch.current(),
-            gcHead: this.getStateValue('__dolt_gc_head') ?? null,
-            gcCommits: this.getStateValue('__dolt_gc_commits') ?? null,
+            compaction: this.doltGcState(),
             alarmWorker: this.getStateValue('alarm-active-worker') ?? null,
             log: dolt.log({ limit: 500 }).map((commit) => ({ message: commit.message, date: commit.date, hash: commit.hash })),
             status: dolt.status(),
@@ -190,8 +189,7 @@ async function startWorkspaceProbe() {
     info: () =>
       rpc<{
         branch: string;
-        gcHead: string | null;
-        gcCommits: string | null;
+        compaction: DoltGcState;
         alarmWorker: string | null;
         log: Array<{ message: string; date: string; hash: string }>;
         status: Array<{ table: string; status: string }>;
@@ -566,22 +564,27 @@ it.skipIf(!celldTestBinary())(
     for (let n = 1; n <= 48; n++) await workspace.call("contextEdgeUpsert", edge(n));
     const young = await workspace.info();
     expect(young.log).toHaveLength(initial.log.length + 48);
-    expect(young.gcHead).toBeNull();
+    expect(young.compaction.lastCollectedHead).toBeNull();
     await workspace.call("alarmAdoptWorker", "gc-probe-driver");
     for (let n = 49; n <= 65; n++) await workspace.call("contextEdgeUpsert", edge(n));
 
     // Observe the scheduled production check; do not lower the threshold or call gc from the test.
     await expect
-      .poll(async () => (await workspace.info()).gcHead, {
+      .poll(async () => (await workspace.info()).compaction?.lastCollectedHead ?? null, {
         timeout: 20_000,
         interval: 200,
       })
       .not.toBeNull();
     const collected = await workspace.info();
     expect(collected.log).toHaveLength(initial.log.length + 65);
-    expect(collected.log.map((commit) => commit.hash)).toContain(collected.gcHead);
-    expect(Number(collected.gcCommits)).toBeGreaterThanOrEqual(64);
-    expect(Number(collected.gcCommits)).toBeLessThanOrEqual(collected.log.length);
+    expect(collected.compaction.head).toBe(collected.log[0]?.hash);
+    expect(collected.log.map((commit) => commit.hash)).toContain(
+      collected.compaction.lastCollectedHead
+    );
+    expect(Number(collected.compaction.observedCommitsAtLastCollection)).toBeGreaterThanOrEqual(64);
+    expect(Number(collected.compaction.observedCommitsAtLastCollection)).toBeLessThanOrEqual(
+      collected.log.length
+    );
     expect(collected.rows["context_edges"]).toHaveLength(65);
     expect(collected.alarmWorker).toBe("gc-probe-driver");
     expect(collected.status.filter((entry) => !entry.table.startsWith("dolt_"))).toEqual([]);
@@ -591,14 +594,16 @@ it.skipIf(!celldTestBinary())(
     const restored = await workspace.info();
     expect(restored.log).toEqual(collected.log);
     expect(restored.rows).toEqual(collected.rows);
-    expect(restored.gcHead).toBe(collected.gcHead);
-    expect(restored.gcCommits).toBe(collected.gcCommits);
+    expect(restored.compaction.lastCollectedHead).toBe(collected.compaction.lastCollectedHead);
+    expect(restored.compaction.observedCommitsAtLastCollection).toBe(
+      collected.compaction.observedCommitsAtLastCollection
+    );
     expect(restored.alarmWorker).toBe(collected.alarmWorker);
     await workspace.call("contextEdgeUpsert", edge(66));
     const continued = await workspace.info();
     expect(continued.log).toHaveLength(initial.log.length + 66);
     expect(continued.rows["context_edges"]).toHaveLength(66);
-    expect(continued.gcHead).toBe(restored.gcHead);
+    expect(continued.compaction.lastCollectedHead).toBe(restored.compaction.lastCollectedHead);
   },
   120_000
 );

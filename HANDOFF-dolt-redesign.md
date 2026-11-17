@@ -96,6 +96,19 @@ restart probe and 10k-turn measurement; steering/model completion remains open.
 
 ### WorkspaceStateDO default compaction verified
 
+A bounded read-only compaction observation is now available through the existing
+`agent.describe().storage` snapshot. `readDoltGcState` is shared by both durable
+bases; it reports current head, last collected head, the commit count observed
+at collection, and the 10,000-entry log limit. It scans no history and never
+starts collection. Base observation changes are `66683ea` on the P4 branch;
+Base `feat/dolt-p2` remains `4132392` until the real-agent soak verifies them.
+The actual workspace-state test now reads the same observation helper. All 22
+focused host tests, 69 Base agent/kernel tests, four Base typechecks and host
+gate checks through lint pass; formatting is only the same eight-file baseline.
+The actual agent-cell soak is still pending; do not infer collection from these
+conventional checks.
+
+
 `WorkspaceStateDO` already inherits `committedTransaction`'s default geometric
 schedule; no second scheduler or product implementation change is needed.
 The new real-fork test in `workspaceStateCelld.test.ts` makes 65 ordinary

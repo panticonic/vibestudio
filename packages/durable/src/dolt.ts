@@ -524,6 +524,29 @@ const GC_COMMITS_KEY = "__dolt_gc_commits";
 /** `dolt.log` answers at most this many commits. */
 const DOLT_LOG_MAX = 10_000;
 
+/** Bounded read-only facts about a cell's current head and its last collection. */
+export interface DoltGcState {
+  readonly head: string;
+  readonly lastCollectedHead: string | null;
+  /** The log observation is capped at logLimit; it is not an unbounded history count. */
+  readonly observedCommitsAtLastCollection: number | null;
+  readonly logLimit: number;
+}
+
+export function readDoltGcState(
+  dolt: DoltStorage | null,
+  memory: Pick<DoltGcMemory, "get">
+): DoltGcState | null {
+  if (!dolt) return null;
+  const count = Number(memory.get(GC_COMMITS_KEY));
+  return {
+    head: dolt.hashOf("HEAD"),
+    lastCollectedHead: memory.get(GC_HEAD_KEY),
+    observedCommitsAtLastCollection: Number.isSafeInteger(count) && count > 0 ? count : null,
+    logLimit: DOLT_LOG_MAX,
+  };
+}
+
 /** The number of commits since the last collection after which the cell is due. */
 export function doltGcThreshold(memory: DoltGcMemory, policy: DoltGcPolicy): number {
   const held = Number(memory.get(GC_COMMITS_KEY) ?? 0);
