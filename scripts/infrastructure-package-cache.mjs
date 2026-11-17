@@ -198,7 +198,19 @@ function packageInputDigest(name, packages, commonDigest) {
     commonDigest,
     ...[...closure]
       .sort()
-      .flatMap((dependency) => [dependency, packages.get(dependency).sourceDigest]),
+      .flatMap((dependency) => {
+        const pkg = packages.get(dependency);
+        const compilerOnly =
+          pkg.buildProfile === "tsc-output" || pkg.buildProfile === "tsc-build-incremental";
+        // Custom builders can embed NODE_ENV or emit development-only maps.
+        // Include the mode through their consumer closure, while compiler-only
+        // packages can retain their identical output across mode switches.
+        return [
+          dependency,
+          pkg.sourceDigest,
+          ...(pkg.build && !compilerOnly ? [`node-env:${process.env.NODE_ENV ?? ""}`] : []),
+        ];
+      }),
   ]);
 }
 

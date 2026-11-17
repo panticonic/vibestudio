@@ -147,6 +147,44 @@ production import graphs pass. The new worker operation still needs its live
 run before either P2 template branch advances. Evidence and producer logs are
 private under `~/.local/state/celld-p4-compaction/`.
 
+The next real run `st_955d73c2bd774113b4e919e248cb0e27` completed all
+65 native evals and reported scheduled collection at exactly 64 observed
+commits. The recovered receipt joins 65 unique invocation ids to the exact
+owned runtime, with continuous scope counters 1–65. It is **not an acceptance
+pass**: cleanup waited on the normal critical mission-retirement confirmation,
+so the unchanged 420 s test deadline expired. The exact owned mission argument
+digest was verified before resolving that one deletion once; no standing grant
+changed. Cleanup then joined. Final native events: zero refusals and zero
+outstanding. The zero-model-call result was not retained in the returned
+execution after the deadline; the next run must retain that proof too.
+
+System-testing `213ca99` supplies the real worker-owned resident-session
+registrar and registered RPC context view (27 focused tests passed).
+`61ff05b` places the bounded worker inside the existing exact per-case context,
+with explicit scoped mission rules including critical retirement. The generic
+orchestrator correctly cannot ratify critical work; do not weaken that product
+policy. The case context and all descendants retire recursively after its
+worker joins. All 50 focused worker/runner/validator tests and three composition
+typechecks pass. P2 branches still wait for the fresh real-stack gate.
+
+Memory audit requested by the owner: no retired producer/test processes remain.
+The last instance peaked at 4,803 MiB within its 6 GiB group, fell to about
+3.1–3.4 GiB during the workload, had zero OOM kills, and is stopped/joined.
+Only the owned registry fixture remains (under 80 MiB including its wrappers).
+Heavy work is now strictly serial. Its private release remains only for the
+immediate repaired comparison; bounded evidence is in the compaction state dir.
+
+Verification exposed a separate infrastructure-cache defect: switching from a
+development build to production reused a mode-dependent headless bundle and
+then failed the production source-map contract. The regression reproduces the
+incorrect cache hit. Cache keys now include NODE_ENV for custom builders and
+their consumer closures while retaining compiler-only outputs across modes.
+All nine cache tests pass, and the normal production build succeeds. The full
+host gate passes through lint and reaches only the same eight untouched
+formatting baselines. Template authority/dependency gates, all 50 focused
+worker/runner tests and three composition typechecks pass; a new test mock
+needed an explicit undefined return for noImplicitReturns, now corrected.
+
 ### Steering investigation resumed after the checkpoint
 
 Native event tracing now works with both native DEBUG and host verbose logging.
