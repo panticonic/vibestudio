@@ -130,9 +130,9 @@ Collection uses a kernel advisory lock (`flock`, on the project's Linux collecti
 
 Collection selects only training cases. Failed outcomes and rejected semantic reviews stay in the records.
 The initial admission conservatively excludes episodes with failed child calls or tool actions; it does not train
-failed actions merely because a parent recovered. Hosted teachers generate ordinary tool-loop answers, including
-for declared finite decision functions; collection does not manufacture native sampling probabilities or scoring
-receipts. A separate verifier receives the reference requirements and fixture observations, not the teacher's
+failed actions merely because a parent recovered. Hosted teachers generate actual executor answers. Declared finite decision functions use the same short
+decision prompt and JSON choice surface as the student, with a generated choice when scores are unavailable.
+Collection records that reply and does not manufacture sampling probabilities or scoring receipts. A separate verifier receives the reference requirements and fixture observations, not the teacher's
 conversation or reasoning. It can reject or mark an answer uncertain. This is independent model review, not an
 exact oracle for free-form prose.
 

@@ -115,7 +115,7 @@ async function runOwned(context, executable, args, cwd, env = process.env) {
 }
 
 async function completeAdmission({ directory, work, pin, python, env, context, models, signal,
-  cases, source, assertSourceSnapshot }) {
+  caseByTaskId, source, assertSourceSnapshot }) {
   const helper = path.join(pin, "scripts/neuralese_data/teacher_admission.py");
   const draftFile = path.join(directory, "admission-drafts.json");
   await runOwned(context, python, [helper, "replay", "--pool", work, "--out", draftFile,
@@ -142,7 +142,7 @@ async function completeAdmission({ directory, work, pin, python, env, context, m
           ? "gate-failed" : evidence.tool_error_count ? "failed-action" : null;
       if (!reason) {
         const result = evidence.evaluation;
-        const testCase = cases.find((item) => sample.task_id.endsWith(`:${item.id}`));
+        const testCase = caseByTaskId.get(sample.task_id);
         if (!testCase) throw new Error(`canonical result has unknown source case ${sample.task_id}`);
         const reviewJournal = path.join(admissions, `${sha256({ result: sample.result,
           teacher: receipt.teacher, task_id: sample.task_id, sample: sample.sample })}.review.jsonl`);
@@ -272,7 +272,7 @@ export async function collectSuite(options, context, dependencies = {}) {
           assertSourceSnapshot();
           // Replay and semantic receipts are bound to canonical program IR, native results and rollout bytes.
           await completeAdmission({ directory, work, pin, python, env, context, models, signal,
-            cases: prepared.cases, source, assertSourceSnapshot });
+            caseByTaskId: new Map(records.map((record) => [record.id, record.semantics.evaluation_fixture.case])), source, assertSourceSnapshot });
           return { exitCode: 0, resultPath: path.join(work, "manifest.jsonl") };
         },
       }
