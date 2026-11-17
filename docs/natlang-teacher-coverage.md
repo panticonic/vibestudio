@@ -168,3 +168,34 @@ A campaign resolves its natlang commit once and shares one staged runtime module
 imports previously retained one native-server exit hook per copy, producing an exit-listener warning in a long
 campaign even though no native server was started. Sharing the immutable bundle avoids duplicate modules and
 keeps suite workers isolated without copying a runtime for every suite.
+
+
+## Documentation retrieval and admitted pilot
+
+The source corpus now includes a typed `keywords.nl` policy that identifies the requested operation and object.
+Filesystem search bounds no longer silently prune later sources: truncated grep falls back to scoped directory
+listing, reads continue by the actual line-offset contract, and numerical BM25 ranks exact source sections.
+Search requests are normalized into lexical words plus original phrases, so reordered multiword queries retain
+recall. Recursive directory names are relative to the listed directory; both the fixture and generated service
+reference follow that production behavior. The existing `fits.nl` judges finite batches until an answer or source
+exhaustion. Batch size controls concurrency; it is not a semantic candidate cutoff. Vocabulary is unrestricted;
+source-grounded answers and the verifier decide admission.
+
+The final `docs-f` Luna pilot passed quality one with fourteen captured calls (one real `docHelp.nl` root,
+one `keywords.nl` call, twelve finite `fits.nl` readouts), zero failed actions, and all source/entry/root bindings
+verified. Exact replay matched all fourteen requests. Its answering quote came from the actual
+`skills/workspace-dev/TOOLS.md` checkPanel passage. Separate semantic review accepted the guidance and the
+TypeScript-only versus broader build-report distinction. One sample was admitted under
+`/home/werg/data/vibestudio-teacher-pilot-20261117/docs-f/teacher`; its bound receipt is
+`docs-f/admissions/t000000.json`. Teacher code pin:
+`67a3eb6935c69db259c3219963f311fb14268e83`; Base:
+`e24dd517acd34dc65f90268557e1e76ec34e3e73`; host:
+`e710ef5e1815995f5a4b225fa06be70a3cf1477c`. The owned run joined successfully at about 2 GB peak.
+
+Earlier diagnostics were not admitted: initial `docs` missed the answer, `docs-b` exhausted forty calls,
+`docs-c` recovered a failed action despite its final correct answer, and `docs-d`/`docs-e` found no matches
+before lexical query indexing was corrected. These runs used changing source versions and cannot estimate an
+unbiased teacher acceptance rate. The final source passed 26 host fixture/IR tests, ten focused Base tests, and
+all 34 docs case preflights. The reviewed total remains 18 suites and 450 cases, now with 39 Natlang sources.
+This is evidence that source-authentic canonical collection, replay and admission work; fresh transfer worlds and
+paired held-out model evaluation are still needed to establish learned reliability.
