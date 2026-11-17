@@ -68,7 +68,7 @@ export function parseArguments(argv) {
       (options.all ? options.suite || options.template : !options.template || !options.suite))
   ) {
     throw new Error(
-      "usage: natlang:teacher -- --all | --template T --suite PATH --out DIR [--preflight] [--case ID] [--limit N] [--replicate N] [--provider P --model M]"
+      "usage: natlang:fixture-teacher -- --all | --template T --suite PATH --out DIR [--preflight] [--case ID] [--limit N] [--replicate N] [--provider P --model M]"
     );
   }
   return options;

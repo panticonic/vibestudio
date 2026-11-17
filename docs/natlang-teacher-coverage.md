@@ -1,4 +1,8 @@
-# Natlang teacher coverage
+# Natlang fixture coverage
+
+The fixture suites below remain available for regression work. The live workflow corpus uses
+the managed collector and independently verified outcomes documented in
+[Live Natlang teacher capture](natlang-live-teacher-capture.md).
 
 The collection inventory is [`scripts/natlang-teacher-suites.json`](../scripts/natlang-teacher-suites.json).
 It names the existing executable skill suites, not a claim that every Vibestudio application has been converted.
@@ -9,7 +13,7 @@ template checkout.
 Check collection preparation for the entire inventory from the host checkout:
 
 ```sh
-pnpm natlang:teacher -- --all --out DIR --preflight
+pnpm natlang:fixture-teacher -- --all --out DIR --preflight
 ```
 
 Preflight checks fixture and compilation readiness without asserting teacher quality or admitting training data.
@@ -115,8 +119,8 @@ and independent outcome checks determine which demonstrations become SFT targets
 From a clean host and template source snapshot:
 
 ```sh
-pnpm natlang:teacher -- --all --preflight --out /path/to/fixture-check
-pnpm natlang:teacher -- --all --out /path/to/teacher-campaign
+pnpm natlang:fixture-teacher -- --all --preflight --out /path/to/fixture-check
+pnpm natlang:fixture-teacher -- --all --out /path/to/fixture-campaign
 ```
 
 The default teacher and separate verifier are `openai-codex:gpt-6-luna` at low effort, using natlang's existing

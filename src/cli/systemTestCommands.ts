@@ -86,7 +86,7 @@ const STARTUP_READINESS_DEADLINE_MS = 60_000;
 const STALE_STATUS_ATTESTATION_RE =
   /host authority attestation nonce was replayed or is outside the receiver's retention bound/u;
 
-function makeSystemTestRunnerCaller(scope: SessionScope, targetId: string): SystemTestRunnerClient {
+function makeSystemTestRunnerCaller(scope: SessionScope, targetId: string): SystemTestRunnerCaller {
   const call = (method: { name: string }, args: unknown[]) =>
     scope.client.callTarget(targetId, method.name, args);
   return {
@@ -137,7 +137,8 @@ function makeSystemTestRunnerCaller(scope: SessionScope, targetId: string): Syst
   };
 }
 
-type SystemTestRunnerCaller = SystemTestRunnerClient;
+/** The CLI controls test lifecycle; fixture-owned teacher execution stays inside the workspace harness. */
+export type SystemTestRunnerCaller = Omit<SystemTestRunnerClient, "runPanelTeacher">;
 
 export function systemTestDoctorRecovery(error: unknown): {
   ok: false;

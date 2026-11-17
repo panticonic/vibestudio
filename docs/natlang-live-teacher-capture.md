@@ -1,0 +1,43 @@
+# Live teacher capture
+
+Live workflow collection executes the authored Natlang root against real caller-scoped services. Policy stays in the `.nl` program. The capture, record joins, ownership checks and paged export are exact transport and durability plumbing.
+
+## Mechanism inventory
+
+- `packages/natlang/src/driver.ts` is the shared Natlang gateway boundary for generation and decision scoring. Capture therefore applies to every gateway provider without changing its serving protocol. Requests are snapshotted before dispatch; replies and errors are actual returned values.
+- `models.ts` resolves the executor role for root and child calls. A capture-scoped executor selection resolves that role to the explicit teacher throughout the tree. Explicit named model selections retain their own identity. `.on({model})` keeps its ordinary non-inheriting semantics.
+- `recordsStore.ts` joins exchanges by their actual invocation ID into the completed call record. Existing record retention and flush semantics apply. Capture does not create permanent annotations.
+- `evalNatlang.ts` exposes `natlang.captureModelTurns({executorModel})` before the first Natlang call in the current eval run. Capture and executor selection reset for the next run. Ordinary runs retain no raw model contexts.
+- The gateway's Pi request context and original assistant response are retained only when capture is enabled. Original tool-call IDs are preserved alongside the normalized Natlang reply. Gateway attribution describes the authenticated transport caller; call-summary owner and run fields identify the eval owner.
+- The system-testing runner's `runPanelTeacher` RPC invokes the actual `repairPanel.nl` root in the seeded panel context using its real browser, VCS and build ports. A finite EvalDO owns execution and export. The result includes the original eval run, root call IDs and raw records before scope disposal.
+- Training admission and effect verification consume these records separately. A live browser/workspace episode is observed evidence, not a claim that external effects can be exactly replayed as a portable fixture. The independent system-test oracle remains separate from the teacher's report.
+
+## Use
+
+Run a single workflow from the Vibestudio host checkout with the development templates configured.
+Use a new output directory and a model enabled on the collection machine.
+
+```sh
+pnpm natlang:teacher --case panel-draft-unmount --out /path/to/new-run
+```
+
+The second case is `panel-draft-stale-snapshot`. The two cases share a source group because they use the same
+panel and user goal. The collector starts one isolated managed Vibestudio instance, checks the vendored
+Natlang build, pins the host and templates, and retains the full system-test trajectory. On success,
+`verified/manifest.json` binds the original call tree and independent browser evidence. The verified
+manifest is the input to Natlang's [shared SFT pipeline](https://github.com/werg/natlang/blob/main/plans/neuralese/LIVE_WORKFLOW_SFT_20261118.md).
+Failed runs retain diagnostic artifacts.
+
+## Capture API
+
+Enable capture before executing the program:
+
+```ts
+natlang.captureModelTurns({ executorModel: "provider:model" });
+const program = await natlang.load("skills/example/root.nl", {
+  services: { world: callerOwnedWorld },
+});
+await program(actualInput);
+```
+
+Use the completed run's actual root IDs and raw traces. Export rejects incomplete records, a different run, missing parents or mixed owners. The panel-teacher runner also rejects any captured generation whose actual returned model differs from the chosen teacher. If a call is missing, treat the episode as incomplete and rerun it in a fresh owned fixture; do not synthesize a request or reply.
