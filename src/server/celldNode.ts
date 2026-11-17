@@ -21,6 +21,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { getPhysicalPathForAsarPath } from "@vibestudio/shared/runtimePaths";
+import { initializeBlobRetentions } from "./storage/blobRetentions.js";
 
 /** Environment that would let an inherited fleet setting override this node's
  * private topology (the same list `celld dev` removes for its child). */
@@ -212,6 +213,7 @@ export class CelldNode {
     fs.mkdirSync(this.projectDir, { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.workingDir, { recursive: true, mode: 0o700 });
     fs.mkdirSync(options.blobRoot, { recursive: true });
+    initializeBlobRetentions(options.blobRoot);
     if (options.egressSecret !== undefined) {
       fs.writeFileSync(this.secretFile, options.egressSecret, { mode: 0o600 });
     }

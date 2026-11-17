@@ -245,6 +245,33 @@ the group, retire each exact instance, and retain bounded evidence only.
 Private proofs: `soak5-workload-evidence.json`, `soak5-memory-summary.json`,
 inspect/trajectory and native supervisor logs in the existing evidence dirs.
 
+The traced diagnostic `st_5e526d8c30f54ea08ab431f48db12177` reached the
+unchanged 420 s orchestration deadline under syscall-tracing overhead. It is
+not an acceptance or timing result. Cleanup reproduced the same registry fault,
+now at the namespace DELETE. The retained trace has 197 failed host lock calls
+and three `F_GETLK` answers naming the workspace native PID as the writer.
+The normal SQLite busy handler waited and exhausted its allowance; this was
+not an unconfigured wait. A small worker created/retired during the same native
+workload passed. All instance, tracer and collector processes are joined.
+
+A controlled comparison on a roughly production-sized registry fenced the
+native node with rollback journaling, while WAL completed all 100 native
+requests plus host mutations in 6.4 s without errors. That comparison's HTTP
+replies alone do not establish final publication. The committed regression now
+also joins normal durable shutdown, restarts the real native node, and verifies
+all 65 actual Dolt writes survived. The root-reader regression was red before
+the fix with the same schema-read lock stack. Together with host retention/GC
+and node tests, all 12 focused tests pass.
+
+The host-owned `CelldNode` initializes the canonical retention registry in WAL
+mode **before** admitting deployment/native producers. It validates the exact
+schema before changing journal mode, checks WAL was accepted, and preserves
+SQLite's full synchronous durability. Native continues to use the same stock
+SQLite file/schema and does not change its journal mode. No Rust/binary change,
+busy-wait extension, retry loop, or production deadline change is involved.
+The full host gate passes through lint and reaches only the same eight untouched
+formatting baselines. A fresh untraced actual-agent soak still gates promotion.
+
 For the later 10k measurement, use the existing TestCase `explicitOnly` and
 `timeoutMs` metadata rather than inventing a job API or a product timeout.
 EvalKernel's timeout is opt-in: absent means unbounded, confirmed in its
