@@ -221,6 +221,13 @@ export interface InternalRpcClientConfig extends RpcClientConfig, RpcClientRecov
    * made through scoped request clients and typed peers. The hook observes the
    * exact promise without changing RPC results or error semantics. */
   onOutboundOperation?: (operation: Promise<unknown>) => void;
+  /**
+   * Deliver a call addressed to this client's own `selfId` in-process (the default). A hosted class
+   * (docs/dolt-redesign.md §7.2) presents its hosting entity's id on outbound calls without being that
+   * entity: a call it makes to the entity is a call to another endpoint, and must go out through the
+   * transport instead of being answered by the hosted class itself.
+   */
+  loopback?: boolean;
 }
 
 function publicCaller(caller: AuthenticatedCaller): AuthenticatedCaller {
@@ -639,6 +646,7 @@ function createRpcClientCore(config: InternalRpcClientConfig): RpcWireClient {
 
   async function deliverEnvelope(envelope: RpcEnvelope, signal?: AbortSignal): Promise<void> {
     if (
+      (config as InternalRpcClientConfig).loopback !== false &&
       envelope.target === config.selfId &&
       isLocalRpcDestination(envelope.destination, config.workspaceId)
     ) {

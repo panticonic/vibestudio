@@ -3819,6 +3819,17 @@ export class RpcServer {
     };
   }
 
+  private traceRpcAdmission(
+    phase: string,
+    callerId: string,
+    targetId: string,
+    method: string,
+    requestId?: string
+  ): void {
+    if (log.isTrace())
+      log.trace("admission", { at: Date.now(), phase, callerId, targetId, method, requestId });
+  }
+
   /**
    * Dispatch a `request` envelope arriving over HTTP `/rpc`. `target === "main"`
    * is a direct service-dispatch; any other target is a relay.
@@ -3835,6 +3846,7 @@ export class RpcServer {
     const method = message.method;
     const args = message.args ?? [];
     const requestId = message.requestId;
+    this.traceRpcAdmission("caller.start", callerId, targetId, method, requestId);
     const idempotencyKey = envelope.delivery.idempotencyKey;
     const readOnly = envelope.delivery.readOnly === true;
     const authorityParent = this.authorityParentFor(
@@ -3869,7 +3881,9 @@ export class RpcServer {
       ),
       authorityParent
     );
+    this.traceRpcAdmission("caller.ready", callerId, targetId, method, requestId);
     const causal = await this.resolveCausalInvocation(verifiedCaller, message);
+    this.traceRpcAdmission("causal.ready", callerId, targetId, method, requestId);
     const causalParent = causal?.parent;
     // A causal parent authenticates invocation lineage; it does not change the
     // authorizing origin. Harness-owned tool and closure calls retain their
@@ -4904,7 +4918,9 @@ export class RpcServer {
     relayCallerScope?: RelayCallerScope
   ): Promise<unknown> {
     const ref = parseDOTarget(targetId);
+    this.traceRpcAdmission("target.start", callerId, targetId, method, meta?.requestId);
     await this.ensureDirectDoReady(ref);
+    this.traceRpcAdmission("target.ready", callerId, targetId, method, meta?.requestId);
     // Assertion-only: the concrete DO entity must exist before dispatch.
     // Method-specific context checks (e.g. subscribeChannel) belong in the
     // DO's own handler, not in the generic relay path. Cross-context calls
@@ -4941,6 +4957,7 @@ export class RpcServer {
         { id: callerId, kind: callerKind },
         transportCaller.code
       );
+      this.traceRpcAdmission("authority.start", callerId, targetId, method, meta?.requestId);
       const authorization = await this.directDOAuthorization({
         caller: attributedCaller,
         authorizingCaller: relayCallerScope?.authorizingCaller,
@@ -4951,6 +4968,7 @@ export class RpcServer {
         readOnly: meta?.readOnly,
         signal: meta?.signal,
       });
+      this.traceRpcAdmission("authority.ready", callerId, targetId, method, meta?.requestId);
       const dispatchedArgs = this.resolveOpaqueHandleArgument(args, authorization);
       const inheritedAuthorizingCaller = relayCallerScope?.authorizingCaller
         ? attributedCaller.subject
@@ -4967,6 +4985,7 @@ export class RpcServer {
         attributedCaller
       );
       try {
+        this.traceRpcAdmission("receiver.start", callerId, targetId, method, meta?.requestId);
         const result = await postToDurableObject(
           ref,
           method,
@@ -4992,6 +5011,7 @@ export class RpcServer {
           },
           meta?.signal
         );
+        this.traceRpcAdmission("receiver.done", callerId, targetId, method, meta?.requestId);
         return this.sealProducedResourceHandle(ref, authorization, result);
       } finally {
         releaseAuthorityParent();

@@ -23,6 +23,32 @@ symlink root `root-dolt-p2`, not pushed). Fork binary: `unified-fork` `2d1749d`
 
 ## P4 continuation (2026-11-17)
 
+
+### S6b restoration in progress
+
+The previous source restore was reverted on Base as `cd334fb`, then the held
+hosted-client change was merged as `1036ecd` on `feat/dolt-p2-s3`. This restores
+agent-owned kernels while keeping the later child-retirement repair and gateway
+diagnostics. Base `feat/dolt-p2` still remains at `13085f3` until the restored
+slice is gated. The host merge of `feat/dolt-p0-s6b-agent-hosting` restores the hosted-client
+transport flag. Its only conflict was this handover's historical text, resolved
+by retaining the current, more complete record. The unrelated
+`bridgeStream.test.ts` reformat is dropped. The new self-call regression now
+joins a complete transport response instead of leaving a detached call behind
+a short sleep. Admission tracing at the existing trace log level marks caller,
+causal, target-readiness, authority and receiver phases without request args.
+
+Conventional checks: 175 Base hosted-kernel/eval/owner tests, 102 RPC tests,
+226 HTTP/RPC admission tests, host types and all four Base typecheck
+configurations pass. The full commit gate found two missing production imports:
+Base agentic-do's durable dependency (fixed as `4132392`) and system-testing's
+RPC helper dependency (fixed as `b2e01ac`, on both branches). Its repeat passes
+through lint and fails only the same eight untouched formatting files. A
+complete release was prepared separately with the corrected manifests.
+Next trace the exact agent self-call reproduction before claiming S6b complete.
+No live verification instance remains; the registry from the preceding slice
+is still owned.
+
 ### Steering investigation resumed after the checkpoint
 
 Native event tracing now works with both native DEBUG and host verbose logging.

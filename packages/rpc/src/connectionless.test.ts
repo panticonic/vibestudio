@@ -7,6 +7,7 @@ import {
 } from "./connectionless.js";
 import { bindExecutionSession, createInternalConnectionlessRpcClient } from "./internal.js";
 import type { RpcEnvelope } from "./types.js";
+import { responseEnvelopeFor } from "./envelope.js";
 
 const SELF = "do:test:SessionDO:obj1";
 
@@ -345,5 +346,52 @@ describe("@rpc direct authority declaration", () => {
 
   it("the factory form still registers exposure", () => {
     expect([...rpcExposedMethodNames(new PolicyDO())].sort()).toEqual(["broad", "serverOnly"]);
+  });
+});
+
+describe("a call to the client's own id", () => {
+  it("is delivered in-process by default: it never reaches the transport", async () => {
+    const fetch = vi.fn(async () => new Response("{}"));
+    const connectionless = createInternalConnectionlessRpcClient({
+      selfId: SELF,
+      serverUrl: "http://gw.test",
+      authToken: "T",
+      callerKind: "do",
+      workspaceId: "ws",
+      fetch,
+    });
+    // Nothing is exposed here, so the in-process delivery answers with a refusal, not a network call.
+    await expect(connectionless.client.call(SELF, "anything", [])).rejects.toBeDefined();
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("leaves the process when the client is a hosted class presenting its entity's id (loopback: false)", async () => {
+    const fetch = vi.fn(async (_url: unknown, init?: RequestInit) => {
+      const request = JSON.parse(String(init?.body)) as RpcEnvelope;
+      return new Response(
+        JSON.stringify(
+          responseEnvelopeFor(
+            request,
+            { callerId: SELF, callerKind: "do" },
+            {
+              type: "response",
+              requestId: (request.message as { requestId: string }).requestId,
+              result: "hosting entity",
+            }
+          )
+        )
+      );
+    });
+    const connectionless = createInternalConnectionlessRpcClient({
+      selfId: SELF,
+      serverUrl: "http://gw.test",
+      authToken: "T",
+      callerKind: "do",
+      workspaceId: "ws",
+      loopback: false,
+      fetch,
+    });
+    await expect(connectionless.client.call(SELF, "chatOp", [])).resolves.toBe("hosting entity");
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 });

@@ -699,6 +699,8 @@ export abstract class DurableObjectBase {
         throw new Error("RPC not available: WORKSPACE_ID not configured");
       const connectionless = createInternalConnectionlessRpcClient({
         selfId: this.rpcSelfId,
+        // A hosted class presents its entity's id without being the entity (§7.2).
+        ...(this.codeHostProps().host ? { loopback: false } : {}),
         serverUrl: gatewayUrl,
         authToken: token,
         callerKind: "do",
