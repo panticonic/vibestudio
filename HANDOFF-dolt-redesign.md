@@ -272,6 +272,28 @@ busy-wait extension, retry loop, or production deadline change is involved.
 The full host gate passes through lint and reaches only the same eight untouched
 formatting baselines. A fresh untraced actual-agent soak still gates promotion.
 
+**Actual-agent gate now passes:** `st_444e20c9d29f4ffb8847b8ce350b4753`,
+205.9 s overall, host `763409214`, Base `66683ea`, System-testing `1d8104e`.
+The retained full execution joins 65 distinct native receipts with counters
+1–65, zero model calls, the default 64-commit collection marker, and no mission,
+session or case-context cleanup errors. The native workload took 189.7 s
+(mean turn 2,902 ms, p95 3,337 ms). It is an actual AiChatWorker/EvalKernel
+session, not a model call, seeded log or standalone counter substitute.
+
+Base P2 is fast-forwarded to `66683ea`; System-testing P2 to `1d8104e`.
+Nothing is pushed. The complete source/release fingerprint was
+`3488d82150588d72976d3a4ecda6e1410dda2ae5b2edcd0a7c636fddb632f649`.
+The instance, all children and external observer are stopped/joined, and its
+owned complete release tree was removed after the comparison. Bounded proof
+and memory summaries are `soak7-workload-evidence.json` and
+`soak7-memory-summary.json` under the private compaction state directory.
+The entire scope peaked at 3,458,158,592 bytes (3.22 GiB), with no MemoryMax
+hits or OOM kills. Heavy work stays serial under 6 GiB/zero swap.
+
+Continue: the explicit 10k native-turn normal-fork measurement and strict
+steering/model-completion acceptance remain open. This passing gate is not
+project completion.
+
 For the later 10k measurement, use the existing TestCase `explicitOnly` and
 `timeoutMs` metadata rather than inventing a job API or a product timeout.
 EvalKernel's timeout is opt-in: absent means unbounded, confirmed in its
