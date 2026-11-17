@@ -117,7 +117,9 @@ const statSchema = z.object({
 const direntSchema = z.object({
   name: z
     .string()
-    .describe("Entry name; basename for flat listings, root-relative path for recursive ones."),
+    .describe(
+      "Entry name; basename for flat listings, path relative to the listed directory for recursive ones."
+    ),
   _isFile: z.boolean().describe("True if the entry is a regular file."),
   _isDirectory: z.boolean().describe("True if the entry is a directory."),
   _isSymbolicLink: z.boolean().describe("True if the entry is a symbolic link."),
@@ -210,7 +212,7 @@ const readdirOptionsSchema = z.object({
   recursive: z
     .boolean()
     .optional()
-    .describe("Recurse into subdirectories, reporting root-relative paths."),
+    .describe("Recurse into subdirectories, reporting paths relative to the listed directory."),
 });
 const mkdirOptionsSchema = z.object({
   recursive: z
