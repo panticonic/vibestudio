@@ -1802,6 +1802,9 @@ The host recognizes a hosting class through its manifest's `hosts`, not a class 
 `HostedEvalKernel` relays the ordinary kernel methods through `hostCode`; the vessel
 checks their callers. The eval tool, await task and durable acknowledgement address
 the actual `evalHostId`, and lifecycle control reaches the kernel through its owner.
+There is one kernel and one notebook scope per agent; the execution registry admits
+one live run per executing runtime id. Approvals name the owning agent, the agent
+has no resident-session relay, and execution-root census activates self-hosting agents.
 
 A shared principal is not a shared endpoint. The kernel's RPC client therefore sends
 self-addressed requests through the host (`loopback:false`); replies to transport-delivered
@@ -1818,6 +1821,32 @@ inheritance all pass with zero tool failures. Conventional hosted-kernel/eval/ow
 RPC/HTTP and admission tests pass; host and Base typechecks pass. See the Nov 17 S6b
 record in `HANDOFF-dolt-redesign.md` for run ids and the distinct known channel.admin
 baseline encountered by one debug-state sample.
+
+#### 6.11.7 What the product lanes found (the last of the pass)
+
+The unit and real-fork tests passed before the lanes ran; the lanes found what they could not.
+
+- **Fork selection was wrong in the design and in the code before it.** §6.4 and the channel's fork saga asked
+  every `entity` participant for its knowledge. A headless client (the CLI and the system-test session) is an
+  entity too (`kind: "external"`) with no agent cell: the call was refused by default-deny, so **a conversation
+  fork from a headless session never worked**, before this pass as well. The saga now selects participants whose
+  `ref.kind` is `agent` (the multi-agent test has a headless entity in the channel). The lane scenario
+  `conversation-fork-adopts-agent-cell` is the first test that forks through the channel's own `fork` RPC on the
+  real stack.
+- **An adoption must bind exactly what the open that follows binds.** The projection binding is immutable
+  (`native-channel-publication.ts`, `bind`). A subagent's open binds `reportTo` (its parent) on the task
+  channel; the fork's adoption bound the same projection without it, and the first open after the adoption was
+  refused. Both paths now take `reportTo` from one function (`nativeReportTo`). §6.8's note that the adoption "is
+  one binding" holds only if the candidate is the same value on both paths.
+- **A commit with nothing to commit throws on the real engine** (found by the first lane, fixed with
+  `versionedChangesPending`): §6.3's "a commit at each turn" is a commit when a versioned table changed.
+- **Cost of the cell that the design did not give a number for (R1).** A turn of 23 storage transactions and one
+  Dolt commit is 558 ms and **635 KB of file before gc** (41 KB after); a fork copies the file (247 ms at 3 MB). The
+  design's "gc is cheap, run it sometimes" (§11) is now a requirement: nothing schedules it.
+- **The input gate refuses a transaction from a continuation without a live driver, whatever the gate holds.**
+  Agent cells hit it rarely and persistently (§6.11.3's agent runs many transactions from chained promises); a
+  retry does not cure it. The evidence and the pointer into celld are in `HANDOFF-dolt-redesign.md`
+  ("Input-gate refusals in agent cells"); it is the fork's to fix, and Pi's 8-attempt retry should go when it does.
 
 #### 6.11.8 Compaction of Dolt cells
 
@@ -2502,10 +2531,11 @@ Each step is a complete cut that keeps the system working.
    Done since step 4: a run's `timeoutMs` bounds its CPU (§7.8, celld `ec0d6f5`), a run ended by its CPU limit
    is settled by its deadline (§7.8, celld `2d1749d`, Base `bd89d94`), the D5 restart report is a message
    (§7.10), the cost of a kernel run is measured (§7.7).
-7. **Host side done, agent side held** (2026-11-15, §6.11.6): the host's manifest-based eval-host recognition and the
-   owner-hosted admission are in; the agent hosting its own kernel hangs on the kernel's calls to the agent and is on
-   branches (`feat/dolt-p2-s6b-agent-hosting`, `feat/dolt-p0-s6b-agent-hosting`). The executor fact is `kind:
-"dynamic-code"` (S6a).
+7. **Done** (2026-11-17, §6.11.6): agents host their persistent eval kernels.
+   Both request and reply routing distinguish endpoints that share a principal id;
+   the actual self-call, authority, continuity, crash replay, finite cancellation and
+   subagent-fork cases pass. Finite scopes and owner-session targets stay session entities.
+   The executor fact is `kind: "dynamic-code"` (S6a).
 
 ---
 
