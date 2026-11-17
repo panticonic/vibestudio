@@ -21,6 +21,88 @@ symlink root `root-dolt-p2`, not pushed). Fork binary: `unified-fork` `2d1749d`
 | 5. P3 Durable services: `WorkspaceStateDO` (Dolt), the replaying import, the maintenance journal and `cloneDO` deleted | **done and gated**; the `panel-tree-navigation` "regression" was a pre-P3 gap in browser-panel agent calls ("P3 follow-up" below), and every call to a Dolt object costs about three flushes (measured, a decision for the user)                                                                                                                                                                                                                                                          |
 | 6. P4 Agent system (2026-11-15)                                                                                        | **slices S1 to S5 done and gated, S6 partly done** (second pass, "P4 second pass" below): the hash chain is deleted (S1); the agent cell is a Dolt cell on Pi's composite storage (S3); the conversation fork forks the agents' cells at a commit (S4); a subagent fork is a fork of its parent's cell (S5); the executor fact is renamed (S6a). **Not done:** agent self-hosting (S6b). P5 onward not started                                                                            |
 
+## P4 continuation (2026-11-17)
+
+Resumed from `celld/docs/fork/HANDOVER.md`, single-track. Host starts at
+`c8e2511a3`, Base at `adc9993`, system-testing at `1c16e49`, fork `75f1700`,
+Pi `.dolt.5`. Main checkouts and the owner's processes remain untouched.
+
+The first fresh instance, `p4-resume`, reproduced the stopped-sweep checks:
+
+| Test | Run | Result |
+| --- | --- | --- |
+| `eval-exact-authority` | `st_84b1f7c8b339436da834e81c2893bfbb` | Pass, no tool failures, 102 s |
+| `channel-envelope-inspection-bounded` | `st_f26e916dcac34837bb84ea9715ab98cf` | Pass, no tool failures, 51 s |
+| `workspace-test-runner-extension` | `st_5b462797e7a44a89bf38fe2ec527ce84` | Fails: `fs.ensureMaterialized` rejects its own bootstrap with `ENOTREADY` |
+
+**Authority validator defect.** The archived final-sweep failure
+`st_bcaf1b4e2c9448d38c9dfaa01b2c07b2` is a false negative, not a model error:
+the agent used the exact read-only request ceiling, read the permissions, and
+returned `{count, rows}`. The result was bounded, with an object-shaped preview;
+the validator accepted only arrays or bounded array previews. Its native
+`permissions.inventory` receipt proves the completed read (383 rows). Other
+archived failures really include `ERUNMANIFEST`; this finding does not reclassify
+them.
+
+The exact-authority and preauthorization validators now use schema-validated
+native inventory receipts from each invocation's operation journal, independent
+of guest syntax or returned shape. No prompt or authority policy changed. The
+regression fails against the original validator; the focused semantic-validator
+suite passes all 91 tests. Template typecheck passes all three configurations
+with `GOMEMLIMIT=3GiB GOMAXPROCS=3`, under the required 6 GiB scope. Without the
+native compiler limits it hit the scope's OOM limit twice; Node heap limits do
+not control TypeScript 7's native compiler. Failed-run scratch was removed.
+
+Committed locally as system-testing `f86aef1`, fast-forwarded onto both
+`feat/dolt-p2` and `feat/dolt-p2-s4`. A fresh instance using the changed template
+passed `eval-exact-authority` (`st_6388a0db940c408aa6743274b9b3fd96`, 116 s) and
+`eval-preauthorization` (`st_3550bda20edc4696aff8d05fd1a9a729`, 106 s), both with
+zero tool failures. `p4-authority-live` was stopped and joined.
+
+**Context-materialization defect.** The test runner correctly calls
+`ctx.fs.ensureMaterialized(request.target)`. `FsService.resolveContextRoot`
+rejects a chained native extension when its context projection is absent,
+before dispatching that explicit materialization request. This is an
+infrastructure failure, not a model error. The repair resolves the scoped source
+address without demanding a projection before the explicit operation can run;
+scratch creation and the authenticated context binding stay in force. Three
+regressions fail before the fix; all 77 filesystem-service tests pass after it.
+Host typecheck (host, host tests, validation tooling, workerd programs) passes.
+The exact real-stack repro now passes on a fresh instance:
+`workspace-test-runner-extension`, `st_8b32df60809f47db8974c5fd3c72ca72`, 42 s,
+zero tool failures. Full host lint also passes.
+
+Further stopped-sweep checks on `p4-materialize-live`:
+
+| Test | Run | Result |
+| --- | --- | --- |
+| `file-search-read-tools` | `st_8b1231d427d04d66b850f0f967e9112a` | Pass, no tool failures, 67 s |
+| `worker-env` | `st_5fa7705623ee45079de8af85dd7eae19` | Fails, 116 s: first eval guessed the descriptor export and threw a guest `TypeError`; the agent then read the contract, observed the right value and destroyed the worker |
+| `dynamic-workspace-service` | `st_c68edbcd7a1c41cfbb518a469412753a` | Pass, no tool failures, 178 s |
+
+The `worker-env` failure was inspected immediately; bounded evidence is retained
+in that run's `inspect-resume.json`. This is its required rerun of the prior
+sweep failure. The test still rejects the unexpected guest error even though the
+task eventually succeeded. No validator or prompt was weakened.
+All five failures from the stopped sweep have now had their required rerun:
+four pass (including the repaired workspace test); `worker-env` retains the
+known model-error failure. The three instances used so far logged zero input-gate
+refusals and zero saturated-cell warnings.
+
+`pnpm check:commit` passes every check through host typecheck and lint. Its sole
+failure is the pre-existing `format:check` in eight untouched files
+(`celldMigration*`, `celldNode.test.ts`, `durableObjectCloneReceipts.ts`,
+`dynamicWorkerHost.test.ts`, `hubServer.test.ts`, `nativeSqlitePayloadCelld.test.ts`).
+Both changed filesystem files pass focused Prettier/oxlint. The commit uses the
+handover's allowed `--no-verify` exception only for that formatting baseline.
+`p4-materialize-live` was stopped and joined before these checks.
+
+`p4-resume` was stopped and joined. Its shutdown reported
+`active-eval-cancellation` errors for three already-retired session objects;
+the supervisor still retired. Keep this evidence separate from successful
+scenario results. Log:
+`~/.config/vibestudio/instance-state/122394aeedcbfe99/system-test-logs/p4-resume.log`.
+
 ## P4 Agent system (2026-11-15): slice plan, what was done, what remains
 
 **Plan, and why this order.** The design's §6 is one change in the doc and five in the code. Before

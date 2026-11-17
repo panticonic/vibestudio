@@ -1172,14 +1172,10 @@ export class FsService {
           );
         }
         contextId = cid;
-        const state = this.contextFolderManager.getContextFolderState(contextId);
-        if (state.status !== "ready") {
-          throw codedError(
-            "ENOTREADY",
-            `Context folder ${contextId} is ${state.status}; scoped extension filesystem calls must wait for context materialization`
-          );
-        }
-        const root = await this.contextFolderManager.ensureContextFolder(contextId);
+        // Resolving a scoped address must not require its source projection:
+        // ensureMaterialized is itself an extension filesystem operation.
+        // The semantic owner establishes the projection on explicit demand.
+        const root = this.contextFolderManager.contextSourcePath(contextId);
         return {
           sourceRoot: root,
           root: await this.contextFolderManager.ensureContextScratch(contextId),

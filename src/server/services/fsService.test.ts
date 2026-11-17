@@ -1093,7 +1093,7 @@ describe("FsService", () => {
       });
     });
 
-    it("fails fast for chained extension fs calls before context materialization", async () => {
+    it("resolves native roots without requiring or creating a source projection", async () => {
       const ctx = makeExtensionCtx("@workspace-extensions/file-tools");
       ctx.chainCaller = {
         callerId: "do:workers/agent-worker:AiChatWorker:agent-3",
@@ -1103,9 +1103,11 @@ describe("FsService", () => {
       };
       registerContext(ctx.chainCaller.callerId, "do", "ctx-not-ready");
 
-      await expect(service.handleCall(ctx, "realpath", ["/"])).rejects.toMatchObject({
-        code: "ENOTREADY",
+      await expect(service.handleCall(ctx, "nativeRoots", [])).resolves.toEqual({
+        source: path.join(tmpRoot, "ctx-not-ready"),
+        scratch: path.join(tmpRoot, "ctx-not-ready-scratch"),
       });
+      expect(existsSync(path.join(tmpRoot, "ctx-not-ready"))).toBe(false);
     });
   });
 
@@ -1912,23 +1914,47 @@ describe("FsService", () => {
         effectiveVersion: "ev-1",
       };
       registerContext(ctx.chainCaller.callerId, "do", contextId);
-      mkdirSync(path.join(tmpRoot, contextId), { recursive: true });
       return ctx;
     }
 
-    it("ensureMaterialized RPC declares a narrow scope and returns the source root", async () => {
+    it("ensureMaterialized RPC bootstraps an absent projection with a narrow scope", async () => {
       const { bridge, calls } = makeMaterializeBridge({ materialize: true });
+      const materialize = bridge.ensureMaterialized;
+      bridge.ensureMaterialized = async (contextId, repos) => {
+        await materialize(contextId, repos);
+        mkdirSync(path.join(tmpRoot, contextId), { recursive: true });
+      };
       const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
         disk: new FsDisk(bundledRipgrepPath),
         contextAuthority: { kind: "semantic", bridge },
       });
       const ctx = makeChainedExtensionCtx("ctx-s4");
+      expect(existsSync(path.join(tmpRoot, "ctx-s4"))).toBe(false);
 
       await expect(
         svc.handleCall(ctx, "ensureMaterialized", ["panels/chat/index.tsx"])
       ).resolves.toBe(path.join(tmpRoot, "ctx-s4"));
 
       expect(calls).toEqual([{ contextId: "ctx-s4", repos: ["panels/chat"] }]);
+      expect(existsSync(path.join(tmpRoot, "ctx-s4"))).toBe(true);
+    });
+
+    it("propagates the projection owner's failure to a chained extension", async () => {
+      const { bridge } = makeMaterializeBridge({ materialize: true });
+      const failure = new Error("semantic projection failed");
+      bridge.ensureMaterialized = async () => {
+        throw failure;
+      };
+      const svc = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath),
+        contextAuthority: { kind: "semantic", bridge },
+      });
+      const ctx = makeChainedExtensionCtx("ctx-projection-failure");
+
+      await expect(svc.handleCall(ctx, "ensureMaterialized", ["panels/chat"])).rejects.toBe(
+        failure
+      );
+      expect(existsSync(path.join(tmpRoot, "ctx-projection-failure"))).toBe(false);
     });
 
     it("ensureMaterialized RPC ignores direct-disk scratch paths", async () => {
