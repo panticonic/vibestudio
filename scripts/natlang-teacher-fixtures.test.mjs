@@ -306,3 +306,132 @@ test("documentation lookup never searches or reads evaluation-feedback Markdown"
   }, []);
   assert.deepEqual(result.found, []);
 });
+
+/** Load original crisp retrieval helpers with only their real service/semantic boundaries substituted. */
+function sourceRetrieval(services, judge) {
+  const root = path.join(base, "skills/sandbox/help/docHelp");
+  const cache = new Map();
+  const load = (file) => {
+    if (cache.has(file)) return cache.get(file).exports;
+    const { code } = transformSync(fs.readFileSync(file, "utf8"), {
+      sourcefile: file,
+      loader: "ts",
+      format: "cjs",
+      target: "es2022",
+    });
+    const module = { exports: {} };
+    cache.set(file, module);
+    const imported = (specifier) => {
+      if (specifier === "natlang:services") return services;
+      if (specifier === "./fits.nl") return { default: judge, __esModule: true };
+      if (specifier.startsWith("./"))
+        return load(path.resolve(path.dirname(file), specifier.replace(/\.js$/, ".ts")));
+      return require(specifier);
+    };
+    new Function("require", "module", "exports", code)(imported, module, module.exports);
+    return module.exports;
+  };
+  return load(path.join(root, "locateDoc.ts")).default;
+}
+
+test("the original document world remains searchable beyond the grep result bound", async () => {
+  let visited = [];
+  const { result, metric } = await scoreDocumentation(
+    async (services) => {
+      const broad = await services.fs.grep("typecheck|single|panel|before|publish", {
+        caseInsensitive: true,
+        maxMatches: 1000,
+      });
+      assert.equal(broad.truncated, true);
+      const locate = sourceRetrieval(services, async (_question, text) => {
+        visited.push(text);
+        return text.includes("@workspace-extensions/typecheck-service.checkPanel")
+          ? "answers"
+          : "no";
+      });
+      return locate("How do I typecheck a single panel before I publish it?");
+    },
+    [
+      "skills/workspace-dev/TOOLS.md",
+      "skills/workspace-dev/WORKFLOW.md",
+      "skills/extensiondev/DEV_LOOP.md",
+      "skills/sandbox/EVAL.md",
+    ]
+  );
+  assert.equal(metric.quality, 1, JSON.stringify({ metric, result }));
+  assert.ok(result.found.some((entry) => entry.source === "skills/workspace-dev/TOOLS.md"));
+  assert.ok(visited.some((text) => text.includes("getBuildReport")));
+});
+
+test("retrieval continues after an entire rejected batch and keeps source quotes exact", async () => {
+  let judgments = 0;
+  const body = Array.from(
+    { length: 14 },
+    (_, index) =>
+      `## Section ${index === 13 ? "zzz" : index}\n\nneedle ${index === 13 ? "actionable instruction" : "unhelpful detail"}`
+  ).join("\n\n");
+  const services = {
+    fs: {
+      grep: async () => ({ matches: [{ file: "guide.md" }], truncated: false }),
+      readText: async () => ({ text: body, truncated: false, contentHash: "fixed" }),
+    },
+    docs: { search: async () => [] },
+  };
+  const locate = sourceRetrieval(services, async (_question, text) => {
+    judgments++;
+    return text.includes("actionable instruction") ? "answers" : "no";
+  });
+  const result = await locate("Where is the needle located?");
+  assert.ok(judgments > 6);
+  assert.equal(result.found.length, 1);
+  assert.ok(body.includes(result.found[0].quote));
+});
+
+test("documentation read continuation uses line offsets and UTF-8 byte bounds", async () => {
+  await scoreDocumentation(async (services) => {
+    const file = "skills/workspace-dev/TOOLS.md";
+    const first = await services.fs.readText(file, { limit: 2, maxBytes: 1048576 });
+    const second = await services.fs.readText(file, {
+      offset: first.nextOffset,
+      limit: 2,
+      maxBytes: 1048576,
+    });
+    const original = fs.readFileSync(path.join(base, file), "utf8");
+    assert.equal(first.nextOffset, 3);
+    assert.equal(second.startLine, 3);
+    assert.equal(first.text + "\n" + second.text, original.split("\n").slice(0, 4).join("\n"));
+    assert.equal(second.contentHash, first.contentHash);
+    const tooSmall = await services.fs.readText(file, { maxBytes: 1 });
+    assert.equal(tooSmall.firstLineExceedsLimit, true);
+    return { found: [], tried: [] };
+  }, []);
+});
+
+test("retrieval reads every line page before ranking exact section quotes", async () => {
+  const pages = ["# Guide\n\nOpening material.", "\n## Answer\n\nneedle actionable instruction"];
+  const offsets = [];
+  const services = {
+    fs: {
+      grep: async () => ({ matches: [{ file: "guide.md" }], truncated: false }),
+      readText: async (_file, options) => {
+        offsets.push(options.offset);
+        return options.offset === 1
+          ? {
+              text: pages[0],
+              contentHash: "fixed",
+              totalLines: 7,
+              startLine: 1,
+              truncated: true,
+              nextOffset: 4,
+            }
+          : { text: pages[1], contentHash: "fixed", totalLines: 7, startLine: 4, truncated: false };
+      },
+    },
+    docs: { search: async () => [] },
+  };
+  const locate = sourceRetrieval(services, async () => "answers");
+  const result = await locate("Where is the needle?");
+  assert.deepEqual(offsets, [1, 4]);
+  assert.ok(result.found[0].quote.includes("actionable instruction"));
+  assert.ok(pages.join("\n").includes(result.found[0].quote));
+});
