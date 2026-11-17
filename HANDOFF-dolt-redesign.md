@@ -19,7 +19,7 @@ symlink root `root-dolt-p2`, not pushed). Fork binary: `unified-fork` `2d1749d`
 | 3. P2a: heap residency by a hold; the host kernel lease deleted                                                        | **done and gated** (below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | 4. P2b: general dynamic code (§7 rewritten 2026-11-14 to the user's decisions)                                         | **steps 0 to 6 done** (third pass, 2026-11-15, "third pass" below): the agent settles by pull (a background `eval-await` task and `SessionDO.acknowledge`), the website spec pulls, and the push model is deleted (`evalService` is `dynamicCodeService`, the `eval` service, `resultReceiver`, `onEvalComplete`, `onEvalProgress`, `evalEngine`, `evalEventIngress`, `settle`). **Not done:** the agent hosting its own kernel (optional step 4 of the task; documented in §7.12 item 7) |
 | 5. P3 Durable services: `WorkspaceStateDO` (Dolt), the replaying import, the maintenance journal and `cloneDO` deleted | **done and gated**; the `panel-tree-navigation` "regression" was a pre-P3 gap in browser-panel agent calls ("P3 follow-up" below), and every call to a Dolt object costs about three flushes (measured, a decision for the user)                                                                                                                                                                                                                                                          |
-| 6. P4 Agent system (2026-11-15)                                                                                        | **slices S1 to S5 done and gated, S6 partly done** (second pass, "P4 second pass" below): the hash chain is deleted (S1); the agent cell is a Dolt cell on Pi's composite storage (S3); the conversation fork forks the agents' cells at a commit (S4); a subagent fork is a fork of its parent's cell (S5); the executor fact is renamed (S6a). **S6b now complete** (Nov 17 continuation below). Product compaction soak, restart/10k-turn measurements and strict steering completion remain open. P5 onward not started                                                                            |
+| 6. P4 Agent system (2026-11-15)                                                                                        | **slices S1 to S5 done and gated, S6 partly done** (second pass, "P4 second pass" below): the hash chain is deleted (S1); the agent cell is a Dolt cell on Pi's composite storage (S3); the conversation fork forks the agents' cells at a commit (S4); a subagent fork is a fork of its parent's cell (S5); the executor fact is renamed (S6a). **S6b now complete** (Nov 17 continuation below). Product compaction, activation-loss restart and normal 65-turn fork gates pass. The 10k-turn measurement and strict steering completion remain open. P5 onward not started                                                                            |
 
 ## P4 continuation (2026-11-17)
 
@@ -293,6 +293,44 @@ hits or OOM kills. Heavy work stays serial under 6 GiB/zero swap.
 Continue: the explicit 10k native-turn normal-fork measurement and strict
 steering/model-completion acceptance remain open. This passing gate is not
 project completion.
+
+**Normal-fork short gate passes:** `st_ba15f3a72fc14833af2ebd3783c5df5e`,
+223.8 s overall, System-testing `b64e74c` (now also fast-forwarded to P2).
+The same real agent closes 65 native turns, reports collection at 64 commits
+and zero model calls, then takes the ordinary channel `fork({locus:{kind:"head"}})`
+path. The clone adopts its channel, preserves its model and source history
+(sequence 262 → 263), and its independent lineage context is explicitly retired.
+Mission, clone, source session and outer case-context cleanup all pass.
+The normal fork RPC took 9,895 ms. Native logs report **35,008,303 exported
+facet bytes** across three facets; this is facet payload, not total wire bytes.
+The entire scope peaked at 3.91 GiB and had no MemoryMax or OOM events.
+All short-run processes/observers are stopped and joined.
+
+An initial short-fork run failed only because the case omitted critical
+retirement authority for its independent clone. `b64e74c` adds an invocation-bound,
+one-use, case-only `context.boundary` decision for generated `context/ctx-…`
+resources; normal product policy remains unchanged. The fixture checks its
+computed clone id did not already exist, then uses that exact id for cleanup,
+including an uncertain creation reply. Verified fork measurements now survive
+a subsequent cleanup failure. The corrected exact rerun above passes.
+
+The explicit-only `agent-cell-fork-benchmark` uses the same implementation
+with 10,000 turns and its own 12-hour investigation bound. Do not supply a
+420-second CLI override to that case. It emits sparse real-receipt progress,
+scans only the latest native invocations per turn, and returns a bounded tail.
+The full focused suite passed 98 tests and three composition typechecks;
+authority/dependency/hygiene guards passed; the cleanup correction passed its
+74 relevant tests and authority guard. Native TypeScript itself peaked at
+5.84 GiB within the 6 GiB scope, even with tighter Go GC; this is a measured
+compiler working set, not a repaired leak. Keep compiler phases isolated.
+
+The complete producer12 release is held only for the immediate 10k comparison.
+The fresh owned instance is `p4-agent-10k`; use its outside-quota long observer
+`~/.local/state/celld-p4-steering/observe-memory-long.py`. The registry fixture
+was replaced after joining the old one; node PID 472729, timeout parent 472728,
+16-hour fixture lifetime (verify commands before stopping). No other heavy
+work may overlap this measurement. Keep observing it; neither this short pass
+nor launching the long case is project completion.
 
 For the later 10k measurement, use the existing TestCase `explicitOnly` and
 `timeoutMs` metadata rather than inventing a job API or a product timeout.
