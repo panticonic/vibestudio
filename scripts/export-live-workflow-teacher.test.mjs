@@ -74,6 +74,19 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
+        "spectrolite-worlds",
+        "managedSpectroliteWorlds",
+        [
+          {
+            id: "sample",
+            path: "Review.mdx",
+            checks: ["document"],
+            expected: ["document-ready"],
+            requiredText: ["Review.mdx"],
+          },
+        ],
+      ],
+      [
         "grimoire-worlds",
         "managedGrimoireWorlds",
         [{ id: "quiet-garden", expected: ["supported", "supported"] }],
@@ -164,6 +177,7 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(memory.root, "recallDecision");
   assert.equal(memory.workspace, "personal");
   assert.equal(memory.expectedStatus, "missing-source");
+  assert.equal(cases.get("spectrolite-live-sample").workspace, "spectrolite");
   assert.equal(cases.get("grimoire-live-quiet-garden").workspace, "examples");
   const checklist = cases.get("terminal-checklist-live-restart");
   assert.equal(checklist.root, "verifyChecklist");
@@ -443,6 +457,79 @@ test("authoring export rejects a review drawn from another baseline", async (t) 
   );
 });
 
+test("Spectrolite export rejects a preview from another canonical revision", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "spectrolite-live-release-handoff";
+  const run = diagnostics.natlangTeacher;
+  const world = cases.get(entry.test.name);
+  run.report = {
+    findings: world.checks.map((check, index) => ({
+      check,
+      code: world.expected[index],
+      detail: world.documentPath,
+      evidenceIds: ["ctx:vault", "ctx:document", ...(check === "preview" ? ["ctx:preview"] : [])],
+    })),
+  };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  const skill = structuredClone(leaf);
+  skill.callId = skill.summary.call_id = "skill";
+  skill.record.definition.name = "reviewSpectrolite";
+  leaf.record.parent_call_id = "skill";
+  run.calls.push(skill);
+  const working = { kind: "event", id: "committed" };
+  const preview = {
+    id: "ctx:preview",
+    documentPath: world.documentPath,
+    contentHash: "canonical",
+    phase: "rendered",
+    detail: null,
+  };
+  diagnostics.managedSpectrolite = {
+    contextId: "ctx",
+    verification: {
+      caseId: world.caseId,
+      passed: true,
+      browser: { path: world.documentPath, text: world.heading, rendered: [world.previewText] },
+      observed: {
+        vault: { id: "ctx:vault", repositoryId: "vault", clean: true, working },
+        document: {
+          id: "ctx:document",
+          repositoryId: "vault",
+          path: world.documentPath,
+          contentHash: "canonical",
+          ref: working,
+        },
+        preview,
+      },
+      checks: Object.fromEntries(
+        [
+          "canonicalDocument",
+          "browserIdentity",
+          "visiblePreview",
+          "actualDisposition",
+          "matchedFindings",
+        ].map((name) => [name, true])
+      ),
+    },
+  };
+  const pinned = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pinned, workspace: "spectrolite" }));
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  preview.contentHash = "older";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-different-revision` }),
+    /Spectrolite findings must match the assigned canonical revision/u
+  );
+});
+
 test("terminal checklist export binds the report to a new PTY after restart", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
@@ -612,6 +699,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["onboarding-worlds", "export const managedSetupWorlds = [];"],
       ["checklist-worlds", "export const managedChecklistWorlds = [];"],
       ["grimoire-worlds", "export const managedGrimoireWorlds = [];"],
+      ["spectrolite-worlds", "export const managedSpectroliteWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,

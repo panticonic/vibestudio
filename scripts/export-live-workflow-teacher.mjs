@@ -153,6 +153,15 @@ const verifiedMemoryWorkflow = {
   root: "recallDecision",
   evidence: verifiedMemoryEvidence,
 };
+const spectroliteWorkflow = {
+  family: "spectrolite-live-vault",
+  workspace: "spectrolite",
+  namespace: "vibestudio:spectrolite",
+  group: "canonical-vault-preview",
+  validator: { template: "spectrolite", path: "skills/spectrolite-review-fixtures/live.ts" },
+  root: "reviewSpectrolite",
+  evidence: spectroliteEvidence,
+};
 const grimoireWorkflow = {
   family: "examples-live-grimoire",
   workspace: "examples",
@@ -224,6 +233,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedSetupWorlds },
     { managedChecklistWorlds },
     { managedGrimoireWorlds },
+    { managedSpectroliteWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -243,12 +253,33 @@ export async function loadLiveTeacherCases(checkouts) {
       "onboarding-worlds.ts",
       "checklist-worlds.ts",
       "grimoire-worlds.ts",
+      "spectrolite-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const {
+    id,
+    path: documentPath,
+    checks,
+    expected,
+    requiredText,
+    heading,
+    previewText,
+  } of managedSpectroliteWorlds) {
+    cases.set(`spectrolite-live-${id}`, {
+      ...spectroliteWorkflow,
+      caseId: id,
+      documentPath,
+      checks,
+      expected,
+      requiredText,
+      heading,
+      previewText,
+    });
+  }
   for (const { id, expected } of managedGrimoireWorlds) {
     cases.set(`grimoire-live-${id}`, {
       ...grimoireWorkflow,
@@ -723,6 +754,78 @@ function verifiedMemoryEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, selected_event: verification.eventId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function spectroliteEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedSpectrolite;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  const { vault, document, preview } = verification?.observed ?? {};
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.caseId === workflow.caseId &&
+      verification.passed === true &&
+      vault?.id === `${fixture.contextId}:vault` &&
+      vault.clean === true &&
+      typeof vault.repositoryId === "string" &&
+      vault.repositoryId === document?.repositoryId &&
+      document.id === `${fixture.contextId}:document` &&
+      document.path === workflow.documentPath &&
+      verification.browser?.path === document.path &&
+      typeof verification.browser.text === "string" &&
+      verification.browser.text.includes(workflow.heading) &&
+      (workflow.previewText === null ||
+        verification.browser.rendered?.some(
+          (text) => typeof text === "string" && text.includes(workflow.previewText)
+        ) === true) &&
+      typeof document.contentHash === "string" &&
+      document.ref?.id === vault.working?.id &&
+      document.ref?.kind === vault.working?.kind &&
+      (preview === null ||
+        (preview?.id === `${fixture.contextId}:preview` &&
+          preview.documentPath === document.path &&
+          preview.contentHash === document.contentHash)) &&
+      Array.isArray(report?.findings) &&
+      report.findings.length === workflow.checks.length &&
+      report.findings.every((finding, index) => {
+        const check = workflow.checks[index];
+        const ids = [
+          vault.id,
+          document.id,
+          ...(check === "preview" && preview ? [preview.id] : []),
+        ];
+        return (
+          finding?.check === check &&
+          finding.code === workflow.expected[index] &&
+          (finding.code !== "preview-ready" || preview?.phase === "rendered") &&
+          (finding.code !== "preview-missing" || preview === null) &&
+          JSON.stringify(finding.evidenceIds) === JSON.stringify(ids) &&
+          typeof finding.detail === "string" &&
+          finding.detail.trim().length > 0 &&
+          (check !== "document" ||
+            workflow.requiredText.every((text) => finding.detail.includes(text))) &&
+          (check !== "preview" || !preview?.detail || finding.detail.includes(preview.detail))
+        );
+      }) &&
+      [
+        "canonicalDocument",
+        "browserIdentity",
+        "visiblePreview",
+        "actualDisposition",
+        "matchedFindings",
+      ].every((name) => verification.checks?.[name] === true),
+    "Spectrolite findings must match the assigned canonical revision and rendered editor"
+  );
+  return {
+    world: {
+      context_id: fixture.contextId,
+      document_path: document.path,
+      content_hash: document.contentHash,
+    },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };
