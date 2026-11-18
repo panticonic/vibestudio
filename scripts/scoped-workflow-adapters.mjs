@@ -38,6 +38,12 @@ const simple = {
 };
 
 const bound = {
+  async scratchHandoff(world, load) {
+    const { createScratchHandoffFixture } = await load(
+      "skills/scratch-handoff-fixtures/fixture.ts"
+    );
+    return createScratchHandoffFixture(world);
+  },
   async automationLifecycle(world, load) {
     const { createAutomationLifecycleFixture, verifyAutomationLifecycle } = await load(
       "skills/automation-lifecycle-fixtures/fixture.ts"
