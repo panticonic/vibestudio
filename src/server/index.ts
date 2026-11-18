@@ -3401,7 +3401,9 @@ async function main() {
       const mirrorBlobsDir = layout.blobsDir;
       container.registerRpc(
         createMirrorService({
-          contextRepoTargets: (contextId) => workspaceVcs.contextRepoTargets(contextId),
+          contextRepoTargets: (contextId, caller, signal) =>
+            workspaceVcs.contextRepoTargets(contextId, caller, signal),
+          participantHistoryAttached: () => workspaceVcs.participantHistoryAttached,
           listStateFiles: async (stateHash) =>
             (await workspaceVcs.contentProjection.listStateFiles(stateHash)).map((file) => ({
               path: file.path,

@@ -325,6 +325,35 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       workspaceId: deps.workspaceId,
       contextId,
     });
+
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    await vcs.attachParticipantHistory({
+      canonical,
+      replayedWorkingHeads: new Map(),
+      dispatch: { dispatch: vi.fn(async (_owner, method) => {
+        if (method === "readHistoryMain") return { head: "initial", eventId: "genesis" };
+        if (method === "listHistoryAppliedPublications") return [];
+        throw new Error(`Unexpected canonical dispatch ${method}`);
+      }) },
+    });
+    const actorA = createVerifiedCaller("shell:alice", "shell");
+    const actorB = createVerifiedCaller("shell:bob", "shell");
+    const scope = vi.spyOn(vcs, "openParticipantScope").mockImplementation(async (input) => ({
+      dispatch: { dispatch }, canonical, contextId,
+      caller: input.caller,
+      owner: input.caller === actorA ? owners[0]! : owners[1]!,
+      workingHead: input.caller === actorA && aliceEdited ? "edited" : "initial",
+    }));
+    const [a] = await vcs.contextRepoTargets(contextId, actorA);
+    const [b] = await vcs.contextRepoTargets(contextId, actorB);
+    expect(a!.stateHash).not.toBe(b!.stateHash);
+    expect(await blobstoreService.readFileAtTree(blobsDir, a!.stateHash, "note.txt")).toMatchObject({ contentHash: privateEdit });
+    expect(await blobstoreService.readFileAtTree(blobsDir, b!.stateHash, "note.txt")).toMatchObject({ contentHash: original });
+    const before = dispatch.mock.calls.length;
+    expect(await vcs.contextRepoTargets(contextId, actorA)).toEqual([a]);
+    expect(dispatch.mock.calls).toHaveLength(before);
+    expect(scope).toHaveBeenCalledWith({ caller: actorA, contextId, ownerContextId: contextId });
+    await expect(vcs.contextRepoTargets(contextId)).rejects.toThrow("verified caller");
   });
 
   it("resolves current semantic content without a checkout and reuses only exact immutable heads", async () => {

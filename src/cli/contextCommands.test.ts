@@ -32,7 +32,8 @@ describe("context snapshot mirror", () => {
     let pages = 0;
     const client = mockClient({
       "mirror.objects": ([arg]) => {
-        const { cursor } = arg as { cursor?: string };
+        const { contextId, cursor } = arg as { contextId: string; cursor?: string };
+        expect(contextId).toBe("context:test");
         if (!cursor) {
           pages++;
           return {
@@ -61,7 +62,7 @@ describe("context snapshot mirror", () => {
       },
     });
 
-    const written = await writeState(client, "state-x", path.join(dir, "packages/x"));
+    const written = await writeState(client, "state-x", path.join(dir, "packages/x"), "context:test");
     expect(written).toBe(2);
     expect(pages).toBe(2); // paged via the `next` cursor
     expect(fs.readFileSync(path.join(dir, "packages/x/src/a.ts"), "utf8")).toBe("A\n");

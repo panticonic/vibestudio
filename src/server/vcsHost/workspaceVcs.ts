@@ -46,6 +46,7 @@ import {
 import {
   contextMaterializationCommand,
   ContextMaterializationCommandSchema,
+  type ContextMaterializationCommand,
   type WorkspaceMaterializationBlob,
   type WorkspaceMaterializationRepository,
 } from "@vibestudio/shared/vcs/workspaceProjection";
@@ -2173,7 +2174,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private async contextContentCommand(
     contextId: string
-  ): Promise<import("@vibestudio/shared/vcs/workspaceProjection").ContextMaterializationCommand> {
+  ): Promise<ContextMaterializationCommand> {
     await this.whenSemanticReady();
     return this.gad().contextMaterializationCommand({ contextId, materializedState: null });
   }
@@ -2195,13 +2196,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private async readFencedContextContent(contextId: string) {
     const head = this.contextHeads.get(contextId);
     if (head === null) throw new Error(`Semantic context ${contextId} was deleted`);
-    if (head === undefined) {
-      const snapshot = await this.readExactContextContent(contextId);
-      this.rememberContextContent(snapshot);
-      return snapshot;
-    }
-    const headKey = canonicalJson(head);
-    const cached = this.contextContentSnapshots.get(headKey);
+    const cached = head ? await this.cachedContextContent(canonicalJson(head)) : undefined;
+    if (cached) return cached;
+    const snapshot = await this.readExactContextContent(contextId);
+    this.rememberContextContent(snapshot);
+    return snapshot;
+  }
+
+  private async cachedContextContent(key: string) {
+    const cached = this.contextContentSnapshots.get(key);
     if (
       cached &&
       (
@@ -2213,24 +2216,28 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       ).every(Boolean)
     )
       return cached;
-    const snapshot = await this.readExactContextContent(contextId);
-    this.rememberContextContent(snapshot);
-    return snapshot;
+    return undefined;
   }
 
   private rememberContextContent(snapshot: {
     semanticState: VcsStateNodeRef;
     repositories: Array<{ repoPath: string; stateHash: string }>;
-  }): void {
+  }, key = canonicalJson(snapshot.semanticState)): void {
     if (this.contextContentSnapshots.size >= 128) {
       this.contextContentSnapshots.delete(this.contextContentSnapshots.keys().next().value!);
     }
-    this.contextContentSnapshots.set(canonicalJson(snapshot.semanticState), snapshot);
+    this.contextContentSnapshots.set(key, snapshot);
   }
 
   private async readExactContextContent(contextId: string) {
     const command = await this.contextContentCommand(contextId);
     this.publishContextHead(contextId, command.targetState);
+    return this.realizeContextContent(command);
+  }
+
+  private async realizeContextContent(
+    command: Pick<ContextMaterializationCommand, "targetState" | "repositories" | "blobs">
+  ) {
     const roots = await this.materializer.planContentRoots(command.repositories);
     const realized = await Promise.allSettled(
       roots.map(async (root) => {
@@ -2261,12 +2268,32 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     };
   }
 
+  private async participantContextContent(contextId: string, caller: VerifiedCaller, signal?: AbortSignal) {
+    const scope = await this.openParticipantScope({
+      caller, contextId, ownerContextId: contextId, ...(signal ? { signal } : {}),
+    });
+    if (!scope) throw new Error("Participant workspace history is unavailable");
+    const key = (head: string) => canonicalJson(["participant", head]);
+    const cached = await this.cachedContextContent(key(scope.workingHead));
+    if (cached) return cached;
+    const projection = await readWorkspaceParticipantProjection(scope);
+    const snapshot = await this.realizeContextContent({
+      targetState: projection.state, repositories: projection.repositories, blobs: [],
+    });
+    this.rememberContextContent(snapshot, key(projection.head));
+    return snapshot;
+  }
+
   async contextRepoTargets(
-    contextId: string
+    contextId: string, caller?: VerifiedCaller, signal?: AbortSignal
   ): Promise<Array<{ repoPath: string; stateHash: string }>> {
-    return (await this.exactContextContent(contextId)).repositories.map((repository) => ({
-      ...repository,
-    }));
+    if (this.participantHistoryAttached) {
+      if (!caller) throw new Error("A verified caller is required to mirror a participant's working copy");
+      const snapshot = await this.participantContextContent(contextId, caller, signal);
+      return snapshot.repositories.map((repository) => ({ ...repository }));
+    }
+    const snapshot = await this.exactContextContent(contextId);
+    return snapshot.repositories.map((repository) => ({ ...repository }));
   }
 
   async materializeContextRepos(contextId: string, _scopes: string[] | "all"): Promise<void> {

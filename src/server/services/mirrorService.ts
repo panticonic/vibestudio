@@ -14,12 +14,15 @@
 import type { ServiceDefinition } from "@vibestudio/shared/serviceDefinition";
 import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import { defineServiceHandler } from "@vibestudio/shared/serviceHandlers";
-import type { ServiceContext } from "@vibestudio/shared/serviceDispatcher";
+import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { mirrorMethods, MIRROR_POLICY } from "@vibestudio/service-schemas/mirror";
 
 export interface MirrorServiceDeps {
   /** Per-repo content-addressed targets for a context (no disk projection). */
-  contextRepoTargets(contextId: string): Promise<Array<{ repoPath: string; stateHash: string }>>;
+  contextRepoTargets(
+    contextId: string, caller: VerifiedCaller, signal?: AbortSignal
+  ): Promise<Array<{ repoPath: string; stateHash: string }>>;
+  participantHistoryAttached?(): boolean;
   /** The CAS file list for a state (mirrors the tree in first if needed). */
   listStateFiles(
     stateHash: string
@@ -46,15 +49,23 @@ export function createMirrorService(deps: MirrorServiceDeps): ServiceDefinition 
     return binding.contextId;
   }
 
-  async function authorizeObjects(ctx: ServiceContext, stateHash: string): Promise<void> {
-    if (ctx.caller.runtime.kind !== "agent") return;
-    const binding = ctx.caller.agentBinding;
-    if (!binding) {
+  async function authorizeObjects(ctx: ServiceContext, input: { stateHash: string; contextId?: string | undefined }): Promise<void> {
+    const agent = ctx.caller.runtime.kind === "agent";
+    if (!agent && !deps.participantHistoryAttached?.()) return;
+    const binding = agent ? ctx.caller.agentBinding : null;
+    if (agent && !binding) {
       throw new Error("mirror: agent caller has no entity binding");
     }
-    const targets = await deps.contextRepoTargets(binding.contextId);
-    if (!targets.some((target) => target.stateHash === stateHash)) {
-      throw new Error("mirror.objects stateHash is not reachable from this agent context");
+    const requestedContext = input.contextId ?? binding?.contextId;
+    if (!requestedContext) {
+      throw new Error("mirror.objects requires the context of the participant's working copy");
+    }
+    const contextId = contextIdForTargets(ctx, requestedContext);
+    const targets = await deps.contextRepoTargets(contextId, ctx.caller, ctx.signal);
+    if (!targets.some((target) => target.stateHash === input.stateHash)) {
+      throw new Error(agent
+        ? "mirror.objects stateHash is not reachable from this agent context"
+        : "mirror.objects stateHash is not reachable from this participant context");
     }
   }
 
@@ -67,10 +78,10 @@ export function createMirrorService(deps: MirrorServiceDeps): ServiceDefinition 
     handler: defineServiceHandler("mirror", mirrorMethods, {
       targets: async (ctx, [{ contextId }]) => {
         const scopedContextId = contextIdForTargets(ctx, contextId);
-        return deps.contextRepoTargets(scopedContextId);
+        return deps.contextRepoTargets(scopedContextId, ctx.caller, ctx.signal);
       },
       objects: async (ctx, [input]) => {
-        await authorizeObjects(ctx, input.stateHash);
+        await authorizeObjects(ctx, input);
         let files = await deps.listStateFiles(input.stateHash);
         files.sort((a, b) => compareUtf16CodeUnits(a.path, b.path));
         if (input.paths && input.paths.length > 0) {

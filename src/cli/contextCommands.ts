@@ -27,20 +27,19 @@ export async function writeState(
   client: RpcClient,
   stateHash: string,
   destRepoDir: string,
-  onWrite?: (absPath: string) => void
+  contextId?: string
 ): Promise<number> {
   let cursor: string | undefined;
   let written = 0;
   do {
     const page = await client.mainCall("mirror.objects", [
-      { stateHash, ...(cursor ? { cursor } : {}) },
+      { stateHash, ...(contextId ? { contextId } : {}), ...(cursor ? { cursor } : {}) },
     ]);
     for (const file of page.files) {
       const abs = path.join(destRepoDir, file.path);
       await fsp.mkdir(path.dirname(abs), { recursive: true });
       const mode = file.mode === 33261 ? 0o755 : 0o644;
       await fsp.writeFile(abs, Buffer.from(file.content, "base64"), { mode });
-      onWrite?.(abs);
       written += 1;
     }
     cursor = page.next;
@@ -77,7 +76,7 @@ async function mirror(inv: ParsedInvocation): Promise<number> {
     const targets = await client.mainCall("mirror.targets", [{ contextId }]);
     let total = 0;
     for (const target of targets) {
-      total += await writeState(client, target.stateHash, path.join(dir, target.repoPath));
+      total += await writeState(client, target.stateHash, path.join(dir, target.repoPath), contextId);
     }
     await writeContextBinding(client, dir, contextId);
 
