@@ -9,6 +9,21 @@ const program = "skills/vibestudio-workflows/runWorkflow.nl";
 
 const domains = [
   {
+    domain: "channelAgent",
+    template: "base",
+    source: "skills/channel-agent-membership-fixtures/worlds.ts",
+    exported: "channelMembershipWorlds",
+    operation: "manageChannelAgent",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
+    domain: "localReviewer",
+    template: "base",
+    source: "skills/channel-agent-membership-fixtures/localReviewerWorlds.ts",
+    exported: "localReviewerWorlds",
+    identify: (world) => [world.id, world.sourceGroups],
+  },
+  {
     domain: "automation",
     template: "base",
     source: "skills/automation-workflow-fixtures/worlds.ts",
@@ -66,6 +81,14 @@ const domains = [
     source: "skills/system-investigation-suite/worlds.ts",
     exported: "systemInvestigationWorlds",
     operation: "investigateSystem",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
+    domain: "localModel",
+    template: "system",
+    source: "skills/local-model-task-fixtures/worlds.ts",
+    exported: "localModelTaskWorlds",
+    operation: "prepareLocalModel",
     identify: (world) => [world.id, [world.sourceGroup]],
   },
   {
