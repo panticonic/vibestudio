@@ -1,8 +1,16 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
+import type { VcsEditInput } from "@vibestudio/service-schemas/vcs";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { expect, it, vi } from "vitest";
 import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
-import { openWorkspaceParticipantContext } from "./workspaceHistoryHost.js";
+import { getBytes, putBytes } from "../services/blobstoreService.js";
+import {
+  editWorkspaceParticipant,
+  openWorkspaceParticipantContext,
+} from "./workspaceHistoryHost.js";
 
 const canonical = {
   source: "workers/workspace-source",
@@ -69,4 +77,91 @@ it("withholds a grant when replay reports a different allocation", async () => {
     })
   ).rejects.toThrow("different participant owner");
   expect(dispatch).toHaveBeenCalledTimes(1);
+});
+
+it("stores prepared participant content before applying the edit and returns a committed retry", async () => {
+  const blobsDir = await mkdtemp(join(tmpdir(), "workspace-history-content-"));
+  try {
+    const owner = { ...canonical, objectKey: "work-alice" };
+    const before = Buffer.from("original");
+    const after = Buffer.from("edited");
+    const { digest: originalHash } = await putBytes(blobsDir, before);
+    const contentHash = sha256HexSyncText(after.toString("utf8"));
+    const cause = { parent: null };
+    const edit: VcsEditInput = {
+      commandId: "edit-command",
+      contextId: "edit-context",
+      expectedWorkingHead: { kind: "event", eventId: "initial-event" },
+      changes: [
+        {
+          kind: "text-edit",
+          repositoryId: "repo",
+          fileId: "file",
+          edits: [{ start: 0, end: before.length, text: after.toString("utf8") }],
+        },
+      ],
+    };
+    const workingHead = { kind: "application" as const, applicationId: "application" };
+    const result = {
+      commandId: edit.commandId,
+      contextId: edit.contextId,
+      applicationId: workingHead.applicationId,
+      workUnitId: "work-unit",
+      changeCount: 1,
+      changeIds: ["change"],
+      incorporatedChangeCount: 0,
+      incorporatedChangeIds: [],
+      decisionIds: [],
+    };
+    const command = { commandId: edit.commandId, method: "edit", requestDigest: "digest", cause };
+    const application = { contextId: edit.contextId };
+    let committed = false;
+    const dispatch = vi.fn(
+      async (ref: WorkspaceSourceProviderRef, method: string, input: unknown) => {
+        expect(ref).toEqual(owner);
+        if (method === "planHistoryEdit") {
+          if (committed)
+            return { kind: "committed", head: "applied", result: { ...result, workingHead } };
+          const request = input as { receipt: unknown };
+          if (request.receipt === null)
+            return { kind: "read-content", contentHashes: [originalHash] };
+          expect(request.receipt).toEqual({
+            files: [{ contentHash: originalHash, base64: before.toString("base64") }],
+          });
+          return {
+            kind: "planned",
+            command,
+            application,
+            result,
+            blobs: [{ contentHash, base64: after.toString("base64") }],
+          };
+        }
+        expect(method).toBe("applyHistoryApplication");
+        expect(input).toEqual({ head: "working", command, plan: application });
+        expect(await getBytes(blobsDir, contentHash)).toEqual(after);
+        committed = true;
+        return { head: "applied", value: workingHead };
+      }
+    );
+    const execute = () =>
+      editWorkspaceParticipant({
+        dispatch: { dispatch },
+        owner,
+        head: "working",
+        edit,
+        cause,
+        blobsDir,
+      });
+    const output = { head: "applied", result: { ...result, workingHead } };
+    await expect(execute()).resolves.toEqual(output);
+    await expect(execute()).resolves.toEqual(output);
+    expect(dispatch.mock.calls.map(([, method]) => method)).toEqual([
+      "planHistoryEdit",
+      "planHistoryEdit",
+      "applyHistoryApplication",
+      "planHistoryEdit",
+    ]);
+  } finally {
+    await rm(blobsDir, { recursive: true, force: true });
+  }
 });

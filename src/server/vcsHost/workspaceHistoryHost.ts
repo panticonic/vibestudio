@@ -1,9 +1,20 @@
-import { sha256HexSyncText } from "@vibestudio/content-addressing";
+import { createHash } from "node:crypto";
+import { compareUtf16CodeUnits, sha256HexSyncText } from "@vibestudio/content-addressing";
+import {
+  vcsStateNodeRefSchema,
+  vcsWorkingMutationResultSchema,
+  type VcsEditInput,
+  type VcsTrajectorySenderRef,
+  type VcsWorkingMutationResult,
+} from "@vibestudio/service-schemas/vcs";
+import { GadJsonRecordSchema } from "@vibestudio/service-schemas/workspaceSource";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { z } from "zod";
 import type { DODispatch } from "../doDispatch.js";
+import { getBytes, putBytes } from "../services/blobstoreService.js";
+import { withBlobContentLock } from "../storage/blobRetentions.js";
 import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
 
 const head = z.string().min(1);
@@ -14,6 +25,145 @@ const reservationSchema = z
     origin: z.object({ ref: z.string().min(1), token: z.string().min(1) }).strict(),
   })
   .strict();
+
+const digest = z.string().regex(/^[0-9a-f]{64}$/u);
+const blob = z.object({ contentHash: digest, base64: z.string() }).strict();
+const causeSchema = z
+  .object({
+    parent: z
+      .object({
+        logId: z.string().min(1),
+        head,
+        invocationId: z.string().min(1),
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict();
+const editPlan = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("read-content"), contentHashes: z.array(digest).min(1) }).strict(),
+  z
+    .object({
+      kind: z.literal("committed"),
+      head,
+      result: vcsWorkingMutationResultSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("planned"),
+      command: z
+        .object({
+          commandId: z.string().min(1),
+          method: z.literal("edit"),
+          requestDigest: z.string().min(1),
+          cause: causeSchema,
+        })
+        .strict(),
+      application: GadJsonRecordSchema,
+      blobs: z.array(blob),
+      result: vcsWorkingMutationResultSchema.omit({ workingHead: true }),
+    })
+    .strict(),
+]);
+const appliedEdit = z.object({ head, value: vcsStateNodeRefSchema }).strict();
+
+/** Store every prepared blob before its owner can commit a reference to it. */
+export async function putPreparedWorkspaceContent(
+  blobsDir: string,
+  blobs: readonly z.infer<typeof blob>[]
+): Promise<string[]> {
+  const seen = new Set<string>();
+  const prepared = blobs.map(({ contentHash, base64 }) => {
+    if (!digest.safeParse(contentHash).success) {
+      throw new Error("semantic content preparation contains an invalid content identity");
+    }
+    if (seen.has(contentHash))
+      throw new Error(`semantic content preparation repeats ${contentHash}`);
+    seen.add(contentHash);
+    const bytes = Buffer.from(base64, "base64");
+    if (bytes.toString("base64") !== base64) {
+      throw new Error(`semantic content preparation has invalid bytes for ${contentHash}`);
+    }
+    if (createHash("sha256").update(bytes).digest("hex") !== contentHash) {
+      throw new Error(`semantic content preparation bytes do not match ${contentHash}`);
+    }
+    return bytes;
+  });
+  await Promise.all(prepared.map((bytes) => putBytes(blobsDir, bytes)));
+  return [...seen].sort(compareUtf16CodeUnits);
+}
+
+/** Execute an edit with host-owned content, after admission has fixed the participant owner. */
+export async function editWorkspaceParticipant(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  owner: WorkspaceSourceProviderRef;
+  head: string;
+  edit: VcsEditInput;
+  cause: z.infer<typeof causeSchema>;
+  triggerEvidence?: { text: string; sender: VcsTrajectorySenderRef } | null;
+  blobsDir: string;
+}): Promise<{ head: string; result: VcsWorkingMutationResult }> {
+  const { dispatch, owner, edit, cause, blobsDir } = input;
+  const requestPlan = async (receipt: { files: z.infer<typeof blob>[] } | null) =>
+    editPlan.parse(
+      await dispatch.dispatch(owner, "planHistoryEdit", {
+        head: input.head,
+        edit,
+        cause,
+        receipt,
+        ...(input.triggerEvidence === undefined ? {} : { triggerEvidence: input.triggerEvidence }),
+      })
+    );
+  const checkResult = (result: VcsWorkingMutationResult) => {
+    if (
+      result.commandId !== edit.commandId ||
+      result.contextId !== edit.contextId ||
+      result.workingHead.kind !== "application" ||
+      result.applicationId !== result.workingHead.applicationId
+    ) {
+      throw new Error("Workspace edit returned a different application");
+    }
+  };
+  let plan = await requestPlan(null);
+  if (plan.kind === "read-content") {
+    const files = await Promise.all(
+      plan.contentHashes.map(async (contentHash) => {
+        const bytes = await getBytes(blobsDir, contentHash);
+        if (!bytes) throw new Error(`semantic content blob ${contentHash} is missing`);
+        return { contentHash, base64: bytes.toString("base64") };
+      })
+    );
+    plan = await requestPlan({ files });
+  }
+  if (plan.kind === "read-content") throw new Error("Workspace edit repeated its content request");
+  if (plan.kind === "committed") {
+    checkResult(plan.result);
+    return { head: plan.head, result: plan.result };
+  }
+  if (
+    plan.command.commandId !== edit.commandId ||
+    canonicalJson(plan.command.cause) !== canonicalJson(cause) ||
+    plan.result.commandId !== edit.commandId ||
+    plan.result.contextId !== edit.contextId
+  ) {
+    throw new Error("Workspace edit plan belongs to a different command");
+  }
+  const prepared = plan;
+  const applied = await withBlobContentLock(blobsDir, async () => {
+    await putPreparedWorkspaceContent(blobsDir, prepared.blobs);
+    return appliedEdit.parse(
+      await dispatch.dispatch(owner, "applyHistoryApplication", {
+        head: input.head,
+        command: prepared.command,
+        plan: prepared.application,
+      })
+    );
+  });
+  const result = { ...prepared.result, workingHead: applied.value };
+  checkResult(result);
+  return { head: applied.head, result };
+}
 
 function workspaceParticipant(caller: VerifiedCaller): string {
   const invocation = caller.nativeInvocation;

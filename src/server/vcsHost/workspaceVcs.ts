@@ -46,7 +46,6 @@ import {
   getBytes,
   hasTreeObject,
   materializeTree,
-  putBytes,
   readFileAtTree,
   readTreeDirectory,
   resolveTreePath,
@@ -93,6 +92,7 @@ import {
   type GadJsonRecord,
 } from "@vibestudio/service-schemas/workspaceSource";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
+import { putPreparedWorkspaceContent } from "./workspaceHistoryHost.js";
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
 import { retainedBlobDigests, withBlobContentLock } from "../storage/blobRetentions.js";
 
@@ -1033,29 +1033,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     owner: WorkspaceSemanticPort,
     request: WorkspaceSourceHostContentRequest
   ): Promise<SemanticDispatchResult> {
-    const seen = new Set<string>();
-    const prepared = request.blobs.map(({ contentHash, base64 }) => {
-      if (!/^[0-9a-f]{64}$/u.test(contentHash)) {
-        throw new Error("semantic content preparation contains an invalid content identity");
-      }
-      if (seen.has(contentHash))
-        throw new Error(`semantic content preparation repeats ${contentHash}`);
-      seen.add(contentHash);
-      const bytes = Buffer.from(base64, "base64");
-      if (bytes.toString("base64") !== base64) {
-        throw new Error(`semantic content preparation has invalid bytes for ${contentHash}`);
-      }
-      if (crypto.createHash("sha256").update(bytes).digest("hex") !== contentHash) {
-        throw new Error(`semantic content preparation bytes do not match ${contentHash}`);
-      }
-      return { contentHash, bytes };
-    });
     // Validate the full request before writing, then await every store before
     // allowing the source to commit references. The GC lease spans the ack.
-    await Promise.all(prepared.map(({ bytes }) => putBytes(this.deps.blobsDir, bytes)));
-    const contentHashes = prepared
-      .map(({ contentHash }) => contentHash)
-      .sort(compareUtf16CodeUnits);
+    const contentHashes = await putPreparedWorkspaceContent(this.deps.blobsDir, request.blobs);
     return owner.semanticContentAck({ acknowledgement: { request, contentHashes } });
   }
 
