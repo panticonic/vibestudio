@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import {
   createVerifiedCaller,
   ServiceDispatcher,
@@ -19,7 +20,7 @@ import type {
   WorkspaceSemanticOutput,
   WorkspaceVcs,
 } from "../vcsHost/workspaceVcs.js";
-import { createVcsService } from "./vcsService.js";
+import { createVcsService, type VcsServiceDeps } from "./vcsService.js";
 import { gadWireMethods } from "@vibestudio/service-schemas/workspaceSource";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 
@@ -82,6 +83,7 @@ function service(options?: {
     input: { contextId: string; sourceDeltaId: string }
   ) => Promise<void>;
   onEpochTransitionPublished?: () => void;
+  participantWorkspace?: VcsServiceDeps["participantWorkspace"];
 }) {
   const semanticCall = vi.fn<WorkspaceVcs["semanticCausalCall"]>(
     async <M extends WorkspaceSemanticMethod>(
@@ -120,6 +122,7 @@ function service(options?: {
     return (options?.result ?? { contextId: "context:own" }) as WorkspaceSemanticOutput<"vcsPush">;
   });
   const definition = createVcsService({
+    participantWorkspace: options?.participantWorkspace,
     workspaceVcs: {
       semanticCausalCall: semanticCall,
       semanticPublishCall,
@@ -158,6 +161,113 @@ function service(options?: {
 }
 
 describe("canonical vcsService", () => {
+  it("uses the admitted participant copy for exact reads and protected writes", async () => {
+    const caller = createVerifiedCaller("worker:reader", "worker", null, null, {
+      userId: "user:owner",
+      handle: "owner",
+    });
+    const ctx = { ...workerContext(), caller };
+    const canonical = {
+      source: "workers/workspace-source",
+      className: "GadHistoryDO",
+      objectKey: "canonical",
+    };
+    const identity = JSON.stringify(["user", "user:owner", caller.runtime.id]);
+    const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(identity)}` };
+    const dispatch = vi.fn().mockResolvedValue(true);
+    const scope = {
+      dispatch: { dispatch },
+      canonical,
+      owner,
+      caller,
+      contextId: "context:own",
+      workingHead: "native-head",
+    };
+    const saved = {
+      contextId: scope.contextId,
+      event: EVENT,
+      committedApplicationIds: [],
+      integrationSourceEventIds: [],
+    };
+    const published = {
+      contextId: scope.contextId,
+      eventId: EVENT.eventId,
+      mainEventId: EVENT.eventId,
+      effectId: "effect:push",
+      appliedAt: 1,
+    };
+    const workspace = {
+      participantHistoryAttached: true,
+      openParticipantScope: vi.fn().mockResolvedValue(scope),
+      readParticipantMain: vi.fn().mockResolvedValue(EVENT),
+      editParticipantContext: vi.fn(),
+      transferParticipantContext: vi.fn(),
+      saveParticipantContext: vi.fn().mockResolvedValue(saved),
+      discardParticipantContext: vi.fn(),
+      publishParticipantContext: vi.fn().mockResolvedValue(published),
+      readParticipantFiles: vi.fn().mockResolvedValue([null]),
+    };
+    const { definition, semanticCall, semanticPublishCall } = service({
+      context: scope.contextId,
+      participantWorkspace: workspace,
+    });
+    await expect(
+      definition.handler(ctx, "status", [{ contextId: "context:foreign" }])
+    ).rejects.toMatchObject({ code: "EACCES" });
+    await expect(definition.handler(ctx, "mainState", [])).resolves.toEqual(EVENT);
+    expect(workspace.openParticipantScope).not.toHaveBeenCalled();
+
+    const file = { repositoryId: "repo:one", file: { kind: "path", path: "hello.txt" } };
+    await expect(
+      definition.handler(ctx, "readFile", [{ state: EVENT, ...file }])
+    ).resolves.toBeNull();
+    expect(workspace.openParticipantScope).toHaveBeenCalledWith({
+      caller,
+      contextId: scope.contextId,
+      ownerContextId: scope.contextId,
+    });
+    expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryReferenceVisibility", {
+      contextIds: [scope.contextId],
+      references: [EVENT],
+    });
+    expect(workspace.readParticipantFiles).toHaveBeenCalledWith({
+      ...scope,
+      read: { state: EVENT, files: [file] },
+    });
+    dispatch.mockResolvedValueOnce(false);
+    await expect(
+      definition.handler(ctx, "readFile", [{ state: EVENT, ...file }])
+    ).rejects.toMatchObject({ code: "EINVAL" });
+    expect(workspace.readParticipantFiles).toHaveBeenCalledOnce();
+
+    const commit = {
+      contextId: scope.contextId,
+      commandId: "command:commit",
+      expectedWorkingHead: EVENT,
+    };
+    await expect(definition.handler(ctx, "commit", [commit])).resolves.toEqual(saved);
+    expect(workspace.saveParticipantContext).toHaveBeenCalledWith({
+      ...scope,
+      head: scope.workingHead,
+      cause: { parent: null },
+      commit,
+    });
+    const push = {
+      contextId: scope.contextId,
+      commandId: "command:push",
+      expectedCommittedEventId: EVENT.eventId,
+      expectedMainEventId: "event:main",
+    };
+    await expect(definition.handler(ctx, "push", [push])).resolves.toEqual(published);
+    expect(workspace.publishParticipantContext).toHaveBeenCalledWith({
+      ...scope,
+      push,
+      gateContext: { kind: "caller", caller },
+    });
+    expect(semanticCall).not.toHaveBeenCalled();
+    expect(semanticPublishCall).not.toHaveBeenCalled();
+  });
+
   it("keeps installation provenance restricted to reviewed source consumers", async () => {
     const { definition, semanticPublishCall } = service({ context: "context:own" });
     await expect(

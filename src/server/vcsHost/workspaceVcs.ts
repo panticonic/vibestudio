@@ -105,7 +105,6 @@ import {
   GadJsonRecordSchema,
   SemanticContextResultSchema,
   GadJsonValueSchema,
-  semanticFileHostReadSchema,
   type GadJsonRecord,
 } from "@vibestudio/service-schemas/workspaceSource";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
@@ -119,6 +118,7 @@ import {
   openWorkspaceParticipantContext,
   putPreparedWorkspaceContent,
   readWorkspaceCanonicalMain,
+  readWorkspaceParticipantFileDescriptors,
   readWorkspaceParticipantProjection,
   readWorkspaceParticipantStatus,
   readWorkspacePublicationApproval,
@@ -665,6 +665,36 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
   }
 
+  get participantHistoryAttached(): boolean {
+    return this.participantHistorySource !== null;
+  }
+
+  async readParticipantMain() {
+    const source = this.participantHistorySource;
+    if (!source) throw new Error("Participant workspace history is unavailable");
+    const main = await readWorkspaceCanonicalMain(source);
+    return { kind: "event" as const, eventId: main.eventId };
+  }
+
+  async openParticipantScope(input: {
+    caller: VerifiedCaller;
+    contextId: string;
+    ownerContextId: string;
+    signal?: AbortSignal;
+  }) {
+    const source = this.participantHistorySource;
+    if (!source) return null;
+    const replayedWorkingHead = source.replayedWorkingHeads?.get(input.contextId);
+    const reservation = await openWorkspaceParticipantContext({
+      ...source, ...input,
+      ...(replayedWorkingHead === undefined ? {} : { replayedWorkingHead }),
+    });
+    return {
+      dispatch: source.dispatch, canonical: source.canonical, ...reservation,
+      caller: input.caller, contextId: input.contextId,
+    };
+  }
+
   /**
    * Resolve the workspace source provider's provenance for one durable channel
    * envelope. This is a source-provider read, not a semantic VCS command: routing
@@ -981,23 +1011,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     contextId: string;
     read: VcsReadFilesInput;
   }): Promise<VcsReadFileResult[]> {
-    requireWorkspaceParticipantOwner(input);
-    const { dispatch, owner, contextId, read } = input;
-    const files = semanticFileHostReadSchema.nullable().array().max(500).parse(
-      await dispatch.dispatch(owner, "readHistoryFiles", { contextId, read })
-    );
-    if (files.length !== read.files.length) {
-      throw new Error("Workspace history returned a different number of file results");
-    }
-    const state = canonicalJson(read.state);
-    for (const [index, selector] of read.files.entries()) {
-      const file = files[index];
-      if (file === null) continue;
-      if (!file || canonicalJson(file.state) !== state || file.repositoryId !== selector.repositoryId ||
-          (selector.file.kind === "id" ? file.fileId !== selector.file.fileId : file.path !== selector.file.path)) {
-        throw new Error("Workspace history returned a different file selection");
-      }
-    }
+    const files = await readWorkspaceParticipantFileDescriptors(input);
     const result = await this.executeHostRead({ kind: "read-semantic-blobs", files });
     return vcsMethods.readFiles.returns.parse(result);
   }
@@ -1087,19 +1101,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     isTracked: FsVcsBridge["isTracked"];
     signal?: AbortSignal;
   }): Promise<{ bridge: FsVcsBridge; sourceRoot: string } | null> {
-    const source = this.participantHistorySource;
-    if (!source) return null;
     const { caller, contextId, isTracked } = input;
-    const replayedWorkingHead = source.replayedWorkingHeads?.get(contextId);
-    const { owner } = await openWorkspaceParticipantContext({
-      ...source,
+    const scope = await this.openParticipantScope({
       caller,
       contextId,
       ownerContextId: contextId,
       ...(input.signal ? { signal: input.signal } : {}),
-      ...(replayedWorkingHead === undefined ? {} : { replayedWorkingHead }),
     });
-    const scope = { ...source, owner, caller, contextId };
+    if (!scope) return null;
+    const { owner, dispatch } = scope;
     const catalog = workspaceParticipantCatalog(scope);
     const { disk, materializer } = this.participantProjection(owner);
     const assertContext = (requested: string) => {
@@ -1107,7 +1117,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     };
     const workingHead = async () => {
       const receipt = GadJsonRecordSchema.parse(
-        await source.dispatch.dispatch(owner, "readHistoryHeads", { contextId }),
+        await dispatch.dispatch(owner, "readHistoryHeads", { contextId }),
       );
       if (typeof receipt["workingHead"] !== "string" || !receipt["workingHead"])
         throw new Error("Participant context has no working revision");

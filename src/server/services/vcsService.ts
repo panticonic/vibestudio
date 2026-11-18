@@ -36,6 +36,12 @@ import {
   type VcsMethodName,
 } from "@vibestudio/service-schemas/vcs";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
+import {
+  readWorkspaceParticipantFileDescriptors,
+  readWorkspaceParticipantStatus,
+  workspaceParticipantCatalog,
+  workspaceParticipantReferencesReachable,
+} from "../vcsHost/workspaceHistoryHost.js";
 import { isTrustedDeviceCaller } from "./clientTrust.js";
 import { requireReviewedSourceConsumer } from "./workspaceTemplateSourceService.js";
 
@@ -46,6 +52,18 @@ export interface VcsServiceDeps {
     | "semanticPublishCall"
     | "semanticEpochTransitionPublishCall"
     | "referencesReachable"
+  >;
+  participantWorkspace?: Pick<
+    WorkspaceVcs,
+    | "participantHistoryAttached"
+    | "readParticipantMain"
+    | "openParticipantScope"
+    | "editParticipantContext"
+    | "transferParticipantContext"
+    | "saveParticipantContext"
+    | "discardParticipantContext"
+    | "publishParticipantContext"
+    | "readParticipantFiles"
   >;
   entityCache?: Pick<EntityCache, "resolveContext" | "resolveActive">;
   hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
@@ -277,6 +295,124 @@ async function reachableContextAuthorities(
 }
 
 export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
+  const participantWorkspace = () => {
+    const workspace = deps.participantWorkspace;
+    return workspace?.participantHistoryAttached ? workspace : undefined;
+  };
+
+  const participantScope = async (
+    workspace: NonNullable<VcsServiceDeps["participantWorkspace"]>,
+    ctx: ServiceContext,
+    explicitContextId: string | null,
+    caller = ctx.caller
+  ) => {
+    const ownerContextId =
+      callerContextId(ctx, deps) ?? (privileged(ctx, deps) ? explicitContextId : null);
+    const contextId = explicitContextId ?? ownerContextId;
+    if (!ownerContextId || !contextId)
+      return unauthorizedBinding("The caller has no admitted workspace participant context");
+    const scope = await workspace.openParticipantScope({
+      caller,
+      contextId,
+      ownerContextId,
+      ...(ctx.signal ? { signal: ctx.signal } : {}),
+    });
+    if (!scope) throw new Error("Participant workspace history is unavailable");
+    return scope;
+  };
+
+  const invokeParticipant = async (
+    workspace: NonNullable<VcsServiceDeps["participantWorkspace"]>,
+    ctx: ServiceContext,
+    method: VcsMethodName,
+    input: unknown,
+    effectCaller: VerifiedCaller,
+    epochTransition: boolean
+  ): Promise<unknown> => {
+    if (method === "mainState") return workspace.readParticipantMain();
+    const scope = await participantScope(
+      workspace,
+      ctx,
+      vcsOperationContextId(method, input),
+      effectCaller
+    );
+    const cause = { parent: ctx.causalParent ?? null };
+    const common = { ...scope, head: scope.workingHead, cause };
+    switch (method) {
+      case "status":
+        return readWorkspaceParticipantStatus(scope);
+      case "edit":
+        return (
+          await workspace.editParticipantContext({
+            ...common,
+            edit: vcsMethods.edit.args.parse([input])[0],
+          })
+        ).result;
+      case "move":
+        return (
+          await workspace.transferParticipantContext({
+            ...common,
+            transfer: { method: "move", value: vcsMethods.move.args.parse([input])[0] },
+          })
+        ).result;
+      case "copy":
+        return (
+          await workspace.transferParticipantContext({
+            ...common,
+            transfer: { method: "copy", value: vcsMethods.copy.args.parse([input])[0] },
+          })
+        ).result;
+      case "commit":
+        return workspace.saveParticipantContext({
+          ...common,
+          commit: vcsMethods.commit.args.parse([input])[0],
+        });
+      case "discard":
+        return workspace.discardParticipantContext({
+          ...common,
+          discard: vcsMethods.discard.args.parse([input])[0],
+        });
+      case "push":
+        if (epochTransition)
+          throw new Error("Participant publication requires an ordinary workspace revision");
+        return workspace.publishParticipantContext({
+          ...scope,
+          push: vcsMethods.push.args.parse([input])[0],
+          gateContext: {
+            kind: "caller",
+            caller: effectCaller,
+            ...(ctx.signal ? { signal: ctx.signal } : {}),
+          },
+        });
+      case "readFiles":
+        return workspace.readParticipantFiles({
+          ...scope,
+          read: vcsMethods.readFiles.args.parse([input])[0],
+        });
+      case "readFile": {
+        const { state, ...file } = vcsMethods.readFile.args.parse([input])[0];
+        return (
+          (await workspace.readParticipantFiles({ ...scope, read: { state, files: [file] } }))[0] ??
+          null
+        );
+      }
+      case "resolveRepository":
+        return workspaceParticipantCatalog(scope).resolveRepository(
+          vcsMethods.resolveRepository.args.parse([input])[0]
+        );
+      case "listDirectory":
+        return workspaceParticipantCatalog(scope).listDirectory(
+          vcsMethods.listDirectory.args.parse([input])[0]
+        );
+      case "listFiles":
+        return workspaceParticipantCatalog(scope).listFiles(
+          vcsMethods.listFiles.args.parse([input])[0]
+        );
+      default:
+        throw new Error(`The participant workspace does not yet implement vcs.${method}`);
+    }
+  };
+
   const invoke = async (
     ctx: ServiceContext,
     method: VcsMethodName,
@@ -284,6 +420,9 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     effectCaller: VerifiedCaller = ctx.caller,
     epochTransition = false
   ): Promise<unknown> => {
+    const workspace = participantWorkspace();
+    if (workspace)
+      return invokeParticipant(workspace, ctx, method, input, effectCaller, epochTransition);
     const causalParent = ctx.causalParent ?? null;
     switch (method) {
       case "edit":
@@ -499,7 +638,15 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     );
     if (guardedRoots.length > 0 && !privileged(ctx, deps)) {
       const contextIds = await reachableContextAuthorities(ctx, deps);
-      if (!(await deps.workspaceVcs.referencesReachable(contextIds, guardedRoots))) {
+      const workspace = participantWorkspace();
+      const reachable = workspace
+        ? await workspaceParticipantReferencesReachable({
+            ...(await participantScope(workspace, ctx, primaryContextId)),
+            contextIds,
+            references: guardedRoots,
+          })
+        : await deps.workspaceVcs.referencesReachable(contextIds, guardedRoots);
+      if (!reachable) {
         const reference = guardedRoots[0]!;
         const message =
           "The exact semantic reference is unavailable from the caller's reachable context graph; re-observe it and copy the complete typed reference unchanged";
@@ -595,22 +742,38 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             const admittedArgs = admittedInput === undefined ? [] : [admittedInput];
             if (!websiteAuthorityIdentity(ctx.caller))
               return preparedAuthorityState([], admittedArgs);
-            const causalParent = ctx.causalParent ?? null;
+            const workspace = participantWorkspace();
+            const scope =
+              workspace && method !== "mainState"
+                ? await participantScope(
+                    workspace,
+                    ctx,
+                    vcsOperationContextId(method as VcsMethodName, admittedInput)
+                  )
+                : null;
             const reads: SemanticReads = {
-              inspect: (inspectInput) =>
-                deps.workspaceVcs.semanticCausalCall("vcsInspect", inspectInput, causalParent),
-              compare: (compareInput) =>
-                deps.workspaceVcs.semanticCausalCall("vcsCompare", compareInput, causalParent),
-              status: (statusInput) =>
-                deps.workspaceVcs.semanticCausalCall("vcsStatus", statusInput, causalParent),
-              listDirectory: (directoryInput) =>
-                deps.workspaceVcs.semanticCausalCall(
-                  "vcsListDirectory",
-                  directoryInput,
-                  causalParent
-                ),
-              listFiles: (filesInput) =>
-                deps.workspaceVcs.semanticCausalCall("vcsListFiles", filesInput, causalParent),
+              inspect: async (value) =>
+                vcsMethods.inspect.returns.parse(await invoke(ctx, "inspect", value)),
+              compare: async (value) =>
+                vcsMethods.compare.returns.parse(await invoke(ctx, "compare", value)),
+              status: async (value) =>
+                vcsMethods.status.returns.parse(await invoke(ctx, "status", value)),
+              listDirectory: async (value) =>
+                vcsMethods.listDirectory.returns.parse(await invoke(ctx, "listDirectory", value)),
+              listFiles: async (value) =>
+                vcsMethods.listFiles.returns.parse(await invoke(ctx, "listFiles", value)),
+              ...(scope
+                ? {
+                    repositoryPath: workspaceParticipantCatalog(scope).repositoryPath,
+                    filePath: async (state, repositoryId, fileId) => {
+                      const files = await readWorkspaceParticipantFileDescriptors({
+                        ...scope,
+                        read: { state, files: [{ repositoryId, file: { kind: "id", fileId } }] },
+                      });
+                      return files[0]?.path ?? null;
+                    },
+                  }
+                : {}),
             };
             const selections = await vcsFileSelections(
               method as VcsMethodName,

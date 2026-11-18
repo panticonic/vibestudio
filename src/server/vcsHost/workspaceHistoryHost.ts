@@ -13,6 +13,7 @@ import {
   type VcsListDirectoryInput,
   type VcsListFilesInput,
   type VcsMergeInput,
+  type VcsReadFilesInput,
   type VcsMoveInput,
   type VcsResolveRepositoryInput,
   type VcsStateNodeRef,
@@ -20,7 +21,7 @@ import {
   type VcsTrajectorySenderRef,
   type VcsWorkingMutationResult,
 } from "@vibestudio/service-schemas/vcs";
-import { GadJsonRecordSchema } from "@vibestudio/service-schemas/workspaceSource";
+import { GadJsonRecordSchema, semanticFileHostReadSchema } from "@vibestudio/service-schemas/workspaceSource";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
@@ -178,6 +179,33 @@ export interface WorkspaceHistorySource {
   canonical: WorkspaceSourceProviderRef;
 }
 
+/** Read exact file metadata without accessing content bytes. */
+export async function readWorkspaceParticipantFileDescriptors(input: WorkspaceHistorySource & {
+  owner: WorkspaceSourceProviderRef;
+  caller: VerifiedCaller;
+  contextId: string;
+  read: VcsReadFilesInput;
+}) {
+  requireWorkspaceParticipantOwner(input);
+  const { dispatch, owner, contextId, read } = input;
+  const files = semanticFileHostReadSchema.nullable().array().max(500).parse(
+    await dispatch.dispatch(owner, "readHistoryFiles", { contextId, read })
+  );
+  if (files.length !== read.files.length) {
+    throw new Error("Workspace history returned a different number of file results");
+  }
+  const state = canonicalJson(read.state);
+  for (const [index, selector] of read.files.entries()) {
+    const file = files[index];
+    if (file === null) continue;
+    if (!file || canonicalJson(file.state) !== state || file.repositoryId !== selector.repositoryId ||
+        (selector.file.kind === "id" ? file.fileId !== selector.file.fileId : file.path !== selector.file.path)) {
+      throw new Error("Workspace history returned a different file selection");
+    }
+  }
+  return files;
+}
+
 /** Bind the catalog reads to the admitted copy and verify their exact revision. */
 export function workspaceParticipantCatalog(input: WorkspaceHistorySource & {
   caller: VerifiedCaller;
@@ -193,6 +221,14 @@ export function workspaceParticipantCatalog(input: WorkspaceHistorySource & {
     return result;
   };
   return {
+    async repositoryPath(state: VcsStateNodeRef, repositoryId: string) {
+      const result = verify(vcsResolveRepositoryResultSchema.parse(
+        await dispatch.dispatch(owner, "readHistoryRepositoryLocation", { contextId, state, repositoryId })
+      ), state);
+      if (result && result.repositoryId !== repositoryId)
+        throw new Error("Workspace catalog returned a different repository identity");
+      return result?.repoPath ?? null;
+    },
     async resolveRepository(repository: VcsResolveRepositoryInput) {
       const result = verify(vcsResolveRepositoryResultSchema.parse(
         await dispatch.dispatch(owner, "resolveHistoryRepository", { contextId, repository })

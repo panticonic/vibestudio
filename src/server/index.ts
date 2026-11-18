@@ -3417,6 +3417,7 @@ async function main() {
       getServiceDefinition() {
         return createVcsService({
           workspaceVcs,
+          participantWorkspace: workspaceVcs,
           entityCache,
           hasClientCapability,
           // Cross-context READ authz (throw-not-prompt): back it with WS-3's
