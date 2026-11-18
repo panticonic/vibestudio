@@ -16,6 +16,14 @@ The common program automatically mounts installed workflow packages under `runWo
 workflow modules from different installed templates. The module lexically owns its types and internal calls. Each
 authoritative service is both scoped to the module's exact stages and supplied by the caller for that case.
 
+`pnpm natlang:tasks --summary` also reports `scopedRunnable`, the number of cases with a runner adapter.
+The trusted harness can call `runScopedNatlangWorkflow(checkouts, caseId, natlang)` from
+`scripts/run-scoped-natlang-workflow.mjs` with the `load`, `calls`, and `trace` APIs for an isolated Natlang run.
+Each attempt creates fresh scoped bindings. The runner checks the authored request against the recorded root and
+child inputs, and checks the reported results against the exact outputs before calling the template's independent
+verifier. The verifier can also check the fixture's observed operations. Managed cases continue through the
+system-test runner documented below.
+
 The shared program test can check each scoped request at its mounted Natlang argument boundary using a scripted
 executor. Run it from the Vibestudio host checkout with the development templates configured.
 

@@ -4,6 +4,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.cjs";
 import { loadLiveTeacherCases, workflowSourceGroups } from "./export-live-workflow-teacher.mjs";
+import { hasScopedWorkflowAdapter } from "./scoped-workflow-adapters.mjs";
 
 const program = "skills/vibestudio-workflows/runWorkflow.nl";
 
@@ -224,7 +225,7 @@ const domains = [
   },
 ];
 
-export async function loadWorkflowBank(checkouts) {
+async function loadAuthoredWorkflowBank(checkouts) {
   const live = await loadLiveTeacherCases(checkouts);
   const fixtureGroups = await Promise.all(
     domains.map(async (domain) => {
@@ -243,7 +244,7 @@ export async function loadWorkflowBank(checkouts) {
         ) {
           throw new Error(`Invalid authored task identity or goal for ${id} from ${domain.source}`);
         }
-        return {
+        const scenario = {
           id,
           family: domain.domain,
           execution: "scoped-fixture",
@@ -260,22 +261,40 @@ export async function loadWorkflowBank(checkouts) {
               }
             : input,
         };
+        return { scenario, world };
       });
     })
   );
   const cases = [
     ...[...live].map(([id, workflow]) => ({
-      id,
-      family: workflow.family,
-      execution: "managed-workspace",
-      sourceGroups: workflowSourceGroups(workflow),
-      program,
+      scenario: {
+        id,
+        family: workflow.family,
+        execution: "managed-workspace",
+        sourceGroups: workflowSourceGroups(workflow),
+        program,
+      },
     })),
     ...fixtureGroups.flat(),
   ];
-  if (new Set(cases.map(({ id }) => id)).size !== cases.length)
+  if (new Set(cases.map(({ scenario }) => scenario.id)).size !== cases.length)
     throw new Error("Duplicate task ID in the Vibestudio workflow bank");
   return cases;
+}
+
+export async function loadWorkflowBank(checkouts) {
+  return (await loadAuthoredWorkflowBank(checkouts)).map(({ scenario }) => scenario);
+}
+
+export async function loadAuthoredScopedWorkflow(checkouts, id) {
+  const found = (await loadAuthoredWorkflowBank(checkouts)).find(
+    ({ scenario }) => scenario.id === id
+  );
+  if (!found) throw new Error(`Unknown Vibestudio workflow case ${id}`);
+  if (found.scenario.execution !== "scoped-fixture")
+    throw new Error(`Case ${id} runs through the managed workspace runner`);
+  // Each attempt owns its fixture state. No run may mutate the imported corpus.
+  return structuredClone(found);
 }
 
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) {
@@ -299,7 +318,10 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
       const key = `${execution}/${family}`;
       counts[key] = (counts[key] ?? 0) + 1;
     }
-    console.log(JSON.stringify({ total: cases.length, counts }, null, 2));
+    const scopedRunnable = cases.filter(
+      (item) => item.execution === "scoped-fixture" && hasScopedWorkflowAdapter(item.family)
+    ).length;
+    console.log(JSON.stringify({ total: cases.length, scopedRunnable, counts }, null, 2));
   } else {
     for (const scenario of cases) console.log(JSON.stringify(scenario));
   }
