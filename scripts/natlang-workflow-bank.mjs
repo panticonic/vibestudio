@@ -10,6 +10,14 @@ const program = "skills/vibestudio-workflows/runWorkflow.nl";
 
 const domains = [
   {
+    domain: "visualize",
+    template: "base",
+    source: "skills/visualization-fixtures/worlds.ts",
+    exported: "presentationWorlds",
+    operation: "preparePresentation",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
     domain: "templateCandidate",
     template: "base",
     source: "skills/template-candidate-fixtures/worlds.ts",

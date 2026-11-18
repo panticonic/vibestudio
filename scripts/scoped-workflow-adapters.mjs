@@ -38,6 +38,16 @@ const simple = {
 };
 
 const bound = {
+  async visualize(world, load) {
+    const [{ verifyPresentation }, { renderComponent }] = await Promise.all([
+      load("skills/visualization-fixtures/verify.ts"),
+      load("skills/visualize/preparePresentation/prepareSection/render.ts"),
+    ]);
+    return {
+      bindings: {},
+      verify: (value) => verifyPresentation(world, value, renderComponent),
+    };
+  },
   async templateCandidate(world, load) {
     const { createTemplateCandidateFixture } = await load(
       "skills/template-candidate-fixtures/fixture.ts"

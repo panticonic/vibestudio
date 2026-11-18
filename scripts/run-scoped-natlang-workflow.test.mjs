@@ -172,6 +172,30 @@ test("every advertised adapter resolves its template-owned verifier and opens a 
   }
 });
 
+test("presentation evidence rejects a well-formed component with an invented number", async () => {
+  const { world } = await loadAuthoredScopedWorkflow(checkouts, "visualize-library-capacity");
+  const load = (source) => loadScopedWorkflowModule(checkouts.base, source);
+  const { verify } = await prepareScopedWorkflowAdapter("visualize", world, load);
+  const { renderComponent } = await load(
+    "skills/visualize/preparePresentation/prepareSection/render.ts"
+  );
+  const report = {
+    omitted: world.omitted,
+    views: world.expected.map(({ id, outcome }) => ({
+      id,
+      status: "ready",
+      rendered: renderComponent(outcome.spec),
+    })),
+  };
+  assert.equal(verify(report), true);
+  const changed = structuredClone(report);
+  const candidate = changed.views[1].rendered;
+  candidate.props.data[0].visits = 63;
+  changed.views[1].rendered = renderComponent(candidate);
+  assert.equal(verify(changed), false);
+  assert.equal(verify({ ...report, views: [...report.views].reverse() }), false);
+});
+
 const newlyIntegrated = new Set(["google", "publication", "localModel"]);
 test("the newly integrated families require the expected binding evidence for every authored case", async () => {
   const scenarios = (await loadWorkflowBank(checkouts)).filter((item) =>
