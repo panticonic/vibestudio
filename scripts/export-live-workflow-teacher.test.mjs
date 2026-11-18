@@ -33,6 +33,17 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["unit-repair-worlds", "workerRepairWorlds", [{ id: "pagination" }]],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
+      [
+        "panel-repair-world",
+        "panelRepairWorlds",
+        [
+          {
+            id: "panel-draft-discard-clears",
+            sourceGroup: "discard-draft-reset",
+            failedChecks: ["discardRestoresSaved", "discardedDraftStaysDiscarded"],
+          },
+        ],
+      ],
     ].map(([file, name, worlds]) =>
       writeFile(
         path.join(casesDir, `${file}.ts`),
@@ -54,6 +65,13 @@ test("authored template worlds flow into the collector without losing original s
     "vibestudio:content-project:inventory-v1",
   ]);
   assert.equal(cases.get("content-project-inventory").requiresReview, true);
+  const discard = cases.get("panel-draft-discard-clears");
+  assert.equal(discard.root, "repairPanel");
+  assert.deepEqual(discard.failedChecks, ["discardRestoresSaved", "discardedDraftStaysDiscarded"]);
+  assert.deepEqual(groups("panel-draft-discard-clears"), [
+    "vibestudio:panel-repair:discard-draft-reset",
+    "vibestudio:panel-repair:draft-navigation",
+  ]);
   assert.deepEqual(groups("owned-operations-release-blocked"), [
     "vibestudio:owned-operations:release:blocked",
   ]);
@@ -137,6 +155,18 @@ async function fixture(t) {
   await save();
   return { options, diagnostics, entry, save };
 }
+
+test("managed panel export requires the assigned baseline failure and the paired browser readback", async (t) => {
+  const { options, diagnostics, save } = await fixture(t);
+  diagnostics.panelDraftBaseline.checks.navigationDoesNotSave = false;
+  diagnostics.panelDraftVerification.checks.navigationDoesNotSave = true;
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow(options), /reproduce the assigned failures/u);
+  diagnostics.panelDraftBaseline.checks.navigationDoesNotSave = true;
+  delete diagnostics.panelDraftVerification.checks.navigationDoesNotSave;
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow(options), /every paired check afterward/u);
+});
 
 test("live panel export binds real test world, independent checks and exact EvalDO scope", async (t) => {
   const { options } = await fixture(t);

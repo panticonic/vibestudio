@@ -13,6 +13,7 @@ const panelWorkflow = {
   family: "workspace-panel-repair",
   namespace: "vibestudio:panel-repair",
   group: "draft-navigation",
+  failedChecks: ["preservesUnsavedDraft"],
   validator: { template: "system-testing", path: "skills/system-testing/panel-repair-oracle.ts" },
   program: "skills/workspace-dev/panel-repair/repairPanel.nl",
   root: "repairPanel",
@@ -104,18 +105,29 @@ export async function loadLiveTeacherCases(checkouts) {
     { ownedOperationsWorlds, ownedOperationsComposedWorlds },
     { workerRepairWorlds },
     { localMessagingWorlds },
+    { panelRepairWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
       "owned-operations-worlds.ts",
       "unit-repair-worlds.ts",
       "local-messaging/worlds.ts",
+      "panel-repair-world.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, sourceGroup, failedChecks } of panelRepairWorlds) {
+    cases.set(id, {
+      ...panelWorkflow,
+      failedChecks,
+      sourceGroups: [...new Set([sourceGroup, panelWorkflow.group])].map(
+        (group) => `${panelWorkflow.namespace}:${group}`
+      ),
+    });
+  }
   for (const { id, sourceGroup } of contentProjectWorlds) {
     const scenario = `content-project-${id}`;
     if (cases.has(scenario)) continue;
@@ -174,18 +186,27 @@ async function readJson(file) {
   return JSON.parse(file.endsWith(".gz") ? gunzipSync(bytes) : bytes);
 }
 
-function panelEvidence(execution, exercise) {
+function panelEvidence(execution, exercise, _name, { failedChecks }) {
   const diagnostics = execution.diagnostics;
   const baseline = diagnostics.panelDraftBaseline;
   const browser = diagnostics.panelDraftVerification;
   const workspace = diagnostics.workspaceRepoFixture;
   const revisions = diagnostics.panelRepairWorkspace;
+  const baselineChecks = baseline?.checks ?? {};
+  const candidateChecks = browser?.checks ?? {};
+  const before = Object.keys(baselineChecks);
+  const after = Object.keys(candidateChecks);
+  const failures = before.filter((check) => baselineChecks[check] === false);
   requireEvidence(
-    baseline?.checks?.preservesUnsavedDraft === false &&
-      browser?.passed === true &&
-      Object.values(browser.checks ?? {}).length > 0 &&
-      Object.values(browser.checks).every((value) => value === true),
-    "The retained browser evidence must show the draft loss before repair and all checks passing after"
+    browser?.passed === true &&
+      failedChecks.length > 0 &&
+      failures.length === failedChecks.length &&
+      failures.every((check) => failedChecks.includes(check)) &&
+      before.length === after.length &&
+      before.every(
+        (check) => typeof baselineChecks[check] === "boolean" && candidateChecks[check] === true
+      ),
+    "The retained browser evidence must reproduce the assigned failures before repair and pass every paired check afterward"
   );
   requireEvidence(
     workspace?.kind === "draft-repair-panel" &&
@@ -533,7 +554,7 @@ export async function exportLiveTeacherWorkflow({
     source.validator_sha256 === hash(validatorBytes),
     "Validator source differs from the run pin"
   );
-  const observed = workflow.evidence(execution, exercise, test.name);
+  const observed = workflow.evidence(execution, exercise, test.name, workflow);
   const world = { instance: source.instance, run_id: source.run_id, ...observed.world };
   if (workflow.requiresReview) {
     requireEvidence(
