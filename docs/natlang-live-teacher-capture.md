@@ -93,6 +93,9 @@ source revision. The exporter checks source fingerprints and the original execut
 Provenance history cases read cause, cohort, and rejection walks from a disposable semantic
 repository. The fixture records an actual counteraction. Reports cite compact refs tied to
 the exact file, scope, and immutable workspace head.
+Proposal reviews also run the existing Natlang constraint judgment over the collected walks.
+Repeated views of the same reason count once, and a recorded counteraction can reject an
+equivalent change. The exporter verifies the decision and the cited live evidence.
 The release-readiness dossier joins two skill trees in one call. It requires observed recovery after a real worker restart
 and verified cleanup before the project skill can prepare and commit the evidence dossier.
 The authored inventory comes from the configured system-testing template, which supplies

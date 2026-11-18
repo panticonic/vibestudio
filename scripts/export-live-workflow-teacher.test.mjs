@@ -524,7 +524,13 @@ test("provenance history export rejects an aliased file or walk scope", async (t
       walk: check.walk,
       scope: check.scope,
       subject: { kind: "file", fileId: "file-current", repositoryId: "repo", state: workingHead },
-      entries: [{ label: "Authored work", intent: { text: "Related policy change" } }],
+      entries: [
+        {
+          node: { kind: "work-unit", workUnitId: "same-work" },
+          label: "Authored work",
+          intent: { text: "Related policy change" },
+        },
+      ],
       omitted: [],
       nextCursor: null,
     },
@@ -533,7 +539,14 @@ test("provenance history export rejects an aliased file or walk scope", async (t
       exists: true,
       limited: false,
       records: [
-        { ref: `history:${index + 1}:1`, label: "Authored work", intent: "Related policy change" },
+        {
+          ref: `history:${index + 1}:1`,
+          label: "Authored work",
+          intent: "Related policy change",
+          source: "source:1",
+          group: null,
+          detail: null,
+        },
       ],
     },
   }));
@@ -547,7 +560,7 @@ test("provenance history export rejects an aliased file or walk scope", async (t
       workingHead,
       readbacks,
       passed: true,
-      checks: { unchanged: true, exactReads: true, history: true, report: true },
+      checks: { unchanged: true, exactReads: true, history: true, report: true, constraint: true },
     },
   };
   await save();
@@ -564,6 +577,111 @@ test("provenance history export rejects an aliased file or walk scope", async (t
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-different-scope` }),
     /Provenance history must cite the exact repository, walk scope, and recorded coordinates/u
+  );
+});
+
+test("live provenance proposal export requires the judgment calls and the exact reversal", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "provenance-history-live-retry-repeat-300";
+  const world = cases.get(entry.test.name);
+  const head = { kind: "event", eventId: "owned-head" };
+  const run = diagnostics.natlangTeacher;
+  const [root, sample] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  const call = (name, parent) => ({
+    ...structuredClone(sample),
+    callId: name,
+    summary: { ...sample.summary, call_id: name },
+    record: { ...sample.record, outcome: "done", definition: { name }, parent_call_id: parent },
+  });
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  run.calls = [
+    root,
+    call("reviewProvenance", "root"),
+    call("reviewLiveHistory", "reviewProvenance"),
+    call("assessProposedProperty", "reviewLiveHistory"),
+    call("weighConstraint", "assessProposedProperty"),
+    call("compareProperty", "weighConstraint"),
+    call("judgeConstraint", "weighConstraint"),
+  ];
+  const readbacks = world.checks.map((check, index) => {
+    const row = {
+      node: { kind: "work-unit", workUnitId: "node-" + index },
+      label: "Reverted wait",
+      detail: "Attempted 300 seconds",
+      group: index === 0 ? "counteractions" : "history",
+      intent: { tier: "stated", text: "staging cut the link" },
+    };
+    return {
+      fileId: "file",
+      walk: {
+        walk: check.walk,
+        scope: null,
+        subject: { kind: "file", fileId: "file", repositoryId: "repo", state: head },
+        entries: [row],
+        omitted: [],
+        nextCursor: null,
+      },
+      receipt: {
+        check,
+        exists: true,
+        limited: false,
+        records: [
+          {
+            ref: `history:${index + 1}:1`,
+            source: `source:${index + 1}`,
+            label: row.label,
+            detail: row.detail,
+            group: row.group,
+            intent: row.intent.text,
+          },
+        ],
+      },
+    };
+  });
+  const constraint = { status: "rejected", evidence: ["history:1:1"] };
+  run.report = {
+    kind: "live-history",
+    findings: readbacks.map(({ receipt }) => ({
+      check: receipt.check,
+      status: "recorded",
+      evidence: [receipt.records[0].ref],
+    })),
+    constraint: structuredClone(constraint),
+  };
+  diagnostics.managedProvenanceHistory = {
+    contextId: "ctx",
+    verification: {
+      contextId: "ctx",
+      caseId: world.caseId,
+      repoPath: "projects/owned",
+      repositoryId: "repo",
+      workingHead: head,
+      property: world.constraint.proposedProperty,
+      constraint,
+      readbacks,
+      passed: true,
+      checks: { unchanged: true, exactReads: true, history: true, report: true, constraint: true },
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  run.report.constraint.evidence = ["history:2:1"];
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-counteraction` }),
+    /Provenance history must cite/u
+  );
+  run.report.constraint.evidence = ["history:1:1"];
+  run.calls.at(-1).record.parent_call_id = "reviewLiveHistory";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-judgment` }),
+    /Provenance history must cite/u
   );
 });
 

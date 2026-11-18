@@ -339,11 +339,12 @@ export async function loadLiveTeacherCases(checkouts) {
     })
   );
   const cases = new Map(originalCases);
-  for (const { id, checks } of managedProvenanceHistoryWorlds) {
+  for (const { id, checks, constraint } of managedProvenanceHistoryWorlds) {
     cases.set(`provenance-history-live-${id}`, {
       ...provenanceHistoryWorkflow,
       caseId: id,
       checks,
+      constraint,
     });
   }
   for (const { id, goal, expected, files, execution } of managedRuntimeProgramWorlds) {
@@ -906,6 +907,51 @@ function provenanceHistoryEvidence(execution, exercise, _scenario, workflow) {
   const verification = fixture?.verification;
   const report = exercise.report;
   const readbacks = verification?.readbacks;
+  const assigned = workflow.constraint;
+  function matchesConstraint() {
+    if (!assigned) return report.constraint === undefined && verification.constraint === undefined;
+    const child = (parent, name) =>
+      exercise.calls.find(
+        ({ record }) =>
+          parent &&
+          record?.parent_call_id === parent &&
+          record.definition?.name === name &&
+          record.outcome === "done"
+      )?.callId;
+    const skill = child(exercise.rootCallIds[0], "reviewProvenance");
+    const history = child(skill, "reviewLiveHistory");
+    const proposal = child(history, "assessProposedProperty");
+    const judgment = child(proposal, "weighConstraint");
+    if (!judgment || !child(judgment, "compareProperty") || !child(judgment, "judgeConstraint"))
+      return false;
+    if (
+      verification.property !== assigned.proposedProperty ||
+      report.constraint?.status !== assigned.status ||
+      verification.constraint?.status !== assigned.status
+    )
+      return false;
+    const records = readbacks.flatMap(({ receipt }) => receipt.records);
+    const match = records.find((record) => {
+      if (assigned.evidence === "retry-counteraction")
+        return (
+          record.group === "counteractions" &&
+          /300 seconds/iu.test(record.detail ?? "") &&
+          /staging cut the link/iu.test(record.intent ?? "")
+        );
+      if (assigned.evidence === "policy")
+        return /Cap the retry backoff at 30 seconds/iu.test(record.intent ?? "");
+      if (assigned.evidence === "cache")
+        return /Cache the upstream feed for 900 seconds/iu.test(record.intent ?? "");
+      return false;
+    });
+    if (assigned.evidence !== "none" && !match) return false;
+    const ids = JSON.stringify(match ? [match.ref] : []);
+    return (
+      JSON.stringify(report.constraint.evidence) === ids &&
+      JSON.stringify(verification.constraint.evidence) === ids
+    );
+  }
+  const sources = new Map();
   const sameCheck = (left, right) =>
     left?.path === right.path && left.walk === right.walk && left.scope === right.scope;
   requireEvidence(
@@ -918,6 +964,7 @@ function provenanceHistoryEvidence(execution, exercise, _scenario, workflow) {
       verification.checks?.exactReads === true &&
       verification.checks?.history === true &&
       verification.checks?.report === true &&
+      verification.checks?.constraint === true &&
       typeof verification.repoPath === "string" &&
       verification.repoPath.startsWith("projects/") &&
       typeof verification.repositoryId === "string" &&
@@ -967,15 +1014,21 @@ function provenanceHistoryEvidence(execution, exercise, _scenario, workflow) {
           entry.status === status &&
           walk.entries.every((row, item) => {
             const recorded = receipt.records[item];
+            const key = JSON.stringify(row.node);
+            if (!sources.has(key)) sources.set(key, `source:${sources.size + 1}`);
             return (
               recorded?.ref === `history:${index + 1}:${item + 1}` &&
               recorded.label === row.label &&
+              recorded.source === sources.get(key) &&
+              recorded.group === (row.group ?? null) &&
+              recorded.detail === (row.detail ?? null) &&
               recorded.intent === (row.intent?.text ?? null)
             );
           }) &&
           JSON.stringify(entry.evidence) === JSON.stringify(receipt.records.map((row) => row.ref))
         );
-      }),
+      }) &&
+      matchesConstraint(),
     "Provenance history must cite the exact repository, walk scope, and recorded coordinates"
   );
   return {
