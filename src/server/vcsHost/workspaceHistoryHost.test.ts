@@ -9,6 +9,7 @@ import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
 import { getBytes, putBytes } from "../services/blobstoreService.js";
 import {
   editWorkspaceParticipant,
+  mergeWorkspaceParticipantMain,
   openWorkspaceParticipantContext,
   readWorkspaceParticipantStatus,
   workspaceParticipantReferencesReachable,
@@ -135,6 +136,50 @@ it("checks typed references through the admitted participant contexts", async ()
     references: [{ kind: "state-node", value: { kind: "event" } }],
   })).resolves.toBe(false);
   expect(dispatch).toHaveBeenCalledTimes(1);
+});
+
+it("stores composed content before the participant records the merge", async () => {
+  const blobsDir = await mkdtemp(join(tmpdir(), "workspace-history-merge-"));
+  try {
+    const caller = native(1, "merge-call");
+    const participant = JSON.stringify(["task", {
+      authoritySessionId: "sealed", runtimeId: "agent",
+    }, { conversationId: 3, taskId: 1 }]);
+    const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participant)}` };
+    const mine = Buffer.from("my text");
+    const { digest } = await putBytes(blobsDir, mine);
+    const composed = Buffer.from("combined content");
+    const composedDigest = sha256HexSyncText(composed.toString());
+    const application = { kind: "application", applicationId: "merge-application" };
+    const dispatch = vi.fn(async (_owner: WorkspaceSourceProviderRef, method: string, raw: unknown) => {
+      const request = raw as { content?: { observation: { files: unknown[] }; contentHashes?: string[] } };
+      expect(method).toBe("mergeHistoryMain");
+      if (!request.content) return { kind: "read-content", contentHashes: [digest] };
+      expect(request.content.observation.files).toEqual([{ contentHash: digest, text: mine.toString() }]);
+      if (!request.content.contentHashes) {
+        return {
+          kind: "prepare-content",
+          blobs: [{ contentHash: composedDigest, base64: composed.toString("base64") }],
+        };
+      }
+      expect(request.content.contentHashes).toEqual([composedDigest]);
+      expect(await getBytes(blobsDir, composedDigest)).toEqual(composed);
+      return { kind: "committed", head: "merge-head", value: application };
+    });
+    await expect(mergeWorkspaceParticipantMain({
+      dispatch: { dispatch }, caller, owner, canonical, blobsDir,
+      selection: { head: "mine", base: "base", main: "shared" },
+      cause: { parent: null },
+      merge: {
+        commandId: "merge", contextId: "context",
+        expectedWorkingHead: { kind: "event", eventId: "mine-event" },
+        source: { kind: "event", eventId: "shared-event" },
+      },
+    })).resolves.toEqual({ head: "merge-head", value: application });
+    expect(dispatch).toHaveBeenCalledTimes(3);
+  } finally {
+    await rm(blobsDir, { recursive: true, force: true });
+  }
 });
 
 it("stores prepared participant content before applying the edit and returns a committed retry", async () => {

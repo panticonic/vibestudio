@@ -6,6 +6,7 @@ import {
   vcsStatusResultSchema,
   vcsWorkingMutationResultSchema,
   type VcsEditInput,
+  type VcsMergeInput,
   type VcsStatusResult,
   type VcsTrajectorySenderRef,
   type VcsWorkingMutationResult,
@@ -74,6 +75,11 @@ const editPlan = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 const appliedEdit = z.object({ head, value: vcsStateNodeRefSchema }).strict();
+const mergeReply = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("read-content"), contentHashes: z.array(digest).min(1) }).strict(),
+  z.object({ kind: z.literal("prepare-content"), blobs: z.array(blob).min(1) }).strict(),
+  appliedEdit.extend({ kind: z.literal("committed") }).strict(),
+]);
 const workspaceProjection = z
   .object({
     head,
@@ -279,6 +285,52 @@ export async function editWorkspaceParticipant(input: {
   const result = { ...prepared.result, workingHead: applied.value };
   checkResult(result);
   return { head: applied.head, result };
+}
+
+/** Observe and store merge content before the participant can reference it in its native history. */
+export async function mergeWorkspaceParticipantMain(input: WorkspaceHistorySource & {
+  caller: VerifiedCaller;
+  owner: WorkspaceSourceProviderRef;
+  selection: { head: string; base: string; main: string };
+  merge: VcsMergeInput;
+  cause: z.infer<typeof causeSchema>;
+  triggerEvidence?: { text: string; sender: VcsTrajectorySenderRef } | null;
+  blobsDir: string;
+}) {
+  requireWorkspaceParticipantOwner(input);
+  const { dispatch, owner, merge, cause, blobsDir, triggerEvidence } = input;
+  const send = async (content?: {
+    observation: { files: Array<{ contentHash: string; text: string }> };
+    contentHashes?: string[];
+  }) => mergeReply.parse(await dispatch.dispatch(owner, "mergeHistoryMain", {
+    ...input.selection,
+    merge,
+    cause,
+    ...(triggerEvidence === undefined ? {} : { triggerEvidence }),
+    ...(content ? { content } : {}),
+  }));
+  let reply = await send();
+  if (reply.kind === "read-content") {
+    const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+    const files = await Promise.all(reply.contentHashes.map(async (contentHash) => {
+      const bytes = await getBytes(blobsDir, contentHash);
+      if (!bytes) throw new Error(`semantic merge blob ${contentHash} is missing`);
+      return { contentHash, text: decoder.decode(bytes) };
+    }));
+    const observation = { files };
+    reply = await send({ observation });
+    if (reply.kind === "prepare-content") {
+      const { blobs } = reply;
+      reply = await withBlobContentLock(blobsDir, async () => {
+        const contentHashes = await putPreparedWorkspaceContent(blobsDir, blobs);
+        return send({ observation, contentHashes });
+      });
+    }
+  }
+  if (reply.kind !== "committed" || reply.value.kind !== "application") {
+    throw new Error("Workspace merge did not return the committed application");
+  }
+  return { head: reply.head, value: reply.value };
 }
 
 function workspaceParticipant(caller: VerifiedCaller): string {

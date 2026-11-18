@@ -110,6 +110,7 @@ import {
   bindWorkspaceParticipantPublication,
   collectWorkspaceHistoryContentRoots,
   listAppliedWorkspacePublications,
+  mergeWorkspaceParticipantMain,
   observeAppliedWorkspacePublication,
   putPreparedWorkspaceContent,
   readWorkspaceCanonicalMain,
@@ -1005,6 +1006,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       throw new Error("Workspace discard returned a different saved context");
     }
     await this.materializeParticipantContext({ dispatch, owner, contextId: discard.contextId });
+    return result;
+  }
+
+  async mergeParticipantMain(input: Omit<Parameters<typeof mergeWorkspaceParticipantMain>[0], "blobsDir">) {
+    const result = await mergeWorkspaceParticipantMain({ ...input, blobsDir: this.deps.blobsDir });
+    await this.materializeParticipantContext({
+      dispatch: input.dispatch,
+      owner: input.owner,
+      contextId: input.merge.contextId,
+    });
     return result;
   }
 
