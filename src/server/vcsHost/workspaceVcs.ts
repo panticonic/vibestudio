@@ -104,6 +104,8 @@ import {
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
 import {
   bindWorkspaceParticipantPublication,
+  listAppliedWorkspacePublications,
+  observeAppliedWorkspacePublication,
   putPreparedWorkspaceContent,
   readWorkspaceCanonicalMain,
   readWorkspaceParticipantProjection,
@@ -878,6 +880,60 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
   }
 
+  /** Project already-authorized native advances after interrupted host publication. */
+  async recoverParticipantPublications(input: {
+    dispatch: Pick<DODispatch, "dispatch">;
+    canonical: WorkspaceSourceProviderRef;
+  }): Promise<number> {
+    return this.mutateProtectedMain(async () => {
+      const pending = await listAppliedWorkspacePublications(input);
+      let recovered = 0;
+      for (let cursor = pending.length - 1; cursor >= 0; cursor--) {
+        const { approval } = pending[cursor]!;
+        const prior = this.deps.refs.readAppliedPublication(approval.publicationId);
+        if (!prior) continue;
+        if (prior.previousEventId !== approval.previousEventId ||
+            prior.publishedEventId !== approval.proposedEventId) {
+          throw new Error("Host publication and canonical receipt name different events");
+        }
+        await this.replayPublicationObservers(prior);
+        await observeAppliedWorkspacePublication({ ...input, approval }).acknowledge();
+        this.deps.refs.acknowledgePublication(approval.publicationId);
+        pending.splice(cursor, 1);
+        recovered += 1;
+      }
+      while (pending.length > 0) {
+        const currentEventId = this.deps.refs.readMainSemanticState()?.eventId;
+        const next = pending.filter(({ approval }) => approval.previousEventId === currentEventId);
+        if (next.length !== 1) {
+          throw new Error("Approved publications cannot be reconciled with the current host history");
+        }
+        const record = next[0]!;
+        const { approval } = record;
+        const revision = await readWorkspacePublishedRevision({
+          ...input,
+          eventId: approval.proposedEventId,
+        });
+        if (revision.head !== approval.publication.proposedHead ||
+            revision.state.kind !== "event" || revision.state.eventId !== approval.proposedEventId) {
+          throw new Error("Canonical history cannot prove the approved publication");
+        }
+        await this.publishMain({
+          effectId: approval.publicationId,
+          payload: GadJsonRecordSchema.parse({
+            previousEventId: approval.previousEventId,
+            publishedEventId: approval.proposedEventId,
+            repositories: revision.repositories,
+          }),
+        }, undefined, observeAppliedWorkspacePublication({ ...input, approval }));
+        this.deps.refs.acknowledgePublication(approval.publicationId);
+        pending.splice(pending.indexOf(record), 1);
+        recovered += 1;
+      }
+      return recovered;
+    });
+  }
+
   /**
    * One workspace-wide protected-main authoring lease. Callers that must read
    * main, author a candidate, journal its publication intent, and publish may
@@ -1222,9 +1278,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private async publishMain(
     effect: Pick<SemanticEffect, "effectId" | "payload">,
-    gateContext: PublicationGateContext,
+    gateContext: PublicationGateContext | undefined,
     canonical?: CanonicalRefPublication
   ): Promise<GadJsonRecord> {
+    if (!gateContext && !canonical) throw new Error("Protected publication has no authority source");
     const profileStartedAt = performance.now();
     const repositories = effect.payload["repositories"];
     if (!Array.isArray(repositories)) {
@@ -1284,7 +1341,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         publishedEventId: String(effect.payload["publishedEventId"] ?? ""),
         hostRefsBasisDigest,
       },
-      gateContext: { ...gateContext, getCandidateWorkspaceState },
+      ...(gateContext ? { gateContext: { ...gateContext, getCandidateWorkspaceState } } : {}),
     };
     if (canonical) await this.deps.refs.updateMains(update, canonical);
     else await this.deps.refs.updateMains(update);

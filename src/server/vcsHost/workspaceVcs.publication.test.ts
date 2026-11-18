@@ -135,6 +135,73 @@ describe("WorkspaceVcs protected publication notification", () => {
     expect(refs.readMain("packages/a")?.contentRoot).toMatch(/^state:[0-9a-f]{64}$/);
   });
 
+  it("recovers canonical publications in order without asking for approval again", async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "participant-publication-recovery-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const gate = vi.fn(async () => undefined);
+    const refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate });
+    await refs.updateMains({
+      entries: [],
+      evidence: {
+        publicationId: "initial",
+        previousEventId: "initial-parent",
+        publishedEventId: "initial-event",
+        hostRefsBasisDigest: hostRefBasisDigest([]),
+      },
+    });
+    gate.mockClear();
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test",
+      blobsDir,
+      workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, "contexts"),
+      buildSourcesRoot: path.join(root, "build-sources"),
+      refs,
+    });
+    const canonical = {
+      source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical",
+    };
+    const receipt = (previousEventId: string, proposedEventId: string) => ({
+      approval: {
+        publicationId: `publication:${proposedEventId}`,
+        participantId: `participant:${proposedEventId}`,
+        previousEventId,
+        proposedEventId,
+        publication: { previousHead: `head:${previousEventId}`, proposedHead: `head:${proposedEventId}` },
+      },
+      applied: true,
+      expiresAt: 1,
+    });
+    const first = receipt("initial-event", "first");
+    const second = receipt("first", "second");
+    const pending = new Map([second, first].map((value) => [value.approval.publicationId, value]));
+    const observed: string[] = [];
+    refs.onRefsChanged((value) => { observed.push(value.publishedEventId); });
+    const dispatch = vi.fn(async (target: typeof canonical, method: string, input?: unknown) => {
+      expect(target).toEqual(canonical);
+      if (method === "listHistoryAppliedPublications") return [...pending.values()];
+      if (method === "readHistoryPublishedRevision") {
+        const { eventId } = input as { eventId: string };
+        return { head: `head:${eventId}`, state: { kind: "event", eventId }, repositories: [] };
+      }
+      const { publicationId } = input as { publicationId: string };
+      if (method === "readHistoryPublicationApproval") return pending.get(publicationId) ?? null;
+      if (method === "acknowledgeHistoryPublication") {
+        expect(refs.readMainSemanticState()?.eventId).toBe(pending.get(publicationId)?.approval.proposedEventId);
+        pending.delete(publicationId);
+        return null;
+      }
+      throw new Error(`Publication recovery attempted ${method}`);
+    });
+    const recover = () => vcs.recoverParticipantPublications({ dispatch: { dispatch }, canonical });
+    await expect(recover()).resolves.toBe(2);
+    await expect(recover()).resolves.toBe(0);
+    expect(observed).toEqual(["first", "second"]);
+    expect(refs.readMainSemanticState()).toEqual({ kind: "event", eventId: "second" });
+    expect(gate).not.toHaveBeenCalled();
+  });
+
   async function interruptedPublication(semanticAcknowledged: boolean) {
     root = await fsp.mkdtemp(path.join(os.tmpdir(), "vcs-launch-recovery-"));
     const blobsDir = path.join(root, "blobs");

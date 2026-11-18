@@ -272,6 +272,54 @@ export async function readWorkspacePublicationApproval(input: {
   );
 }
 
+export async function listAppliedWorkspacePublications(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+}) {
+  return z
+    .array(publicationReceipt.extend({ applied: z.literal(true) }))
+    .parse(await input.dispatch.dispatch(input.canonical, "listHistoryAppliedPublications"));
+}
+
+async function readExactWorkspacePublicationApproval(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+  approval: z.infer<typeof publicationApproval>;
+}) {
+  const receipt = await readWorkspacePublicationApproval({
+    ...input,
+    publicationId: input.approval.publicationId,
+  });
+  if (receipt && canonicalJson(receipt.approval) !== canonicalJson(input.approval)) {
+    throw new Error("Workspace publication receipt names a different transition");
+  }
+  return receipt;
+}
+
+/** Startup recovery can project an already committed revision without authority to publish. */
+export function observeAppliedWorkspacePublication(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+  approval: z.infer<typeof publicationApproval>;
+}): CanonicalRefPublication {
+  const confirmed = async () =>
+    (await readExactWorkspacePublicationApproval(input))?.applied === true;
+  return {
+    approved: confirmed,
+    async authorize() {
+      throw new Error("Publication recovery cannot issue approval");
+    },
+    async publish() {
+      if (!(await confirmed())) throw new Error("Workspace publication has no applied revision");
+    },
+    async acknowledge() {
+      await input.dispatch.dispatch(input.canonical, "acknowledgeHistoryPublication", {
+        publicationId: input.approval.publicationId,
+      });
+    },
+  };
+}
+
 /** The protected gate authorizes this exact native transition before it can publish. */
 export function bindWorkspaceParticipantPublication(input: {
   dispatch: Pick<DODispatch, "dispatch">;
@@ -285,17 +333,8 @@ export function bindWorkspaceParticipantPublication(input: {
   const participantId = requireWorkspaceParticipantOwner({ canonical, owner, caller });
   const approval = publicationApproval.parse({ ...input.target, participantId });
   const publicationId = { publicationId: approval.publicationId };
-  async function readApproval() {
-    const receipt = await readWorkspacePublicationApproval({
-      dispatch,
-      canonical,
-      publicationId: approval.publicationId,
-    });
-    if (receipt && canonicalJson(receipt.approval) !== canonicalJson(approval)) {
-      throw new Error("Workspace publication receipt names a different transition");
-    }
-    return receipt;
-  }
+  const readApproval = () =>
+    readExactWorkspacePublicationApproval({ dispatch, canonical, approval });
   return {
     async approved(): Promise<boolean> {
       const receipt = await readApproval();
