@@ -41,8 +41,7 @@ it("uses the verified task to choose a copy and preserves the migrated context h
           origin: { ref: "History:canonical", token: "grant" },
         };
       }
-      if (method === "connectHistoryParticipant") return "latest-main";
-      if (method === "openHistoryContext") return (input as { head: string }).head;
+      if (method === "bindHistoryContext") return (input as { replayedHead?: string }).replayedHead ?? "latest-main";
       throw new Error(`Unexpected history call ${method}`);
     }
   );
@@ -81,6 +80,17 @@ it("withholds a grant when replay reports a different allocation", async () => {
     })
   ).rejects.toThrow("different participant owner");
   expect(dispatch).toHaveBeenCalledTimes(1);
+});
+
+it("avoids opening a new participant copy during shutdown", async () => {
+  const dispatch = vi.fn();
+  const shutdown = new AbortController();
+  shutdown.abort(new Error("Workspace stopped"));
+  await expect(openWorkspaceParticipantContext({
+    dispatch: { dispatch }, canonical, caller: native(1, "late"),
+    ownerContextId: "owner", contextId: "context", signal: shutdown.signal,
+  })).rejects.toThrow("Workspace stopped");
+  expect(dispatch).not.toHaveBeenCalled();
 });
 
 it("reads status only from the verified participant and context", async () => {

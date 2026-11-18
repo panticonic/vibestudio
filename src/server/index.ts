@@ -1833,6 +1833,7 @@ async function main() {
   // Workspace VCS is the native effect adapter for the exact manifest-declared
   // semantic authority worker.
   const { WorkspaceVcs } = await import("./vcsHost/workspaceVcs.js");
+  const startupBackgroundLifetime = new AbortController();
   const workspaceVcs = new WorkspaceVcs({
     blobsDir: layout.blobsDir,
     workspaceRoot: workspacePath,
@@ -7006,6 +7007,7 @@ async function main() {
             async bind(ctx, contextId) {
               return await workspaceVcs.bindParticipantFilesystem({
                 caller: ctx.caller, contextId, isTracked: vcsBridge.isTracked,
+                signal: startupBackgroundLifetime.signal,
               }) ?? { bridge: vcsBridge, sourceRoot: contextFolderManager.contextSourcePath(contextId) };
             },
           },
@@ -8090,7 +8092,6 @@ async function main() {
   });
   // Recovery owns persisted work; each DO invocation independently restores its
   // exact incarnation. Neither general recovery nor maintenance owns desktop readiness.
-  const startupBackgroundLifetime = new AbortController();
   const runtimeRecovery = (async () => {
     await relayServices.webhook?.internal
       .reannounceRelaySubscriptions()

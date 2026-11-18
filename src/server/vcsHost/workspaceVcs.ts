@@ -1085,6 +1085,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     caller: VerifiedCaller;
     contextId: string;
     isTracked: FsVcsBridge["isTracked"];
+    signal?: AbortSignal;
   }): Promise<{ bridge: FsVcsBridge; sourceRoot: string } | null> {
     const source = this.participantHistorySource;
     if (!source) return null;
@@ -1095,6 +1096,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       caller,
       contextId,
       ownerContextId: contextId,
+      ...(input.signal ? { signal: input.signal } : {}),
       ...(replayedWorkingHead === undefined ? {} : { replayedWorkingHead }),
     });
     const scope = { ...source, owner, caller, contextId };

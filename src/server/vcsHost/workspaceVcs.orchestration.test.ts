@@ -210,9 +210,8 @@ describe("WorkspaceVcs semantic host orchestration", () => {
           origin: { ref: "canonical", token: "grant" },
         };
       }
-      if (method === "connectHistoryParticipant") return "main";
-      if (method === "openHistoryContext") {
-        expect(raw).toEqual({ contextId, head: "replayed-working" });
+      if (method === "bindHistoryContext") {
+        expect(raw).toMatchObject({ contextId, replayedHead: "replayed-working" });
         return "replayed-working";
       }
       if (method === "readHistoryProjection") {

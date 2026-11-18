@@ -595,6 +595,7 @@ export async function openWorkspaceParticipantContext(input: {
   ownerContextId: string;
   contextId: string;
   replayedWorkingHead?: string;
+  signal?: AbortSignal;
 }): Promise<{ owner: WorkspaceSourceProviderRef; workingHead: string }> {
   const { dispatch, canonical, caller, ownerContextId, contextId } = input;
   if (!ownerContextId || !contextId)
@@ -607,6 +608,7 @@ export async function openWorkspaceParticipantContext(input: {
     className: owner.className,
     key: owner.objectKey,
   });
+  input.signal?.throwIfAborted();
   const reservation = reservationSchema.parse(
     await dispatch.dispatch(canonical, "reserveHistoryParticipant", {
       participantId,
@@ -615,16 +617,13 @@ export async function openWorkspaceParticipantContext(input: {
   );
   if (reservation.targetId !== targetId)
     throw new Error("Workspace history returned a different participant owner");
-  const current = head.parse(
-    await dispatch.dispatch(owner, "connectHistoryParticipant", {
+  input.signal?.throwIfAborted();
+  const workingHead = head.parse(
+    await dispatch.dispatch(owner, "bindHistoryContext", {
       participantId,
       origin: reservation.origin,
-    })
-  );
-  const workingHead = head.parse(
-    await dispatch.dispatch(owner, "openHistoryContext", {
       contextId,
-      head: input.replayedWorkingHead ?? current,
+      ...(input.replayedWorkingHead === undefined ? {} : { replayedHead: input.replayedWorkingHead }),
     })
   );
   return { owner, workingHead };

@@ -1693,10 +1693,20 @@ export class FsService {
         if (!srcTracked && !dstTracked) return { handled: false };
         if (srcTracked && dstTracked) {
           const snapshot = await managedWorkspaceSnapshot(bridge, contextId);
+          const sourceRepoPath = taxonomyRepoForPath(srcRel);
+          const sourceRepository = snapshot.repositories.find((entry) => entry.repoPath === sourceRepoPath);
           const prefix = `${srcRel}/`;
-          const sourcePaths = (await managedWorkspaceFiles(bridge, snapshot))
-            .map((candidate) => `${candidate.repoPath}/${candidate.path}`)
-            .filter((candidate) => candidate === srcRel || candidate.startsWith(prefix));
+          const exactSource = sourceRepository && srcRel.startsWith(`${sourceRepository.repoPath}/`)
+            ? await managedFile(
+                bridge, snapshot, sourceRepository.repositoryId,
+                srcRel.slice(sourceRepository.repoPath.length + 1),
+              )
+            : null;
+          const sourcePaths = exactSource
+            ? [srcRel]
+            : (await managedWorkspaceFiles(bridge, snapshot))
+                .map((candidate) => `${candidate.repoPath}/${candidate.path}`)
+                .filter((candidate) => candidate === srcRel || candidate.startsWith(prefix));
           if (sourcePaths.length === 0) {
             throw codedError("ENOENT", `rename: source not found: ${String(args[0])}`);
           }
@@ -1710,7 +1720,7 @@ export class FsService {
               const destinationRoute = router.route(destinationPath);
               const sourceRepository = managedRepository(snapshot, sourceRoute.repoPath);
               const destinationRepository = managedRepository(snapshot, destinationRoute.repoPath);
-              const source = await managedFile(
+              const source = (sourcePath === srcRel ? exactSource : null) ?? await managedFile(
                 bridge,
                 snapshot,
                 sourceRepository.repositoryId,

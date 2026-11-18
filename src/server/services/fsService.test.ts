@@ -1653,6 +1653,29 @@ describe("FsService", () => {
   // ─── Semantic VCS reroute ─────────────────────────────────────────────────
 
   describe("exact context projection (demand + loud assertion)", () => {
+    it("renames a tracked file by exact path without listing other repositories", async () => {
+      const { bridge, files, moveCalls } = makeCanonicalSemanticBridge(["packages/one", "packages/two"]);
+      const contextId = "ctx-rename-file";
+      files.set(`${contextId}/packages/one/source.ts`, { kind: "text", text: "private edited content" });
+      files.set(`${contextId}/packages/two/unrelated.ts`, { kind: "text", text: "unrelated" });
+      const listFiles = vi.spyOn(bridge, "listFiles");
+      const service = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+        disk: new FsDisk(bundledRipgrepPath), contextAuthority: { kind: "semantic", bridge },
+      });
+      const caller = makeWorkerCtx("do:src:class:rename-file");
+      registerContext(caller.caller.runtime.id, "do", contextId);
+      try {
+        await service.handleCall(caller, "rename", ["/packages/one/source.ts", "/packages/one/dest.ts"]);
+        expect(listFiles).toHaveBeenCalledTimes(1);
+        expect(listFiles).toHaveBeenCalledWith(expect.objectContaining({
+          repositoryId: "repository:packages/one", prefix: "source.ts",
+        }));
+        expect(moveCalls[0]?.moves).toMatchObject([{ destinationPath: "dest.ts" }]);
+      } finally {
+        await service.stop();
+      }
+    });
+
     it("reads a large managed corpus in bounded exact-state batches without disk projection", async () => {
       const repositories = Array.from({ length: 503 }, (_, i) => `skills/skill${i}`);
       const { bridge, files } = makeCanonicalSemanticBridge(repositories);
