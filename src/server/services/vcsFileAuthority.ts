@@ -5,6 +5,7 @@ import {
   type VcsStateNodeRef,
   type VcsInspectInput,
   type VcsCompareInput,
+  type VcsDiscardInput,
   type VcsStatusInput,
   type VcsSemanticNodeRef,
   type VcsListDirectoryInput,
@@ -31,6 +32,7 @@ export interface SemanticReads {
     target: VcsStateNodeRef,
     source: VcsStateNodeRef
   ): Promise<Array<Pick<WorkspaceFileAccess, "path" | "kind">>>;
+  hasDiscardReceipt?(discard: VcsDiscardInput): Promise<boolean>;
 }
 
 /** Select paths from authoritative identities at the exact admitted semantic state. */
@@ -306,6 +308,7 @@ export async function vcsFileSelections(
         }
       } else if (method === "discard") {
         const [request] = vcsMethods.discard.args.parse([input]);
+        if (await read.hasDiscardReceipt?.(request)) break;
         const status = await read.status({ contextId: request.contextId });
         target = status.committed;
         source = request.expectedWorkingHead;

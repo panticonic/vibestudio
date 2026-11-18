@@ -37,6 +37,7 @@ import {
 } from "@vibestudio/service-schemas/vcs";
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import {
+  hasWorkspaceParticipantDiscardReceipt,
   readWorkspaceParticipantFileDescriptors,
   readWorkspaceParticipantStatus,
   workspaceParticipantCatalog,
@@ -639,14 +640,26 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     if (guardedRoots.length > 0 && !privileged(ctx, deps)) {
       const contextIds = await reachableContextAuthorities(ctx, deps);
       const workspace = participantWorkspace();
-      const reachable = workspace
+      const scope = workspace ? await participantScope(workspace, ctx, primaryContextId) : null;
+      const reachable = scope
         ? await workspaceParticipantReferencesReachable({
-            ...(await participantScope(workspace, ctx, primaryContextId)),
+            ...scope,
             contextIds,
             references: guardedRoots,
           })
         : await deps.workspaceVcs.referencesReachable(contextIds, guardedRoots);
-      if (!reachable) {
+      if (
+        !reachable &&
+        !(
+          scope &&
+          method === "discard" &&
+          (await hasWorkspaceParticipantDiscardReceipt({
+            ...scope,
+            discard: vcsMethods.discard.args.parse([parsed.input])[0],
+            cause: { parent: ctx.causalParent ?? null },
+          }))
+        )
+      ) {
         const reference = guardedRoots[0]!;
         const message =
           "The exact semantic reference is unavailable from the caller's reachable context graph; re-observe it and copy the complete typed reference unchanged";
@@ -767,6 +780,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
                 ? {
                     repositoryPath: catalog.repositoryPath,
                     changedLocations: catalog.changedLocations,
+                    hasDiscardReceipt: (discard) =>
+                      hasWorkspaceParticipantDiscardReceipt({
+                        ...scope,
+                        discard,
+                        cause: { parent: ctx.causalParent ?? null },
+                      }),
                     filePath: async (state, repositoryId, fileId) => {
                       const files = await readWorkspaceParticipantFileDescriptors({
                         ...scope,

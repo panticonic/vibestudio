@@ -203,7 +203,13 @@ describe("canonical vcsService", () => {
       editParticipantContext: vi.fn(),
       transferParticipantContext: vi.fn(),
       saveParticipantContext: vi.fn().mockResolvedValue(saved),
-      discardParticipantContext: vi.fn(),
+      discardParticipantContext: vi
+        .fn()
+        .mockResolvedValue({
+          contextId: scope.contextId,
+          workingHead: EVENT,
+          discardedApplicationIds: ["old-application"],
+        }),
       publishParticipantContext: vi.fn().mockResolvedValue(published),
       readParticipantFiles: vi.fn().mockResolvedValue([null]),
     };
@@ -239,6 +245,25 @@ describe("canonical vcsService", () => {
       definition.handler(ctx, "readFile", [{ state: EVENT, ...file }])
     ).rejects.toMatchObject({ code: "EINVAL" });
     expect(workspace.readParticipantFiles).toHaveBeenCalledOnce();
+
+    const discard = {
+      contextId: scope.contextId,
+      commandId: "command:discard",
+      expectedWorkingHead: { kind: "application", applicationId: "old-application" },
+    };
+    dispatch.mockResolvedValueOnce(false).mockResolvedValueOnce(false);
+    await expect(definition.handler(ctx, "discard", [discard])).rejects.toMatchObject({
+      code: "EINVAL",
+    });
+    expect(workspace.discardParticipantContext).not.toHaveBeenCalled();
+    dispatch.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    await expect(definition.handler(ctx, "discard", [discard])).resolves.toMatchObject({
+      discardedApplicationIds: ["old-application"],
+    });
+    expect(dispatch).toHaveBeenCalledWith(owner, "hasHistoryDiscardReceipt", {
+      discard,
+      cause: { parent: null },
+    });
 
     const commit = {
       contextId: scope.contextId,

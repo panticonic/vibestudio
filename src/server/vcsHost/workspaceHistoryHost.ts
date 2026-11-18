@@ -9,6 +9,7 @@ import {
   vcsStatusResultSchema,
   vcsWorkingMutationResultSchema,
   type VcsCopyInput,
+  type VcsDiscardInput,
   type VcsEditInput,
   type VcsListDirectoryInput,
   type VcsListFilesInput,
@@ -155,6 +156,19 @@ export async function workspaceParticipantReferencesReachable(input: {
     contextIds: [...new Set(input.contextIds)],
     references,
   }));
+}
+
+/** A reset removes the discarded application from normal reference visibility. */
+export async function hasWorkspaceParticipantDiscardReceipt(input: WorkspaceHistorySource & {
+  owner: WorkspaceSourceProviderRef;
+  caller: VerifiedCaller;
+  discard: VcsDiscardInput;
+  cause: z.infer<typeof causeSchema>;
+}): Promise<boolean> {
+  requireWorkspaceParticipantOwner(input);
+  return z.boolean().parse(await input.dispatch.dispatch(
+    input.owner, "hasHistoryDiscardReceipt", { discard: input.discard, cause: input.cause },
+  ));
 }
 
 export async function readWorkspacePublishedRevision(input: {
