@@ -190,3 +190,112 @@ test("worker repair export binds the actual workerd artifact and candidate state
   assert.deepEqual(manifest.required_effect_kinds, ["workspace"]);
   assert.deepEqual(manifest.source_groups, ["vibestudio:unit-repair:worker-label-normalizer"]);
 });
+
+test("content export requires independent semantic review of exact committed bytes", async (t) => {
+  const { options, entry, diagnostics, save } = await fixture(t);
+  entry.test.name = "content-project-release-runbook";
+  const event = { kind: "event", eventId: "local-event" };
+  const head = JSON.stringify(event);
+  const request = { goal: "Deliver a runbook", documentRoles: ["rollback"], facts: [] };
+  const repoPath = "projects/release";
+  diagnostics.natlangTeacher.programPath = "skills/workspace-dev/content-project/deliverProject.nl";
+  diagnostics.natlangTeacher.report = {
+    status: "committed",
+    repoPath,
+    eventId: event.eventId,
+    head,
+  };
+  diagnostics.natlangTeacher.calls[0].record.definition.name = "deliverProject";
+  diagnostics.contentProjectWorld = {
+    kind: "content-project",
+    contextId: "ctx",
+    repoPath,
+    before: "initial",
+    after: head,
+    request,
+  };
+  const reviewInput = {
+    actual: {
+      contextId: "ctx",
+      committedEvent: event,
+      documents: [{ path: "README.md", text: "Actual committed document" }],
+    },
+    expected: request,
+    rubric: "Ground the runbook in the supplied facts",
+  };
+  diagnostics.contentProjectVerification = {
+    passed: true,
+    reasons: [],
+    evidence: [{ inspected: head }],
+    semanticReviewRequired: true,
+    semanticReviewInput: reviewInput,
+  };
+  await save();
+  await assert.rejects(() => exportLiveTeacherWorkflow(options), /reviewer must be configured/);
+  const review = async (input, teacher) => {
+    assert.deepEqual(input, reviewInput);
+    assert.notEqual(teacher, "provider:other");
+    return {
+      schema: "natlang.live-workflow-review/1",
+      model: "provider:other",
+      input,
+      exchange: { request: { messages: [] }, reply: { calls: [] } },
+      verdict: { accepted: true },
+    };
+  };
+  await assert.rejects(
+    () =>
+      exportLiveTeacherWorkflow({
+        ...options,
+        review: async (input, teacher) => ({ ...(await review(input, teacher)), model: teacher }),
+      }),
+    /did not bind/
+  );
+  await exportLiveTeacherWorkflow({ ...options, review });
+  const proof = JSON.parse(await readFile(path.join(options.out, "verification.json"), "utf8"));
+  const workspaceEvidence = JSON.parse(
+    await readFile(path.join(options.out, "workspace.json"), "utf8")
+  );
+  assert.equal(proof.checks.independentSemanticReview, true);
+  assert.deepEqual(workspaceEvidence.semanticReview.input, reviewInput);
+  assert.equal(proof.calls.length, 2);
+});
+
+test("owned operations export requires persisted readbacks and absence after teardown", async (t) => {
+  const { options, entry, diagnostics, save } = await fixture(t);
+  entry.test.name = "owned-operations-release-audit-continuation";
+  diagnostics.natlangTeacher.programPath = "skills/agents/operational-handoff/operate.nl";
+  diagnostics.natlangTeacher.report = { kind: "release-continuation" };
+  diagnostics.natlangTeacher.calls[0].record.definition.name = "operate";
+  diagnostics.ownedOperationsWorld = {
+    kind: "owned-operations",
+    contextId: "ctx",
+    caseId: "release-audit-continuation",
+    request: { kind: "release-continuation" },
+  };
+  diagnostics.ownedOperationsVerification = {
+    passed: true,
+    checks: {
+      reportedHandles: true,
+      reportedCleanup: true,
+      programRequestedCleanup: true,
+      actualNoOwnedWorkersRemain: true,
+      actualNoOwnedContextsRemain: true,
+    },
+  };
+  diagnostics.ownedOperationsCleanupErrors = [];
+  const audit = {
+    opened: [{ handle: { id: "owned-worker" } }],
+    snapshots: [{ phase: "before-cleanup", value: { revision: 2 } }],
+    remainingEntityIds: ["owned-worker"],
+    remainingContextIds: [],
+  };
+  diagnostics.ownedOperationsAudit = audit;
+  await save();
+  await assert.rejects(() => exportLiveTeacherWorkflow(options), /persistence and teardown/);
+  audit.remainingEntityIds = [];
+  await save();
+  await exportLiveTeacherWorkflow(options);
+  const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
+  assert.equal(manifest.world.case_id, "release-audit-continuation");
+});

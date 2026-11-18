@@ -24,12 +24,20 @@ pnpm natlang:teacher --case panel-draft-unmount --out /path/to/new-run
 The panel cases are `panel-draft-unmount` and `panel-draft-stale-snapshot`. The VCS cases are
 `workspace-integration-theme-locale` and `workspace-integration-theme-locale-alias`.
 The worker cases are `worker-label-repair-type-mismatch` and `worker-label-repair-missing-helper`.
+The content cases are `content-project-release-runbook` and `content-project-role-onboarding`.
+Owned operations include `owned-operations-incident-payment-and-ledger` and
+`owned-operations-release-audit-continuation`, with independent checks of actual persistence and teardown.
 The two cases in each family share a source group. Repeat `--case` to run selected cases sequentially in one managed
 workspace. Each case gets its own system-test run, owned fixture context, source receipt and output under `cases/<case>/`.
 The final status indicates whether every selected case succeeded. Successful cases remain available when a later one fails. The collector starts one isolated managed Vibestudio
 instance, checks the vendored Natlang build, pins the host and templates, and retains the full
 system-test trajectory. A new workspace can ask for access to the selected model's credential.
 The approval identifies the model gateway and provider for that workspace.
+
+Content cases also need `--review-model PROVIDER:MODEL` with a model distinct from the executor. The independent judge
+reads the actual committed document bytes against the test's original goal and facts. It uses the built Natlang Node host
+in `$NATLANG_REPO` (default `~/natlang`) and its configured provider login. The artifact retains the review separately from
+executor targets.
 
 On success, `verified/manifest.json` binds the original call tree and the independent effect checks. The verified
 manifest is the input to Natlang's [shared SFT pipeline](https://github.com/werg/natlang/blob/main/plans/neuralese/LIVE_WORKFLOW_SFT_20261118.md).

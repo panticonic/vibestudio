@@ -18,6 +18,10 @@ test("selected cases share one managed instance and keep earlier success when a 
     new URL("collect-live-workflow-teacher.mjs", import.meta.url),
     path.join(root, "scripts/collect-live-workflow-teacher.mjs")
   );
+  await copyFile(
+    new URL("review-live-workflow-teacher.mjs", import.meta.url),
+    path.join(root, "scripts/review-live-workflow-teacher.mjs")
+  );
   const sourceCommit = "a".repeat(40);
   const runId = "st_" + "1".repeat(32);
   await put(
@@ -40,7 +44,7 @@ test("selected cases share one managed instance and keep earlier success when a 
     `import { mkdir, readFile, writeFile } from 'node:fs/promises';
     import path from 'node:path';
     export const liveTeacherCases = new Map(['passing', 'failing'].map(caseId =>
-      [caseId, { family: 'fixture', group: 'group', validator: 'oracle.ts' }]
+      [caseId, { family: 'fixture', group: 'group', validator: {template:'system-testing',path:'skills/system-testing/oracle.ts'} }]
     ));
     export async function exportLiveTeacherWorkflow({ out, pins, trajectory }) {
       const source = JSON.parse(await readFile(pins, 'utf8'));

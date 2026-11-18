@@ -10,6 +10,7 @@ import {
   developmentTemplateHead,
 } from "../src/dev/developmentTemplateConfig.cjs";
 import { exportLiveTeacherWorkflow, liveTeacherCases } from "./export-live-workflow-teacher.mjs";
+import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const args = process.argv.slice(2);
 const { values } = parseArgs({
@@ -17,13 +18,21 @@ const { values } = parseArgs({
   options: {
     case: { type: "string", multiple: true },
     list: { type: "boolean" },
+    "review-model": { type: "string" },
     out: { type: "string" },
     model: { type: "string", default: "openai-codex:gpt-6-luna" },
   },
 });
 if (values.list && values.case === undefined && values.out === undefined) {
   for (const [scenario, workflow] of liveTeacherCases)
-    console.log(JSON.stringify({ scenario, family: workflow.family, sourceGroup: workflow.group }));
+    console.log(
+      JSON.stringify({
+        scenario,
+        family: workflow.family,
+        sourceGroup: workflow.group,
+        requiresReview: Boolean(workflow.requiresReview),
+      })
+    );
   process.exit(0);
 }
 const scenarios = values.case ?? [];
@@ -39,17 +48,21 @@ if (
   );
 }
 
+const review = workflowReviewer(values["review-model"]);
+if (
+  scenarios.some((scenario) => liveTeacherCases.get(scenario).requiresReview) &&
+  (!review || values["review-model"] === values.model)
+) {
+  throw new Error("Choose --review-model PROVIDER:MODEL distinct from the content teacher");
+}
+
 const host = fileURLToPath(new URL("../", import.meta.url));
 const { checkouts } = requireDevelopmentTemplateCheckouts(host);
 const validators = new Map(
-  scenarios.map((scenario) => [
-    scenario,
-    path.join(
-      checkouts["system-testing"],
-      "skills/system-testing",
-      liveTeacherCases.get(scenario).validator
-    ),
-  ])
+  scenarios.map((scenario) => {
+    const { template, path: validator } = liveTeacherCases.get(scenario).validator;
+    return [scenario, path.join(checkouts[template], validator)];
+  })
 );
 const runtimePin = path.join(checkouts.base, "packages/natlang/vendor/natlang-pin.json");
 const readJson = (file) => JSON.parse(readFileSync(file, "utf8"));
@@ -156,6 +169,7 @@ try {
         validator: validators.get(scenario),
         out: destination,
         split: "train",
+        review,
       });
       console.log(path.join(destination, "manifest.json"));
     } catch (error) {

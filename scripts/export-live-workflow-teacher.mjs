@@ -5,12 +5,13 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
+import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const panelWorkflow = {
   family: "workspace-panel-repair",
   namespace: "vibestudio:panel-repair",
   group: "draft-navigation",
-  validator: "panel-repair-oracle.ts",
+  validator: { template: "system-testing", path: "skills/system-testing/panel-repair-oracle.ts" },
   program: "skills/workspace-dev/panel-repair/repairPanel.nl",
   root: "repairPanel",
   evidence: panelEvidence,
@@ -19,7 +20,10 @@ const integrationWorkflow = {
   family: "workspace-vcs-integration",
   namespace: "vibestudio:workspace-integration",
   group: "settings-conflict",
-  validator: "vcs-integration-oracle.ts",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/vcs-integration-oracle.ts",
+  },
   program: "skills/vibestudio-vcs/integration/integrateWorkspace.nl",
   root: "integrateWorkspace",
   evidence: integrationEvidence,
@@ -28,12 +32,38 @@ const unitRepairWorkflow = {
   family: "workspace-unit-repair",
   namespace: "vibestudio:unit-repair",
   group: "worker-label-normalizer",
-  validator: "unit-repair-oracle.ts",
+  validator: { template: "system-testing", path: "skills/system-testing/unit-repair-oracle.ts" },
   program: "skills/workspace-dev/unit-repair/repairUnit.nl",
   root: "repairUnit",
   evidence: unitRepairEvidence,
 };
+const contentWorkflow = {
+  family: "workspace-content-project",
+  namespace: "vibestudio:content-project",
+  group: "grounded-project-delivery",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/content-project-oracle.ts",
+  },
+  program: "skills/workspace-dev/content-project/deliverProject.nl",
+  root: "deliverProject",
+  requiresReview: true,
+  evidence: contentProjectEvidence,
+};
+const ownedOperationsWorkflow = {
+  family: "workspace-owned-operations",
+  namespace: "vibestudio:owned-operations",
+  group: "durable-worker-handoff",
+  validator: { template: "base", path: "packages/natlang-services/src/ownedOperationsOracle.ts" },
+  program: "skills/agents/operational-handoff/operate.nl",
+  root: "operate",
+  evidence: ownedOperationsEvidence,
+};
 export const liveTeacherCases = new Map([
+  ["owned-operations-incident-payment-and-ledger", ownedOperationsWorkflow],
+  ["owned-operations-release-audit-continuation", ownedOperationsWorkflow],
+  ["content-project-release-runbook", contentWorkflow],
+  ["content-project-role-onboarding", contentWorkflow],
   ["worker-label-repair-type-mismatch", unitRepairWorkflow],
   ["worker-label-repair-missing-helper", unitRepairWorkflow],
   ["panel-draft-unmount", panelWorkflow],
@@ -166,7 +196,79 @@ function unitRepairEvidence(execution, exercise) {
   };
 }
 
-export async function exportLiveTeacherWorkflow({ trajectory, pins, validator, out, split }) {
+function ownedOperationsEvidence(execution, exercise, scenario) {
+  const fixture = execution.diagnostics.ownedOperationsWorld;
+  const verification = execution.diagnostics.ownedOperationsVerification;
+  const audit = execution.diagnostics.ownedOperationsAudit;
+  const cleanup = execution.diagnostics.ownedOperationsCleanupErrors;
+  requireEvidence(
+    fixture?.kind === "owned-operations" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      typeof fixture.caseId === "string" &&
+      scenario === `owned-operations-${fixture.caseId}` &&
+      exercise.report?.kind === fixture.request?.kind &&
+      verification?.passed === true &&
+      verification.checks?.reportedHandles === true &&
+      verification.checks?.reportedCleanup === true &&
+      verification.checks?.programRequestedCleanup === true &&
+      verification.checks?.actualNoOwnedWorkersRemain === true &&
+      verification.checks?.actualNoOwnedContextsRemain === true &&
+      Object.values(verification.checks).every((value) => value === true) &&
+      cleanup?.length === 0 &&
+      audit?.opened?.length > 0 &&
+      audit?.snapshots?.length > 0 &&
+      audit.remainingEntityIds?.length === 0 &&
+      audit.remainingContextIds?.length === 0,
+    "Missing independently verified worker persistence and teardown in the owned context"
+  );
+  return {
+    world: { context_id: fixture.contextId, case_id: fixture.caseId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture, verification, audit, cleanup } },
+  };
+}
+
+function contentProjectEvidence(execution, exercise) {
+  const fixture = execution.diagnostics.contentProjectWorld;
+  const verification = execution.diagnostics.contentProjectVerification;
+  const input = verification?.semanticReviewInput;
+  requireEvidence(
+    fixture?.kind === "content-project" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      typeof fixture.before === "string" &&
+      typeof fixture.after === "string" &&
+      fixture.before !== fixture.after &&
+      exercise.report?.status === "committed" &&
+      exercise.report.repoPath === fixture.repoPath &&
+      exercise.report.head === fixture.after &&
+      verification?.passed === true &&
+      verification.reasons?.length === 0 &&
+      verification.evidence?.length > 0 &&
+      verification.semanticReviewRequired === true &&
+      input?.actual?.contextId === fixture.contextId &&
+      JSON.stringify(input?.actual?.committedEvent) === fixture.after &&
+      input.actual.committedEvent.eventId === exercise.report.eventId &&
+      JSON.stringify(input.expected) === JSON.stringify(fixture.request) &&
+      input.actual.documents?.length > 0 &&
+      typeof input.rubric === "string",
+    "Missing independent content-project readback at the committed workspace revision"
+  );
+  return {
+    world: { context_id: fixture.contextId, seed_revision: fixture.before },
+    checks: { independentlyVerifiedContentProject: true },
+    evidence: { workspace: { fixture, verification } },
+    reviewInput: input,
+  };
+}
+
+export async function exportLiveTeacherWorkflow({
+  trajectory,
+  pins,
+  validator,
+  out,
+  split,
+  review,
+}) {
   const entry = await readJson(trajectory);
   const source = await readJson(pins);
   const { test, result, execution } = entry;
@@ -185,7 +287,7 @@ export async function exportLiveTeacherWorkflow({ trajectory, pins, validator, o
       typeof exercise.evalRunId === "string",
     "Missing eligible authored Natlang execution, run identity, or root call"
   );
-  const observed = workflow.evidence(execution, exercise);
+  const observed = workflow.evidence(execution, exercise, test.name);
   const rootId = exercise.rootCallIds[0];
   const captured = exercise.calls;
   const root = captured.find((call) => call.callId === rootId);
@@ -237,13 +339,38 @@ export async function exportLiveTeacherWorkflow({ trajectory, pins, validator, o
     source.validator_sha256 === hash(validatorBytes),
     "Validator source differs from the run pin"
   );
+  if (workflow.requiresReview) {
+    requireEvidence(
+      typeof review === "function",
+      "An independent content reviewer must be configured"
+    );
+    const semanticReview = await review(observed.reviewInput, source.teacher);
+    requireEvidence(
+      semanticReview?.schema === "natlang.live-workflow-review/1" &&
+        semanticReview.model !== source.teacher &&
+        JSON.stringify(semanticReview.input) === JSON.stringify(observed.reviewInput) &&
+        semanticReview.exchange?.request &&
+        semanticReview.exchange?.reply,
+      "Independent reviewer did not bind the exact committed document readback"
+    );
+    await writeFile(`${out}.review.json`, `${JSON.stringify(semanticReview, null, 2)}\n`, {
+      mode: 0o600,
+      flag: "wx",
+    });
+    requireEvidence(
+      semanticReview.verdict?.accepted === true,
+      "Independent content review did not pass"
+    );
+    observed.evidence.workspace.semanticReview = semanticReview;
+    observed.checks.independentSemanticReview = true;
+  }
   await mkdir(out, { mode: 0o700 });
   async function bind(name, data) {
     const bytes = Buffer.isBuffer(data) ? data : Buffer.from(`${JSON.stringify(data, null, 2)}\n`);
     await writeFile(path.join(out, name), bytes, { mode: 0o600, flag: "wx" });
     return { path: name, sha256: hash(bytes) };
   }
-  const validatorFile = await bind(workflow.validator, validatorBytes);
+  const validatorFile = await bind(path.basename(workflow.validator.path), validatorBytes);
   const evidence = [];
   for (const [kind, data] of Object.entries(observed.evidence)) {
     evidence.push({ kind, ...(await bind(`${kind}.json`, { ...data, pins: source })) });
@@ -294,11 +421,15 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
       validator: { type: "string" },
       out: { type: "string" },
       split: { type: "string" },
+      "review-model": { type: "string" },
     },
   });
   for (const option of ["trajectory", "pins", "validator", "out", "split"]) {
     requireEvidence(values[option], `Missing --${option}`);
   }
-  const manifest = await exportLiveTeacherWorkflow(values);
+  const manifest = await exportLiveTeacherWorkflow({
+    ...values,
+    review: workflowReviewer(values["review-model"]),
+  });
   console.log(path.join(values.out, manifest.path));
 }
