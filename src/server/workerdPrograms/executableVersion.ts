@@ -8,6 +8,7 @@ export interface DoEngineAdmission {
   readonly storage: "dolt";
   /** SQL name patterns kept out of every commit, fork and reset (framework patterns included). */
   readonly doltLocal: readonly string[];
+  readonly doltRemotes?: true;
 }
 
 export interface DoExecutableAdmission {

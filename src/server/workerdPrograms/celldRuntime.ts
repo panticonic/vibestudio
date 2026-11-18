@@ -37,8 +37,9 @@ export type CelldWorkerCode = WorkerLoaderWorkerCode & {
 
 /** A facet's celld options at creation: its engine is fixed then. */
 export interface CelldFacetOptions {
-  storage?: "dolt";
+  storage?: "dolt" | "sqlite";
   doltLocal?: readonly string[];
+  doltRemotes?: boolean;
 }
 
 /**

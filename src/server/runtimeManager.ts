@@ -547,6 +547,7 @@ export interface WorkerdWorkspaceProvider {
     hosted?: HostedClassManifest;
     storage?: "dolt";
     doltLocal?: readonly string[];
+    doltRemotes?: boolean;
   }>;
   readonly singletonRegistry: SingletonRegistry;
 }
@@ -2176,7 +2177,11 @@ export class RuntimeManager {
       .getManifestDoClasses(source)
       .find((entry) => entry.className === className);
     return declared?.storage === "dolt"
-      ? { storage: "dolt", doltLocal: doltLocalPatterns(declared.doltLocal ?? []) }
+      ? {
+          storage: "dolt",
+          doltLocal: doltLocalPatterns(declared.doltLocal ?? []),
+          ...(declared.doltRemotes === true ? { doltRemotes: true as const } : {}),
+        }
       : null;
   }
 

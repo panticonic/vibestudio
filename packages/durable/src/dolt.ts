@@ -650,6 +650,8 @@ export interface CelldDoltClassConfig {
 export interface CelldFacetStorageOptions {
   readonly storage: "dolt" | "sqlite";
   readonly doltLocal?: readonly string[];
+  /** A Dolt facet may decline the remotes capability inherited from its owner. */
+  readonly doltRemotes?: boolean;
 }
 
 /** Whether a table name matches a `doltLocal` pattern (`%` is any run, case-sensitive). */

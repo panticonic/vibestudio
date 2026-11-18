@@ -150,6 +150,8 @@ export interface PackageManifest {
        */
       storage?: "dolt";
       doltLocal?: string[];
+      /** Allow this class's Dolt facet to exchange commits through grants. */
+      doltRemotes?: boolean;
     }>;
   };
   /**

@@ -408,7 +408,10 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
           );
         this.sqliteEngineChecked = true;
       }
-      return this.ctx.facets.get(DO_FACET, () => ({ class: loaded.class }));
+      return this.ctx.facets.get(DO_FACET, () => ({
+        class: loaded.class,
+        celld: { storage: "sqlite", doltRemotes: false },
+      }));
     }
     if (!this.doltReady) {
       this.doltPreparation ??= this.prepareDoltObject(loaded, userKey).then(
@@ -430,6 +433,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       class: loaded.class,
       celld: {
         storage: "dolt",
+        doltRemotes: engine.doltRemotes === true,
         ...(engine.doltLocal.length > 0 ? { doltLocal: [...engine.doltLocal] } : {}),
       },
     }));
@@ -511,7 +515,11 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     from: string
   ): Promise<void> {
     const engine = loaded.engine!;
-    const legacy = () => this.ctx.facets.get(DO_FACET, () => ({ class: loaded.class }));
+    const legacy = () =>
+      this.ctx.facets.get(DO_FACET, () => ({
+        class: loaded.class,
+        celld: { storage: "sqlite", doltRemotes: false },
+      }));
     const staging = () => this.doltFacet(loaded, engine, DO_STAGING_FACET);
     const target = () => this.doltFacet(loaded, engine, DO_FACET);
     const call = <T>(facet: Fetcher, method: string, body: unknown) =>
@@ -660,15 +668,16 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
     instance: HostedInstance,
     limits?: CodeHostInput["limits"]
   ): Fetcher {
-    const facetOptions: CelldFacetOptions | null =
+    const facetOptions: CelldFacetOptions =
       instance.admission.grants.storage === "dolt"
         ? {
             storage: "dolt",
+            doltRemotes: false,
             ...(instance.admission.grants.doltLocal.length > 0
               ? { doltLocal: instance.admission.grants.doltLocal }
               : {}),
           }
-        : null;
+        : { storage: "sqlite", doltRemotes: false };
     return (
       this.ctx.facets as unknown as {
         get(
@@ -681,7 +690,7 @@ export class UniversalDO extends DurableObject<UniversalDoEnv> {
       instance.facetName,
       () => ({
         class: instance.class,
-        ...(facetOptions ? { celld: facetOptions } : {}),
+        celld: facetOptions,
       }),
       ...(limits ? [{ limits }] : [])
     );

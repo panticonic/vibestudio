@@ -493,6 +493,7 @@ describe("RuntimeManager", () => {
         secrets: ["DO_LOADER_SECRET__UniversalDO"],
         codegen: true,
         residency: true,
+        doltRemotes: true,
       });
       expect(Object.keys(secrets).sort()).toEqual(
         [
@@ -943,7 +944,12 @@ describe("RuntimeManager", () => {
     });
 
     it("prepares schema evidence without an object and reuses it on activation", async () => {
-      const deps = createMockDeps();
+      const deps = createMockDeps({
+        getManifestDoClasses: (source) =>
+          source === "workers/board"
+            ? [{ className: "BoardDO", storage: "dolt", doltRemotes: true }]
+            : [],
+      });
       const mgr = new RuntimeManager(deps);
       const binding = await deps.bindRuntimeImage("workers/board", "state:original");
       const build = (await deps.getBuildByExecution(
@@ -976,6 +982,10 @@ describe("RuntimeManager", () => {
       expect(
         mgr.getDoAdmission("workers/board", "BoardDO", "first")?.executableVersion
       ).not.toBeNull();
+      expect(mgr.getDoAdmission("workers/board", "BoardDO", "first")?.engine).toMatchObject({
+        storage: "dolt",
+        doltRemotes: true,
+      });
       await mgr.shutdown();
     });
 
