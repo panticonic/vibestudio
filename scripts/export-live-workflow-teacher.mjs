@@ -85,7 +85,8 @@ function integrationEvidence(execution, exercise) {
   requireEvidence(
     observed?.kind === "vcs-integration" &&
       observed.contextId === execution.provenance?.contextId &&
-      typeof observed.commonSeedEvent === "string" &&
+      observed.commonSeedEvent?.kind === "event" &&
+      typeof observed.commonSeedEvent.eventId === "string" &&
       observed.source?.kind === "event" &&
       typeof observed.source.eventId === "string" &&
       observed.before &&
@@ -102,7 +103,7 @@ function integrationEvidence(execution, exercise) {
   return {
     world: {
       context_id: observed.contextId,
-      seed_revision: observed.commonSeedEvent,
+      seed_revision: observed.commonSeedEvent.eventId,
       source_revision: observed.source.eventId,
     },
     checks: { independentlyVerifiedWorkspaceIntegration: true },

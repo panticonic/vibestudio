@@ -116,7 +116,7 @@ test("workspace integration binds conflict source and verified state without bro
   diagnostics.workspaceIntegrationWorld = {
     kind: "vcs-integration",
     contextId: "ctx",
-    commonSeedEvent: "seed",
+    commonSeedEvent: { kind: "event", eventId: "seed" },
     source,
     before,
     after,
@@ -130,6 +130,7 @@ test("workspace integration binds conflict source and verified state without bro
   await save();
   await exportLiveTeacherWorkflow(options);
   const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
+  assert.equal(manifest.world.seed_revision, "seed");
   assert.equal(manifest.world.source_revision, "incoming");
   assert.deepEqual(manifest.required_effect_kinds, ["workspace"]);
   assert.deepEqual(manifest.source_groups, ["vibestudio:workspace-integration:settings-conflict"]);
