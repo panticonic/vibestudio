@@ -95,6 +95,17 @@ const integrationHandoffWorkflow = {
   skills: ["integrateWorkspace", "assembleHandoff"],
   evidence: integrationHandoffEvidence,
 };
+const automationLifecycleWorkflow = {
+  family: "workspace-automation-lifecycle",
+  namespace: "vibestudio:automation-lifecycle",
+  group: "missions-controller",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/automation-lifecycle-managed.ts",
+  },
+  root: "reconcileAutomation",
+  evidence: automationLifecycleEvidence,
+};
 const composedReleaseWorkflow = {
   ...ownedOperationsWorkflow,
   family: "workspace-release-dossier",
@@ -131,6 +142,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { workspaceIntegrationWorlds },
     { managedScratchWorlds },
     { integrationHandoffWorlds },
+    { managedAutomationWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -141,12 +153,20 @@ export async function loadLiveTeacherCases(checkouts) {
       "vcs-integration-worlds.ts",
       "scratch-handoff-worlds.ts",
       "integration-handoff-worlds.ts",
+      "automation-lifecycle-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, status } of managedAutomationWorlds) {
+    cases.set(`automation-lifecycle-live-${id}`, {
+      ...automationLifecycleWorkflow,
+      caseId: id,
+      expectedStatus: status,
+    });
+  }
   for (const { id, integration, questions } of integrationHandoffWorlds) {
     cases.set(`integration-handoff-${id}`, {
       ...integrationHandoffWorkflow,
@@ -415,6 +435,36 @@ function ownedOperationsEvidence(execution, exercise, scenario) {
     world: { context_id: fixture.contextId, case_id: fixture.caseId },
     checks: verification.checks,
     evidence: { workspace: { fixture, verification, audit, cleanup } },
+  };
+}
+
+function automationLifecycleEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedAutomation;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  requireEvidence(
+    fixture?.contextId === execution.provenance?.contextId &&
+      verification?.caseId === workflow.caseId &&
+      verification.expectedStatus === workflow.expectedStatus &&
+      report?.status === workflow.expectedStatus &&
+      report.missionId === verification.assignedId &&
+      verification.passed === true &&
+      [
+        "exactStateAndReport",
+        "defaultMonitorUnchanged",
+        "definitionPreserved",
+        "noAutomationRunStarted",
+        "assignedTransition",
+        "missingStaysMissing",
+      ].every((name) => verification.checks?.[name] === true) &&
+      /^[a-f0-9]{64}$/u.test(verification.expectedRevision) &&
+      /^[a-f0-9]{64}$/u.test(verification.observedRevision),
+    "The managed automation must retain independently verified scheduling, definition, and run-state evidence"
+  );
+  return {
+    world: { context_id: fixture.contextId, seed_revision: verification.expectedRevision },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
   };
 }
 

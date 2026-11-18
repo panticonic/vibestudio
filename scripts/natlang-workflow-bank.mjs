@@ -34,7 +34,10 @@ const domains = [
     source: "skills/automation-lifecycle-fixtures/worlds.ts",
     exported: "automationLifecycleWorlds",
     operation: "reconcileAutomation",
-    identify: (world) => [world.id, [world.sourceGroup]],
+    identify: (world) => [
+      world.id,
+      [world.sourceGroup, "vibestudio:automation-lifecycle:missions-controller"],
+    ],
   },
   {
     domain: "channelAgent",

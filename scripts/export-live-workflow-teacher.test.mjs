@@ -53,6 +53,7 @@ test("authored template worlds flow into the collector without losing original s
         "integrationHandoffWorlds",
         [{ id: "rollout", integration: "rollout", questions: [{ file: "limits.json" }] }],
       ],
+      ["automation-lifecycle-worlds", "managedAutomationWorlds", [{ id: "stale", status: "held" }]],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
         "panel-repair-world",
@@ -86,6 +87,9 @@ test("authored template worlds flow into the collector without losing original s
     "vibestudio:content-project:inventory-v1",
   ]);
   assert.equal(cases.get("content-project-inventory").requiresReview, true);
+  const automation = cases.get("automation-lifecycle-live-stale");
+  assert.equal(automation.root, "reconcileAutomation");
+  assert.equal(automation.expectedStatus, "held");
   const scratch = cases.get("scratch-handoff-live-review");
   assert.equal(scratch.root, "assembleHandoff");
   assert.equal(scratch.expectedStatus, "staged");
@@ -300,6 +304,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["panel-repair-world", "export const panelRepairWorlds = [];"],
       ["scratch-handoff-worlds", "export const managedScratchWorlds = [];"],
       ["integration-handoff-worlds", "export const integrationHandoffWorlds = [];"],
+      ["automation-lifecycle-worlds", "export const managedAutomationWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,
