@@ -73,6 +73,7 @@ test("authored template worlds flow into the collector without losing original s
         ],
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
+      ["runtime-program-worlds", "managedRuntimeProgramWorlds", [{ id: "sample", files: {} }]],
       ["incident-continuation-worlds", "incidentContinuationWorlds", []],
       ["log-audit-worlds", "managedLogAuditWorlds", [{ id: "sample", windows: [], lines: [] }]],
       [
@@ -204,6 +205,7 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(cases.get("google-setup-live-sample").workspace, "google-workspace");
   assert.equal(cases.get("local-model-compare-live-sample").root, "prepareLocalModel");
   assert.equal(cases.get("host-log-audit-live-sample").root, "investigateSystem");
+  assert.equal(cases.get("runtime-program-live-sample").root, "reviewRuntimeEvidence");
   assert.equal(cases.get("spectrolite-live-sample").workspace, "spectrolite");
   assert.equal(cases.get("grimoire-live-quiet-garden").workspace, "examples");
   const checklist = cases.get("terminal-checklist-live-restart");
@@ -481,6 +483,68 @@ test("authoring export rejects a review drawn from another baseline", async (t) 
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-baseline` }),
     /must match the assigned compiler snapshots/u
+  );
+});
+
+test("runtime program export binds stale execution to the measured revision pair", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "runtime-program-live-stale-counter-receipt";
+  const world = cases.get(entry.test.name);
+  const run = diagnostics.natlangTeacher;
+  const execution = { id: "earlier-owned-eval", state: "stale" };
+  const receipt = {
+    evalRunId: execution.id,
+    original: world.original,
+    current: world.current,
+    signature: true,
+    returned: world.execution.output,
+    thrown: null,
+    execution,
+  };
+  assert.notEqual(receipt.original, receipt.current);
+  run.report = { kind: "program", next: "refresh-program-receipt", basis: execution.id };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  const skill = structuredClone(leaf);
+  skill.callId = skill.summary.call_id = "skill";
+  skill.record.definition.name = "reviewRuntimeEvidence";
+  leaf.record.parent_call_id = "skill";
+  run.calls.push(skill);
+  diagnostics.managedRuntimeProgram = {
+    contextId: "ctx",
+    verification: {
+      passed: true,
+      checks: { observation: true, verdict: true, basis: true, source: true },
+      observed: {
+        contextId: "ctx",
+        caseId: world.caseId,
+        expected: world.expected,
+        receipt,
+        request: {
+          kind: "program",
+          goal: world.goal,
+          path: "scratch/review/main.ts",
+          call: null,
+          userRequestedRetry: false,
+          compiler: "passed",
+          diagnostic: null,
+          execution,
+        },
+      },
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  receipt.current = receipt.original;
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-different-revision` }),
+    /Runtime review must cite the original owned compiler or execution receipt/u
   );
 });
 
@@ -1111,6 +1175,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["spectrolite-worlds", "export const managedSpectroliteWorlds = [];"],
       ["news-worlds", "export const managedNewsWorlds = [];"],
       ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
+      ["runtime-program-worlds", "export const managedRuntimeProgramWorlds = [];"],
       ["incident-continuation-worlds", "export const incidentContinuationWorlds = [];"],
       ["log-audit-worlds", "export const managedLogAuditWorlds = [];"],
       ["local-model-comparison-worlds", "export const localModelComparisonWorlds = [];"],

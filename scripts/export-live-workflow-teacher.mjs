@@ -169,6 +169,17 @@ const localComparisonWorkflow = {
   root: "prepareLocalModel",
   evidence: localComparisonEvidence,
 };
+const runtimeProgramWorkflow = {
+  family: "runtime-live-program-receipts",
+  namespace: "vibestudio:runtime",
+  group: "checked-program-compiler-execution",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/runtime-program-managed.ts",
+  },
+  root: "reviewRuntimeEvidence",
+  evidence: runtimeProgramEvidence,
+};
 const incidentContinuationWorkflow = {
   family: "system-live-incident-continuation",
   namespace: "vibestudio:system",
@@ -282,6 +293,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { localModelComparisonWorlds },
     { managedLogAuditWorlds },
     { incidentContinuationWorlds },
+    { managedRuntimeProgramWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -307,12 +319,33 @@ export async function loadLiveTeacherCases(checkouts) {
       "local-model-comparison-worlds.ts",
       "log-audit-worlds.ts",
       "incident-continuation-worlds.ts",
+      "runtime-program-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, goal, expected, files, execution } of managedRuntimeProgramWorlds) {
+    const digest = (tree) =>
+      hash(
+        JSON.stringify(Object.entries(tree).sort(([left], [right]) => left.localeCompare(right)))
+      );
+    const original = digest(files);
+    const current =
+      execution?.kind === "stale"
+        ? digest({ ...files, "main.ts": execution.replacement })
+        : original;
+    cases.set(`runtime-program-live-${id}`, {
+      ...runtimeProgramWorkflow,
+      caseId: id,
+      goal,
+      expected,
+      original,
+      current,
+      execution,
+    });
+  }
   for (const { id, windows, lines } of managedLogAuditWorlds) {
     cases.set(`host-log-audit-live-${id}`, {
       ...hostLogAuditWorkflow,
@@ -843,6 +876,75 @@ function verifiedMemoryEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, selected_event: verification.eventId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function runtimeProgramEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedRuntimeProgram;
+  const verification = fixture?.verification;
+  const observed = verification?.observed;
+  const request = observed?.request;
+  const receipt = observed?.receipt;
+  const report = exercise.report;
+  const step = workflow.execution;
+  const basis = request?.execution?.id ?? request?.path;
+  const failedCompile = ["repair-result-contract", "resolve-import", "read-diagnostic"].includes(
+    workflow.expected
+  );
+  const diagnostic =
+    {
+      "repair-result-contract": "result-type",
+      "resolve-import": "missing-import",
+      "read-diagnostic": "other",
+    }[workflow.expected] ?? null;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      observed?.contextId === fixture.contextId &&
+      observed.caseId === workflow.caseId &&
+      observed.expected === workflow.expected &&
+      verification.passed === true &&
+      verification.checks?.observation === true &&
+      verification.checks?.verdict === true &&
+      verification.checks?.basis === true &&
+      verification.checks?.source === true &&
+      request?.kind === "program" &&
+      request.goal === workflow.goal &&
+      typeof request.path === "string" &&
+      request.path.endsWith("/main.ts") &&
+      request.call === null &&
+      request.userRequestedRetry === false &&
+      request.compiler === (failedCompile ? "failed" : "passed") &&
+      request.diagnostic === diagnostic &&
+      receipt?.signature === !failedCompile &&
+      receipt.original === workflow.original &&
+      receipt.current === workflow.current &&
+      typeof receipt.evalRunId === "string" &&
+      receipt.evalRunId.length > 0 &&
+      receipt.evalRunId !== exercise.evalRunId &&
+      (step
+        ? request.execution?.id === receipt.evalRunId &&
+          request.execution?.state === (step.kind === "check" ? "verified" : step.kind) &&
+          JSON.stringify(request.execution) === JSON.stringify(receipt.execution) &&
+          (step.kind === "failure"
+            ? typeof receipt.thrown === "string" && receipt.thrown.includes(step.message)
+            : receipt.thrown === null &&
+              (step.kind === "unchecked" ||
+                JSON.stringify(receipt.returned) === JSON.stringify(step.output)))
+        : request.execution === undefined && receipt.execution === null) &&
+      report?.kind === "program" &&
+      report.next === workflow.expected &&
+      report.basis === basis,
+    "Runtime review must cite the original owned compiler or execution receipt"
+  );
+  return {
+    world: {
+      context_id: fixture.contextId,
+      program_path: request.path,
+      execution_run_id: receipt.evalRunId,
+    },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };

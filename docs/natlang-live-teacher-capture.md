@@ -86,6 +86,10 @@ exclusive cursors. Each audit sees only its assigned tagged records.
 Incident continuation cases combine the two skills. The first completed investigation unlocks
 the live inventory for the local-model comparison. The exporter requires both nested skill reports,
 their actual call order and the read journal, and records both source groups for split hygiene.
+Runtime program reviews compile caller-owned scratch source through the installed Natlang loader.
+When a task includes execution, a separate EvalDO run loads and calls the exact typed program.
+The review distinguishes checked output, unchecked output, failure and a receipt from an older
+source revision. The exporter checks source fingerprints and the original execution run ID.
 The release-readiness dossier joins two skill trees in one call. It requires observed recovery after a real worker restart
 and verified cleanup before the project skill can prepare and commit the evidence dossier.
 The authored inventory comes from the configured system-testing template, which supplies
