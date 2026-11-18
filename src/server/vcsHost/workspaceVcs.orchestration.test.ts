@@ -732,6 +732,40 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(perform()).rejects.toThrow("does not match its digest");
   });
 
+  it("repairs a participant's current projection when retrying a completed discard", async () => {
+    const { vcs } = await harness();
+    const nativeInvocation = {
+      owner: { runtimeId: "agent", authoritySessionId: "sealed" },
+      task: { conversationId: 3, taskId: 1 },
+      operation: { kind: "tool" as const, assistantEntryId: 0, callId: "discard" },
+    };
+    const caller = { runtime: { kind: "do" as const, id: "agent" }, nativeInvocation };
+    const participant = canonicalJson(["task", nativeInvocation.owner, nativeInvocation.task]);
+    const owner = { ...TEST_PROVIDER, objectKey: `work-${sha256HexSyncText(participant)}` };
+    const contextId = "context:test";
+    const discard = {
+      contextId, commandId: "discard",
+      expectedWorkingHead: { kind: "application" as const, applicationId: "original-work" },
+    };
+    const saved = {
+      contextId, workingHead: { kind: "event", eventId: "saved" },
+      discardedApplicationIds: ["original-work"],
+    };
+    const dispatch = vi.fn().mockResolvedValue({ head: "saved-head", discard: saved });
+    const projection = vi.spyOn(vcs, "materializeParticipantContext").mockResolvedValue({
+      head: "later-head", state: { kind: "application", applicationId: "later-edit" }, folder: "projection",
+    });
+    const cause = { parent: null };
+    await expect(vcs.discardParticipantContext({
+      dispatch: { dispatch }, canonical: TEST_PROVIDER, owner, caller,
+      discard, head: "original-head", cause,
+    })).resolves.toEqual(saved);
+    expect(dispatch).toHaveBeenCalledWith(owner, "discardHistoryContext", {
+      discard, head: "original-head", cause,
+    });
+    expect(projection).toHaveBeenCalledWith({ dispatch: { dispatch }, owner, contextId });
+  });
+
   it.each([
     {
       authoredChangeId: "change:test",

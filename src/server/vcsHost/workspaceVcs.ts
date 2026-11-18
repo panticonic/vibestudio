@@ -22,13 +22,15 @@ import * as path from "node:path";
 import { TextDecoder } from "node:util";
 
 import type {
+  VcsDiscardInput,
+  VcsDiscardResult,
   VcsPushInput,
   VcsPushResult,
   VcsReadFileResult,
   VcsReadFilesInput,
   VcsStateNodeRef,
 } from "@vibestudio/service-schemas/vcs";
-import { vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
+import { vcsDiscardResultSchema, vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
 import type {
   ProtectedPublicationEvent,
   ProtectedPublicationFileChange,
@@ -982,6 +984,28 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     }
     const result = await this.executeHostRead({ kind: "read-semantic-blobs", files });
     return vcsMethods.readFiles.returns.parse(result);
+  }
+
+  /** Restore the selected saved state, then realize the participant's current files. */
+  async discardParticipantContext(input: WorkspaceHistorySource & {
+    owner: WorkspaceSourceProviderRef;
+    caller: VerifiedCaller;
+    head: string;
+    discard: VcsDiscardInput;
+    cause: { parent: RpcCausalParent | null };
+  }): Promise<VcsDiscardResult> {
+    requireWorkspaceParticipantOwner(input);
+    const { dispatch, owner, discard, cause, head } = input;
+    const receipt = GadJsonRecordSchema.parse(
+      await dispatch.dispatch(owner, "discardHistoryContext", { head, discard, cause })
+    );
+    const result = vcsDiscardResultSchema.parse(receipt["discard"]);
+    if (result.contextId !== discard.contextId || result.workingHead.kind !== "event" ||
+        typeof receipt["head"] !== "string" || !receipt["head"]) {
+      throw new Error("Workspace discard returned a different saved context");
+    }
+    await this.materializeParticipantContext({ dispatch, owner, contextId: discard.contextId });
+    return result;
   }
 
   /**
