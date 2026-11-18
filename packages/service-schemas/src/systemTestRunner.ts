@@ -144,7 +144,31 @@ export const workspaceIntegrationTeacherInputSchema = z.object({
 }).strict();
 export type WorkspaceIntegrationTeacherInput = z.infer<typeof workspaceIntegrationTeacherInputSchema>;
 
+export const unitRepairTeacherInputSchema = z.object({
+  contextId: z.string().min(1),
+  unit: z.string().regex(/^workers\/[A-Za-z0-9][A-Za-z0-9._-]*$/u),
+  executorModel: z.string().regex(/^[^:]+:.+$/u),
+  goal: z.string().min(1),
+}).strict();
+export type UnitRepairTeacherInput = z.infer<typeof unitRepairTeacherInputSchema>;
+export interface UnitRepairTeacherResult {
+  teacher: PanelTeacherResult;
+  world: {
+    contextId: string;
+    unit: string;
+    before: string;
+    after: string;
+    baseline: { source: string; severity: string; file: string; message: string }[];
+  };
+  verification: {
+    passed: boolean;
+    checks: Record<string, boolean>;
+    evidence: unknown;
+  };
+}
+
 export interface SystemTestRunnerRpc {
+  runUnitRepairTeacher(input: UnitRepairTeacherInput): Promise<UnitRepairTeacherResult>;
   runWorkspaceIntegrationTeacher(input: WorkspaceIntegrationTeacherInput): Promise<PanelTeacherResult>;
   runPanelTeacher(input: PanelTeacherInput): Promise<PanelTeacherResult>;
   doctor(model?: string): Promise<SystemTestDoctorResult>;
@@ -169,6 +193,7 @@ export type SystemTestRunnerClient = SystemTestRunnerRpc;
 
 export const systemTestRunnerRpcMethods = createReceiverRpcMethods<SystemTestRunnerRpc>([
   "runPanelTeacher",
+  "runUnitRepairTeacher",
   "runWorkspaceIntegrationTeacher",
   "doctor",
   "listSystemTests",

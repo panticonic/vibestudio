@@ -24,7 +24,18 @@ const integrationWorkflow = {
   root: "integrateWorkspace",
   evidence: integrationEvidence,
 };
+const unitRepairWorkflow = {
+  family: "workspace-unit-repair",
+  namespace: "vibestudio:unit-repair",
+  group: "worker-label-normalizer",
+  validator: "unit-repair-oracle.ts",
+  program: "skills/workspace-dev/unit-repair/repairUnit.nl",
+  root: "repairUnit",
+  evidence: unitRepairEvidence,
+};
 export const liveTeacherCases = new Map([
+  ["worker-label-repair-type-mismatch", unitRepairWorkflow],
+  ["worker-label-repair-missing-helper", unitRepairWorkflow],
   ["panel-draft-unmount", panelWorkflow],
   ["panel-draft-stale-snapshot", panelWorkflow],
   ["workspace-integration-theme-locale", integrationWorkflow],
@@ -108,6 +119,50 @@ function integrationEvidence(execution, exercise) {
     },
     checks: { independentlyVerifiedWorkspaceIntegration: true },
     evidence: { workspace: { fixture: observed, verification } },
+  };
+}
+
+function unitRepairEvidence(execution, exercise) {
+  const fixture = execution.diagnostics.unitRepairWorld;
+  const verification = execution.diagnostics.unitRepairVerification;
+  const final = verification?.evidence;
+  const receipt = final?.tests?.receipt;
+  const checks = verification?.checks;
+  const protectedSource = final?.protectedSource;
+  requireEvidence(
+    fixture?.contextId === execution.provenance?.contextId &&
+      typeof fixture?.unit === "string" &&
+      fixture?.baseline?.some((diagnostic) => diagnostic.severity === "error") &&
+      typeof fixture?.before === "string" &&
+      typeof fixture?.after === "string" &&
+      fixture.before !== fixture.after &&
+      exercise.report?.status === "verified" &&
+      exercise.report.revision === fixture.after &&
+      final?.revision === fixture.after &&
+      final.build?.status === "ok" &&
+      verification?.passed === true &&
+      checks?.changedRevision === true &&
+      checks?.sourceBuild === true &&
+      checks?.originalManifestAndTests === true &&
+      protectedSource?.before?.length === 2 &&
+      JSON.stringify(protectedSource.before) === JSON.stringify(protectedSource.after) &&
+      checks?.originalWorkerdSuite === true &&
+      final.tests?.status === "passed" &&
+      final.tests?.report?.total === 5 &&
+      receipt?.protocol === "unit-verification-receipt.v1" &&
+      receipt?.operation === "test" &&
+      receipt?.contextId === fixture.contextId &&
+      receipt?.target === fixture.unit &&
+      receipt?.stateHash === final.build.stateHash &&
+      receipt?.runtime === "workerd" &&
+      receipt?.artifactKey &&
+      receipt?.executionDigest,
+    "Missing independent compiler and original workerd test evidence at the repaired revision"
+  );
+  return {
+    world: { context_id: fixture.contextId, seed_revision: fixture.before },
+    checks,
+    evidence: { workspace: { fixture, verification } },
   };
 }
 

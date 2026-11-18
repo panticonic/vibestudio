@@ -9,7 +9,7 @@ Live workflow collection executes the authored Natlang root against real caller-
 - `recordsStore.ts` joins exchanges by their actual invocation ID into the completed call record. Existing record retention and flush semantics apply. Capture does not create permanent annotations.
 - `evalNatlang.ts` exposes `natlang.captureModelTurns({executorModel})` before the first Natlang call in the current eval run. Capture and executor selection reset for the next run. Ordinary runs retain no raw model contexts.
 - The gateway's Pi request context and original assistant response are retained only when capture is enabled. Original tool-call IDs are preserved alongside the normalized Natlang reply. Gateway attribution describes the authenticated transport caller; call-summary owner and run fields identify the eval owner.
-- The system-testing runner's `runPanelTeacher` RPC invokes the actual `repairPanel.nl` root in the seeded panel context using its real browser, VCS and build ports. A finite EvalDO owns execution and export. The result includes the original eval run, root call IDs and raw records before scope disposal.
+- The system-testing runner invokes each authored root in a seeded, caller-owned context. Panel repair uses real browser, VCS and build ports. Workspace integration uses the actual VCS conflict and decision history. Worker repair uses real compiler reports and the original manifest-declared workerd suite through Testbench. A finite EvalDO owns execution and retains the eval run, root call IDs and raw records before scope disposal.
 - Training admission and effect verification consume these records separately. A live browser/workspace episode is observed evidence, not a claim that external effects can be exactly replayed as a portable fixture. The independent system-test oracle remains separate from the teacher's report.
 
 ## Use
@@ -23,6 +23,7 @@ pnpm natlang:teacher --case panel-draft-unmount --out /path/to/new-run
 
 The panel cases are `panel-draft-unmount` and `panel-draft-stale-snapshot`. The VCS cases are
 `workspace-integration-theme-locale` and `workspace-integration-theme-locale-alias`.
+The worker cases are `worker-label-repair-type-mismatch` and `worker-label-repair-missing-helper`.
 The two cases in each family share a source group. The collector starts one isolated managed Vibestudio
 instance, checks the vendored Natlang build, pins the host and templates, and retains the full
 system-test trajectory. A new workspace can ask for access to the selected model's credential.
@@ -44,7 +45,7 @@ const program = await natlang.load("skills/example/root.nl", {
 await program(actualInput);
 ```
 
-Use the completed run's actual root IDs and raw traces. Export rejects incomplete records, a different run, missing parents or mixed owners. The panel-teacher runner also rejects any captured generation whose actual returned model differs from the chosen teacher. If a call is missing, treat the episode as incomplete and rerun it in a fresh owned fixture; do not synthesize a request or reply.
+Use the completed run's actual root IDs and raw traces. Export rejects incomplete records, a different run, missing parents or mixed owners. The teacher capture rejects any captured generation whose actual returned model differs from the chosen teacher. If a call is missing, treat the episode as incomplete and rerun it in a fresh owned fixture; do not synthesize a request or reply.
 
 ## Console history provider parity
 

@@ -135,3 +135,58 @@ test("workspace integration binds conflict source and verified state without bro
   assert.deepEqual(manifest.required_effect_kinds, ["workspace"]);
   assert.deepEqual(manifest.source_groups, ["vibestudio:workspace-integration:settings-conflict"]);
 });
+
+test("worker repair export binds the actual workerd artifact and candidate state", async (t) => {
+  const { options, entry, diagnostics, save } = await fixture(t);
+  entry.test.name = "worker-label-repair-type-mismatch";
+  const revisions = { before: "seed-head", after: "candidate-head" };
+  const target = "workers/labels";
+  diagnostics.natlangTeacher.programPath = "skills/workspace-dev/unit-repair/repairUnit.nl";
+  diagnostics.natlangTeacher.report = { status: "verified", revision: revisions.after };
+  diagnostics.natlangTeacher.calls[0].record.definition.name = "repairUnit";
+  diagnostics.unitRepairWorld = {
+    contextId: "ctx",
+    unit: target,
+    ...revisions,
+    baseline: [{ severity: "error", source: "tsc" }],
+  };
+  const receipt = {
+    protocol: "unit-verification-receipt.v1",
+    operation: "test",
+    contextId: "ctx",
+    target,
+    stateHash: "current-state",
+    runtime: "workerd",
+    artifactKey: "selected-artifact",
+    executionDigest: "selected-execution",
+  };
+  const protectedFiles = [
+    { path: target + "/package.json", sha256: "a".repeat(64) },
+    { path: target + "/index.test.ts", sha256: "b".repeat(64) },
+  ];
+  diagnostics.unitRepairVerification = {
+    passed: true,
+    checks: {
+      changedRevision: true,
+      sourceBuild: true,
+      originalManifestAndTests: true,
+      originalWorkerdSuite: true,
+    },
+    evidence: {
+      revision: revisions.after,
+      protectedSource: { before: protectedFiles, after: protectedFiles },
+      build: { status: "ok", stateHash: "current-state" },
+      tests: { status: "passed", report: { total: 5 }, receipt },
+    },
+  };
+  receipt.stateHash = "stale-state";
+  await save();
+  await assert.rejects(() => exportLiveTeacherWorkflow(options), /compiler and original workerd/);
+  receipt.stateHash = "current-state";
+  await save();
+  await exportLiveTeacherWorkflow(options);
+  const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
+  assert.equal(manifest.world.seed_revision, revisions.before);
+  assert.deepEqual(manifest.required_effect_kinds, ["workspace"]);
+  assert.deepEqual(manifest.source_groups, ["vibestudio:unit-repair:worker-label-normalizer"]);
+});
