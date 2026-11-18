@@ -38,6 +38,12 @@ const simple = {
 };
 
 const bound = {
+  async templateCandidate(world, load) {
+    const { createTemplateCandidateFixture } = await load(
+      "skills/template-candidate-fixtures/fixture.ts"
+    );
+    return createTemplateCandidateFixture(world);
+  },
   async scratchHandoff(world, load) {
     const { createScratchHandoffFixture } = await load(
       "skills/scratch-handoff-fixtures/fixture.ts"
