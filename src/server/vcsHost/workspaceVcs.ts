@@ -641,8 +641,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       const contextId = semanticRequestContextId(request);
       const operationClass = vcsMethods[semanticApiMethodForWire(method)].operationClass;
       if (contextId && operationClass !== "read") this.contextHeads.delete(contextId);
-      const next = await this.dispatchSemanticWire(method, request);
+      const owner = this.gad();
+      const next = await this.dispatchSemanticWire(owner, method, request);
       const result = await this.drainSemanticResult(
+        owner,
         next,
         (value) =>
           vcsMethods[semanticApiMethodForWire(method)].returns.parse(
@@ -677,13 +679,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private dispatchSemanticWire<M extends WorkspaceSemanticMethod>(
+    owner: WorkspaceSemanticPort,
     method: M,
     request: SemanticRequest<M>
   ): Promise<WorkspaceSourceSemanticDispatchResult> {
     if (!isSemanticWireMethod(method)) {
       throw new Error(`Invalid semantic VCS method ${JSON.stringify(method)}`);
     }
-    return this.gad()[method](request);
+    return owner[method](request);
   }
 
   semanticDirectCall<M extends WorkspaceSemanticMethod>(
@@ -804,6 +807,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private async drainSemanticResult<T>(
+    owner: WorkspaceSemanticPort,
     initial: SemanticDispatchResult,
     decode: SemanticResultDecoder<T>,
     publicationGateContext?: PublicationGateContext
@@ -815,7 +819,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       }
       if (result.kind === "host-read") {
         if (result.request["kind"] === "read-merge-content") {
-          result = await this.executeMergeContentHostRead(result.request);
+          result = await this.executeMergeContentHostRead(owner, result.request);
           continue;
         }
         return decode(await this.executeHostRead(result.request));
@@ -823,7 +827,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (result.kind === "host-content") {
         const request = result.request;
         result = await withBlobContentLock(this.deps.blobsDir, () =>
-          this.prepareSemanticContent(request)
+          this.prepareSemanticContent(owner, request)
         );
         continue;
       }
@@ -839,7 +843,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         this.deps.refs.acknowledgePublication(effect.effectId);
       }
       const acknowledgeStartedAt = performance.now();
-      result = await this.gad().semanticEffectAck({
+      result = await owner.semanticEffectAck({
         acknowledgement: {
           effectId: effect.effectId,
           payloadDigest: effect.payloadDigest,
@@ -870,9 +874,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       const head = this.deps.refs.readHeadPublication();
       if (head) await this.replayPublicationObservers(head);
     });
+    const owner = this.gad();
     let recovered = 0;
     for (let step = 0; step < 1_000; step += 1) {
-      const effects = await this.gad().pendingSemanticEffects();
+      const effects = await owner.pendingSemanticEffects();
       // Publication authorization belongs to the request that initiated the
       // protected advance. A generic restart has no caller or lifecycle
       // authority and must never manufacture one. It may only finish the
@@ -905,7 +910,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         // Selection happens outside the lifecycle lock. Re-check after joining
         // it so an effect cancelled by context deletion cannot recreate the
         // disposable projection from a stale command.
-        const pending = await this.gad().pendingSemanticEffects();
+        const pending = await owner.pendingSemanticEffects();
         if (
           !pending.some(
             (candidate) =>
@@ -929,7 +934,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
             }
           : await this.executeSemanticEffect(effect);
         if (publication) this.deps.refs.acknowledgePublication(effect.effectId);
-        await this.gad().semanticEffectAck({
+        await owner.semanticEffectAck({
           acknowledgement: {
             effectId: effect.effectId,
             payloadDigest: effect.payloadDigest,
@@ -1025,6 +1030,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   /** Prepared bytes remain transient until the source commits their content identities. */
   private async prepareSemanticContent(
+    owner: WorkspaceSemanticPort,
     request: WorkspaceSourceHostContentRequest
   ): Promise<SemanticDispatchResult> {
     const seen = new Set<string>();
@@ -1050,10 +1056,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const contentHashes = prepared
       .map(({ contentHash }) => contentHash)
       .sort(compareUtf16CodeUnits);
-    return this.gad().semanticContentAck({ acknowledgement: { request, contentHashes } });
+    return owner.semanticContentAck({ acknowledgement: { request, contentHashes } });
   }
 
-  private async executeHostRead(request: WorkspaceSourceHostReadRequest): Promise<unknown> {
+  private async executeHostRead(
+    request: Exclude<WorkspaceSourceHostReadRequest, { kind: "read-merge-content" }>
+  ): Promise<unknown> {
     if (request.kind === "read-semantic-blobs") {
       return Promise.all(
         request.files.map(async (file) => {
@@ -1061,9 +1069,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           return this.executeSingleSemanticBlobRead(file);
         })
       );
-    }
-    if (request.kind === "read-merge-content") {
-      return this.executeMergeContentHostRead(request);
     }
     return this.executeSingleSemanticBlobRead(request);
   }
@@ -1089,6 +1094,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private async executeMergeContentHostRead(
+    owner: WorkspaceSemanticPort,
     request: Extract<WorkspaceSourceHostReadRequest, { kind: "read-merge-content" }>
   ): Promise<SemanticDispatchResult> {
     const files = await Promise.all(
@@ -1106,7 +1112,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         return { contentHash, text };
       })
     );
-    return this.gad().semanticHostReadAck({ acknowledgement: { request, files } });
+    return owner.semanticHostReadAck({ acknowledgement: { request, files } });
   }
 
   private fileContent(
@@ -1305,13 +1311,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         contextId,
       })
     )}`;
-    const result = await this.gad().ensureContext({
+    const owner = this.gad();
+    const result = await owner.ensureContext({
       contextId,
       commandId,
       ...(projection === "deferred" ? { projection } : {}),
       ingress: { causalParent: null },
     });
-    const context = await this.drainSemanticResult(result, parseSemanticContextResult);
+    const context = await this.drainSemanticResult(owner, result, parseSemanticContextResult);
     this.publishContextHead(contextId, context.working.ref);
     return context.working.ref;
   }
@@ -1716,13 +1723,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           targetContextId,
         })
       )}`;
-      const result = await this.gad().forkContext({
+      const owner = this.gad();
+      const result = await owner.forkContext({
         sourceContextId,
         targetContextId,
         commandId,
         ingress: { causalParent: null },
       });
-      const context = await this.drainSemanticResult(result, parseSemanticContextResult);
+      const context = await this.drainSemanticResult(owner, result, parseSemanticContextResult);
       this.publishContextHead(targetContextId, context.working.ref);
       return context.working.ref;
     });
