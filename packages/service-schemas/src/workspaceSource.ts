@@ -1487,7 +1487,7 @@ const semanticEffectSchema = z
     createdAt: z.string(),
   })
   .strict();
-const semanticFileHostReadSchema = z
+export const semanticFileHostReadSchema = z
   .object({
     kind: z.literal("read-semantic-blob"),
     state: vcsStateNodeRefSchema,

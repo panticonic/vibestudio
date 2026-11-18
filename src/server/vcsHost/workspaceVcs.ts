@@ -25,6 +25,7 @@ import type {
   VcsPushInput,
   VcsPushResult,
   VcsReadFileResult,
+  VcsReadFilesInput,
   VcsStateNodeRef,
 } from "@vibestudio/service-schemas/vcs";
 import { vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
@@ -99,6 +100,7 @@ import {
   GadJsonRecordSchema,
   SemanticContextResultSchema,
   GadJsonValueSchema,
+  semanticFileHostReadSchema,
   type GadJsonRecord,
 } from "@vibestudio/service-schemas/workspaceSource";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
@@ -934,6 +936,36 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
   }
 
+  /** Read admitted selectors from one exact revision in the caller's participant history. */
+  async readParticipantFiles(input: {
+    dispatch: Pick<DODispatch, "dispatch">;
+    canonical: WorkspaceSourceProviderRef;
+    owner: WorkspaceSourceProviderRef;
+    caller: VerifiedCaller;
+    contextId: string;
+    read: VcsReadFilesInput;
+  }): Promise<VcsReadFileResult[]> {
+    requireWorkspaceParticipantOwner(input);
+    const { dispatch, owner, contextId, read } = input;
+    const files = semanticFileHostReadSchema.nullable().array().max(500).parse(
+      await dispatch.dispatch(owner, "readHistoryFiles", { contextId, read })
+    );
+    if (files.length !== read.files.length) {
+      throw new Error("Workspace history returned a different number of file results");
+    }
+    const state = canonicalJson(read.state);
+    for (const [index, selector] of read.files.entries()) {
+      const file = files[index];
+      if (file === null) continue;
+      if (!file || canonicalJson(file.state) !== state || file.repositoryId !== selector.repositoryId ||
+          (selector.file.kind === "id" ? file.fileId !== selector.file.fileId : file.path !== selector.file.path)) {
+        throw new Error("Workspace history returned a different file selection");
+      }
+    }
+    const result = await this.executeHostRead({ kind: "read-semantic-blobs", files });
+    return vcsMethods.readFiles.returns.parse(result);
+  }
+
   /**
    * One workspace-wide protected-main authoring lease. Callers that must read
    * main, author a candidate, journal its publication intent, and publish may
@@ -1217,6 +1249,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   ): Promise<NonNullable<VcsReadFileResult>> {
     const bytes = await getBytes(this.deps.blobsDir, request.contentHash);
     if (!bytes) throw new Error(`semantic content blob ${request.contentHash} is missing`);
+    if (crypto.createHash("sha256").update(bytes).digest("hex") !== request.contentHash) {
+      throw new Error(`semantic content blob ${request.contentHash} does not match its digest`);
+    }
     return {
       repositoryId: request.repositoryId,
       fileId: request.fileId,

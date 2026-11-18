@@ -7,7 +7,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { CONTEXT_BINDING_FILE, parseContextBinding } from "@vibestudio/shared/contextBinding";
 import { contextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
 import type { ContextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
-import { buildWorktreeManifest, EMPTY_STATE_HASH, sha256Hex } from "@vibestudio/content-addressing";
+import {
+  buildWorktreeManifest,
+  canonicalJson,
+  EMPTY_STATE_HASH,
+  sha256Hex,
+  sha256HexSyncText,
+} from "@vibestudio/content-addressing";
 import { createVerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import * as blobstoreService from "../services/blobstoreService.js";
 import {
@@ -673,6 +679,57 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     ]);
     files = [request, { ...request, contentHash: "0".repeat(64) }];
     await expect(read()).rejects.toThrow("missing");
+  });
+
+  it("verifies participant file coordinates and content against the exact read request", async () => {
+    const { blobsDir, vcs } = await harness();
+    const nativeInvocation = {
+      owner: { runtimeId: "agent", authoritySessionId: "sealed" },
+      task: { conversationId: 3, taskId: 1 },
+      operation: { kind: "tool" as const, assistantEntryId: 0, callId: "call" },
+    };
+    const caller = { runtime: { kind: "do" as const, id: "agent" }, nativeInvocation };
+    const participant = canonicalJson(["task", nativeInvocation.owner, nativeInvocation.task]);
+    const owner = { ...TEST_PROVIDER, objectKey: `work-${sha256HexSyncText(participant)}` };
+    const contextId = "context:test";
+    const state = { kind: "application" as const, applicationId: "app:test" };
+    const repositoryId = "repo";
+    const read = { state, files: [
+      { repositoryId, file: { kind: "path" as const, path: "value" } },
+      { repositoryId, file: { kind: "id" as const, fileId: "absent" } },
+    ] };
+    const text = "one";
+    const stored = await putBytes(blobsDir, Buffer.from(text));
+    const file = {
+      kind: "read-semantic-blob",
+      state,
+      repositoryId,
+      fileId: "file:test",
+      repoPath: "meta",
+      path: "value",
+      contentHash: stored.digest,
+      contentKind: "text",
+      byteLength: 3,
+      coordinateExtent: 3,
+      externalKeys: [],
+      authoredChangeId: "change:test",
+      authoredByWorkUnitId: "work:test",
+      contentClass: "internal",
+      mode: 0o644,
+    };
+    const dispatch = vi.fn().mockResolvedValue([file, null]);
+    const perform = () => vcs.readParticipantFiles({
+      dispatch: { dispatch }, canonical: TEST_PROVIDER, owner, caller, contextId, read,
+    });
+    await expect(perform()).resolves.toMatchObject([
+      { fileId: file.fileId, content: { kind: "text", text } }, null,
+    ]);
+    expect(dispatch).toHaveBeenLastCalledWith(owner, "readHistoryFiles", { contextId, read });
+    dispatch.mockResolvedValueOnce([{ ...file, path: "different" }, null]);
+    await expect(perform()).rejects.toThrow("different file selection");
+    await fsp.chmod(blobPath(blobsDir, stored.digest), 0o644);
+    await fsp.writeFile(blobPath(blobsDir, stored.digest), "two");
+    await expect(perform()).rejects.toThrow("does not match its digest");
   });
 
   it.each([
