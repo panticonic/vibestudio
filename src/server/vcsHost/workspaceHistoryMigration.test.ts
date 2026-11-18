@@ -21,6 +21,7 @@ it("replays onto one destination and returns the exact migrated context after a 
     [working, "installed-working"],
   ]);
   let lost = true;
+  let receipt: unknown = null;
   const dispatch = vi.fn(async (target, method, input) => {
     if (target === source && method === "exportHistoryReplayPlan") return plan;
     if (target === source && method === "exportHistoryReplayStep") {
@@ -30,12 +31,14 @@ it("replays onto one destination and returns the exact migrated context after a 
       return { head: nextByStep.get(input.step.kind === "event" ? main : working) };
     }
     if (target === destination && method === "finishHistoryReplay") {
+      receipt = input;
       if (lost) {
         lost = false;
         throw new Error("Lost publication reply");
       }
       return { head: input.head };
     }
+    if (target === destination && method === "readHistoryReplayReceipt") return receipt;
     throw new Error(`Unexpected migration operation ${method}`);
   });
   const args = { dispatch: { dispatch }, source, destination };
@@ -44,9 +47,14 @@ it("replays onto one destination and returns the exact migrated context after a 
     main: "installed-main",
     contexts: [{ id: "context:A", committed: "installed-main", working: "installed-working" }],
   });
+  const installed = {
+    eventId: main.eventId,
+    head: "installed-main",
+    contexts: [{ id: "context:A", committed: "installed-main", working: "installed-working" }],
+  };
   expect(dispatch.mock.calls.filter(([, method]) => method === "finishHistoryReplay")).toEqual([
-    [destination, "finishHistoryReplay", { eventId: main.eventId, head: "installed-main" }],
-    [destination, "finishHistoryReplay", { eventId: main.eventId, head: "installed-main" }],
+    [destination, "finishHistoryReplay", installed],
+    [destination, "finishHistoryReplay", installed],
   ]);
 });
 

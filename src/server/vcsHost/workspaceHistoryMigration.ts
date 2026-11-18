@@ -1,10 +1,25 @@
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import { compareUtf16CodeUnits } from "@vibestudio/content-addressing";
 import { vcsStateNodeRefSchema, type VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
 import { z } from "zod";
 import type { DODispatch } from "../doDispatch.js";
 import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
 
 const headSchema = z.object({ head: z.string().min(1) }).strict();
+const replayReceiptSchema = headSchema
+  .extend({
+    eventId: z.string().min(1),
+    contexts: z.array(
+      z
+        .object({
+          id: z.string().min(1),
+          committed: z.string().min(1),
+          working: z.string().min(1),
+        })
+        .strict()
+    ),
+  })
+  .strict();
 const planSchema = z
   .object({
     main: vcsStateNodeRefSchema.nullable(),
@@ -33,6 +48,15 @@ const replayStepIdentity = z.discriminatedUnion("kind", [
 
 function stateId(ref: VcsStateNodeRef): string {
   return ref.kind === "event" ? `event:${ref.eventId}` : `application:${ref.applicationId}`;
+}
+
+export async function readWorkspaceHistoryReplayReceipt(
+  dispatch: Pick<DODispatch, "dispatch">,
+  destination: WorkspaceSourceProviderRef
+) {
+  return replayReceiptSchema
+    .nullable()
+    .parse(await dispatch.dispatch(destination, "readHistoryReplayReceipt"));
 }
 
 /** The caller owns source quiescence and admission of the destination's hosted executable. */
@@ -71,20 +95,24 @@ export async function migrateWorkspaceHistory(input: {
     return head;
   };
   const main = resolve(plan.main);
-  const contexts = plan.contexts.map(({ id, working, committed }) => ({
-    id,
-    working: resolve(working),
-    committed: resolve(committed),
-  }));
+  const contexts = plan.contexts
+    .map(({ id, working, committed }) => ({
+      id,
+      working: resolve(working),
+      committed: resolve(committed),
+    }))
+    .sort((left, right) => compareUtf16CodeUnits(left.id, right.id));
   if (canonicalJson(plan) !== canonicalJson(await readPlan())) {
     throw new Error("Workspace source advanced during replay");
   }
+  const receipt = { eventId: plan.main.eventId, head: main, contexts };
   const result = headSchema.parse(
-    await dispatch.dispatch(destination, "finishHistoryReplay", {
-      eventId: plan.main.eventId,
-      head: main,
-    })
+    await dispatch.dispatch(destination, "finishHistoryReplay", receipt)
   );
   if (result.head !== main) throw new Error("Workspace replay installed a different head");
+  const recorded = await readWorkspaceHistoryReplayReceipt(dispatch, destination);
+  if (canonicalJson(recorded) !== canonicalJson(receipt)) {
+    throw new Error("Workspace replay recorded different context revisions");
+  }
   return { main, contexts };
 }

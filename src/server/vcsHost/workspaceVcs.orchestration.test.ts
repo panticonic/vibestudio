@@ -201,6 +201,10 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const state = { kind: "event", eventId: "replayed-event" };
     const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string, raw?: unknown) => {
       if (method === "readHistoryMain") return { head: "main", eventId: "main-event" };
+      if (method === "readHistoryReplayReceipt") return {
+        head: "initial", eventId: "main-event",
+        contexts: [{ id: contextId, committed: "initial", working: "replayed-working" }],
+      };
       if (method === "listHistoryAppliedPublications") return [];
       if (method === "reserveHistoryParticipant") {
         const { participantId } = raw as { participantId: string };
@@ -240,7 +244,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
     await expect(bind(1)).resolves.toBeNull();
     await vcs.attachParticipantHistory({
-      dispatch: { dispatch }, canonical, replayedWorkingHeads: new Map([[contextId, "replayed-working"]]),
+      dispatch: { dispatch }, canonical,
     });
     const [first, second] = await Promise.all([bind(1), bind(2)]);
     expect(first?.sourceRoot).toBeDefined();
@@ -1135,6 +1139,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     let retired = false;
     const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string) => {
       if (method === "readHistoryMain") return { head: "main-head", eventId: "main-event" };
+      if (method === "readHistoryReplayReceipt") return null;
       if (method === "listHistoryAppliedPublications") return [];
       if (method === "listHistoryRetainedParticipants") return retired ? [active] : [retiring, active];
       if (method !== "readHistoryContentRoots") throw new Error(`Unexpected history call ${method}`);

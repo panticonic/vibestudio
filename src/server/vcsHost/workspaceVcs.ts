@@ -130,6 +130,7 @@ import {
   type WorkspaceHistorySource,
 } from "./workspaceHistoryHost.js";
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
+import { readWorkspaceHistoryReplayReceipt } from "./workspaceHistoryMigration.js";
 import { retainedBlobDigests, withBlobContentLock } from "../storage/blobRetentions.js";
 
 /**
@@ -659,9 +660,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       }
       await readWorkspaceCanonicalMain(source);
       await this.recoverParticipantPublications(source);
+      const receipt = source.replayedWorkingHeads ? null
+        : await readWorkspaceHistoryReplayReceipt(source.dispatch, source.canonical);
+      const replayedWorkingHeads = source.replayedWorkingHeads ??
+        new Map(receipt?.contexts.map(({ id, working }) => [id, working]));
       this.participantHistorySource = {
         ...source,
-        ...(source.replayedWorkingHeads ? { replayedWorkingHeads: new Map(source.replayedWorkingHeads) } : {}),
+        replayedWorkingHeads: new Map(replayedWorkingHeads),
       };
     });
   }
