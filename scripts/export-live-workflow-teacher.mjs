@@ -153,6 +153,15 @@ const verifiedMemoryWorkflow = {
   root: "recallDecision",
   evidence: verifiedMemoryEvidence,
 };
+const onboardingWorkflow = {
+  family: "workspace-onboarding",
+  workspace: "personal",
+  namespace: "vibestudio:onboarding",
+  group: "installed-setup-owner-review",
+  validator: { template: "system-testing", path: "skills/system-testing/onboarding-managed.ts" },
+  root: "planSetup",
+  evidence: onboardingEvidence,
+};
 const composedReleaseWorkflow = {
   ...ownedOperationsWorkflow,
   family: "workspace-release-dossier",
@@ -195,6 +204,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedPresentationWorlds },
     { managedAuthoringWorlds },
     { managedMemoryWorlds },
+    { managedSetupWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -211,12 +221,21 @@ export async function loadLiveTeacherCases(checkouts) {
       "presentation-worlds.ts",
       "authoring-worlds.ts",
       "verified-memory-worlds.ts",
+      "onboarding-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, expected } of managedSetupWorlds) {
+    cases.set(`onboarding-live-${id}`, {
+      ...onboardingWorkflow,
+      caseId: id,
+      expectedStatus: expected.status,
+      expectedRoute: expected.route,
+    });
+  }
   for (const { id, expected } of managedMemoryWorlds) {
     cases.set(`verified-memory-live-${id}`, {
       ...verifiedMemoryWorkflow,
@@ -668,6 +687,41 @@ function verifiedMemoryEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, selected_event: verification.eventId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function onboardingEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedSetup;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  const sameRoute = (left, right) =>
+    right === null
+      ? left === null
+      : ["capabilityId", "action", "via", "destination"].every((key) => left?.[key] === right[key]);
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.caseId === workflow.caseId &&
+      verification.passed === true &&
+      verification.status === workflow.expectedStatus &&
+      report?.status === workflow.expectedStatus &&
+      /^[a-f0-9]{64}$/u.test(verification.receipt) &&
+      report.receipt === verification.receipt &&
+      sameRoute(verification.route, workflow.expectedRoute) &&
+      sameRoute(report.route, verification.route) &&
+      [
+        "workspaceHeadUnchanged",
+        "generationBound",
+        "exactOwnerRows",
+        "authoritativeRoute",
+        "unknownAndUnverified",
+      ].every((name) => verification.checks?.[name] === true),
+    "The onboarding plan must match its actual owner receipt and canonical route"
+  );
+  return {
+    world: { context_id: fixture.contextId, owner_snapshot: verification.receipt },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };

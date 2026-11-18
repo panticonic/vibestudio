@@ -74,6 +74,11 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
+        "onboarding-worlds",
+        "managedSetupWorlds",
+        [{ id: "retired", expected: { status: "invalid-selection", route: null } }],
+      ],
+      [
         "verified-memory-worlds",
         "managedMemoryWorlds",
         [{ id: "retired", expected: { status: "missing-source" } }],
@@ -149,6 +154,10 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(memory.root, "recallDecision");
   assert.equal(memory.workspace, "personal");
   assert.equal(memory.expectedStatus, "missing-source");
+  const setup = cases.get("onboarding-live-retired");
+  assert.equal(setup.root, "planSetup");
+  assert.equal(setup.workspace, "personal");
+  assert.equal(setup.expectedStatus, "invalid-selection");
   const presentation = cases.get("presentation-live-repair");
   assert.equal(presentation.root, "preparePresentation");
   assert.deepEqual(presentation.renderedIds, ["jobs"]);
@@ -419,6 +428,65 @@ test("authoring export rejects a review drawn from another baseline", async (t) 
   );
 });
 
+test("onboarding export requires the assigned workspace and canonical owner destination", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "onboarding-live-device-settings";
+  const run = diagnostics.natlangTeacher;
+  const receipt = "1".repeat(64);
+  const route = {
+    capabilityId: "connection.device",
+    action: "setup",
+    via: "shell-navigation",
+    destination: "settings/devices",
+  };
+  run.report = { status: "route-client", receipt, route };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  const skill = structuredClone(leaf);
+  skill.callId = skill.summary.call_id = "skill";
+  skill.record.definition.name = "planSetup";
+  leaf.record.parent_call_id = "skill";
+  run.calls.push(skill);
+  diagnostics.managedSetup = {
+    contextId: "ctx",
+    verification: {
+      caseId: "device-settings",
+      status: "route-client",
+      receipt,
+      route,
+      passed: true,
+      checks: Object.fromEntries(
+        [
+          "workspaceHeadUnchanged",
+          "generationBound",
+          "exactOwnerRows",
+          "authoritativeRoute",
+          "unknownAndUnverified",
+        ].map((name) => [name, true])
+      ),
+    },
+  };
+  await save();
+  await assert.rejects(
+    () => exportLiveTeacherWorkflow({ ...options, cases }),
+    /assigned workspace/u
+  );
+  const pinned = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pinned, workspace: "personal" }));
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  run.report.route = { ...route, destination: "settings/connection" };
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-route` }),
+    /must match its actual owner receipt and canonical route/u
+  );
+});
+
 test("workspace integration binds conflict source and verified state without browser evidence", async (t) => {
   const { options, entry, diagnostics, save } = await fixture(t);
   entry.test.name = "workspace-integration-theme-locale";
@@ -472,6 +540,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["presentation-worlds", "export const managedPresentationWorlds = [];"],
       ["authoring-worlds", "export const managedAuthoringWorlds = [];"],
       ["verified-memory-worlds", "export const managedMemoryWorlds = [];"],
+      ["onboarding-worlds", "export const managedSetupWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,
