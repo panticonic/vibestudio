@@ -1,12 +1,19 @@
 import { createHash } from "node:crypto";
 import { compareUtf16CodeUnits, sha256HexSyncText } from "@vibestudio/content-addressing";
 import {
+  vcsListDirectoryResultSchema,
+  vcsListFilesResultSchema,
+  vcsResolveRepositoryResultSchema,
   vcsStateNodeRefSchema,
   vcsSemanticNodeRefSchema,
   vcsStatusResultSchema,
   vcsWorkingMutationResultSchema,
   type VcsEditInput,
+  type VcsListDirectoryInput,
+  type VcsListFilesInput,
   type VcsMergeInput,
+  type VcsResolveRepositoryInput,
+  type VcsStateNodeRef,
   type VcsStatusResult,
   type VcsTrajectorySenderRef,
   type VcsWorkingMutationResult,
@@ -167,6 +174,54 @@ export async function readWorkspaceCanonicalMain(input: {
 export interface WorkspaceHistorySource {
   dispatch: Pick<DODispatch, "dispatch">;
   canonical: WorkspaceSourceProviderRef;
+}
+
+/** Bind the catalog reads to the admitted copy and verify their exact revision. */
+export function workspaceParticipantCatalog(input: WorkspaceHistorySource & {
+  caller: VerifiedCaller;
+  owner: WorkspaceSourceProviderRef;
+  contextId: string;
+}) {
+  requireWorkspaceParticipantOwner(input);
+  const { dispatch, owner, contextId } = input;
+  const verify = <T extends { state: VcsStateNodeRef } | null>(result: T, state: VcsStateNodeRef) => {
+    if (result && canonicalJson(result.state) !== canonicalJson(state)) {
+      throw new Error("Workspace catalog returned a different revision");
+    }
+    return result;
+  };
+  return {
+    async resolveRepository(repository: VcsResolveRepositoryInput) {
+      const result = verify(vcsResolveRepositoryResultSchema.parse(
+        await dispatch.dispatch(owner, "resolveHistoryRepository", { contextId, repository })
+      ), repository.state);
+      if (result && result.repoPath !== repository.repoPath)
+        throw new Error("Workspace catalog returned a different repository path");
+      return result;
+    },
+    async listFiles(list: VcsListFilesInput) {
+      const { prefix } = list;
+      const result = verify(vcsListFilesResultSchema.parse(
+        await dispatch.dispatch(owner, "listHistoryFiles", { contextId, list })
+      ), list.state);
+      if (result.repositoryId !== list.repositoryId || result.files.length > list.limit ||
+          (prefix && result.files.some(({ path }) => !path.startsWith(prefix)))) {
+        throw new Error("Workspace catalog returned a different file scope");
+      }
+      return result;
+    },
+    async listDirectory(list: VcsListDirectoryInput) {
+      const result = verify(vcsListDirectoryResultSchema.parse(
+        await dispatch.dispatch(owner, "listHistoryDirectory", { contextId, list })
+      ), list.state);
+      const prefix = list.path ? `${list.path}/` : "";
+      if (result && (result.path !== list.path || result.entries.length > list.limit ||
+          result.entries.some(({ name, path }) => path !== prefix + name))) {
+        throw new Error("Workspace catalog returned a different directory scope");
+      }
+      return result;
+    },
+  };
 }
 
 /** Read private roots before canonical roots so retirement preserves saved history in either location. */

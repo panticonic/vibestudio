@@ -13,6 +13,7 @@ import {
   openWorkspaceParticipantContext,
   readWorkspaceParticipantStatus,
   workspaceParticipantReferencesReachable,
+  workspaceParticipantCatalog,
 } from "./workspaceHistoryHost.js";
 
 const canonical = {
@@ -136,6 +137,27 @@ it("checks typed references through the admitted participant contexts", async ()
     references: [{ kind: "state-node", value: { kind: "event" } }],
   })).resolves.toBe(false);
   expect(dispatch).toHaveBeenCalledTimes(1);
+});
+
+it("binds catalog pages to the requested participant revision", async () => {
+  const caller = native(1, "catalog-call");
+  const participant = JSON.stringify(["task", {
+    authoritySessionId: "sealed", runtimeId: "agent",
+  }, { conversationId: 3, taskId: 1 }]);
+  const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participant)}` };
+  const contextId = "context";
+  const dispatch = vi.fn();
+  const catalog = workspaceParticipantCatalog({ dispatch: { dispatch }, caller, owner, canonical, contextId });
+  const state = { kind: "event" as const, eventId: "saved" };
+  const repository = { state, repoPath: "meta" };
+  dispatch.mockResolvedValueOnce({ ...repository, repositoryId: "repository" });
+  await expect(catalog.resolveRepository(repository)).resolves.toEqual({ ...repository, repositoryId: "repository" });
+  expect(dispatch).toHaveBeenLastCalledWith(owner, "resolveHistoryRepository", { contextId, repository });
+  const list = { state, path: "meta", limit: 5 };
+  dispatch.mockResolvedValueOnce({ state, path: list.path, entries: [], nextCursor: null });
+  await expect(catalog.listDirectory(list)).resolves.toMatchObject({ state, entries: [] });
+  dispatch.mockResolvedValueOnce({ state: { ...state, eventId: "other" }, path: list.path, entries: [], nextCursor: null });
+  await expect(catalog.listDirectory(list)).rejects.toThrow("different revision");
 });
 
 it.each([
