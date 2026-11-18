@@ -38,6 +38,12 @@ const simple = {
 };
 
 const bound = {
+  async mobileSystem(world, load) {
+    const { createMobileScenarioFixture } = await load(
+      "skills/mobile-system-testing-fixtures/fixture.ts"
+    );
+    return createMobileScenarioFixture(world);
+  },
   async visualize(world, load) {
     const [{ verifyPresentation }, { renderComponent }] = await Promise.all([
       load("skills/visualization-fixtures/verify.ts"),

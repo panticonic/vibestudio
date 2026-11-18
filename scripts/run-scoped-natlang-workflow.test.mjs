@@ -196,6 +196,37 @@ test("presentation evidence rejects a well-formed component with an invented num
   assert.equal(verify({ ...report, views: [...report.views].reverse() }), false);
 });
 
+test("mobile discovery confines concurrent provisioning and readiness to the assigned device", async () => {
+  const { world } = await loadAuthoredScopedWorkflow(
+    checkouts,
+    "mobile-system-explicit-compatible"
+  );
+  const load = (source) => loadScopedWorkflowModule(checkouts["system-testing"], source);
+  const { bindings, verify } = await prepareScopedWorkflowAdapter("mobileSystem", world, load);
+  const deviceId = world.request.deviceId;
+  await assert.rejects(bindings.mobilePairing.pair(deviceId), /Inspect the assigned inventory/u);
+  await bindings.mobileInventory.read();
+  await assert.rejects(bindings.mobilePairing.pair("emulator-5554"), /exact authorized/u);
+  const pairings = await Promise.allSettled([
+    bindings.mobilePairing.pair(deviceId),
+    bindings.mobilePairing.pair(deviceId),
+  ]);
+  assert.equal(pairings.filter(({ status }) => status === "fulfilled").length, 1);
+  const receipt = pairings.find(({ status }) => status === "fulfilled").value;
+  await assert.rejects(bindings.mobileWorkspace.read(deviceId), /paired device/u);
+  const readback = await bindings.mobileWorkspace.read(receipt.pairedDevice);
+  assert.equal(verify({ status: "paired-ready", deviceId, receipt, readback }), true);
+  assert.equal(
+    verify({
+      status: "paired-ready",
+      deviceId,
+      receipt,
+      readback: { ...readback, pairedDevice: deviceId },
+    }),
+    false
+  );
+});
+
 const newlyIntegrated = new Set(["google", "publication", "localModel"]);
 test("the newly integrated families require the expected binding evidence for every authored case", async () => {
   const scenarios = (await loadWorkflowBank(checkouts)).filter((item) =>

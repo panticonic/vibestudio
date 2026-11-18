@@ -10,6 +10,20 @@ const program = "skills/vibestudio-workflows/runWorkflow.nl";
 
 const domains = [
   {
+    domain: "mobileSystem",
+    template: "system-testing",
+    source: "skills/mobile-system-testing-fixtures/worlds.ts",
+    exported: "mobileScenarioWorlds",
+    operation: "runMobileScenario",
+    identify: (world) => [
+      world.id,
+      [
+        "vibestudio:system-testing:mobile-admission",
+        "vibestudio:system-testing:android-verified-outcome",
+      ],
+    ],
+  },
+  {
     domain: "visualize",
     template: "base",
     source: "skills/visualization-fixtures/worlds.ts",
