@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { createMissionsClient, type MissionRpc } from "./clients/missionsClient.js";
 import {
   missionCharterSchema,
   missionRecordSchema,
   missionRunRecordSchema,
   missionsMethods,
+  missionsRpcMethods,
 } from "./missions.js";
 
 const hex = "a".repeat(64);
@@ -16,6 +18,31 @@ const image = {
 };
 
 describe("missions v3 contract", () => {
+  it("requires a digest and reversible action for the revision-guarded method", () => {
+    const { args } = missionsMethods.transitionAtRevision;
+    expect(args.parse(["mission", "pause", hex])).toEqual(["mission", "pause", hex]);
+    expect(args.safeParse(["mission", "resume"]).success).toBe(false);
+    expect(args.safeParse(["mission", "retire", hex]).success).toBe(false);
+    expect(args.safeParse(["mission", "resume", "unknown-revision"]).success).toBe(false);
+    expect(missionsMethods.pause.args.parse(["mission"])).toEqual(["mission"]);
+    expect(missionsMethods.resume.args.parse(["mission"])).toEqual(["mission"]);
+  });
+
+  it("sends the guarded transition through the revision-aware receiver", async () => {
+    const result = { state: "paused", missionId: "mission", revisionDigest: hex };
+    const call = vi
+      .fn()
+      .mockResolvedValueOnce({ kind: "durable-object", targetId: "controller" })
+      .mockResolvedValueOnce(result);
+    const client = createMissionsClient({ call } as unknown as MissionRpc);
+    await expect(client.transitionAtRevision("mission", "pause", hex)).resolves.toEqual(result);
+    expect(call.mock.calls.at(-1)?.slice(0, 3)).toEqual([
+      "controller",
+      missionsRpcMethods.transitionAtRevision,
+      ["mission", "pause", hex],
+    ]);
+    expect(call).toHaveBeenCalledTimes(2);
+  });
   it("launches immediately and has no review endpoint", () => {
     expect(missionsMethods.launch.tier.tier).toBe("open");
     expect(missionsMethods).not.toHaveProperty("requestReview");

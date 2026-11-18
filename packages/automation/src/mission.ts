@@ -504,6 +504,11 @@ export interface MissionsClient {
   cancel(missionId: string): Promise<MissionRecord>;
   pause(missionId: string): Promise<MissionRecord>;
   resume(missionId: string): Promise<MissionRecord>;
+  transitionAtRevision(
+    missionId: string,
+    action: "pause" | "resume",
+    expectedRevisionDigest: string
+  ): Promise<MissionRecord>;
   retire(missionId: string): Promise<MissionRecord>;
 }
 
