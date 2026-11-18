@@ -141,6 +141,18 @@ const authoringWorkflow = {
   root: "reviewProgram",
   evidence: authoringEvidence,
 };
+const verifiedMemoryWorkflow = {
+  family: "workspace-verified-memory",
+  workspace: "personal",
+  namespace: "vibestudio:memory",
+  group: "verified-committed-source",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/verified-memory-managed.ts",
+  },
+  root: "recallDecision",
+  evidence: verifiedMemoryEvidence,
+};
 const composedReleaseWorkflow = {
   ...ownedOperationsWorkflow,
   family: "workspace-release-dossier",
@@ -182,6 +194,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedPdfWorlds },
     { managedPresentationWorlds },
     { managedAuthoringWorlds },
+    { managedMemoryWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -197,12 +210,20 @@ export async function loadLiveTeacherCases(checkouts) {
       "pdf-intake-worlds.ts",
       "presentation-worlds.ts",
       "authoring-worlds.ts",
+      "verified-memory-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, expected } of managedMemoryWorlds) {
+    cases.set(`verified-memory-live-${id}`, {
+      ...verifiedMemoryWorkflow,
+      caseId: id,
+      expectedStatus: expected.status,
+    });
+  }
   for (const { id, request, expected } of managedAuthoringWorlds) {
     cases.set(`authoring-live-${id}`, {
       ...authoringWorkflow,
@@ -619,6 +640,39 @@ function authoringEvidence(execution, exercise, _scenario, workflow) {
   };
 }
 
+function verifiedMemoryEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedMemory;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  const citation = verification?.citation;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.caseId === workflow.caseId &&
+      verification.passed === true &&
+      typeof verification.eventId === "string" &&
+      verification.status === workflow.expectedStatus &&
+      report?.status === workflow.expectedStatus &&
+      report.leadId === verification.leadId &&
+      verification.leadId === (report.status === "no-lead" ? null : verification.eventId) &&
+      ["protectedMainUnchanged", "actualRecall", "observedWorld", "joinedSource"].every(
+        (name) => verification.checks?.[name] === true
+      ) &&
+      (report.status === "verified"
+        ? citation?.eventId === verification.eventId &&
+          ["eventId", "path", "contentHash", "quote", "line"].every(
+            (name) => report.citation?.[name] === citation[name]
+          )
+        : citation === null && report.citation === null),
+    "The Personal memory report must match its recalled event and exact committed source"
+  );
+  return {
+    world: { context_id: fixture.contextId, selected_event: verification.eventId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
 function publicationPreflightEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.managedPublication;
   const verification = fixture?.verification;
@@ -885,6 +939,10 @@ export async function exportLiveTeacherWorkflow({
   const { test, result, execution } = entry;
   const workflow = cases.get(test?.name) ?? (await loadCases?.())?.get(test?.name);
   requireEvidence(workflow, "Unsupported live teacher scenario");
+  requireEvidence(
+    (source.workspace ?? "system") === (workflow.workspace ?? "system"),
+    "The live teacher source pin must name the case's assigned workspace"
+  );
   requireEvidence(result?.passed === true && !execution?.error, "The actual system test must pass");
   const exercise = execution?.diagnostics?.natlangTeacher;
   const shared = exercise?.programPath === sharedProgram;

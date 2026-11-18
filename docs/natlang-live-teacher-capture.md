@@ -74,10 +74,10 @@ The release-readiness dossier joins two skill trees in one call. It requires obs
 and verified cleanup before the project skill can prepare and commit the evidence dossier.
 The authored inventory comes from the configured system-testing template, which supplies
 the same worlds to the explicit system-test runner. `--list` prints each case's source groups for split hygiene.
-Repeat `--case` to run selected cases sequentially in one managed
-workspace. Each case gets its own system-test run, owned fixture context, source receipt and output under `cases/<case>/`.
-The final status indicates whether every selected case succeeded. Successful cases remain available when a later one fails. The collector starts one isolated managed Vibestudio
-instance, checks the vendored Natlang build, pins the host and templates, and retains the full
+Repeat `--case` to run selected cases in the managed workspace composition each case declares.
+Cases with the same composition share an instance. The collector retires that instance before starting the next composition.
+Each case gets its own system-test run, owned fixture context, source receipt and output under `cases/<case>/`.
+The final status indicates whether every selected case succeeded. Successful cases remain available when a later one fails. The collector checks the vendored Natlang build, pins the host and templates, and retains the full
 system-test trajectory. A new workspace can ask for access to the selected model's credential.
 The approval identifies the model gateway and provider for that workspace.
 

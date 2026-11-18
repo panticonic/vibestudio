@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 
-test("selected cases share one managed instance and keep earlier success when a later case fails", async (t) => {
+test("a batch reuses each workspace instance and retains successes across failures", async (t) => {
   const root = await mkdtemp(path.join(os.tmpdir(), "live-teacher-batch-"));
   t.after(() => rm(root, { recursive: true, force: true }));
   async function put(relative, contents, mode) {
@@ -43,8 +43,8 @@ test("selected cases share one managed instance and keep earlier success when a 
     "scripts/export-live-workflow-teacher.mjs",
     `import { mkdir, readFile, writeFile } from 'node:fs/promises';
     import path from 'node:path';
-    export const liveTeacherCases = new Map(['passing', 'failing'].map(caseId =>
-      [caseId, { family: 'fixture', group: 'group', validator: {template:'system-testing',path:'skills/system-testing/oracle.ts'} }]
+    export const liveTeacherCases = new Map(['passing', 'failing', 'personal'].map(caseId =>
+      [caseId, { family: 'fixture', group: 'group', workspace: caseId === 'personal' ? 'personal' : undefined, validator: {template:'system-testing',path:'skills/system-testing/oracle.ts'} }]
     ));
     export async function loadLiveTeacherCases() { return liveTeacherCases; }
     export function workflowSourceGroups(workflow) { return [workflow.group]; }
@@ -68,9 +68,9 @@ exit 0
     `#!/usr/bin/env node
     const fs = require('node:fs');
     const path = require('node:path');
-    const [launcher, , instance, command, ...args] = process.argv.slice(2);
+    const [launcher, , instance, , workspace, command, ...args] = process.argv.slice(2);
     if (launcher === 'natlang:vendor') process.exit(0);
-    fs.appendFileSync('commands.jsonl', JSON.stringify({ instance, command, args }) + '\\n');
+    fs.appendFileSync('commands.jsonl', JSON.stringify({ instance, workspace, command, args }) + '\\n');
     const out = args[args.indexOf('--out-dir') + 1];
     if (command === 'run') {
       fs.mkdirSync(path.join(out, '${runId}'));
@@ -92,6 +92,8 @@ exit 0
       "passing",
       "--case",
       "failing",
+      "--case",
+      "personal",
       "--out",
       out,
     ],
@@ -109,13 +111,34 @@ exit 0
     .map(JSON.parse);
   assert.deepEqual(
     commands.map(({ command }) => command),
-    ["doctor", "run", "trajectory", "run", "stop"]
+    ["doctor", "run", "trajectory", "run", "stop", "doctor", "run", "trajectory", "stop"]
   );
-  assert.equal(new Set(commands.map(({ instance }) => instance)).size, 1);
+  assert.deepEqual(
+    commands.map(({ workspace }) => workspace),
+    [
+      "system",
+      "system",
+      "system",
+      "system",
+      "system",
+      "personal",
+      "personal",
+      "personal",
+      "personal",
+    ]
+  );
+  assert.equal(new Set(commands.slice(0, 5).map(({ instance }) => instance)).size, 1);
+  assert.equal(new Set(commands.slice(5).map(({ instance }) => instance)).size, 1);
+  assert.notEqual(commands[0].instance, commands[5].instance);
   const pathFor = (kind, name) => path.join(out, "cases", kind, name);
   const admitted = JSON.parse(await readFile(pathFor("passing", "verified/manifest.json"), "utf8"));
   assert.equal(admitted.source.run_id, runId);
   assert.equal(admitted.run.scenario, "passing");
+  const personal = JSON.parse(
+    await readFile(pathFor("personal", "verified/manifest.json"), "utf8")
+  );
+  assert.equal(personal.source.workspace, "personal");
+  assert.equal(personal.source.instance, commands[5].instance);
   assert.equal(JSON.parse(await readFile(pathFor("failing", "source.json"), "utf8")).run_id, runId);
   await assert.rejects(readFile(pathFor("failing", "verified/manifest.json")), { code: "ENOENT" });
 });

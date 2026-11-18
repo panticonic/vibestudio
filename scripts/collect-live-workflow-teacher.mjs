@@ -48,6 +48,7 @@ if (list) {
         scenario,
         family: workflow.family,
         sourceGroup: workflow.group,
+        workspace: workflow.workspace ?? "system",
         sourceGroups: workflowSourceGroups(workflow),
         requiresReview: Boolean(workflow.requiresReview),
       })
@@ -120,77 +121,103 @@ if (command(["natlang:vendor", "--check"]) !== 0)
   throw new Error("Vendored Natlang pin check failed");
 const out = path.resolve(values.out);
 mkdirSync(out, { mode: 0o700 });
-const instance = `natlang-live-${randomUUID().slice(0, 12)}`;
-const systemTest = (args, stdout) =>
-  command(["system-test", "--instance", instance, ...args], stdout);
-const source = { repositories: pinned.repositories, instance, teacher: values.model };
+const source = { repositories: pinned.repositories, teacher: values.model };
 const writePins = (destination, value) =>
   writeFileSync(destination, JSON.stringify(value, null, 2), { mode: 0o600 });
 
 const single = scenarios.length === 1;
 const casesDir = path.join(out, "cases");
+const groups = new Map();
+for (const scenario of scenarios) {
+  const workspace = liveTeacherCases.get(scenario).workspace ?? "system";
+  if (!groups.has(workspace))
+    groups.set(workspace, { instance: `natlang-live-${randomUUID().slice(0, 12)}`, cases: [] });
+  groups.get(workspace).cases.push(scenario);
+}
 if (!single) {
-  writePins(path.join(out, "source.json"), { ...source, scenarios });
+  const instances = Object.fromEntries(
+    [...groups].map(([workspace, group]) => [workspace, group.instance])
+  );
+  const legacy = groups.size === 1 ? { instance: groups.values().next().value.instance } : {};
+  writePins(path.join(out, "source.json"), { ...source, ...legacy, instances, scenarios });
   mkdirSync(casesDir, { mode: 0o700 });
 }
-const cases = scenarios.map((scenario) => {
-  const directory = single ? out : path.join(casesDir, scenario);
-  if (!single) mkdirSync(directory, { mode: 0o700 });
-  const pins = path.join(directory, "source.json");
-  const caseSource = { ...source, validator_sha256: pinned.validators[scenario] };
-  writePins(pins, caseSource);
-  return { scenario, directory, pins, caseSource };
-});
-try {
-  if (systemTest(["doctor", "--approve-startup", "--model", source.teacher]) !== 0) {
-    throw new Error("The managed Vibestudio instance did not pass readiness checks");
-  }
-  const failures = [];
-  for (const { scenario, directory, pins, caseSource } of cases) {
-    try {
-      if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
-        throw new Error("Source pins changed before starting the case");
-      const status = systemTest([
-        "run",
-        scenario,
-        "--model",
-        source.teacher,
-        "--out-dir",
-        directory,
-      ]);
-      const runs = readdirSync(directory).filter((entry) => /^st_[a-f0-9]{32}$/u.test(entry));
-      if (runs.length !== 1) throw new Error("Expected one managed system-test run");
-      const [runId] = runs;
-      writePins(pins, { ...caseSource, run_id: runId });
-      if (status !== 0)
-        throw new Error(`System test ${runId} failed. Its evidence is in ${directory}`);
-      if (
-        systemTest(
-          ["trajectory", runId, scenario, "--full", "--json", "--out-dir", directory],
-          "ignore"
-        ) !== 0
-      )
-        throw new Error(`Unable to retrieve the durable trajectory for ${runId}`);
-      if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
-        throw new Error("Source pins changed during the live run");
-      const destination = path.join(directory, "verified");
-      await exportLiveTeacherWorkflow({
-        trajectory: path.join(directory, runId, `trajectory-${scenario}-full.json.gz`),
-        pins,
-        validator: validators.get(scenario),
-        out: destination,
-        split: "train",
-        review,
-        cases: liveTeacherCases,
-      });
-      console.log(path.join(destination, "manifest.json"));
-    } catch (error) {
-      console.error(`Teacher case ${scenario} failed: ${String(error)}`);
-      failures.push(error);
+const failures = [];
+for (const [workspace, group] of groups) {
+  const { instance } = group;
+  const systemTest = (args, stdout) =>
+    command(["system-test", "--instance", instance, "--workspace", workspace, ...args], stdout);
+  const cases = group.cases.map((scenario) => {
+    const directory = single ? out : path.join(casesDir, scenario);
+    if (!single) mkdirSync(directory, { mode: 0o700 });
+    const pins = path.join(directory, "source.json");
+    const caseSource = {
+      ...source,
+      instance,
+      workspace,
+      validator_sha256: pinned.validators[scenario],
+    };
+    writePins(pins, caseSource);
+    return { scenario, directory, pins, caseSource };
+  });
+  let stopStatus;
+  try {
+    if (systemTest(["doctor", "--approve-startup", "--model", source.teacher]) !== 0) {
+      throw new Error(`The managed ${workspace} workspace did not pass readiness checks`);
     }
+    for (const { scenario, directory, pins, caseSource } of cases) {
+      try {
+        if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
+          throw new Error("Source pins changed before starting the case");
+        const status = systemTest([
+          "run",
+          scenario,
+          "--model",
+          source.teacher,
+          "--out-dir",
+          directory,
+        ]);
+        const runs = readdirSync(directory).filter((entry) => /^st_[a-f0-9]{32}$/u.test(entry));
+        if (runs.length !== 1) throw new Error("Expected one managed system-test run");
+        const [runId] = runs;
+        writePins(pins, { ...caseSource, run_id: runId });
+        if (status !== 0)
+          throw new Error(`System test ${runId} failed. Its evidence is in ${directory}`);
+        if (
+          systemTest(
+            ["trajectory", runId, scenario, "--full", "--json", "--out-dir", directory],
+            "ignore"
+          ) !== 0
+        )
+          throw new Error(`Unable to retrieve the durable trajectory for ${runId}`);
+        if (JSON.stringify(pinSources()) !== JSON.stringify(pinned))
+          throw new Error("Source pins changed during the live run");
+        const destination = path.join(directory, "verified");
+        await exportLiveTeacherWorkflow({
+          trajectory: path.join(directory, runId, `trajectory-${scenario}-full.json.gz`),
+          pins,
+          validator: validators.get(scenario),
+          out: destination,
+          split: "train",
+          review,
+          cases: liveTeacherCases,
+        });
+        console.log(path.join(destination, "manifest.json"));
+      } catch (error) {
+        console.error(`Teacher case ${scenario} failed: ${String(error)}`);
+        failures.push(error);
+      }
+    }
+  } catch (error) {
+    console.error(`Teacher workspace ${workspace} failed: ${String(error)}`);
+    failures.push(error);
+  } finally {
+    stopStatus = systemTest(["stop"]);
   }
-  if (failures.length)
-    throw new AggregateError(failures, `${failures.length} live teacher case(s) failed`);
-} finally {
-  if (systemTest(["stop"]) !== 0) process.exitCode = 1;
+  if (stopStatus !== 0) {
+    failures.push(new Error(`Could not retire the managed ${workspace} workspace ${instance}`));
+    break;
+  }
 }
+if (failures.length)
+  throw new AggregateError(failures, `${failures.length} live teacher operation(s) failed`);

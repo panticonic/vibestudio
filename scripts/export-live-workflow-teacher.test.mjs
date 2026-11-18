@@ -74,6 +74,11 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
+        "verified-memory-worlds",
+        "managedMemoryWorlds",
+        [{ id: "retired", expected: { status: "missing-source" } }],
+      ],
+      [
         "authoring-worlds",
         "managedAuthoringWorlds",
         [
@@ -140,6 +145,10 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(review.root, "reviewProgram");
   assert.equal(review.comparedBaseline, true);
   assert.equal(review.expectedStatus, "baseline-rejected");
+  const memory = cases.get("verified-memory-live-retired");
+  assert.equal(memory.root, "recallDecision");
+  assert.equal(memory.workspace, "personal");
+  assert.equal(memory.expectedStatus, "missing-source");
   const presentation = cases.get("presentation-live-repair");
   assert.equal(presentation.root, "preparePresentation");
   assert.deepEqual(presentation.renderedIds, ["jobs"]);
@@ -462,6 +471,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["pdf-intake-worlds", "export const managedPdfWorlds = [];"],
       ["presentation-worlds", "export const managedPresentationWorlds = [];"],
       ["authoring-worlds", "export const managedAuthoringWorlds = [];"],
+      ["verified-memory-worlds", "export const managedMemoryWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,
