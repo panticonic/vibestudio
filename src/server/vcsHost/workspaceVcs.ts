@@ -2550,6 +2550,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return stateHash;
   }
 
+  /** Keep exact content and semantic identity together even when two revisions have identical bytes. */
+  async resolveCallerContextState(contextId: string, caller: VerifiedCaller, signal?: AbortSignal) {
+    const { semanticState, repositories } = this.participantHistoryAttached
+      ? await this.participantContextContent(contextId, caller, signal)
+      : await this.exactContextContent(contextId);
+    const { stateHash } = await this.repositories.contentView(repositories);
+    return { semanticState, stateHash };
+  }
+
   executionStateForContent(
     stateHash: string
   ): import("@vibestudio/shared/execution/retention").ExecutionSourceStateRef | null {

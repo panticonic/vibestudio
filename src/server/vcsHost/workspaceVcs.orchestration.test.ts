@@ -352,6 +352,16 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const before = dispatch.mock.calls.length;
     expect(await vcs.contextRepoTargets(contextId, actorA)).toEqual([a]);
     expect(dispatch.mock.calls).toHaveLength(before);
+    const [privateSource, sharedSource] = await Promise.all([
+      vcs.resolveCallerContextState(contextId, actorA),
+      vcs.resolveCallerContextState(contextId, actorB),
+    ]);
+    expect(privateSource.semanticState).toEqual({ kind: "application", applicationId: "alice-edit" });
+    expect(sharedSource.semanticState).toEqual({ kind: "event", eventId: "genesis" });
+    await expect(vcs.readFile(privateSource.stateHash, "packages/example/note.txt")).resolves
+      .toMatchObject({ content: { kind: "text", text: "private edit" } });
+    await expect(vcs.readFile(sharedSource.stateHash, "packages/example/note.txt")).resolves
+      .toMatchObject({ content: { kind: "text", text: "shared content" } });
     expect(scope).toHaveBeenCalledWith({ caller: actorA, contextId, ownerContextId: contextId });
     await expect(vcs.contextRepoTargets(contextId)).rejects.toThrow("verified caller");
   });

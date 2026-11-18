@@ -4255,14 +4255,9 @@ async function main() {
               operation.method,
               operation.args
             ),
-          resolveContextSource: async (contextId, sourcePath) => {
-            const contentStateHash = await workspaceVcs.resolveContextState(contextId);
-            const sourceState = workspaceVcs.executionStateForContent(contentStateHash);
-            if (!sourceState || sourceState.kind === "bootstrap-snapshot") {
-              throw new Error(
-                `eval context ${contextId} has no semantic identity for ${contentStateHash}`
-              );
-            }
+          resolveContextSource: async (contextId, sourcePath, ctx) => {
+            const { stateHash: contentStateHash, semanticState: sourceState } =
+              await workspaceVcs.resolveCallerContextState(contextId, ctx.caller, ctx.signal);
             const file = await workspaceVcs.readFile(contentStateHash, sourcePath);
             if (!file) throw new Error(`eval source file does not exist: ${sourcePath}`);
             if (file.content.kind !== "text") {

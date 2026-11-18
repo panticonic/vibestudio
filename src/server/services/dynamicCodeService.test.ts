@@ -415,6 +415,12 @@ function createHarness(
     }
   );
   let shutdown: (() => Promise<void>) | null = null;
+  const resolveContextSource = vi.fn(async (_contextId: string, sourcePath: string, _ctx: ServiceContext) => ({
+    code: `// exact:${sourcePath}\nreturn 7;`,
+    sourceDigest: createHash("sha256").update(`// exact:${sourcePath}\nreturn 7;`).digest("hex"),
+    sourceState: { kind: "event" as const, eventId: "event:source" },
+    contentStateHash: `state:${"c".repeat(64)}`,
+  }));
   const dynamicCode = createDynamicCodeService({
     resolveExecutionArtifact: () =>
       options.ownerArtifact === undefined
@@ -433,18 +439,14 @@ function createHarness(
       shutdown = callback;
     },
     ...(options.systemTestHarness ? { isSystemTestHarness: () => true } : {}),
-    resolveContextSource: async (_contextId, sourcePath) => ({
-      code: `// exact:${sourcePath}\nreturn 7;`,
-      sourceDigest: createHash("sha256").update(`// exact:${sourcePath}\nreturn 7;`).digest("hex"),
-      sourceState: { kind: "event", eventId: "event:source" },
-      contentStateHash: `state:${"c".repeat(64)}`,
-    }),
+    resolveContextSource,
   });
   const service = callerView(dynamicCode, doDispatch);
   return {
     service,
     dynamicCode,
     calls,
+    resolveContextSource,
     executionSessions,
     taskAuthorities,
     activity,
@@ -1180,9 +1182,10 @@ describe("dynamicCode admission", () => {
 
   it("retains exact context-file bytes and semantic source provenance before acceptance", async () => {
     const ownerId = "session:default";
-    const { service, calls } = createHarness({ [ownerId]: "ctx:source" });
+    const { service, calls, resolveContextSource } = createHarness({ [ownerId]: "ctx:source" });
+    const ctx = activeInvocationContext(authenticatedCaller("shell:dev_cli", "shell"));
     await service.handler(
-      activeInvocationContext(authenticatedCaller("shell:dev_cli", "shell")),
+      ctx,
       "start",
       [
         {
@@ -1192,6 +1195,7 @@ describe("dynamicCode admission", () => {
         },
       ]
     );
+    expect(resolveContextSource).toHaveBeenCalledWith("ctx:source", "scripts/check.ts", ctx);
     const accepted = calls.find((call) => call.method === "startRun")?.args[0] as Record<
       string,
       unknown

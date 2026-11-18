@@ -132,7 +132,8 @@ export function createDynamicCodeService(deps: {
   ) => Promise<void>;
   resolveContextSource?: (
     contextId: string,
-    path: string
+    path: string,
+    ctx: ServiceContext
   ) => Promise<{
     code: string;
     sourceDigest: string;
@@ -592,6 +593,8 @@ export function createDynamicCodeService(deps: {
   }> {
     const owner = await resolveOwnerForCaller(ctx, runArgs);
     const ownerId = owner.ownerId;
+    const agentBinding = trustedAgentRelay(ctx);
+    assertAgentCausalParent(ctx, agentBinding);
     const exactSource =
       runArgs.source.kind === "inline"
         ? {
@@ -601,7 +604,7 @@ export function createDynamicCodeService(deps: {
             contentStateHash: undefined,
           }
         : deps.resolveContextSource
-          ? await deps.resolveContextSource(owner.contextId, runArgs.source.path)
+          ? await deps.resolveContextSource(owner.contextId, runArgs.source.path, ctx)
           : (() => {
               throw new ServiceError(
                 "dynamicCode",
@@ -612,8 +615,6 @@ export function createDynamicCodeService(deps: {
                 "service"
               );
             })();
-    const agentBinding = trustedAgentRelay(ctx);
-    assertAgentCausalParent(ctx, agentBinding);
     // Refuse an unscoped or trajectory-drifting agent relay before creating
     // a session or exposing any presenter authority ceiling.
     const { ref: hostRef } = await ensureSession(
