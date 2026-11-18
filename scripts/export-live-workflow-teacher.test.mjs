@@ -1,10 +1,75 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { exportLiveTeacherWorkflow } from "./export-live-workflow-teacher.mjs";
+import {
+  exportLiveTeacherWorkflow,
+  loadLiveTeacherCases,
+  workflowSourceGroups,
+} from "./export-live-workflow-teacher.mjs";
+
+test("authored template worlds flow into the collector without losing original split lineage", async (t) => {
+  const dir = await mkdtemp(path.join(os.tmpdir(), "live-teacher-inventory-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const casesDir = path.join(dir, "skills/system-testing");
+  await mkdir(path.join(casesDir, "local-messaging"), { recursive: true });
+  await Promise.all(
+    [
+      [
+        "content-project-worlds",
+        "contentProjectWorlds",
+        [
+          { id: "release-runbook", sourceGroup: "content-project/release-operations-v1" },
+          { id: "handoff", sourceGroup: "content-project/release-operations-v1" },
+          { id: "inventory", sourceGroup: "content-project/inventory-v1" },
+        ],
+      ],
+      [
+        "owned-operations-worlds",
+        "ownedOperationsWorlds",
+        [{ id: "release-blocked", sourceGroup: "vibestudio:owned-operations:release:blocked" }],
+      ],
+      ["unit-repair-worlds", "workerRepairWorlds", [{ id: "pagination" }]],
+      ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
+    ].map(([file, name, worlds]) =>
+      writeFile(
+        path.join(casesDir, `${file}.ts`),
+        `export const ${name} = ${JSON.stringify(worlds)};
+         ${name === "ownedOperationsWorlds" ? 'export const ownedOperationsComposedWorlds = [{ id: "release-readiness-dossier", sourceGroup: "vibestudio:owned-operations:release:pending" }];' : ""}`
+      )
+    )
+  );
+  const cases = await loadLiveTeacherCases({ "system-testing": dir });
+  const groups = (id) => workflowSourceGroups(cases.get(id));
+  assert.deepEqual(groups("content-project-release-runbook"), [
+    "vibestudio:content-project:grounded-project-delivery",
+  ]);
+  assert.deepEqual(groups("content-project-handoff"), [
+    "vibestudio:content-project:release-operations-v1",
+    "vibestudio:content-project:grounded-project-delivery",
+  ]);
+  assert.deepEqual(groups("content-project-inventory"), [
+    "vibestudio:content-project:inventory-v1",
+  ]);
+  assert.equal(cases.get("content-project-inventory").requiresReview, true);
+  assert.deepEqual(groups("owned-operations-release-blocked"), [
+    "vibestudio:owned-operations:release:blocked",
+  ]);
+  assert.deepEqual(groups("worker-repair-pagination"), ["vibestudio:unit-repair:pagination"]);
+  assert.deepEqual(groups("messaging-audience-hold"), [
+    "vibestudio:local-messaging:scoped-addressed-delivery",
+  ]);
+  const composed = cases.get("owned-operations-release-readiness-dossier");
+  assert.deepEqual(composed.skills, ["operate", "deliverProject"]);
+  assert.equal(composed.requiresReview, true);
+  assert.deepEqual(workflowSourceGroups(composed), [
+    "vibestudio:owned-operations:release:pending",
+    "vibestudio:owned-operations:durable-worker-handoff",
+    "vibestudio:content-project:grounded-project-delivery",
+  ]);
+});
 
 async function fixture(t) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "live-panel-export-"));
@@ -94,6 +159,23 @@ test("live panel export rejects a report about a different revision", async (t) 
   diagnostics.natlangTeacher.report.revision = "stale";
   await save();
   await assert.rejects(() => exportLiveTeacherWorkflow(options), /repair report/);
+});
+
+test("shared program export requires the assigned skill and its actual nested stages", async (t) => {
+  const { options, diagnostics, save } = await fixture(t);
+  const run = diagnostics.natlangTeacher;
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, reproduce] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  await save();
+  await assert.rejects(() => exportLiveTeacherWorkflow(options), /assigned repairPanel skill/);
+  const skill = structuredClone(reproduce);
+  skill.callId = skill.summary.call_id = "skill";
+  skill.record.definition.name = "repairPanel";
+  reproduce.record.parent_call_id = "skill";
+  run.calls.push(skill);
+  await save();
+  await exportLiveTeacherWorkflow(options);
 });
 
 test("live panel export rejects a child from a different evaluation", async (t) => {

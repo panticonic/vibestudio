@@ -9,7 +9,7 @@ Live workflow collection executes the authored Natlang root against real caller-
 - `recordsStore.ts` joins exchanges by their actual invocation ID into the completed call record. Existing record retention and flush semantics apply. Capture does not create permanent annotations.
 - `evalNatlang.ts` exposes `natlang.captureModelTurns({executorModel})` before the first Natlang call in the current eval run. Capture and executor selection reset for the next run. Ordinary runs retain no raw model contexts.
 - The gateway's Pi request context and original assistant response are retained only when capture is enabled. Original tool-call IDs are preserved alongside the normalized Natlang reply. Gateway attribution describes the authenticated transport caller; call-summary owner and run fields identify the eval owner.
-- The system-testing runner invokes each authored root in a seeded, caller-owned context. Panel repair uses real browser, VCS and build ports. Workspace integration uses the actual VCS conflict and decision history. Worker repair uses real compiler reports and the original manifest-declared workerd suite through Testbench. A finite EvalDO owns execution and retains the eval run, root call IDs and raw records before scope disposal.
+- The system-testing runner invokes `skills/vibestudio-workflows/runWorkflow.nl` in a seeded, caller-owned context. The shared lambda calls a typed skill tree with that scenario's assigned input and live service bindings. Panel repair uses real browser, VCS and build ports. Workspace integration uses actual conflict and decision history. Worker repair uses real compiler reports and the original manifest-declared workerd suite through Testbench. A finite EvalDO retains the run, skill calls and nested records before scope disposal.
 - Training admission and effect verification consume these records separately. A live browser/workspace episode is observed evidence, not a claim that external effects can be exactly replayed as a portable fixture. The independent system-test oracle remains separate from the teacher's report.
 
 ## Use
@@ -21,25 +21,31 @@ pnpm natlang:teacher --list
 pnpm natlang:teacher --case panel-draft-unmount --out /path/to/new-run
 ```
 
-The panel cases are `panel-draft-unmount` and `panel-draft-stale-snapshot`. The VCS cases are
-`workspace-integration-theme-locale` and `workspace-integration-theme-locale-alias`.
-The worker cases are `worker-label-repair-type-mismatch` and `worker-label-repair-missing-helper`.
-The content cases are `content-project-release-runbook` and `content-project-role-onboarding`.
-Owned operations include `owned-operations-incident-payment-and-ledger` and
-`owned-operations-release-audit-continuation`, with independent checks of actual persistence and teardown.
-The two cases in each family share a source group. Repeat `--case` to run selected cases sequentially in one managed
+The catalog includes browser-driven panel repair, workspace VCS integration, worker diagnosis and repair,
+grounded document projects, and stateful incident and release handoffs. Worker worlds cover behavior such
+as routing precedence, event ordering and queue admission. Content worlds include access offboarding,
+inventory migration, consent, event logistics, and dataset release and recall. Operations worlds vary
+restoration and recovery readiness, approval changes, rejected gates, and continuation from durable state.
+Messaging worlds exercise addressed local delivery and holding an ambiguous recipient in synthetic owned channels.
+The release-readiness dossier joins two skill trees in one call. It requires observed recovery after a real worker restart
+and verified cleanup before the project skill can prepare and commit the evidence dossier.
+The authored inventory comes from the configured system-testing template, which supplies
+the same worlds to the explicit system-test runner. `--list` prints each case's source groups for split hygiene.
+Repeat `--case` to run selected cases sequentially in one managed
 workspace. Each case gets its own system-test run, owned fixture context, source receipt and output under `cases/<case>/`.
 The final status indicates whether every selected case succeeded. Successful cases remain available when a later one fails. The collector starts one isolated managed Vibestudio
 instance, checks the vendored Natlang build, pins the host and templates, and retains the full
 system-test trajectory. A new workspace can ask for access to the selected model's credential.
 The approval identifies the model gateway and provider for that workspace.
 
-Content cases also need `--review-model PROVIDER:MODEL` with a model distinct from the executor. The independent judge
+Content cases and the release-readiness dossier need `--review-model PROVIDER:MODEL` with a model distinct from the executor. The independent judge
 reads the actual committed document bytes against the test's original goal and facts. It uses the built Natlang Node host
 in `$NATLANG_REPO` (default `~/natlang`) and its configured provider login. The artifact retains the review separately from
 executor targets.
 
-On success, `verified/manifest.json` binds the original call tree and the independent effect checks. The verified
+On success, `verified/manifest.json` binds the original call tree and the independent effect checks. For shared-program
+runs the exporter requires the common root, the assigned skill as its direct child, and that skill's own nested stages.
+The verified
 manifest is the input to Natlang's [shared SFT pipeline](https://github.com/werg/natlang/blob/main/plans/neuralese/LIVE_WORKFLOW_SFT_20261118.md).
 Failed runs retain diagnostic artifacts.
 

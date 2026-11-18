@@ -9,7 +9,11 @@ import {
   requireDevelopmentTemplateCheckouts,
   developmentTemplateHead,
 } from "../src/dev/developmentTemplateConfig.cjs";
-import { exportLiveTeacherWorkflow, liveTeacherCases } from "./export-live-workflow-teacher.mjs";
+import {
+  exportLiveTeacherWorkflow,
+  loadLiveTeacherCases,
+  workflowSourceGroups,
+} from "./export-live-workflow-teacher.mjs";
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
 const args = process.argv.slice(2);
@@ -23,28 +27,37 @@ const { values } = parseArgs({
     model: { type: "string", default: "openai-codex:gpt-6-luna" },
   },
 });
-if (values.list && values.case === undefined && values.out === undefined) {
+const list = values.list && values.case === undefined && values.out === undefined;
+const scenarios = values.case ?? [];
+if (
+  !list &&
+  (values.list || !values.out || !scenarios.length || new Set(scenarios).size !== scenarios.length)
+) {
+  throw new Error(
+    "Usage: pnpm natlang:teacher --list | --case WORKFLOW_CASE [--case WORKFLOW_CASE ...] --out NEW_DIR [--model PROVIDER:MODEL]"
+  );
+}
+
+const host = fileURLToPath(new URL("../", import.meta.url));
+const { checkouts } = requireDevelopmentTemplateCheckouts(host);
+const liveTeacherCases = await loadLiveTeacherCases(checkouts);
+if (list) {
   for (const [scenario, workflow] of liveTeacherCases)
     console.log(
       JSON.stringify({
         scenario,
         family: workflow.family,
         sourceGroup: workflow.group,
+        sourceGroups: workflowSourceGroups(workflow),
         requiresReview: Boolean(workflow.requiresReview),
       })
     );
   process.exit(0);
 }
-const scenarios = values.case ?? [];
-if (
-  values.list ||
-  !values.out ||
-  !scenarios.length ||
-  new Set(scenarios).size !== scenarios.length ||
-  scenarios.some((scenario) => !liveTeacherCases.has(scenario))
-) {
+const unknown = scenarios.filter((scenario) => !liveTeacherCases.has(scenario));
+if (unknown.length) {
   throw new Error(
-    "Usage: pnpm natlang:teacher --list | --case WORKFLOW_CASE [--case WORKFLOW_CASE ...] --out NEW_DIR [--model PROVIDER:MODEL]"
+    `Unknown teacher case(s): ${unknown.join(", ")}. Run pnpm natlang:teacher --list.`
   );
 }
 
@@ -56,8 +69,6 @@ if (
   throw new Error("Choose --review-model PROVIDER:MODEL distinct from the content teacher");
 }
 
-const host = fileURLToPath(new URL("../", import.meta.url));
-const { checkouts } = requireDevelopmentTemplateCheckouts(host);
 const validators = new Map(
   scenarios.map((scenario) => {
     const { template, path: validator } = liveTeacherCases.get(scenario).validator;
@@ -170,6 +181,7 @@ try {
         out: destination,
         split: "train",
         review,
+        cases: liveTeacherCases,
       });
       console.log(path.join(destination, "manifest.json"));
     } catch (error) {

@@ -46,6 +46,8 @@ test("selected cases share one managed instance and keep earlier success when a 
     export const liveTeacherCases = new Map(['passing', 'failing'].map(caseId =>
       [caseId, { family: 'fixture', group: 'group', validator: {template:'system-testing',path:'skills/system-testing/oracle.ts'} }]
     ));
+    export async function loadLiveTeacherCases() { return liveTeacherCases; }
+    export function workflowSourceGroups(workflow) { return [workflow.group]; }
     export async function exportLiveTeacherWorkflow({ out, pins, trajectory }) {
       const source = JSON.parse(await readFile(pins, 'utf8'));
       const run = JSON.parse(await readFile(trajectory, 'utf8'));

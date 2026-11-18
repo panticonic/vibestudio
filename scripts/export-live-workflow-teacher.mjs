@@ -2,11 +2,13 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
+import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.cjs";
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
 
+const sharedProgram = "skills/vibestudio-workflows/runWorkflow.nl";
 const panelWorkflow = {
   family: "workspace-panel-repair",
   namespace: "vibestudio:panel-repair",
@@ -59,7 +61,30 @@ const ownedOperationsWorkflow = {
   root: "operate",
   evidence: ownedOperationsEvidence,
 };
-export const liveTeacherCases = new Map([
+const messagingWorkflow = {
+  family: "workspace-local-messaging",
+  namespace: "vibestudio:local-messaging",
+  group: "scoped-addressed-delivery",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/local-messaging/verify-outcome.mjs",
+  },
+  root: "routeMessage",
+  evidence: localMessagingEvidence,
+};
+const composedReleaseWorkflow = {
+  ...ownedOperationsWorkflow,
+  family: "workspace-release-dossier",
+  program: undefined,
+  skills: ["operate", "deliverProject"],
+  validator: {
+    template: "system-testing",
+    path: "workers/system-test-runner/owned-operations-dependency.ts",
+  },
+  requiresReview: true,
+  evidence: composedReleaseEvidence,
+};
+const originalCases = new Map([
   ["owned-operations-incident-payment-and-ledger", ownedOperationsWorkflow],
   ["owned-operations-release-audit-continuation", ownedOperationsWorkflow],
   ["content-project-release-runbook", contentWorkflow],
@@ -71,6 +96,70 @@ export const liveTeacherCases = new Map([
   ["workspace-integration-theme-locale", integrationWorkflow],
   ["workspace-integration-theme-locale-alias", integrationWorkflow],
 ]);
+
+export async function loadLiveTeacherCases(checkouts) {
+  const directory = path.join(checkouts["system-testing"], "skills/system-testing");
+  const [
+    { contentProjectWorlds },
+    { ownedOperationsWorlds, ownedOperationsComposedWorlds },
+    { workerRepairWorlds },
+    { localMessagingWorlds },
+  ] = await Promise.all(
+    [
+      "content-project-worlds.ts",
+      "owned-operations-worlds.ts",
+      "unit-repair-worlds.ts",
+      "local-messaging/worlds.ts",
+    ].map((file) => import(pathToFileURL(path.join(directory, file)).href))
+  );
+  const cases = new Map(originalCases);
+  for (const { id, sourceGroup } of contentProjectWorlds) {
+    const scenario = `content-project-${id}`;
+    if (cases.has(scenario)) continue;
+    const group = sourceGroup.split("/").at(-1);
+    const relatedOriginal = contentProjectWorlds.some(
+      (world) =>
+        world.sourceGroup === sourceGroup && originalCases.has(`content-project-${world.id}`)
+    );
+    cases.set(scenario, {
+      ...contentWorkflow,
+      group,
+      sourceGroups: [
+        `${contentWorkflow.namespace}:${group}`,
+        ...(relatedOriginal ? [`${contentWorkflow.namespace}:${contentWorkflow.group}`] : []),
+      ],
+    });
+  }
+  for (const { id, sourceGroup } of ownedOperationsWorlds) {
+    const scenario = `owned-operations-${id}`;
+    if (cases.has(scenario)) continue;
+    cases.set(scenario, {
+      ...ownedOperationsWorkflow,
+      group: sourceGroup.slice(ownedOperationsWorkflow.namespace.length + 1),
+    });
+  }
+  for (const { id, sourceGroup } of ownedOperationsComposedWorlds) {
+    cases.set(`owned-operations-${id}`, {
+      ...composedReleaseWorkflow,
+      sourceGroups: [
+        sourceGroup,
+        ...workflowSourceGroups(ownedOperationsWorkflow),
+        ...workflowSourceGroups(contentWorkflow),
+      ],
+    });
+  }
+  for (const { id } of workerRepairWorlds) {
+    cases.set(`worker-repair-${id}`, { ...unitRepairWorkflow, group: id });
+  }
+  for (const { id } of localMessagingWorlds) {
+    cases.set(`messaging-${id}`, messagingWorkflow);
+  }
+  return cases;
+}
+
+export function workflowSourceGroups(workflow) {
+  return workflow.sourceGroups ?? [`${workflow.namespace}:${workflow.group}`];
+}
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 function requireEvidence(condition, message) {
@@ -228,6 +317,81 @@ function ownedOperationsEvidence(execution, exercise, scenario) {
   };
 }
 
+function localMessagingEvidence(execution, exercise, scenario) {
+  const fixture = execution.diagnostics.localMessagingWorld;
+  const verification = execution.diagnostics.localMessagingVerification;
+  const channelEvidence = execution.diagnostics.localMessagingEvidence;
+  const cleanup = execution.diagnostics.localMessagingCleanupErrors;
+  requireEvidence(
+    fixture?.kind === "local-messaging" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      scenario === `messaging-${fixture.caseId}` &&
+      cleanup?.length === 0 &&
+      verification?.passed === true &&
+      verification.status === exercise.report?.status &&
+      ["delivered", "held"].includes(verification.status) &&
+      channelEvidence?.closedAdmission === true &&
+      channelEvidence.boundaries?.length > 0 &&
+      channelEvidence.boundaries.every(
+        (boundary) => boundary.joined && boundary.barrier?.channelId === boundary.channelId
+      ) &&
+      channelEvidence.probeSnapshots?.length > 0 &&
+      verification.messageIds?.length === (verification.status === "delivered" ? 1 : 0) &&
+      (verification.status === "held" ||
+        verification.messageIds[0] === exercise.report.messageId) &&
+      JSON.stringify(channelEvidence?.report) === JSON.stringify(exercise.report),
+    "Missing the exact scoped delivery or hold evidence and cleanup"
+  );
+  return {
+    world: { context_id: fixture.contextId, case_id: fixture.caseId },
+    checks: { independentlyVerifiedAddressedDelivery: true, ownedCleanup: true },
+    evidence: { workspace: { fixture, verification, channelEvidence, cleanup } },
+  };
+}
+
+function composedReleaseEvidence(execution, exercise, scenario) {
+  const fixture = execution.diagnostics.composedWorkflowWorld;
+  const verification = execution.diagnostics.composedWorkflowVerification;
+  const dependency = execution.diagnostics.dependencyAudit;
+  const results = exercise.report?.results;
+  requireEvidence(
+    fixture?.kind === "owned-operations-content" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      scenario === `owned-operations-${fixture.caseId}` &&
+      verification?.passed === true &&
+      ["operations", "content", "dependency", "cleanup"].every(
+        (key) => verification.checks?.[key] === true
+      ) &&
+      dependency?.passed === true &&
+      dependency.events?.length >= 5 &&
+      exercise.report?.remaining?.length === 0 &&
+      results?.length === 2 &&
+      results[0]?.kind === "operate" &&
+      results[1]?.kind === "deliverProject",
+    "Missing the independently verified operations prerequisite and committed dossier"
+  );
+  const operations = ownedOperationsEvidence(
+    execution,
+    { ...exercise, report: results[0].report },
+    scenario
+  );
+  const content = contentProjectEvidence(execution, { ...exercise, report: results[1].report });
+  return {
+    world: { ...content.world, case_id: fixture.caseId },
+    checks: { ...operations.checks, ...content.checks, independentlyVerifiedSkillDependency: true },
+    evidence: {
+      workspace: {
+        fixture,
+        verification,
+        dependency,
+        operations: operations.evidence.workspace,
+        content: content.evidence.workspace,
+      },
+    },
+    reviewInput: content.reviewInput,
+  };
+}
+
 function contentProjectEvidence(execution, exercise) {
   const fixture = execution.diagnostics.contentProjectWorld;
   const verification = execution.diagnostics.contentProjectVerification;
@@ -268,38 +432,66 @@ export async function exportLiveTeacherWorkflow({
   out,
   split,
   review,
+  cases = originalCases,
+  loadCases,
 }) {
   const entry = await readJson(trajectory);
   const source = await readJson(pins);
   const { test, result, execution } = entry;
-  const workflow = liveTeacherCases.get(test?.name);
+  const workflow = cases.get(test?.name) ?? (await loadCases?.())?.get(test?.name);
   requireEvidence(workflow, "Unsupported live teacher scenario");
   requireEvidence(result?.passed === true && !execution?.error, "The actual system test must pass");
   const exercise = execution?.diagnostics?.natlangTeacher;
+  const shared = exercise?.programPath === sharedProgram;
   requireEvidence(
     exercise?.trainingEligible === true &&
       !exercise.executionError &&
       !exercise.captureErrors?.length &&
-      exercise.programPath === workflow.program &&
+      (shared || (workflow.program && exercise.programPath === workflow.program)) &&
       Array.isArray(exercise.calls) &&
       Array.isArray(exercise.rootCallIds) &&
       exercise.rootCallIds.length === 1 &&
       typeof exercise.evalRunId === "string",
     "Missing eligible authored Natlang execution, run identity, or root call"
   );
-  const observed = workflow.evidence(execution, exercise, test.name);
   const rootId = exercise.rootCallIds[0];
   const captured = exercise.calls;
   const root = captured.find((call) => call.callId === rootId);
   const generationTurns = (call) =>
     (call?.record?.model_turns ?? []).filter((turn) => turn.kind === "generation" && turn.reply);
+  const expectedRoot = shared ? "runWorkflow" : workflow.root;
   requireEvidence(
-    root?.record.definition?.name === workflow.root &&
+    root?.record.definition?.name === expectedRoot &&
       root.record.parent_call_id === null &&
       generationTurns(root).length > 0 &&
       captured.some((call) => call.callId !== rootId && generationTurns(call).length > 0),
-    `Expected the authored ${workflow.root} root and at least one actual child call`
+    `Expected the authored ${expectedRoot} root and at least one actual child call`
   );
+  if (shared) {
+    const expectedSkills = workflow.skills ?? [workflow.root];
+    const children = captured.filter((call) => call?.record?.parent_call_id === rootId);
+    const skills = expectedSkills.map((name) =>
+      children.find((call) => call.record.definition?.name === name)
+    );
+    requireEvidence(
+      children.length === skills.length &&
+        skills.every(
+          (skill) =>
+            generationTurns(skill).length > 0 &&
+            captured.some((call) => call?.record?.parent_call_id === skill.callId)
+        ),
+      `Expected the shared workflow to call the assigned ${expectedSkills.join(", ")} skill and its own stages`
+    );
+    requireEvidence(
+      skills
+        .slice(1)
+        .every(
+          (skill, index) =>
+            Date.parse(skills[index].record.ended_at) <= Date.parse(skill.record.started_at)
+        ),
+      "The dependent skill started before its prerequisite completed"
+    );
+  }
   const code = source.repositories?.natlang;
   const sourceRevisions = Object.values(source.repositories ?? {}).map(
     (revision) => revision.git_commit
@@ -333,12 +525,13 @@ export async function exportLiveTeacherWorkflow({
   );
 
   const taskId = `${workflow.namespace}:${test.name}`;
-  const world = { instance: source.instance, run_id: source.run_id, ...observed.world };
   const validatorBytes = await readFile(validator);
   requireEvidence(
     source.validator_sha256 === hash(validatorBytes),
     "Validator source differs from the run pin"
   );
+  const observed = workflow.evidence(execution, exercise, test.name);
+  const world = { instance: source.instance, run_id: source.run_id, ...observed.world };
   if (workflow.requiresReview) {
     requireEvidence(
       typeof review === "function",
@@ -402,7 +595,7 @@ export async function exportLiveTeacherWorkflow({
     split,
     source_namespace: workflow.namespace,
     source_ids: [taskId],
-    source_groups: [`${workflow.namespace}:${workflow.group}`],
+    source_groups: workflowSourceGroups(workflow),
     source_revisions: sourceRevisions,
     code,
     learner_kinds: ["natlang-executor"],
@@ -430,6 +623,11 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   const manifest = await exportLiveTeacherWorkflow({
     ...values,
     review: workflowReviewer(values["review-model"]),
+    loadCases: () =>
+      loadLiveTeacherCases(
+        requireDevelopmentTemplateCheckouts(fileURLToPath(new URL("../", import.meta.url)))
+          .checkouts
+      ),
   });
   console.log(path.join(values.out, manifest.path));
 }
