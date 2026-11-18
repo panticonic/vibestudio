@@ -153,6 +153,14 @@ const verifiedMemoryWorkflow = {
   root: "recallDecision",
   evidence: verifiedMemoryEvidence,
 };
+const localComparisonWorkflow = {
+  family: "local-model-live-comparison",
+  namespace: "vibestudio:local-model",
+  group: "assigned-candidates-live-inventory",
+  validator: { template: "system", path: "skills/local-model-task-bindings/live.ts" },
+  root: "prepareLocalModel",
+  evidence: localComparisonEvidence,
+};
 const googleSetupWorkflow = {
   family: "google-live-setup-journey",
   workspace: "google-workspace",
@@ -254,6 +262,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedSpectroliteWorlds },
     { managedNewsWorlds },
     { managedGoogleSetupWorlds },
+    { localModelComparisonWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -276,12 +285,20 @@ export async function loadLiveTeacherCases(checkouts) {
       "spectrolite-worlds.ts",
       "news-worlds.ts",
       "google-setup-worlds.ts",
+      "local-model-comparison-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, request } of localModelComparisonWorlds) {
+    cases.set(`local-model-compare-live-${id}`, {
+      ...localComparisonWorkflow,
+      caseId: id,
+      request,
+    });
+  }
   for (const { id, checks, codes } of managedGoogleSetupWorlds) {
     cases.set(`google-setup-live-${id}`, { ...googleSetupWorkflow, caseId: id, checks, codes });
   }
@@ -782,6 +799,65 @@ function verifiedMemoryEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, selected_event: verification.eventId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function localComparisonEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedLocalComparison;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  const { modelRef, alternatives, requiresPriorConversation } = workflow.request;
+  const refs = [modelRef, ...alternatives];
+  const candidates = report?.candidates;
+  const rows = verification?.rows;
+  const selected = Array.isArray(candidates) && candidates.find((candidate) => candidate?.handoff);
+  const mode = requiresPriorConversation ? "fork" : "fresh";
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.contextId === fixture.contextId &&
+      verification.caseId === workflow.caseId &&
+      verification.passed === true &&
+      verification.checks?.stableInventory === true &&
+      verification.checks?.exactReads === true &&
+      verification.checks?.handoff === true &&
+      verification.checks?.candidates === true &&
+      JSON.stringify(verification.inspected) === JSON.stringify(refs) &&
+      Array.isArray(rows) &&
+      rows.length === refs.length &&
+      Array.isArray(candidates) &&
+      candidates.length === refs.length &&
+      report.receipt === null &&
+      refs.every((ref, index) => {
+        const row = rows[index];
+        const candidate = candidates[index];
+        const expected = verification.expected?.candidates?.[index];
+        return (
+          row?.ref === ref &&
+          candidate?.ref === ref &&
+          candidate.state === (row.row?.state ?? null) &&
+          candidate.disposition === expected?.disposition &&
+          (candidate.disposition === "ready-to-delegate"
+            ? candidate.handoff?.ref === ref && candidate.handoff.mode === mode
+            : candidate.handoff === null)
+        );
+      }) &&
+      (selected
+        ? report.disposition === "ready-to-delegate" &&
+          report.ref === selected.ref &&
+          report.state === selected.state &&
+          report.handoff?.ref === selected.ref &&
+          report.handoff.mode === mode
+        : report.disposition === "no-candidate" &&
+          report.ref === modelRef &&
+          report.state === null &&
+          report.handoff === null),
+    "Local model comparison must use the exact assigned reads and handoff"
+  );
+  return {
+    world: { context_id: fixture.contextId, assigned_models: refs },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };

@@ -74,6 +74,11 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
+        "local-model-comparison-worlds",
+        "localModelComparisonWorlds",
+        [{ id: "sample", request: {} }],
+      ],
+      [
         "google-setup-worlds",
         "managedGoogleSetupWorlds",
         [{ id: "sample", checks: [], codes: [] }],
@@ -195,6 +200,7 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(memory.expectedStatus, "missing-source");
   assert.equal(cases.get("news-live-sample").workspace, "news");
   assert.equal(cases.get("google-setup-live-sample").workspace, "google-workspace");
+  assert.equal(cases.get("local-model-compare-live-sample").root, "prepareLocalModel");
   assert.equal(cases.get("spectrolite-live-sample").workspace, "spectrolite");
   assert.equal(cases.get("grimoire-live-quiet-garden").workspace, "examples");
   const checklist = cases.get("terminal-checklist-live-restart");
@@ -472,6 +478,54 @@ test("authoring export rejects a review drawn from another baseline", async (t) 
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-baseline` }),
     /must match the assigned compiler snapshots/u
+  );
+});
+
+test("local model comparison export rejects a handoff that skips the first eligible model", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "local-model-compare-live-continue-code-review";
+  const world = cases.get(entry.test.name);
+  const refs = [world.request.modelRef, ...world.request.alternatives];
+  const candidates = refs.map((ref, index) => ({
+    ref,
+    state: index === 0 ? "not-installed" : "startable",
+    disposition: index === 0 ? "needs-install" : "ready-to-delegate",
+    handoff: index === 0 ? null : { ref, mode: "fork" },
+  }));
+  const run = diagnostics.natlangTeacher;
+  const selected = candidates[1];
+  run.report = { ...selected, receipt: null, candidates };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  const skill = structuredClone(leaf);
+  skill.callId = skill.summary.call_id = "skill";
+  skill.record.definition.name = "prepareLocalModel";
+  leaf.record.parent_call_id = "skill";
+  run.calls.push(skill);
+  diagnostics.managedLocalComparison = {
+    contextId: "ctx",
+    verification: {
+      contextId: "ctx",
+      caseId: world.caseId,
+      passed: true,
+      checks: { stableInventory: true, exactReads: true, handoff: true, candidates: true },
+      inspected: refs,
+      rows: candidates.map(({ ref, state }) => ({ ref, row: { state } })),
+      expected: structuredClone(run.report),
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  run.report = { ...run.report, ...candidates[2] };
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-skipped-local-candidate` }),
+    /Local model comparison must use the exact assigned reads and handoff/u
   );
 });
 
@@ -840,6 +894,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["spectrolite-worlds", "export const managedSpectroliteWorlds = [];"],
       ["news-worlds", "export const managedNewsWorlds = [];"],
       ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
+      ["local-model-comparison-worlds", "export const localModelComparisonWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,

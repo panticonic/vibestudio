@@ -77,6 +77,9 @@ readback without a model.
 Google Workspace setup cases join Drive readiness to the installed welcome panel. They verify the
 account and permission owner links, the Gmail launch gate across reload, and layout at the assigned widths.
 The smoke runs in a fresh workspace before external Google account setup.
+Local model comparison cases query the installed local-model extension twice. The workflow assesses the
+assigned candidates against tool and context requirements and offers a fresh or fork handoff only for a
+qualifying local model. The comparison has only inventory access.
 The release-readiness dossier joins two skill trees in one call. It requires observed recovery after a real worker restart
 and verified cleanup before the project skill can prepare and commit the evidence dossier.
 The authored inventory comes from the configured system-testing template, which supplies
