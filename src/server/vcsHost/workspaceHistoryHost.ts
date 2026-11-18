@@ -127,11 +127,7 @@ export async function readWorkspaceParticipantProjection(input: {
 }
 
 /** Read shared ancestry and edits from the verified participant's own context. */
-export async function readWorkspaceParticipantStatus(input: {
-  dispatch: Pick<DODispatch, "dispatch">;
-  canonical: WorkspaceSourceProviderRef;
-  owner: WorkspaceSourceProviderRef;
-  caller: VerifiedCaller;
+export async function readWorkspaceParticipantStatus(input: WorkspaceHistoryParticipant & {
   contextId: string;
 }): Promise<VcsStatusResult> {
   requireWorkspaceParticipantOwner(input);
@@ -144,11 +140,7 @@ export async function readWorkspaceParticipantStatus(input: {
 }
 
 /** Check exact references through contexts the host has already admitted for this caller. */
-export async function workspaceParticipantReferencesReachable(input: {
-  dispatch: Pick<DODispatch, "dispatch">;
-  canonical: WorkspaceSourceProviderRef;
-  owner: WorkspaceSourceProviderRef;
-  caller: VerifiedCaller;
+export async function workspaceParticipantReferencesReachable(input: WorkspaceHistoryParticipant & {
   contextIds: readonly string[];
   references: readonly { kind: string; value: unknown }[];
 }): Promise<boolean> {
@@ -169,9 +161,7 @@ export async function workspaceParticipantReferencesReachable(input: {
 }
 
 /** A reset removes the discarded application from normal reference visibility. */
-export async function hasWorkspaceParticipantDiscardReceipt(input: WorkspaceHistorySource & {
-  owner: WorkspaceSourceProviderRef;
-  caller: VerifiedCaller;
+export async function hasWorkspaceParticipantDiscardReceipt(input: WorkspaceHistoryParticipant & {
   discard: VcsDiscardInput;
   cause: z.infer<typeof causeSchema>;
 }): Promise<boolean> {
@@ -182,9 +172,7 @@ export async function hasWorkspaceParticipantDiscardReceipt(input: WorkspaceHist
 }
 
 /** Inspect the exact admitted provenance node and its immediate relationships. */
-export async function inspectWorkspaceParticipantProvenance(input: WorkspaceHistorySource & {
-  owner: WorkspaceSourceProviderRef;
-  caller: VerifiedCaller;
+export async function inspectWorkspaceParticipantProvenance(input: WorkspaceHistoryParticipant & {
   contextId: string;
   inspect: VcsInspectInput;
 }) {
@@ -251,10 +239,14 @@ export interface WorkspaceHistorySource {
   canonical: WorkspaceSourceProviderRef;
 }
 
-/** Read exact file metadata without accessing content bytes. */
-export async function readWorkspaceParticipantFileDescriptors(input: WorkspaceHistorySource & {
+export interface WorkspaceHistoryParticipant extends WorkspaceHistorySource {
   owner: WorkspaceSourceProviderRef;
   caller: VerifiedCaller;
+  ownerContextId?: string | undefined;
+}
+
+/** Read exact file metadata without accessing content bytes. */
+export async function readWorkspaceParticipantFileDescriptors(input: WorkspaceHistoryParticipant & {
   contextId: string;
   read: VcsReadFilesInput;
 }) {
@@ -279,9 +271,7 @@ export async function readWorkspaceParticipantFileDescriptors(input: WorkspaceHi
 }
 
 /** Bind the catalog reads to the admitted copy and verify their exact revision. */
-export function workspaceParticipantCatalog(input: WorkspaceHistorySource & {
-  caller: VerifiedCaller;
-  owner: WorkspaceSourceProviderRef;
+export function workspaceParticipantCatalog(input: WorkspaceHistoryParticipant & {
   contextId: string;
 }) {
   requireWorkspaceParticipantOwner(input);
@@ -499,9 +489,7 @@ async function readWorkspaceMergeObservation(blobsDir: string, contentHashes: st
 }
 
 /** Review the participant's current state against the exact shared revision. */
-export async function reviewWorkspaceParticipantMerge(input: WorkspaceHistorySource & {
-  owner: WorkspaceSourceProviderRef;
-  caller: VerifiedCaller;
+export async function reviewWorkspaceParticipantMerge(input: WorkspaceHistoryParticipant & {
   contextId: string;
   compare: VcsCompareInput;
   blobsDir: string;
@@ -522,9 +510,7 @@ export async function reviewWorkspaceParticipantMerge(input: WorkspaceHistorySou
 }
 
 /** Observe and store merge content before the participant can reference it in its native history. */
-export async function mergeWorkspaceParticipantContext(input: WorkspaceHistorySource & {
-  caller: VerifiedCaller;
-  owner: WorkspaceSourceProviderRef;
+export async function mergeWorkspaceParticipantContext(input: WorkspaceHistoryParticipant & {
   selection?: { head: string; base: string } & (
     { main: string } | { source: { contextId: string; head: string; participantId?: string } }
   );
@@ -579,7 +565,7 @@ export async function mergeWorkspaceParticipantContext(input: WorkspaceHistorySo
   return { head: reply.head, value: reply.value, result: reply.result };
 }
 
-function workspaceParticipant(caller: VerifiedCaller): string {
+function workspaceParticipant(caller: VerifiedCaller, ownerContextId: string | undefined): string {
   const invocation = caller.nativeInvocation;
   if (invocation) {
     // Every tool call in the same authenticated task reuses its working copy.
@@ -587,16 +573,15 @@ function workspaceParticipant(caller: VerifiedCaller): string {
   }
   if (caller.taskAuthority) return canonicalJson(["task-grant", caller.taskAuthority]);
   const userId = caller.subject?.userId;
-  if (userId) return canonicalJson(["user", userId, caller.remoteDeviceKey ?? caller.runtime.id]);
+  if (userId && ownerContextId) {
+    // One device can open several independent sessions with separate retirement.
+    return canonicalJson(["user", userId, caller.remoteDeviceKey ?? caller.runtime.id, ownerContextId]);
+  }
   throw new Error("The verified caller has no workspace participant identity");
 }
 
-export function requireWorkspaceParticipantOwner(input: {
-  canonical: WorkspaceSourceProviderRef;
-  owner: WorkspaceSourceProviderRef;
-  caller: VerifiedCaller;
-}): string {
-  const participantId = workspaceParticipant(input.caller);
+export function requireWorkspaceParticipantOwner(input: Omit<WorkspaceHistoryParticipant, "dispatch">): string {
+  const participantId = workspaceParticipant(input.caller, input.ownerContextId);
   const expected = { ...input.canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
   if (canonicalJson(input.owner) !== canonicalJson(expected)) {
     throw new Error("Workspace history belongs to a different participant");
@@ -692,16 +677,12 @@ export function observeAppliedWorkspacePublication(input: {
 }
 
 /** The protected gate authorizes this exact native transition before it can publish. */
-export function bindWorkspaceParticipantPublication(input: {
-  dispatch: Pick<DODispatch, "dispatch">;
-  canonical: WorkspaceSourceProviderRef;
-  owner: WorkspaceSourceProviderRef;
-  caller: VerifiedCaller;
+export function bindWorkspaceParticipantPublication(input: WorkspaceHistoryParticipant & {
   contextId: string;
   target: Omit<z.infer<typeof publicationApproval>, "participantId">;
 }): CanonicalRefPublication {
-  const { dispatch, canonical, owner, caller, contextId } = input;
-  const participantId = requireWorkspaceParticipantOwner({ canonical, owner, caller });
+  const { dispatch, canonical, owner, contextId } = input;
+  const participantId = requireWorkspaceParticipantOwner(input);
   const approval = publicationApproval.parse({ ...input.target, participantId });
   const publicationId = { publicationId: approval.publicationId };
   const readApproval = () =>
@@ -766,7 +747,7 @@ export async function openWorkspaceParticipantContext(input: {
   const { dispatch, canonical, caller, ownerContextId, contextId } = input;
   if (!ownerContextId || !contextId)
     throw new Error("Workspace contexts require durable identities");
-  const participantId = workspaceParticipant(caller);
+  const participantId = workspaceParticipant(caller, ownerContextId);
   const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
   const targetId = canonicalEntityId({
     kind: "do",

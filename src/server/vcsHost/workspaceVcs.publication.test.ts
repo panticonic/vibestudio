@@ -62,7 +62,7 @@ describe("WorkspaceVcs protected publication notification", () => {
       refs,
     });
     const caller = createHostCaller("test-device", "server", { userId: "user:test", handle: "test" });
-    const participantId = canonicalJson(["user", "user:test", "test-device"]);
+    const participantId = canonicalJson(["user", "user:test", "test-device", "context"]);
     const canonical = {
       source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical",
     };
@@ -120,7 +120,7 @@ describe("WorkspaceVcs protected publication notification", () => {
       }
     });
     const publish = () => vcs.publishParticipantContext({
-      dispatch: { dispatch }, canonical, owner, gateContext: { kind: "caller", caller },
+      dispatch: { dispatch }, canonical, owner, ownerContextId: "context", gateContext: { kind: "caller", caller },
       push: {
         commandId: "publish-command", contextId: "context",
         expectedMainEventId: "initial-event", expectedCommittedEventId: "saved-event",

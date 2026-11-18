@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256HexSyncText } from "@vibestudio/content-addressing";
 import type { VcsEditInput } from "@vibestudio/service-schemas/vcs";
-import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { createVerifiedCaller, type VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { expect, it, vi } from "vitest";
 import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
 import { getBytes, putBytes } from "../services/blobstoreService.js";
@@ -47,13 +47,13 @@ it("uses the verified task to choose a copy and preserves the migrated context h
       throw new Error(`Unexpected history call ${method}`);
     }
   );
-  const launch = (caller: VerifiedCaller, replayedWorkingHead?: string) =>
+  const launch = (caller: VerifiedCaller, replayedWorkingHead?: string, ownerContextId = "owner", contextId = "context") =>
     openWorkspaceParticipantContext({
       dispatch: { dispatch },
       canonical,
       caller,
-      ownerContextId: "owner",
-      contextId: "context",
+      ownerContextId,
+      contextId,
       replayedWorkingHead,
     });
   const first = await launch(native(1, "call-1"), "replayed-working");
@@ -64,6 +64,12 @@ it("uses the verified task to choose a copy and preserves the migrated context h
   expect(first.workingHead).toBe("replayed-working");
   expect(second.workingHead).toBe("latest-main");
   expect(dispatch.mock.calls[1]?.[0]).toEqual(first.owner);
+  const device = createVerifiedCaller("shell:editor", "shell", null, null, { userId: "person", handle: "person" });
+  const editor = await launch(device);
+  const child = await launch(device, undefined, "owner", "child-context");
+  const independent = await launch(device, undefined, "other-owner");
+  expect(editor.owner).toEqual(child.owner);
+  expect(editor.owner).not.toEqual(independent.owner);
 });
 
 it("withholds a grant when replay reports a different allocation", async () => {

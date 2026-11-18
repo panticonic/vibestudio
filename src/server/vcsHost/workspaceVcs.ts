@@ -129,6 +129,7 @@ import {
   retireWorkspaceParticipantContext,
   transferWorkspaceParticipant,
   workspaceParticipantCatalog,
+  type WorkspaceHistoryParticipant,
   type WorkspaceHistorySource,
 } from "./workspaceHistoryHost.js";
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
@@ -704,7 +705,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       });
       return {
         dispatch: source.dispatch, canonical: source.canonical, ...reservation,
-        caller: input.caller, contextId: input.contextId,
+        caller: input.caller, contextId: input.contextId, ownerContextId: input.ownerContextId,
       };
     });
   }
@@ -878,16 +879,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   /** Advance the participant's exact saved revision through the protected gate. */
-  async publishParticipantContext(input: {
-    dispatch: Pick<DODispatch, "dispatch">;
-    canonical: WorkspaceSourceProviderRef;
-    owner: WorkspaceSourceProviderRef;
+  async publishParticipantContext(input: Omit<WorkspaceHistoryParticipant, "caller"> & {
     push: VcsPushInput;
     gateContext: CallerPublicationGateContext;
   }): Promise<VcsPushResult> {
-    const { push, gateContext, dispatch, canonical, owner } = input;
+    const { push, gateContext, dispatch, canonical, owner, ownerContextId } = input;
     const caller = gateContext.caller;
-    requireWorkspaceParticipantOwner({ canonical, owner, caller });
+    requireWorkspaceParticipantOwner({ canonical, owner, caller, ownerContextId });
     if (push.epochTransition || push.templateInstallation) {
       throw new Error("This publication requires the workspace installation lifecycle");
     }
@@ -902,6 +900,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
           canonical,
           owner,
           caller,
+          ownerContextId,
           contextId: push.contextId,
           target: {
             publicationId,
@@ -1017,11 +1016,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   /** Read admitted selectors from one exact revision in the caller's participant history. */
-  async readParticipantFiles(input: {
-    dispatch: Pick<DODispatch, "dispatch">;
-    canonical: WorkspaceSourceProviderRef;
-    owner: WorkspaceSourceProviderRef;
-    caller: VerifiedCaller;
+  async readParticipantFiles(input: WorkspaceHistoryParticipant & {
     contextId: string;
     read: VcsReadFilesInput;
   }): Promise<VcsReadFileResult[]> {
@@ -1031,9 +1026,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   /** Restore the selected saved state, then realize the participant's current files. */
-  async discardParticipantContext(input: WorkspaceHistorySource & {
-    owner: WorkspaceSourceProviderRef;
-    caller: VerifiedCaller;
+  async discardParticipantContext(input: WorkspaceHistoryParticipant & {
     head: string;
     discard: VcsDiscardInput;
     cause: { parent: RpcCausalParent | null };
@@ -1066,9 +1059,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return reviewWorkspaceParticipantMerge({ ...input, blobsDir: this.deps.blobsDir });
   }
 
-  async editParticipantContext(input: WorkspaceHistorySource & {
-    caller: VerifiedCaller;
-  } & Omit<Parameters<typeof editWorkspaceParticipant>[0], "blobsDir">) {
+  async editParticipantContext(input: WorkspaceHistoryParticipant &
+    Omit<Parameters<typeof editWorkspaceParticipant>[0], "blobsDir">) {
     requireWorkspaceParticipantOwner(input);
     const result = await editWorkspaceParticipant({ ...input, blobsDir: this.deps.blobsDir });
     await this.materializeParticipantContext({
@@ -1079,9 +1071,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return result;
   }
 
-  async transferParticipantContext(input: WorkspaceHistorySource & {
-    caller: VerifiedCaller;
-  } & Omit<Parameters<typeof transferWorkspaceParticipant>[0], "blobsDir">) {
+  async transferParticipantContext(input: WorkspaceHistoryParticipant &
+    Omit<Parameters<typeof transferWorkspaceParticipant>[0], "blobsDir">) {
     requireWorkspaceParticipantOwner(input);
     const result = await transferWorkspaceParticipant({ ...input, blobsDir: this.deps.blobsDir });
     await this.materializeParticipantContext({
@@ -1092,9 +1083,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return result;
   }
 
-  async saveParticipantContext(input: WorkspaceHistorySource & {
-    owner: WorkspaceSourceProviderRef;
-    caller: VerifiedCaller;
+  async saveParticipantContext(input: WorkspaceHistoryParticipant & {
     head: string;
     commit: VcsCommitInput;
     cause: { parent: RpcCausalParent | null };

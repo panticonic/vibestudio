@@ -172,7 +172,7 @@ describe("canonical vcsService", () => {
       className: "GadHistoryDO",
       objectKey: "canonical",
     };
-    const identity = JSON.stringify(["user", "user:owner", caller.runtime.id]);
+    const identity = JSON.stringify(["user", "user:owner", caller.runtime.id, "context:own"]);
     const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(identity)}` };
     const dispatch = vi.fn().mockResolvedValue(true);
     const scope = {
@@ -181,6 +181,7 @@ describe("canonical vcsService", () => {
       owner,
       caller,
       contextId: "context:own",
+      ownerContextId: "context:own",
       workingHead: "native-head",
     };
     const saved = {

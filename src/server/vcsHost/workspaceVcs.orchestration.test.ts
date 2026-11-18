@@ -339,7 +339,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const actorA = createVerifiedCaller("shell:alice", "shell");
     const actorB = createVerifiedCaller("shell:bob", "shell");
     const scope = vi.spyOn(vcs, "openParticipantScope").mockImplementation(async (input) => ({
-      dispatch: { dispatch }, canonical, contextId,
+      dispatch: { dispatch }, canonical, contextId, ownerContextId: input.ownerContextId,
       caller: input.caller,
       owner: input.caller === actorA ? owners[0]! : owners[1]!,
       workingHead: input.caller === actorA && aliceEdited ? "edited" : "initial",
