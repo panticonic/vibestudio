@@ -37,6 +37,14 @@ const domains = [
     input: (world) => ({ goal: world.goal, work: world.work }),
   },
   {
+    domain: "gmailReview",
+    template: "google-workspace",
+    source: "skills/gmail-workflow-review-fixtures/worlds.ts",
+    exported: "gmailWorkflowWorlds",
+    operation: "reviewGmailWorkflow",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
     domain: "publication",
     template: "base",
     source: "skills/publish-preflight-fixtures/worlds.ts",
@@ -60,15 +68,139 @@ const domains = [
     operation: "investigateSystem",
     identify: (world) => [world.id, [world.sourceGroup]],
   },
+  {
+    domain: "templates",
+    template: "base",
+    source: "skills/template-lifecycle-fixtures/worlds.ts",
+    exported: "templateLifecycleWorlds",
+    operation: "reviewTemplate",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
+    domain: "problems",
+    template: "base",
+    source: "skills/problem-review-fixtures/worlds.ts",
+    exported: "problemReviewWorlds",
+    operation: "reviewProblem",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
+    domain: "provenance",
+    template: "base",
+    source: "skills/provenance-review-fixtures/worlds.ts",
+    exported: "provenanceReviewWorlds",
+    operation: "reviewProvenance",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
+    domain: "examples",
+    template: "examples",
+    source: "skills/examples-review-fixtures/worlds.ts",
+    exported: "exampleWorlds",
+    operation: "reviewExample",
+    identify: (world) => [world.id, world.sourceGroups ?? [world.sourceGroup]],
+  },
+  {
+    domain: "news",
+    template: "news",
+    source: "skills/news-workflow-fixtures/worlds.ts",
+    exported: "newsWorlds",
+    operation: "reviewNews",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
+    domain: "spectrolite",
+    template: "spectrolite",
+    source: "skills/spectrolite-review-fixtures/worlds.ts",
+    exported: "spectroliteWorlds",
+    operation: "reviewSpectrolite",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
+    domain: "testReview",
+    template: "system-testing",
+    source: "skills/system-test-review-fixtures/worlds.ts",
+    exported: "systemTestReviewWorlds",
+    operation: "reviewSystemTest",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
+    domain: "deviceAndTerminal",
+    template: "base",
+    source: "skills/device-and-terminal-review-fixtures/worlds.ts",
+    exported: "deviceAndTerminalWorlds",
+    operation: "reviewDeviceAndTerminal",
+    identify: (world) => [world.id, world.sourceGroups ?? [world.sourceGroup]],
+  },
+  {
+    domain: "sessionTest",
+    template: "system-testing",
+    source: "skills/session-test-review-fixtures/worlds.ts",
+    exported: "sessionTestReviewWorlds",
+    operation: "reviewSessionTest",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
+    domain: "research",
+    template: "base",
+    source: "skills/research-intake-fixtures/worlds.ts",
+    exported: "researchIntakeWorlds",
+    operation: "reviewResearchIntake",
+    identify: (world) => [world.id, world.sourceGroups ?? [world.sourceGroup]],
+  },
+  {
+    domain: "unitDesign",
+    template: "base",
+    source: "skills/workspace-unit-design-fixtures/worlds.ts",
+    exported: "workspaceUnitDesignWorlds",
+    operation: "reviewWorkspaceUnit",
+    identify: (world) => [
+      `unit-design-${world.id}`,
+      (world.sourceGroups ?? [world.sourceGroup]).map((group) => `vibestudio:${group}`),
+    ],
+  },
+  {
+    domain: "runtimeEvidence",
+    template: "base",
+    source: "skills/runtime-evidence-review-fixtures/worlds.ts",
+    exported: "runtimeEvidenceWorlds",
+    operation: "reviewRuntimeEvidence",
+    identify: (world) => [world.id, world.sourceGroups ?? [world.sourceGroup]],
+  },
+  {
+    domain: "conversation",
+    template: "base",
+    source: "skills/conversation-evidence-review-fixtures/worlds.ts",
+    exported: "conversationEvidenceWorlds",
+    operation: "reviewConversation",
+    identify: (world) => [world.id, world.sourceGroups ?? [world.sourceGroup]],
+  },
+  {
+    domain: "mediaImport",
+    template: "base",
+    source: "skills/media-and-import-review-fixtures/worlds.ts",
+    exported: "mediaImportWorlds",
+    operation: "reviewMediaAndImport",
+    identify: (world) => [world.id, world.sourceGroups ?? [world.sourceGroup]],
+  },
+  {
+    domain: "personalFacility",
+    template: "personal",
+    source: "skills/personal-facility-review-fixtures/worlds.ts",
+    exported: "personalFacilityWorlds",
+    operation: "reviewPersonalFacility",
+    identify: (world) => [world.id, world.sourceGroups ?? [world.sourceGroup]],
+  },
 ];
 
 export async function loadWorkflowBank(checkouts) {
   const live = await loadLiveTeacherCases(checkouts);
   const fixtureGroups = await Promise.all(
     domains.map(async (domain) => {
-      const module = await import(
+      const imported = await import(
         pathToFileURL(path.join(checkouts[domain.template], domain.source)).href
       );
+      const module = imported.default ?? imported;
       return module[domain.exported].map((world) => {
         const [id, sourceGroups] = domain.identify(world);
         const input = domain.input?.(world, module) ?? world.request;

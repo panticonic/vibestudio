@@ -110,7 +110,10 @@ export async function loadLiveTeacherCases(checkouts) {
       "owned-operations-worlds.ts",
       "unit-repair-worlds.ts",
       "local-messaging/worlds.ts",
-    ].map((file) => import(pathToFileURL(path.join(directory, file)).href))
+    ].map(async (file) => {
+      const imported = await import(pathToFileURL(path.join(directory, file)).href);
+      return imported.default ?? imported;
+    })
   );
   const cases = new Map(originalCases);
   for (const { id, sourceGroup } of contentProjectWorlds) {

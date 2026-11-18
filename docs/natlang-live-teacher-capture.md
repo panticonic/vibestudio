@@ -16,6 +16,17 @@ The common program automatically mounts installed workflow packages under `runWo
 workflow modules from different installed templates. The module lexically owns its types and internal calls. Each
 authoritative service is both scoped to the module's exact stages and supplied by the caller for that case.
 
+The shared program test can check each scoped request at its mounted Natlang argument boundary using a scripted
+executor. Run it from the Vibestudio host checkout with the development templates configured.
+
+```sh
+bank=$(mktemp)
+trap 'rm -f "$bank"' EXIT
+pnpm --silent natlang:tasks > "$bank" &&
+  VIBESTUDIO_WORKFLOW_BANK_JSONL="$bank" node scripts/run-userland-tests.mjs \
+    --template base --filter packages/natlang/src/vibestudio-workflow-program.test.ts
+```
+
 Live workflow collection executes the authored Natlang root against real caller-scoped services. Policy stays in the `.nl` program. The capture, record joins, ownership checks and paged export are exact transport and durability plumbing.
 
 ## Mechanism inventory
