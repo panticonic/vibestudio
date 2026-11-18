@@ -247,6 +247,14 @@ describe("canonical vcsService", () => {
     ).rejects.toMatchObject({ code: "EINVAL" });
     expect(workspace.readParticipantFiles).toHaveBeenCalledOnce();
 
+    const neighbors = { root: EVENT, limit: 2 };
+    const page = { root: EVENT, edges: [], nextCursor: null };
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(page);
+    await expect(definition.handler(ctx, "neighbors", [neighbors])).resolves.toEqual(page);
+    expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryNeighbors", {
+      contextId: scope.contextId, neighbors,
+    });
+
     const discard = {
       contextId: scope.contextId,
       commandId: "command:discard",

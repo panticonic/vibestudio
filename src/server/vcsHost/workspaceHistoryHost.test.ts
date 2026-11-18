@@ -12,6 +12,7 @@ import {
   inspectWorkspaceParticipantProvenance,
   mergeWorkspaceParticipantContext,
   openWorkspaceParticipantContext,
+  readWorkspaceParticipantNeighbors,
   readWorkspaceParticipantStatus,
   reviewWorkspaceParticipantMerge,
   workspaceParticipantReferencesReachable,
@@ -274,6 +275,14 @@ it("validates the selected participant command and the endpoints of its provenan
     contextId: "context", inspect: input.inspect,
   });
   await expect(inspectWorkspaceParticipantProvenance(input)).rejects.toThrow("different provenance");
+  const page = { root, edges: result.edges, nextCursor: "next-page" };
+  const neighbors = { root, limit: 1 };
+  dispatch.mockResolvedValueOnce(page).mockResolvedValueOnce({
+    ...page, edges: [{ ...page.edges[0], to: other }],
+  });
+  await expect(readWorkspaceParticipantNeighbors({ ...input, neighbors })).resolves.toEqual(page);
+  expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryNeighbors", { contextId: "context", neighbors });
+  await expect(readWorkspaceParticipantNeighbors({ ...input, neighbors })).rejects.toThrow("different provenance");
 });
 
 it("observes exact bytes for a participant comparison and validates the returned states", async () => {

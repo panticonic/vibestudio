@@ -40,6 +40,7 @@ import {
   hasWorkspaceParticipantDiscardReceipt,
   inspectWorkspaceParticipantProvenance,
   readWorkspaceParticipantFileDescriptors,
+  readWorkspaceParticipantNeighbors,
   readWorkspaceParticipantStatus,
   workspaceParticipantCatalog,
   workspaceParticipantReferencesReachable,
@@ -349,6 +350,11 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         return inspectWorkspaceParticipantProvenance({
           ...scope,
           inspect: vcsMethods.inspect.args.parse([input])[0],
+        });
+      case "neighbors":
+        return readWorkspaceParticipantNeighbors({
+          ...scope,
+          neighbors: vcsMethods.neighbors.args.parse([input])[0],
         });
       case "compare":
         return workspace.reviewParticipantMerge({

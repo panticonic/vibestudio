@@ -6,6 +6,7 @@ import {
   vcsListDirectoryResultSchema,
   vcsListFilesResultSchema,
   vcsMergeResultSchema,
+  vcsNeighborsResultSchema,
   vcsResolveRepositoryResultSchema,
   vcsStateNodeRefSchema,
   vcsSemanticNodeRefSchema,
@@ -19,9 +20,12 @@ import {
   type VcsListDirectoryInput,
   type VcsListFilesInput,
   type VcsMergeInput,
+  type VcsNeighborsInput,
+  type VcsProvenanceEdge,
   type VcsReadFilesInput,
   type VcsMoveInput,
   type VcsResolveRepositoryInput,
+  type VcsSemanticNodeRef,
   type VcsStateNodeRef,
   type VcsStatusResult,
   type VcsTrajectorySenderRef,
@@ -181,7 +185,6 @@ export async function inspectWorkspaceParticipantProvenance(input: WorkspaceHist
   const result = vcsInspectResultSchema.parse(
     await dispatch.dispatch(owner, "inspectHistoryNode", { contextId, inspect }),
   );
-  const root = canonicalJson(inspect.node);
   const sameNode =
     (inspect.node.kind === "event" && result.node.kind === "event" &&
       result.node.value.eventId === inspect.node.eventId && "revision" in result.node.value) ||
@@ -204,12 +207,34 @@ export async function inspectWorkspaceParticipantProvenance(input: WorkspaceHist
       result.node.value.workUnitId === inspect.node.workUnitId) ||
     (inspect.node.kind === "command" && result.node.kind === "command" &&
       result.node.value.commandId === inspect.node.commandId);
-  if (canonicalJson(result.root) !== root || !sameNode ||
-      result.edges.length > inspect.edgeLimit ||
-      result.edges.some(({ from, to }) => canonicalJson(from) !== root && canonicalJson(to) !== root)) {
+  if (!sameNode) throw new Error("Workspace history returned different provenance");
+  requireWorkspaceProvenanceEdges(inspect.node, result, inspect.edgeLimit);
+  return result;
+}
+
+export async function readWorkspaceParticipantNeighbors(input: WorkspaceHistoryParticipant & {
+  contextId: string;
+  neighbors: VcsNeighborsInput;
+}) {
+  requireWorkspaceParticipantOwner(input);
+  const { dispatch, owner, contextId, neighbors } = input;
+  const result = vcsNeighborsResultSchema.parse(
+    await dispatch.dispatch(owner, "readHistoryNeighbors", { contextId, neighbors }),
+  );
+  requireWorkspaceProvenanceEdges(neighbors.root, result, neighbors.limit);
+  return result;
+}
+
+function requireWorkspaceProvenanceEdges(
+  requested: VcsSemanticNodeRef,
+  { root, edges }: { root: VcsSemanticNodeRef; edges: readonly VcsProvenanceEdge[] },
+  limit: number,
+) {
+  const expected = canonicalJson(requested);
+  if (canonicalJson(root) !== expected || edges.length > limit ||
+      edges.some(({ from, to }) => canonicalJson(from) !== expected && canonicalJson(to) !== expected)) {
     throw new Error("Workspace history returned different provenance");
   }
-  return result;
 }
 
 export async function readWorkspacePublishedRevision(input: {
