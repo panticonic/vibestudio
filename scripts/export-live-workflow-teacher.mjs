@@ -125,6 +125,14 @@ const pdfIntakeWorkflow = {
   root: "extractPdfEvidence",
   evidence: pdfIntakeEvidence,
 };
+const presentationWorkflow = {
+  family: "workspace-presentation",
+  namespace: "vibestudio:visualize",
+  group: "component-selection-and-grounding",
+  validator: { template: "system-testing", path: "skills/system-testing/presentation-managed.ts" },
+  root: "preparePresentation",
+  evidence: presentationEvidence,
+};
 const composedReleaseWorkflow = {
   ...ownedOperationsWorkflow,
   family: "workspace-release-dossier",
@@ -164,6 +172,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedAutomationWorlds },
     { managedPublicationWorlds },
     { managedPdfWorlds },
+    { managedPresentationWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -177,12 +186,20 @@ export async function loadLiveTeacherCases(checkouts) {
       "automation-lifecycle-worlds.ts",
       "publication-preflight-worlds.ts",
       "pdf-intake-worlds.ts",
+      "presentation-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, expected } of managedPresentationWorlds) {
+    cases.set(`presentation-live-${id}`, {
+      ...presentationWorkflow,
+      caseId: id,
+      renderedIds: expected.filter((view) => Object.hasOwn(view, "labels")).map(({ id }) => id),
+    });
+  }
   for (const { id, pages, blocked, claims } of managedPdfWorlds) {
     const answered = claims.filter(({ evidence }) => evidence.length > 0).length;
     const expectedStatus =
@@ -508,6 +525,39 @@ function pdfIntakeEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, seed_revision: verification.seedRevision },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function presentationEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedPresentation;
+  const verification = fixture?.verification;
+  const ready = exercise.report?.views?.filter((view) => view.status === "ready");
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      fixture.caseId === workflow.caseId &&
+      verification?.passed === true &&
+      typeof verification.panelAttempt === "string" &&
+      typeof verification.buildKey === "string" &&
+      [
+        "ownedPanel",
+        "exactViewOrder",
+        "browserRenderedCatalog",
+        "visibleLabels",
+        "exactReport",
+        "protectedHeadUnchanged",
+      ].every((name) => verification.checks?.[name] === true) &&
+      JSON.stringify(verification.rendered?.ids) === JSON.stringify(workflow.renderedIds) &&
+      JSON.stringify(ready?.map(({ id }) => id)) === JSON.stringify(workflow.renderedIds) &&
+      ready.every(({ rendered }) => typeof rendered?.mdx === "string") &&
+      JSON.stringify(ready.map(({ rendered }) => hash(rendered.mdx))) ===
+        JSON.stringify(verification.mdxDigests),
+    "The grounded presentation must match its managed browser readback and exact MDX"
+  );
+  return {
+    world: { context_id: fixture.contextId, panel_attempt: verification.panelAttempt },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };

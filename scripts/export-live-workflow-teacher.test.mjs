@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import templateConfig from "../src/dev/developmentTemplateConfig.cjs";
 import {
   exportLiveTeacherWorkflow,
   loadLiveTeacherCases,
@@ -73,6 +74,19 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
+        "presentation-worlds",
+        "managedPresentationWorlds",
+        [
+          {
+            id: "repair",
+            expected: [
+              { id: "jobs", labels: ["Mon"] },
+              { id: "hold", status: "needs-review" },
+            ],
+          },
+        ],
+      ],
+      [
         "panel-repair-world",
         "panelRepairWorlds",
         [
@@ -111,6 +125,12 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(cleanPdf.root, "extractPdfEvidence");
   assert.equal(cleanPdf.expectedStatus, "missing-pages");
   assert.deepEqual(cleanPdf.pages, [1, 5]);
+  const presentation = cases.get("presentation-live-repair");
+  assert.equal(presentation.root, "preparePresentation");
+  assert.deepEqual(presentation.renderedIds, ["jobs"]);
+  assert.deepEqual(groups("presentation-live-repair"), [
+    "vibestudio:visualize:component-selection-and-grounding",
+  ]);
   const preflight = cases.get("publication-preflight-live-caption");
   assert.equal(preflight.root, "preflightPublication");
   assert.deepEqual(preflight.expectedBlockers, ["missing-presentation"]);
@@ -281,6 +301,52 @@ test("live panel export rejects a child from a different evaluation", async (t) 
   await assert.rejects(() => exportLiveTeacherWorkflow(options), /different EvalDO/);
 });
 
+test("presentation export ties the exact MDX to the managed browser readback", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "presentation-live-unsampled-hall";
+  const run = diagnostics.natlangTeacher;
+  const mdx = '<Stats items={[{"label":"Confirmed bookings","value":24}]} />';
+  run.report = { views: [{ id: "counts", status: "ready", rendered: { mdx } }] };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  const skill = structuredClone(leaf);
+  skill.callId = skill.summary.call_id = "skill";
+  skill.record.definition.name = "preparePresentation";
+  leaf.record.parent_call_id = "skill";
+  run.calls.push(skill);
+  const verification = {
+    passed: true,
+    panelAttempt: "attempt",
+    buildKey: "build",
+    checks: Object.fromEntries(
+      [
+        "ownedPanel",
+        "exactViewOrder",
+        "browserRenderedCatalog",
+        "visibleLabels",
+        "exactReport",
+        "protectedHeadUnchanged",
+      ].map((name) => [name, true])
+    ),
+    rendered: { ids: ["counts"] },
+    mdxDigests: [createHash("sha256").update(mdx).digest("hex")],
+  };
+  diagnostics.managedPresentation = { contextId: "ctx", caseId: "unsampled-hall", verification };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  run.report.views[0].rendered.mdx = mdx.replace("24", "240");
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-mdx` }),
+    /match its managed browser readback and exact MDX/u
+  );
+});
+
 test("workspace integration binds conflict source and verified state without browser evidence", async (t) => {
   const { options, entry, diagnostics, save } = await fixture(t);
   entry.test.name = "workspace-integration-theme-locale";
@@ -331,6 +397,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["automation-lifecycle-worlds", "export const managedAutomationWorlds = [];"],
       ["publication-preflight-worlds", "export const managedPublicationWorlds = [];"],
       ["pdf-intake-worlds", "export const managedPdfWorlds = [];"],
+      ["presentation-worlds", "export const managedPresentationWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,
