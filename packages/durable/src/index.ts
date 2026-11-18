@@ -3,6 +3,8 @@ import {
   resolveReceiverAuthority,
 } from "@vibestudio/shared/receiverAuthorityDeclaration";
 import { LifecyclePreparation } from "@vibestudio/shared/lifecyclePreparation";
+import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import { doTargetId } from "@vibestudio/shared/workspaceServiceRpc";
 import { deserializeRpcFailure, serializeRpcFailure } from "@vibestudio/rpc";
 import {
   collectExposableMethods,
@@ -52,6 +54,7 @@ import {
 } from "@vibestudio/shared/durableWork";
 import {
   parseLifecyclePrepareInput,
+  type LifecycleCloneInput,
   type LifecyclePrepareInput,
   type LifecyclePrepareResult,
 } from "@vibestudio/shared/doDispatcher";
@@ -917,6 +920,32 @@ export abstract class DurableObjectBase {
 
   async resumeAfterRestart(_input: LifecycleResumeInput): Promise<void> {}
 
+  /** Initialize identity-bound state and any versioned changes specific to the clone. */
+  protected initializeClonedStorage(_input: LifecycleCloneInput): void {}
+
+  private prepareClonedStorage(input: LifecycleCloneInput): void {
+    if (!input?.target || doTargetId(input.target) !== this.rpcSelfId) {
+      throw new Error("Clone preparation does not name this Durable Object");
+    }
+    const receiptKey = "__lifecycleCloneReceipt";
+    const witness = canonicalJson(input);
+    const prior = this.getStateValue(receiptKey);
+    if (prior === witness) return;
+    if (prior !== null) throw new Error("Clone preparation witness changed");
+    this.assertCleanWorkingSet();
+    this.committedTransaction(
+      (changed) => (changed ? "Initialize cloned storage" : null),
+      () => {
+        this.initializeClonedStorage(input);
+        this.setStateValue(receiptKey, witness);
+        return (
+          this.dolt !== null &&
+          this.sql.exec("SELECT 1 FROM dolt_status LIMIT 1").toArray().length > 0
+        );
+      }
+    );
+  }
+
   /**
    * Declare that this activation owns a live resource which must be released
    * before workerd replacement or server shutdown.
@@ -1032,7 +1061,11 @@ export abstract class DurableObjectBase {
         }
       }
 
-      if (method === "__lifecycle/prepare" || method === "__lifecycle/resume") {
+      if (
+        method === "__lifecycle/prepare" ||
+        method === "__lifecycle/resume" ||
+        method === "__lifecycle/initializeClone"
+      ) {
         return await this.withCaller(verifiedCallerFromBody, async () => {
           const denial = this.hostControlDenial(method, authorityAcceptedAt);
           if (denial) {
@@ -1052,6 +1085,10 @@ export abstract class DurableObjectBase {
           // activation retains its previous schemaReady cache. Lifecycle is the
           // generation boundary, so revalidate the one current schema here.
           await this.ensureSchema();
+          if (method === "__lifecycle/initializeClone") {
+            this.prepareClonedStorage(args[0] as LifecycleCloneInput);
+            return jsonResponse({ value: null });
+          }
           const result =
             method === "__lifecycle/prepare"
               ? await (async () => {

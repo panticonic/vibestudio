@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { LifecycleCloneInput } from "@vibestudio/shared/doDispatcher";
 import { DurableObjectBase } from "./index.js";
 import { DoltDriftError, doltLocalPatterns } from "./dolt.js";
 import { LEGACY_PROOF_HEADER } from "./legacyImport.js";
@@ -90,6 +91,55 @@ async function onDolt() {
 }
 
 describe("DurableObjectBase on a Dolt cell", () => {
+  it("initializes a clone once under an exact host witness and commits its versioned changes", async () => {
+    class ClonedNotesDO extends NotesDO {
+      protected override initializeClonedStorage(input: LifecycleCloneInput): void {
+        this.sql.exec("INSERT INTO notes(body) VALUES (?)", input.targetContextId);
+      }
+    }
+    const fake = await FakeDoltStorage.create({ doltLocal: doltLocalPatterns() });
+    const { call, callAs } = await createTestDO(ClonedNotesDO, undefined, {
+      storage: fake.storage,
+    });
+    const source = { source: "test", className: "TestDO", objectKey: "parent" };
+    const target = { ...source, objectKey: "test-key" };
+    const input: LifecycleCloneInput = {
+      provenance: {
+        storage: "snapshot",
+        operationContextId: "child-context",
+        sourceEntityId: "do:test:TestDO:parent",
+        sourceContextId: "parent-context",
+        sourceAuthoritySessionId: "parent-session",
+        sourceBuildKey: "parent-build",
+        sourceExecutionDigest: "parent-executable",
+      },
+      source,
+      sourceContextId: "parent-context",
+      target,
+      targetContextId: "child-context",
+      authoritySessionId: "child-session",
+      buildKey: "child-build",
+      executionDigest: "child-executable",
+    };
+    const method = "__lifecycle/initializeClone";
+    await expect(
+      callAs({ callerId: input.provenance.sourceEntityId, callerKind: "do" }, method, input)
+    ).rejects.toThrow(/host.bound attestation/);
+    expect(fake.sql.exec("SELECT body FROM notes").toArray()).toEqual([]);
+    await expect(call(method, { ...input, target: source })).rejects.toThrow(
+      "Clone preparation does not name this Durable Object"
+    );
+    const before = fake.dolt.log().length;
+    await expect(call(method, input)).resolves.toBe(null);
+    await expect(call(method, input)).resolves.toBe(null);
+    await expect(call(method, { ...input, targetContextId: "other" })).rejects.toThrow(
+      "Clone preparation witness changed"
+    );
+    expect(fake.sql.exec("SELECT body FROM notes").toArray()).toEqual([{ body: "child-context" }]);
+    expect(fake.dolt.log()).toHaveLength(before + 1);
+    expect(fake.dolt.status()).toEqual([]);
+  });
+
   it("serves the facet engine probe only with the hosting root's proof", async () => {
     const proof = "hosting-root-proof";
     class HostedNotesDO extends NotesDO {
