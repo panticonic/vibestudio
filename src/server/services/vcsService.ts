@@ -38,6 +38,7 @@ import {
 import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import {
   hasWorkspaceParticipantDiscardReceipt,
+  inspectWorkspaceParticipantProvenance,
   readWorkspaceParticipantFileDescriptors,
   readWorkspaceParticipantStatus,
   workspaceParticipantCatalog,
@@ -344,6 +345,11 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     switch (method) {
       case "status":
         return readWorkspaceParticipantStatus(scope);
+      case "inspect":
+        return inspectWorkspaceParticipantProvenance({
+          ...scope,
+          inspect: vcsMethods.inspect.args.parse([input])[0],
+        });
       case "compare":
         return workspace.reviewParticipantMerge({
           ...scope,

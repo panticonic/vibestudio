@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { compareUtf16CodeUnits, sha256HexSyncText } from "@vibestudio/content-addressing";
 import {
   vcsCompareResultSchema,
+  vcsInspectResultSchema,
   vcsListDirectoryResultSchema,
   vcsListFilesResultSchema,
   vcsMergeResultSchema,
@@ -14,6 +15,7 @@ import {
   type VcsCopyInput,
   type VcsDiscardInput,
   type VcsEditInput,
+  type VcsInspectInput,
   type VcsListDirectoryInput,
   type VcsListFilesInput,
   type VcsMergeInput,
@@ -177,6 +179,32 @@ export async function hasWorkspaceParticipantDiscardReceipt(input: WorkspaceHist
   return z.boolean().parse(await input.dispatch.dispatch(
     input.owner, "hasHistoryDiscardReceipt", { discard: input.discard, cause: input.cause },
   ));
+}
+
+/** Inspect the exact admitted provenance node and its immediate relationships. */
+export async function inspectWorkspaceParticipantProvenance(input: WorkspaceHistorySource & {
+  owner: WorkspaceSourceProviderRef;
+  caller: VerifiedCaller;
+  contextId: string;
+  inspect: VcsInspectInput;
+}) {
+  requireWorkspaceParticipantOwner(input);
+  const { dispatch, owner, contextId, inspect } = input;
+  const result = vcsInspectResultSchema.parse(
+    await dispatch.dispatch(owner, "inspectHistoryNode", { contextId, inspect }),
+  );
+  const root = canonicalJson(inspect.node);
+  const sameNode =
+    (inspect.node.kind === "work-unit" && result.node.kind === "work-unit" &&
+      result.node.value.workUnitId === inspect.node.workUnitId) ||
+    (inspect.node.kind === "command" && result.node.kind === "command" &&
+      result.node.value.commandId === inspect.node.commandId);
+  if (canonicalJson(result.root) !== root || !sameNode ||
+      result.edges.length > inspect.edgeLimit ||
+      result.edges.some(({ from, to }) => canonicalJson(from) !== root && canonicalJson(to) !== root)) {
+    throw new Error("Workspace history returned different provenance");
+  }
+  return result;
 }
 
 export async function readWorkspacePublishedRevision(input: {

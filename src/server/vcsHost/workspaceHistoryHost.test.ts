@@ -9,6 +9,7 @@ import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
 import { getBytes, putBytes } from "../services/blobstoreService.js";
 import {
   editWorkspaceParticipant,
+  inspectWorkspaceParticipantProvenance,
   mergeWorkspaceParticipantContext,
   openWorkspaceParticipantContext,
   readWorkspaceParticipantStatus,
@@ -238,6 +239,35 @@ it.each([
   } finally {
     await rm(blobsDir, { recursive: true, force: true });
   }
+});
+
+it("validates the selected participant command and the endpoints of its provenance", async () => {
+  const caller = native(1, "inspect");
+  const identity = JSON.stringify(["task", {
+    authoritySessionId: "sealed", runtimeId: "agent",
+  }, { conversationId: 3, taskId: 1 }]);
+  const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(identity)}` };
+  const root = { kind: "command" as const, commandId: "command:one" };
+  const other = { kind: "command" as const, commandId: "command:other" };
+  const workUnit = { kind: "work-unit" as const, workUnitId: "work:one" };
+  const at = "2026-04-01T00:00:00.000Z";
+  const result = {
+    root, hasMoreEdges: false,
+    node: { kind: "command", value: {
+      commandId: root.commandId, workspaceId: "workspace", contextId: "context",
+      method: "edit", status: "complete", result: workUnit, createdAt: at, completedAt: at,
+    } },
+    edges: [{ kind: "caused-by", from: workUnit, to: root }],
+  };
+  const dispatch = vi.fn()
+    .mockResolvedValueOnce(result)
+    .mockResolvedValueOnce({ ...result, edges: [{ ...result.edges[0], to: other }] });
+  const input = { dispatch: { dispatch }, owner, canonical, caller, contextId: "context", inspect: { node: root, edgeLimit: 1 } };
+  await expect(inspectWorkspaceParticipantProvenance(input)).resolves.toEqual(result);
+  expect(dispatch).toHaveBeenCalledWith(owner, "inspectHistoryNode", {
+    contextId: "context", inspect: input.inspect,
+  });
+  await expect(inspectWorkspaceParticipantProvenance(input)).rejects.toThrow("different provenance");
 });
 
 it("observes exact bytes for a participant comparison and validates the returned states", async () => {
