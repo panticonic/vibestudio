@@ -32,6 +32,7 @@ export interface SemanticReads {
     target: VcsStateNodeRef,
     source: VcsStateNodeRef
   ): Promise<Array<Pick<WorkspaceFileAccess, "path" | "kind">>>;
+  mergeLocations?: NonNullable<SemanticReads["changedLocations"]>;
   hasDiscardReceipt?(discard: VcsDiscardInput): Promise<boolean>;
 }
 
@@ -317,8 +318,9 @@ export async function vcsFileSelections(
         target = { kind: "event", eventId: request.expectedMainEventId };
         source = { kind: "event", eventId: request.expectedCommittedEventId };
       }
-      if (method !== "merge" && read.changedLocations && source.kind !== "external-delta") {
-        for (const { kind, path } of await read.changedLocations(target, source)) {
+      const locations = method === "merge" ? read.mergeLocations : read.changedLocations;
+      if (locations && source.kind !== "external-delta") {
+        for (const { kind, path } of await locations(target, source)) {
           add("write", path, kind);
         }
         break;

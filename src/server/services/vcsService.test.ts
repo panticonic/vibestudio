@@ -211,6 +211,7 @@ describe("canonical vcsService", () => {
       publishParticipantContext: vi.fn().mockResolvedValue(published),
       readParticipantFiles: vi.fn().mockResolvedValue([null]),
       reviewParticipantMerge: vi.fn(),
+      mergeParticipantContext: vi.fn(),
     };
     const { definition, semanticCall, semanticPublishCall } = service({
       context: scope.contextId,
@@ -275,6 +276,16 @@ describe("canonical vcsService", () => {
       head: scope.workingHead,
       cause: { parent: null },
       commit,
+    });
+    const source = { kind: "event", eventId: "event:shared" };
+    const merge = { ...commit, commandId: "command:merge", source };
+    const work = { status: "working", contextId: scope.contextId };
+    workspace.mergeParticipantContext.mockResolvedValue({ result: work });
+    await expect(definition.handler(ctx, "merge", [merge])).resolves.toEqual(work);
+    expect(workspace.mergeParticipantContext).toHaveBeenCalledWith({
+      ...scope,
+      cause: { parent: null },
+      merge,
     });
     const push = {
       contextId: scope.contextId,

@@ -194,7 +194,11 @@ it.each([
       applicationId: application.applicationId, workingHead: application,
       changeCount: 1, changeIds: ["composed-change"],
       incorporatedChangeCount: 1, incorporatedChangeIds: ["source-change"],
-      decisionIds: ["decision"],
+      status: "working", decisionId: "decision", decisionIds: ["decision"],
+      resolution: { complete: true, concluded: true, remainingCoordinateCount: 0 },
+      counts: { adopt: 0, convergent: 0, composed: 1, conflict: 0, resolved: 0 },
+      outcomes: [], composed: [], conflicts: [], nextConflictCursor: null,
+      intents: [], intentsTruncated: false,
     };
     const dispatch = vi.fn(async (_owner: WorkspaceSourceProviderRef, method: string, raw: unknown) => {
       if (method === "resolveHistoryMainMerge") {

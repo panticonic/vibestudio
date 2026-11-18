@@ -66,6 +66,7 @@ export interface VcsServiceDeps {
     | "publishParticipantContext"
     | "readParticipantFiles"
     | "reviewParticipantMerge"
+    | "mergeParticipantContext"
   >;
   entityCache?: Pick<EntityCache, "resolveContext" | "resolveActive">;
   hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
@@ -348,6 +349,14 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           ...scope,
           compare: vcsMethods.compare.args.parse([input])[0],
         });
+      case "merge":
+        return (
+          await workspace.mergeParticipantContext({
+            ...scope,
+            cause,
+            merge: vcsMethods.merge.args.parse([input])[0],
+          })
+        ).result;
       case "edit":
         return (
           await workspace.editParticipantContext({
@@ -789,6 +798,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
                 ? {
                     repositoryPath: catalog.repositoryPath,
                     changedLocations: catalog.changedLocations,
+                    mergeLocations: catalog.mergeLocations,
                     hasDiscardReceipt: (discard) =>
                       hasWorkspaceParticipantDiscardReceipt({
                         ...scope,

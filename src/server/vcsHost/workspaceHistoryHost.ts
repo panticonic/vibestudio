@@ -4,6 +4,7 @@ import {
   vcsCompareResultSchema,
   vcsListDirectoryResultSchema,
   vcsListFilesResultSchema,
+  vcsMergeResultSchema,
   vcsResolveRepositoryResultSchema,
   vcsStateNodeRefSchema,
   vcsSemanticNodeRefSchema,
@@ -91,7 +92,7 @@ const appliedEdit = z.object({ head, value: vcsStateNodeRefSchema }).strict();
 const mergeReply = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("read-content"), contentHashes: z.array(digest).min(1) }).strict(),
   z.object({ kind: z.literal("prepare-content"), blobs: z.array(blob).min(1) }).strict(),
-  appliedEdit.extend({ kind: z.literal("committed"), result: vcsWorkingMutationResultSchema }).strict(),
+  appliedEdit.extend({ kind: z.literal("committed"), result: vcsMergeResultSchema }).strict(),
 ]);
 const mainMergeSelection = z.object({ head, base: head, main: head }).strict();
 const mergeReview = z.discriminatedUnion("kind", [
@@ -246,16 +247,22 @@ export function workspaceParticipantCatalog(input: WorkspaceHistorySource & {
     }
     return result;
   };
+  const locations = async (
+    method: "readHistoryChangedLocations" | "readHistoryMergeLocations",
+    target: VcsStateNodeRef,
+    source: VcsStateNodeRef,
+  ) => {
+    const result = changedLocations.parse(await dispatch.dispatch(owner, method, { contextId, target, source }));
+    if (canonicalJson([result.target, result.source]) !== canonicalJson([target, source])) {
+      throw new Error("Workspace changes belong to different revisions");
+    }
+    return result.locations;
+  };
   return {
-    async changedLocations(target: VcsStateNodeRef, source: VcsStateNodeRef) {
-      const result = changedLocations.parse(await dispatch.dispatch(
-        owner, "readHistoryChangedLocations", { contextId, target, source }
-      ));
-      if (canonicalJson([result.target, result.source]) !== canonicalJson([target, source])) {
-        throw new Error("Workspace changes belong to different revisions");
-      }
-      return result.locations;
-    },
+    changedLocations: (target: VcsStateNodeRef, source: VcsStateNodeRef) =>
+      locations("readHistoryChangedLocations", target, source),
+    mergeLocations: (target: VcsStateNodeRef, source: VcsStateNodeRef) =>
+      locations("readHistoryMergeLocations", target, source),
     async repositoryPath(state: VcsStateNodeRef, repositoryId: string) {
       const result = verify(vcsResolveRepositoryResultSchema.parse(
         await dispatch.dispatch(owner, "readHistoryRepositoryLocation", { contextId, state, repositoryId })
@@ -518,8 +525,9 @@ export async function mergeWorkspaceParticipantContext(input: WorkspaceHistorySo
   if (reply.kind !== "committed" || reply.value.kind !== "application") {
     throw new Error("Workspace merge did not return the committed application");
   }
-  if (reply.result.contextId !== merge.contextId || reply.result.commandId !== merge.commandId ||
+  if (reply.result.status !== "working" || reply.result.contextId !== merge.contextId || reply.result.commandId !== merge.commandId ||
       reply.result.applicationId !== reply.value.applicationId ||
+      reply.result.decisionId !== reply.result.decisionIds[0] ||
       canonicalJson(reply.result.workingHead) !== canonicalJson(reply.value)) {
     throw new Error("Workspace merge returned a different application receipt");
   }

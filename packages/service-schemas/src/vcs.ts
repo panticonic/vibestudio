@@ -1368,7 +1368,7 @@ const vcsMergeReviewFields = {
 export const vcsMergeResultSchema = z.discriminatedUnion("status", [
   vcsWorkingMutationResultSchema.extend({
     status: z.literal("working"),
-    decisionId: id("Created merge decision."),
+    decisionId: id("Created merge decision when an explicit resolution was recorded.").optional(),
     outcomes: z.array(vcsMergeCoordinateSchema).max(500),
     ...vcsMergeReviewFields,
     composed: z.array(vcsComposedReviewSchema).max(500),
