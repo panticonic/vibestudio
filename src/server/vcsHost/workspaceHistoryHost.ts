@@ -205,6 +205,13 @@ export async function inspectWorkspaceParticipantProvenance(input: WorkspaceHist
       result.node.value.appliedChangeId === inspect.node.appliedChangeId) ||
     (inspect.node.kind === "decision" && result.node.kind === "decision" &&
       result.node.value.decisionId === inspect.node.decisionId) ||
+    (inspect.node.kind === "file" && result.node.kind === "file" &&
+      canonicalJson(result.node.state) === canonicalJson(inspect.node.state) &&
+      result.node.value.fileId === inspect.node.fileId &&
+      (result.node.value.kind === "tombstone" || result.node.value.repositoryId === inspect.node.repositoryId)) ||
+    (inspect.node.kind === "repository" && result.node.kind === "repository" &&
+      canonicalJson(result.node.state) === canonicalJson(inspect.node.state) &&
+      result.node.value.repositoryId === inspect.node.repositoryId) ||
     (inspect.node.kind === "work-unit" && result.node.kind === "work-unit" &&
       result.node.value.workUnitId === inspect.node.workUnitId) ||
     (inspect.node.kind === "command" && result.node.kind === "command" &&
