@@ -8,10 +8,12 @@ import {
   vcsSemanticNodeRefSchema,
   vcsStatusResultSchema,
   vcsWorkingMutationResultSchema,
+  type VcsCopyInput,
   type VcsEditInput,
   type VcsListDirectoryInput,
   type VcsListFilesInput,
   type VcsMergeInput,
+  type VcsMoveInput,
   type VcsResolveRepositoryInput,
   type VcsStateNodeRef,
   type VcsStatusResult,
@@ -55,7 +57,7 @@ const causeSchema = z
       .nullable(),
   })
   .strict();
-const editPlan = z.discriminatedUnion("kind", [
+const mutationPlan = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("read-content"), contentHashes: z.array(digest).min(1) }).strict(),
   z
     .object({
@@ -70,7 +72,7 @@ const editPlan = z.discriminatedUnion("kind", [
       command: z
         .object({
           commandId: z.string().min(1),
-          method: z.literal("edit"),
+          method: z.enum(["edit", "move", "copy"]),
           requestDigest: z.string().min(1),
           cause: causeSchema,
         })
@@ -271,39 +273,58 @@ export async function putPreparedWorkspaceContent(
   return [...seen].sort(compareUtf16CodeUnits);
 }
 
-/** Execute an edit with host-owned content, after admission has fixed the participant owner. */
-export async function editWorkspaceParticipant(input: {
+interface ParticipantMutationTarget {
   dispatch: Pick<DODispatch, "dispatch">;
   owner: WorkspaceSourceProviderRef;
   head: string;
-  edit: VcsEditInput;
   cause: z.infer<typeof causeSchema>;
   triggerEvidence?: { text: string; sender: VcsTrajectorySenderRef } | null;
   blobsDir: string;
-}): Promise<{ head: string; result: VcsWorkingMutationResult }> {
-  const { dispatch, owner, edit, cause, blobsDir } = input;
+}
+
+export type ParticipantTransfer =
+  | { method: "move"; value: VcsMoveInput }
+  | { method: "copy"; value: VcsCopyInput };
+
+/** Execute an edit with host-owned content, after admission has fixed the participant owner. */
+export function editWorkspaceParticipant(input: ParticipantMutationTarget & { edit: VcsEditInput }) {
+  return mutateWorkspaceParticipant(input, { method: "edit", value: input.edit });
+}
+
+/** Apply an admitted exact move or copy with its original content provenance. */
+export function transferWorkspaceParticipant(input: ParticipantMutationTarget & { transfer: ParticipantTransfer }) {
+  return mutateWorkspaceParticipant(input, input.transfer);
+}
+
+async function mutateWorkspaceParticipant(
+  input: ParticipantMutationTarget,
+  request: ParticipantTransfer | { method: "edit"; value: VcsEditInput },
+): Promise<{ head: string; result: VcsWorkingMutationResult }> {
+  const { dispatch, owner, cause, blobsDir } = input;
+  const { value, method } = request;
+  const common = {
+    head: input.head,
+    cause,
+    ...(input.triggerEvidence === undefined ? {} : { triggerEvidence: input.triggerEvidence }),
+  };
   const requestPlan = async (receipt: { files: z.infer<typeof blob>[] } | null) =>
-    editPlan.parse(
-      await dispatch.dispatch(owner, "planHistoryEdit", {
-        head: input.head,
-        edit,
-        cause,
-        receipt,
-        ...(input.triggerEvidence === undefined ? {} : { triggerEvidence: input.triggerEvidence }),
-      })
+    mutationPlan.parse(method === "edit"
+      ? await dispatch.dispatch(owner, "planHistoryEdit", { ...common, edit: value, receipt })
+      : await dispatch.dispatch(owner, "planHistoryTransfer", { ...common, transfer: request })
     );
   const checkResult = (result: VcsWorkingMutationResult) => {
     if (
-      result.commandId !== edit.commandId ||
-      result.contextId !== edit.contextId ||
+      result.commandId !== value.commandId ||
+      result.contextId !== value.contextId ||
       result.workingHead.kind !== "application" ||
       result.applicationId !== result.workingHead.applicationId
     ) {
-      throw new Error("Workspace edit returned a different application");
+      throw new Error("Workspace mutation returned a different application");
     }
   };
   let plan = await requestPlan(null);
   if (plan.kind === "read-content") {
+    if (method !== "edit") throw new Error("Workspace transfer requested new content");
     const files = await Promise.all(
       plan.contentHashes.map(async (contentHash) => {
         const bytes = await getBytes(blobsDir, contentHash);
@@ -313,18 +334,19 @@ export async function editWorkspaceParticipant(input: {
     );
     plan = await requestPlan({ files });
   }
-  if (plan.kind === "read-content") throw new Error("Workspace edit repeated its content request");
+  if (plan.kind === "read-content") throw new Error("Workspace mutation repeated its content request");
   if (plan.kind === "committed") {
     checkResult(plan.result);
     return { head: plan.head, result: plan.result };
   }
   if (
-    plan.command.commandId !== edit.commandId ||
+    plan.command.commandId !== value.commandId ||
+    plan.command.method !== method ||
     canonicalJson(plan.command.cause) !== canonicalJson(cause) ||
-    plan.result.commandId !== edit.commandId ||
-    plan.result.contextId !== edit.contextId
+    plan.result.commandId !== value.commandId ||
+    plan.result.contextId !== value.contextId
   ) {
-    throw new Error("Workspace edit plan belongs to a different command");
+    throw new Error("Workspace mutation plan belongs to a different command");
   }
   const prepared = plan;
   const applied = await withBlobContentLock(blobsDir, async () => {

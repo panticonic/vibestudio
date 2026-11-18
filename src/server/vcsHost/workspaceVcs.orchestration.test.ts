@@ -193,6 +193,65 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
+  it("opens the admitted filesystem copy and materializes its own directory", async () => {
+    const { vcs, blobsDir } = await harness();
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const contextId = "ctx-shared";
+    const content = (await putBytes(blobsDir, Buffer.from("participant-only bytes"))).digest;
+    const state = { kind: "event", eventId: "replayed-event" };
+    const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string, raw?: unknown) => {
+      if (method === "readHistoryMain") return { head: "main", eventId: "main-event" };
+      if (method === "listHistoryAppliedPublications") return [];
+      if (method === "reserveHistoryParticipant") {
+        const { participantId } = raw as { participantId: string };
+        return {
+          targetId: `do:${owner.source}:${owner.className}:work-${sha256HexSyncText(participantId)}`,
+          head: "initial",
+          origin: { ref: "canonical", token: "grant" },
+        };
+      }
+      if (method === "connectHistoryParticipant") return "main";
+      if (method === "openHistoryContext") {
+        expect(raw).toEqual({ contextId, head: "replayed-working" });
+        return "replayed-working";
+      }
+      if (method === "readHistoryProjection") {
+        return {
+          head: "replayed-working",
+          state,
+          repositories: [{
+            repositoryId: "repository", repoPath: "meta", presence: "present", fileManifestId: "files",
+            source: { kind: "snapshot", files: [{ path: "note.txt", contentHash: content, mode: 420 }] },
+          }],
+        };
+      }
+      throw new Error(`Unexpected participant dispatch ${method}`);
+    });
+    const bind = (taskId: number) => vcs.bindParticipantFilesystem({
+      contextId,
+      caller: {
+        runtime: { kind: "do", id: "agent" },
+        nativeInvocation: {
+          owner: { runtimeId: "agent", authoritySessionId: "sealed" },
+          task: { conversationId: 0, taskId },
+          operation: { kind: "tool", assistantEntryId: 0, callId: "bind" },
+        },
+      },
+      isTracked: async () => true,
+    });
+    await expect(bind(1)).resolves.toBeNull();
+    await vcs.attachParticipantHistory({
+      dispatch: { dispatch }, canonical, replayedWorkingHeads: new Map([[contextId, "replayed-working"]]),
+    });
+    const [first, second] = await Promise.all([bind(1), bind(2)]);
+    expect(first?.sourceRoot).toBeDefined();
+    expect(first?.sourceRoot).not.toBe(second?.sourceRoot);
+    await first!.bridge.ensureMaterialized(contextId, "all");
+    await expect(first!.bridge.isMaterialized(contextId, "meta")).resolves.toBe(true);
+    await expect(second!.bridge.isMaterialized(contextId, "meta")).resolves.toBe(false);
+    await expect(fsp.readFile(path.join(first!.sourceRoot, "meta/note.txt"), "utf8")).resolves.toBe("participant-only bytes");
+  });
+
   it("keeps participant projections separate, advances one, and repairs its binding on retry", async () => {
     const { vcs, blobsDir, deps } = await harness();
     const contextId = "context:shared";

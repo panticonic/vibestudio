@@ -7001,7 +7001,14 @@ async function main() {
         );
         return new FsService(contextFolderManager, entityCache, {
           disk: nativeWorkspace.disk,
-          contextAuthority: { kind: "semantic", bridge: vcsBridge },
+          contextAuthority: {
+            kind: "semantic",
+            async bind(ctx, contextId) {
+              return await workspaceVcs.bindParticipantFilesystem({
+                caller: ctx.caller, contextId, isTracked: vcsBridge.isTracked,
+              }) ?? { bridge: vcsBridge, sourceRoot: contextFolderManager.contextSourcePath(contextId) };
+            },
+          },
         });
       },
       stop: (service: InstanceType<typeof FsService>) => service.stop(),

@@ -22,6 +22,8 @@ import * as path from "node:path";
 import { TextDecoder } from "node:util";
 
 import type {
+  VcsCommitInput,
+  VcsCommitResult,
   VcsDiscardInput,
   VcsDiscardResult,
   VcsPushInput,
@@ -30,7 +32,7 @@ import type {
   VcsReadFilesInput,
   VcsStateNodeRef,
 } from "@vibestudio/service-schemas/vcs";
-import { vcsDiscardResultSchema, vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
+import { vcsCommitResultSchema, vcsDiscardResultSchema, vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
 import type {
   ProtectedPublicationEvent,
   ProtectedPublicationFileChange,
@@ -96,6 +98,7 @@ import type {
   WorkspaceSourceProviderRef,
 } from "../workspaceSourceProvider.js";
 import type { DODispatch } from "../doDispatch.js";
+import type { FsVcsBridge } from "../services/fsService.js";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import {
@@ -109,15 +112,20 @@ import { WorkspaceRepositories } from "./workspaceRepositories.js";
 import {
   bindWorkspaceParticipantPublication,
   collectWorkspaceHistoryContentRoots,
+  editWorkspaceParticipant,
   listAppliedWorkspacePublications,
   mergeWorkspaceParticipantContext,
   observeAppliedWorkspacePublication,
+  openWorkspaceParticipantContext,
   putPreparedWorkspaceContent,
   readWorkspaceCanonicalMain,
   readWorkspaceParticipantProjection,
+  readWorkspaceParticipantStatus,
   readWorkspacePublicationApproval,
   readWorkspacePublishedRevision,
   requireWorkspaceParticipantOwner,
+  transferWorkspaceParticipant,
+  workspaceParticipantCatalog,
   type WorkspaceHistorySource,
 } from "./workspaceHistoryHost.js";
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
@@ -197,6 +205,10 @@ const UTF8_DECODER = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
 const BUILDS_LOG_ID = "builds:workspace";
 const CONTENT_OBSERVATION_CONCURRENCY = 32;
 const SLOW_SEMANTIC_EFFECT_MS = 500;
+
+type ParticipantHistoryAttachment = WorkspaceHistorySource & {
+  replayedWorkingHeads?: ReadonlyMap<string, string>;
+};
 
 export interface ExactRepositorySnapshotPlan {
   version: 1;
@@ -359,7 +371,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private gadCaller: WorkspaceSemanticPort | null = null;
   private sourceProviderCaller: WorkspaceSourceProviderV1 | null = null;
-  private participantHistorySource: WorkspaceHistorySource | null = null;
+  private participantHistorySource: ParticipantHistoryAttachment | null = null;
   private readonly protectedPublicationListeners = new Set<
     (event: ProtectedPublicationEvent) => void | Promise<void>
   >();
@@ -639,14 +651,17 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     this.sourceProviderCaller = provider;
   }
 
-  async attachParticipantHistory(source: WorkspaceHistorySource): Promise<void> {
+  async attachParticipantHistory(source: ParticipantHistoryAttachment): Promise<void> {
     return this.mutateProtectedMain(async () => {
       if (this.participantHistorySource) {
         throw new Error("Participant workspace history is already attached");
       }
       await readWorkspaceCanonicalMain(source);
       await this.recoverParticipantPublications(source);
-      this.participantHistorySource = source;
+      this.participantHistorySource = {
+        ...source,
+        ...(source.replayedWorkingHeads ? { replayedWorkingHeads: new Map(source.replayedWorkingHeads) } : {}),
+      };
     });
   }
 
@@ -1017,6 +1032,125 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       contextId: input.merge.contextId,
     });
     return result;
+  }
+
+  async editParticipantContext(input: WorkspaceHistorySource & {
+    caller: VerifiedCaller;
+  } & Omit<Parameters<typeof editWorkspaceParticipant>[0], "blobsDir">) {
+    requireWorkspaceParticipantOwner(input);
+    const result = await editWorkspaceParticipant({ ...input, blobsDir: this.deps.blobsDir });
+    await this.materializeParticipantContext({
+      dispatch: input.dispatch,
+      owner: input.owner,
+      contextId: input.edit.contextId,
+    });
+    return result;
+  }
+
+  async transferParticipantContext(input: WorkspaceHistorySource & {
+    caller: VerifiedCaller;
+  } & Omit<Parameters<typeof transferWorkspaceParticipant>[0], "blobsDir">) {
+    requireWorkspaceParticipantOwner(input);
+    const result = await transferWorkspaceParticipant({ ...input, blobsDir: this.deps.blobsDir });
+    await this.materializeParticipantContext({
+      dispatch: input.dispatch,
+      owner: input.owner,
+      contextId: input.transfer.value.contextId,
+    });
+    return result;
+  }
+
+  async saveParticipantContext(input: WorkspaceHistorySource & {
+    owner: WorkspaceSourceProviderRef;
+    caller: VerifiedCaller;
+    head: string;
+    commit: VcsCommitInput;
+    cause: { parent: RpcCausalParent | null };
+  }): Promise<VcsCommitResult> {
+    requireWorkspaceParticipantOwner(input);
+    const { dispatch, owner, head, commit, cause } = input;
+    const receipt = GadJsonRecordSchema.parse(
+      await dispatch.dispatch(owner, "saveHistoryContext", { head, commit, cause })
+    );
+    const result = vcsCommitResultSchema.parse(receipt["result"]);
+    if (result.contextId !== commit.contextId || typeof receipt["head"] !== "string" || !receipt["head"]) {
+      throw new Error("Workspace save returned a different context");
+    }
+    await this.materializeParticipantContext({ dispatch, owner, contextId: commit.contextId });
+    return result;
+  }
+
+  /** Bind one verified filesystem request to a participant's branch and projection directory. */
+  async bindParticipantFilesystem(input: {
+    caller: VerifiedCaller;
+    contextId: string;
+    isTracked: FsVcsBridge["isTracked"];
+  }): Promise<{ bridge: FsVcsBridge; sourceRoot: string } | null> {
+    const source = this.participantHistorySource;
+    if (!source) return null;
+    const { caller, contextId, isTracked } = input;
+    const replayedWorkingHead = source.replayedWorkingHeads?.get(contextId);
+    const { owner } = await openWorkspaceParticipantContext({
+      ...source,
+      caller,
+      contextId,
+      ownerContextId: contextId,
+      ...(replayedWorkingHead === undefined ? {} : { replayedWorkingHead }),
+    });
+    const scope = { ...source, owner, caller, contextId };
+    const catalog = workspaceParticipantCatalog(scope);
+    const { disk, materializer } = this.participantProjection(owner);
+    const assertContext = (requested: string) => {
+      if (requested !== contextId) throw new Error("Filesystem request names a different context");
+    };
+    const workingHead = async () => {
+      const receipt = GadJsonRecordSchema.parse(
+        await source.dispatch.dispatch(owner, "readHistoryHeads", { contextId }),
+      );
+      if (typeof receipt["workingHead"] !== "string" || !receipt["workingHead"])
+        throw new Error("Participant context has no working revision");
+      return receipt["workingHead"];
+    };
+    const readFiles = (read: VcsReadFilesInput) => this.readParticipantFiles({ ...scope, read });
+    return {
+      sourceRoot: disk.contextDir(contextId),
+      bridge: {
+        isTracked,
+        ...catalog,
+        status: ({ contextId: requested }) => {
+          assertContext(requested);
+          return readWorkspaceParticipantStatus(scope);
+        },
+        readFile: async ({ state, ...file }) => (await readFiles({ state, files: [file] }))[0] ?? null,
+        readFiles,
+        edit: async (edit, parent) => {
+          assertContext(edit.contextId);
+          return this.editParticipantContext({ ...scope, head: await workingHead(), edit, cause: { parent } });
+        },
+        move: async (value, parent) => {
+          assertContext(value.contextId);
+          return this.transferParticipantContext({
+            ...scope, head: await workingHead(), transfer: { method: "move", value }, cause: { parent },
+          });
+        },
+        copy: async (value, parent) => {
+          assertContext(value.contextId);
+          return this.transferParticipantContext({
+            ...scope, head: await workingHead(), transfer: { method: "copy", value }, cause: { parent },
+          });
+        },
+        ensureMaterialized: async (requested) => {
+          assertContext(requested);
+          await this.materializeParticipantContext(scope);
+        },
+        isMaterialized: async (requested, repoPath) => {
+          assertContext(requested);
+          const normalized = normalizeRepositoryPath(repoPath);
+          const receipt = await materializer.materializationState(contextId);
+          return receipt?.repositories.some((repository) => repository.repoPath === normalized) ?? false;
+        },
+      },
+    };
   }
 
   /**
@@ -2108,19 +2242,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     contextId: string;
   }): Promise<{ head: string; state: VcsStateNodeRef; folder: string }> {
     const { contextId, owner } = input;
-    const ownerKey = sha256HexSyncText(canonicalJson(owner));
+    const { ownerKey, disk, materializer } = this.participantProjection(owner);
     return this.locked(canonicalJson(["participant-projection", ownerKey, contextId]), async () => {
       const { head, state, repositories } = await readWorkspaceParticipantProjection(input);
-      const disk = new DiskProjector({
-        contentProjection: this.contentProjection,
-        workspaceRoot: this.deps.workspaceRoot,
-        contextProjectionsRoot: path.join(this.deps.contextProjectionsRoot, ".participants", ownerKey),
-      });
-      const materializer = new ContextMaterializer({
-        blobsDir: this.deps.blobsDir,
-        workspaceId: this.deps.workspaceId,
-        disk,
-      });
       const folder = disk.contextDir(contextId);
       const prior = await materializer.materializationState(contextId);
       const intact = prior !== null && await materializer.projectionMatches(prior);
@@ -2162,6 +2286,17 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       }));
       return { head, state, folder };
     });
+  }
+
+  private participantProjection(owner: WorkspaceSourceProviderRef) {
+    const ownerKey = sha256HexSyncText(canonicalJson(owner));
+    const disk = new DiskProjector({
+      contentProjection: this.contentProjection,
+      workspaceRoot: this.deps.workspaceRoot,
+      contextProjectionsRoot: path.join(this.deps.contextProjectionsRoot, ".participants", ownerKey),
+    });
+    const materializer = new ContextMaterializer({ blobsDir: this.deps.blobsDir, workspaceId: this.deps.workspaceId, disk });
+    return { ownerKey, disk, materializer };
   }
 
   async isContextRepoMaterialized(contextId: string, repoPath: string): Promise<boolean> {

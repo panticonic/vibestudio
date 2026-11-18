@@ -223,6 +223,7 @@ interface TrackedHandle {
   nativeId: number;
   path: string;
   panelId: string;
+  sourceRoot: string;
   ownerCallerIds: readonly string[];
 }
 
@@ -703,6 +704,10 @@ async function managedWorkspaceFilesMatching(
  */
 export type FsContextAuthority =
   | { kind: "semantic"; bridge: FsVcsBridge }
+  | {
+      kind: "semantic";
+      bind(ctx: ServiceContext, contextId: string): Promise<{ bridge: FsVcsBridge; sourceRoot: string }>;
+    }
   | { kind: "scratch-only" };
 
 export interface FsCallTelemetry {
@@ -908,9 +913,13 @@ export class FsService {
     }
   }
 
-  private semanticBridge(scope: FsCallScope): FsVcsBridge | null {
-    if (!scope.contextId) return null;
-    return this.contextAuthority.kind === "semantic" ? this.contextAuthority.bridge : null;
+  private async bindCallScope(ctx: ServiceContext, args: unknown[]) {
+    const scope = await this.resolveContextRoot(ctx, args);
+    const authority = this.contextAuthority;
+    if (!scope.contextId || authority.kind !== "semantic") return { scope, bridge: null };
+    if ("bridge" in authority) return { scope, bridge: authority.bridge };
+    const { bridge, sourceRoot } = await authority.bind(ctx, scope.contextId);
+    return { scope: { ...scope, sourceRoot }, bridge };
   }
 
   /**
@@ -930,8 +939,7 @@ export class FsService {
     ) {
       throw new Error("Managed file reads require non-empty glob patterns");
     }
-    const scope = await this.resolveContextRoot(ctx, options ? [options.explicitContextId] : []);
-    const bridge = this.semanticBridge(scope);
+    const { scope, bridge } = await this.bindCallScope(ctx, options ? [options.explicitContextId] : []);
     if (!bridge || !scope.contextId) {
       throw codedError(
         "ESEMANTICAUTHORITY",
@@ -1235,15 +1243,16 @@ export class FsService {
       nativeId,
       path: logicalPath,
       panelId,
+      sourceRoot: scope.sourceRoot,
       ownerCallerIds: scope.ownerCallerIds,
     });
     return id;
   }
 
-  private getTrackedHandle(id: number, callerId: string): TrackedHandle {
+  private getTrackedHandle(id: number, scope: FsCallScope): TrackedHandle {
     const tracked = this.openHandles.get(id);
     if (!tracked) throw new Error(`Invalid file handle: ${id}`);
-    if (tracked.panelId !== callerId)
+    if (tracked.panelId !== scope.panelId || tracked.sourceRoot !== scope.sourceRoot)
       throw new Error(`File handle ${id} does not belong to caller`);
     return tracked;
   }
@@ -1992,7 +2001,7 @@ export class FsService {
     if (!websiteAuthorityIdentity(ctx.caller))
       return preparedAuthorityState([], { args: rawArgs, accesses: [] });
     const args = [...rawArgs];
-    const scope = await this.resolveContextRoot(ctx, args);
+    const { scope, bridge } = await this.bindCallScope(ctx, args);
     await this.prepareDiskScope(scope);
     const accesses: WorkspaceFileAccess[] = [];
     const add = async (
@@ -2006,7 +2015,6 @@ export class FsService {
       let directory = folder;
       if (requiresSemanticAuthority(logical)) {
         if (method === "rename") {
-          const bridge = this.semanticBridge(scope);
           if (!bridge || !scope.contextId)
             throw codedError("EACCES", "Semantic filesystem authority is unavailable");
           const snapshot = await managedWorkspaceSnapshot(bridge, scope.contextId);
@@ -2028,7 +2036,7 @@ export class FsService {
     if (method === "handleClose")
       return preparedAuthorityState([], { args: rawArgs, accesses: [] });
     if (method.startsWith("handle")) {
-      const handle = this.getTrackedHandle(args[0] as number, scope.panelId);
+      const handle = this.getTrackedHandle(args[0] as number, scope);
       accesses.push({
         effect: method === "handleRead" ? "read" : method === "handleWrite" ? "write" : "list",
         path: handle.path,
@@ -2084,15 +2092,13 @@ export class FsService {
     // Clone args so shift() in resolveContextRoot doesn't mutate the original
     const args = [...rawArgs];
     const scopeStartedAt = Date.now();
-    const scope = await this.resolveContextRoot(ctx, args);
+    const { scope, bridge } = await this.bindCallScope(ctx, args);
     this.emitTelemetry({
       method,
       phase: "scope",
       durationMs: Date.now() - scopeStartedAt,
       ...(scope.contextId ? { contextId: scope.contextId } : {}),
     });
-    const { panelId } = scope;
-    const bridge = this.semanticBridge(scope);
     this.assertScratchOnlyCall(scope, method, args);
 
     if (method === "nativeRoots") {
@@ -2149,7 +2155,7 @@ export class FsService {
     if (method.startsWith("handle")) {
       const id = args[0] as number;
       if (method === "handleClose" && !this.openHandles.has(id)) return;
-      const tracked = this.getTrackedHandle(id, panelId);
+      const tracked = this.getTrackedHandle(id, scope);
       args[0] = tracked.nativeId;
       if (method === "handleClose") {
         closedHandleId = id;

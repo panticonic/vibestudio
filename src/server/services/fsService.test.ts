@@ -546,6 +546,53 @@ describe("FsService", () => {
     rmSync(tmpRoot, { recursive: true, force: true });
   });
 
+  it("binds reads and handles to the selected copy of one logical context", async () => {
+    const contextId = "ctx-two-copies";
+    const caller = makeAgentCtx("shared-runtime", contextId);
+    const task = (taskId: number): ServiceContext => ({
+      ...caller,
+      caller: {
+        ...caller.caller,
+        nativeInvocation: {
+          owner: { runtimeId: caller.caller.runtime.id, authoritySessionId: "session" },
+          task: { conversationId: 1, taskId },
+          operation: { kind: "tool", assistantEntryId: 1, callId: "read" },
+        },
+      },
+    });
+    const roots = [1, 2].map((id) => path.join(tmpRoot, `copy-${id}`));
+    for (const [index, root] of roots.entries()) {
+      const repo = path.join(root, contextId, "skills", "system-testing");
+      mkdirSync(repo, { recursive: true });
+      writeFileSync(path.join(repo, "SKILL.md"), `from copy ${index + 1}`);
+    }
+    const scratch = path.join(tmpRoot, `${contextId}-scratch`);
+    mkdirSync(scratch, { recursive: true });
+    writeFileSync(path.join(scratch, "value.txt"), "private handle");
+    const bound = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
+      disk: new FsDisk(bundledRipgrepPath),
+      contextAuthority: {
+        kind: "semantic",
+        async bind(ctx, resolved) {
+          expect(resolved).toBe(contextId);
+          const id = ctx.caller.nativeInvocation?.task.taskId;
+          const root = roots[(id ?? 0) - 1];
+          if (!root) throw new Error("Missing admitted task");
+          return { sourceRoot: path.join(root, contextId), bridge: makeProjectedReadBridge(root) };
+        },
+      },
+    });
+    try {
+      const read = (id: number) => bound.handleCall(task(id), "readFile", ["/skills/system-testing/SKILL.md", "utf8"]);
+      await expect(Promise.all([read(1), read(2)])).resolves.toEqual(["from copy 1", "from copy 2"]);
+      const opened = (await bound.handleCall(task(1), "open", ["value.txt", "r"])) as { handleId: number };
+      await expect(bound.handleCall(task(2), "handleStat", [opened.handleId])).rejects.toThrow("does not belong");
+      await expect(bound.handleCall(task(1), "handleStat", [opened.handleId])).resolves.toMatchObject({ isFile: true });
+    } finally {
+      await bound.stop();
+    }
+  });
+
   it("reports scope and directory-operation phases without exposing path contents", async () => {
     const telemetry: Array<{ method: string; phase: string; contextId?: string }> = [];
     const observed = new FsService(makeStubFolderManager(tmpRoot), entityCache, {
