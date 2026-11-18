@@ -32,6 +32,17 @@ test("authored template worlds flow into the collector without losing original s
         [{ id: "release-blocked", sourceGroup: "vibestudio:owned-operations:release:blocked" }],
       ],
       ["unit-repair-worlds", "workerRepairWorlds", [{ id: "pagination" }]],
+      [
+        "vcs-integration-worlds",
+        "workspaceIntegrationWorlds",
+        [
+          {
+            id: "rollout",
+            sourceGroup: "rollout",
+            files: [{ path: "limits.json" }, { path: "preview.json" }],
+          },
+        ],
+      ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
         "panel-repair-world",
@@ -67,6 +78,12 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(cases.get("content-project-inventory").requiresReview, true);
   const discard = cases.get("panel-draft-discard-clears");
   assert.equal(discard.root, "repairPanel");
+  const rollout = cases.get("workspace-integration-rollout");
+  assert.deepEqual(rollout.expectedPaths, ["limits.json", "preview.json"]);
+  assert.deepEqual(groups("workspace-integration-rollout"), [
+    "vibestudio:workspace-integration:rollout",
+    "vibestudio:workspace-integration:settings-conflict",
+  ]);
   assert.deepEqual(discard.failedChecks, ["discardRestoresSaved", "discardedDraftStaysDiscarded"]);
   assert.deepEqual(groups("panel-draft-discard-clears"), [
     "vibestudio:panel-repair:discard-draft-reset",
@@ -246,6 +263,48 @@ test("workspace integration binds conflict source and verified state without bro
   assert.equal(manifest.world.source_revision, "incoming");
   assert.deepEqual(manifest.required_effect_kinds, ["workspace"]);
   assert.deepEqual(manifest.source_groups, ["vibestudio:workspace-integration:settings-conflict"]);
+
+  const dir = path.join(path.dirname(options.trajectory), "worlds");
+  const directory = path.join(dir, "skills/system-testing");
+  await mkdir(path.join(directory, "local-messaging"), { recursive: true });
+  await Promise.all(
+    [
+      ["content-project-worlds", "export const contentProjectWorlds = [];"],
+      [
+        "owned-operations-worlds",
+        "export const ownedOperationsWorlds = [], ownedOperationsComposedWorlds = [];",
+      ],
+      ["unit-repair-worlds", "export const workerRepairWorlds = [];"],
+      ["local-messaging/worlds", "export const localMessagingWorlds = [];"],
+      ["panel-repair-world", "export const panelRepairWorlds = [];"],
+      [
+        "vcs-integration-worlds",
+        `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,
+      ],
+    ].map(([file, contents]) => writeFile(path.join(directory, `${file}.ts`), contents))
+  );
+  const cases = await loadLiveTeacherCases({ "system-testing": dir });
+  entry.test.name = "workspace-integration-notification-rollout";
+  diagnostics.workspaceIntegrationWorld.privateOracle = {
+    files: [
+      {
+        path: "notifications/channels.json",
+        fileId: "channels",
+        sourceChangeIds: ["incoming:channels"],
+      },
+      {
+        path: "notifications/retries.json",
+        fileId: "retries",
+        sourceChangeIds: ["incoming:retries"],
+      },
+    ],
+  };
+  diagnostics.workspaceIntegrationVerification.verificationPaths = ["notifications/channels.json"];
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-incomplete` }),
+    /must verify every assigned file/u
+  );
 });
 
 test("worker repair export binds the actual workerd artifact and candidate state", async (t) => {

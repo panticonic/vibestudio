@@ -106,6 +106,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { workerRepairWorlds },
     { localMessagingWorlds },
     { panelRepairWorlds },
+    { workspaceIntegrationWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -113,12 +114,22 @@ export async function loadLiveTeacherCases(checkouts) {
       "unit-repair-worlds.ts",
       "local-messaging/worlds.ts",
       "panel-repair-world.ts",
+      "vcs-integration-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, sourceGroup, files } of workspaceIntegrationWorlds) {
+    cases.set(`workspace-integration-${id}`, {
+      ...integrationWorkflow,
+      expectedPaths: files?.map(({ path }) => path) ?? ["settings.json"],
+      sourceGroups: [...new Set([sourceGroup, integrationWorkflow.group])].map(
+        (group) => `${integrationWorkflow.namespace}:${group}`
+      ),
+    });
+  }
   for (const { id, sourceGroup, failedChecks } of panelRepairWorlds) {
     cases.set(id, {
       ...panelWorkflow,
@@ -233,7 +244,7 @@ function panelEvidence(execution, exercise, _name, { failedChecks }) {
   };
 }
 
-function integrationEvidence(execution, exercise) {
+function integrationEvidence(execution, exercise, _name, { expectedPaths }) {
   const observed = execution.diagnostics.workspaceIntegrationWorld;
   const verification = execution.diagnostics.workspaceIntegrationVerification;
   requireEvidence(
@@ -254,6 +265,22 @@ function integrationEvidence(execution, exercise) {
       verification.evidence?.length > 0,
     "Missing verified integration evidence bound to the seeded conflict and exact resulting workspace revision"
   );
+  if (expectedPaths) {
+    const verified = verification.verificationPaths;
+    const assigned = observed.privateOracle?.files;
+    requireEvidence(
+      verified?.length === expectedPaths.length &&
+        assigned?.length === expectedPaths.length &&
+        expectedPaths.every(
+          (path) =>
+            verified.includes(path) &&
+            assigned.some(
+              (file) => file.path === path && file.fileId && file.sourceChangeIds?.length
+            )
+        ),
+      "The managed integration oracle must verify every assigned file and retain its exact source history"
+    );
+  }
   return {
     world: {
       context_id: observed.contextId,
