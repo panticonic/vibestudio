@@ -188,7 +188,22 @@ it.each([
     const composed = Buffer.from("combined content");
     const composedDigest = sha256HexSyncText(composed.toString());
     const application = { kind: "application", applicationId: "merge-application" };
+    const result = {
+      commandId: "merge", contextId: "context", workUnitId: "work-unit",
+      applicationId: application.applicationId, workingHead: application,
+      changeCount: 1, changeIds: ["composed-change"],
+      incorporatedChangeCount: 1, incorporatedChangeIds: ["source-change"],
+      decisionIds: ["decision"],
+    };
     const dispatch = vi.fn(async (_owner: WorkspaceSourceProviderRef, method: string, raw: unknown) => {
+      if (method === "resolveHistoryMainMerge") {
+        expect(raw).toEqual({
+          contextId: "context",
+          target: { kind: "event", eventId: "mine-event" },
+          sourceEventId: "shared-event",
+        });
+        return selection;
+      }
       const request = raw as { content?: { observation: { files: unknown[] }; contentHashes?: string[] } };
       expect(method).toBe(expectedMethod);
       expect(raw).toMatchObject(selection);
@@ -202,19 +217,19 @@ it.each([
       }
       expect(request.content.contentHashes).toEqual([composedDigest]);
       expect(await getBytes(blobsDir, composedDigest)).toEqual(composed);
-      return { kind: "committed", head: "merge-head", value: application };
+      return { kind: "committed", head: "merge-head", value: application, result };
     });
     await expect(mergeWorkspaceParticipantContext({
       dispatch: { dispatch }, caller, owner, canonical, blobsDir,
-      selection,
+      ...(expectedMethod === "mergeHistoryMain" ? {} : { selection }),
       cause: { parent: null },
       merge: {
         commandId: "merge", contextId: "context",
         expectedWorkingHead: { kind: "event", eventId: "mine-event" },
         source: { kind: "event", eventId: "shared-event" },
       },
-    })).resolves.toEqual({ head: "merge-head", value: application });
-    expect(dispatch).toHaveBeenCalledTimes(3);
+    })).resolves.toEqual({ head: "merge-head", value: application, result });
+    expect(dispatch).toHaveBeenCalledTimes(expectedMethod === "mergeHistoryMain" ? 4 : 3);
   } finally {
     await rm(blobsDir, { recursive: true, force: true });
   }

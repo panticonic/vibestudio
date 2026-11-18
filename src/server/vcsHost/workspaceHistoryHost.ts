@@ -89,8 +89,9 @@ const appliedEdit = z.object({ head, value: vcsStateNodeRefSchema }).strict();
 const mergeReply = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("read-content"), contentHashes: z.array(digest).min(1) }).strict(),
   z.object({ kind: z.literal("prepare-content"), blobs: z.array(blob).min(1) }).strict(),
-  appliedEdit.extend({ kind: z.literal("committed") }).strict(),
+  appliedEdit.extend({ kind: z.literal("committed"), result: vcsWorkingMutationResultSchema }).strict(),
 ]);
+const mainMergeSelection = z.object({ head, base: head, main: head }).strict();
 const workspaceProjection = z
   .object({
     head,
@@ -432,7 +433,7 @@ async function mutateWorkspaceParticipant(
 export async function mergeWorkspaceParticipantContext(input: WorkspaceHistorySource & {
   caller: VerifiedCaller;
   owner: WorkspaceSourceProviderRef;
-  selection: { head: string; base: string } & (
+  selection?: { head: string; base: string } & (
     { main: string } | { source: { contextId: string; head: string; participantId?: string } }
   );
   merge: VcsMergeInput;
@@ -442,12 +443,21 @@ export async function mergeWorkspaceParticipantContext(input: WorkspaceHistorySo
 }) {
   requireWorkspaceParticipantOwner(input);
   const { dispatch, owner, merge, cause, blobsDir, triggerEvidence } = input;
-  const method = "main" in input.selection ? "mergeHistoryMain" : "mergeHistoryContext";
+  let selection = input.selection;
+  if (!selection) {
+    if (merge.source.kind !== "event") throw new Error("Workspace integration requires a saved event");
+    selection = mainMergeSelection.parse(await dispatch.dispatch(owner, "resolveHistoryMainMerge", {
+      contextId: merge.contextId,
+      target: merge.expectedWorkingHead,
+      sourceEventId: merge.source.eventId,
+    }));
+  }
+  const method = "main" in selection ? "mergeHistoryMain" : "mergeHistoryContext";
   const send = async (content?: {
     observation: { files: Array<{ contentHash: string; text: string }> };
     contentHashes?: string[];
   }) => mergeReply.parse(await dispatch.dispatch(owner, method, {
-    ...input.selection,
+    ...selection,
     merge,
     cause,
     ...(triggerEvidence === undefined ? {} : { triggerEvidence }),
@@ -474,7 +484,12 @@ export async function mergeWorkspaceParticipantContext(input: WorkspaceHistorySo
   if (reply.kind !== "committed" || reply.value.kind !== "application") {
     throw new Error("Workspace merge did not return the committed application");
   }
-  return { head: reply.head, value: reply.value };
+  if (reply.result.contextId !== merge.contextId || reply.result.commandId !== merge.commandId ||
+      reply.result.applicationId !== reply.value.applicationId ||
+      canonicalJson(reply.result.workingHead) !== canonicalJson(reply.value)) {
+    throw new Error("Workspace merge returned a different application receipt");
+  }
+  return { head: reply.head, value: reply.value, result: reply.result };
 }
 
 function workspaceParticipant(caller: VerifiedCaller): string {
