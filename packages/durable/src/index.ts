@@ -83,6 +83,7 @@ import {
   validateDurableObjectSchemaIndexes,
 } from "./schema.js";
 import { InvocationContext } from "./invocation-context.js";
+import { isLegacyCall, serveLegacyCall } from "./legacyImport.js";
 import {
   assertCleanWorkingSet,
   collectDoltGarbage,
@@ -988,6 +989,16 @@ export abstract class DurableObjectBase {
         method,
         body: await request.text(),
         onRevoked: (reason) => this.onHostedRevoked(reason),
+      });
+    }
+    if (isLegacyCall(method)) {
+      if (request.method !== "POST") return new Response(null, { status: 405 });
+      return serveLegacyCall({
+        storage: this.ctx.storage,
+        props: this.codeHostProps(),
+        request,
+        method,
+        body: await request.text(),
       });
     }
     const acceptedAtRaw = request.headers.get(DIRECT_AUTHORITY_ACCEPTED_AT_HEADER);

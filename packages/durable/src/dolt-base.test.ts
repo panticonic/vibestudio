@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { DurableObjectBase } from "./index.js";
 import { DoltDriftError, doltLocalPatterns } from "./dolt.js";
+import { LEGACY_PROOF_HEADER } from "./legacyImport.js";
 import { FakeDoltStorage } from "./test-dolt.js";
 import { createTestDO } from "./test-utils.js";
 
@@ -89,6 +90,25 @@ async function onDolt() {
 }
 
 describe("DurableObjectBase on a Dolt cell", () => {
+  it("serves the facet engine probe only with the hosting root's proof", async () => {
+    const proof = "hosting-root-proof";
+    class HostedNotesDO extends NotesDO {
+      constructor(ctx: ConstructorParameters<typeof NotesDO>[0], env: unknown) {
+        super({ ...ctx, props: { codeHost: { name: "root", proof } } }, env);
+      }
+    }
+    const fake = await FakeDoltStorage.create();
+    const { instance } = await createTestDO(HostedNotesDO, undefined, { storage: fake.storage });
+    const url = "http://do/test-key/__legacy/engine";
+    const refused = await instance.fetch(new Request(url, { method: "POST", body: "{}" }));
+    expect(refused.status).toBe(403);
+    const permitted = await instance.fetch(
+      new Request(url, { method: "POST", headers: { [LEGACY_PROOF_HEADER]: proof }, body: "{}" })
+    );
+    expect(permitted.status).toBe(200);
+    expect(await permitted.json()).toEqual({ result: { engine: "dolt" } });
+  });
+
   it("counts commits made while a compaction check is pending", async () => {
     const { instance } = await onDolt();
     vi.useFakeTimers();
