@@ -91,14 +91,15 @@ Consequences:
 **Open:**
 
 - Deletion line counts marked _estimate_ still need span-level checks.
-- The facet-relay path for remotes and `ondoltpush` (§5.6 and §3.2) are in
-  the pinned fork (`9440c29`, tested there); a Vibestudio-side test is P5's.
-  A facet loaded through a Worker Loader must pass a custom `transport`.
 - The GAD database size gate (§5.1, §10 P5): a participant fork copies the
   whole file.
 
 **Done (`feat/dolt-p0`, see `HANDOFF-dolt-redesign.md`):**
 
+- The real-node `doltFacetRemoteCelld.test.ts` verifies the byte relay and
+  `ondoltpush` for a loaded Dolt target. The target facet inherits the
+  root's `doltRemotes` declaration on the repaired fork. P5 still needs
+  to wire that declaration and the custom transport into its product root.
 - P0 Foundations: the typed surface, `committedTransaction` on F2, schema
   install commits, the schema-guard filter and the `FakeDoltStorage` double,
   with a real-fork probe.
@@ -400,8 +401,8 @@ Vibestudio pins is `9440c29`, which also fixes the hard-reset durability gap
   turn and before the pusher is answered; a handler that throws changes
   nothing). The class needs the method; a holder gets no event. This replaces
   the earlier "no hook" gap: the canonical GAD database reacts to `main`
-  moving without a follow-up RPC from the pusher. Pinned by the fork's
-  `examples/dolt-remotes`; _a Vibestudio-side test is P5's_.
+  moving without a follow-up RPC from the pusher. Covered by the fork's
+  `examples/dolt-remotes` and Vibestudio's `doltFacetRemoteCelld.test.ts`.
 - **A Dolt facet is a holder, and a source or push target only through its
   parent.** A facet has no id to route to. The parent relays request bytes to
   the facet's `remote.serve` through a facet call (`9440c29` tests the relay,
