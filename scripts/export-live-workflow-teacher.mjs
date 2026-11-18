@@ -84,6 +84,17 @@ const scratchHandoffWorkflow = {
   root: "assembleHandoff",
   evidence: scratchHandoffEvidence,
 };
+const integrationHandoffWorkflow = {
+  family: "workspace-integration-handoff",
+  namespace: "vibestudio:integration-handoff",
+  group: "integrated-filesystem-evidence",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/integration-handoff-managed.ts",
+  },
+  skills: ["integrateWorkspace", "assembleHandoff"],
+  evidence: integrationHandoffEvidence,
+};
 const composedReleaseWorkflow = {
   ...ownedOperationsWorkflow,
   family: "workspace-release-dossier",
@@ -119,6 +130,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { panelRepairWorlds },
     { workspaceIntegrationWorlds },
     { managedScratchWorlds },
+    { integrationHandoffWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -128,12 +140,26 @@ export async function loadLiveTeacherCases(checkouts) {
       "panel-repair-world.ts",
       "vcs-integration-worlds.ts",
       "scratch-handoff-worlds.ts",
+      "integration-handoff-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, integration, questions } of integrationHandoffWorlds) {
+    cases.set(`integration-handoff-${id}`, {
+      ...integrationHandoffWorkflow,
+      caseId: id,
+      expectedPaths: [...new Set(questions.map(({ file }) => file))],
+      sourceGroups: [
+        ...workflowSourceGroups(integrationHandoffWorkflow),
+        ...workflowSourceGroups(integrationWorkflow),
+        ...workflowSourceGroups(scratchHandoffWorkflow),
+        `${integrationWorkflow.namespace}:${integration}`,
+      ],
+    });
+  }
   for (const { id, group, status } of managedScratchWorlds) {
     cases.set(`scratch-handoff-live-${id}`, {
       ...scratchHandoffWorkflow,
@@ -389,6 +415,51 @@ function ownedOperationsEvidence(execution, exercise, scenario) {
     world: { context_id: fixture.contextId, case_id: fixture.caseId },
     checks: verification.checks,
     evidence: { workspace: { fixture, verification, audit, cleanup } },
+  };
+}
+
+function integrationHandoffEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.integrationHandoff;
+  const verification = fixture?.verification;
+  const artifact = verification?.artifact;
+  const results = exercise.report?.results;
+  const integrated = results?.[0]?.report;
+  const handoff = results?.[1]?.report;
+  requireEvidence(
+    fixture?.contextId === execution.provenance?.contextId &&
+      fixture.caseId === workflow.caseId &&
+      verification?.passed === true &&
+      [
+        "persistedIntegration",
+        "beforeChanged",
+        "handoffUsedIntegratedHead",
+        "exactClaims",
+        "pairedReports",
+      ].every((name) => verification.checks?.[name] === true) &&
+      verification.verificationPaths?.length === workflow.expectedPaths.length &&
+      workflow.expectedPaths.every((path) => verification.verificationPaths.includes(path)) &&
+      typeof verification.seed?.eventId === "string" &&
+      typeof verification.source?.eventId === "string" &&
+      verification.before !== verification.after &&
+      integrated?.status === "integrated" &&
+      integrated.head === verification.after &&
+      handoff?.status === "staged" &&
+      artifact &&
+      artifact.path === handoff.artifact?.path &&
+      artifact.bytes === handoff.artifact?.bytes &&
+      Number.isSafeInteger(artifact.bytes) &&
+      artifact.bytes > 0 &&
+      /^[0-9a-f]{64}$/u.test(artifact.sha256),
+    "The scratch handoff must be independently verified against every assigned file at the integrated head"
+  );
+  return {
+    world: {
+      context_id: fixture.contextId,
+      seed_revision: verification.seed.eventId,
+      source_revision: verification.source.eventId,
+    },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
   };
 }
 
