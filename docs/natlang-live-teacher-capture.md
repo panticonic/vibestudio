@@ -1,5 +1,21 @@
 # Live teacher capture
 
+## Authored task bank
+
+`pnpm natlang:tasks --summary` counts the tasks in the configured template checkouts.
+`pnpm natlang:tasks --case CASE` shows the authored task's source lineage and public request when it uses a scoped fixture.
+The command reads source and makes no model calls. Managed-workspace cases have system-test fixtures.
+Scoped-fixture cases use authored observations shaped by the owning template's Vibestudio contracts and have independent verifiers in that template.
+They are not recorded live effects or training examples.
+
+The scale target uses the baseline of 316 entries in the managed system-test catalog at System-testing revision
+`eb8cc7f`. The resulting target is at least 632 independently authored cases. The baseline includes explicit-only and
+qualification cases so it remains conservative and does not rise when new authored cases are registered.
+
+The common program automatically mounts installed workflow packages under `runWorkflow.domains`. A task may refer to
+workflow modules from different installed templates. The module lexically owns its types and internal calls. Each
+authoritative service is both scoped to the module's exact stages and supplied by the caller for that case.
+
 Live workflow collection executes the authored Natlang root against real caller-scoped services. Policy stays in the `.nl` program. The capture, record joins, ownership checks and paged export are exact transport and durability plumbing.
 
 ## Mechanism inventory
