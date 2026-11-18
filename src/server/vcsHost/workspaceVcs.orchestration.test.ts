@@ -193,12 +193,14 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
-  it("opens the admitted filesystem copy and materializes its own directory", async () => {
+  it("reopens admitted copies and reclaims their directories only after archival", async () => {
     const { vcs, blobsDir } = await harness();
     const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
     const contextId = "ctx-shared";
     const content = (await putBytes(blobsDir, Buffer.from("participant-only bytes"))).digest;
     const state = { kind: "event", eventId: "replayed-event" };
+    const allocated = new Set<string>();
+    let refuseRetirement = true;
     const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string, raw?: unknown) => {
       if (method === "readHistoryMain") return { head: "main", eventId: "main-event" };
       if (method === "readHistoryReplayReceipt") return {
@@ -208,11 +210,19 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       if (method === "listHistoryAppliedPublications") return [];
       if (method === "reserveHistoryParticipant") {
         const { participantId } = raw as { participantId: string };
+        const objectKey = `work-${sha256HexSyncText(participantId)}`;
+        allocated.add(objectKey);
         return {
-          targetId: `do:${owner.source}:${owner.className}:work-${sha256HexSyncText(participantId)}`,
+          targetId: `do:${owner.source}:${owner.className}:${objectKey}`,
           head: "initial",
           origin: { ref: "canonical", token: "grant" },
         };
+      }
+      if (method === "retireHistoryContext") {
+        expect(owner).toEqual(canonical);
+        expect(raw).toEqual({ contextId });
+        if (refuseRetirement) throw new Error("Archive incomplete");
+        return { contextId, targets: [...allocated] };
       }
       if (method === "bindHistoryContext") {
         expect(raw).toMatchObject({ contextId, replayedHead: "replayed-working" });
@@ -243,8 +253,13 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       isTracked: async () => true,
     });
     await expect(bind(1)).resolves.toBeNull();
+    await vcs.attachGad(providerFromWireCall(vi.fn(async (method) => {
+      expect(method).toBe("vcsDropContext");
+      return { dropped: true };
+    })));
+    const destroyRetiredStorage = vi.fn(async (_owner: typeof TEST_PROVIDER) => {});
     await vcs.attachParticipantHistory({
-      dispatch: { dispatch }, canonical,
+      dispatch: { dispatch }, canonical, destroyRetiredStorage,
     });
     const [first, second] = await Promise.all([bind(1), bind(2)]);
     expect(first?.sourceRoot).toBeDefined();
@@ -253,6 +268,16 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     await expect(first!.bridge.isMaterialized(contextId, "meta")).resolves.toBe(true);
     await expect(second!.bridge.isMaterialized(contextId, "meta")).resolves.toBe(false);
     await expect(fsp.readFile(path.join(first!.sourceRoot, "meta/note.txt"), "utf8")).resolves.toBe("participant-only bytes");
+    await expect(vcs.dropContext(contextId)).rejects.toThrow("Archive incomplete");
+    expect(destroyRetiredStorage).not.toHaveBeenCalled();
+    await expect(fsp.stat(first!.sourceRoot)).resolves.toBeDefined();
+    await expect(bind(1)).rejects.toThrow("context has retired");
+    refuseRetirement = false;
+    await vcs.dropContext(contextId);
+    expect(destroyRetiredStorage.mock.calls.map(([owner]) => owner)).toEqual(
+      [...allocated].map((objectKey) => ({ ...canonical, objectKey }))
+    );
+    await expect(fsp.stat(first!.sourceRoot)).rejects.toHaveProperty("code", "ENOENT");
   });
 
   it("keeps participant projections separate, advances one, and repairs its binding on retry", async () => {

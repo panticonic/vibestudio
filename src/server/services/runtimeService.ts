@@ -1678,15 +1678,19 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
   }
 
   async function retireEntity(id: string, removeContext?: boolean): Promise<void> {
-    const record = await retireRecord(id);
-    if (!record) return;
-    if (removeContext) {
+    await serializeByKey(entityTransitions, id, async () => {
+      const retired = await retireRecordOnce(id);
+      if (!removeContext) return;
+      // A context cleanup can fail after the entity was durably retired.
+      // Retry from that same record so the archive and removal can finish.
+      const record = retired ?? (await store.resolveRecord(id));
+      if (record?.status !== "retired") return;
       const live = await store.listActive();
       if (!live.some((e) => e.contextId === record.contextId)) {
         await deps.semanticContexts.dropContext(record.contextId);
         await deps.contextFolders.removeContext(record.contextId);
       }
-    }
+    });
   }
 
   async function recoverExecution(

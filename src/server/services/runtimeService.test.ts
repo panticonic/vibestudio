@@ -2876,19 +2876,25 @@ describe("runtimeService session entities", () => {
     expect(sessions[0]?.createdAt).toBeGreaterThan(0);
   });
 
-  it("retire with removeContext deletes the context folder when no live entity shares it", async () => {
-    const { service, contextFolders, instance } = await buildDeps();
+  it("retries interrupted context removal after the last entity was retired", async () => {
+    const dropContext = vi.fn(async () => {});
+    dropContext.mockRejectedValueOnce(new Error("Archive interrupted"));
+    const { service, contextFolders, instance } = await buildDeps({ semanticContexts: { dropContext } });
     const handle = (await service.handler({ caller: shellCaller }, "createEntity", [
       sessionSpec({ key: "s-rm" }),
     ])) as { id: string; contextId: string };
     await contextFolders.ensureContextFolder(handle.contextId);
     expect(contextFolders.existing.has(handle.contextId)).toBe(true);
 
-    await service.handler({ caller: shellCaller }, "retireEntity", [
+    const retire = () => service.handler({ caller: shellCaller }, "retireEntity", [
       { id: handle.id, removeContext: true },
     ]);
+    await expect(retire()).rejects.toThrow("Archive interrupted");
 
     expect(instance.entityResolve(handle.id)?.status).toBe("retired");
+    expect(contextFolders.existing.has(handle.contextId)).toBe(true);
+    await retire();
+    expect(dropContext).toHaveBeenCalledTimes(2);
     expect(contextFolders.removeContext).toHaveBeenCalledWith(handle.contextId);
     expect(contextFolders.existing.has(handle.contextId)).toBe(false);
   });

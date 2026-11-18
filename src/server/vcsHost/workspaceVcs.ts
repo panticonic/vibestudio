@@ -125,6 +125,7 @@ import {
   readWorkspacePublishedRevision,
   requireWorkspaceParticipantOwner,
   reviewWorkspaceParticipantMerge,
+  retireWorkspaceParticipantContext,
   transferWorkspaceParticipant,
   workspaceParticipantCatalog,
   type WorkspaceHistorySource,
@@ -210,6 +211,7 @@ const SLOW_SEMANTIC_EFFECT_MS = 500;
 
 type ParticipantHistoryAttachment = WorkspaceHistorySource & {
   replayedWorkingHeads?: ReadonlyMap<string, string>;
+  destroyRetiredStorage?: (owner: WorkspaceSourceProviderRef) => Promise<void>;
 };
 
 export interface ExactRepositorySnapshotPlan {
@@ -690,15 +692,20 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }) {
     const source = this.participantHistorySource;
     if (!source) return null;
-    const replayedWorkingHead = source.replayedWorkingHeads?.get(input.contextId);
-    const reservation = await openWorkspaceParticipantContext({
-      ...source, ...input,
-      ...(replayedWorkingHead === undefined ? {} : { replayedWorkingHead }),
+    return this.locked(`context-lifecycle:${input.ownerContextId}`, async () => {
+      if (this.contextHeads.get(input.ownerContextId) === null || this.contextHeads.get(input.contextId) === null) {
+        throw new Error("Workspace participant context has retired");
+      }
+      const replayedWorkingHead = source.replayedWorkingHeads?.get(input.contextId);
+      const reservation = await openWorkspaceParticipantContext({
+        ...source, ...input,
+        ...(replayedWorkingHead === undefined ? {} : { replayedWorkingHead }),
+      });
+      return {
+        dispatch: source.dispatch, canonical: source.canonical, ...reservation,
+        caller: input.caller, contextId: input.contextId,
+      };
     });
-    return {
-      dispatch: source.dispatch, canonical: source.canonical, ...reservation,
-      caller: input.caller, contextId: input.contextId,
-    };
   }
 
   /**
@@ -2126,6 +2133,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   async dropContext(contextId: string): Promise<void> {
     await this.whenSemanticReady();
     await this.locked(`context-lifecycle:${contextId}`, async () => {
+      const source = this.participantHistorySource;
+      if (source) {
+        this.contextHeads.set(contextId, null);
+        const retired = await retireWorkspaceParticipantContext({ ...source, contextId });
+        for (const owner of retired) {
+          await source.destroyRetiredStorage?.(owner);
+          await fsp.rm(this.participantProjection(owner).root, { recursive: true, force: true });
+        }
+      }
       this.contextHeads.delete(contextId);
       // Projection bytes are disposable and reconstructible from semantic
       // authority. Remove them first so every interrupted ordering is
@@ -2312,13 +2328,14 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private participantProjection(owner: WorkspaceSourceProviderRef) {
     const ownerKey = sha256HexSyncText(canonicalJson(owner));
+    const root = path.join(this.deps.contextProjectionsRoot, ".participants", ownerKey);
     const disk = new DiskProjector({
       contentProjection: this.contentProjection,
       workspaceRoot: this.deps.workspaceRoot,
-      contextProjectionsRoot: path.join(this.deps.contextProjectionsRoot, ".participants", ownerKey),
+      contextProjectionsRoot: root,
     });
     const materializer = new ContextMaterializer({ blobsDir: this.deps.blobsDir, workspaceId: this.deps.workspaceId, disk });
-    return { ownerKey, disk, materializer };
+    return { ownerKey, root, disk, materializer };
   }
 
   async isContextRepoMaterialized(contextId: string, repoPath: string): Promise<boolean> {

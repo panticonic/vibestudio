@@ -749,3 +749,18 @@ export async function openWorkspaceParticipantContext(input: {
   );
   return { owner, workingHead };
 }
+
+/** Archive all storage owners whose logical context has finished retiring. */
+export async function retireWorkspaceParticipantContext(input: WorkspaceHistorySource & {
+  contextId: string;
+}): Promise<WorkspaceSourceProviderRef[]> {
+  const { dispatch, canonical, contextId } = input;
+  const receipt = z.object({
+    contextId: z.string().min(1),
+    targets: retainedParticipantKeys,
+  }).strict().parse(await dispatch.dispatch(canonical, "retireHistoryContext", { contextId }));
+  if (receipt.contextId !== contextId || new Set(receipt.targets).size !== receipt.targets.length) {
+    throw new Error("Workspace retirement returned a different context or allocation");
+  }
+  return receipt.targets.map((objectKey) => ({ ...canonical, objectKey }));
+}
