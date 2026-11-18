@@ -133,6 +133,14 @@ const presentationWorkflow = {
   root: "preparePresentation",
   evidence: presentationEvidence,
 };
+const authoringWorkflow = {
+  family: "workspace-natlang-authoring",
+  namespace: "vibestudio:natlang-authoring",
+  group: "workspace-compiler-contract-review",
+  validator: { template: "system-testing", path: "skills/system-testing/authoring-managed.ts" },
+  root: "reviewProgram",
+  evidence: authoringEvidence,
+};
 const composedReleaseWorkflow = {
   ...ownedOperationsWorkflow,
   family: "workspace-release-dossier",
@@ -173,6 +181,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedPublicationWorlds },
     { managedPdfWorlds },
     { managedPresentationWorlds },
+    { managedAuthoringWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -187,12 +196,21 @@ export async function loadLiveTeacherCases(checkouts) {
       "publication-preflight-worlds.ts",
       "pdf-intake-worlds.ts",
       "presentation-worlds.ts",
+      "authoring-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, request, expected } of managedAuthoringWorlds) {
+    cases.set(`authoring-live-${id}`, {
+      ...authoringWorkflow,
+      caseId: id,
+      comparedBaseline: request.compare,
+      expectedStatus: expected.status,
+    });
+  }
   for (const { id, expected } of managedPresentationWorlds) {
     cases.set(`presentation-live-${id}`, {
       ...presentationWorkflow,
@@ -558,6 +576,44 @@ function presentationEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, panel_attempt: verification.panelAttempt },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function authoringEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedAuthoring;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  const revision = /^[a-f0-9]{64}$/u;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.caseId === workflow.caseId &&
+      verification.passed === true &&
+      verification.status === workflow.expectedStatus &&
+      report?.status === workflow.expectedStatus &&
+      revision.test(verification.candidateRevision) &&
+      report.candidateRevision === verification.candidateRevision &&
+      report.baselineRevision === verification.baselineRevision &&
+      (workflow.comparedBaseline
+        ? revision.test(verification.baselineRevision)
+        : verification.baselineRevision === null) &&
+      [
+        "sourceUnchanged",
+        "workspaceHeadUnchanged",
+        "exactInspections",
+        "intendedWorld",
+        "joinedFindings",
+      ].every((name) => verification.checks?.[name] === true),
+    "The authoring review must match the assigned compiler snapshots and exact source revisions"
+  );
+  return {
+    world: {
+      context_id: fixture.contextId,
+      candidate_revision: verification.candidateRevision,
+      baseline_revision: verification.baselineRevision,
+    },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };

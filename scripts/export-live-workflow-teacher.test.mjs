@@ -74,6 +74,17 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
+        "authoring-worlds",
+        "managedAuthoringWorlds",
+        [
+          {
+            id: "old-reference",
+            request: { compare: true },
+            expected: { status: "baseline-rejected" },
+          },
+        ],
+      ],
+      [
         "presentation-worlds",
         "managedPresentationWorlds",
         [
@@ -125,6 +136,10 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(cleanPdf.root, "extractPdfEvidence");
   assert.equal(cleanPdf.expectedStatus, "missing-pages");
   assert.deepEqual(cleanPdf.pages, [1, 5]);
+  const review = cases.get("authoring-live-old-reference");
+  assert.equal(review.root, "reviewProgram");
+  assert.equal(review.comparedBaseline, true);
+  assert.equal(review.expectedStatus, "baseline-rejected");
   const presentation = cases.get("presentation-live-repair");
   assert.equal(presentation.root, "preparePresentation");
   assert.deepEqual(presentation.renderedIds, ["jobs"]);
@@ -347,6 +362,54 @@ test("presentation export ties the exact MDX to the managed browser readback", a
   );
 });
 
+test("authoring export rejects a review drawn from another baseline", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "authoring-live-baseline-unavailable";
+  const run = diagnostics.natlangTeacher;
+  const candidateRevision = "a".repeat(64);
+  const baselineRevision = "b".repeat(64);
+  run.report = { status: "baseline-rejected", candidateRevision, baselineRevision };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  const skill = structuredClone(leaf);
+  skill.callId = skill.summary.call_id = "skill";
+  skill.record.definition.name = "reviewProgram";
+  leaf.record.parent_call_id = "skill";
+  run.calls.push(skill);
+  diagnostics.managedAuthoring = {
+    contextId: "ctx",
+    verification: {
+      caseId: "baseline-unavailable",
+      status: "baseline-rejected",
+      candidateRevision,
+      baselineRevision,
+      passed: true,
+      checks: Object.fromEntries(
+        [
+          "sourceUnchanged",
+          "workspaceHeadUnchanged",
+          "exactInspections",
+          "intendedWorld",
+          "joinedFindings",
+        ].map((name) => [name, true])
+      ),
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  run.report.baselineRevision = "c".repeat(64);
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-baseline` }),
+    /must match the assigned compiler snapshots/u
+  );
+});
+
 test("workspace integration binds conflict source and verified state without browser evidence", async (t) => {
   const { options, entry, diagnostics, save } = await fixture(t);
   entry.test.name = "workspace-integration-theme-locale";
@@ -398,6 +461,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["publication-preflight-worlds", "export const managedPublicationWorlds = [];"],
       ["pdf-intake-worlds", "export const managedPdfWorlds = [];"],
       ["presentation-worlds", "export const managedPresentationWorlds = [];"],
+      ["authoring-worlds", "export const managedAuthoringWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,
