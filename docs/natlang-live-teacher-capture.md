@@ -76,6 +76,11 @@ The authored inventory comes from the configured system-testing template, which 
 the same worlds to the explicit system-test runner. `--list` prints each case's source groups for split hygiene.
 Repeat `--case` to run selected cases in the managed workspace composition each case declares.
 Cases with the same composition share an instance. The collector retires that instance before starting the next composition.
+The managed runner can provision a private System or Personal workspace, or a workspace
+from a registered catalog template listed as a consumer of the development test harness.
+For example, `pnpm system-test --instance examples-smoke --workspace examples doctor` provisions
+the actual Examples composition and pairs to its workspace ID. Use the same instance and workspace
+for the test and stop commands.
 Each case gets its own system-test run, owned fixture context, source receipt and output under `cases/<case>/`.
 The final status indicates whether every selected case succeeded. Successful cases remain available when a later one fails. The collector checks the vendored Natlang build, pins the host and templates, and retains the full
 system-test trajectory. A new workspace can ask for access to the selected model's credential.

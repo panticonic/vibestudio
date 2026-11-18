@@ -259,6 +259,7 @@ async function pairWithInvite(
     serverId: string;
     invite: HubPairingInvite | NonNullable<HubReadyPayload["rootInvite"]>;
     workspace?: LocalCliWorkspaceSelection;
+    workspaceId?: string;
   },
   credentialFile: string | undefined,
   deps: LocalPairingDeps = {}
@@ -305,11 +306,20 @@ export async function pairLocalCli(
   options: {
     credentialFile?: string;
     workspace?: LocalCliWorkspaceSelection;
+    workspaceId?: string;
   } & LocalPairingDeps = {}
 ): Promise<LocalCliPairingResult> {
   options.signal?.throwIfAborted();
   const ready = HubReadyPayloadSchema.parse(rawReady);
   const existing = existingCredential(ready.serverId, options.credentialFile);
+  if (
+    existing?.kind === "device" &&
+    existing.phase === "workspace" &&
+    options.workspaceId &&
+    options.workspaceId !== existing.workspaceId
+  ) {
+    throw new Error("The saved CLI credential belongs to a different workspace");
+  }
   if (existing) {
     // Public readiness deliberately omits private workspaces. Authenticate and
     // route the saved identity; neither a public listing nor a reused display
@@ -319,7 +329,7 @@ export async function pairLocalCli(
         gatewayUrl: ready.gatewayUrl,
         serverId: ready.serverId,
         ...(existing.kind === "device" && existing.phase === "account"
-          ? { workspace: options.workspace }
+          ? { workspace: options.workspace, workspaceId: options.workspaceId }
           : { workspaceId: existing.workspaceId }),
       },
       existing,
@@ -334,6 +344,7 @@ export async function pairLocalCli(
       serverId: ready.serverId,
       invite: ready.rootInvite,
       ...(options.workspace ? { workspace: options.workspace } : {}),
+      ...(options.workspaceId ? { workspaceId: options.workspaceId } : {}),
     },
     options.credentialFile,
     options

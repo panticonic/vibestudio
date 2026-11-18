@@ -75,8 +75,13 @@ describe("self-provisioning system-test instance", () => {
       command: ["run", "browser-import"],
     });
     expect(parseSystemTestLauncherArgs(["--workspace=system", "list"]).workspace).toBe("system");
+    for (const template of ["examples", "news", "google-workspace", "spectrolite"]) {
+      expect(parseSystemTestLauncherArgs(["--workspace", template, "doctor"]).workspace).toBe(
+        template
+      );
+    }
     expect(() => parseSystemTestLauncherArgs(["--workspace", "project", "list"])).toThrow(
-      /personal or system/
+      /received project/
     );
     expect(() =>
       parseSystemTestLauncherArgs(["--workspace", "personal", "--workspace", "system", "list"])
@@ -572,6 +577,13 @@ describe.skipIf(!live)("system-test instance lifetimes (stub supervisor)", () =>
     });
     expect(created).toMatchObject({ created: true, managed: true });
     expect(created.ledger.lifetime).toBe("until-stop");
+    await expect(
+      ensureSystemTestInstance(repoRoot, "doctored", {
+        explicitInstance: true,
+        workspace: "examples",
+        lifetime: "leased",
+      })
+    ).rejects.toThrow(/uses workspace system, requested examples/u);
 
     const ownership = await openOwnership();
     const attached = await ensureSystemTestInstance(repoRoot, "doctored", {

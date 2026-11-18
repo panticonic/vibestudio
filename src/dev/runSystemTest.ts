@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { SYSTEM_TEST_WORKSPACES } from "./cliWorkspaceSelection.js";
 import * as path from "node:path";
 import * as fs from "node:fs";
 import type { StdioOptions } from "node:child_process";
@@ -57,7 +58,8 @@ Commands:
 
 Options:
   --instance ID                  Stable unique instance name (default: system-test)
-  --workspace personal|system    Private workspace this instance runs in (default: system).
+  --workspace NAME               Workspace template for this instance (default: system).
+                                 Choices: ${SYSTEM_TEST_WORKSPACES.join(", ")}.
                                  Fixed when the instance pairs; cases naming units
                                  the workspace does not install are reported
                                  not-installed rather than run.
