@@ -199,6 +199,10 @@ export async function inspectWorkspaceParticipantProvenance(input: WorkspaceHist
       result.node.value.eventId === inspect.node.eventId && "revision" in result.node.value) ||
     (inspect.node.kind === "application" && result.node.kind === "application" &&
       result.node.value.applicationId === inspect.node.applicationId && "revision" in result.node.value) ||
+    (inspect.node.kind === "change" && result.node.kind === "change" &&
+      result.node.value.changeId === inspect.node.changeId) ||
+    (inspect.node.kind === "applied-change" && result.node.kind === "applied-change" &&
+      result.node.value.appliedChangeId === inspect.node.appliedChangeId) ||
     (inspect.node.kind === "work-unit" && result.node.kind === "work-unit" &&
       result.node.value.workUnitId === inspect.node.workUnitId) ||
     (inspect.node.kind === "command" && result.node.kind === "command" &&
