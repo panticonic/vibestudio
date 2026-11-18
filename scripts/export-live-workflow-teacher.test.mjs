@@ -74,6 +74,17 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
+        "news-worlds",
+        "managedNewsWorlds",
+        [
+          {
+            id: "sample",
+            checks: [{ kind: "reader", view: "saved" }],
+            expected: [{ status: "ready", code: "empty-loaded-view" }],
+          },
+        ],
+      ],
+      [
         "spectrolite-worlds",
         "managedSpectroliteWorlds",
         [
@@ -177,6 +188,7 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(memory.root, "recallDecision");
   assert.equal(memory.workspace, "personal");
   assert.equal(memory.expectedStatus, "missing-source");
+  assert.equal(cases.get("news-live-sample").workspace, "news");
   assert.equal(cases.get("spectrolite-live-sample").workspace, "spectrolite");
   assert.equal(cases.get("grimoire-live-quiet-garden").workspace, "examples");
   const checklist = cases.get("terminal-checklist-live-restart");
@@ -457,6 +469,63 @@ test("authoring export rejects a review drawn from another baseline", async (t) 
   );
 });
 
+test("News export rejects findings that cite a different schedule owner", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "news-live-baseline-dual-cadence";
+  const world = cases.get(entry.test.name);
+  const run = diagnostics.natlangTeacher;
+  run.report = {
+    status: "ready",
+    findings: [
+      { code: "poll-confirmed", evidenceIds: ["poll-owner"] },
+      { code: "briefing-confirmed", evidenceIds: ["briefing-owner"] },
+    ],
+  };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  const skill = structuredClone(leaf);
+  skill.callId = skill.summary.call_id = "skill";
+  skill.record.definition.name = "reviewNews";
+  leaf.record.parent_call_id = "skill";
+  run.calls.push(skill);
+  diagnostics.managedNews = {
+    contextId: "ctx",
+    verification: {
+      passed: true,
+      checks: { matchesReport: true, matchesState: true },
+      caseId: world.caseId,
+      assignment: {
+        contextId: "ctx",
+        channelId: "reader",
+        agentKey: "reader",
+        participantId: "curator",
+      },
+      observed: world.checks.map(({ intent }) => ({
+        kind: "schedule",
+        intent,
+        owner: { id: "reader" },
+        poll: { id: "poll-owner" },
+        briefing: { id: "briefing-owner" },
+      })),
+    },
+  };
+  const pinned = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pinned, workspace: "news" }));
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  run.report.findings[1].evidenceIds = ["another-reader"];
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-different-owner` }),
+    /News findings must match the assigned channel observations and Missions owners/u
+  );
+});
+
 test("Spectrolite export rejects a preview from another canonical revision", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
@@ -700,6 +769,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["checklist-worlds", "export const managedChecklistWorlds = [];"],
       ["grimoire-worlds", "export const managedGrimoireWorlds = [];"],
       ["spectrolite-worlds", "export const managedSpectroliteWorlds = [];"],
+      ["news-worlds", "export const managedNewsWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,

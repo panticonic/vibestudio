@@ -153,6 +153,15 @@ const verifiedMemoryWorkflow = {
   root: "recallDecision",
   evidence: verifiedMemoryEvidence,
 };
+const newsWorkflow = {
+  family: "news-live-ownership",
+  workspace: "news",
+  namespace: "vibestudio:news",
+  group: "owned-reader-and-missions",
+  validator: { template: "news", path: "packages/news-live-evidence/live.ts" },
+  root: "reviewNews",
+  evidence: newsEvidence,
+};
 const spectroliteWorkflow = {
   family: "spectrolite-live-vault",
   workspace: "spectrolite",
@@ -234,6 +243,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedChecklistWorlds },
     { managedGrimoireWorlds },
     { managedSpectroliteWorlds },
+    { managedNewsWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -254,12 +264,16 @@ export async function loadLiveTeacherCases(checkouts) {
       "checklist-worlds.ts",
       "grimoire-worlds.ts",
       "spectrolite-worlds.ts",
+      "news-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, checks, expected } of managedNewsWorlds) {
+    cases.set(`news-live-${id}`, { ...newsWorkflow, caseId: id, checks, expected });
+  }
   for (const {
     id,
     path: documentPath,
@@ -754,6 +768,74 @@ function verifiedMemoryEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, selected_event: verification.eventId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function newsEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedNews;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  const assignment = verification?.assignment;
+  const observed = verification?.observed;
+  const status = ["blocked", "attention", "waiting", "ready"].find((value) =>
+    workflow.expected.some((finding) => finding.status === value)
+  );
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      assignment?.contextId === fixture.contextId &&
+      typeof assignment.channelId === "string" &&
+      assignment.channelId === assignment.agentKey &&
+      typeof assignment.participantId === "string" &&
+      assignment.participantId.length > 0 &&
+      verification?.caseId === workflow.caseId &&
+      verification.passed === true &&
+      verification.checks?.matchesReport === true &&
+      verification.checks?.matchesState === true &&
+      report?.status === status &&
+      Array.isArray(report.findings) &&
+      Array.isArray(observed) &&
+      observed.length === workflow.checks.length &&
+      report.findings.length === observed.length &&
+      report.findings.every((finding, index) => {
+        const work = workflow.checks[index];
+        const read = observed[index];
+        if (!read || read.kind !== work.kind || finding?.code !== workflow.expected[index]?.code)
+          return false;
+        let id;
+        if (read.kind === "reader") {
+          if (
+            read.view !== work.view ||
+            read.overview?.articleCount !== 0 ||
+            read.pages?.length !== 1 ||
+            read.pages[0].articleIds?.length !== 0
+          )
+            return false;
+          id = finding.code === "empty-loaded-view" ? read.pages[0].id : read.overview.id;
+        } else {
+          if (JSON.stringify(read.intent) !== JSON.stringify(work.intent)) return false;
+          id = ["poll-confirmed", "poll-mismatch"].includes(finding.code)
+            ? read.poll?.id
+            : ["briefing-confirmed", "briefing-mismatch"].includes(finding.code)
+              ? read.briefing?.id
+              : read.owner?.id;
+        }
+        return (
+          typeof id === "string" &&
+          id.length > 0 &&
+          JSON.stringify(finding.evidenceIds) === JSON.stringify([id])
+        );
+      }),
+    "News findings must match the assigned channel observations and Missions owners"
+  );
+  return {
+    world: {
+      context_id: fixture.contextId,
+      channel_id: assignment.channelId,
+      participant_id: assignment.participantId,
+    },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };

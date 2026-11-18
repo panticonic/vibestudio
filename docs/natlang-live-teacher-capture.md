@@ -70,6 +70,10 @@ as routing precedence, event ordering and queue admission. Content worlds includ
 inventory migration, consent, event logistics, and dataset release and recall. Operations worlds vary
 restoration and recovery readiness, approval changes, rejected gates, and continuation from durable state.
 Messaging worlds exercise addressed local delivery and holding an ambiguous recipient in synthetic owned channels.
+News cases review reader setup, saved and archive views, and changes to polling and briefing cadence.
+Each case joins the installed News worker on its own channel and checks its readback against the exact Missions
+schedule records. The `news-managed-oracle-qualification` system test exercises the installed worker and
+readback without a model.
 The release-readiness dossier joins two skill trees in one call. It requires observed recovery after a real worker restart
 and verified cleanup before the project skill can prepare and commit the evidence dossier.
 The authored inventory comes from the configured system-testing template, which supplies
