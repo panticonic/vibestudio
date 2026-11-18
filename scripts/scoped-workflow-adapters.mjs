@@ -38,6 +38,16 @@ const simple = {
 };
 
 const bound = {
+  async automationLifecycle(world, load) {
+    const { createAutomationLifecycleFixture, verifyAutomationLifecycle } = await load(
+      "skills/automation-lifecycle-fixtures/fixture.ts"
+    );
+    const fixture = createAutomationLifecycleFixture(world);
+    return {
+      bindings: fixture.bindings,
+      verify: (value) => verifyAutomationLifecycle(world, value, fixture.audit()),
+    };
+  },
   async google(world, load) {
     const [{ createGoogleWorkflowFixture }, { verifyGoogleWorkflowOutcome }] = await Promise.all([
       load("skills/google-drive/drive-workflow-fixture.ts"),

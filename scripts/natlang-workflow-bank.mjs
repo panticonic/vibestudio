@@ -10,6 +10,14 @@ const program = "skills/vibestudio-workflows/runWorkflow.nl";
 
 const domains = [
   {
+    domain: "automationLifecycle",
+    template: "base",
+    source: "skills/automation-lifecycle-fixtures/worlds.ts",
+    exported: "automationLifecycleWorlds",
+    operation: "reconcileAutomation",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
     domain: "channelAgent",
     template: "base",
     source: "skills/channel-agent-membership-fixtures/worlds.ts",
