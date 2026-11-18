@@ -74,6 +74,9 @@ News cases review reader setup, saved and archive views, and changes to polling 
 Each case joins the installed News worker on its own channel and checks its readback against the exact Missions
 schedule records. The `news-managed-oracle-qualification` system test exercises the installed worker and
 readback without a model.
+Google Workspace setup cases join Drive readiness to the installed welcome panel. They verify the
+account and permission owner links, the Gmail launch gate across reload, and layout at the assigned widths.
+The smoke runs in a fresh workspace before external Google account setup.
 The release-readiness dossier joins two skill trees in one call. It requires observed recovery after a real worker restart
 and verified cleanup before the project skill can prepare and commit the evidence dossier.
 The authored inventory comes from the configured system-testing template, which supplies

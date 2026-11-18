@@ -74,6 +74,11 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
+        "google-setup-worlds",
+        "managedGoogleSetupWorlds",
+        [{ id: "sample", checks: [], codes: [] }],
+      ],
+      [
         "news-worlds",
         "managedNewsWorlds",
         [
@@ -189,6 +194,7 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(memory.workspace, "personal");
   assert.equal(memory.expectedStatus, "missing-source");
   assert.equal(cases.get("news-live-sample").workspace, "news");
+  assert.equal(cases.get("google-setup-live-sample").workspace, "google-workspace");
   assert.equal(cases.get("spectrolite-live-sample").workspace, "spectrolite");
   assert.equal(cases.get("grimoire-live-quiet-garden").workspace, "examples");
   const checklist = cases.get("terminal-checklist-live-restart");
@@ -466,6 +472,69 @@ test("authoring export rejects a review drawn from another baseline", async (t) 
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-baseline` }),
     /must match the assigned compiler snapshots/u
+  );
+});
+
+test("Google setup export binds the measured viewport to the authored check", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "google-setup-live-narrow-owner-review";
+  const world = cases.get(entry.test.name);
+  const run = diagnostics.natlangTeacher;
+  const receipts = world.checks.map((check, index) => ({
+    id: `ctx:google-setup:${index + 1}`,
+    check,
+    stage: "needs-setup",
+    accountOwner: true,
+    permissionsOwner: true,
+    gmailEnabled: false,
+    inheritedLaunch: null,
+    overflow: false,
+    viewportWidth: check.width ?? null,
+  }));
+  run.report = {
+    status: "action-needed",
+    action: "open-setup",
+    ids: [],
+    checkpoint: null,
+    panelFindings: receipts.map(({ check, id }, index) => ({
+      check,
+      evidenceId: id,
+      code: world.codes[index],
+    })),
+  };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  const skill = structuredClone(leaf);
+  skill.callId = skill.summary.call_id = "skill";
+  skill.record.definition.name = "guideGoogleWorkspace";
+  leaf.record.parent_call_id = "skill";
+  run.calls.push(skill);
+  diagnostics.managedGoogleSetup = {
+    contextId: "ctx",
+    verification: {
+      contextId: "ctx",
+      panelId: "welcome",
+      caseId: world.caseId,
+      readiness: { state: "needs-setup" },
+      passed: true,
+      checks: { driveNeedsSetup: true, browserAgrees: true, reportMatches: true },
+      receipts,
+    },
+  };
+  const pinned = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pinned, workspace: "google-workspace" }));
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  receipts[0].viewportWidth = 1280;
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-different-viewport` }),
+    /Google setup findings must match the assigned panel and account observations/u
   );
 });
 
@@ -770,6 +839,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["grimoire-worlds", "export const managedGrimoireWorlds = [];"],
       ["spectrolite-worlds", "export const managedSpectroliteWorlds = [];"],
       ["news-worlds", "export const managedNewsWorlds = [];"],
+      ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,

@@ -153,6 +153,15 @@ const verifiedMemoryWorkflow = {
   root: "recallDecision",
   evidence: verifiedMemoryEvidence,
 };
+const googleSetupWorkflow = {
+  family: "google-live-setup-journey",
+  workspace: "google-workspace",
+  namespace: "vibestudio:google",
+  group: "live-setup-owner-handoff",
+  validator: { template: "google-workspace", path: "skills/google-drive/live-setup-journey.ts" },
+  root: "guideGoogleWorkspace",
+  evidence: googleSetupEvidence,
+};
 const newsWorkflow = {
   family: "news-live-ownership",
   workspace: "news",
@@ -244,6 +253,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedGrimoireWorlds },
     { managedSpectroliteWorlds },
     { managedNewsWorlds },
+    { managedGoogleSetupWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -265,12 +275,16 @@ export async function loadLiveTeacherCases(checkouts) {
       "grimoire-worlds.ts",
       "spectrolite-worlds.ts",
       "news-worlds.ts",
+      "google-setup-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, checks, codes } of managedGoogleSetupWorlds) {
+    cases.set(`google-setup-live-${id}`, { ...googleSetupWorkflow, caseId: id, checks, codes });
+  }
   for (const { id, checks, expected } of managedNewsWorlds) {
     cases.set(`news-live-${id}`, { ...newsWorkflow, caseId: id, checks, expected });
   }
@@ -768,6 +782,60 @@ function verifiedMemoryEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, selected_event: verification.eventId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function googleSetupEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedGoogleSetup;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  const receipts = verification?.receipts;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.contextId === fixture.contextId &&
+      typeof verification.panelId === "string" &&
+      verification.panelId.length > 0 &&
+      verification.caseId === workflow.caseId &&
+      verification.passed === true &&
+      verification.checks?.driveNeedsSetup === true &&
+      verification.checks?.browserAgrees === true &&
+      verification.checks?.reportMatches === true &&
+      verification.readiness?.state === "needs-setup" &&
+      report?.status === "action-needed" &&
+      report.action === "open-setup" &&
+      report.ids?.length === 0 &&
+      report.checkpoint === null &&
+      Array.isArray(report.panelFindings) &&
+      Array.isArray(receipts) &&
+      report.panelFindings.length === workflow.checks.length &&
+      receipts.length === workflow.checks.length &&
+      workflow.checks.every((check, index) => {
+        const row = receipts[index];
+        const finding = report.panelFindings[index];
+        const id = `${fixture.contextId}:google-setup:${index + 1}`;
+        if (
+          row?.id !== id ||
+          row.stage !== verification.readiness.state ||
+          row.gmailEnabled !== false ||
+          JSON.stringify(row.check) !== JSON.stringify(check) ||
+          finding?.evidenceId !== id ||
+          finding.code !== workflow.codes[index] ||
+          JSON.stringify(finding.check) !== JSON.stringify(check)
+        )
+          return false;
+        if (check.kind === "owners")
+          return row.accountOwner === true && row.permissionsOwner === true;
+        if (check.kind === "viewport")
+          return row.viewportWidth === check.width && row.overflow === false;
+        return row.inheritedLaunch === (check.afterReload ? false : null);
+      }),
+    "Google setup findings must match the assigned panel and account observations"
+  );
+  return {
+    world: { context_id: fixture.contextId, panel_id: verification.panelId },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };
