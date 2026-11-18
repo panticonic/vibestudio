@@ -65,6 +65,7 @@ export interface VcsServiceDeps {
     | "discardParticipantContext"
     | "publishParticipantContext"
     | "readParticipantFiles"
+    | "reviewParticipantMerge"
   >;
   entityCache?: Pick<EntityCache, "resolveContext" | "resolveActive">;
   hasClientCapability?: (callerId: string, capability: ClientCapability) => boolean;
@@ -342,6 +343,11 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
     switch (method) {
       case "status":
         return readWorkspaceParticipantStatus(scope);
+      case "compare":
+        return workspace.reviewParticipantMerge({
+          ...scope,
+          compare: vcsMethods.compare.args.parse([input])[0],
+        });
       case "edit":
         return (
           await workspace.editParticipantContext({
@@ -768,8 +774,11 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             const reads: SemanticReads = {
               inspect: async (value) =>
                 vcsMethods.inspect.returns.parse(await invoke(ctx, "inspect", value)),
-              compare: async (value) =>
-                vcsMethods.compare.returns.parse(await invoke(ctx, "compare", value)),
+              compare: async (value) => {
+                if (catalog)
+                  throw new Error("Participant merge requires a reviewed placement scope");
+                return vcsMethods.compare.returns.parse(await invoke(ctx, "compare", value));
+              },
               status: async (value) =>
                 vcsMethods.status.returns.parse(await invoke(ctx, "status", value)),
               listDirectory: async (value) =>

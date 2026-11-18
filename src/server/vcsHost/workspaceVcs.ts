@@ -124,6 +124,7 @@ import {
   readWorkspacePublicationApproval,
   readWorkspacePublishedRevision,
   requireWorkspaceParticipantOwner,
+  reviewWorkspaceParticipantMerge,
   transferWorkspaceParticipant,
   workspaceParticipantCatalog,
   type WorkspaceHistorySource,
@@ -1046,6 +1047,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       contextId: input.merge.contextId,
     });
     return result;
+  }
+
+  reviewParticipantMerge(input: Omit<Parameters<typeof reviewWorkspaceParticipantMerge>[0], "blobsDir">) {
+    return reviewWorkspaceParticipantMerge({ ...input, blobsDir: this.deps.blobsDir });
   }
 
   async editParticipantContext(input: WorkspaceHistorySource & {

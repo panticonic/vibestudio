@@ -12,6 +12,7 @@ import {
   mergeWorkspaceParticipantContext,
   openWorkspaceParticipantContext,
   readWorkspaceParticipantStatus,
+  reviewWorkspaceParticipantMerge,
   workspaceParticipantReferencesReachable,
   workspaceParticipantCatalog,
 } from "./workspaceHistoryHost.js";
@@ -230,6 +231,40 @@ it.each([
       },
     })).resolves.toEqual({ head: "merge-head", value: application, result });
     expect(dispatch).toHaveBeenCalledTimes(expectedMethod === "mergeHistoryMain" ? 4 : 3);
+  } finally {
+    await rm(blobsDir, { recursive: true, force: true });
+  }
+});
+
+it("observes exact bytes for a participant comparison and validates the returned states", async () => {
+  const blobsDir = await mkdtemp(join(tmpdir(), "workspace-history-compare-"));
+  try {
+    const caller = native(1, "compare-call");
+    const participant = JSON.stringify(["task", {
+      authoritySessionId: "sealed", runtimeId: "agent",
+    }, { conversationId: 3, taskId: 1 }]);
+    const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participant)}` };
+    const { digest } = await putBytes(blobsDir, Buffer.from("Exact review content"));
+    const target = { kind: "event" as const, eventId: "event:target" };
+    const source = { kind: "event" as const, eventId: "event:source" };
+    const compare = { target, source, limit: 10 };
+    const result = {
+      target, source, base: { kind: "event", eventId: "event:common" },
+      counts: { adopt: 0, convergent: 1, composed: 0, conflict: 0, resolved: 0 },
+      intentCounts: { merged: 0, settled: 1, split: 0, contested: 0, pending: 0 },
+      resolution: { complete: true, concluded: false, remainingCoordinateCount: 0 },
+      coordinates: [], intents: [], intentsTruncated: false, nextCursor: null,
+    };
+    const dispatch = vi.fn()
+      .mockResolvedValueOnce({ kind: "read-content", contentHashes: [digest] })
+      .mockResolvedValueOnce({ kind: "reviewed", result })
+      .mockResolvedValueOnce({ kind: "reviewed", result: { ...result, target: source } });
+    const input = { dispatch: { dispatch }, caller, owner, canonical, blobsDir, contextId: "context", compare };
+    await expect(reviewWorkspaceParticipantMerge(input)).resolves.toEqual(result);
+    expect(dispatch).toHaveBeenNthCalledWith(2, owner, "reviewHistoryMainMerge", {
+      contextId: "context", compare, observation: { files: [{ contentHash: digest, text: "Exact review content" }] },
+    });
+    await expect(reviewWorkspaceParticipantMerge(input)).rejects.toThrow("different merge comparison");
   } finally {
     await rm(blobsDir, { recursive: true, force: true });
   }

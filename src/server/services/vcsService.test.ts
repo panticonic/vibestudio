@@ -203,15 +203,14 @@ describe("canonical vcsService", () => {
       editParticipantContext: vi.fn(),
       transferParticipantContext: vi.fn(),
       saveParticipantContext: vi.fn().mockResolvedValue(saved),
-      discardParticipantContext: vi
-        .fn()
-        .mockResolvedValue({
-          contextId: scope.contextId,
-          workingHead: EVENT,
-          discardedApplicationIds: ["old-application"],
-        }),
+      discardParticipantContext: vi.fn().mockResolvedValue({
+        contextId: scope.contextId,
+        workingHead: EVENT,
+        discardedApplicationIds: ["old-application"],
+      }),
       publishParticipantContext: vi.fn().mockResolvedValue(published),
       readParticipantFiles: vi.fn().mockResolvedValue([null]),
+      reviewParticipantMerge: vi.fn(),
     };
     const { definition, semanticCall, semanticPublishCall } = service({
       context: scope.contextId,

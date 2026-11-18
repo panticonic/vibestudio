@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { compareUtf16CodeUnits, sha256HexSyncText } from "@vibestudio/content-addressing";
 import {
+  vcsCompareResultSchema,
   vcsListDirectoryResultSchema,
   vcsListFilesResultSchema,
   vcsResolveRepositoryResultSchema,
@@ -8,6 +9,7 @@ import {
   vcsSemanticNodeRefSchema,
   vcsStatusResultSchema,
   vcsWorkingMutationResultSchema,
+  type VcsCompareInput,
   type VcsCopyInput,
   type VcsDiscardInput,
   type VcsEditInput,
@@ -92,6 +94,10 @@ const mergeReply = z.discriminatedUnion("kind", [
   appliedEdit.extend({ kind: z.literal("committed"), result: vcsWorkingMutationResultSchema }).strict(),
 ]);
 const mainMergeSelection = z.object({ head, base: head, main: head }).strict();
+const mergeReview = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("read-content"), contentHashes: z.array(digest).min(1) }).strict(),
+  z.object({ kind: z.literal("reviewed"), result: vcsCompareResultSchema }).strict(),
+]);
 const workspaceProjection = z
   .object({
     head,
@@ -429,6 +435,40 @@ async function mutateWorkspaceParticipant(
   return { head: applied.head, result };
 }
 
+async function readWorkspaceMergeObservation(blobsDir: string, contentHashes: string[]) {
+  const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
+  const files: Array<{ contentHash: string; text: string }> = [];
+  for (const contentHash of contentHashes) {
+    const bytes = await getBytes(blobsDir, contentHash);
+    if (!bytes) throw new Error(`semantic merge blob ${contentHash} is missing`);
+    files.push({ contentHash, text: decoder.decode(bytes) });
+  }
+  return { files };
+}
+
+/** Review the participant's current state against the exact shared revision. */
+export async function reviewWorkspaceParticipantMerge(input: WorkspaceHistorySource & {
+  owner: WorkspaceSourceProviderRef;
+  caller: VerifiedCaller;
+  contextId: string;
+  compare: VcsCompareInput;
+  blobsDir: string;
+}) {
+  requireWorkspaceParticipantOwner(input);
+  const { contextId, compare, blobsDir, owner, dispatch } = input;
+  const request = { contextId, compare };
+  let review = mergeReview.parse(await dispatch.dispatch(owner, "reviewHistoryMainMerge", request));
+  if (review.kind === "read-content") {
+    const observation = await readWorkspaceMergeObservation(blobsDir, review.contentHashes);
+    review = mergeReview.parse(await dispatch.dispatch(owner, "reviewHistoryMainMerge", { ...request, observation }));
+  }
+  if (review.kind !== "reviewed" ||
+      canonicalJson([review.result.target, review.result.source]) !== canonicalJson([compare.target, compare.source])) {
+    throw new Error("Workspace history returned a different merge comparison");
+  }
+  return review.result;
+}
+
 /** Observe and store merge content before the participant can reference it in its native history. */
 export async function mergeWorkspaceParticipantContext(input: WorkspaceHistorySource & {
   caller: VerifiedCaller;
@@ -465,13 +505,7 @@ export async function mergeWorkspaceParticipantContext(input: WorkspaceHistorySo
   }));
   let reply = await send();
   if (reply.kind === "read-content") {
-    const decoder = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
-    const files = await Promise.all(reply.contentHashes.map(async (contentHash) => {
-      const bytes = await getBytes(blobsDir, contentHash);
-      if (!bytes) throw new Error(`semantic merge blob ${contentHash} is missing`);
-      return { contentHash, text: decoder.decode(bytes) };
-    }));
-    const observation = { files };
+    const observation = await readWorkspaceMergeObservation(blobsDir, reply.contentHashes);
     reply = await send({ observation });
     if (reply.kind === "prepare-content") {
       const { blobs } = reply;
