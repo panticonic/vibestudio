@@ -14,17 +14,19 @@ Live workflow collection executes the authored Natlang root against real caller-
 
 ## Use
 
-Run a single workflow from the Vibestudio host checkout with the development templates configured.
-Use a new output directory and a model enabled on the collection machine.
+List the available cases, then select workflows from the Vibestudio host checkout with the development templates configured. Use a new output directory and a model enabled on the collection machine.
 
 ```sh
+pnpm natlang:teacher --list
 pnpm natlang:teacher --case panel-draft-unmount --out /path/to/new-run
 ```
 
 The panel cases are `panel-draft-unmount` and `panel-draft-stale-snapshot`. The VCS cases are
 `workspace-integration-theme-locale` and `workspace-integration-theme-locale-alias`.
 The worker cases are `worker-label-repair-type-mismatch` and `worker-label-repair-missing-helper`.
-The two cases in each family share a source group. The collector starts one isolated managed Vibestudio
+The two cases in each family share a source group. Repeat `--case` to run selected cases sequentially in one managed
+workspace. Each case gets its own system-test run, owned fixture context, source receipt and output under `cases/<case>/`.
+The final status indicates whether every selected case succeeded. Successful cases remain available when a later one fails. The collector starts one isolated managed Vibestudio
 instance, checks the vendored Natlang build, pins the host and templates, and retains the full
 system-test trajectory. A new workspace can ask for access to the selected model's credential.
 The approval identifies the model gateway and provider for that workspace.
