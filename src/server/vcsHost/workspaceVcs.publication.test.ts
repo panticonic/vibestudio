@@ -2,6 +2,8 @@ import { promises as fsp } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { canonicalJson, sha256HexSyncText } from "@vibestudio/content-addressing";
+import { createHostCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { ProtectedPublicationEvent } from "@vibestudio/shared/protectedPublicationEvents";
 import { hostRefBasisDigest } from "@vibestudio/shared/vcs/publication";
 import {
@@ -28,6 +30,109 @@ describe("WorkspaceVcs protected publication notification", () => {
     vi.restoreAllMocks();
     if (root) await fsp.rm(root, { recursive: true, force: true });
     root = undefined;
+  });
+
+  it("projects shared main only after the gated participant push is confirmed", async () => {
+    root = await fsp.mkdtemp(path.join(os.tmpdir(), "participant-publication-"));
+    const blobsDir = path.join(root, "blobs");
+    ensureLayout(blobsDir);
+    const contentHash = (await putBytes(blobsDir, Buffer.from("participant content"))).digest;
+    const prepare = vi.fn();
+    const completed = vi.fn();
+    const gate = vi.fn(async () => ({ prepare, committed: completed, failed: vi.fn() }));
+    const refs = createProtectedRefStore({ statePath: path.join(root, "refs"), gate });
+    await refs.updateMains({
+      entries: [],
+      evidence: {
+        publicationId: "initial",
+        previousEventId: "initial-parent",
+        publishedEventId: "initial-event",
+        hostRefsBasisDigest: hostRefBasisDigest([]),
+      },
+    });
+    gate.mockClear();
+    prepare.mockClear();
+    completed.mockClear();
+    const vcs = new WorkspaceVcs({
+      workspaceId: "workspace:test",
+      blobsDir,
+      workspaceRoot: path.join(root, "source"),
+      contextProjectionsRoot: path.join(root, "contexts"),
+      buildSourcesRoot: path.join(root, "build-sources"),
+      refs,
+    });
+    const caller = createHostCaller("test-device", "server", { userId: "user:test", handle: "test" });
+    const participantId = canonicalJson(["user", "user:test", "test-device"]);
+    const canonical = {
+      source: "workers/workspace-source", className: "GadHistoryDO", objectKey: "canonical",
+    };
+    const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
+    let approval: Record<string, unknown> | null = null;
+    let applied = false;
+    const dispatch = vi.fn(async (target: typeof canonical, method: string, args?: unknown) => {
+      expect(target).toEqual(
+        method === "readHistoryProjection" || method === "publishApprovedHistory" ? owner : canonical
+      );
+      switch (method) {
+        case "readHistoryPublicationApproval":
+          return approval ? { approval, applied, expiresAt: Date.now() + 60_000 } : null;
+        case "readHistoryProjection":
+          return {
+            head: "saved-head",
+            state: { kind: "event", eventId: "saved-event" },
+            repositories: [{
+              repositoryId: "repo",
+              repoPath: "packages/a",
+              presence: "present",
+              fileManifestId: "manifest",
+              source: { kind: "snapshot", files: [{ path: "note.txt", contentHash, mode: 0o644 }] },
+            }],
+          };
+        case "readHistoryMain":
+          return { head: "initial-head", eventId: "initial-event" };
+        case "authorizeHistoryPublication":
+          expect(prepare).toHaveBeenCalledOnce();
+          approval = args as Record<string, unknown>;
+          return { expiresAt: Date.now() + 60_000 };
+        case "grantHistoryPublication":
+          expect(approval).toMatchObject({
+            participantId,
+            previousEventId: "initial-event",
+            proposedEventId: "saved-event",
+            publication: { previousHead: "initial-head", proposedHead: "saved-head" },
+          });
+          return { kind: "grant", id: "grant", origin: { ref: "GadHistoryDO:canonical", token: "token" } };
+        case "publishApprovedHistory":
+          expect(refs.readMainSemanticState()?.eventId).toBe("initial-event");
+          expect(args).toMatchObject({ contextId: "context", proposedEventId: "saved-event" });
+          applied = true;
+          throw new Error("The native push reply was lost");
+        case "releaseHistoryGrant":
+          expect(args).toEqual({ id: "grant" });
+          return null;
+        case "acknowledgeHistoryPublication":
+          expect(refs.readMainSemanticState()?.eventId).toBe("saved-event");
+          expect(refs.readHeadPublication()?.observersAppliedAt).not.toBeNull();
+          approval = null;
+          return null;
+        default:
+          throw new Error(`Unexpected history method ${method}`);
+      }
+    });
+    const publish = () => vcs.publishParticipantContext({
+      dispatch: { dispatch }, canonical, owner, gateContext: { kind: "caller", caller },
+      push: {
+        commandId: "publish-command", contextId: "context",
+        expectedMainEventId: "initial-event", expectedCommittedEventId: "saved-event",
+      },
+    });
+    const result = await publish();
+    expect(result.mainEventId).toBe("saved-event");
+    await expect(publish()).resolves.toEqual(result);
+    expect(gate).toHaveBeenCalledOnce();
+    expect(completed).toHaveBeenCalledOnce();
+    expect(dispatch.mock.calls.filter(([, method]) => method === "publishApprovedHistory")).toHaveLength(1);
+    expect(refs.readMain("packages/a")?.contentRoot).toMatch(/^state:[0-9a-f]{64}$/);
   });
 
   async function interruptedPublication(semanticAcknowledged: boolean) {

@@ -103,6 +103,14 @@ export interface RefGateCompletion {
 
 export type RefGate = (batch: RefGateBatch) => Promise<RefGateCompletion | undefined>;
 
+/** The exact semantic transition whose committed tree pointers this store projects. */
+export interface CanonicalRefPublication {
+  approved(): Promise<boolean>;
+  authorize(): Promise<void>;
+  publish(): Promise<void>;
+  acknowledge(): Promise<void>;
+}
+
 export interface ProtectedRefStoreDeps {
   statePath: string;
   gate: RefGate;
@@ -115,7 +123,10 @@ export interface ProtectedRefStore {
   readMain(repoPath: string): MainRefRecord | null;
   listMains(): MainRefRecord[];
   readHeadPublication(): AppliedPublication | null;
-  updateMains(input: UpdateMainsInput): Promise<UpdateMainsResult>;
+  updateMains(
+    input: UpdateMainsInput,
+    canonical?: CanonicalRefPublication
+  ): Promise<UpdateMainsResult>;
   readAppliedPublication(publicationId: string): AppliedPublication | null;
   acknowledgePublication(publicationId: string): void;
   onRefsChanged(listener: OnRefsChanged): () => void;
@@ -506,7 +517,7 @@ export function createProtectedRefStore(deps: ProtectedRefStoreDeps): ProtectedR
       for (const [id, evidence] of nextPublications) publications.set(id, evidence);
     },
 
-    async updateMains(input) {
+    async updateMains(input, canonical) {
       if (
         !input.evidence.publicationId ||
         !input.evidence.previousEventId ||
@@ -607,27 +618,39 @@ export function createProtectedRefStore(deps: ProtectedRefStoreDeps): ProtectedR
         // The semantic main event is protected state even when its repository
         // snapshot is content-identical to the current one. Gate every new
         // publication; only an exact durable replay above skips approval.
-        const gateCompletion = await deps.gate({
-          entries: entries.map((entry) => ({
-            repoPath: entry.repoPath,
-            old: entry.expectedOld,
-            next: entry.next,
-          })),
-          publication: {
-            publicationId: input.evidence.publicationId,
-            previousEventId: input.evidence.previousEventId,
-            publishedEventId: input.evidence.publishedEventId,
-          },
-          ...(input.gateContext !== undefined ? { gateContext: input.gateContext } : {}),
-        });
+        const alreadyApproved = canonical ? await canonical.approved() : false;
+        const gateCompletion = alreadyApproved
+          ? undefined
+          : await deps.gate({
+              entries: entries.map((entry) => ({
+                repoPath: entry.repoPath,
+                old: entry.expectedOld,
+                next: entry.next,
+              })),
+              publication: {
+                publicationId: input.evidence.publicationId,
+                previousEventId: input.evidence.previousEventId,
+                publishedEventId: input.evidence.publishedEventId,
+              },
+              ...(input.gateContext !== undefined ? { gateContext: input.gateContext } : {}),
+            });
 
         let evidence!: AppliedPublication;
+        let handedToCanonical = false;
         try {
           // Gate side effects are prepared before the protected refs are
           // published. This is deliberately a separate phase: a completion
           // callback that runs only after `persist` can leave the refs ahead of
           // admission/clearance when that callback fails.
           await gateCompletion?.prepare();
+          if (canonical) {
+            // The semantic owner may have durably accepted the transition even
+            // if its response is interrupted. Its approval and applied receipts
+            // govern retry once this handoff starts.
+            handedToCanonical = true;
+            if (!alreadyApproved) await canonical.authorize();
+            await canonical.publish();
+          }
           const appliedAt = now();
           const nextMains = new Map(mains);
           for (const entry of entries) {
@@ -670,7 +693,7 @@ export function createProtectedRefStore(deps: ProtectedRefStoreDeps): ProtectedR
           headPublicationId = evidence.publicationId;
           mainEventId = evidence.publishedEventId;
         } catch (error) {
-          await gateCompletion?.failed(error);
+          if (!handedToCanonical) await gateCompletion?.failed(error);
           throw error;
         }
         // The durable ref state is now committed. Completion reporting is
@@ -709,6 +732,7 @@ export function createProtectedRefStore(deps: ProtectedRefStoreDeps): ProtectedR
           publications.set(evidence.publicationId, observed);
         });
       }
+      await canonical?.acknowledge();
       return outcome.result;
     },
 

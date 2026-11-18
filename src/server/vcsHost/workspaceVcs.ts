@@ -21,7 +21,12 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { TextDecoder } from "node:util";
 
-import type { VcsReadFileResult, VcsStateNodeRef } from "@vibestudio/service-schemas/vcs";
+import type {
+  VcsPushInput,
+  VcsPushResult,
+  VcsReadFileResult,
+  VcsStateNodeRef,
+} from "@vibestudio/service-schemas/vcs";
 import { vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
 import type {
   ProtectedPublicationEvent,
@@ -58,10 +63,12 @@ import {
   assertExecutionSourceContentRoot,
   type ExecutionSourceContentRoot,
 } from "../services/executionSourceRoots.js";
-import type {
-  AppliedPublication,
-  ProtectedRefPublication,
-  ProtectedRefStore,
+import {
+  RefEventConflictError,
+  type AppliedPublication,
+  type CanonicalRefPublication,
+  type ProtectedRefPublication,
+  type ProtectedRefStore,
 } from "../services/protectedRefStore.js";
 import type {
   BuildRecord,
@@ -96,8 +103,13 @@ import {
 } from "@vibestudio/service-schemas/workspaceSource";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
 import {
+  bindWorkspaceParticipantPublication,
   putPreparedWorkspaceContent,
+  readWorkspaceCanonicalMain,
   readWorkspaceParticipantProjection,
+  readWorkspacePublicationApproval,
+  readWorkspacePublishedRevision,
+  requireWorkspaceParticipantOwner,
 } from "./workspaceHistoryHost.js";
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
 import { retainedBlobDigests, withBlobContentLock } from "../storage/blobRetentions.js";
@@ -781,6 +793,91 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     );
   }
 
+  /** Advance the participant's exact saved revision through the protected gate. */
+  async publishParticipantContext(input: {
+    dispatch: Pick<DODispatch, "dispatch">;
+    canonical: WorkspaceSourceProviderRef;
+    owner: WorkspaceSourceProviderRef;
+    push: VcsPushInput;
+    gateContext: CallerPublicationGateContext;
+  }): Promise<VcsPushResult> {
+    const { push, gateContext, dispatch, canonical, owner } = input;
+    const caller = gateContext.caller;
+    requireWorkspaceParticipantOwner({ canonical, owner, caller });
+    if (push.epochTransition || push.templateInstallation) {
+      throw new Error("This publication requires the workspace installation lifecycle");
+    }
+    const publicationId = `participant-publication:${sha256HexSyncText(
+      canonicalJson({ owner, contextId: push.contextId, commandId: push.commandId })
+    )}`;
+    return this.mutateProtectedMain(async () => {
+      const recorded = await readWorkspacePublicationApproval({ dispatch, canonical, publicationId });
+      const participant = (previousHead: string, proposedHead: string) =>
+        bindWorkspaceParticipantPublication({
+          dispatch,
+          canonical,
+          owner,
+          caller,
+          contextId: push.contextId,
+          target: {
+            publicationId,
+            previousEventId: push.expectedMainEventId,
+            proposedEventId: push.expectedCommittedEventId,
+            publication: { previousHead, proposedHead },
+          },
+        });
+      const finish = (publication: AppliedPublication): VcsPushResult => ({
+        contextId: push.contextId,
+        eventId: publication.publishedEventId,
+        mainEventId: publication.publishedEventId,
+        effectId: publicationId,
+        appliedAt: new Date(publication.appliedAt).toISOString(),
+      });
+      const prior = this.deps.refs.readAppliedPublication(publicationId);
+      if (prior) {
+        if (prior.previousEventId !== push.expectedMainEventId ||
+            prior.publishedEventId !== push.expectedCommittedEventId) {
+          throw new Error("Workspace publication command names different events");
+        }
+        const canonicalPublication = recorded
+          ? participant(recorded.approval.publication.previousHead, recorded.approval.publication.proposedHead)
+          : null;
+        if (canonicalPublication && !await canonicalPublication.approved()) {
+          throw new Error("Workspace publication lost its native approval receipt");
+        }
+        await this.replayPublicationObservers(prior);
+        await canonicalPublication?.acknowledge();
+        this.deps.refs.acknowledgePublication(publicationId);
+        return finish(prior);
+      }
+
+      const candidate = recorded?.applied
+        ? await readWorkspacePublishedRevision({ dispatch, canonical, eventId: push.expectedCommittedEventId })
+        : await readWorkspaceParticipantProjection({ dispatch, owner, contextId: push.contextId });
+      if (candidate.state.kind !== "event" || candidate.state.eventId !== push.expectedCommittedEventId) {
+        throw new Error("Workspace publication requires the exact saved revision");
+      }
+      const main = recorded
+        ? { head: recorded.approval.publication.previousHead, eventId: recorded.approval.previousEventId }
+        : await readWorkspaceCanonicalMain({ dispatch, canonical });
+      if (main.eventId !== push.expectedMainEventId) {
+        throw new RefEventConflictError(push.expectedMainEventId, main.eventId, null);
+      }
+      await this.publishMain({
+        effectId: publicationId,
+        payload: GadJsonRecordSchema.parse({
+          previousEventId: push.expectedMainEventId,
+          publishedEventId: push.expectedCommittedEventId,
+          repositories: candidate.repositories,
+        }),
+      }, gateContext, participant(main.head, candidate.head));
+      const publication = this.deps.refs.readAppliedPublication(publicationId);
+      if (!publication) throw new Error("Workspace publication has no host receipt");
+      this.deps.refs.acknowledgePublication(publicationId);
+      return finish(publication);
+    });
+  }
+
   /**
    * One workspace-wide protected-main authoring lease. Callers that must read
    * main, author a candidate, journal its publication intent, and publish may
@@ -1124,8 +1221,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }
 
   private async publishMain(
-    effect: SemanticEffect,
-    gateContext: PublicationGateContext
+    effect: Pick<SemanticEffect, "effectId" | "payload">,
+    gateContext: PublicationGateContext,
+    canonical?: CanonicalRefPublication
   ): Promise<GadJsonRecord> {
     const profileStartedAt = performance.now();
     const repositories = effect.payload["repositories"];
@@ -1174,7 +1272,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const hostRefsBasisDigest = hostRefBasisDigest(
       current.map(({ repoPath, contentRoot }) => ({ repoPath, contentRoot }))
     );
-    await this.deps.refs.updateMains({
+    const update = {
       entries: changedPaths.map((repoPath) => ({
         repoPath,
         expectedOld: currentByPath.get(repoPath) ?? null,
@@ -1187,7 +1285,9 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         hostRefsBasisDigest,
       },
       gateContext: { ...gateContext, getCandidateWorkspaceState },
-    });
+    };
+    if (canonical) await this.deps.refs.updateMains(update, canonical);
+    else await this.deps.refs.updateMains(update);
     const refsCompletedAt = performance.now();
     const publication = this.deps.refs.readAppliedPublication(effect.effectId);
     if (!publication) throw new Error(`protected publication ${effect.effectId} was not recorded`);

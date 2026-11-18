@@ -15,6 +15,7 @@ import { WorkspaceMaterializationRepositorySchema } from "@vibestudio/shared/vcs
 import { z } from "zod";
 import type { DODispatch } from "../doDispatch.js";
 import { getBytes, putBytes } from "../services/blobstoreService.js";
+import type { CanonicalRefPublication } from "../services/protectedRefStore.js";
 import { withBlobContentLock } from "../storage/blobRetentions.js";
 import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
 
@@ -86,6 +87,28 @@ export async function readWorkspaceParticipantProjection(input: {
       contextId: input.contextId,
     })
   );
+}
+
+export async function readWorkspacePublishedRevision(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+  eventId: string;
+}) {
+  return workspaceProjection.parse(
+    await input.dispatch.dispatch(input.canonical, "readHistoryPublishedRevision", {
+      eventId: input.eventId,
+    })
+  );
+}
+
+export async function readWorkspaceCanonicalMain(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+}): Promise<{ head: string; eventId: string }> {
+  return z
+    .object({ head, eventId: z.string().min(1) })
+    .strict()
+    .parse(await input.dispatch.dispatch(input.canonical, "readHistoryMain"));
 }
 
 /** Store every prepared blob before its owner can commit a reference to it. */
@@ -195,6 +218,129 @@ function workspaceParticipant(caller: VerifiedCaller): string {
   const userId = caller.subject?.userId;
   if (userId) return canonicalJson(["user", userId, caller.remoteDeviceKey ?? caller.runtime.id]);
   throw new Error("The verified caller has no workspace participant identity");
+}
+
+export function requireWorkspaceParticipantOwner(input: {
+  canonical: WorkspaceSourceProviderRef;
+  owner: WorkspaceSourceProviderRef;
+  caller: VerifiedCaller;
+}): string {
+  const participantId = workspaceParticipant(input.caller);
+  const expected = { ...input.canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
+  if (canonicalJson(input.owner) !== canonicalJson(expected)) {
+    throw new Error("Workspace publication belongs to a different participant");
+  }
+  return participantId;
+}
+
+const publicationApproval = z
+  .object({
+    publicationId: z.string().min(1),
+    participantId: z.string().min(1),
+    previousEventId: z.string().min(1),
+    proposedEventId: z.string().min(1),
+    publication: z.object({ previousHead: head, proposedHead: head }).strict(),
+  })
+  .strict();
+const publicationReceipt = z
+  .object({
+    approval: publicationApproval,
+    expiresAt: z.number().int().positive(),
+    applied: z.boolean(),
+  })
+  .strict();
+const publicationGrant = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("applied"), head }).strict(),
+  z
+    .object({
+      kind: z.literal("grant"),
+      id: z.string().min(1),
+      origin: reservationSchema.shape.origin,
+    })
+    .strict(),
+]);
+
+export async function readWorkspacePublicationApproval(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+  publicationId: string;
+}) {
+  return publicationReceipt.nullable().parse(
+    await input.dispatch.dispatch(input.canonical, "readHistoryPublicationApproval", {
+      publicationId: input.publicationId,
+    })
+  );
+}
+
+/** The protected gate authorizes this exact native transition before it can publish. */
+export function bindWorkspaceParticipantPublication(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+  owner: WorkspaceSourceProviderRef;
+  caller: VerifiedCaller;
+  contextId: string;
+  target: Omit<z.infer<typeof publicationApproval>, "participantId">;
+}): CanonicalRefPublication {
+  const { dispatch, canonical, owner, caller, contextId } = input;
+  const participantId = requireWorkspaceParticipantOwner({ canonical, owner, caller });
+  const approval = publicationApproval.parse({ ...input.target, participantId });
+  const publicationId = { publicationId: approval.publicationId };
+  async function readApproval() {
+    const receipt = await readWorkspacePublicationApproval({
+      dispatch,
+      canonical,
+      publicationId: approval.publicationId,
+    });
+    if (receipt && canonicalJson(receipt.approval) !== canonicalJson(approval)) {
+      throw new Error("Workspace publication receipt names a different transition");
+    }
+    return receipt;
+  }
+  return {
+    async approved(): Promise<boolean> {
+      const receipt = await readApproval();
+      return receipt !== null && (receipt.applied || receipt.expiresAt > Date.now());
+    },
+    async authorize(): Promise<void> {
+      await dispatch.dispatch(canonical, "authorizeHistoryPublication", approval);
+    },
+    async publish(): Promise<void> {
+      const permit = publicationGrant.parse(
+        await dispatch.dispatch(canonical, "grantHistoryPublication", publicationId)
+      );
+      if (permit.kind === "applied") {
+        if (permit.head !== approval.publication.proposedHead || !(await readApproval())?.applied) {
+          throw new Error("Workspace publication did not advance to its approved head");
+        }
+        return;
+      }
+      try {
+        await dispatch.dispatch(owner, "publishApprovedHistory", {
+          contextId,
+          publication: approval.publication,
+          proposedEventId: approval.proposedEventId,
+          origin: permit.origin,
+        });
+      } catch (error) {
+        if (!(await readApproval())?.applied) throw error;
+      } finally {
+        await dispatch
+          .dispatch(canonical, "releaseHistoryGrant", { id: permit.id })
+          .catch((error) =>
+            console.warn(
+              "[WorkspaceHistory] Could not release the publication grant",
+              error instanceof Error ? error.message : String(error)
+            )
+          );
+      }
+      if (!(await readApproval())?.applied) {
+        throw new Error("Workspace publication did not advance to its approved head");
+      }
+    },
+    async acknowledge(): Promise<void> {
+      await dispatch.dispatch(canonical, "acknowledgeHistoryPublication", publicationId);
+    },
+  };
 }
 
 /** Called after the host authorizes the requested context for the verified caller. */
