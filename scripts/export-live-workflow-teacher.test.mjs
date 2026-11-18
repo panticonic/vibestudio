@@ -74,6 +74,11 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
+        "checklist-worlds",
+        "managedChecklistWorlds",
+        [{ id: "restart", request: { continuation: "restart" }, expected: [[], ["1"], ["1"]] }],
+      ],
+      [
         "onboarding-worlds",
         "managedSetupWorlds",
         [{ id: "retired", expected: { status: "invalid-selection", route: null } }],
@@ -154,6 +159,10 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(memory.root, "recallDecision");
   assert.equal(memory.workspace, "personal");
   assert.equal(memory.expectedStatus, "missing-source");
+  const checklist = cases.get("terminal-checklist-live-restart");
+  assert.equal(checklist.root, "verifyChecklist");
+  assert.equal(checklist.expectedContinuation, "restart");
+  assert.deepEqual(checklist.expectedScreens, [[], ["1"], ["1"]]);
   const setup = cases.get("onboarding-live-retired");
   assert.equal(setup.root, "planSetup");
   assert.equal(setup.workspace, "personal");
@@ -428,6 +437,60 @@ test("authoring export rejects a review drawn from another baseline", async (t) 
   );
 });
 
+test("terminal checklist export binds the report to a new PTY after restart", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "terminal-checklist-live-restart-state";
+  const run = diagnostics.natlangTeacher;
+  const screens = [
+    { sessionId: "session", ptyId: "initial", cols: 80, rows: 24, checked: [] },
+    { sessionId: "session", ptyId: "initial", cols: 80, rows: 24, checked: ["2"] },
+    { sessionId: "session", ptyId: "restarted", cols: 62, rows: 18, checked: ["2"] },
+  ];
+  run.report = { status: "verified", continuation: "restart", screens: structuredClone(screens) };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  const skill = structuredClone(leaf);
+  skill.callId = skill.summary.call_id = "skill";
+  skill.record.definition.name = "verifyChecklist";
+  leaf.record.parent_call_id = "skill";
+  run.calls.push(skill);
+  diagnostics.managedChecklist = {
+    contextId: "ctx",
+    verification: {
+      caseId: "restart-state",
+      sessionId: "session",
+      continuation: "restart",
+      screens,
+      passed: true,
+      checks: Object.fromEntries(
+        [
+          "exactScreenSequence",
+          "sessionPreserved",
+          "terminalIdentity",
+          "viewport",
+          "joinedReport",
+          "retired",
+        ].map((name) => [name, true])
+      ),
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+
+  // A matching report and fixture still cannot attest a restart with the old PTY.
+  screens[2].ptyId = run.report.screens[2].ptyId = "initial";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-unchanged-pty` }),
+    /must match the live PTY sequence and verified cleanup/u
+  );
+});
+
 test("onboarding export requires the assigned workspace and canonical owner destination", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
@@ -541,6 +604,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["authoring-worlds", "export const managedAuthoringWorlds = [];"],
       ["verified-memory-worlds", "export const managedMemoryWorlds = [];"],
       ["onboarding-worlds", "export const managedSetupWorlds = [];"],
+      ["checklist-worlds", "export const managedChecklistWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,

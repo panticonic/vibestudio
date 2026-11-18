@@ -153,6 +153,14 @@ const verifiedMemoryWorkflow = {
   root: "recallDecision",
   evidence: verifiedMemoryEvidence,
 };
+const terminalChecklistWorkflow = {
+  family: "workspace-terminal-checklist",
+  namespace: "vibestudio:terminal-apps",
+  group: "durable-checklist-session",
+  validator: { template: "system-testing", path: "skills/system-testing/checklist-managed.ts" },
+  root: "verifyChecklist",
+  evidence: terminalChecklistEvidence,
+};
 const onboardingWorkflow = {
   family: "workspace-onboarding",
   workspace: "personal",
@@ -205,6 +213,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedAuthoringWorlds },
     { managedMemoryWorlds },
     { managedSetupWorlds },
+    { managedChecklistWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -222,12 +231,21 @@ export async function loadLiveTeacherCases(checkouts) {
       "authoring-worlds.ts",
       "verified-memory-worlds.ts",
       "onboarding-worlds.ts",
+      "checklist-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, request, expected } of managedChecklistWorlds) {
+    cases.set(`terminal-checklist-live-${id}`, {
+      ...terminalChecklistWorkflow,
+      caseId: id,
+      expectedContinuation: request.continuation,
+      expectedScreens: expected,
+    });
+  }
   for (const { id, expected } of managedSetupWorlds) {
     cases.set(`onboarding-live-${id}`, {
       ...onboardingWorkflow,
@@ -687,6 +705,58 @@ function verifiedMemoryEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, selected_event: verification.eventId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function terminalChecklistEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedChecklist;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  const screens = verification?.screens;
+  const continuation = workflow.expectedContinuation;
+  const continuing = continuation !== "none";
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.caseId === workflow.caseId &&
+      verification.passed === true &&
+      verification.continuation === continuation &&
+      report?.status === "verified" &&
+      report.continuation === continuation &&
+      typeof verification.sessionId === "string" &&
+      Array.isArray(screens) &&
+      screens.length === workflow.expectedScreens.length &&
+      typeof screens[0]?.ptyId === "string" &&
+      Array.isArray(report.screens) &&
+      report.screens.length === screens.length &&
+      screens.every((screen, index) => {
+        const last = continuing && index === screens.length - 1;
+        const observed = report.screens[index];
+        return (
+          screen.sessionId === verification.sessionId &&
+          typeof screen.ptyId === "string" &&
+          (screen.ptyId === screens[0].ptyId) === !(last && continuation === "restart") &&
+          screen.cols === (last ? 62 : 80) &&
+          screen.rows === (last ? 18 : 24) &&
+          JSON.stringify(screen.checked) === JSON.stringify(workflow.expectedScreens[index]) &&
+          ["sessionId", "ptyId", "cols", "rows"].every((key) => observed?.[key] === screen[key]) &&
+          JSON.stringify(observed.checked) === JSON.stringify(screen.checked)
+        );
+      }) &&
+      [
+        "exactScreenSequence",
+        "sessionPreserved",
+        "terminalIdentity",
+        "viewport",
+        "joinedReport",
+        "retired",
+      ].every((name) => verification.checks?.[name] === true),
+    "The checklist report must match the live PTY sequence and verified cleanup"
+  );
+  return {
+    world: { context_id: fixture.contextId, session_id: verification.sessionId },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };
