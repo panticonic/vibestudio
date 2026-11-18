@@ -9,7 +9,7 @@ import type { WorkspaceSourceProviderRef } from "../workspaceSourceProvider.js";
 import { getBytes, putBytes } from "../services/blobstoreService.js";
 import {
   editWorkspaceParticipant,
-  mergeWorkspaceParticipantMain,
+  mergeWorkspaceParticipantContext,
   openWorkspaceParticipantContext,
   readWorkspaceParticipantStatus,
   workspaceParticipantReferencesReachable,
@@ -138,7 +138,12 @@ it("checks typed references through the admitted participant contexts", async ()
   expect(dispatch).toHaveBeenCalledTimes(1);
 });
 
-it("stores composed content before the participant records the merge", async () => {
+it.each([
+  { method: "mergeHistoryMain", selection: { head: "mine", base: "base", main: "shared" } },
+  { method: "mergeHistoryContext", selection: {
+    head: "mine", base: "base", source: { contextId: "peer", head: "shared", participantId: "other" },
+  } },
+])("stores composed content before $method records the merge", async ({ method: expectedMethod, selection }) => {
   const blobsDir = await mkdtemp(join(tmpdir(), "workspace-history-merge-"));
   try {
     const caller = native(1, "merge-call");
@@ -153,7 +158,8 @@ it("stores composed content before the participant records the merge", async () 
     const application = { kind: "application", applicationId: "merge-application" };
     const dispatch = vi.fn(async (_owner: WorkspaceSourceProviderRef, method: string, raw: unknown) => {
       const request = raw as { content?: { observation: { files: unknown[] }; contentHashes?: string[] } };
-      expect(method).toBe("mergeHistoryMain");
+      expect(method).toBe(expectedMethod);
+      expect(raw).toMatchObject(selection);
       if (!request.content) return { kind: "read-content", contentHashes: [digest] };
       expect(request.content.observation.files).toEqual([{ contentHash: digest, text: mine.toString() }]);
       if (!request.content.contentHashes) {
@@ -166,9 +172,9 @@ it("stores composed content before the participant records the merge", async () 
       expect(await getBytes(blobsDir, composedDigest)).toEqual(composed);
       return { kind: "committed", head: "merge-head", value: application };
     });
-    await expect(mergeWorkspaceParticipantMain({
+    await expect(mergeWorkspaceParticipantContext({
       dispatch: { dispatch }, caller, owner, canonical, blobsDir,
-      selection: { head: "mine", base: "base", main: "shared" },
+      selection,
       cause: { parent: null },
       merge: {
         commandId: "merge", contextId: "context",

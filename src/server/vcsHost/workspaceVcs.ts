@@ -110,7 +110,7 @@ import {
   bindWorkspaceParticipantPublication,
   collectWorkspaceHistoryContentRoots,
   listAppliedWorkspacePublications,
-  mergeWorkspaceParticipantMain,
+  mergeWorkspaceParticipantContext,
   observeAppliedWorkspacePublication,
   putPreparedWorkspaceContent,
   readWorkspaceCanonicalMain,
@@ -1009,8 +1009,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return result;
   }
 
-  async mergeParticipantMain(input: Omit<Parameters<typeof mergeWorkspaceParticipantMain>[0], "blobsDir">) {
-    const result = await mergeWorkspaceParticipantMain({ ...input, blobsDir: this.deps.blobsDir });
+  async mergeParticipantContext(input: Omit<Parameters<typeof mergeWorkspaceParticipantContext>[0], "blobsDir">) {
+    const result = await mergeWorkspaceParticipantContext({ ...input, blobsDir: this.deps.blobsDir });
     await this.materializeParticipantContext({
       dispatch: input.dispatch,
       owner: input.owner,

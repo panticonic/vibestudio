@@ -288,10 +288,12 @@ export async function editWorkspaceParticipant(input: {
 }
 
 /** Observe and store merge content before the participant can reference it in its native history. */
-export async function mergeWorkspaceParticipantMain(input: WorkspaceHistorySource & {
+export async function mergeWorkspaceParticipantContext(input: WorkspaceHistorySource & {
   caller: VerifiedCaller;
   owner: WorkspaceSourceProviderRef;
-  selection: { head: string; base: string; main: string };
+  selection: { head: string; base: string } & (
+    { main: string } | { source: { contextId: string; head: string; participantId?: string } }
+  );
   merge: VcsMergeInput;
   cause: z.infer<typeof causeSchema>;
   triggerEvidence?: { text: string; sender: VcsTrajectorySenderRef } | null;
@@ -299,10 +301,11 @@ export async function mergeWorkspaceParticipantMain(input: WorkspaceHistorySourc
 }) {
   requireWorkspaceParticipantOwner(input);
   const { dispatch, owner, merge, cause, blobsDir, triggerEvidence } = input;
+  const method = "main" in input.selection ? "mergeHistoryMain" : "mergeHistoryContext";
   const send = async (content?: {
     observation: { files: Array<{ contentHash: string; text: string }> };
     contentHashes?: string[];
-  }) => mergeReply.parse(await dispatch.dispatch(owner, "mergeHistoryMain", {
+  }) => mergeReply.parse(await dispatch.dispatch(owner, method, {
     ...input.selection,
     merge,
     cause,
