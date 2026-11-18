@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { parseArgs } from "node:util";
+import { isDeepStrictEqual, parseArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
 import { requireDevelopmentTemplateCheckouts } from "../src/dev/developmentTemplateConfig.cjs";
 import { workflowReviewer } from "./review-live-workflow-teacher.mjs";
@@ -496,10 +496,16 @@ export async function loadLiveTeacherCases(checkouts) {
     });
   }
   for (const { id, integration, questions } of integrationHandoffWorlds) {
+    const assignedIntegration = workspaceIntegrationWorlds.find(({ id }) => id === integration);
+    if (!assignedIntegration)
+      throw new Error(`Unknown integration for handoff ${id}: ${integration}`);
+    const unanswered = questions.filter((question) => question.unanswered).map(({ text }) => text);
     cases.set(`integration-handoff-${id}`, {
       ...integrationHandoffWorkflow,
       caseId: id,
-      expectedPaths: [...new Set(questions.map(({ file }) => file))],
+      expectedPaths: assignedIntegration.files?.map(({ path }) => path) ?? ["settings.json"],
+      expectedStatus: unanswered.length ? "unanswered" : "staged",
+      unanswered,
       sourceGroups: [
         ...workflowSourceGroups(integrationHandoffWorkflow),
         ...workflowSourceGroups(integrationWorkflow),
@@ -1707,6 +1713,7 @@ function integrationHandoffEvidence(execution, exercise, _scenario, workflow) {
         "beforeChanged",
         "handoffUsedIntegratedHead",
         "exactClaims",
+        "allSourcesRead",
         "pairedReports",
       ].every((name) => verification.checks?.[name] === true) &&
       verification.verificationPaths?.length === workflow.expectedPaths.length &&
@@ -1716,13 +1723,19 @@ function integrationHandoffEvidence(execution, exercise, _scenario, workflow) {
       verification.before !== verification.after &&
       integrated?.status === "integrated" &&
       integrated.head === verification.after &&
-      handoff?.status === "staged" &&
-      artifact &&
-      artifact.path === handoff.artifact?.path &&
-      artifact.bytes === handoff.artifact?.bytes &&
-      Number.isSafeInteger(artifact.bytes) &&
-      artifact.bytes > 0 &&
-      /^[0-9a-f]{64}$/u.test(artifact.sha256),
+      handoff?.status === workflow.expectedStatus &&
+      verification.expectedStatus === workflow.expectedStatus &&
+      isDeepStrictEqual(verification.unanswered, workflow.unanswered) &&
+      isDeepStrictEqual(handoff.unanswered, workflow.unanswered) &&
+      isDeepStrictEqual(handoff.missingSources, []) &&
+      (workflow.expectedStatus === "unanswered"
+        ? artifact === null && handoff.artifact === null
+        : artifact &&
+          artifact.path === handoff.artifact?.path &&
+          artifact.bytes === handoff.artifact?.bytes &&
+          Number.isSafeInteger(artifact.bytes) &&
+          artifact.bytes > 0 &&
+          /^[0-9a-f]{64}$/u.test(artifact.sha256)),
     "The scratch handoff must be independently verified against every assigned file at the integrated head"
   );
   return {

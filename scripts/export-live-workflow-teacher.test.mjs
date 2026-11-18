@@ -52,7 +52,14 @@ test("authored template worlds flow into the collector without losing original s
       [
         "integration-handoff-worlds",
         "integrationHandoffWorlds",
-        [{ id: "rollout", integration: "rollout", questions: [{ file: "limits.json" }] }],
+        [
+          { id: "rollout", integration: "rollout", questions: [{ text: "Which cap applies?" }] },
+          {
+            id: "rollout-unconfirmed",
+            integration: "rollout",
+            questions: [{ text: "Who signed the rollout?", unanswered: true }],
+          },
+        ],
       ],
       ["automation-lifecycle-worlds", "managedAutomationWorlds", [{ id: "stale", status: "held" }]],
       [
@@ -236,7 +243,58 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(scratch.expectedStatus, "staged");
   const joined = cases.get("integration-handoff-rollout");
   assert.deepEqual(joined.skills, ["integrateWorkspace", "assembleHandoff"]);
-  assert.deepEqual(joined.expectedPaths, ["limits.json"]);
+  assert.deepEqual(joined.expectedPaths, ["limits.json", "preview.json"]);
+  const heldHandoff = cases.get("integration-handoff-rollout-unconfirmed");
+  assert.equal(heldHandoff.expectedStatus, "unanswered");
+  assert.deepEqual(heldHandoff.unanswered, ["Who signed the rollout?"]);
+  const verification = {
+    passed: true,
+    checks: Object.fromEntries(
+      [
+        "persistedIntegration",
+        "beforeChanged",
+        "handoffUsedIntegratedHead",
+        "exactClaims",
+        "allSourcesRead",
+        "pairedReports",
+      ].map((key) => [key, true])
+    ),
+    verificationPaths: heldHandoff.expectedPaths,
+    seed: { eventId: "seed" },
+    source: { eventId: "source" },
+    before: "before",
+    after: "after",
+    expectedStatus: "unanswered",
+    unanswered: heldHandoff.unanswered,
+    artifact: null,
+  };
+  const execution = {
+    provenance: { contextId: "owned" },
+    diagnostics: {
+      integrationHandoff: { contextId: "owned", caseId: heldHandoff.caseId, verification },
+    },
+  };
+  const handoff = {
+    status: "unanswered",
+    unanswered: heldHandoff.unanswered,
+    missingSources: [],
+    artifact: null,
+  };
+  const exercise = {
+    report: { results: [{ report: { status: "integrated", head: "after" } }, { report: handoff }] },
+  };
+  assert.equal(heldHandoff.evidence(execution, exercise, "", heldHandoff).checks.exactClaims, true);
+  handoff.artifact = { path: "/.tmp/handoff", bytes: 8 };
+  assert.throws(
+    () => heldHandoff.evidence(execution, exercise, "", heldHandoff),
+    /independently verified/
+  );
+  handoff.artifact = null;
+  handoff.unanswered = [];
+  assert.throws(
+    () => heldHandoff.evidence(execution, exercise, "", heldHandoff),
+    /independently verified/
+  );
   assert.ok(
     groups("integration-handoff-rollout").includes(
       "vibestudio:workspace-integration:settings-conflict"

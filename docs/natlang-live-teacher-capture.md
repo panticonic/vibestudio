@@ -98,6 +98,10 @@ Repeated views of the same reason count once, and a recorded counteraction can r
 equivalent change. The exporter verifies the decision and the cited live evidence.
 The release-readiness dossier joins two skill trees in one call. It requires observed recovery after a real worker restart
 and verified cleanup before the project skill can prepare and commit the evidence dossier.
+Integration handoffs combine the workspace integration and scratch evidence skills. The scratch
+binding opens only after the VCS oracle verifies the integration. Some questions require
+citations from multiple resulting files. If those files lack a required decision, such as a
+signed approval, the case requires a hold with the precise unanswered questions and no artifact.
 The authored inventory comes from the configured system-testing template, which supplies
 the same worlds to the explicit system-test runner. `--list` prints each case's source groups for split hygiene.
 Repeat `--case` to run selected cases in the managed workspace composition each case declares.
