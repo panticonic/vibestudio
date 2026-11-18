@@ -117,6 +117,14 @@ const publicationPreflightWorkflow = {
   root: "preflightPublication",
   evidence: publicationPreflightEvidence,
 };
+const pdfIntakeWorkflow = {
+  family: "workspace-pdf-intake",
+  namespace: "vibestudio:pdf-intake",
+  group: "local-pdf-evidence",
+  validator: { template: "system-testing", path: "skills/system-testing/pdf-intake-managed.ts" },
+  root: "extractPdfEvidence",
+  evidence: pdfIntakeEvidence,
+};
 const composedReleaseWorkflow = {
   ...ownedOperationsWorkflow,
   family: "workspace-release-dossier",
@@ -155,6 +163,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { integrationHandoffWorlds },
     { managedAutomationWorlds },
     { managedPublicationWorlds },
+    { managedPdfWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -167,12 +176,26 @@ export async function loadLiveTeacherCases(checkouts) {
       "integration-handoff-worlds.ts",
       "automation-lifecycle-worlds.ts",
       "publication-preflight-worlds.ts",
+      "pdf-intake-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, pages, blocked, claims } of managedPdfWorlds) {
+    const answered = claims.filter(({ evidence }) => evidence.length > 0).length;
+    const expectedStatus =
+      blocked ??
+      (answered === 0 ? "no-match" : answered === claims.length ? "verified" : "partial-match");
+    cases.set(`pdf-intake-live-${id}`, {
+      ...pdfIntakeWorkflow,
+      caseId: id,
+      expectedStatus,
+      pages,
+      blocked,
+    });
+  }
   for (const { id, expectedBlockers } of managedPublicationWorlds) {
     cases.set(`publication-preflight-live-${id}`, {
       ...publicationPreflightWorkflow,
@@ -455,6 +478,38 @@ function ownedOperationsEvidence(execution, exercise, scenario) {
     world: { context_id: fixture.contextId, case_id: fixture.caseId },
     checks: verification.checks,
     evidence: { workspace: { fixture, verification, audit, cleanup } },
+  };
+}
+
+function pdfIntakeEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedPdf;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.caseId === workflow.caseId &&
+      verification.passed === true &&
+      verification.expectedStatus === workflow.expectedStatus &&
+      report?.status === workflow.expectedStatus &&
+      [
+        "sourceUnchanged",
+        "workspaceHeadUnchanged",
+        "localExtraction",
+        "exactCitations",
+        "disposition",
+      ].every((name) => verification.checks?.[name] === true) &&
+      /^[a-f0-9]{64}$/u.test(verification.digest) &&
+      report.digest === verification.digest &&
+      JSON.stringify(verification.requestedPages) === JSON.stringify(workflow.pages) &&
+      JSON.stringify(report.readPages) === JSON.stringify(workflow.blocked ? [] : workflow.pages) &&
+      typeof verification.seedRevision === "string",
+    "The PDF decision must match the owned source bytes, exact page scope, and a verified local extraction"
+  );
+  return {
+    world: { context_id: fixture.contextId, seed_revision: verification.seedRevision },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
   };
 }
 

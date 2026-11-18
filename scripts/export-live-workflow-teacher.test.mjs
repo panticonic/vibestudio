@@ -59,6 +59,18 @@ test("authored template worlds flow into the collector without losing original s
         "managedPublicationWorlds",
         [{ id: "caption", expectedBlockers: ["missing-presentation"] }],
       ],
+      [
+        "pdf-intake-worlds",
+        "managedPdfWorlds",
+        [
+          {
+            id: "page-missing",
+            pages: [1, 5],
+            blocked: "missing-pages",
+            claims: [{ evidence: [] }],
+          },
+        ],
+      ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
         "panel-repair-world",
@@ -95,6 +107,10 @@ test("authored template worlds flow into the collector without losing original s
   const automation = cases.get("automation-lifecycle-live-stale");
   assert.equal(automation.root, "reconcileAutomation");
   assert.equal(automation.expectedStatus, "held");
+  const cleanPdf = cases.get("pdf-intake-live-page-missing");
+  assert.equal(cleanPdf.root, "extractPdfEvidence");
+  assert.equal(cleanPdf.expectedStatus, "missing-pages");
+  assert.deepEqual(cleanPdf.pages, [1, 5]);
   const preflight = cases.get("publication-preflight-live-caption");
   assert.equal(preflight.root, "preflightPublication");
   assert.deepEqual(preflight.expectedBlockers, ["missing-presentation"]);
@@ -314,6 +330,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["integration-handoff-worlds", "export const integrationHandoffWorlds = [];"],
       ["automation-lifecycle-worlds", "export const managedAutomationWorlds = [];"],
       ["publication-preflight-worlds", "export const managedPublicationWorlds = [];"],
+      ["pdf-intake-worlds", "export const managedPdfWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,

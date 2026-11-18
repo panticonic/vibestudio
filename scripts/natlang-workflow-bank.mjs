@@ -249,7 +249,10 @@ const domains = [
     source: "skills/pdf-intake-fixtures/worlds.ts",
     exported: "pdfIntakeWorlds",
     operation: "extractPdfEvidence",
-    identify: (world) => [world.id, [world.sourceGroup]],
+    identify: (world) => [
+      world.id,
+      [world.sourceGroup, "vibestudio:pdf-intake:local-pdf-evidence"],
+    ],
   },
   {
     domain: "personalFacility",
