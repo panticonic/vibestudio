@@ -97,6 +97,11 @@ const workspaceProjection = z
     repositories: z.array(WorkspaceMaterializationRepositorySchema),
   })
   .strict();
+const changedLocations = z.object({
+  target: vcsStateNodeRefSchema,
+  source: vcsStateNodeRefSchema,
+  locations: z.array(z.object({ kind: z.enum(["file", "folder"]), path: z.string() }).strict()),
+}).strict();
 
 export async function readWorkspaceParticipantProjection(input: {
   dispatch: Pick<DODispatch, "dispatch">;
@@ -221,6 +226,15 @@ export function workspaceParticipantCatalog(input: WorkspaceHistorySource & {
     return result;
   };
   return {
+    async changedLocations(target: VcsStateNodeRef, source: VcsStateNodeRef) {
+      const result = changedLocations.parse(await dispatch.dispatch(
+        owner, "readHistoryChangedLocations", { contextId, target, source }
+      ));
+      if (canonicalJson([result.target, result.source]) !== canonicalJson([target, source])) {
+        throw new Error("Workspace changes belong to different revisions");
+      }
+      return result.locations;
+    },
     async repositoryPath(state: VcsStateNodeRef, repositoryId: string) {
       const result = verify(vcsResolveRepositoryResultSchema.parse(
         await dispatch.dispatch(owner, "readHistoryRepositoryLocation", { contextId, state, repositoryId })

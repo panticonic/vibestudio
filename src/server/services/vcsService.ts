@@ -751,6 +751,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
                     vcsOperationContextId(method as VcsMethodName, admittedInput)
                   )
                 : null;
+            const catalog = scope ? workspaceParticipantCatalog(scope) : null;
             const reads: SemanticReads = {
               inspect: async (value) =>
                 vcsMethods.inspect.returns.parse(await invoke(ctx, "inspect", value)),
@@ -762,9 +763,10 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
                 vcsMethods.listDirectory.returns.parse(await invoke(ctx, "listDirectory", value)),
               listFiles: async (value) =>
                 vcsMethods.listFiles.returns.parse(await invoke(ctx, "listFiles", value)),
-              ...(scope
+              ...(scope && catalog
                 ? {
-                    repositoryPath: workspaceParticipantCatalog(scope).repositoryPath,
+                    repositoryPath: catalog.repositoryPath,
+                    changedLocations: catalog.changedLocations,
                     filePath: async (state, repositoryId, fileId) => {
                       const files = await readWorkspaceParticipantFileDescriptors({
                         ...scope,

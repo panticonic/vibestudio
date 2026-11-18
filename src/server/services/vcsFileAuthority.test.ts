@@ -131,6 +131,46 @@ const scopes = (selections: Awaited<ReturnType<typeof vcsFileSelections>>) =>
   selections.map(({ capability, resource }) => ({ capability, resource }));
 
 describe("website semantic file consent", () => {
+  it("uses native placement metadata to authorize both ends of publication changes", async () => {
+    const touched: Array<{ kind: "folder"; path: string }> = [
+      { kind: "folder", path: "projects/old" },
+      { kind: "folder", path: "projects/new" },
+    ];
+    const committed = { kind: "event", eventId: "event:new" } as const;
+    const changedLocations: NonNullable<SemanticReads["changedLocations"]> = async (
+      target,
+      source
+    ) => {
+      expect(target).toEqual(state);
+      expect(source).toEqual(committed);
+      return touched;
+    };
+    const selected = await vcsFileSelections(
+      "push",
+      {
+        commandId: "command:publish",
+        contextId: "context:one",
+        expectedMainEventId: state.eventId,
+        expectedCommittedEventId: committed.eventId,
+      },
+      {
+        ...typedReads(async () => {
+          throw new Error("Unexpected semantic read");
+        }),
+        changedLocations,
+      }
+    );
+    expect(scopes(selected)).toEqual([
+      {
+        capability: "filesystem.write",
+        resource: { kind: "prefix", prefix: "workspace-path/projects/new/" },
+      },
+      {
+        capability: "filesystem.write",
+        resource: { kind: "prefix", prefix: "workspace-path/projects/old/" },
+      },
+    ]);
+  });
   it("authorizes every batch selector while sharing exact-state repository discovery", async () => {
     const calls: string[] = [];
     const source = metadata();

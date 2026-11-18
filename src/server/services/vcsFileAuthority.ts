@@ -27,6 +27,10 @@ export interface SemanticReads {
   listFiles(input: VcsListFilesInput): Promise<VcsListFilesResult>;
   repositoryPath?(state: VcsStateNodeRef, repositoryId: string): Promise<string | null>;
   filePath?(state: VcsStateNodeRef, repositoryId: string, fileId: string): Promise<string | null>;
+  changedLocations?(
+    target: VcsStateNodeRef,
+    source: VcsStateNodeRef
+  ): Promise<Array<Pick<WorkspaceFileAccess, "path" | "kind">>>;
 }
 
 /** Select paths from authoritative identities at the exact admitted semantic state. */
@@ -309,6 +313,12 @@ export async function vcsFileSelections(
         const [request] = vcsMethods.push.args.parse([input]);
         target = { kind: "event", eventId: request.expectedMainEventId };
         source = { kind: "event", eventId: request.expectedCommittedEventId };
+      }
+      if (method !== "merge" && read.changedLocations && source.kind !== "external-delta") {
+        for (const { kind, path } of await read.changedLocations(target, source)) {
+          add("write", path, kind);
+        }
+        break;
       }
       let cursor: string | undefined;
       do {
