@@ -2,8 +2,10 @@ import { createHash } from "node:crypto";
 import { compareUtf16CodeUnits, sha256HexSyncText } from "@vibestudio/content-addressing";
 import {
   vcsStateNodeRefSchema,
+  vcsStatusResultSchema,
   vcsWorkingMutationResultSchema,
   type VcsEditInput,
+  type VcsStatusResult,
   type VcsTrajectorySenderRef,
   type VcsWorkingMutationResult,
 } from "@vibestudio/service-schemas/vcs";
@@ -87,6 +89,23 @@ export async function readWorkspaceParticipantProjection(input: {
       contextId: input.contextId,
     })
   );
+}
+
+/** Read shared ancestry and edits from the verified participant's own context. */
+export async function readWorkspaceParticipantStatus(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+  owner: WorkspaceSourceProviderRef;
+  caller: VerifiedCaller;
+  contextId: string;
+}): Promise<VcsStatusResult> {
+  requireWorkspaceParticipantOwner(input);
+  const status = vcsStatusResultSchema.parse(
+    await input.dispatch.dispatch(input.owner, "readHistoryStatus", { contextId: input.contextId })
+  );
+  if (status.contextId !== input.contextId)
+    throw new Error("Workspace status belongs to a different context");
+  return status;
 }
 
 export async function readWorkspacePublishedRevision(input: {
@@ -228,7 +247,7 @@ export function requireWorkspaceParticipantOwner(input: {
   const participantId = workspaceParticipant(input.caller);
   const expected = { ...input.canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
   if (canonicalJson(input.owner) !== canonicalJson(expected)) {
-    throw new Error("Workspace publication belongs to a different participant");
+    throw new Error("Workspace history belongs to a different participant");
   }
   return participantId;
 }

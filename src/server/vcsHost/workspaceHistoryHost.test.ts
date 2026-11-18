@@ -10,6 +10,7 @@ import { getBytes, putBytes } from "../services/blobstoreService.js";
 import {
   editWorkspaceParticipant,
   openWorkspaceParticipantContext,
+  readWorkspaceParticipantStatus,
 } from "./workspaceHistoryHost.js";
 
 const canonical = {
@@ -77,6 +78,37 @@ it("withholds a grant when replay reports a different allocation", async () => {
     })
   ).rejects.toThrow("different participant owner");
   expect(dispatch).toHaveBeenCalledTimes(1);
+});
+
+it("reads status only from the verified participant and context", async () => {
+  const caller = native(1, "status-call");
+  const participantId = JSON.stringify(["task", {
+    authoritySessionId: "sealed",
+    runtimeId: "agent",
+  }, { conversationId: 3, taskId: 1 }]);
+  const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
+  const event = { kind: "event", eventId: "saved" };
+  const status = {
+    contextId: "context",
+    committed: event,
+    workingHead: event,
+    clean: true,
+    mainEventId: "main",
+    mainRelation: "behind",
+    workingCounts: { applications: 0, workUnits: 0, changes: 0 },
+    integrating: [],
+  };
+  const dispatch = vi.fn().mockResolvedValue(status);
+  const request = { dispatch: { dispatch }, canonical, owner, caller, contextId: "context" };
+  await expect(readWorkspaceParticipantStatus(request)).resolves.toEqual(status);
+  expect(dispatch).toHaveBeenLastCalledWith(owner, "readHistoryStatus", { contextId: "context" });
+  await expect(
+    readWorkspaceParticipantStatus({ ...request, caller: native(2, "other-task") })
+  ).rejects.toThrow("history belongs to a different participant");
+  expect(dispatch).toHaveBeenCalledTimes(1);
+  await expect(
+    readWorkspaceParticipantStatus({ ...request, contextId: "other-context" })
+  ).rejects.toThrow("different context");
 });
 
 it("stores prepared participant content before applying the edit and returns a committed retry", async () => {
