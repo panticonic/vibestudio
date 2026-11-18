@@ -4007,7 +4007,7 @@ describe("runtimeService.cloneContext", () => {
     expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
   });
 
-  it("reuses an interrupted self-fork reservation only at its original storage commit", async () => {
+  it("reuses an inherited-context self-fork only at its original storage commit", async () => {
     const { service, cloneDurableStorage } = await buildDeps();
     const parent = await seedDO(service, "ctx-self-fork-retry", "parent");
     const caller = createVerifiedCaller(parent.id, "do");
@@ -4018,7 +4018,6 @@ describe("runtimeService.cloneContext", () => {
           execution: { surface: "code", source: "workers/agent" },
           className: "AgentDO",
           key: "child",
-          contextId: "ctx-self-fork-retry",
           forkStorage: { at },
         },
       ]);
@@ -4026,6 +4025,7 @@ describe("runtimeService.cloneContext", () => {
     await expect(fork("original")).rejects.toThrow("Fork interrupted");
     await expect(fork("changed")).rejects.toThrow(/storageCommit/);
     const child = await fork("original");
+    expect(child).toMatchObject({ contextId: "ctx-self-fork-retry" });
     await expect(fork("original")).resolves.toEqual(child);
     await expect(fork("changed")).rejects.toThrow(/storageCommit/);
     expect(cloneDurableStorage).toHaveBeenCalledTimes(2);

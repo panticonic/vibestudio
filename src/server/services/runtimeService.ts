@@ -661,10 +661,6 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       key: spec.key,
     });
     const create = async (): Promise<RuntimeEntityHandle> => {
-      const forkSource =
-        spec.kind === "do" && spec.forkStorage
-          ? await reserveForkedStorage(actors, spec, canonicalId)
-          : undefined;
       const preparedResourceBindings = spec.resourceBindings?.length
         ? await deps.prepareResourceBindings?.({
             bindings: spec.resourceBindings,
@@ -702,6 +698,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       const contextId =
         preparedResourceBindings?.contextId ??
         (await resolveTargetContext(caller, spec.contextId, agentBinding));
+      const forkSource =
+        spec.kind === "do" && spec.forkStorage
+          ? await reserveForkedStorage(actors, { ...spec, contextId }, canonicalId)
+          : undefined;
       return activateEntityOnce(
         actors,
         spec,
