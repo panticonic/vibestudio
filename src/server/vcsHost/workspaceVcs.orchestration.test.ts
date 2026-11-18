@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { CONTEXT_BINDING_FILE, parseContextBinding } from "@vibestudio/shared/contextBinding";
 import { contextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
 import type { ContextMaterializationCommand } from "@vibestudio/shared/vcs/workspaceProjection";
 import { buildWorktreeManifest, EMPTY_STATE_HASH, sha256Hex } from "@vibestudio/content-addressing";
@@ -186,6 +187,53 @@ afterEach(async () => {
 });
 
 describe("WorkspaceVcs semantic host orchestration", () => {
+  it("keeps participant projections separate, advances one, and repairs its binding on retry", async () => {
+    const { vcs, blobsDir, deps } = await harness();
+    const contextId = "context:shared";
+    const owners = ["work-alice", "work-bob"].map((objectKey) => ({ ...TEST_PROVIDER, objectKey }));
+    const original = (await putBytes(blobsDir, Buffer.from("shared content"))).digest;
+    const privateEdit = (await putBytes(blobsDir, Buffer.from("private edit"))).digest;
+    let aliceEdited = false;
+    const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string, input: unknown) => {
+      expect(method).toBe("readHistoryProjection");
+      expect(input).toEqual({ contextId });
+      const edited = aliceEdited && owner.objectKey === "work-alice";
+      return {
+        head: edited ? "edited" : "initial",
+        state: edited
+          ? { kind: "application", applicationId: "alice-edit" }
+          : { kind: "event", eventId: "genesis" },
+        repositories: [{
+          repositoryId: "repo",
+          repoPath: "packages/example",
+          presence: "present",
+          fileManifestId: edited ? "edited-manifest" : "initial-manifest",
+          source: { kind: "snapshot", files: [
+            { path: "note.txt", contentHash: edited ? privateEdit : original, mode: 0o644 },
+          ] },
+        }],
+      };
+    });
+    const project = (owner: typeof TEST_PROVIDER) =>
+      vcs.materializeParticipantContext({ dispatch: { dispatch }, owner, contextId });
+    const [alice, bob] = await Promise.all(owners.map(project));
+    expect(alice!.folder).not.toBe(bob!.folder);
+    const read = (folder: string) => fsp.readFile(path.join(folder, "packages/example/note.txt"), "utf8");
+    await expect(read(alice!.folder)).resolves.toBe("shared content");
+    await expect(read(bob!.folder)).resolves.toBe("shared content");
+    aliceEdited = true;
+    expect((await project(owners[0]!)).head).toBe("edited");
+    await expect(read(alice!.folder)).resolves.toBe("private edit");
+    await expect(read(bob!.folder)).resolves.toBe("shared content");
+    const binding = path.join(alice!.folder, CONTEXT_BINDING_FILE);
+    await fsp.unlink(binding);
+    await project(owners[0]!);
+    expect(parseContextBinding(JSON.parse(await fsp.readFile(binding, "utf8")))).toMatchObject({
+      workspaceId: deps.workspaceId,
+      contextId,
+    });
+  });
+
   it("resolves current semantic content without a checkout and reuses only exact immutable heads", async () => {
     const { vcs, blobsDir, deps } = await harness();
     const firstBytes = Buffer.from("first configuration");

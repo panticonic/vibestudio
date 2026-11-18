@@ -137,6 +137,7 @@ export class ContextMaterializer {
         if (!contextMaterializationReceiptProves(command, receipt)) {
           throw new Error("stored materialization cannot prove an idempotent retry");
         }
+        await this.ensureContextBinding(command.contextId);
         return receipt;
       }
       if (
@@ -250,7 +251,7 @@ export class ContextMaterializer {
         ...receipt,
         repositories: next,
       });
-      await this.writeContextBinding(command.contextId);
+      await this.ensureContextBinding(command.contextId);
       return receipt;
     });
   }
@@ -761,7 +762,7 @@ export class ContextMaterializer {
     );
   }
 
-  private async writeContextBinding(contextId: string): Promise<void> {
+  async ensureContextBinding(contextId: string): Promise<void> {
     const binding = contextBinding({ workspaceId: this.deps.workspaceId, contextId });
     await this.writeAtomicJson(this.bindingPath(contextId), encodeContextBinding(binding), 0o644);
   }

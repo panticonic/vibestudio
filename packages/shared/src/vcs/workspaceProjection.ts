@@ -86,7 +86,7 @@ const workspaceStateRefSchema = z.discriminatedUnion("kind", [
 const materializationFileSchema = z
   .object({ path: z.string(), contentHash: z.string().min(1), mode: z.number().int().nonnegative() })
   .strict();
-const materializationRepositorySchema = z.discriminatedUnion("presence", [
+export const WorkspaceMaterializationRepositorySchema = z.discriminatedUnion("presence", [
   z
     .object({
       repositoryId: z.string().min(1),
@@ -131,7 +131,7 @@ export const ContextMaterializationCommandSchema: z.ZodType<ContextMaterializati
     mode: z.enum(["initialize", "patch", "replace"]),
     previousState: workspaceStateRefSchema.nullable(),
     targetState: workspaceStateRefSchema,
-    repositories: z.array(materializationRepositorySchema),
+    repositories: z.array(WorkspaceMaterializationRepositorySchema),
     blobs: z.array(z.object({ contentHash: z.string().min(1), base64: z.string() }).strict()),
     payloadDigest: z.string().min(1),
   })

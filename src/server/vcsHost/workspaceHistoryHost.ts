@@ -11,6 +11,7 @@ import { GadJsonRecordSchema } from "@vibestudio/service-schemas/workspaceSource
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
+import { WorkspaceMaterializationRepositorySchema } from "@vibestudio/shared/vcs/workspaceProjection";
 import { z } from "zod";
 import type { DODispatch } from "../doDispatch.js";
 import { getBytes, putBytes } from "../services/blobstoreService.js";
@@ -67,6 +68,25 @@ const editPlan = z.discriminatedUnion("kind", [
     .strict(),
 ]);
 const appliedEdit = z.object({ head, value: vcsStateNodeRefSchema }).strict();
+const workspaceProjection = z
+  .object({
+    head,
+    state: vcsStateNodeRefSchema,
+    repositories: z.array(WorkspaceMaterializationRepositorySchema),
+  })
+  .strict();
+
+export async function readWorkspaceParticipantProjection(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  owner: WorkspaceSourceProviderRef;
+  contextId: string;
+}) {
+  return workspaceProjection.parse(
+    await input.dispatch.dispatch(input.owner, "readHistoryProjection", {
+      contextId: input.contextId,
+    })
+  );
+}
 
 /** Store every prepared blob before its owner can commit a reference to it. */
 export async function putPreparedWorkspaceContent(

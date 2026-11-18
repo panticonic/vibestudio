@@ -34,6 +34,7 @@ import {
   sha256HexSyncText,
 } from "@vibestudio/content-addressing";
 import {
+  contextMaterializationCommand,
   ContextMaterializationCommandSchema,
   type WorkspaceMaterializationBlob,
   type WorkspaceMaterializationRepository,
@@ -82,7 +83,9 @@ import type {
   WorkspaceSourceSemanticEffect,
   WorkspaceSourceHostReadRequest,
   WorkspaceSourceHostContentRequest,
+  WorkspaceSourceProviderRef,
 } from "../workspaceSourceProvider.js";
+import type { DODispatch } from "../doDispatch.js";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import {
@@ -92,7 +95,10 @@ import {
   type GadJsonRecord,
 } from "@vibestudio/service-schemas/workspaceSource";
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
-import { putPreparedWorkspaceContent } from "./workspaceHistoryHost.js";
+import {
+  putPreparedWorkspaceContent,
+  readWorkspaceParticipantProjection,
+} from "./workspaceHistoryHost.js";
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
 import { retainedBlobDigests, withBlobContentLock } from "../storage/blobRetentions.js";
 
@@ -1848,6 +1854,69 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   async materializeContextRepos(contextId: string, _scopes: string[] | "all"): Promise<void> {
     await this.ensureContext(contextId);
+  }
+
+  /** Recover an editable directory from the verified participant's current history. */
+  async materializeParticipantContext(input: {
+    dispatch: Pick<DODispatch, "dispatch">;
+    owner: WorkspaceSourceProviderRef;
+    contextId: string;
+  }): Promise<{ head: string; state: VcsStateNodeRef; folder: string }> {
+    const { contextId, owner } = input;
+    const ownerKey = sha256HexSyncText(canonicalJson(owner));
+    return this.locked(canonicalJson(["participant-projection", ownerKey, contextId]), async () => {
+      const { head, state, repositories } = await readWorkspaceParticipantProjection(input);
+      const disk = new DiskProjector({
+        contentProjection: this.contentProjection,
+        workspaceRoot: this.deps.workspaceRoot,
+        contextProjectionsRoot: path.join(this.deps.contextProjectionsRoot, ".participants", ownerKey),
+      });
+      const materializer = new ContextMaterializer({
+        blobsDir: this.deps.blobsDir,
+        workspaceId: this.deps.workspaceId,
+        disk,
+      });
+      const folder = disk.contextDir(contextId);
+      const prior = await materializer.materializationState(contextId);
+      const intact = prior !== null && await materializer.projectionMatches(prior);
+      if (intact && canonicalJson(prior.targetState) === canonicalJson(state)) {
+        await materializer.ensureContextBinding(contextId);
+        return { head, state, folder };
+      }
+      let selected: WorkspaceMaterializationRepository[] = repositories;
+      const mode = !prior ? "initialize" : intact ? "patch" : "replace";
+      if (prior && mode === "patch") {
+        const roots = new Map((await materializer.planContentRoots(repositories)).map(
+          (repo) => [repo.repositoryId, repo]
+        ));
+        const previous = new Map(prior.repositories.map((repo) => [repo.repositoryId, repo]));
+        selected = repositories.filter((repo) => {
+          if (repo.presence !== "present") return false;
+          const before = previous.get(repo.repositoryId);
+          return !before || before.repoPath !== repo.repoPath ||
+            before.contentRoot !== roots.get(repo.repositoryId)?.contentRoot;
+        });
+        for (const repo of prior.repositories) {
+          if (!roots.has(repo.repositoryId)) {
+            selected.push({
+              repositoryId: repo.repositoryId,
+              repoPath: repo.repoPath,
+              presence: "deleted",
+            });
+          }
+        }
+      }
+      await materializer.materialize(contextMaterializationCommand({
+        contextId,
+        commandId: `participant-projection:${ownerKey}:${head}`,
+        mode,
+        previousState: prior?.targetState ?? null,
+        targetState: state,
+        repositories: selected,
+        blobs: [],
+      }));
+      return { head, state, folder };
+    });
   }
 
   async isContextRepoMaterialized(contextId: string, repoPath: string): Promise<boolean> {
