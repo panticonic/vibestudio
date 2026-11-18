@@ -43,6 +43,11 @@ test("authored template worlds flow into the collector without losing original s
           },
         ],
       ],
+      [
+        "scratch-handoff-worlds",
+        "managedScratchWorlds",
+        [{ id: "review", group: "review", status: "staged" }],
+      ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
         "panel-repair-world",
@@ -76,6 +81,9 @@ test("authored template worlds flow into the collector without losing original s
     "vibestudio:content-project:inventory-v1",
   ]);
   assert.equal(cases.get("content-project-inventory").requiresReview, true);
+  const scratch = cases.get("scratch-handoff-live-review");
+  assert.equal(scratch.root, "assembleHandoff");
+  assert.equal(scratch.expectedStatus, "staged");
   const discard = cases.get("panel-draft-discard-clears");
   assert.equal(discard.root, "repairPanel");
   const rollout = cases.get("workspace-integration-rollout");
@@ -277,6 +285,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["unit-repair-worlds", "export const workerRepairWorlds = [];"],
       ["local-messaging/worlds", "export const localMessagingWorlds = [];"],
       ["panel-repair-world", "export const panelRepairWorlds = [];"],
+      ["scratch-handoff-worlds", "export const managedScratchWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,

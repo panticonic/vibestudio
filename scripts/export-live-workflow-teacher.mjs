@@ -73,6 +73,17 @@ const messagingWorkflow = {
   root: "routeMessage",
   evidence: localMessagingEvidence,
 };
+const scratchHandoffWorkflow = {
+  family: "workspace-scratch-handoff",
+  namespace: "vibestudio:scratch-handoff",
+  group: "workspace-filesystem-evidence",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/scratch-handoff-managed.ts",
+  },
+  root: "assembleHandoff",
+  evidence: scratchHandoffEvidence,
+};
 const composedReleaseWorkflow = {
   ...ownedOperationsWorkflow,
   family: "workspace-release-dossier",
@@ -107,6 +118,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { localMessagingWorlds },
     { panelRepairWorlds },
     { workspaceIntegrationWorlds },
+    { managedScratchWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -115,12 +127,24 @@ export async function loadLiveTeacherCases(checkouts) {
       "local-messaging/worlds.ts",
       "panel-repair-world.ts",
       "vcs-integration-worlds.ts",
+      "scratch-handoff-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, group, status } of managedScratchWorlds) {
+    cases.set(`scratch-handoff-live-${id}`, {
+      ...scratchHandoffWorkflow,
+      caseId: id,
+      expectedStatus: status,
+      sourceGroups: [
+        `${scratchHandoffWorkflow.namespace}:${scratchHandoffWorkflow.group}`,
+        `${scratchHandoffWorkflow.namespace}:${group}`,
+      ],
+    });
+  }
   for (const { id, sourceGroup, files } of workspaceIntegrationWorlds) {
     cases.set(`workspace-integration-${id}`, {
       ...integrationWorkflow,
@@ -365,6 +389,40 @@ function ownedOperationsEvidence(execution, exercise, scenario) {
     world: { context_id: fixture.contextId, case_id: fixture.caseId },
     checks: verification.checks,
     evidence: { workspace: { fixture, verification, audit, cleanup } },
+  };
+}
+
+function scratchHandoffEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.scratchHandoffWorld;
+  const verification = execution.diagnostics.scratchHandoffVerification;
+  const artifact = verification?.artifact;
+  const report = exercise.report;
+  const staged = workflow.expectedStatus === "staged";
+  requireEvidence(
+    fixture?.caseId === workflow.caseId &&
+      fixture.contextId === execution.provenance?.contextId &&
+      report?.status === workflow.expectedStatus &&
+      verification?.passed === true &&
+      verification.expectedStatus === workflow.expectedStatus &&
+      ["protectedUnchanged", "originalsUnchanged", "disposition", "exactReadback"].every(
+        (name) => verification.checks?.[name] === true
+      ) &&
+      typeof verification.seedRevision === "string" &&
+      verification.sourceIds?.length > 0 &&
+      (staged
+        ? artifact &&
+          report.artifact?.path === artifact.path &&
+          report.artifact.bytes === artifact.bytes &&
+          Number.isSafeInteger(artifact.bytes) &&
+          artifact.bytes > 0 &&
+          /^[0-9a-f]{64}$/u.test(artifact.sha256)
+        : report.artifact === null && artifact === null),
+    "The scratch handoff must be independently read back, or held without a scratch artifact, in the assigned context"
+  );
+  return {
+    world: { context_id: fixture.contextId, seed_revision: verification.seedRevision },
+    checks: verification.checks,
+    evidence: { workspace: { fixture, verification } },
   };
 }
 

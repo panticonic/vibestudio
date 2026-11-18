@@ -23,7 +23,10 @@ const domains = [
     source: "skills/scratch-handoff-fixtures/worlds.ts",
     exported: "scratchHandoffWorlds",
     operation: "assembleHandoff",
-    identify: (world) => [world.id, [world.sourceGroup]],
+    identify: (world) => [
+      world.id,
+      [world.sourceGroup, "vibestudio:scratch-handoff:workspace-filesystem-evidence"],
+    ],
   },
   {
     domain: "automationLifecycle",
