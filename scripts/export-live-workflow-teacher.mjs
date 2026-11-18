@@ -106,6 +106,17 @@ const automationLifecycleWorkflow = {
   root: "reconcileAutomation",
   evidence: automationLifecycleEvidence,
 };
+const publicationPreflightWorkflow = {
+  family: "workspace-publication-preflight",
+  namespace: "vibestudio:publication-preflight",
+  group: "portable-public-package",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/publication-preflight-managed.ts",
+  },
+  root: "preflightPublication",
+  evidence: publicationPreflightEvidence,
+};
 const composedReleaseWorkflow = {
   ...ownedOperationsWorkflow,
   family: "workspace-release-dossier",
@@ -143,6 +154,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedScratchWorlds },
     { integrationHandoffWorlds },
     { managedAutomationWorlds },
+    { managedPublicationWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -154,12 +166,20 @@ export async function loadLiveTeacherCases(checkouts) {
       "scratch-handoff-worlds.ts",
       "integration-handoff-worlds.ts",
       "automation-lifecycle-worlds.ts",
+      "publication-preflight-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, expectedBlockers } of managedPublicationWorlds) {
+    cases.set(`publication-preflight-live-${id}`, {
+      ...publicationPreflightWorkflow,
+      caseId: id,
+      expectedBlockers,
+    });
+  }
   for (const { id, status } of managedAutomationWorlds) {
     cases.set(`automation-lifecycle-live-${id}`, {
       ...automationLifecycleWorkflow,
@@ -435,6 +455,40 @@ function ownedOperationsEvidence(execution, exercise, scenario) {
     world: { context_id: fixture.contextId, case_id: fixture.caseId },
     checks: verification.checks,
     evidence: { workspace: { fixture, verification, audit, cleanup } },
+  };
+}
+
+function publicationPreflightEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedPublication;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.caseId === workflow.caseId &&
+      verification.passed === true &&
+      [
+        "protectedHeadUnchanged",
+        "exactPanelCapture",
+        "localArtifactRepeatable",
+        "singleReadback",
+        "verifiedDisposition",
+      ].every((name) => verification.checks?.[name] === true) &&
+      typeof verification.seedRevision === "string" &&
+      typeof verification.panelAttempt === "string" &&
+      /^sha256:[a-f0-9]{64}$/u.test(verification.artifactDigest) &&
+      verification.publicPaths?.includes("index.html") &&
+      verification.publicPaths?.includes("vibestudio-build.json") &&
+      report?.status === (workflow.expectedBlockers.length ? "blocked" : "ready-for-review") &&
+      Array.isArray(report.blockers) &&
+      JSON.stringify([...report.blockers].sort()) ===
+        JSON.stringify([...workflow.expectedBlockers].sort()),
+    "The managed publication decision must match the exact local artifact, live panel, and approved review"
+  );
+  return {
+    world: { context_id: fixture.contextId, seed_revision: verification.seedRevision },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
   };
 }
 

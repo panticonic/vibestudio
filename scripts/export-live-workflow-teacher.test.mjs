@@ -54,6 +54,11 @@ test("authored template worlds flow into the collector without losing original s
         [{ id: "rollout", integration: "rollout", questions: [{ file: "limits.json" }] }],
       ],
       ["automation-lifecycle-worlds", "managedAutomationWorlds", [{ id: "stale", status: "held" }]],
+      [
+        "publication-preflight-worlds",
+        "managedPublicationWorlds",
+        [{ id: "caption", expectedBlockers: ["missing-presentation"] }],
+      ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
         "panel-repair-world",
@@ -90,6 +95,9 @@ test("authored template worlds flow into the collector without losing original s
   const automation = cases.get("automation-lifecycle-live-stale");
   assert.equal(automation.root, "reconcileAutomation");
   assert.equal(automation.expectedStatus, "held");
+  const preflight = cases.get("publication-preflight-live-caption");
+  assert.equal(preflight.root, "preflightPublication");
+  assert.deepEqual(preflight.expectedBlockers, ["missing-presentation"]);
   const scratch = cases.get("scratch-handoff-live-review");
   assert.equal(scratch.root, "assembleHandoff");
   assert.equal(scratch.expectedStatus, "staged");
@@ -305,6 +313,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["scratch-handoff-worlds", "export const managedScratchWorlds = [];"],
       ["integration-handoff-worlds", "export const integrationHandoffWorlds = [];"],
       ["automation-lifecycle-worlds", "export const managedAutomationWorlds = [];"],
+      ["publication-preflight-worlds", "export const managedPublicationWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,

@@ -96,7 +96,13 @@ const domains = [
     source: "skills/publish-preflight-fixtures/worlds.ts",
     exported: "publicationWorlds",
     operation: "preflightPublication",
-    identify: (world) => [world.id, [`vibestudio:publication:${world.group}`]],
+    identify: (world) => [
+      world.id,
+      [
+        `vibestudio:publication:${world.group}`,
+        "vibestudio:publication-preflight:portable-public-package",
+      ],
+    ],
     input: (world, source) => source.publicationRequest(world),
   },
   {
