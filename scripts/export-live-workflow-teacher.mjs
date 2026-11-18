@@ -153,6 +153,15 @@ const verifiedMemoryWorkflow = {
   root: "recallDecision",
   evidence: verifiedMemoryEvidence,
 };
+const grimoireWorkflow = {
+  family: "examples-live-grimoire",
+  workspace: "examples",
+  namespace: "vibestudio:examples",
+  group: "grimoire-resident-care",
+  validator: { template: "examples", path: "skills/examples-review-fixtures/live-garden.ts" },
+  root: "reviewExample",
+  evidence: grimoireEvidence,
+};
 const terminalChecklistWorkflow = {
   family: "workspace-terminal-checklist",
   namespace: "vibestudio:terminal-apps",
@@ -214,6 +223,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedMemoryWorlds },
     { managedSetupWorlds },
     { managedChecklistWorlds },
+    { managedGrimoireWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -232,12 +242,20 @@ export async function loadLiveTeacherCases(checkouts) {
       "verified-memory-worlds.ts",
       "onboarding-worlds.ts",
       "checklist-worlds.ts",
+      "grimoire-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, expected } of managedGrimoireWorlds) {
+    cases.set(`grimoire-live-${id}`, {
+      ...grimoireWorkflow,
+      caseId: id,
+      expectedDecisions: expected,
+    });
+  }
   for (const { id, request, expected } of managedChecklistWorlds) {
     cases.set(`terminal-checklist-live-${id}`, {
       ...terminalChecklistWorkflow,
@@ -705,6 +723,45 @@ function verifiedMemoryEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, selected_event: verification.eventId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function grimoireEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedGrimoire;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  const same = (actual, expected) =>
+    expected &&
+    actual?.decision === expected.decision &&
+    actual.finding === expected.finding &&
+    JSON.stringify(actual.evidenceIds) === JSON.stringify(expected.evidenceIds);
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.passed === true &&
+      typeof verification.garden === "string" &&
+      verification.observed?.before?.id === `${verification.garden}:before` &&
+      verification.observed?.current?.id === `${verification.garden}:current` &&
+      same(report, verification.expected) &&
+      Array.isArray(report.components) &&
+      JSON.stringify(report.components.map(({ decision }) => decision)) ===
+        JSON.stringify(workflow.expectedDecisions) &&
+      report.components.every((item, index) =>
+        same(item, verification.expected.components?.[index])
+      ) &&
+      [
+        "persistedVisits",
+        "assignedClaims",
+        "readOwnedGarden",
+        "matchedJudgment",
+        "matchedClaims",
+      ].every((name) => verification.checks?.[name] === true),
+    "Grimoire claims must match the assigned garden and the persisted resident visits"
+  );
+  return {
+    world: { context_id: fixture.contextId, garden: verification.garden, case_id: workflow.caseId },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };

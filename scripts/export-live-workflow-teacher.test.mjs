@@ -74,6 +74,11 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
+        "grimoire-worlds",
+        "managedGrimoireWorlds",
+        [{ id: "quiet-garden", expected: ["supported", "supported"] }],
+      ],
+      [
         "checklist-worlds",
         "managedChecklistWorlds",
         [{ id: "restart", request: { continuation: "restart" }, expected: [[], ["1"], ["1"]] }],
@@ -159,6 +164,7 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(memory.root, "recallDecision");
   assert.equal(memory.workspace, "personal");
   assert.equal(memory.expectedStatus, "missing-source");
+  assert.equal(cases.get("grimoire-live-quiet-garden").workspace, "examples");
   const checklist = cases.get("terminal-checklist-live-restart");
   assert.equal(checklist.root, "verifyChecklist");
   assert.equal(checklist.expectedContinuation, "restart");
@@ -605,6 +611,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["verified-memory-worlds", "export const managedMemoryWorlds = [];"],
       ["onboarding-worlds", "export const managedSetupWorlds = [];"],
       ["checklist-worlds", "export const managedChecklistWorlds = [];"],
+      ["grimoire-worlds", "export const managedGrimoireWorlds = [];"],
       [
         "vcs-integration-worlds",
         `export const workspaceIntegrationWorlds = [{id:"notification-rollout", sourceGroup:"rollout", files:[{path:"notifications/channels.json"},{path:"notifications/retries.json"}]}];`,
