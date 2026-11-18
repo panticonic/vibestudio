@@ -21,10 +21,14 @@ Use a new output directory and a model enabled on the collection machine.
 pnpm natlang:teacher --case panel-draft-unmount --out /path/to/new-run
 ```
 
-The second case is `panel-draft-stale-snapshot`. The two cases share a source group because they use the same
-panel and user goal. The collector starts one isolated managed Vibestudio instance, checks the vendored
-Natlang build, pins the host and templates, and retains the full system-test trajectory. On success,
-`verified/manifest.json` binds the original call tree and independent browser evidence. The verified
+The panel cases are `panel-draft-unmount` and `panel-draft-stale-snapshot`. The VCS cases are
+`workspace-integration-theme-locale` and `workspace-integration-theme-locale-alias`.
+The two cases in each family share a source group. The collector starts one isolated managed Vibestudio
+instance, checks the vendored Natlang build, pins the host and templates, and retains the full
+system-test trajectory. A new workspace can ask for access to the selected model's credential.
+The approval identifies the model gateway and provider for that workspace.
+
+On success, `verified/manifest.json` binds the original call tree and the independent effect checks. The verified
 manifest is the input to Natlang's [shared SFT pipeline](https://github.com/werg/natlang/blob/main/plans/neuralese/LIVE_WORKFLOW_SFT_20261118.md).
 Failed runs retain diagnostic artifacts.
 

@@ -1,3 +1,4 @@
+import { vcsMergeSourceSchema } from "./vcs.js";
 import { createReceiverRpcMethods } from "@vibestudio/shared/rpcMethods";
 import { evalRunStatusSchema } from "./eval.js";
 import { z } from "zod";
@@ -136,7 +137,15 @@ export const panelTeacherInputSchema = z.object({
 export type PanelTeacherInput = z.infer<typeof panelTeacherInputSchema>;
 export interface PanelTeacherResult { report: unknown; rootCallIds: string[]; calls: unknown[]; evalRunId: string; programPath: string; }
 
+export const workspaceIntegrationTeacherInputSchema = z.object({
+  contextId: z.string().min(1), source: vcsMergeSourceSchema,
+  files: z.array(z.object({repositoryId:z.string().min(1),path:z.string().min(1),workspacePath:z.string().min(1)}).strict()).min(1),
+  executorModel:z.string().regex(/^[^:]+:.+$/u),goal:z.string().min(1),
+}).strict();
+export type WorkspaceIntegrationTeacherInput = z.infer<typeof workspaceIntegrationTeacherInputSchema>;
+
 export interface SystemTestRunnerRpc {
+  runWorkspaceIntegrationTeacher(input: WorkspaceIntegrationTeacherInput): Promise<PanelTeacherResult>;
   runPanelTeacher(input: PanelTeacherInput): Promise<PanelTeacherResult>;
   doctor(model?: string): Promise<SystemTestDoctorResult>;
   listSystemTests(category?: string): Promise<SystemTestDescriptor[]>;
@@ -160,6 +169,7 @@ export type SystemTestRunnerClient = SystemTestRunnerRpc;
 
 export const systemTestRunnerRpcMethods = createReceiverRpcMethods<SystemTestRunnerRpc>([
   "runPanelTeacher",
+  "runWorkspaceIntegrationTeacher",
   "doctor",
   "listSystemTests",
   "startSystemTestRun",

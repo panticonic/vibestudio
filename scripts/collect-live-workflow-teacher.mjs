@@ -9,7 +9,7 @@ import {
   requireDevelopmentTemplateCheckouts,
   developmentTemplateHead,
 } from "../src/dev/developmentTemplateConfig.cjs";
-import { exportLivePanelTeacher } from "./export-live-panel-teacher.mjs";
+import { exportLiveTeacherWorkflow, liveTeacherCases } from "./export-live-workflow-teacher.mjs";
 
 const args = process.argv.slice(2);
 const { values } = parseArgs({
@@ -21,9 +21,10 @@ const { values } = parseArgs({
   },
 });
 const scenario = values.case;
-if (!["panel-draft-unmount", "panel-draft-stale-snapshot"].includes(scenario) || !values.out) {
+const workflow = liveTeacherCases.get(scenario);
+if (!workflow || !values.out) {
   throw new Error(
-    "Usage: pnpm natlang:teacher --case PANEL_CASE --out NEW_DIR [--model PROVIDER:MODEL]"
+    "Usage: pnpm natlang:teacher --case WORKFLOW_CASE --out NEW_DIR [--model PROVIDER:MODEL]"
   );
 }
 
@@ -31,7 +32,8 @@ const host = fileURLToPath(new URL("../", import.meta.url));
 const { checkouts } = requireDevelopmentTemplateCheckouts(host);
 const validator = path.join(
   checkouts["system-testing"],
-  "skills/system-testing/panel-repair-oracle.ts"
+  "skills/system-testing",
+  workflow.validator
 );
 const runtimePin = path.join(checkouts.base, "packages/natlang/vendor/natlang-pin.json");
 const readJson = (file) => JSON.parse(readFileSync(file, "utf8"));
@@ -99,7 +101,7 @@ try {
     throw new Error("Source pins changed during the live run");
   }
   const destination = path.join(out, "verified");
-  await exportLivePanelTeacher({
+  await exportLiveTeacherWorkflow({
     trajectory: path.join(out, runId, `trajectory-${scenario}-full.json.gz`),
     pins,
     validator,

@@ -138,7 +138,10 @@ function makeSystemTestRunnerCaller(scope: SessionScope, targetId: string): Syst
 }
 
 /** The CLI controls test lifecycle; fixture-owned teacher execution stays inside the workspace harness. */
-export type SystemTestRunnerCaller = Omit<SystemTestRunnerClient, "runPanelTeacher">;
+export type SystemTestRunnerCaller = Omit<
+  SystemTestRunnerClient,
+  "runPanelTeacher" | "runWorkspaceIntegrationTeacher"
+>;
 
 export function systemTestDoctorRecovery(error: unknown): {
   ok: false;

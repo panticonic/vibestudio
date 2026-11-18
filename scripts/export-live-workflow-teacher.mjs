@@ -6,7 +6,30 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { gunzipSync } from "node:zlib";
 
-const supportedCases = new Set(["panel-draft-unmount", "panel-draft-stale-snapshot"]);
+const panelWorkflow = {
+  family: "workspace-panel-repair",
+  namespace: "vibestudio:panel-repair",
+  group: "draft-navigation",
+  validator: "panel-repair-oracle.ts",
+  program: "skills/workspace-dev/panel-repair/repairPanel.nl",
+  root: "repairPanel",
+  evidence: panelEvidence,
+};
+const integrationWorkflow = {
+  family: "workspace-vcs-integration",
+  namespace: "vibestudio:workspace-integration",
+  group: "settings-conflict",
+  validator: "vcs-integration-oracle.ts",
+  program: "skills/vibestudio-vcs/integration/integrateWorkspace.nl",
+  root: "integrateWorkspace",
+  evidence: integrationEvidence,
+};
+export const liveTeacherCases = new Map([
+  ["panel-draft-unmount", panelWorkflow],
+  ["panel-draft-stale-snapshot", panelWorkflow],
+  ["workspace-integration-theme-locale", integrationWorkflow],
+  ["workspace-integration-theme-locale-alias", integrationWorkflow],
+]);
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 
 function requireEvidence(condition, message) {
@@ -18,18 +41,12 @@ async function readJson(file) {
   return JSON.parse(file.endsWith(".gz") ? gunzipSync(bytes) : bytes);
 }
 
-export async function exportLivePanelTeacher({ trajectory, pins, validator, out, split }) {
-  const entry = await readJson(trajectory);
-  const source = await readJson(pins);
-  const { test, result, execution } = entry;
-  const diagnostics = execution?.diagnostics;
-  const exercise = diagnostics?.natlangTeacher;
-  const baseline = diagnostics?.panelDraftBaseline;
-  const browser = diagnostics?.panelDraftVerification;
-  const workspace = diagnostics?.workspaceRepoFixture;
-  const revisions = diagnostics?.panelRepairWorkspace;
-  requireEvidence(supportedCases.has(test?.name), "Unsupported panel repair scenario");
-  requireEvidence(result?.passed === true && !execution.error, "The actual system test must pass");
+function panelEvidence(execution, exercise) {
+  const diagnostics = execution.diagnostics;
+  const baseline = diagnostics.panelDraftBaseline;
+  const browser = diagnostics.panelDraftVerification;
+  const workspace = diagnostics.workspaceRepoFixture;
+  const revisions = diagnostics.panelRepairWorkspace;
   requireEvidence(
     baseline?.checks?.preservesUnsavedDraft === false &&
       browser?.passed === true &&
@@ -45,30 +62,85 @@ export async function exportLivePanelTeacher({ trajectory, pins, validator, out,
     "The verified run must bind the seeded workspace context"
   );
   requireEvidence(
-    exercise?.report?.status === "verified" &&
-      typeof exercise.report.revision === "string" &&
-      exercise.programPath === "skills/workspace-dev/panel-repair/repairPanel.nl" &&
+    exercise.report?.status === "verified" &&
       revisions?.before &&
       revisions?.after &&
       exercise.report.revision === JSON.stringify(revisions.after) &&
-      JSON.stringify(revisions.before) !== JSON.stringify(revisions.after) &&
+      JSON.stringify(revisions.before) !== JSON.stringify(revisions.after),
+    "Missing actual authored Natlang repair report for the changed workspace revision"
+  );
+  return {
+    world: { context_id: workspace.contextId, seed_revision: workspace.taskBaseEventId },
+    checks: browser.checks,
+    evidence: {
+      workspace: { fixture: workspace, revisions, verifiedRevision: exercise.report.revision },
+      cdp: { baseline, candidate: browser },
+    },
+  };
+}
+
+function integrationEvidence(execution, exercise) {
+  const observed = execution.diagnostics.workspaceIntegrationWorld;
+  const verification = execution.diagnostics.workspaceIntegrationVerification;
+  requireEvidence(
+    observed?.kind === "vcs-integration" &&
+      observed.contextId === execution.provenance?.contextId &&
+      typeof observed.commonSeedEvent === "string" &&
+      observed.source?.kind === "event" &&
+      typeof observed.source.eventId === "string" &&
+      observed.before &&
+      observed.after &&
+      JSON.stringify(observed.before) !== JSON.stringify(observed.after) &&
+      exercise.report?.status === "integrated" &&
+      exercise.report.head === JSON.stringify(observed.after) &&
+      verification?.passed === true &&
+      verification.reasons?.length === 0 &&
+      JSON.stringify(verification.head) === JSON.stringify(observed.after) &&
+      verification.evidence?.length > 0,
+    "Missing verified integration evidence bound to the seeded conflict and exact resulting workspace revision"
+  );
+  return {
+    world: {
+      context_id: observed.contextId,
+      seed_revision: observed.commonSeedEvent,
+      source_revision: observed.source.eventId,
+    },
+    checks: { independentlyVerifiedWorkspaceIntegration: true },
+    evidence: { workspace: { fixture: observed, verification } },
+  };
+}
+
+export async function exportLiveTeacherWorkflow({ trajectory, pins, validator, out, split }) {
+  const entry = await readJson(trajectory);
+  const source = await readJson(pins);
+  const { test, result, execution } = entry;
+  const workflow = liveTeacherCases.get(test?.name);
+  requireEvidence(workflow, "Unsupported live teacher scenario");
+  requireEvidence(result?.passed === true && !execution?.error, "The actual system test must pass");
+  const exercise = execution?.diagnostics?.natlangTeacher;
+  requireEvidence(
+    exercise?.trainingEligible === true &&
+      !exercise.executionError &&
+      !exercise.captureErrors?.length &&
+      exercise.programPath === workflow.program &&
       Array.isArray(exercise.calls) &&
       Array.isArray(exercise.rootCallIds) &&
       exercise.rootCallIds.length === 1 &&
       typeof exercise.evalRunId === "string",
-    "Missing actual authored Natlang repair report, run identity, or root call"
+    "Missing eligible authored Natlang execution, run identity, or root call"
   );
+  const observed = workflow.evidence(execution, exercise);
   const rootId = exercise.rootCallIds[0];
   const captured = exercise.calls;
   const root = captured.find((call) => call.callId === rootId);
   const generationTurns = (call) =>
     (call?.record?.model_turns ?? []).filter((turn) => turn.kind === "generation" && turn.reply);
   requireEvidence(
-    root?.record.definition?.name === "repairPanel" &&
+    root?.record.definition?.name === workflow.root &&
       root.record.parent_call_id === null &&
       generationTurns(root).length > 0 &&
       captured.some((call) => call.callId !== rootId && generationTurns(call).length > 0),
-    "Expected the authored repairPanel root and at least one actual child call"
+    `Expected the authored ${workflow.root} root and at least one actual child call`
   );
   const code = source.repositories?.natlang;
   const sourceRevisions = Object.values(source.repositories ?? {}).map(
@@ -102,13 +174,8 @@ export async function exportLivePanelTeacher({ trajectory, pins, validator, out,
     "Choose the predeclared split for this source world"
   );
 
-  const taskId = `vibestudio:panel-repair:${test.name}`;
-  const world = {
-    instance: source.instance,
-    run_id: source.run_id,
-    context_id: workspace.contextId,
-    seed_revision: workspace.taskBaseEventId,
-  };
+  const taskId = `${workflow.namespace}:${test.name}`;
+  const world = { instance: source.instance, run_id: source.run_id, ...observed.world };
   const validatorBytes = await readFile(validator);
   requireEvidence(
     source.validator_sha256 === hash(validatorBytes),
@@ -120,15 +187,11 @@ export async function exportLivePanelTeacher({ trajectory, pins, validator, out,
     await writeFile(path.join(out, name), bytes, { mode: 0o600, flag: "wx" });
     return { path: name, sha256: hash(bytes) };
   }
-  const validatorFile = await bind("panel-repair-oracle.ts", validatorBytes);
-  const workspaceFile = await bind("workspace.json", {
-    fixture: workspace,
-    revisions,
-    verifiedRevision: exercise.report.revision,
-    browserBinding: browser.browserBinding,
-    pins: source,
-  });
-  const browserFile = await bind("cdp.json", { baseline, candidate: browser });
+  const validatorFile = await bind(workflow.validator, validatorBytes);
+  const evidence = [];
+  for (const [kind, data] of Object.entries(observed.evidence)) {
+    evidence.push({ kind, ...(await bind(`${kind}.json`, { ...data, pins: source })) });
+  }
   const calls = [];
   for (const [index, call] of captured.entries())
     calls.push(await bind(`call-${index}.json`, call));
@@ -138,7 +201,7 @@ export async function exportLivePanelTeacher({ trajectory, pins, validator, out,
     run_id: source.run_id,
     world,
     status: "passed",
-    checks: browser.checks,
+    checks: observed.checks,
     validator: validatorFile,
     root_call_ids: [rootId],
     calls: captured.map(({ callId, summary }) => ({
@@ -147,24 +210,21 @@ export async function exportLivePanelTeacher({ trajectory, pins, validator, out,
       owner_key: summary.owner_key,
       run_id: summary.run_id,
     })),
-    evidence: [
-      { kind: "workspace", ...workspaceFile },
-      { kind: "cdp", ...browserFile },
-    ],
+    evidence,
   });
   return bind("manifest.json", {
     schema: "natlang.live-teacher-task/1",
     id: taskId,
-    family: "workspace-panel-repair",
+    family: workflow.family,
     split,
-    source_namespace: "vibestudio:panel-repair",
+    source_namespace: workflow.namespace,
     source_ids: [taskId],
-    source_groups: ["vibestudio:panel-repair:draft-navigation"],
+    source_groups: [`${workflow.namespace}:${workflow.group}`],
     source_revisions: sourceRevisions,
     code,
     learner_kinds: ["natlang-executor"],
     world,
-    required_effect_kinds: ["workspace", "cdp"],
+    required_effect_kinds: evidence.map(({ kind }) => kind),
     calls,
     verification,
   });
@@ -183,6 +243,6 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
   for (const option of ["trajectory", "pins", "validator", "out", "split"]) {
     requireEvidence(values[option], `Missing --${option}`);
   }
-  const manifest = await exportLivePanelTeacher(values);
+  const manifest = await exportLiveTeacherWorkflow(values);
   console.log(path.join(values.out, manifest.path));
 }

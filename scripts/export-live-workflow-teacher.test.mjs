@@ -4,7 +4,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { exportLivePanelTeacher } from "./export-live-panel-teacher.mjs";
+import { exportLiveTeacherWorkflow } from "./export-live-workflow-teacher.mjs";
 
 async function fixture(t) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "live-panel-export-"));
@@ -55,6 +55,7 @@ async function fixture(t) {
     panelDraftBaseline: { checks: { preservesUnsavedDraft: false } },
     panelDraftVerification: { passed: true, checks: { preservesUnsavedDraft: true } },
     natlangTeacher: {
+      trainingEligible: true,
       report: { status: "verified", revision: JSON.stringify(after) },
       programPath: "skills/workspace-dev/panel-repair/repairPanel.nl",
       rootCallIds: ["root"],
@@ -69,12 +70,12 @@ async function fixture(t) {
   };
   const save = () => writeFile(options.trajectory, JSON.stringify(entry));
   await save();
-  return { options, diagnostics, save };
+  return { options, diagnostics, entry, save };
 }
 
 test("live panel export binds real test world, independent checks and exact EvalDO scope", async (t) => {
   const { options } = await fixture(t);
-  await exportLivePanelTeacher(options);
+  await exportLiveTeacherWorkflow(options);
   const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
   const receipt = JSON.parse(await readFile(path.join(options.out, "verification.json"), "utf8"));
   assert.deepEqual(receipt.world, manifest.world);
@@ -92,12 +93,44 @@ test("live panel export rejects a report about a different revision", async (t) 
   const { options, diagnostics, save } = await fixture(t);
   diagnostics.natlangTeacher.report.revision = "stale";
   await save();
-  await assert.rejects(() => exportLivePanelTeacher(options), /repair report/);
+  await assert.rejects(() => exportLiveTeacherWorkflow(options), /repair report/);
 });
 
 test("live panel export rejects a child from a different evaluation", async (t) => {
   const { options, diagnostics, save } = await fixture(t);
   diagnostics.natlangTeacher.calls[1].summary.run_id = "other";
   await save();
-  await assert.rejects(() => exportLivePanelTeacher(options), /different EvalDO/);
+  await assert.rejects(() => exportLiveTeacherWorkflow(options), /different EvalDO/);
+});
+
+test("workspace integration binds conflict source and verified state without browser evidence", async (t) => {
+  const { options, entry, diagnostics, save } = await fixture(t);
+  entry.test.name = "workspace-integration-theme-locale";
+  const before = { kind: "event", eventId: "before" };
+  const after = { kind: "event", eventId: "after" };
+  const source = { kind: "event", eventId: "incoming" };
+  diagnostics.natlangTeacher.programPath =
+    "skills/vibestudio-vcs/integration/integrateWorkspace.nl";
+  diagnostics.natlangTeacher.report = { status: "integrated", head: JSON.stringify(after) };
+  diagnostics.natlangTeacher.calls[0].record.definition.name = "integrateWorkspace";
+  diagnostics.workspaceIntegrationWorld = {
+    kind: "vcs-integration",
+    contextId: "ctx",
+    commonSeedEvent: "seed",
+    source,
+    before,
+    after,
+  };
+  diagnostics.workspaceIntegrationVerification = {
+    passed: true,
+    reasons: [],
+    head: after,
+    evidence: [{ workingHead: after }],
+  };
+  await save();
+  await exportLiveTeacherWorkflow(options);
+  const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
+  assert.equal(manifest.world.source_revision, "incoming");
+  assert.deepEqual(manifest.required_effect_kinds, ["workspace"]);
+  assert.deepEqual(manifest.source_groups, ["vibestudio:workspace-integration:settings-conflict"]);
 });
