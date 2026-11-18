@@ -169,6 +169,17 @@ const localComparisonWorkflow = {
   root: "prepareLocalModel",
   evidence: localComparisonEvidence,
 };
+const provenanceHistoryWorkflow = {
+  family: "workspace-live-provenance-history",
+  namespace: "vibestudio:provenance",
+  group: "owned-history-cause-cohort-counteractions",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/provenance-history-managed.ts",
+  },
+  root: "reviewProvenance",
+  evidence: provenanceHistoryEvidence,
+};
 const runtimeProgramWorkflow = {
   family: "runtime-live-program-receipts",
   namespace: "vibestudio:runtime",
@@ -294,6 +305,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedLogAuditWorlds },
     { incidentContinuationWorlds },
     { managedRuntimeProgramWorlds },
+    { managedProvenanceHistoryWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -320,12 +332,20 @@ export async function loadLiveTeacherCases(checkouts) {
       "log-audit-worlds.ts",
       "incident-continuation-worlds.ts",
       "runtime-program-worlds.ts",
+      "provenance-history-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, checks } of managedProvenanceHistoryWorlds) {
+    cases.set(`provenance-history-live-${id}`, {
+      ...provenanceHistoryWorkflow,
+      caseId: id,
+      checks,
+    });
+  }
   for (const { id, goal, expected, files, execution } of managedRuntimeProgramWorlds) {
     const digest = (tree) =>
       hash(
@@ -876,6 +896,94 @@ function verifiedMemoryEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, selected_event: verification.eventId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function provenanceHistoryEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedProvenanceHistory;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  const readbacks = verification?.readbacks;
+  const sameCheck = (left, right) =>
+    left?.path === right.path && left.walk === right.walk && left.scope === right.scope;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.contextId === fixture.contextId &&
+      verification.caseId === workflow.caseId &&
+      verification.passed === true &&
+      verification.checks?.unchanged === true &&
+      verification.checks?.exactReads === true &&
+      verification.checks?.history === true &&
+      verification.checks?.report === true &&
+      typeof verification.repoPath === "string" &&
+      verification.repoPath.startsWith("projects/") &&
+      typeof verification.repositoryId === "string" &&
+      verification.repositoryId.length > 0 &&
+      verification.workingHead?.kind === "event" &&
+      report?.kind === "live-history" &&
+      Array.isArray(report.findings) &&
+      Array.isArray(readbacks) &&
+      report.findings.length === workflow.checks.length &&
+      readbacks.length === workflow.checks.length &&
+      workflow.checks.every((check, index) => {
+        const read = readbacks[index];
+        const entry = report.findings[index];
+        const receipt = read?.receipt;
+        if (!sameCheck(entry?.check, check) || !sameCheck(receipt?.check, check)) return false;
+        const walk = read.walk;
+        if (check.path === "src/retired-ingress.ts") {
+          return (
+            walk === null &&
+            read.fileId === null &&
+            receipt.exists === false &&
+            receipt.records.length === 0 &&
+            entry.status === "coordinate-absent" &&
+            entry.evidence?.length === 0
+          );
+        }
+        if (
+          !walk ||
+          receipt.exists !== true ||
+          walk.walk !== check.walk ||
+          walk.subject?.kind !== "file" ||
+          walk.subject.fileId !== read.fileId ||
+          walk.subject.repositoryId !== verification.repositoryId ||
+          JSON.stringify(walk.subject.state) !== JSON.stringify(verification.workingHead) ||
+          (check.walk === "cohort" && walk.scope !== check.scope) ||
+          walk.entries.length !== receipt.records.length
+        )
+          return false;
+        const limited = Boolean(
+          walk.nextCursor ||
+          walk.omitted.length ||
+          walk.entries.some((row) => row.boundary === "outside-visibility")
+        );
+        const status = limited ? "limited" : walk.entries.length ? "recorded" : "none-visible";
+        return (
+          receipt.limited === limited &&
+          entry.status === status &&
+          walk.entries.every((row, item) => {
+            const recorded = receipt.records[item];
+            return (
+              recorded?.ref === `history:${index + 1}:${item + 1}` &&
+              recorded.label === row.label &&
+              recorded.intent === (row.intent?.text ?? null)
+            );
+          }) &&
+          JSON.stringify(entry.evidence) === JSON.stringify(receipt.records.map((row) => row.ref))
+        );
+      }),
+    "Provenance history must cite the exact repository, walk scope, and recorded coordinates"
+  );
+  return {
+    world: {
+      context_id: fixture.contextId,
+      repository_id: verification.repositoryId,
+      head: verification.workingHead,
+    },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };

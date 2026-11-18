@@ -73,6 +73,11 @@ test("authored template worlds flow into the collector without losing original s
         ],
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
+      [
+        "provenance-history-worlds",
+        "managedProvenanceHistoryWorlds",
+        [{ id: "sample", checks: [] }],
+      ],
       ["runtime-program-worlds", "managedRuntimeProgramWorlds", [{ id: "sample", files: {} }]],
       ["incident-continuation-worlds", "incidentContinuationWorlds", []],
       ["log-audit-worlds", "managedLogAuditWorlds", [{ id: "sample", windows: [], lines: [] }]],
@@ -206,6 +211,7 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(cases.get("local-model-compare-live-sample").root, "prepareLocalModel");
   assert.equal(cases.get("host-log-audit-live-sample").root, "investigateSystem");
   assert.equal(cases.get("runtime-program-live-sample").root, "reviewRuntimeEvidence");
+  assert.equal(cases.get("provenance-history-live-sample").root, "reviewProvenance");
   assert.equal(cases.get("spectrolite-live-sample").workspace, "spectrolite");
   assert.equal(cases.get("grimoire-live-quiet-garden").workspace, "examples");
   const checklist = cases.get("terminal-checklist-live-restart");
@@ -483,6 +489,81 @@ test("authoring export rejects a review drawn from another baseline", async (t) 
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-baseline` }),
     /must match the assigned compiler snapshots/u
+  );
+});
+
+test("provenance history export rejects an aliased file or walk scope", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "provenance-history-live-cohort-breadth";
+  const world = cases.get(entry.test.name);
+  const workingHead = { kind: "event", eventId: "owned-head" };
+  const run = diagnostics.natlangTeacher;
+  run.report = {
+    kind: "live-history",
+    findings: world.checks.map((check, index) => ({
+      check,
+      status: "recorded",
+      evidence: [`history:${index + 1}:1`],
+    })),
+  };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  const skill = structuredClone(leaf);
+  skill.callId = skill.summary.call_id = "skill";
+  skill.record.definition.name = "reviewProvenance";
+  leaf.record.parent_call_id = "skill";
+  run.calls.push(skill);
+  const readbacks = world.checks.map((check, index) => ({
+    fileId: "file-current",
+    walk: {
+      walk: check.walk,
+      scope: check.scope,
+      subject: { kind: "file", fileId: "file-current", repositoryId: "repo", state: workingHead },
+      entries: [{ label: "Authored work", intent: { text: "Related policy change" } }],
+      omitted: [],
+      nextCursor: null,
+    },
+    receipt: {
+      check,
+      exists: true,
+      limited: false,
+      records: [
+        { ref: `history:${index + 1}:1`, label: "Authored work", intent: "Related policy change" },
+      ],
+    },
+  }));
+  diagnostics.managedProvenanceHistory = {
+    contextId: "ctx",
+    verification: {
+      contextId: "ctx",
+      caseId: world.caseId,
+      repoPath: "projects/owned",
+      repositoryId: "repo",
+      workingHead,
+      readbacks,
+      passed: true,
+      checks: { unchanged: true, exactReads: true, history: true, report: true },
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  readbacks[0].walk.subject.fileId = "another-file";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-different-file` }),
+    /Provenance history must cite the exact repository, walk scope, and recorded coordinates/u
+  );
+  readbacks[0].walk.subject.fileId = "file-current";
+  readbacks[0].walk.scope = "turn";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-different-scope` }),
+    /Provenance history must cite the exact repository, walk scope, and recorded coordinates/u
   );
 });
 
@@ -1175,6 +1256,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["spectrolite-worlds", "export const managedSpectroliteWorlds = [];"],
       ["news-worlds", "export const managedNewsWorlds = [];"],
       ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
+      ["provenance-history-worlds", "export const managedProvenanceHistoryWorlds = [];"],
       ["runtime-program-worlds", "export const managedRuntimeProgramWorlds = [];"],
       ["incident-continuation-worlds", "export const incidentContinuationWorlds = [];"],
       ["log-audit-worlds", "export const managedLogAuditWorlds = [];"],

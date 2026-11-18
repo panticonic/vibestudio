@@ -90,6 +90,9 @@ Runtime program reviews compile caller-owned scratch source through the installe
 When a task includes execution, a separate EvalDO run loads and calls the exact typed program.
 The review distinguishes checked output, unchecked output, failure and a receipt from an older
 source revision. The exporter checks source fingerprints and the original execution run ID.
+Provenance history cases read cause, cohort, and rejection walks from a disposable semantic
+repository. The fixture records an actual counteraction. Reports cite compact refs tied to
+the exact file, scope, and immutable workspace head.
 The release-readiness dossier joins two skill trees in one call. It requires observed recovery after a real worker restart
 and verified cleanup before the project skill can prepare and commit the evidence dossier.
 The authored inventory comes from the configured system-testing template, which supplies
