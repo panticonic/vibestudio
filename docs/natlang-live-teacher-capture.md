@@ -80,6 +80,9 @@ The smoke runs in a fresh workspace before external Google account setup.
 Local model comparison cases query the installed local-model extension twice. The workflow assesses the
 assigned candidates against tool and context requirements and offers a fresh or fork handoff only for a
 qualifying local model. The comparison has only inventory access.
+Host log audits emit controlled incident lines from an owned test worker and read them from the real
+server log service. The Natlang investigation checks recovery, unrelated events, old bookmarks, and
+exclusive cursors. Each audit sees only its assigned tagged records.
 The release-readiness dossier joins two skill trees in one call. It requires observed recovery after a real worker restart
 and verified cleanup before the project skill can prepare and commit the evidence dossier.
 The authored inventory comes from the configured system-testing template, which supplies

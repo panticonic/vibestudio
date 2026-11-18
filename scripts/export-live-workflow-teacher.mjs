@@ -153,6 +153,14 @@ const verifiedMemoryWorkflow = {
   root: "recallDecision",
   evidence: verifiedMemoryEvidence,
 };
+const hostLogAuditWorkflow = {
+  family: "system-live-host-log-audit",
+  namespace: "vibestudio:system",
+  group: "assigned-host-log-cursor-and-recovery",
+  validator: { template: "system", path: "skills/system-investigation-live/live.ts" },
+  root: "investigateSystem",
+  evidence: hostLogAuditEvidence,
+};
 const localComparisonWorkflow = {
   family: "local-model-live-comparison",
   namespace: "vibestudio:local-model",
@@ -263,6 +271,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedNewsWorlds },
     { managedGoogleSetupWorlds },
     { localModelComparisonWorlds },
+    { managedLogAuditWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -286,12 +295,21 @@ export async function loadLiveTeacherCases(checkouts) {
       "news-worlds.ts",
       "google-setup-worlds.ts",
       "local-model-comparison-worlds.ts",
+      "log-audit-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
     })
   );
   const cases = new Map(originalCases);
+  for (const { id, windows, lines } of managedLogAuditWorlds) {
+    cases.set(`host-log-audit-live-${id}`, {
+      ...hostLogAuditWorkflow,
+      caseId: id,
+      windows,
+      seedCount: lines.length,
+    });
+  }
   for (const { id, request } of localModelComparisonWorlds) {
     cases.set(`local-model-compare-live-${id}`, {
       ...localComparisonWorkflow,
@@ -799,6 +817,81 @@ function verifiedMemoryEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, selected_event: verification.eventId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function hostLogAuditEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedLogAudit;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  const seed = verification?.seed;
+  const observed = verification?.observed;
+  const windows = workflow.windows;
+  const sameFinding = (finding, code, ids) =>
+    finding?.code === code && JSON.stringify(finding.evidenceIds) === JSON.stringify(ids);
+  const status = ["blocked", "attention", "inconclusive", "ready"].find((candidate) =>
+    windows.some((window) => window.status === candidate)
+  );
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.contextId === fixture.contextId &&
+      verification.caseId === workflow.caseId &&
+      verification.passed === true &&
+      verification.checks?.exactWindows === true &&
+      verification.checks?.summary === true &&
+      verification.checks?.reports === true &&
+      seed?.marker?.startsWith("natlang-host-log-") &&
+      typeof seed.workspaceId === "string" &&
+      typeof seed.boot === "string" &&
+      seed.boot.length > 0 &&
+      Number.isSafeInteger(seed.start) &&
+      Array.isArray(seed.steps) &&
+      seed.steps.length === workflow.seedCount &&
+      seed.steps.every(
+        (seq, index) => Number.isSafeInteger(seq) && seq > (seed.steps[index - 1] ?? seed.start)
+      ) &&
+      report?.status === status &&
+      Array.isArray(report.findings) &&
+      Array.isArray(report.windows) &&
+      Array.isArray(observed) &&
+      report.findings.length === windows.length &&
+      report.windows.length === windows.length &&
+      observed.length === windows.length &&
+      windows.every((window, index) => {
+        const read = observed[index];
+        const result = report.windows[index];
+        const sinceSeq = window.cursor === null ? seed.start : seed.steps[window.cursor];
+        const expectedIds = window.oldBoot
+          ? [seed.boot]
+          : window.evidence.map((step) => `${seed.boot}:${seed.steps[step]}`);
+        const records =
+          window.tag === "WorkerdManager" ? seed.steps.filter((seq) => seq > sinceSeq) : [];
+        return (
+          read?.boot === seed.boot &&
+          read.input?.kind === "server-log-incident" &&
+          read.input?.sinceSeq === sinceSeq &&
+          read.input?.tag === window.tag &&
+          (window.oldBoot
+            ? read.input?.expectedBoot === "retired-workspace-log-boot"
+            : read.input?.expectedBoot === seed.boot) &&
+          JSON.stringify(read.records) === JSON.stringify(records) &&
+          result?.status === window.status &&
+          result.findings?.length === 1 &&
+          sameFinding(result.findings[0], window.code, expectedIds) &&
+          sameFinding(report.findings[index], window.code, expectedIds)
+        );
+      }),
+    "Host log findings must cite the assigned boot, cursor, and recorded sequences"
+  );
+  return {
+    world: {
+      context_id: fixture.contextId,
+      server_boot_id: seed.boot,
+      workspace_id: seed.workspaceId,
+    },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };

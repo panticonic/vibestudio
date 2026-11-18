@@ -73,6 +73,7 @@ test("authored template worlds flow into the collector without losing original s
         ],
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
+      ["log-audit-worlds", "managedLogAuditWorlds", [{ id: "sample", windows: [], lines: [] }]],
       [
         "local-model-comparison-worlds",
         "localModelComparisonWorlds",
@@ -201,6 +202,7 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(cases.get("news-live-sample").workspace, "news");
   assert.equal(cases.get("google-setup-live-sample").workspace, "google-workspace");
   assert.equal(cases.get("local-model-compare-live-sample").root, "prepareLocalModel");
+  assert.equal(cases.get("host-log-audit-live-sample").root, "investigateSystem");
   assert.equal(cases.get("spectrolite-live-sample").workspace, "spectrolite");
   assert.equal(cases.get("grimoire-live-quiet-garden").workspace, "examples");
   const checklist = cases.get("terminal-checklist-live-restart");
@@ -478,6 +480,80 @@ test("authoring export rejects a review drawn from another baseline", async (t) 
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-baseline` }),
     /must match the assigned compiler snapshots/u
+  );
+});
+
+test("host log export requires the actual boot and exclusive cursor", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "host-log-audit-live-indexing-recovery";
+  const world = cases.get(entry.test.name);
+  const run = diagnostics.natlangTeacher;
+  const seed = {
+    marker: "natlang-host-log-abc",
+    boot: "boot-a",
+    workspaceId: "workspace",
+    start: 100,
+    steps: [101, 110],
+  };
+  run.report = {
+    status: "attention",
+    findings: [
+      { code: "log-recovered", evidenceIds: ["boot-a:101", "boot-a:110"] },
+      { code: "log-no-observations", evidenceIds: [] },
+    ],
+    windows: [],
+  };
+  run.report.windows = run.report.findings.map((finding, index) => ({
+    status: world.windows[index].status,
+    findings: [finding],
+  }));
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  const skill = structuredClone(leaf);
+  skill.callId = skill.summary.call_id = "skill";
+  skill.record.definition.name = "investigateSystem";
+  leaf.record.parent_call_id = "skill";
+  run.calls.push(skill);
+  const observed = world.windows.map((window) => ({
+    boot: seed.boot,
+    input: {
+      kind: "server-log-incident",
+      expectedBoot: seed.boot,
+      sinceSeq: window.cursor === null ? seed.start : seed.steps[window.cursor],
+      tag: window.tag,
+    },
+    records: window.cursor === null ? seed.steps : [],
+  }));
+  diagnostics.managedLogAudit = {
+    contextId: "ctx",
+    verification: {
+      contextId: "ctx",
+      caseId: world.caseId,
+      passed: true,
+      checks: { exactWindows: true, summary: true, reports: true },
+      seed,
+      observed,
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  observed[1].records = [110];
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-inclusive-cursor` }),
+    /Host log findings must cite the assigned boot, cursor, and recorded sequences/u
+  );
+  observed[1].records = [];
+  run.report.findings[0].evidenceIds[0] = "another-boot:101";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-boot` }),
+    /Host log findings must cite the assigned boot, cursor, and recorded sequences/u
   );
 });
 
@@ -894,6 +970,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["spectrolite-worlds", "export const managedSpectroliteWorlds = [];"],
       ["news-worlds", "export const managedNewsWorlds = [];"],
       ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
+      ["log-audit-worlds", "export const managedLogAuditWorlds = [];"],
       ["local-model-comparison-worlds", "export const localModelComparisonWorlds = [];"],
       [
         "vcs-integration-worlds",
