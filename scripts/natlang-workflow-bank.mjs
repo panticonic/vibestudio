@@ -207,6 +207,14 @@ const domains = [
     identify: (world) => [world.id, world.sourceGroups ?? [world.sourceGroup]],
   },
   {
+    domain: "pdfIntake",
+    template: "base",
+    source: "skills/pdf-intake-fixtures/worlds.ts",
+    exported: "pdfIntakeWorlds",
+    operation: "extractPdfEvidence",
+    identify: (world) => [world.id, [world.sourceGroup]],
+  },
+  {
     domain: "personalFacility",
     template: "personal",
     source: "skills/personal-facility-review-fixtures/worlds.ts",
