@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { compareUtf16CodeUnits, sha256HexSyncText } from "@vibestudio/content-addressing";
 import {
   vcsStateNodeRefSchema,
+  vcsSemanticNodeRefSchema,
   vcsStatusResultSchema,
   vcsWorkingMutationResultSchema,
   type VcsEditInput,
@@ -31,6 +32,8 @@ const reservationSchema = z
   .strict();
 
 const digest = z.string().regex(/^[0-9a-f]{64}$/u);
+const retainedParticipantKeys = z.array(z.string().regex(/^work-[0-9a-f]{64}$/u));
+const retainedContentHashes = z.array(digest);
 const blob = z.object({ contentHash: digest, base64: z.string() }).strict();
 const causeSchema = z
   .object({
@@ -108,6 +111,31 @@ export async function readWorkspaceParticipantStatus(input: {
   return status;
 }
 
+/** Check exact references through contexts the host has already admitted for this caller. */
+export async function workspaceParticipantReferencesReachable(input: {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+  owner: WorkspaceSourceProviderRef;
+  caller: VerifiedCaller;
+  contextIds: readonly string[];
+  references: readonly { kind: string; value: unknown }[];
+}): Promise<boolean> {
+  requireWorkspaceParticipantOwner(input);
+  const references = [];
+  for (const { kind, value } of input.references) {
+    const ref = kind === "event" ? { kind, eventId: value } : value;
+    const parsed = kind === "event" || kind === "state-node"
+      ? vcsStateNodeRefSchema.safeParse(ref)
+      : kind === "node" ? vcsSemanticNodeRefSchema.safeParse(ref) : null;
+    if (!parsed?.success) return false;
+    references.push(parsed.data);
+  }
+  return z.boolean().parse(await input.dispatch.dispatch(input.owner, "readHistoryReferenceVisibility", {
+    contextIds: [...new Set(input.contextIds)],
+    references,
+  }));
+}
+
 export async function readWorkspacePublishedRevision(input: {
   dispatch: Pick<DODispatch, "dispatch">;
   canonical: WorkspaceSourceProviderRef;
@@ -128,6 +156,32 @@ export async function readWorkspaceCanonicalMain(input: {
     .object({ head, eventId: z.string().min(1) })
     .strict()
     .parse(await input.dispatch.dispatch(input.canonical, "readHistoryMain"));
+}
+
+export interface WorkspaceHistorySource {
+  dispatch: Pick<DODispatch, "dispatch">;
+  canonical: WorkspaceSourceProviderRef;
+}
+
+/** Read private roots before canonical roots so retirement preserves saved history in either location. */
+export async function collectWorkspaceHistoryContentRoots(input: WorkspaceHistorySource): Promise<Set<string>> {
+  const { dispatch, canonical } = input;
+  const participants = async () => retainedParticipantKeys.parse(
+    await dispatch.dispatch(canonical, "listHistoryRetainedParticipants")
+  );
+  const read = async (owner: WorkspaceSourceProviderRef) => retainedContentHashes.parse(
+    await dispatch.dispatch(owner, "readHistoryContentRoots")
+  );
+  const roots = new Set<string>();
+  for (const objectKey of new Set(await participants())) {
+    try {
+      for (const hash of await read({ ...canonical, objectKey })) roots.add(hash);
+    } catch (error) {
+      if ((await participants()).includes(objectKey)) throw error;
+    }
+  }
+  for (const hash of await read(canonical)) roots.add(hash);
+  return roots;
 }
 
 /** Store every prepared blob before its owner can commit a reference to it. */

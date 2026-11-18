@@ -1027,6 +1027,46 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     );
   });
 
+  it("keeps private participant content across the destructive GC boundary", async () => {
+    const { blobsDir, vcs } = await harness();
+    const before = await putBytes(blobsDir, Buffer.from("private before preparation"));
+    const archived = await putBytes(blobsDir, Buffer.from("saved during retirement"));
+    const recent = await putBytes(blobsDir, Buffer.from("private after preparation"));
+    const discarded = await putBytes(blobsDir, Buffer.from("unreferenced"));
+    await vcs.attachGad({
+      contentGcRoots: vi.fn(async () => ({ contentRoots: [], contentHashes: [] })),
+    } as never);
+    const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
+    const retiring = `work-${"a".repeat(64)}`;
+    const active = `work-${"b".repeat(64)}`;
+    let publicationPhase = false;
+    let retired = false;
+    const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string) => {
+      if (method === "readHistoryMain") return { head: "main-head", eventId: "main-event" };
+      if (method === "listHistoryAppliedPublications") return [];
+      if (method === "listHistoryRetainedParticipants") return retired ? [active] : [retiring, active];
+      if (method !== "readHistoryContentRoots") throw new Error(`Unexpected history call ${method}`);
+      if (owner.objectKey === canonical.objectKey) return retired ? [archived.digest] : [];
+      if (owner.objectKey === retiring) {
+        if (publicationPhase) {
+          retired = true;
+          throw new Error("Participant retired while collecting its roots");
+        }
+        return [before.digest];
+      }
+      if (owner.objectKey === active) return publicationPhase ? [recent.digest] : [];
+      throw new Error("Unexpected participant");
+    });
+    await vcs.attachParticipantHistory({ dispatch: { dispatch }, canonical });
+    const epoch = await vcs.prepareGc({ minAgeMs: 0, epoch: 1, executionSourceRoots: [] });
+    publicationPhase = true;
+    await expect(epoch.commit()).resolves.toMatchObject({ swept: 1 });
+    for (const item of [before, archived, recent]) {
+      await expect(getBytes(blobsDir, item.digest)).resolves.toBeInstanceOf(Buffer);
+    }
+    await expect(getBytes(blobsDir, discarded.digest)).resolves.toBeNull();
+  });
+
   it("proves shared semantic, execution, and cached roots in one graph before GC", async () => {
     const { blobsDir, vcs } = await harness();
     const sharedContent = await putBytes(blobsDir, Buffer.from("shared subtree content"));

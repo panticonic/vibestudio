@@ -106,6 +106,7 @@ import {
 import { WorkspaceRepositories } from "./workspaceRepositories.js";
 import {
   bindWorkspaceParticipantPublication,
+  collectWorkspaceHistoryContentRoots,
   listAppliedWorkspacePublications,
   observeAppliedWorkspacePublication,
   putPreparedWorkspaceContent,
@@ -114,6 +115,7 @@ import {
   readWorkspacePublicationApproval,
   readWorkspacePublishedRevision,
   requireWorkspaceParticipantOwner,
+  type WorkspaceHistorySource,
 } from "./workspaceHistoryHost.js";
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
 import { retainedBlobDigests, withBlobContentLock } from "../storage/blobRetentions.js";
@@ -354,6 +356,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private gadCaller: WorkspaceSemanticPort | null = null;
   private sourceProviderCaller: WorkspaceSourceProviderV1 | null = null;
+  private participantHistorySource: WorkspaceHistorySource | null = null;
   private readonly protectedPublicationListeners = new Set<
     (event: ProtectedPublicationEvent) => void | Promise<void>
   >();
@@ -459,6 +462,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       ...semantic.contentHashes,
       ...retainedBlobDigests(this.deps.blobsDir),
     ]);
+    if (this.participantHistorySource) {
+      for (const digest of await collectWorkspaceHistoryContentRoots(this.participantHistorySource))
+        reachable.add(digest);
+    }
     const cachedViewRoots = this.repositories.cachedViewRoots();
     const allRoots = [
       ...new Set([...roots, ...cachedViewRoots.map(({ stateHash }) => stateHash)]),
@@ -627,6 +634,17 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       throw new Error("workspace source provider is already attached");
     }
     this.sourceProviderCaller = provider;
+  }
+
+  async attachParticipantHistory(source: WorkspaceHistorySource): Promise<void> {
+    return this.mutateProtectedMain(async () => {
+      if (this.participantHistorySource) {
+        throw new Error("Participant workspace history is already attached");
+      }
+      await readWorkspaceCanonicalMain(source);
+      await this.recoverParticipantPublications(source);
+      this.participantHistorySource = source;
+    });
   }
 
   /**

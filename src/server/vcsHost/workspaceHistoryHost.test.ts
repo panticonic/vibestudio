@@ -11,6 +11,7 @@ import {
   editWorkspaceParticipant,
   openWorkspaceParticipantContext,
   readWorkspaceParticipantStatus,
+  workspaceParticipantReferencesReachable,
 } from "./workspaceHistoryHost.js";
 
 const canonical = {
@@ -109,6 +110,31 @@ it("reads status only from the verified participant and context", async () => {
   await expect(
     readWorkspaceParticipantStatus({ ...request, contextId: "other-context" })
   ).rejects.toThrow("different context");
+});
+
+it("checks typed references through the admitted participant contexts", async () => {
+  const caller = native(1, "visibility-call");
+  const participantId = JSON.stringify(["task", {
+    authoritySessionId: "sealed",
+    runtimeId: "agent",
+  }, { conversationId: 3, taskId: 1 }]);
+  const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
+  const application = { kind: "application", applicationId: "saved-application" };
+  const dispatch = vi.fn().mockResolvedValue(true);
+  const scope = { dispatch: { dispatch }, canonical, owner, caller, contextIds: ["edit", "edit"] };
+  await expect(workspaceParticipantReferencesReachable({
+    ...scope,
+    references: [{ kind: "event", value: "shared" }, { kind: "state-node", value: application }],
+  })).resolves.toBe(true);
+  expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryReferenceVisibility", {
+    contextIds: ["edit"],
+    references: [{ kind: "event", eventId: "shared" }, application],
+  });
+  await expect(workspaceParticipantReferencesReachable({
+    ...scope,
+    references: [{ kind: "state-node", value: { kind: "event" } }],
+  })).resolves.toBe(false);
+  expect(dispatch).toHaveBeenCalledTimes(1);
 });
 
 it("stores prepared participant content before applying the edit and returns a committed retry", async () => {
