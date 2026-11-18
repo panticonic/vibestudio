@@ -4483,6 +4483,9 @@ export class RuntimeManager {
     const target = { ...ref, objectKey: newObjectKey };
     if (options.reservation.key !== newObjectKey)
       throw new Error("Clone reservation target mismatch");
+    const storageCommit = options.reservation.cloneProvenance?.storageCommit;
+    if (storageCommit !== undefined && options.at !== storageCommit)
+      throw new Error("Clone reservation storage commit mismatch");
     const targetId = this.durableObjectTargetId(target);
     const receipt = this.cloneReceipts.begin(ref, options.reservation);
     if (receipt === "complete") return target;

@@ -249,6 +249,8 @@ export function canonicalizeWorkspaceFilePath(wsRelPath: string): string {
 /** Immutable ownership of a context clone, including its exact source incarnation. */
 export interface EntityCloneProvenance {
   storage: "snapshot" | "fresh";
+  /** The exact Dolt commit named when a self-fork reserved its target. */
+  storageCommit?: string;
   operationContextId: string;
   sourceEntityId: string;
   sourceContextId: string;

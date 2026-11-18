@@ -182,6 +182,7 @@ interface GrantRecord {
   readonly label: string | null;
   readonly fetch: boolean;
   readonly push: readonly string[];
+  readonly pushTransition: NonNullable<DoltGrantInfo["pushTransition"]> | null;
   readonly branches: readonly string[];
   readonly peer: string | null;
   readonly expiresAt: number | null;
@@ -1777,13 +1778,19 @@ export class FakeDoltStorage {
           .map(([name, hash]) => ({ name, hash }))
           .sort((a, b) => a.name.localeCompare(b.name)),
       grant: (options: DoltGrantOptions = {}): DoltGrant => {
+        const push = [...(options.push ?? [])];
+        const transition = options.pushTransition;
+        if (transition && (push.length !== 1 || push[0]!.includes("*"))) {
+          throw new Error("a push transition requires one exact branch");
+        }
         const token = randomBytes(32).toString("base64url");
         const record: GrantRecord = {
           id: `grant_${randomBytes(4).toString("hex")}`,
           tokenHash: createHash("sha256").update(token).digest("hex"),
           label: options.label ?? null,
           fetch: !!options.fetch,
-          push: [...(options.push ?? [])],
+          push,
+          pushTransition: transition ? Object.freeze({ ...transition }) : null,
           branches: [...(options.branches ?? ["*"])],
           peer: options.peer ?? null,
           expiresAt: options.expiresAt ?? null,
@@ -1992,6 +1999,18 @@ export class FakeDoltStorage {
         return fail("ERR_DOLT_REMOTE_FORBIDDEN", `the grant does not allow pushing ${to}`);
       }
       const tip = request.tip ?? "";
+      const existing = this.#branches.get(to);
+      if (grant.pushTransition) {
+        if (tip !== grant.pushTransition.next) {
+          return fail("ERR_DOLT_REMOTE_FORBIDDEN", "the grant approves a different commit");
+        }
+        if (existing?.head !== grant.pushTransition.previous && existing?.head !== tip) {
+          return fail(
+            "ERR_DOLT_NON_FAST_FORWARD",
+            "the approved previous commit is no longer the branch head"
+          );
+        }
+      }
       const incoming = new Map((request.commits ?? []).map((wire) => [wire.hash, wire]));
       if (!incoming.has(tip) && !this.#commits.has(tip)) {
         return fail("ERR_DOLT_REMOTE_BAD_REQUEST", "the pack does not carry the claimed tip");
@@ -2014,7 +2033,6 @@ export class FakeDoltStorage {
       const closure = ancestorsIn(tip);
       if (closure.has("\u0000incomplete"))
         return fail("ERR_DOLT_REMOTE_BAD_REQUEST", "the pack's commit graph is incomplete");
-      const existing = this.#branches.get(to);
       if (existing && existing.head === tip) {
         return encodeWire({
           ok: true,

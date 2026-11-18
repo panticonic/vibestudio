@@ -120,6 +120,7 @@ const entityCloneProvenanceSchema = z
     sourceAuthoritySessionId: z.string().min(1),
     sourceBuildKey: z.string().min(1),
     sourceExecutionDigest: z.string().min(1),
+    storageCommit: z.string().min(1).optional(),
   })
   .strict();
 const entityReservationSchema = entityActivationSchema

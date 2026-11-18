@@ -236,6 +236,11 @@ export interface DoltQueryResult {
 
 // --- Remotes (F7) -----------------------------------------------------------
 
+export interface DoltPushTransition {
+  readonly previous: string;
+  readonly next: string;
+}
+
 export interface DoltGrantOptions {
   /** For the issuer's own bookkeeping. */
   readonly label?: string;
@@ -245,6 +250,8 @@ export interface DoltGrantOptions {
   readonly branches?: readonly string[];
   /** Branch patterns a push may update (default none). */
   readonly push?: readonly string[];
+  /** Authorize only this transition on the single exact branch named by `push`. */
+  readonly pushTransition?: DoltPushTransition;
   /** Epoch milliseconds. */
   readonly expiresAt?: number;
   /** Only a carrier that presents this peer to `serve`. */
@@ -258,6 +265,7 @@ export interface DoltGrant {
   readonly label: string | null;
   readonly fetch: boolean;
   readonly push: readonly string[];
+  readonly pushTransition?: DoltPushTransition | null;
   readonly branches: readonly string[];
   readonly peer: string | null;
   readonly expiresAt: number | null;

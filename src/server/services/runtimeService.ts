@@ -776,6 +776,7 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
     }
     const provenance: EntityCloneProvenance = {
       storage: "snapshot",
+      storageCommit: at,
       operationContextId: spec.contextId || source.contextId,
       sourceEntityId: source.id,
       sourceContextId: source.contextId,
@@ -784,10 +785,21 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
       sourceExecutionDigest: source.activeExecutionDigest,
     };
     const existing = await store.resolveRecord(canonicalId);
+    const reservedCommit = existing?.cloneProvenance?.storageCommit;
+    if (reservedCommit !== undefined && reservedCommit !== at) {
+      throw new IdentityCollisionError(canonicalId, {
+        field: "storageCommit",
+        existing: reservedCommit,
+        attempted: at,
+      });
+    }
     if (existing && existing.status !== "preparing") return source;
     if (!existing) {
       await reserveEntityOnce(actors, spec, spec.key, canonicalId, provenance);
-    } else if (canonicalJson(existing.cloneProvenance ?? null) !== canonicalJson(provenance)) {
+    } else if (
+      canonicalJson(existing.cloneProvenance ?? null) !==
+      canonicalJson({ ...provenance, storageCommit: reservedCommit })
+    ) {
       throw new IdentityCollisionError(canonicalId, {
         field: "cloneProvenance",
         existing: existing.cloneProvenance ?? null,

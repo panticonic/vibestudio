@@ -4007,6 +4007,30 @@ describe("runtimeService.cloneContext", () => {
     expect(cloneDurableStorage).toHaveBeenCalledTimes(1);
   });
 
+  it("reuses an interrupted self-fork reservation only at its original storage commit", async () => {
+    const { service, cloneDurableStorage } = await buildDeps();
+    const parent = await seedDO(service, "ctx-self-fork-retry", "parent");
+    const caller = createVerifiedCaller(parent.id, "do");
+    const fork = (at: string) =>
+      service.handler({ caller }, "createEntity", [
+        {
+          kind: "do",
+          execution: { surface: "code", source: "workers/agent" },
+          className: "AgentDO",
+          key: "child",
+          contextId: "ctx-self-fork-retry",
+          forkStorage: { at },
+        },
+      ]);
+    vi.mocked(cloneDurableStorage).mockRejectedValueOnce(new Error("Fork interrupted"));
+    await expect(fork("original")).rejects.toThrow("Fork interrupted");
+    await expect(fork("changed")).rejects.toThrow(/storageCommit/);
+    const child = await fork("original");
+    await expect(fork("original")).resolves.toEqual(child);
+    await expect(fork("changed")).rejects.toThrow(/storageCommit/);
+    expect(cloneDurableStorage).toHaveBeenCalledTimes(2);
+  });
+
   it("marks only the verified source caller for a cooperative storage snapshot", async () => {
     const { service, cloneDurableStorage } = await buildDeps();
     const { ch } = await seedConversation(service, "ctx-self-clone");
