@@ -1,5 +1,6 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { loadAuthoredScopedWorkflow } from "./natlang-workflow-bank.mjs";
 import { prepareScopedWorkflowAdapter } from "./scoped-workflow-adapters.mjs";
@@ -48,18 +49,20 @@ function matchesSource(definition, source) {
   return definition.source === source || definition.source?.endsWith(`/${source}`);
 }
 
+export async function loadScopedWorkflowModule(checkout, relative) {
+  const filename = path.join(checkout, relative);
+  if (filename.endsWith(".json")) return JSON.parse(await readFile(filename, "utf8"));
+  const imported = await import(pathToFileURL(filename).href);
+  return imported.default ?? imported;
+}
+
 /**
  * Execute one authored scoped case from a trusted harness with an isolated
  * Natlang runtime. The Natlang calls API supplies evidence after the root returns.
  */
 export async function runScopedNatlangWorkflow(checkouts, id, natlang) {
   const { scenario, world } = await loadAuthoredScopedWorkflow(checkouts, id);
-  const load = async (relative) => {
-    const imported = await import(
-      pathToFileURL(path.join(checkouts[scenario.template], relative)).href
-    );
-    return imported.default ?? imported;
-  };
+  const load = (relative) => loadScopedWorkflowModule(checkouts[scenario.template], relative);
   const fixture = await prepareScopedWorkflowAdapter(scenario.family, world, load);
   const options = { roots: true, name: "runWorkflow", limit: 2 };
   const earlier = new Set((await natlang.calls(options)).map((call) => call.callId));

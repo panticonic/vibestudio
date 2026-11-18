@@ -38,6 +38,52 @@ const simple = {
 };
 
 const bound = {
+  async google(world, load) {
+    const [{ createGoogleWorkflowFixture }, { verifyGoogleWorkflowOutcome }] = await Promise.all([
+      load("skills/google-drive/drive-workflow-fixture.ts"),
+      load("skills/google-drive/drive-workflow-worlds.ts"),
+    ]);
+    const fixture = createGoogleWorkflowFixture(world);
+    return {
+      bindings: { googleWorkspaceRead: fixture.binding },
+      verify: (value) =>
+        fixture.readinessReads.length === 1 &&
+        fixture.readinessReads[0].verify === true &&
+        fixture.calls() === world.pages.length &&
+        verifyGoogleWorkflowOutcome(world, value),
+    };
+  },
+  async publication(world, load) {
+    const [observations, { verifyPublicationOutcome }] = await Promise.all([
+      load("skills/publish-preflight-fixtures/observations.json"),
+      load("skills/publish-preflight-fixtures/worlds.ts"),
+    ]);
+    const observation = observations[world.id];
+    if (!observation) throw new Error(`Missing publication observation for ${world.id}`);
+    let reads = 0;
+    return {
+      bindings: {
+        websiteReadback: {
+          async observe() {
+            reads++;
+            return structuredClone(observation);
+          },
+        },
+      },
+      verify: (value) => reads === 1 && verifyPublicationOutcome(world, value, observation),
+    };
+  },
+  async localModel(world, load) {
+    const [{ createLocalModelTaskFixture }, { verifyLocalModelTask }] = await Promise.all([
+      load("skills/local-model-task-fixtures/fixture.ts"),
+      load("skills/local-model-task-fixtures/oracle.ts"),
+    ]);
+    const fixture = createLocalModelTaskFixture(world);
+    return {
+      bindings: fixture.bindings,
+      verify: (value) => verifyLocalModelTask(world, value, fixture.audit()),
+    };
+  },
   async channelAgent(world, load) {
     const { membershipFixture, checkMembershipOutcome } = await load(
       "skills/channel-agent-membership-fixtures/fixture.ts"

@@ -24,6 +24,14 @@ child inputs, and checks the reported results against the exact outputs before c
 verifier. The verifier can also check the fixture's observed operations. Managed cases continue through the
 system-test runner documented below.
 
+The Drive fixtures use the same readiness and cursor guard as the installed skill. The local-model fixtures share the
+installation and readback guard with the extension adapter. Publication runs use frozen observations from the
+canonical package, panel, and publication projections. The publication fixture test recomputes those observations
+as a drift check. To refresh them after an intentional fixture change, set
+`VIBESTUDIO_PUBLICATION_OBSERVATIONS_OUT` to the absolute path of
+`skills/publish-preflight-fixtures/observations.json` in the Base checkout and run
+`node scripts/run-userland-tests.mjs --template base --filter skills/publish-preflight-fixtures/binding.test.ts`.
+
 The shared program test can check each scoped request at its mounted Natlang argument boundary using a scripted
 executor. Run it from the Vibestudio host checkout with the development templates configured.
 
