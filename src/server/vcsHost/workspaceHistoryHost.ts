@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { compareUtf16CodeUnits, sha256HexSyncText } from "@vibestudio/content-addressing";
 import {
+  vcsBlameResultSchema,
   vcsCompareResultSchema,
   vcsInspectResultSchema,
   vcsListDirectoryResultSchema,
@@ -12,6 +13,7 @@ import {
   vcsSemanticNodeRefSchema,
   vcsStatusResultSchema,
   vcsWorkingMutationResultSchema,
+  type VcsBlameInput,
   type VcsCompareInput,
   type VcsCopyInput,
   type VcsDiscardInput,
@@ -222,6 +224,28 @@ export async function readWorkspaceParticipantNeighbors(input: WorkspaceHistoryP
     await dispatch.dispatch(owner, "readHistoryNeighbors", { contextId, neighbors }),
   );
   requireWorkspaceProvenanceEdges(neighbors.root, result, neighbors.limit);
+  return result;
+}
+
+export async function readWorkspaceParticipantBlame(input: WorkspaceHistoryParticipant & {
+  contextId: string;
+  blame: VcsBlameInput;
+}) {
+  requireWorkspaceParticipantOwner(input);
+  const { dispatch, owner, contextId, blame } = input;
+  const result = vcsBlameResultSchema.parse(
+    await dispatch.dispatch(owner, "readHistoryBlame", { contextId, blame }),
+  );
+  if (canonicalJson(result.state) !== canonicalJson(blame.state) ||
+      result.fileId !== blame.fileId || result.spans.length > blame.limit) {
+    throw new Error("Workspace history returned different content lineage");
+  }
+  let last = blame.range.start;
+  for (const span of result.spans) {
+    if (span.start < last || span.end > blame.range.end)
+      throw new Error("Workspace history returned content lineage outside the requested range");
+    last = span.end;
+  }
   return result;
 }
 

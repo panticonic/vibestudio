@@ -254,6 +254,11 @@ describe("canonical vcsService", () => {
     expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryNeighbors", {
       contextId: scope.contextId, neighbors,
     });
+    const blame = { state: EVENT, repositoryId: "repo:one", fileId: "file:one", range: { start: 0, end: 0 }, limit: 1 };
+    const lineage = { state: EVENT, fileId: blame.fileId, coordinateKind: "utf16", spans: [], nextCursor: null };
+    dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(lineage);
+    await expect(definition.handler(ctx, "blame", [blame])).resolves.toEqual(lineage);
+    expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryBlame", { contextId: scope.contextId, blame });
 
     const discard = {
       contextId: scope.contextId,

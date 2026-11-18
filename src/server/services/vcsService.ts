@@ -39,6 +39,7 @@ import type { WorkspaceVcs } from "../vcsHost/workspaceVcs.js";
 import {
   hasWorkspaceParticipantDiscardReceipt,
   inspectWorkspaceParticipantProvenance,
+  readWorkspaceParticipantBlame,
   readWorkspaceParticipantFileDescriptors,
   readWorkspaceParticipantNeighbors,
   readWorkspaceParticipantStatus,
@@ -355,6 +356,11 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         return readWorkspaceParticipantNeighbors({
           ...scope,
           neighbors: vcsMethods.neighbors.args.parse([input])[0],
+        });
+      case "blame":
+        return readWorkspaceParticipantBlame({
+          ...scope,
+          blame: vcsMethods.blame.args.parse([input])[0],
         });
       case "compare":
         return workspace.reviewParticipantMerge({
