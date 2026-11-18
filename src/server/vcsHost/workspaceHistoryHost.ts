@@ -195,6 +195,10 @@ export async function inspectWorkspaceParticipantProvenance(input: WorkspaceHist
   );
   const root = canonicalJson(inspect.node);
   const sameNode =
+    (inspect.node.kind === "event" && result.node.kind === "event" &&
+      result.node.value.eventId === inspect.node.eventId && "revision" in result.node.value) ||
+    (inspect.node.kind === "application" && result.node.kind === "application" &&
+      result.node.value.applicationId === inspect.node.applicationId && "revision" in result.node.value) ||
     (inspect.node.kind === "work-unit" && result.node.kind === "work-unit" &&
       result.node.value.workUnitId === inspect.node.workUnitId) ||
     (inspect.node.kind === "command" && result.node.kind === "command" &&

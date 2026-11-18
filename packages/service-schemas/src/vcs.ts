@@ -524,7 +524,7 @@ export const vcsWorkUnitSchema = z
   });
 export type VcsWorkUnit = z.infer<typeof vcsWorkUnitSchema>;
 
-export const vcsWorkApplicationSchema = z
+const legacyVcsWorkApplicationSchema = z
   .object({
     applicationId: id("Local work application."),
     workUnitId: id("Applied work unit."),
@@ -535,6 +535,12 @@ export const vcsWorkApplicationSchema = z
     semanticProtocol: id("Semantic protocol."),
   })
   .strict();
+export const vcsWorkApplicationSchema = z.union([
+  legacyVcsWorkApplicationSchema,
+  legacyVcsWorkApplicationSchema
+    .omit({ resultWorkspaceFactRootId: true })
+    .extend({ revision: id("Exact native workspace revision.") }),
+]);
 export type VcsWorkApplication = z.infer<typeof vcsWorkApplicationSchema>;
 
 export const vcsMergeCoordinateRefSchema = z.discriminatedUnion("kind", [
@@ -581,7 +587,7 @@ const vcsSnapshotSourceSchema = z
   .object({ sourceUri: externalSourceUri, snapshotRevision: nonEmptyText })
   .strict();
 
-export const vcsWorkspaceEventSchema = z
+const legacyVcsWorkspaceEventSchema = z
   .object({
     eventId: id("Committed workspace event."),
     workspaceId: id("Owning workspace."),
@@ -598,6 +604,12 @@ export const vcsWorkspaceEventSchema = z
     createdAt: timestamp,
   })
   .strict();
+export const vcsWorkspaceEventSchema = z.union([
+  legacyVcsWorkspaceEventSchema,
+  legacyVcsWorkspaceEventSchema
+    .omit({ workspaceFactRootId: true })
+    .extend({ revision: id("Exact native workspace revision.") }),
+]);
 export type VcsWorkspaceEvent = z.infer<typeof vcsWorkspaceEventSchema>;
 
 // ---------------------------------------------------------------------------
