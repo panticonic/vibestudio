@@ -19,9 +19,42 @@ symlink root `root-dolt-p2`, not pushed). Fork binary: `unified-fork` `2d1749d`
 | 3. P2a: heap residency by a hold; the host kernel lease deleted                                                        | **done and gated** (below)                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | 4. P2b: general dynamic code (§7 rewritten 2026-11-14 to the user's decisions)                                         | **steps 0 to 6 done** (third pass, 2026-11-15, "third pass" below): the agent settles by pull (a background `eval-await` task and `SessionDO.acknowledge`), the website spec pulls, and the push model is deleted (`evalService` is `dynamicCodeService`, the `eval` service, `resultReceiver`, `onEvalComplete`, `onEvalProgress`, `evalEngine`, `evalEventIngress`, `settle`). **Not done:** the agent hosting its own kernel (optional step 4 of the task; documented in §7.12 item 7) |
 | 5. P3 Durable services: `WorkspaceStateDO` (Dolt), the replaying import, the maintenance journal and `cloneDO` deleted | **done and gated**; the `panel-tree-navigation` "regression" was a pre-P3 gap in browser-panel agent calls ("P3 follow-up" below), and every call to a Dolt object costs about three flushes (measured, a decision for the user)                                                                                                                                                                                                                                                          |
-| 6. P4 Agent system (2026-11-15)                                                                                        | **slices S1 to S5 done and gated, S6 partly done** (second pass, "P4 second pass" below): the hash chain is deleted (S1); the agent cell is a Dolt cell on Pi's composite storage (S3); the conversation fork forks the agents' cells at a commit (S4); a subagent fork is a fork of its parent's cell (S5); the executor fact is renamed (S6a). **S6b now complete** (Nov 17 continuation below). Product compaction, activation-loss restart and normal 65-turn fork gates pass. The 10k-turn measurement and strict steering completion remain open. P5 onward not started                                                                            |
+| 6. P4 Agent system (2026-11-15)                                                                                        | **slices S1 to S5 done and gated, S6 partly done** (second pass, "P4 second pass" below): the hash chain is deleted (S1); the agent cell is a Dolt cell on Pi's composite storage (S3); the conversation fork forks the agents' cells at a commit (S4); a subagent fork is a fork of its parent's cell (S5); the executor fact is renamed (S6a). **S6b now complete** (Nov 17 continuation below). Product compaction, activation-loss restart and normal 65-turn fork gates pass. Strict steering and collaborator follow-up pass. The 10k-turn run hit its 6 GiB quota before the fork. P5 onward not started                                                                            |
 
 ## P4 continuation (2026-11-17)
+
+### November 18 verification results
+
+- `steer-a-running-child` passed in `st_4985fd0bd204444c833b08e4cb8d4474`.
+  The answer explicitly corrected the file count to 117 and reported 22,510
+  lines. Semantic validation passed. The agent took 85 s and made six model
+  calls. The separate checker waited on first-use credential approval until
+  the known gateway received a decision in the disposable test session.
+- `subagent-followup-after-report` passed in
+  `st_d540ac6d1f9b4ca2a466bc26925edc1d` in 260 s with 13 model calls. Both
+  cases have zero tool failures and no cleanup errors. The shared managed
+  test instance and its observer are stopped and joined.
+- The model-free long case `st_508a958252c04cd2a2ed577f117b6df0` confirmed
+  6,784 native turns before the kernel killed `celld` in the 6 GiB scope
+  at 07:21 CET. The fork never ran. Ephemeral cleanup removed the workspace
+  before inspect and trajectory could return. The saved progress and kernel
+  record distinguish this from the passing 65-turn fork. Evidence is in
+  `~/.local/state/celld-p4-compaction/benchmark-failure-evidence.json`.
+- Fork `380b152` fixes the remote API on loaded Dolt facets. The host probe
+  relays a push through the parent and observes the new head and rows from
+  the facet's notification. Fork `21688dc` discovers nested Linux cgroup v2
+  limits and samples the group that owns the limit. A real isolated probe
+  reproduces null readings on the old binary and shows pressure entry and
+  recovery on the repaired one. The 65-turn workspace replay
+  `st_9920f853b1a64834a870accc1959a33b` passed on `21688dc`, with collection
+  at 64, zero model calls, a 10.6 s fork and clean retirement.
+- The host workspace-state test then exposed missed compaction after a
+  burst of commits. Coalescing a pending check also skipped the commits
+  that set the next check's cadence. Both durable base classes now count
+  those commits while preserving a single pending check. The deterministic
+  60-plus-4 regression fails on the old code. All nine host tests, the four
+  real workspace-state tests, eight Base Dolt tests and all four Base
+  typecheck configurations pass. The Base P4 branch is `bb4bd05`.
 
 
 ### S6b complete: agents host their persistent eval kernels

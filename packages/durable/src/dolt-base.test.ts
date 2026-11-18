@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { DurableObjectBase } from "./index.js";
 import { DoltDriftError, doltLocalPatterns } from "./dolt.js";
 import { FakeDoltStorage } from "./test-dolt.js";
@@ -37,6 +37,9 @@ class NotesDO extends DurableObjectBase {
   }
   engine(): boolean {
     return this.dolt !== null;
+  }
+  compaction() {
+    return this.doltGcState();
   }
   /** Admit a call the way the inbound envelope does, then run `fn` as that call. */
   runCall<T>(
@@ -86,6 +89,24 @@ async function onDolt() {
 }
 
 describe("DurableObjectBase on a Dolt cell", () => {
+  it("counts commits made while a compaction check is pending", async () => {
+    const { instance } = await onDolt();
+    vi.useFakeTimers();
+    try {
+      // One queued check must cover this burst, which is still below the
+      // default threshold. The next eight-commit boundary crosses it.
+      for (let n = 1; n <= 60; n++) instance.add(`note ${n}`);
+      await vi.runOnlyPendingTimersAsync();
+      expect(instance.compaction()?.lastCollectedHead).toBeNull();
+
+      for (let n = 61; n <= 64; n++) instance.add(`note ${n}`);
+      await vi.runOnlyPendingTimersAsync();
+      expect(instance.compaction()?.lastCollectedHead).toBe(instance.compaction()?.head);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("installs its schema as a commit and exposes the store", async () => {
     const { fake, instance } = await onDolt();
     expect(instance.engine()).toBe(true);
