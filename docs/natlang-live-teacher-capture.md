@@ -83,6 +83,9 @@ qualifying local model. The comparison has only inventory access.
 Host log audits emit controlled incident lines from an owned test worker and read them from the real
 server log service. The Natlang investigation checks recovery, unrelated events, old bookmarks, and
 exclusive cursors. Each audit sees only its assigned tagged records.
+Incident continuation cases combine the two skills. The first completed investigation unlocks
+the live inventory for the local-model comparison. The exporter requires both nested skill reports,
+their actual call order and the read journal, and records both source groups for split hygiene.
 The release-readiness dossier joins two skill trees in one call. It requires observed recovery after a real worker restart
 and verified cleanup before the project skill can prepare and commit the evidence dossier.
 The authored inventory comes from the configured system-testing template, which supplies

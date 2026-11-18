@@ -169,6 +169,15 @@ const localComparisonWorkflow = {
   root: "prepareLocalModel",
   evidence: localComparisonEvidence,
 };
+const incidentContinuationWorkflow = {
+  family: "system-live-incident-continuation",
+  namespace: "vibestudio:system",
+  group: "incident-log-before-local-inventory",
+  validator: { template: "system", path: "skills/system-investigation-live/continuation.ts" },
+  root: "investigateSystem",
+  skills: ["investigateSystem", "prepareLocalModel"],
+  evidence: incidentContinuationEvidence,
+};
 const googleSetupWorkflow = {
   family: "google-live-setup-journey",
   workspace: "google-workspace",
@@ -272,6 +281,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedGoogleSetupWorlds },
     { localModelComparisonWorlds },
     { managedLogAuditWorlds },
+    { incidentContinuationWorlds },
   ] = await Promise.all(
     [
       "content-project-worlds.ts",
@@ -296,6 +306,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "google-setup-worlds.ts",
       "local-model-comparison-worlds.ts",
       "log-audit-worlds.ts",
+      "incident-continuation-worlds.ts",
     ].map(async (file) => {
       const imported = await import(pathToFileURL(path.join(directory, file)).href);
       return imported.default ?? imported;
@@ -315,6 +326,21 @@ export async function loadLiveTeacherCases(checkouts) {
       ...localComparisonWorkflow,
       caseId: id,
       request,
+    });
+  }
+  for (const { id, log, models } of incidentContinuationWorlds) {
+    const logWorkflow = cases.get(`host-log-audit-live-${log}`);
+    const modelWorkflow = cases.get(`local-model-compare-live-${models}`);
+    if (!logWorkflow || !modelWorkflow)
+      throw new Error(`Unknown incident continuation source for ${id}`);
+    cases.set(`incident-continuation-live-${id}`, {
+      ...incidentContinuationWorkflow,
+      caseId: id,
+      logWorkflow,
+      modelWorkflow,
+      sourceGroups: [incidentContinuationWorkflow, logWorkflow, modelWorkflow].flatMap(
+        workflowSourceGroups
+      ),
     });
   }
   for (const { id, checks, codes } of managedGoogleSetupWorlds) {
@@ -819,6 +845,68 @@ function verifiedMemoryEvidence(execution, exercise, _scenario, workflow) {
     world: { context_id: fixture.contextId, selected_event: verification.eventId },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
+  };
+}
+
+function incidentContinuationEvidence(execution, exercise, scenario, workflow) {
+  const fixture = execution.diagnostics.managedIncidentContinuation;
+  const verification = fixture?.verification;
+  const report = exercise.report;
+  const results = report?.results;
+  const windowCount = workflow.logWorkflow.windows.length;
+  const refCount = workflow.modelWorkflow.request.alternatives.length + 1;
+  const journal = verification?.journal;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.contextId === fixture.contextId &&
+      verification.caseId === workflow.caseId &&
+      verification.passed === true &&
+      verification.checks?.reportOrder === true &&
+      verification.checks?.readOrder === true &&
+      verification.checks?.log === true &&
+      verification.checks?.models === true &&
+      Array.isArray(results) &&
+      results.length === 2 &&
+      Array.isArray(report.remaining) &&
+      report.remaining.length === 0 &&
+      results[0]?.kind === "domain" &&
+      results[0].domain === "system" &&
+      results[0].operation === "investigateSystem" &&
+      results[1]?.kind === "domain" &&
+      results[1].domain === "localModel" &&
+      results[1].operation === "prepareLocalModel" &&
+      Array.isArray(journal) &&
+      journal.length === windowCount + refCount &&
+      journal.every((entry, index) =>
+        index < windowCount
+          ? entry?.kind === "host-log" && entry.index === index
+          : entry?.kind === "local-model" && entry.index === index - windowCount
+      ),
+    "Incident continuation requires the complete host log review before the assigned local inventory"
+  );
+  const log = hostLogAuditEvidence(
+    execution,
+    { report: results[0].report },
+    scenario,
+    workflow.logWorkflow
+  );
+  const models = localComparisonEvidence(
+    execution,
+    { report: results[1].report },
+    scenario,
+    workflow.modelWorkflow
+  );
+  return {
+    world: { ...log.world, assigned_models: models.world.assigned_models },
+    checks: verification.checks,
+    evidence: {
+      workspace: {
+        fixture,
+        log: log.evidence.workspace.fixture,
+        localModels: models.evidence.workspace.fixture,
+      },
+    },
   };
 }
 

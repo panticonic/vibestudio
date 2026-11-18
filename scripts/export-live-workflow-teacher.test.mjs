@@ -73,6 +73,7 @@ test("authored template worlds flow into the collector without losing original s
         ],
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
+      ["incident-continuation-worlds", "incidentContinuationWorlds", []],
       ["log-audit-worlds", "managedLogAuditWorlds", [{ id: "sample", windows: [], lines: [] }]],
       [
         "local-model-comparison-worlds",
@@ -480,6 +481,146 @@ test("authoring export rejects a review drawn from another baseline", async (t) 
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-baseline` }),
     /must match the assigned compiler snapshots/u
+  );
+});
+
+test("incident continuation export requires both child calls, source groups, and read order", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "incident-continuation-live-search-refresh-review";
+  const world = cases.get(entry.test.name);
+  assert.deepEqual(workflowSourceGroups(world), [
+    "vibestudio:system:incident-log-before-local-inventory",
+    "vibestudio:system:assigned-host-log-cursor-and-recovery",
+    "vibestudio:local-model:assigned-candidates-live-inventory",
+  ]);
+  const seed = {
+    marker: "natlang-host-log-example",
+    boot: "boot",
+    workspaceId: "workspace",
+    start: 100,
+    steps: [101, 102],
+  };
+  const windows = world.logWorkflow.windows.map((window) => ({
+    status: window.status,
+    findings: [
+      { code: window.code, evidenceIds: window.evidence.map((i) => `boot:${seed.steps[i]}`) },
+    ],
+  }));
+  const log = {
+    status: "attention",
+    findings: windows.flatMap((window) => window.findings),
+    windows,
+  };
+  const { modelRef, alternatives } = world.modelWorkflow.request;
+  const refs = [modelRef, ...alternatives];
+  const candidates = refs.map((ref) => ({
+    ref,
+    state: null,
+    disposition: "unavailable",
+    handoff: null,
+  }));
+  const comparison = {
+    disposition: "no-candidate",
+    ref: modelRef,
+    state: null,
+    handoff: null,
+    receipt: null,
+    candidates,
+  };
+  const run = diagnostics.natlangTeacher;
+  run.report = {
+    results: [
+      { kind: "domain", domain: "system", operation: "investigateSystem", report: log },
+      { kind: "domain", domain: "localModel", operation: "prepareLocalModel", report: comparison },
+    ],
+    remaining: [],
+  };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, sample] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  function step(id, name, parent, start, end) {
+    const call = structuredClone(sample);
+    call.callId = call.summary.call_id = id;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    call.record.started_at = new Date(start).toISOString();
+    call.record.ended_at = new Date(end).toISOString();
+    return call;
+  }
+  const modelsCall = step("models", "prepareLocalModel", "root", 4, 6);
+  run.calls = [
+    root,
+    step("log", "investigateSystem", "root", 0, 3),
+    step("window", "readLogs", "log", 1, 2),
+    modelsCall,
+    step("compare", "compareCandidates", "models", 5, 6),
+  ];
+  diagnostics.managedLogAudit = {
+    contextId: "ctx",
+    verification: {
+      contextId: "ctx",
+      caseId: world.logWorkflow.caseId,
+      passed: true,
+      checks: { exactWindows: true, summary: true, reports: true },
+      seed,
+      observed: world.logWorkflow.windows.map((window) => {
+        const sinceSeq = window.cursor === null ? seed.start : seed.steps[window.cursor];
+        return {
+          boot: seed.boot,
+          input: {
+            kind: "server-log-incident",
+            tag: window.tag,
+            sinceSeq,
+            expectedBoot: seed.boot,
+          },
+          records: seed.steps.filter((seq) => seq > sinceSeq),
+        };
+      }),
+    },
+  };
+  diagnostics.managedLocalComparison = {
+    contextId: "ctx",
+    verification: {
+      contextId: "ctx",
+      caseId: world.modelWorkflow.caseId,
+      passed: true,
+      checks: { stableInventory: true, exactReads: true, handoff: true, candidates: true },
+      inspected: refs,
+      rows: refs.map((ref) => ({ ref, row: null })),
+      expected: comparison,
+    },
+  };
+  const journal = windows
+    .map((_, index) => ({ kind: "host-log", index }))
+    .concat(refs.map((_, index) => ({ kind: "local-model", index })));
+  diagnostics.managedIncidentContinuation = {
+    contextId: "ctx",
+    verification: {
+      caseId: world.caseId,
+      contextId: "ctx",
+      passed: true,
+      journal,
+      checks: { reportOrder: true, readOrder: true, log: true, models: true },
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  journal[1] = { kind: "local-model", index: 0 };
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-early-read` }),
+    /complete host log review before the assigned local inventory/u
+  );
+  journal[1] = { kind: "host-log", index: 1 };
+  modelsCall.record.started_at = new Date(2).toISOString();
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-early-skill` }),
+    /dependent skill started before its prerequisite completed/u
   );
 });
 
@@ -970,6 +1111,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["spectrolite-worlds", "export const managedSpectroliteWorlds = [];"],
       ["news-worlds", "export const managedNewsWorlds = [];"],
       ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
+      ["incident-continuation-worlds", "export const incidentContinuationWorlds = [];"],
       ["log-audit-worlds", "export const managedLogAuditWorlds = [];"],
       ["local-model-comparison-worlds", "export const localModelComparisonWorlds = [];"],
       [
