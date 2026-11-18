@@ -77,6 +77,11 @@ test("authored template worlds flow into the collector without losing original s
             blocked: "missing-pages",
             claims: [{ evidence: [] }],
           },
+          {
+            id: "later-batch-rejected",
+            pages: [2, 3, 1, 4],
+            fault: { batch: 2, kind: "receipt-mismatch" },
+          },
         ],
       ],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
@@ -181,7 +186,15 @@ test("authored template worlds flow into the collector without losing original s
       writeFile(
         path.join(casesDir, `${file}.ts`),
         `export const ${name} = ${JSON.stringify(worlds)};
-         ${name === "ownedOperationsWorlds" ? 'export const ownedOperationsComposedWorlds = [{ id: "release-readiness-dossier", sourceGroup: "vibestudio:owned-operations:release:pending" }];' : ""}`
+         ${name === "ownedOperationsWorlds" ? 'export const ownedOperationsComposedWorlds = [{ id: "release-readiness-dossier", sourceGroup: "vibestudio:owned-operations:release:pending" }];' : ""}
+         ${
+           name === "managedPdfWorlds"
+             ? `export const managedPdfExpectation = ({ id }) => ({
+           "page-missing": { expectedStatus: "missing-pages", readPages: [], remaining: [1, 5], attemptedBatches: [] },
+           "later-batch-rejected": { expectedStatus: "incomplete", readPages: [2, 3], remaining: [1, 4], attemptedBatches: [[2, 3], [1, 4]] },
+         })[id];`
+             : ""
+         }`
       )
     )
   );
@@ -205,6 +218,62 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(cleanPdf.root, "extractPdfEvidence");
   assert.equal(cleanPdf.expectedStatus, "missing-pages");
   assert.deepEqual(cleanPdf.pages, [1, 5]);
+  const interruptedPdf = cases.get("pdf-intake-live-later-batch-rejected");
+  const receipt = {
+    caseId: interruptedPdf.caseId,
+    requestedPages: interruptedPdf.pages,
+    readPages: interruptedPdf.readPages,
+    remaining: interruptedPdf.remaining,
+    attemptedBatches: interruptedPdf.attemptedBatches,
+    expectedStatus: interruptedPdf.expectedStatus,
+    fault: interruptedPdf.fault,
+    passed: true,
+    checks: Object.fromEntries(
+      [
+        "sourceUnchanged",
+        "workspaceHeadUnchanged",
+        "localExtraction",
+        "exactCitations",
+        "disposition",
+      ].map((key) => [key, true])
+    ),
+    seedRevision: "before",
+    digest: "a".repeat(64),
+  };
+  const pdfExecution = {
+    provenance: { contextId: "owned" },
+    diagnostics: { managedPdf: { contextId: "owned", verification: receipt } },
+  };
+  const pdfReport = {
+    status: "incomplete",
+    digest: receipt.digest,
+    readPages: [2, 3],
+    remaining: [1, 4],
+  };
+  assert.equal(
+    interruptedPdf.evidence(pdfExecution, { report: pdfReport }, "", interruptedPdf).checks
+      .localExtraction,
+    true
+  );
+  assert.throws(
+    () =>
+      interruptedPdf.evidence(
+        pdfExecution,
+        { report: { ...pdfReport, readPages: [2, 3, 1] } },
+        "",
+        interruptedPdf
+      ),
+    /exact page scope/
+  );
+  receipt.attemptedBatches = [
+    [2, 3],
+    [1, 4],
+    [1, 4],
+  ];
+  assert.throws(
+    () => interruptedPdf.evidence(pdfExecution, { report: pdfReport }, "", interruptedPdf),
+    /exact page scope/
+  );
   const review = cases.get("authoring-live-old-reference");
   assert.equal(review.root, "reviewProgram");
   assert.equal(review.comparedBaseline, true);

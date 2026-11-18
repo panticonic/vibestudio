@@ -291,7 +291,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { integrationHandoffWorlds },
     { managedAutomationWorlds },
     { managedPublicationWorlds },
-    { managedPdfWorlds },
+    { managedPdfWorlds, managedPdfExpectation },
     { managedPresentationWorlds },
     { managedAuthoringWorlds },
     { managedMemoryWorlds },
@@ -468,17 +468,13 @@ export async function loadLiveTeacherCases(checkouts) {
       renderedIds: expected.filter((view) => Object.hasOwn(view, "labels")).map(({ id }) => id),
     });
   }
-  for (const { id, pages, blocked, claims } of managedPdfWorlds) {
-    const answered = claims.filter(({ evidence }) => evidence.length > 0).length;
-    const expectedStatus =
-      blocked ??
-      (answered === 0 ? "no-match" : answered === claims.length ? "verified" : "partial-match");
-    cases.set(`pdf-intake-live-${id}`, {
+  for (const world of managedPdfWorlds) {
+    cases.set(`pdf-intake-live-${world.id}`, {
       ...pdfIntakeWorkflow,
-      caseId: id,
-      expectedStatus,
-      pages,
-      blocked,
+      caseId: world.id,
+      pages: world.pages,
+      fault: world.fault ?? null,
+      ...managedPdfExpectation(world),
     });
   }
   for (const { id, expectedBlockers } of managedPublicationWorlds) {
@@ -792,8 +788,13 @@ function pdfIntakeEvidence(execution, exercise, _scenario, workflow) {
       ].every((name) => verification.checks?.[name] === true) &&
       /^[a-f0-9]{64}$/u.test(verification.digest) &&
       report.digest === verification.digest &&
-      JSON.stringify(verification.requestedPages) === JSON.stringify(workflow.pages) &&
-      JSON.stringify(report.readPages) === JSON.stringify(workflow.blocked ? [] : workflow.pages) &&
+      isDeepStrictEqual(verification.requestedPages, workflow.pages) &&
+      isDeepStrictEqual(verification.fault, workflow.fault) &&
+      isDeepStrictEqual(verification.attemptedBatches, workflow.attemptedBatches) &&
+      isDeepStrictEqual(verification.readPages, workflow.readPages) &&
+      isDeepStrictEqual(verification.remaining, workflow.remaining) &&
+      isDeepStrictEqual(report.readPages, workflow.readPages) &&
+      isDeepStrictEqual(report.remaining, workflow.remaining) &&
       typeof verification.seedRevision === "string",
     "The PDF decision must match the owned source bytes, exact page scope, and a verified local extraction"
   );

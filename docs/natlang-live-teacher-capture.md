@@ -86,6 +86,10 @@ exclusive cursors. Each audit sees only its assigned tagged records.
 Incident continuation cases combine the two skills. The first completed investigation unlocks
 the live inventory for the local-model comparison. The exporter requires both nested skill reports,
 their actual call order and the read journal, and records both source groups for split hygiene.
+PDF cases use the installed extraction extension and preserve the exact page order and citation
+geometry. Interruption cases deliver a controlled read error or mismatched digest after a real
+extraction. The report keeps only the verified prefix, names the unread pages, and stops requesting
+batches at the interruption.
 Runtime program reviews compile caller-owned scratch source through the installed Natlang loader.
 When a task includes execution, a separate EvalDO run loads and calls the exact typed program.
 The review distinguishes checked output, unchecked output, failure and a receipt from an older
