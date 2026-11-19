@@ -97,6 +97,7 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
       ["client-admission-worlds", "managedClientAdmissionWorlds", []],
+      ["vcs-delivery-worlds", "managedVcsDeliveryWorlds", []],
       ["web-brief-worlds", "managedWebBriefWorlds", []],
       ["architecture-boundary-worlds", "managedArchitectureBoundaryWorlds", []],
       ["release-review-handoff-worlds", "managedReleaseReviewHandoffWorlds", []],
@@ -2928,6 +2929,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       ["client-admission-worlds", "export const managedClientAdmissionWorlds = [];"],
+      ["vcs-delivery-worlds", "export const managedVcsDeliveryWorlds = [];"],
       ["web-brief-worlds", "export const managedWebBriefWorlds = [];"],
       ["architecture-boundary-worlds", "export const managedArchitectureBoundaryWorlds = [];"],
       ["release-review-handoff-worlds", "export const managedReleaseReviewHandoffWorlds = [];"],
@@ -4860,4 +4862,126 @@ test("web brief export binds exact page continuation and cited text", async (t) 
     exportLiveTeacherWorkflow({ ...options, cases }),
     /host-verified cached bytes/u
   );
+});
+
+test("VCS delivery export checks the original revision read and the nested decision", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "vcs-delivery-live-committed-cleanup-contract";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+  entry.test.name = name;
+  const { goal, path: filePath, repository, next, text } = assignment;
+  const request = { goal, repository, path: filePath, operationId: "read-assigned-vcs-candidate" };
+  const committed = { kind: "event", eventId: "workspace-event:candidate" };
+  const version = {
+    fileId: "file:cleanup",
+    hash: "content:cleanup",
+    mode: 420,
+    excerpt: text,
+    truncated: false,
+  };
+  const snapshot = {
+    contextId: "ctx",
+    current: true,
+    clean: true,
+    relation: "ahead",
+    working: committed,
+    committed,
+    protectedMain: { kind: "event", eventId: "workspace-event:main" },
+    integrations: [],
+    file: {
+      path: filePath,
+      working: version,
+      committed: version,
+      protectedMain: null,
+      hasLocalDifference: false,
+      hasDeliveryDifference: true,
+    },
+  };
+  const chain = {
+    local: { state: "clean", summary: "Already committed" },
+    main: { state: "current", summary: "Candidate is ahead" },
+  };
+  const interpretation = { effect: "Cancellation closes the preview panel", risks: [] };
+  const review = { ...interpretation, checks: ["Cancel a preview and confirm its panel closes"] };
+  const report = { snapshot, chain, review, next };
+  diagnostics.managedVcsDelivery = {
+    caseId: assignment.id,
+    contextId: "ctx",
+    request,
+    passed: true,
+    snapshot,
+    checks: { contextPreserved: true, exactState: true, assignedFile: true, report: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const observed = {
+    service: "vcsDeliveryRead",
+    method: "observe",
+    args: ref([request.operationId]),
+    result: ref(snapshot),
+  };
+  const decision = call(
+    "chooseDeliveryStep",
+    "reviewVcsDelivery",
+    { snapshot, chain, review },
+    next
+  );
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewVcsDelivery", "runWorkflow", { request }, report, [observed]),
+      call("inspectChain", "reviewVcsDelivery", { snapshot }, chain),
+      call("describeLocalChain", "inspectChain", {}, chain.local),
+      call("reviewIntegration", "inspectChain", {}, chain.main),
+      call("reviewChange", "reviewVcsDelivery", { file: snapshot.file }, review),
+      call("interpretFile", "reviewChange", { file: snapshot.file }, interpretation),
+      call("planChecks", "reviewChange", { path: filePath }, review.checks),
+      decision,
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+
+  observed.result = ref({ ...snapshot, relation: "behind" });
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /actual semantic snapshot/u
+  );
+
+  observed.result = ref(snapshot);
+  decision.record.output = ref("already-current");
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact next step/u);
 });

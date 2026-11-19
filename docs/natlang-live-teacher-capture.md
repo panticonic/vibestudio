@@ -214,6 +214,12 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Semantic VCS delivery reviews a caller-assigned file at the live working head,
+committed event and protected main. The tasks cover a draft, a clean commit
+ahead of main, and an unchanged assigned file in a dirty context. Run
+`vcs-delivery-oracle-qualification` to check the revisions and assignments
+without invoking a model.
+
 The assigned web brief uses live public Chromium fetches and verifies the
 cleaned source bytes by reading the host's cached digest. The cases cover
 two-source citation, the registry's scope and an unsupported question. Run

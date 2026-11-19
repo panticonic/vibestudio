@@ -211,6 +211,15 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const vcsDeliveryWorkflow = {
+  family: "workspace-live-semantic-vcs-delivery",
+  workspace: "examples",
+  namespace: "vibestudio:semantic-vcs",
+  group: "assigned-file-and-context-delivery",
+  validator: { template: "system-testing", path: "skills/system-testing/vcs-delivery-managed.ts" },
+  root: "reviewVcsDelivery",
+  evidence: vcsDeliveryEvidence,
+};
 const webBriefWorkflow = {
   family: "workspace-live-public-web-brief",
   workspace: "examples",
@@ -519,6 +528,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
     { managedClientAdmissionWorlds },
+    { deliveryRepository, managedVcsDeliveryWorlds },
     { managedWebBriefWorlds },
     { managedArchitectureBoundaryWorlds },
     { managedReleaseReviewHandoffWorlds, releaseReviewHandoffWork },
@@ -567,6 +577,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
       "client-admission-worlds.ts",
+      "vcs-delivery-worlds.ts",
       "web-brief-worlds.ts",
       "architecture-boundary-worlds.ts",
       "release-review-handoff-worlds.ts",
@@ -612,6 +623,12 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of managedVcsDeliveryWorlds) {
+    cases.set(`vcs-delivery-live-${assignment.id}`, {
+      ...vcsDeliveryWorkflow,
+      assignment: { ...assignment, repository: deliveryRepository },
+    });
   }
   for (const assignment of managedWebBriefWorlds) {
     cases.set(`web-brief-live-${assignment.id}`, { ...webBriefWorkflow, assignment });
@@ -2590,6 +2607,113 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function vcsDeliveryEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedVcsDelivery;
+  const { caseId, contextId, request, snapshot, checks } = fixture ?? {};
+  const { id, goal, path, repository, seedPath, text, commit, next, terms } = workflow.assignment;
+  const changed = seedPath === path;
+  const report = exercise.report;
+  const file = snapshot?.file;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) =>
+    parent &&
+    records.find(
+      (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+    );
+  const delivery = child(root, "reviewVcsDelivery");
+  const chain = child(delivery, "inspectChain");
+  const change = child(delivery, "reviewChange");
+  const local = child(chain, "describeLocalChain");
+  const integration = child(chain, "reviewIntegration");
+  const interpretation = child(change, "interpretFile");
+  const focused = child(change, "planChecks");
+  const decision = child(delivery, "chooseDeliveryStep");
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effect = delivery?.effects?.[0];
+  requireEvidence(
+    fixture?.passed === true &&
+      caseId === id &&
+      contextId === execution.provenance?.contextId &&
+      typeof contextId === "string" &&
+      snapshot?.current === true &&
+      snapshot.contextId === contextId &&
+      ["contextPreserved", "exactState", "assignedFile", "report"].every(
+        (key) => checks?.[key] === true
+      ) &&
+      request?.goal === goal &&
+      request.repository === repository &&
+      request.path === path &&
+      typeof request.operationId === "string" &&
+      request.operationId.length > 0 &&
+      isDeepStrictEqual(report?.snapshot, snapshot) &&
+      matchesValue(delivery?.inputs?.request, request) &&
+      matchesValue(delivery.output, report) &&
+      effects.length === 1 &&
+      effect?.service === "vcsDeliveryRead" &&
+      effect.method === "observe" &&
+      !effect.error &&
+      matchesValue(effect.args, [request.operationId]) &&
+      matchesValue(effect.result, snapshot),
+    "VCS delivery needs the actual semantic snapshot and only the assigned VCS observation"
+  );
+
+  requireEvidence(
+    snapshot.clean === commit &&
+      snapshot.relation === (commit ? "ahead" : "at") &&
+      snapshot.working?.kind === (commit ? "event" : "application") &&
+      snapshot.protectedMain?.kind === "event" &&
+      snapshot.committed?.kind === "event" &&
+      (commit
+        ? isDeepStrictEqual(snapshot.working, snapshot.committed) &&
+          snapshot.committed.eventId !== snapshot.protectedMain.eventId
+        : isDeepStrictEqual(snapshot.committed, snapshot.protectedMain)) &&
+      isDeepStrictEqual(snapshot.integrations, []) &&
+      file?.path === path &&
+      file.hasLocalDifference === (changed && !commit) &&
+      file.hasDeliveryDifference === changed &&
+      (changed
+        ? file.working?.excerpt === text &&
+          file.protectedMain === null &&
+          (commit ? isDeepStrictEqual(file.working, file.committed) : file.committed === null)
+        : file.working &&
+          isDeepStrictEqual(file.working, file.committed) &&
+          isDeepStrictEqual(file.working, file.protectedMain)),
+    "VCS delivery must retain the real working, committed and protected-main versions"
+  );
+
+  requireEvidence(
+    report.next === next &&
+      report.chain?.main?.state === "current" &&
+      report.chain?.local?.state === (commit ? "clean" : "uncommitted") &&
+      typeof report.review?.effect === "string" &&
+      report.review.effect.trim() &&
+      Array.isArray(report.review.checks) &&
+      report.review.checks.every((check) => typeof check === "string") &&
+      (changed
+        ? terms.every((term) => report.review.effect.toLowerCase().includes(term)) &&
+          terms.some((term) => report.review.checks.join(" ").toLowerCase().includes(term))
+        : report.review.checks.length === 0) &&
+      matchesValue(chain?.inputs?.snapshot, snapshot) &&
+      matchesValue(chain.output, report.chain) &&
+      matchesValue(local?.output, report.chain.local) &&
+      matchesValue(integration?.output, report.chain.main) &&
+      matchesValue(change?.inputs?.file, file) &&
+      matchesValue(change.output, report.review) &&
+      matchesValue(interpretation?.inputs?.file, file) &&
+      matchesValue(focused?.inputs?.path, path) &&
+      matchesValue(focused.output, report.review.checks) &&
+      matchesValue(decision?.inputs?.snapshot, snapshot) &&
+      matchesValue(decision.output, report.next),
+    "VCS delivery needs the nested inspection, focused verification and exact next step"
+  );
+  return {
+    world: { context_id: contextId, path, repository },
     checks,
     evidence: { workspace: { fixture } },
   };
