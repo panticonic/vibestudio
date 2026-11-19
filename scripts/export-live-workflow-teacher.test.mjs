@@ -103,6 +103,7 @@ test("authored template worlds flow into the collector without losing original s
       ["explorer-probe-worlds", "explorerTextWorlds", []],
       ["gmail-compose-history-worlds", "gmailComposeHistoryWorlds", []],
       ["unit-identity-worlds", "unitIdentityWorlds", []],
+      ["transcript-cursor-worlds", "transcriptCursorWorlds", []],
       ["eval-recovery-worlds", "managedEvalRecoveryWorlds", []],
       ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
       ["offline-dictation-worlds", "managedDictationWorlds", []],
@@ -2946,6 +2947,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["explorer-probe-worlds", "export const explorerTextWorlds = [];"],
       ["gmail-compose-history-worlds", "export const gmailComposeHistoryWorlds = [];"],
       ["unit-identity-worlds", "export const unitIdentityWorlds = [];"],
+      ["transcript-cursor-worlds", "export const transcriptCursorWorlds = [];"],
       ["eval-recovery-worlds", "export const managedEvalRecoveryWorlds = [];"],
       ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
       ["offline-dictation-worlds", "export const managedDictationWorlds = [];"],
@@ -6049,4 +6051,76 @@ test("unit identity export rejects artwork that differs from the grounded catalo
   identity.record.effects[1].result = ref(prepared);
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /verified authorized working-state outcome/u);
+});
+
+test("transcript continuation export rejects a checkpoint beyond the frozen channel watermark", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "transcript-cursor-live-freeze-live-tail-during-replay";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "system" }));
+  entry.test.name = name;
+  const channelId = "owned-transcript";
+  entry.execution.provenance.channelId = channelId;
+  const request = { goal: assignment.goal, operationId: "assigned-replay" };
+  const saved = { channelId, seq: 0 };
+  const frontier = 7;
+  const expectedMessages = assignment.messages.map((preview, i) => ({
+    envelopeId: `envelope-${i}`, seq: [2, 4, 7][i],
+    messageId: `message-${i}`, role: "user", preview,
+  }));
+  const pages = [
+    { after: 0, through: frontier, nextAfter: 4, envelopeCount: 2, hasMore: true, messages: expectedMessages.slice(0, 2) },
+    { after: 4, through: frontier, nextAfter: 7, envelopeCount: 1, hasMore: false, messages: expectedMessages.slice(2) },
+  ];
+  const start = { channelId, saved, maxPages: assignment.maxPages, first: pages[0] };
+  const report = {
+    start, pages, messages: expectedMessages, outcome: "complete", next: { channelId, seq: frontier },
+  };
+  diagnostics.transcriptCursor = {
+    passed: true, caseId: assignment.id, contextId: "ctx", channelId, request, saved, frontier,
+    expectedMessages, late: { envelopeId: "later-note", seq: 9 }, observation: start, pages,
+    operations: ["open", "next"], checks: { scope: true, pages: true, checkpoint: true, isolatedTail: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return { complete: true, hash: createHash("sha256").update(text).digest("hex"), bytes: Buffer.byteLength(text) };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = [], id = name) => ({
+    callId: id,
+    summary: { ...prototype.summary, call_id: id },
+    record: {
+      ...prototype.record, call_id: id, parent_call_id: parent, definition: { name }, outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output), effects,
+    },
+  });
+  const effect = (method, args, result) => ({ service: "transcriptCursor", method, args: ref(args), result: ref(result) });
+  const resume = call("resumeChannelTranscript", "runWorkflow", { request }, report, [
+    effect("open", [request.operationId], start),
+  ]);
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher, programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"], report,
+    calls: [
+      call("runWorkflow", null, {}, null), resume,
+      call("assessReplayStart", "resumeChannelTranscript", { start }, "read"),
+      call("collectReplayPages", "resumeChannelTranscript", { start }, { pages, usable: true }, [
+        effect("next", [request.operationId, 4, frontier], pages[1]),
+      ]),
+      ...pages.map((page, i) => call("checkReplayPage", "collectReplayPages", { page }, "verified", [], `check-${i}`)),
+      call("finishTranscript", "resumeChannelTranscript", {}, report),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  report.next.seq = 9;
+  resume.record.output = ref(report);
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact durable checkpoint/u);
 });

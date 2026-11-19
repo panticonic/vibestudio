@@ -211,6 +211,15 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const transcriptCursorWorkflow = {
+  family: "workspace-live-transcript-cursor",
+  workspace: "system",
+  namespace: "vibestudio:session-test",
+  group: "bounded-live-transcript-continuation",
+  validator: { template: "system-testing", path: "skills/system-testing/transcript-cursor-managed.ts" },
+  root: "resumeChannelTranscript",
+  evidence: transcriptCursorEvidence,
+};
 const unitIdentityWorkflow = {
   family: "workspace-live-unit-identity",
   workspace: "system",
@@ -639,6 +648,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { explorerTextWorlds },
     { gmailComposeHistoryWorlds },
     { unitIdentityWorlds },
+    { transcriptCursorWorlds },
     { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
     { managedDictationWorlds },
@@ -699,6 +709,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "explorer-probe-worlds.ts",
       "gmail-compose-history-worlds.ts",
       "unit-identity-worlds.ts",
+      "transcript-cursor-worlds.ts",
       "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
       "offline-dictation-worlds.ts",
@@ -750,6 +761,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of transcriptCursorWorlds) {
+    cases.set(`transcript-cursor-live-${assignment.id}`, { ...transcriptCursorWorkflow, assignment });
   }
   for (const assignment of unitIdentityWorlds) {
     cases.set(`unit-identity-live-${assignment.id}`, { ...unitIdentityWorkflow, assignment });
@@ -2770,6 +2784,93 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function transcriptCursorEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.transcriptCursor;
+  const { caseId, contextId, channelId, request, saved, frontier, expectedMessages,
+    late, observation, pages, operations, checks } = fixture ?? {};
+  const { assignment } = workflow;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const children = (parent, name) => parent ? records.filter(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+  ) : [];
+  const [resume] = children(root, "resumeChannelTranscript");
+  const [admit] = children(resume, "assessReplayStart");
+  const [collect] = children(resume, "collectReplayPages");
+  const [finish] = children(resume, "finishTranscript");
+  const available = assignment.cursor === "start";
+  const admitOutcome = available ? "read" : assignment.outcome;
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effectMatches = (effect, method, args, result) =>
+    effect?.service === "transcriptCursor" && effect.method === method && !effect.error &&
+    matchesValue(effect.args, args) && matchesValue(effect.result, result);
+  requireEvidence(
+    fixture?.passed === true &&
+      ["scope", "pages", "checkpoint", "isolatedTail"].every((key) => checks?.[key] === true) &&
+      caseId === assignment.id && typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId && typeof channelId === "string" &&
+      channelId === execution.provenance?.channelId &&
+      request?.goal === assignment.goal && typeof request.operationId === "string" &&
+      Number.isSafeInteger(frontier) && frontier >= 0 &&
+      saved?.channelId === (assignment.cursor === "foreign" ? channelId + "-other" : channelId) &&
+      saved.seq === (assignment.cursor === "head" ? frontier : 0) &&
+      observation?.channelId === channelId && observation.maxPages === assignment.maxPages &&
+      isDeepStrictEqual(observation.saved, saved) && isDeepStrictEqual(report?.start, observation) &&
+      (assignment.cursor === "foreign"
+        ? observation.first === null
+        : observation.first?.through === frontier && observation.first.after === saved.seq) &&
+      matchesValue(resume?.inputs?.request, request) && matchesValue(resume.output, report) &&
+      effectMatches(resume.effects?.[0], "open", [request.operationId], observation) &&
+      matchesValue(admit?.inputs?.start, observation) && matchesValue(admit.output, admitOutcome),
+    "Transcript continuation requires the assigned channel and original native watermark"
+  );
+  const pageChecks = children(collect, "checkReplayPage");
+  const next = assignment.outcome === "foreign-channel"
+    ? null
+    : { channelId, seq: pages?.at(-1)?.nextAfter ?? saved.seq };
+  requireEvidence(
+    Array.isArray(pages) && pages.length <= assignment.maxPages &&
+      Array.isArray(expectedMessages) && expectedMessages.length === assignment.messages.length &&
+      expectedMessages.every((message, i) => message.preview === assignment.messages[i] &&
+        Number.isSafeInteger(message.seq) && message.seq <= frontier &&
+        message.seq > (expectedMessages[i - 1]?.seq ?? 0)) &&
+      ("late" in assignment
+        ? typeof late?.envelopeId === "string" && Number.isSafeInteger(late.seq) && late.seq > frontier
+        : late === null) &&
+      effects.length === Math.max(1, pages.length) &&
+      isDeepStrictEqual(operations, ["open", ...Array(Math.max(0, pages.length - 1)).fill("next")]) &&
+      (available
+        ? pages.length > 0 && isDeepStrictEqual(observation.first, pages[0]) &&
+          matchesValue(collect?.inputs?.start, observation) &&
+          matchesValue(collect.output, { pages, usable: true }) && pageChecks.length === pages.length &&
+          matchesValue(finish?.output, report)
+        : pages.length === 0 && !collect && !finish &&
+          (observation.first === null || observation.first.envelopeCount === 0)) &&
+      pages.every((page, i) => {
+        const after = pages[i - 1]?.nextAfter ?? saved.seq;
+        const verification = pageChecks.find((call) => matchesValue(call.inputs?.page, page));
+        return page.after === after && page.through === frontier &&
+          Number.isSafeInteger(page.nextAfter) && page.nextAfter > after && page.nextAfter <= frontier &&
+          page.hasMore === (page.nextAfter < frontier) &&
+          Number.isSafeInteger(page.envelopeCount) && page.envelopeCount > 0 && page.envelopeCount <= assignment.pageSize &&
+          isDeepStrictEqual(page.messages, expectedMessages.filter(({ seq }) => seq > after && seq <= page.nextAfter)) &&
+          (i === 0 || effectMatches(collect.effects?.[i - 1], "next", [request.operationId, after, frontier], page)) &&
+          matchesValue(verification?.output, "verified");
+      }) &&
+      (assignment.outcome !== "complete" || next.seq === frontier) &&
+      (assignment.outcome !== "continue" || (pages.length === assignment.maxPages && next.seq < frontier)) &&
+      report.outcome === assignment.outcome && isDeepStrictEqual(report.next, next) &&
+      isDeepStrictEqual(report.pages, pages) && isDeepStrictEqual(report.messages, pages.flatMap((page) => page.messages)),
+    "Transcript continuation requires ordered covered pages and their exact durable checkpoint"
+  );
+  return {
+    world: { context_id: contextId, channel_id: channelId, through_seq: frontier },
     checks,
     evidence: { workspace: { fixture } },
   };

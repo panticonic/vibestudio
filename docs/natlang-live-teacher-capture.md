@@ -215,6 +215,11 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Headless transcript continuation reads a VibeStudio channel through one
+native replay watermark. Its cases cover a late append, a limited page
+budget, a foreign channel, and a checkpoint already at the end. Run
+`transcript-cursor-oracle-qualification` for the live model-free check.
+
 Workspace unit identity combines the existing Natlang icon chooser with
 the catalog and semantic VCS. The cases prepare a new icon, retain an
 exact match, or review a design without editing. The edit case checks its
