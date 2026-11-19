@@ -135,8 +135,10 @@ export function runtimeAppEntrypointSource({ chronolog = false } = {}) {
         'import { DurableObject } from "cloudflare:workers";',
         'import { encodeRpcJson, decodeRpcJson } from "@vibestudio/rpc";',
         'import { createCelldWorkspaceClasses } from "runtime-app:chronolog";',
+        'import { chronologHistoryCarrier } from "./chronologHistoryCarrier.ts";',
         "export const { ChronologWorkspaceDO, ChronologGroupDO } = createCelldWorkspaceClasses({",
         "  DurableObject, socketPair: () => new WebSocketPair(), encode: encodeRpcJson, decode: decodeRpcJson,",
+        "  publication: chronologHistoryCarrier,",
         "});",
       ].join("\n") + "\n"
     : "";

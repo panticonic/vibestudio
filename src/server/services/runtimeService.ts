@@ -341,6 +341,10 @@ export interface RuntimeServiceDeps {
   contextFolders: RuntimeContextFolders;
   /** Required semantic-context lifecycle owned by the semantic workspace. */
   semanticContexts: RuntimeSemanticContexts;
+  forwardHistoryPacket?: (
+    caller: VerifiedCaller,
+    input: { transferId: string; bytes: Uint8Array }
+  ) => Promise<Uint8Array>;
   onContextCreated?: (input: {
     contextId: string;
     ownerContextId: string | null;
@@ -2946,6 +2950,10 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         }
         await deps.faultAbortAgentVessel(ctx.caller, target);
         return { aborted: true as const };
+      },
+      forwardHistoryPacket: (ctx, [input]) => {
+        if (!deps.forwardHistoryPacket) throw new Error("Workspace history transfer is unavailable");
+        return deps.forwardHistoryPacket(ctx.caller, input);
       },
       retireEntity: async (_ctx, [{ id, removeContext }]) => {
         await retireEntity(id, removeContext);

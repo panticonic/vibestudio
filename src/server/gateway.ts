@@ -165,6 +165,7 @@ export interface GatewayDeps {
   rpcHandler?: RpcHandler;
   /** Dynamic in-process RPC handler getter. */
   getRpcHandler?: () => RpcHandler | null | undefined;
+  handleChronologHistory?: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
   /** In-process panel HTTP handler */
   panelHttpHandler?: PanelHttpHandler;
   /** Dynamic in-process panel HTTP handler getter. */
@@ -233,6 +234,14 @@ export class Gateway {
       const extensionHttpHandler = this.deps.getExtensionHttpHandler?.();
       const appArtifactHandler = this.deps.getAppArtifactHandler?.();
       const workerdPort = this.deps.getWorkerdPort?.() ?? this.deps.workerdPort;
+
+      if (
+        (url === "/_chronolog-history" || url.startsWith("/_chronolog-history?")) &&
+        this.deps.handleChronologHistory
+      ) {
+        await this.deps.handleChronologHistory(req, res);
+        return;
+      }
 
       if (url === "/_r/s/internal/workspace-rpc" && rpcHandler) {
         void rpcHandler.handleWorkspaceRpcHttp(req, res);
