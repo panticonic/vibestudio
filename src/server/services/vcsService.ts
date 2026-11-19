@@ -67,6 +67,7 @@ export interface VcsServiceDeps {
     | "openParticipantScope"
     | "editParticipantContext"
     | "transferParticipantContext"
+    | "revertParticipantContext"
     | "importParticipantSnapshot"
     | "saveParticipantContext"
     | "discardParticipantContext"
@@ -425,6 +426,13 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
             ...common,
             transfer: { method: "copy", value: vcsMethods.copy.args.parse([input])[0] },
             readableContextIds: await reachableContextAuthorities(ctx, deps),
+          })
+        ).result;
+      case "revert":
+        return (
+          await workspace.revertParticipantContext({
+            ...common,
+            revert: vcsMethods.revert.args.parse([input])[0],
           })
         ).result;
       case "importSnapshot":

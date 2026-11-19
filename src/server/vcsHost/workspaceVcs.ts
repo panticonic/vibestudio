@@ -136,6 +136,7 @@ import {
   reviewWorkspaceParticipantMerge,
   retireWorkspaceParticipantContext,
   transferWorkspaceParticipant,
+  revertWorkspaceParticipant,
   workspaceMainStateReachable,
   workspaceParticipantCatalog,
   workspaceParticipantReferencesReachable,
@@ -1203,6 +1204,18 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       dispatch: input.dispatch,
       owner: input.owner,
       contextId: input.transfer.value.contextId,
+    });
+    return result;
+  }
+
+  async revertParticipantContext(input: WorkspaceHistoryParticipant &
+    Omit<Parameters<typeof revertWorkspaceParticipant>[0], "blobsDir">) {
+    requireWorkspaceParticipantOwner(input);
+    const result = await revertWorkspaceParticipant({ ...input, blobsDir: this.deps.blobsDir });
+    await this.materializeParticipantContext({
+      dispatch: input.dispatch,
+      owner: input.owner,
+      contextId: input.revert.contextId,
     });
     return result;
   }

@@ -29,6 +29,7 @@ import {
   type VcsReadFilesInput,
   type VcsMoveInput,
   type VcsResolveRepositoryInput,
+  type VcsRevertInput,
   type VcsSemanticNodeRef,
   type VcsStateNodeRef,
   type VcsStatusResult,
@@ -94,7 +95,7 @@ const mutationPlan = z.discriminatedUnion("kind", [
       command: z
         .object({
           commandId: z.string().min(1),
-          method: z.enum(["edit", "move", "copy"]),
+          method: z.enum(["edit", "move", "copy", "revert"]),
           requestDigest: z.string().min(1),
           cause: causeSchema,
         })
@@ -621,9 +622,15 @@ export function transferWorkspaceParticipant(input: ParticipantMutationTarget & 
   return mutateWorkspaceParticipant(input, input.transfer);
 }
 
+export function revertWorkspaceParticipant(input: ParticipantMutationTarget & { revert: VcsRevertInput }) {
+  return mutateWorkspaceParticipant(input, { method: "revert", value: input.revert });
+}
+
 async function mutateWorkspaceParticipant(
   input: ParticipantMutationTarget,
-  request: ParticipantTransfer | { method: "edit"; value: VcsEditInput },
+  request: ParticipantTransfer |
+    { method: "edit"; value: VcsEditInput } |
+    { method: "revert"; value: VcsRevertInput },
 ): Promise<{ head: string; result: VcsWorkingMutationResult }> {
   const { dispatch, owner, cause, blobsDir } = input;
   const { value, method } = request;
@@ -635,10 +642,12 @@ async function mutateWorkspaceParticipant(
   const requestPlan = async (receipt: { files: z.infer<typeof blob>[] } | null) =>
     mutationPlan.parse(method === "edit"
       ? await dispatch.dispatch(owner, "planHistoryEdit", { ...common, edit: value, receipt })
-      : await dispatch.dispatch(owner, "planHistoryTransfer", {
-          ...common, transfer: request,
-          ...(method === "copy" ? { readableContextIds: input.readableContextIds ?? [] } : {}),
-        })
+      : method === "revert"
+        ? await dispatch.dispatch(owner, "planHistoryRevert", { ...common, revert: value })
+        : await dispatch.dispatch(owner, "planHistoryTransfer", {
+            ...common, transfer: request,
+            ...(method === "copy" ? { readableContextIds: input.readableContextIds ?? [] } : {}),
+          })
     );
   const checkResult = (result: VcsWorkingMutationResult) => {
     if (
@@ -652,7 +661,7 @@ async function mutateWorkspaceParticipant(
   };
   let plan = await requestPlan(null);
   if (plan.kind === "read-content") {
-    if (method !== "edit") throw new Error("Workspace transfer requested new content");
+    if (method !== "edit") throw new Error(`Workspace ${method} requested new content`);
     const files = await Promise.all(
       plan.contentHashes.map(async (contentHash) => {
         const bytes = await getBytes(blobsDir, contentHash);
