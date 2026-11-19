@@ -11,6 +11,12 @@ import {
   GadJsonRecordSchema,
   HistoryTrajectorySearchInputSchema,
   HistoryTrajectorySearchMatchesSchema,
+  HistoryWalkCohortSchema,
+  HistoryWalkInvocationsSchema,
+  HistoryWalkPageSchema,
+  type HistoryWalkCohort,
+  type HistoryWalkInvocation,
+  type HistoryWalkPage,
   gadWireMethods,
   type HistoryTrajectorySearchInput,
 } from "@vibestudio/service-schemas/workspaceSource";
@@ -123,6 +129,8 @@ export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMe
   inspectInvocationState: WorkspaceSemanticClient["inspectInvocationState"];
   readHistoryMemoryCause(input: ReturnType<typeof vcsTrajectoryInvocationRefSchema.parse>):
     Promise<ReturnType<typeof vcsReadMemoryCauseSchema.parse> | null>;
+  readHistoryWalkInvocation(input: HistoryWalkInvocation): Promise<HistoryWalkPage>;
+  readHistoryWalkCohortInvocations(input: HistoryWalkCohort): Promise<HistoryWalkInvocation[]>;
   searchHistoryTrajectory(input: HistoryTrajectorySearchInput):
     Promise<import("@vibestudio/service-schemas/vcs").VcsSearchHit[]>;
 };
@@ -212,6 +220,12 @@ export function createWorkspaceSemanticPort(
     inspectInvocationState: (input) => client.inspectInvocationState(input),
     readHistoryMemoryCause: async (input) => vcsReadMemoryCauseSchema.nullable().parse(
       await dispatch.dispatch(provider, "readHistoryMemoryCause", vcsTrajectoryInvocationRefSchema.parse(input)),
+    ),
+    readHistoryWalkInvocation: async (input) => HistoryWalkPageSchema.parse(
+      await dispatch.dispatch(provider, "readHistoryWalkInvocation", vcsTrajectoryInvocationRefSchema.parse(input)),
+    ),
+    readHistoryWalkCohortInvocations: async (input) => HistoryWalkInvocationsSchema.parse(
+      await dispatch.dispatch(provider, "readHistoryWalkCohortInvocations", HistoryWalkCohortSchema.parse(input)),
     ),
     searchHistoryTrajectory: async (input) => HistoryTrajectorySearchMatchesSchema.parse(
       await dispatch.dispatch(provider, "searchHistoryTrajectory", HistoryTrajectorySearchInputSchema.parse(input)),

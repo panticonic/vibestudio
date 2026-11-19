@@ -36,7 +36,7 @@ import {
   type MethodSchema,
   type ServiceMethodSchemas,
 } from "@vibestudio/shared/typedServiceClient";
-import { vcsFileLineageSchema, vcsMethods, vcsSearchHitSchema, vcsSearchInputSchema, vcsStateNodeRefSchema } from "./vcs.js";
+import { vcsFileLineageSchema, vcsMethods, vcsSearchHitSchema, vcsSearchInputSchema, vcsStateNodeRefSchema, vcsTrajectoryInvocationRefSchema, vcsTrajectoryTurnRefSchema, vcsWalkEntrySchema, vcsWalkInputSchema } from "./vcs.js";
 
 const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
@@ -61,6 +61,38 @@ export const HistoryTrajectorySearchInputSchema = vcsSearchInputSchema.pick({ te
   .extend({ causes: HistorySearchCausePageSchema }).strict();
 export type HistoryTrajectorySearchInput = z.infer<typeof HistoryTrajectorySearchInputSchema>;
 export const HistoryTrajectorySearchMatchesSchema = z.array(vcsSearchHitSchema).max(51);
+
+/** Bounded data crossing the native-history and trajectory owner boundary. */
+export const HistoryWalkPageSchema = z.object({
+  entries: z.array(vcsWalkEntrySchema).max(2_000),
+  notes: z.array(z.string().min(1).max(400)).max(20),
+}).strict();
+const historyWalkRevisions = z.array(historySearchRevision).min(1).max(514);
+export const HistoryWalkCohortSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("turn"), turn: vcsTrajectoryTurnRefSchema }).strict(),
+  z.object({
+    kind: z.literal("invocation"), invocation: vcsTrajectoryInvocationRefSchema, workUnitId: z.string().min(1),
+  }).strict(),
+]);
+export const HistoryWalkPlanSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("page"), page: HistoryWalkPageSchema, revisions: historyWalkRevisions,
+    invocation: vcsTrajectoryInvocationRefSchema.nullable(),
+  }).strict(),
+  z.object({
+    kind: z.literal("cohort"), seed: HistoryWalkCohortSchema, revisions: historyWalkRevisions,
+  }).strict(),
+]);
+export const HistoryWalkInvocationsSchema = z.array(vcsTrajectoryInvocationRefSchema).max(2_000);
+export const HistoryWalkCohortRequestSchema = z.object({
+  walk: vcsWalkInputSchema,
+  revisions: historyWalkRevisions,
+  seed: HistoryWalkCohortSchema,
+  invocations: HistoryWalkInvocationsSchema,
+}).strict();
+export type HistoryWalkCohort = z.infer<typeof HistoryWalkCohortSchema>;
+export type HistoryWalkInvocation = z.infer<typeof vcsTrajectoryInvocationRefSchema>;
+export type HistoryWalkPage = z.infer<typeof HistoryWalkPageSchema>;
 
 /** Exact coordinate returned by semantic context initialization and forking. */
 export const SemanticContextResultSchema = z

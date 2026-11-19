@@ -215,6 +215,7 @@ describe("canonical vcsService", () => {
       publishParticipantContext: vi.fn().mockResolvedValue(published),
       readParticipantFiles: vi.fn().mockResolvedValue([null]),
       readParticipantMemory: vi.fn(),
+      walkParticipantHistory: vi.fn(),
       searchParticipantHistory: vi.fn().mockResolvedValue({
         text: "retained provenance", indexMode: "scan", hits: [], truncated: false,
       }),
@@ -291,6 +292,17 @@ describe("canonical vcsService", () => {
     dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(timeline);
     await expect(definition.handler(ctx, "history", [history])).resolves.toEqual(timeline);
     expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryTimeline", { contextId: scope.contextId, history });
+
+    const walk = { contextId: scope.contextId, walk: "cause", subject: EVENT, limit: 2 };
+    const walked = { walk: "cause", subject: EVENT, scope: null, entries: [], omitted: [], notes: [], nextCursor: null };
+    workspace.walkParticipantHistory.mockResolvedValue(walked);
+    dispatch.mockResolvedValueOnce(true);
+    await expect(withChild.handler(ctx, "walk", [
+      { ...walk, visibilityContextIds: ["context:unrelated"] },
+    ])).resolves.toEqual(walked);
+    expect(workspace.walkParticipantHistory).toHaveBeenCalledWith({
+      ...scope, walk: { ...walk, scope: "turn", visibilityContextIds: [childContext, scope.contextId] },
+    });
 
     const memory = {
       contextId: scope.contextId, path: "projects/one/file.txt",

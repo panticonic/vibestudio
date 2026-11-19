@@ -37,6 +37,8 @@ import type {
   VcsReadMemoryResult,
   VcsSearchInput,
   VcsStateNodeRef,
+  VcsWalkInput,
+  VcsWalkResult,
 } from "@vibestudio/service-schemas/vcs";
 import { z } from "zod";
 import { vcsReadMemoryResultSchema, vcsTrajectoryInvocationRefSchema } from "@vibestudio/service-schemas/vcs";
@@ -115,6 +117,8 @@ import {
   HISTORY_SEARCH_CAUSE_LIMIT,
   HistorySearchBasisSchema,
   HistorySearchCausePageSchema,
+  HistoryWalkPageSchema,
+  HistoryWalkPlanSchema,
   type HistorySearchCause,
   SemanticContextResultSchema,
   GadJsonValueSchema,
@@ -839,6 +843,52 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (!source) throw new Error("Participant workspace history is unavailable");
     const main = await readWorkspaceCanonicalMain(source);
     return { kind: "event" as const, eventId: main.eventId };
+  }
+
+  async walkParticipantHistory(input: WorkspaceHistoryParticipant & { walk: VcsWalkInput }): Promise<VcsWalkResult> {
+    requireWorkspaceParticipantOwner(input);
+    const { walk, dispatch, owner } = input;
+    const protectedEventId = this.deps.refs.readMainSemanticState()?.eventId;
+    if (!protectedEventId) throw new Error("Workspace walk needs a protected main event");
+    const plan = HistoryWalkPlanSchema.parse(await dispatch.dispatch(owner, "readHistoryWalk", {
+      walk, protectedEventId,
+    }));
+    let page;
+    if (plan.kind === "cohort") {
+      if (walk.walk !== "cohort") throw new Error("Workspace walk returned a different scope");
+      const invocations = await this.gad().readHistoryWalkCohortInvocations(plan.seed);
+      page = HistoryWalkPageSchema.parse(await dispatch.dispatch(owner, "readHistoryWalkCohort", {
+        walk, revisions: plan.revisions, seed: plan.seed, invocations,
+      }));
+    } else {
+      page = plan.page;
+      if (plan.invocation) {
+        if (walk.walk !== "cause") throw new Error("Workspace walk returned a different scope");
+        const trail = await this.gad().readHistoryWalkInvocation(plan.invocation);
+        const first = trail.entries[0];
+        if (first && canonicalJson(first.node) !== canonicalJson(plan.invocation))
+          throw new Error("Workspace trajectory mirror returned a different invocation");
+        const depth = page.entries.length;
+        page = {
+          entries: [...page.entries, ...trail.entries.map((entry) => ({ ...entry, depth: entry.depth + depth }))],
+          notes: [...page.notes, ...trail.notes],
+        };
+      }
+    }
+    const basis = sha256HexSyncText(canonicalJson({
+      contextId: walk.contextId, walk: walk.walk, scope: walk.scope, subject: walk.subject,
+      revisions: plan.revisions, page,
+    }));
+    const position = walk.cursor?.length && /^native-walk:([a-f0-9]{64}):([0-9]{1,4})$/u.exec(walk.cursor);
+    if (walk.cursor && (!position || position[1] !== basis || Number(position[2]) >= page.entries.length))
+      throw new Error("InvalidReference: walk cursor does not match the admitted history");
+    const offset = position ? Number(position[2]) : 0;
+    const next = offset + walk.limit;
+    return {
+      walk: walk.walk, scope: walk.walk === "cohort" ? walk.scope : null, subject: walk.subject,
+      entries: page.entries.slice(offset, next), omitted: [], notes: page.notes,
+      nextCursor: next < page.entries.length ? `native-walk:${basis}:${next}` : null,
+    };
   }
 
   async readParticipantMemory(input: WorkspaceHistoryParticipant & {
