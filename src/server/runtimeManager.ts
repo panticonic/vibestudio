@@ -2200,6 +2200,10 @@ export class RuntimeManager {
       : null;
   }
 
+  declaresRemoteDoltClass(source: string, className: string): boolean {
+    return this.classEngine(source, className)?.doltRemotes === true;
+  }
+
   /**
    * Admit a class an entity hosts in its own cell (docs/dolt-redesign.md §7.2).
    * Two manifests decide it: the host class declares `hosts` (this code), the

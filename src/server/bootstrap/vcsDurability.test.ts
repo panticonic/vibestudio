@@ -64,6 +64,7 @@ describe("wireVcsDurability", () => {
       dispatch: vi.fn(async () => ["direct-result"]),
     } as unknown as DODispatch;
     const manager = {
+      declaresRemoteDoltClass: vi.fn(() => false),
       ensureDurableObjectEntity: vi.fn(async () => ({
         targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
         effectiveVersion: "a".repeat(64),
@@ -141,6 +142,7 @@ describe("wireVcsDurability", () => {
       attachWorkspaceSourceProvider: vi.fn(),
     } as unknown as WorkspaceVcs;
     const manager = {
+      declaresRemoteDoltClass: vi.fn(() => false),
       ensureDurableObjectEntity: vi.fn(async () => ({
         targetId: "do:workers/workspace-source:GadWorkspaceDO:workspace",
         effectiveVersion: "a".repeat(64),
@@ -196,8 +198,8 @@ describe("wireVcsDurability", () => {
     expect(manager.ensureDurableObjectEntity).toHaveBeenCalledOnce();
     expect(publishWorkspaceSourceEntity).toHaveBeenCalledOnce();
   });
-  it.each(["installed", "before-freeze", "older-runtime"] as const)(
-    "resumes %s participant history before asynchronous activation",
+  it.each(["installed", "before-freeze", "older-runtime", "new"] as const)(
+    "handles %s participant history in workspace activation order",
     async (resumeAt) => {
     const workspaceId = "workspace-1";
     const source = { source: "workers/workspace-source", className: "GadWorkspaceDO", objectKey: "workspace" };
@@ -245,29 +247,44 @@ describe("wireVcsDurability", () => {
       }
     });
     const sequence: string[] = [];
+    let initialize: (() => Promise<void>) | undefined;
     const workspaceVcs = {
       attachGad: vi.fn(async () => undefined),
       attachWorkspaceSourceProvider: vi.fn(),
       attachParticipantHistory: vi.fn(async () => { sequence.push("participant"); }),
-      startSemanticInitialization: vi.fn(() => { sequence.push("initialization"); }),
+      startSemanticInitialization: vi.fn((operation: () => Promise<void>) => {
+        sequence.push("initialization");
+        initialize = operation;
+      }),
     } as unknown as WorkspaceVcs;
     const runtimeManager = {
+      declaresRemoteDoltClass: vi.fn(() => resumeAt === "new"),
       ensureDurableObjectEntity: vi.fn(async ({ source, className, key }) => ({
         targetId: `do:${source}:${className}:${key}`, effectiveVersion: "a".repeat(64),
         buildKey: "b".repeat(64), executionDigest: "c".repeat(64),
         authority: { provides: [], requests: [] },
       })),
     } as unknown as RuntimeManager;
-    const readWorkspaceHistoryOwner = vi.fn(async () => ({ contextId }));
+    const readWorkspaceHistoryOwner = vi.fn(async () => resumeAt === "new" ? null : { contextId });
     const readProtectedMainEventId = vi.fn(() => resumeAt === "installed" ? "since-published" : main.eventId);
     const listWorkspaceHistorySessionOwners = vi.fn(async () => []);
     const { services } = captureServices({
       workspaceVcs, workspaceId, workspaceSourceProvider: source,
       readWorkspaceHistoryOwner, readProtectedMainEventId, listWorkspaceHistorySessionOwners,
+      activateSemanticWorkspace: async () => { sequence.push("root active"); },
     });
     const resolve = <D>(name: string): D | undefined =>
       ({ doDispatch: { dispatch }, runtimeManager })[name as "doDispatch" | "runtimeManager"] as D | undefined;
     await services.find((service) => service.name === "vcsAttach")?.start?.(resolve);
+    if (resumeAt === "new") {
+      expect(runtimeManager.ensureDurableObjectEntity).toHaveBeenCalledOnce();
+      expect(dispatch).not.toHaveBeenCalled();
+      await initialize!();
+      expect(runtimeManager.declaresRemoteDoltClass).toHaveBeenCalledWith(source.source, canonical.className);
+      expect(dispatch).toHaveBeenCalledWith(source, "beginHistoryReplayFreeze", freeze);
+      expect(sequence).toEqual(["initialization", "root active", "participant"]);
+      return;
+    }
     expect(readWorkspaceHistoryOwner).toHaveBeenCalledWith(targetId);
     expect(readProtectedMainEventId).toHaveBeenCalledTimes(resumeAt === "installed" ? 0 : 1);
     if (resumeAt !== "installed") {

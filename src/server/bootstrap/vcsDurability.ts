@@ -49,16 +49,17 @@ export interface VcsDurabilityBootstrapDeps {
 async function restoreParticipantHistory(
   deps: VcsDurabilityBootstrapDeps,
   dispatch: DODispatch,
-  runtime: RuntimeManager
-): Promise<void> {
+  runtime: RuntimeManager,
+  reserve = false,
+): Promise<boolean> {
   const legacy = deps.workspaceSourceProvider;
   const canonical = { ...legacy, className: "GadHistoryDO", objectKey: "canonical" };
   const target = { source: canonical.source, className: canonical.className, key: canonical.objectKey };
   const targetId = canonicalEntityId({ kind: "do", ...target });
   const owner = await deps.readWorkspaceHistoryOwner(targetId);
-  if (!owner) return;
+  if (!owner && !reserve) return false;
   const contextId = canonicalWorkspaceObjectContextId(deps.workspaceId, target);
-  if (owner.contextId !== contextId) {
+  if (owner && owner.contextId !== contextId) {
     throw new Error("The canonical participant history has a different runtime lifetime");
   }
   const prepared = await runtime.ensureDurableObjectEntity({
@@ -70,12 +71,12 @@ async function restoreParticipantHistory(
   const receipt = await readWorkspaceHistoryReplayReceipt(dispatch, canonical);
   const held = await readWorkspaceHistoryReplayFreeze(dispatch, legacy);
   const expectedMainEventId = receipt?.eventId ?? deps.readProtectedMainEventId();
-  if (!receipt && !held && !expectedMainEventId) return;
+  if (!receipt && !held && !expectedMainEventId) return false;
   if (!receipt && !held) {
     const supportsReplay = await dispatch.dispatch(canonical, "supportsHistoryReplay");
     if (supportsReplay !== true) {
       console.warn("[Vcs] Participant history migration requires a runtime with scoped queries");
-      return;
+      return true;
     }
   }
   // The durable system-owned canonical lifetime is also the reservation
@@ -98,6 +99,7 @@ async function restoreParticipantHistory(
     dispatch, canonical, infrastructureContextId: contextId,
     listReplayedSessionOwners: deps.listWorkspaceHistorySessionOwners,
   });
+  return true;
 }
 
 /** Attach the semantic state machine, then initialize its host materialization. */
@@ -143,11 +145,15 @@ export function wireVcsDurability(deps: VcsDurabilityBootstrapDeps): void {
       console.log(
         `[Vcs] Attached manifest-declared workspace source provider (${gadRef.source}:${gadRef.className})`
       );
-      await restoreParticipantHistory(deps, doDispatch, runtimeManager);
+      const historyChecked = await restoreParticipantHistory(deps, doDispatch, runtimeManager);
       if (deps.workspaceVcs.participantHistoryAttached) phaseComplete("installed participant history");
-      deps.workspaceVcs.startSemanticInitialization(() =>
-        deps.activateSemanticWorkspace(deps.workspaceVcs)
-      );
+      deps.workspaceVcs.startSemanticInitialization(async () => {
+        await deps.activateSemanticWorkspace(deps.workspaceVcs);
+        if (!historyChecked && runtimeManager.declaresRemoteDoltClass(gadRef.source, "GadHistoryDO")) {
+          await restoreParticipantHistory(deps, doDispatch, runtimeManager, true);
+          if (deps.workspaceVcs.participantHistoryAttached) phaseComplete("installed participant history");
+        }
+      });
       return deps.workspaceVcs;
     },
     async stop() {

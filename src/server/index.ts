@@ -7337,7 +7337,11 @@ async function main() {
       const owner = await ensureEntityStore(
         container.get<import("./doDispatch.js").DODispatch>("doDispatch")
       ).resolveRecord(targetId);
-      return owner?.status === "active" && owner.ownerUserId === SYSTEM_SUBJECT.userId ? owner : null;
+      if (!owner) return null;
+      if (owner.status !== "active" || owner.ownerUserId !== SYSTEM_SUBJECT.userId) {
+        throw new Error("The canonical workspace history runtime belongs to a different lifetime");
+      }
+      return owner;
     },
     listWorkspaceHistorySessionOwners: async (contextIds) => {
       const store = getEntityStore();
@@ -7381,6 +7385,10 @@ async function main() {
         ownerUserId: SYSTEM_SUBJECT.userId,
       };
       const existing = await store.resolveRecord(targetId);
+      if (className === "GadHistoryDO" && objectKey === "canonical" && existing &&
+          (existing.ownerUserId !== SYSTEM_SUBJECT.userId || existing.contextId !== contextId || existing.status !== "active")) {
+        throw new Error("The canonical workspace history runtime belongs to a different lifetime");
+      }
       if (existing) await store.advanceExecution(activation);
       else await store.activate(activation);
     },
