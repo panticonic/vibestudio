@@ -216,6 +216,7 @@ describe("wireVcsDurability", () => {
     };
     const dispatch = vi.fn(async (_target: typeof source, method: string, input: unknown) => {
       if (method === "readHistoryReplayReceipt") return receipt;
+      if (method === "readHistoryReplayFreeze") return freeze;
       if (method === "beginHistoryReplayFreeze") {
         expect(input).toEqual(freeze);
         return { ...plan, generation };

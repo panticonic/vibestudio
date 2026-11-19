@@ -14,6 +14,7 @@ import type { BuildSystemV2 } from "../buildV2/index.js";
 import type { ExecutionPublicationJournal } from "../executionPublicationJournal.js";
 import {
   migrateWorkspaceHistory,
+  readWorkspaceHistoryReplayFreeze,
   readWorkspaceHistoryReplayReceipt,
   WORKSPACE_PARTICIPANT_HISTORY_MIGRATION,
 } from "../vcsHost/workspaceHistoryMigration.js";
@@ -66,17 +67,16 @@ async function restoreParticipantHistory(
     throw new Error("The runtime prepared a different canonical participant history");
   await deps.publishWorkspaceSourceEntity({ ...canonical, contextId, ...prepared });
   const receipt = await readWorkspaceHistoryReplayReceipt(dispatch, canonical);
-  const expectedMainEventId = receipt?.eventId ?? deps.readProtectedMainEventId();
-  if (!expectedMainEventId)
-    throw new Error("Participant history migration has no initialized source");
+  const freeze = await readWorkspaceHistoryReplayFreeze(dispatch, legacy);
+  if (!receipt && !freeze) return;
+  if (
+    freeze?.operationId !== WORKSPACE_PARTICIPANT_HISTORY_MIGRATION ||
+    freeze.expectedMainEventId !== (receipt?.eventId ?? deps.readProtectedMainEventId())
+  ) {
+    throw new Error("Participant history startup requires the original held migration");
+  }
   await migrateWorkspaceHistory({
-    dispatch,
-    source: legacy,
-    destination: canonical,
-    freeze: {
-      operationId: WORKSPACE_PARTICIPANT_HISTORY_MIGRATION,
-      expectedMainEventId,
-    },
+    dispatch, source: legacy, destination: canonical, freeze,
   });
   await deps.workspaceVcs.attachParticipantHistory({
     dispatch, canonical, infrastructureContextId: contextId,

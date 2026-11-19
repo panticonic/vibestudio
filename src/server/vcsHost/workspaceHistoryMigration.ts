@@ -23,6 +23,18 @@ const replayReceiptSchema = headSchema
     ),
   })
   .strict();
+const freezeSchema = z.object({
+  operationId: z.string().min(1),
+  expectedMainEventId: z.string().min(1),
+}).strict();
+
+export async function readWorkspaceHistoryReplayFreeze(
+  dispatch: Pick<DODispatch, "dispatch">,
+  source: WorkspaceSourceProviderRef
+) {
+  return freezeSchema.nullable().parse(await dispatch.dispatch(source, "readHistoryReplayFreeze"));
+}
+
 const planSchema = z
   .object({
     main: vcsStateNodeRefSchema.nullable(),
