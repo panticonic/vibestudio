@@ -24,6 +24,7 @@ import {
   assertHostBuildPayloadComplete,
   publishHostBuildGeneration,
   admitPublishedHostBuildGeneration,
+  restorePackagedHostPreparationRecipes,
 } from "./scripts/host-build-generations.mjs";
 import { buildInfrastructurePackages } from "./scripts/infrastructure-package-cache.mjs";
 import { nativeWorkspaceArtifactConfigs } from "./scripts/native-workspace-artifacts.mjs";
@@ -818,10 +819,12 @@ async function build() {
       )
     ) {
       const build = { ...expected, kind: "desktop" };
-      if (!admitPublishedHostBuildGeneration(process.cwd(), build)) {
+      let generation = admitPublishedHostBuildGeneration(process.cwd(), build);
+      if (!generation) {
         await checkBuildArtifacts();
-        publishHostBuildGeneration(process.cwd(), build);
+        generation = publishHostBuildGeneration(process.cwd(), build);
       }
+      if (!isDev) restorePackagedHostPreparationRecipes(process.cwd(), generation);
       console.log("Host artifacts already match the current source snapshot.");
       return;
     }
@@ -895,7 +898,11 @@ async function build() {
       process.cwd(),
       DESKTOP_HOST_BUILD_FINGERPRINT_PATH
     );
-    publishHostBuildGeneration(process.cwd(), { ...completedSnapshot, kind: "desktop" });
+    const generation = publishHostBuildGeneration(process.cwd(), {
+      ...completedSnapshot,
+      kind: "desktop",
+    });
+    if (!isDev) restorePackagedHostPreparationRecipes(process.cwd(), generation);
 
     console.log("Build successful!");
   } catch (error) {

@@ -119,6 +119,24 @@ export function readHostPreparationRecipe(root, entry) {
   return record.entries[entry];
 }
 
+/** Packaging consumes the worktree's compiled files. Reinstall their recipe
+ * receipt when a verified immutable generation survived a worktree rebuild. */
+export function restorePackagedHostPreparationRecipes(cwd, generation) {
+  const dist = path.join(cwd, "dist");
+  const recipes = preparationRecipes(dist);
+  for (const [entry, digest] of Object.entries(recipes.entries)) {
+    if (readHostPreparationRecipe(generation, entry) !== digest)
+      throw new Error(`Packaged ${entry} differs from the published host build`);
+  }
+  const receiptPath = path.join(dist, HOST_PREPARATION_RECIPES);
+  if (
+    !fs.existsSync(receiptPath) ||
+    fs.readFileSync(receiptPath, "utf8") !== `${JSON.stringify(recipes)}\n`
+  ) {
+    writePreparationRecipes(dist, recipes);
+  }
+}
+
 const heldGenerations = new Map();
 let exitCleanupInstalled = false;
 

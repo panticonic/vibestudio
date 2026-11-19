@@ -13,6 +13,7 @@ import {
   readCurrentHostBuildGeneration,
   releaseHostBuildGeneration,
   readHostPreparationRecipe,
+  restorePackagedHostPreparationRecipes,
   HOST_PREPARATION_RECIPES,
 } from "./host-build-generations.mjs";
 import {
@@ -371,6 +372,28 @@ test("publishes immutable complete generations and leaves the prior one readable
     assert.equal(fs.existsSync(first), false);
     assert.equal(fs.existsSync(second), true);
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("restores a packaging receipt for matching compiler output after a rebuild", () => {
+  const { root, published } = admittedSourceFixture();
+  const dist = path.join(root, "dist");
+  const receipt = path.join(dist, HOST_PREPARATION_RECIPES);
+  const entry = "prepare-workspace-templates.mjs";
+  try {
+    fs.rmSync(receipt);
+    restorePackagedHostPreparationRecipes(root, published);
+    assert.equal(readHostPreparationRecipe(dist, entry), readHostPreparationRecipe(published, entry));
+    fs.rmSync(receipt);
+    fs.writeFileSync(path.join(dist, entry), "another build");
+    assert.throws(
+      () => restorePackagedHostPreparationRecipes(root, published),
+      /differs from the published host build/u
+    );
+    assert.equal(fs.existsSync(receipt), false);
+  } finally {
+    releaseHostBuildGeneration(published);
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
