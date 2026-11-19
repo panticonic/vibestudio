@@ -51,6 +51,7 @@ import {
 } from "./node-runtime-artifacts.mjs";
 
 import { assertNativeIsolationArtifacts } from "./native-isolation-artifacts.mjs";
+import { nativeCelldArtifact, readNativeCelldManifest, stageNativeCelld } from "./native-celld-artifacts.mjs";
 import {
   assertDarwinProcessObserverArtifacts,
   darwinProcessObserverPath,
@@ -70,6 +71,7 @@ const SERVER_PACKAGE_FILES = [
   "userland-builds",
   "schema-evidence.json",
   "native/node/distribution.json",
+  "native/celld",
   ".nvmrc",
 ];
 export const SERVER_RUNTIME_ARTIFACTS = STANDALONE_SERVER_RUNTIME_ARTIFACTS;
@@ -250,6 +252,7 @@ export async function stageServer(nativeArtifacts) {
   }
   stageDarwinProcessObserverArtifacts(root, repoRoot);
   stageNativeIsolationArtifacts(root, nativeArtifacts);
+  stageServerCelld(root, repoRoot);
   copyTree(path.join(repoRoot, "dist/cli"), path.join(root, "dist/cli"), defaultSkip);
   copyTree(
     path.join(repoRoot, "dist/headless-host"),
@@ -698,6 +701,18 @@ export function stageNativeIsolationArtifacts(root, artifacts) {
     fs.copyFileSync(source, destination);
     if (!artifact.endsWith(".json") && !artifact.endsWith(".exe")) fs.chmodSync(destination, 0o755);
   }
+}
+
+export function stageServerCelld(root, appRoot) {
+  const manifest = readNativeCelldManifest(appRoot);
+  for (const target of manifest.targets) {
+    const source = path.join(appRoot, nativeCelldArtifact(target));
+    const destination = stageNativeCelld(source, root, target);
+    for (const notice of ["LICENSE", "NOTICE"]) {
+      fs.copyFileSync(path.join(path.dirname(source), notice), path.join(path.dirname(destination), notice));
+    }
+  }
+  fs.copyFileSync(path.join(appRoot, "native/celld/targets.json"), path.join(root, "native/celld/targets.json"));
 }
 
 export function stageDarwinProcessObserverArtifacts(root, appRoot = repoRoot) {

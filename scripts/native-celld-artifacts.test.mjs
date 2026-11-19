@@ -11,6 +11,7 @@ import {
   nativeCelldDigest,
   nativeCelldTarget,
   stageNativeCelld,
+  stageNativeCelldCiArtifact,
 } from "./native-celld-artifacts.mjs";
 
 /** A minimal ELF header for linux-x64: the format check reads the class, endianness and machine. */
@@ -67,6 +68,33 @@ test("stages only the binary the manifest names, for the target it names", () =>
     fs.linkSync(staged, holder);
     stageNativeCelld(source, root, target);
     assert.notEqual(fs.statSync(holder).ino, fs.statSync(staged).ino);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("stages a CI receipt only for the commit and digest the application pins", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "native-celld-ci-"));
+  try {
+    const downloaded = path.join(root, "download");
+    fs.mkdirSync(downloaded);
+    const binary = elf(62);
+    const target = withTarget(binary);
+    const commit = "a".repeat(40);
+    const manifest = { fork: { commit }, targets: [target] };
+    const receiptPath = path.join(downloaded, "target.json");
+    const writeReceipt = (receipt) => fs.writeFileSync(receiptPath, JSON.stringify(receipt));
+    fs.writeFileSync(path.join(downloaded, target.binary), binary);
+    fs.writeFileSync(path.join(downloaded, "LICENSE"), "license");
+    fs.writeFileSync(path.join(downloaded, "NOTICE"), "notice");
+    writeReceipt({ ...target, commit: "b".repeat(40) });
+    assert.throws(() => stageNativeCelldCiArtifact(downloaded, root, manifest, target), /pinned/u);
+    writeReceipt({ ...target, commit });
+    const staged = stageNativeCelldCiArtifact(downloaded, root, manifest, target);
+    assert.equal(staged, path.join(root, nativeCelldArtifact(target)));
+    assert.equal(nativeCelldDigest(staged), target.sha256);
+    assert.equal(nativeCelldDigest(path.join(root, "native/celld/artifacts/linux-x64/celld")), target.sha256);
+    assert.equal(fs.readFileSync(path.join(path.dirname(staged), "NOTICE"), "utf8"), "notice");
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

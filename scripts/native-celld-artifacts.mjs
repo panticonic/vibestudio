@@ -54,9 +54,11 @@ export function assertNativeCelldBinary(file, target) {
 }
 
 /** Publish a verified binary under the application root without overwriting an inode a live host executes. */
-export function stageNativeCelld(from, appRoot, target = nativeCelldTarget()) {
+export function stageNativeCelld(from, appRoot, target = nativeCelldTarget(), { artifactInput = false } = {}) {
   assertNativeCelldBinary(from, target);
-  const destination = path.join(appRoot, nativeCelldArtifact(target));
+  const destination = artifactInput
+    ? path.join(appRoot, "native/celld/artifacts", `${target.platform}-${target.arch}`, target.binary)
+    : path.join(appRoot, nativeCelldArtifact(target));
   mkdirSync(path.dirname(destination), { recursive: true });
   const temporary = `${destination}.${randomUUID()}.tmp`;
   try {
@@ -67,4 +69,20 @@ export function stageNativeCelld(from, appRoot, target = nativeCelldTarget()) {
     rmSync(temporary, { force: true });
   }
   return destination;
+}
+
+/** Accept a CI artifact only at the source revision and digest pinned by the application. */
+export function stageNativeCelldCiArtifact(directory, appRoot, manifest, target) {
+  const receipt = JSON.parse(readFileSync(path.join(directory, "target.json"), "utf8"));
+  if (receipt.commit !== manifest.fork.commit || receipt.platform !== target.platform ||
+      receipt.arch !== target.arch || receipt.binary !== target.binary || receipt.sha256 !== target.sha256) {
+    throw new Error(`celld CI artifact does not match the pinned ${target.platform}-${target.arch} build`);
+  }
+  const binary = path.join(directory, target.binary);
+  const artifact = stageNativeCelld(binary, appRoot, target, { artifactInput: true });
+  const staged = stageNativeCelld(artifact, appRoot, target);
+  for (const notice of ["LICENSE", "NOTICE"]) {
+    copyFileSync(path.join(directory, notice), path.join(path.dirname(staged), notice));
+  }
+  return staged;
 }

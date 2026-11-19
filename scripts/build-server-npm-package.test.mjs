@@ -9,6 +9,7 @@ import {
   assertPassthroughScriptsStaged,
   stagePassthroughScriptClosure,
   stageDarwinProcessObserverArtifacts,
+  stageServerCelld,
   withOwnedCleanup,
 } from "./build-server-npm-package.mjs";
 import { SOURCE_SERVER_PREREQUISITE_ARTIFACTS } from "./server-runtime-artifacts.mjs";
@@ -21,6 +22,36 @@ test("stages every standalone child required by source-server readiness", () => 
       SOURCE_SERVER_PREREQUISITE_ARTIFACTS.includes(artifact),
       `${artifact} must be required before a source-server launch`
     );
+  }
+});
+
+test("packages the pinned celld binary with its manifest and redistribution notices", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "npm-celld-payload-"));
+  try {
+    const app = path.join(root, "app");
+    const packageRoot = path.join(root, "server");
+    const source = path.join(app, "native/celld/linux-x64");
+    fs.mkdirSync(source, { recursive: true });
+    const binary = Buffer.alloc(64);
+    Buffer.from([0x7f, 0x45, 0x4c, 0x46, 2, 1]).copy(binary);
+    binary.writeUInt16LE(62, 18);
+    fs.writeFileSync(path.join(source, "celld"), binary);
+    fs.writeFileSync(path.join(source, "LICENSE"), "license");
+    fs.writeFileSync(path.join(source, "NOTICE"), "notice");
+    const manifest = JSON.stringify({
+      version: 1,
+      targets: [{
+        platform: "linux", arch: "x64", binary: "celld",
+        sha256: createHash("sha256").update(binary).digest("hex"),
+      }],
+    });
+    fs.writeFileSync(path.join(app, "native/celld/targets.json"), manifest);
+    stageServerCelld(packageRoot, app);
+    assert.deepEqual(fs.readFileSync(path.join(packageRoot, "native/celld/linux-x64/celld")), binary);
+    assert.equal(fs.readFileSync(path.join(packageRoot, "native/celld/linux-x64/NOTICE"), "utf8"), "notice");
+    assert.equal(fs.readFileSync(path.join(packageRoot, "native/celld/targets.json"), "utf8"), manifest);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 

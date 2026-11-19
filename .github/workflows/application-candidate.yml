@@ -57,6 +57,10 @@ jobs:
       - name: Install test dependencies
         run: pnpm install --frozen-lockfile
 
+      - uses: ./.github/actions/prepare-celld
+        with:
+          target: ${{ inputs.target }}
+
       - name: Download exact Darwin production host inputs
         if: ${{ inputs.target == 'darwin-arm64' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
