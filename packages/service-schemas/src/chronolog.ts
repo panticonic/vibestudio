@@ -239,8 +239,7 @@ export const chronologMethods = defineServiceMethods({
   },
   "history.share": {
     ...groupMutation(CHRONOLOG_SHARE_HISTORY_RESOLVER, groupResource),
-    description:
-      "Allow this Chronolog group's publishers to update the workspace's shared history.",
+    description: "Authorize this Chronolog group to exchange published history with the workspace.",
     args: z.tuple([groupId]),
     returns: groupId,
   },
