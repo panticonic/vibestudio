@@ -91,6 +91,7 @@ test("authored template worlds flow into the collector without losing original s
             id: "later-batch-rejected",
             pages: [2, 3, 1, 4],
             fault: { batch: 2, kind: "receipt-mismatch" },
+            claims: [{ evidence: [] }],
           },
         ],
       ],
@@ -209,7 +210,7 @@ test("authored template worlds flow into the collector without losing original s
              ? `export const managedPdfExpectation = ({ id }) => ({
            "page-missing": { expectedStatus: "missing-pages", readPages: [], remaining: [1, 5], attemptedBatches: [] },
            "later-batch-rejected": { expectedStatus: "incomplete", readPages: [2, 3], remaining: [1, 4], attemptedBatches: [[2, 3], [1, 4]] },
-         })[id];`
+         })[id]; export const managedPdfHandoffWorlds = [{ pdf: "later-batch-rejected" }];`
              : ""
          }`
       )
@@ -340,6 +341,40 @@ test("authored template worlds flow into the collector without losing original s
   assert.throws(
     () => interruptedPdf.evidence(pdfExecution, { report: pdfReport }, "", interruptedPdf),
     /exact page scope/
+  );
+  const pdfHandoff = cases.get("pdf-handoff-live-later-batch-rejected");
+  assert.deepEqual(pdfHandoff.skills, ["extractPdfEvidence", "assembleHandoff"]);
+  assert.equal(pdfHandoff.expectedHandoff, "unanswered");
+  const bridge = {
+    contextId: "owned",
+    verification: {
+      passed: true,
+      checks: { exactPdf: true, exactHandoff: true, verifiedTransfer: true },
+      pdf: {
+        ...receipt,
+        attemptedBatches: [
+          [2, 3],
+          [1, 4],
+        ],
+      },
+      scratch: { passed: true, artifact: null, expectedStatus: "unanswered" },
+      sourceDigests: [2, 3].map((page) => ({ id: `page-${page}`, sha256: "a".repeat(64) })),
+    },
+  };
+  const pdfHandoffExecution = {
+    provenance: { contextId: "owned" },
+    diagnostics: { managedPdfHandoff: bridge },
+  };
+  const pdfHandoffExercise = {
+    report: {
+      results: [{ report: pdfReport }, { report: { status: "unanswered", artifact: null } }],
+    },
+  };
+  assert.ok(pdfHandoff.evidence(pdfHandoffExecution, pdfHandoffExercise, "", pdfHandoff));
+  bridge.verification.sourceDigests[0].id = "page-1";
+  assert.throws(
+    () => pdfHandoff.evidence(pdfHandoffExecution, pdfHandoffExercise, "", pdfHandoff),
+    /verified PDF prefix/
   );
   const review = cases.get("authoring-live-old-reference");
   assert.equal(review.root, "reviewProgram");

@@ -125,6 +125,14 @@ const pdfIntakeWorkflow = {
   root: "extractPdfEvidence",
   evidence: pdfIntakeEvidence,
 };
+const pdfHandoffWorkflow = {
+  family: "workspace-pdf-handoff",
+  namespace: "vibestudio:pdf-handoff",
+  group: "verified-page-transfer",
+  validator: { template: "system-testing", path: "skills/system-testing/pdf-handoff-managed.ts" },
+  skills: ["extractPdfEvidence", "assembleHandoff"],
+  evidence: pdfHandoffEvidence,
+};
 const presentationWorkflow = {
   family: "workspace-presentation",
   namespace: "vibestudio:visualize",
@@ -291,7 +299,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { integrationHandoffWorlds },
     { managedAutomationWorlds },
     { managedPublicationWorlds },
-    { managedPdfWorlds, managedPdfExpectation },
+    { managedPdfWorlds, managedPdfExpectation, managedPdfHandoffWorlds = [] },
     { managedPresentationWorlds },
     { managedAuthoringWorlds },
     { managedMemoryWorlds },
@@ -481,6 +489,23 @@ export async function loadLiveTeacherCases(checkouts) {
       pages: world.pages,
       fault: world.fault ?? null,
       ...managedPdfExpectation(world),
+    });
+  }
+  for (const { pdf } of managedPdfHandoffWorlds) {
+    const world = managedPdfWorlds.find(({ id }) => id === pdf);
+    if (!world) throw new Error(`Unknown PDF intake for handoff ${pdf}`);
+    cases.set(`pdf-handoff-live-${pdf}`, {
+      ...pdfHandoffWorkflow,
+      caseId: pdf,
+      expectedHandoff: world.claims.some(({ evidence }) => !evidence.length)
+        ? "unanswered"
+        : "staged",
+      fault: world.fault ?? null,
+      pages: world.pages,
+      ...managedPdfExpectation(world),
+      sourceGroups: [pdfHandoffWorkflow, pdfIntakeWorkflow, scratchHandoffWorkflow].flatMap(
+        workflowSourceGroups
+      ),
     });
   }
   for (const { id, expectedBlockers, expectedVisual } of managedPublicationWorlds) {
@@ -808,6 +833,57 @@ function pdfIntakeEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, seed_revision: verification.seedRevision },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function pdfHandoffEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedPdfHandoff;
+  const verification = fixture?.verification;
+  const pdf = verification?.pdf;
+  const scratch = verification?.scratch;
+  const results = exercise.report?.results;
+  const intake = results?.[0]?.report;
+  const handoff = results?.[1]?.report;
+  const artifact = scratch?.artifact;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.passed === true &&
+      ["exactPdf", "exactHandoff", "verifiedTransfer"].every(
+        (key) => verification.checks?.[key] === true
+      ) &&
+      pdf?.passed === true &&
+      scratch?.passed === true &&
+      pdf.caseId === workflow.caseId &&
+      pdf.expectedStatus === workflow.expectedStatus &&
+      intake?.status === workflow.expectedStatus &&
+      /^[a-f0-9]{64}$/u.test(pdf.digest) &&
+      intake.digest === pdf.digest &&
+      isDeepStrictEqual(pdf.requestedPages, workflow.pages) &&
+      isDeepStrictEqual(pdf.fault, workflow.fault) &&
+      isDeepStrictEqual(pdf.attemptedBatches, workflow.attemptedBatches) &&
+      isDeepStrictEqual(intake.readPages, workflow.readPages) &&
+      isDeepStrictEqual(intake.remaining, workflow.remaining) &&
+      isDeepStrictEqual(
+        verification.sourceDigests?.map(({ id }) => id),
+        workflow.readPages.map((page) => `page-${page}`)
+      ) &&
+      verification.sourceDigests.every(({ sha256 }) => /^[a-f0-9]{64}$/u.test(sha256)) &&
+      results.length === 2 &&
+      handoff?.status === workflow.expectedHandoff &&
+      scratch.expectedStatus === workflow.expectedHandoff &&
+      (workflow.expectedHandoff === "unanswered"
+        ? artifact === null && handoff.artifact === null
+        : artifact &&
+          artifact.path === handoff.artifact?.path &&
+          artifact.bytes === handoff.artifact?.bytes &&
+          /^[a-f0-9]{64}$/u.test(artifact.sha256)),
+    "The scratch artifact must match the verified PDF prefix and the observed handoff disposition"
+  );
+  return {
+    world: { context_id: fixture.contextId, seed_revision: pdf.seedRevision },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };

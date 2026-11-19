@@ -90,6 +90,9 @@ PDF cases use the installed extraction extension and preserve the exact page ord
 geometry. Interruption cases deliver a controlled read error or mismatched digest after a real
 extraction. The report keeps only the verified prefix, names the unread pages, and stops requesting
 batches at the interruption.
+PDF handoffs join intake and scratch staging in one workflow. The scratch input files are
+created from the installed extension's verified page receipts. They remain unavailable before
+intake, and the handoff holds its artifact if the resulting files leave a required answer open.
 Personal memory comparisons call the existing verified recall skill once for each assigned
 revision. They retain both original quotations and independently observed endpoint outcomes,
 including when one revision has no recall lead or no source. The exporter requires both nested
