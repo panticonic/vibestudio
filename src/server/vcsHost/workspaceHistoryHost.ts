@@ -156,11 +156,15 @@ export async function workspaceParticipantReferencesReachable(input: WorkspaceHi
   requireWorkspaceParticipantOwner(input);
   const references = [];
   for (const { kind, value } of input.references) {
-    const ref = kind === "event" ? { kind, eventId: value } : value;
-    const parsed = kind === "event" || kind === "state-node"
+    if (kind !== "event" && kind !== "state-node" && kind !== "external-delta" && kind !== "node")
+      return false;
+    const ref = kind === "event" ? { kind, eventId: value }
+      : kind === "external-delta" ? { kind, deltaId: value }
+      : value;
+    const parsed = kind === "state-node"
       ? vcsStateNodeRefSchema.safeParse(ref)
-      : kind === "node" ? vcsSemanticNodeRefSchema.safeParse(ref) : null;
-    if (!parsed?.success) return false;
+      : vcsSemanticNodeRefSchema.safeParse(ref);
+    if (!parsed.success) return false;
     references.push(parsed.data);
   }
   return z.boolean().parse(await input.dispatch.dispatch(input.owner, "readHistoryReferenceVisibility", {
@@ -201,6 +205,8 @@ export async function inspectWorkspaceParticipantProvenance(input: WorkspaceHist
       result.node.value.appliedChangeId === inspect.node.appliedChangeId) ||
     (inspect.node.kind === "decision" && result.node.kind === "decision" &&
       result.node.value.decisionId === inspect.node.decisionId) ||
+    (inspect.node.kind === "external-delta" && result.node.kind === "external-delta" &&
+      result.node.value.deltaId === inspect.node.deltaId) ||
     (inspect.node.kind === "file" && result.node.kind === "file" &&
       canonicalJson(result.node.state) === canonicalJson(inspect.node.state) &&
       result.node.value.fileId === inspect.node.fileId &&

@@ -145,11 +145,18 @@ it("checks typed references through the admitted participant contexts", async ()
   const scope = { dispatch: { dispatch }, canonical, owner, caller, contextIds: ["edit", "edit"] };
   await expect(workspaceParticipantReferencesReachable({
     ...scope,
-    references: [{ kind: "event", value: "shared" }, { kind: "state-node", value: application }],
+    references: [
+      { kind: "event", value: "shared" },
+      { kind: "state-node", value: application },
+      { kind: "external-delta", value: "imported-delta" },
+    ],
   })).resolves.toBe(true);
   expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryReferenceVisibility", {
     contextIds: ["edit"],
-    references: [{ kind: "event", eventId: "shared" }, application],
+    references: [
+      { kind: "event", eventId: "shared" }, application,
+      { kind: "external-delta", deltaId: "imported-delta" },
+    ],
   });
   await expect(workspaceParticipantReferencesReachable({
     ...scope,
