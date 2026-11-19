@@ -76,6 +76,13 @@ const readAuthority = {
     session: "family" as const,
     rationale: "Group reads use the authenticated account and a group-scoped grant.",
   },
+  presentation: {
+    title: "Read from Chronolog",
+    action: "read from Chronolog",
+    description: "Read account or workspace information and data from authorized Chronolog groups.",
+    group: "sharing",
+    authorityCategory: { domain: "sharing" as const, verb: "see" as const },
+  },
   access: { sensitivity: "read" as const },
 };
 
