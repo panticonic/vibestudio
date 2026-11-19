@@ -9,6 +9,10 @@ import type { EntityCache } from "@vibestudio/shared/runtime/entityCache";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
 import {
   GadJsonRecordSchema,
+  HistoryQueryCausesSchema,
+  HistoryQueryTrajectorySchema,
+  type HistoryQueryTrajectory,
+  type HistorySearchCause,
   HistoryTrajectorySearchInputSchema,
   HistoryTrajectorySearchMatchesSchema,
   HistoryWalkCohortSchema,
@@ -131,6 +135,7 @@ export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMe
     Promise<ReturnType<typeof vcsReadMemoryCauseSchema.parse> | null>;
   readHistoryWalkInvocation(input: HistoryWalkInvocation): Promise<HistoryWalkPage>;
   readHistoryWalkCohortInvocations(input: HistoryWalkCohort): Promise<HistoryWalkInvocation[]>;
+  readHistoryQueryTrajectory(causes: readonly HistorySearchCause[]): Promise<HistoryQueryTrajectory>;
   searchHistoryTrajectory(input: HistoryTrajectorySearchInput):
     Promise<import("@vibestudio/service-schemas/vcs").VcsSearchHit[]>;
 };
@@ -226,6 +231,9 @@ export function createWorkspaceSemanticPort(
     ),
     readHistoryWalkCohortInvocations: async (input) => HistoryWalkInvocationsSchema.parse(
       await dispatch.dispatch(provider, "readHistoryWalkCohortInvocations", HistoryWalkCohortSchema.parse(input)),
+    ),
+    readHistoryQueryTrajectory: async (causes) => HistoryQueryTrajectorySchema.parse(
+      await dispatch.dispatch(provider, "readHistoryQueryTrajectory", HistoryQueryCausesSchema.parse(causes)),
     ),
     searchHistoryTrajectory: async (input) => HistoryTrajectorySearchMatchesSchema.parse(
       await dispatch.dispatch(provider, "searchHistoryTrajectory", HistoryTrajectorySearchInputSchema.parse(input)),

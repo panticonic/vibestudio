@@ -216,6 +216,7 @@ describe("canonical vcsService", () => {
       readParticipantFiles: vi.fn().mockResolvedValue([null]),
       readParticipantMemory: vi.fn(),
       walkParticipantHistory: vi.fn(),
+      queryParticipantHistory: vi.fn(),
       searchParticipantHistory: vi.fn().mockResolvedValue({
         text: "retained provenance", indexMode: "scan", hits: [], truncated: false,
       }),
@@ -292,6 +293,16 @@ describe("canonical vcsService", () => {
     dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(timeline);
     await expect(definition.handler(ctx, "history", [history])).resolves.toEqual(timeline);
     expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryTimeline", { contextId: scope.contextId, history });
+
+    const query = { contextId: scope.contextId, query: "SELECT * FROM prov_work_units", limit: 2 };
+    const rows = { schemaVersion: 1, state: EVENT, columns: [], rows: [], rowsRead: 0, truncated: false, refusal: null };
+    workspace.queryParticipantHistory.mockResolvedValue(rows);
+    await expect(withChild.handler(ctx, "query", [
+      { ...query, visibilityContextIds: ["context:unrelated"] },
+    ])).resolves.toEqual(rows);
+    expect(workspace.queryParticipantHistory).toHaveBeenCalledWith({
+      ...scope, query: { ...query, visibilityContextIds: [childContext, scope.contextId] },
+    });
 
     const walk = { contextId: scope.contextId, walk: "cause", subject: EVENT, limit: 2 };
     const walked = { walk: "cause", subject: EVENT, scope: null, entries: [], omitted: [], notes: [], nextCursor: null };

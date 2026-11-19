@@ -397,6 +397,12 @@ export interface DoltStorage {
     bindings?: readonly DoltBinding[],
     options?: { readonly limits?: Record<string, number>; readonly maxRows?: number }
   ): DoltQueryResult;
+  /** Run caller SQL solely against worker-authored SELECT projections. */
+  queryScoped?(
+    sql: string,
+    projections: Readonly<Record<string, string>>,
+    options?: { readonly limits?: Record<string, number>; readonly maxRows?: number }
+  ): DoltQueryResult;
   engineDigest(): string;
 }
 

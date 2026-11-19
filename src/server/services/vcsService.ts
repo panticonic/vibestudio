@@ -76,6 +76,7 @@ export interface VcsServiceDeps {
     | "searchParticipantHistory"
     | "readParticipantMemory"
     | "walkParticipantHistory"
+    | "queryParticipantHistory"
     | "reviewParticipantMerge"
     | "mergeParticipantContext"
   >;
@@ -393,6 +394,12 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
         return readWorkspaceParticipantHistory({
           ...scope,
           history: vcsMethods.history.args.parse([input])[0],
+        });
+      case "query":
+        return workspace.queryParticipantHistory({
+          ...scope,
+          query: vcsMethods.query.args.parse([input])[0],
+          ...(ctx.signal ? { signal: ctx.signal } : {}),
         });
       case "walk":
         return workspace.walkParticipantHistory({

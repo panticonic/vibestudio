@@ -31,6 +31,8 @@ import type {
   VcsImportSnapshotResult,
   VcsPushInput,
   VcsPushResult,
+  VcsQueryInput,
+  VcsQueryResult,
   VcsReadFileResult,
   VcsReadFilesInput,
   VcsReadMemoryInput,
@@ -41,7 +43,7 @@ import type {
   VcsWalkResult,
 } from "@vibestudio/service-schemas/vcs";
 import { z } from "zod";
-import { vcsReadMemoryResultSchema, vcsTrajectoryInvocationRefSchema } from "@vibestudio/service-schemas/vcs";
+import { vcsQueryResultSchema, vcsReadMemoryResultSchema, vcsTrajectoryInvocationRefSchema } from "@vibestudio/service-schemas/vcs";
 import { vcsCommitResultSchema, vcsDiscardResultSchema, vcsImportSnapshotResultSchema, vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
 import type {
   ProtectedPublicationEvent,
@@ -114,7 +116,10 @@ import type { ServiceContext, VerifiedCaller } from "@vibestudio/shared/serviceD
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import {
   GadJsonRecordSchema,
+  HISTORY_QUERY_CAUSE_LIMIT,
   HISTORY_SEARCH_CAUSE_LIMIT,
+  HistoryQueryBasisSchema,
+  type HistoryQueryTrajectory,
   HistorySearchBasisSchema,
   HistorySearchCausePageSchema,
   HistoryWalkPageSchema,
@@ -843,6 +848,56 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (!source) throw new Error("Participant workspace history is unavailable");
     const main = await readWorkspaceCanonicalMain(source);
     return { kind: "event" as const, eventId: main.eventId };
+  }
+
+  async queryParticipantHistory(input: WorkspaceHistoryParticipant & {
+    query: VcsQueryInput;
+    signal?: AbortSignal;
+  }): Promise<VcsQueryResult> {
+    requireWorkspaceParticipantOwner(input);
+    const { query, dispatch, owner, signal } = input;
+    const protectedEventId = this.deps.refs.readMainSemanticState()?.eventId;
+    if (!protectedEventId) throw new Error("Workspace query needs a protected main event");
+    const basis = HistoryQueryBasisSchema.parse(await dispatch.dispatch(owner, "readHistoryQueryBasis", {
+      query, protectedEventId,
+    }));
+    let trajectory: HistoryQueryTrajectory = { invocations: [], turns: [], messages: [], truncated: false };
+    if (basis.needsTrajectory) {
+      const causes = new Map<string, HistorySearchCause>();
+      revisions: for (const revision of new Set(basis.revisions)) {
+        let after: HistorySearchCause | null = null;
+        for (;;) {
+          signal?.throwIfAborted();
+          const page = HistorySearchCausePageSchema.parse(
+            await dispatch.dispatch(owner, "readHistorySearchCauses", { revision, after }),
+          );
+          for (const cause of page) {
+            causes.set(canonicalJson(cause), cause);
+            if (causes.size > HISTORY_QUERY_CAUSE_LIMIT) {
+              trajectory.truncated = true;
+              break revisions;
+            }
+          }
+          if (page.length < HISTORY_SEARCH_CAUSE_LIMIT) break;
+          const next = page.at(-1)!;
+          if (canonicalJson(after) === canonicalJson(next))
+            throw new Error("Workspace query causal page did not advance");
+          after = next;
+        }
+      }
+      if (causes.size && !trajectory.truncated)
+        trajectory = await this.gad().readHistoryQueryTrajectory([...causes.values()]);
+    }
+    signal?.throwIfAborted();
+    const result = vcsQueryResultSchema.parse(await dispatch.dispatch(owner, "readHistoryQuery", {
+      query, basis, trajectory,
+    }));
+    if (canonicalJson(result.state) !== canonicalJson(basis.state) ||
+        result.rows.length > query.limit ||
+        result.rows.some((row) => row.length !== result.columns.length)) {
+      throw new Error("Workspace history returned a different query result");
+    }
+    return result;
   }
 
   async walkParticipantHistory(input: WorkspaceHistoryParticipant & { walk: VcsWalkInput }): Promise<VcsWalkResult> {

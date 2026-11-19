@@ -36,7 +36,7 @@ import {
   type MethodSchema,
   type ServiceMethodSchemas,
 } from "@vibestudio/shared/typedServiceClient";
-import { vcsFileLineageSchema, vcsMethods, vcsSearchHitSchema, vcsSearchInputSchema, vcsStateNodeRefSchema, vcsTrajectoryInvocationRefSchema, vcsTrajectoryTurnRefSchema, vcsWalkEntrySchema, vcsWalkInputSchema } from "./vcs.js";
+import { vcsFileLineageSchema, vcsMethods, vcsQueryInputSchema, vcsSearchHitSchema, vcsSearchInputSchema, vcsStateNodeRefSchema, vcsTrajectoryInvocationRefSchema, vcsTrajectoryTurnRefSchema, vcsWalkEntrySchema, vcsWalkInputSchema } from "./vcs.js";
 
 const readAccess = { sensitivity: "read" as const };
 const writeAccess = { sensitivity: "write" as const };
@@ -93,6 +93,30 @@ export const HistoryWalkCohortRequestSchema = z.object({
 export type HistoryWalkCohort = z.infer<typeof HistoryWalkCohortSchema>;
 export type HistoryWalkInvocation = z.infer<typeof vcsTrajectoryInvocationRefSchema>;
 export type HistoryWalkPage = z.infer<typeof HistoryWalkPageSchema>;
+
+export const HISTORY_QUERY_CAUSE_LIMIT = 2_000;
+export const HISTORY_QUERY_TRAJECTORY_ROW_LIMIT = 1_600;
+export const HistoryQueryCausesSchema = z.array(historySearchCause).max(HISTORY_QUERY_CAUSE_LIMIT);
+export const HistoryQueryBasisSchema = z.object({
+  state: vcsStateNodeRefSchema,
+  revisions: historyWalkRevisions,
+  needsTrajectory: z.boolean(),
+}).strict();
+const projectedSqlCell = z.union([z.string().max(2_000), z.number(), z.null()]);
+const projectedSqlRows = z.array(z.array(projectedSqlCell).max(12)).max(HISTORY_QUERY_TRAJECTORY_ROW_LIMIT);
+export const HistoryQueryTrajectorySchema = z.object({
+  invocations: projectedSqlRows,
+  turns: projectedSqlRows,
+  messages: projectedSqlRows,
+  truncated: z.boolean(),
+}).strict();
+export const HistoryQueryRequestSchema = z.object({
+  query: vcsQueryInputSchema,
+  basis: HistoryQueryBasisSchema,
+  trajectory: HistoryQueryTrajectorySchema,
+}).strict();
+export type HistoryQueryBasis = z.infer<typeof HistoryQueryBasisSchema>;
+export type HistoryQueryTrajectory = z.infer<typeof HistoryQueryTrajectorySchema>;
 
 /** Exact coordinate returned by semantic context initialization and forking. */
 export const SemanticContextResultSchema = z
