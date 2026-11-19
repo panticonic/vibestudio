@@ -211,6 +211,15 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const buildPerformanceWorkflow = {
+  family: "system-live-build-performance",
+  workspace: "system",
+  namespace: "vibestudio:performance",
+  group: "native-build-cache-and-panel-payload",
+  validator: { template: "system-testing", path: "skills/system-testing/build-performance-managed.ts" },
+  root: "reviewBuildPerformance",
+  evidence: buildPerformanceEvidence,
+};
 const logCursorWorkflow = {
   family: "system-live-saved-log-cursor",
   workspace: "system",
@@ -589,6 +598,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { phoneSetupUnavailable },
     { managedClientAdmissionWorlds },
     { managedLogCursorWorlds },
+    { buildPerformanceWorlds },
     { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
     { managedDictationWorlds },
@@ -644,6 +654,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "phone-setup-world.ts",
       "client-admission-worlds.ts",
       "log-cursor-worlds.ts",
+      "build-performance-worlds.ts",
       "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
       "offline-dictation-worlds.ts",
@@ -695,6 +706,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of buildPerformanceWorlds) {
+    cases.set(`build-performance-live-${assignment.id}`, { ...buildPerformanceWorkflow, assignment });
   }
   for (const assignment of managedLogCursorWorlds) {
     cases.set(`log-cursor-live-${assignment.id}`, { ...logCursorWorkflow, assignment });
@@ -2700,6 +2714,87 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function buildPerformanceEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.buildPerformance;
+  const { request, receipt, checks } = fixture ?? {};
+  const { goal, initialBudgetBytes } = workflow.assignment;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) => parent && records.find(
+    (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+  );
+  const review = child(root, "reviewBuildPerformance");
+  const assess = child(review, "assessBuildRun");
+  const payloadReview = child(review, "reviewPayload");
+  const followup = child(review, "chooseFollowup");
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const effect = review?.effects?.[0];
+  const runtime = receipt?.targets?.find(({ target }) => target === "runtime");
+  const payload = runtime?.payload;
+  const contextId = execution.provenance?.contextId;
+  requireEvidence(
+    fixture?.passed === true &&
+      ["native", "observation", "judgments"].every((key) => checks?.[key] === true) &&
+      typeof contextId === "string" && contextId.length > 0 &&
+      request?.goal === goal && request.initialBudgetBytes === initialBudgetBytes &&
+      typeof request.operationId === "string" && request.operationId.length > 0 &&
+      receipt?.status === "ok" &&
+      typeof receipt.source === "string" && receipt.source.startsWith("panels/") &&
+      typeof receipt.stateHash === "string" && receipt.stateHash.length > 0 &&
+      typeof runtime?.buildKey === "string" && runtime.buildKey.length > 0 &&
+      receipt.repeat?.sameBuildKeys === true &&
+      Number.isFinite(receipt.repeat.elapsedMs) && receipt.repeat.elapsedMs >= 0 &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      effects.length === 1 &&
+      effect?.service === "buildPerformance" && effect.method === "observe" && !effect.error &&
+      matchesValue(effect.args, [request.operationId]) && matchesValue(effect.result, receipt),
+    "Build performance review requires the assigned native profile and verified repeat keys"
+  );
+  const phaseNames = { bundlingMs: "bundling", validationMs: "validation", otherMs: "other" };
+  const timings = Object.entries(receipt.first.phases ?? {}).sort((a, b) => b[1] - a[1]);
+  const state = receipt.first.cacheState === "built-during-profile" ? "built" : receipt.first.cacheState;
+  const measured = state === "built" && timings[0]?.[1] > 0;
+  const phase = measured
+    ? timings[0][1] === timings[1]?.[1] ? "tied" : phaseNames[timings[0][0]]
+    : "unavailable";
+  const phaseCall = child(assess, "identifyPhase");
+  const contributor = child(payloadReview, "chooseInitialContributor");
+  const largest = payload?.largestInitialInputs.reduce(
+    (best, item) => !best || item.bytes > best.bytes ? item : best, null
+  );
+  const budget = initialBudgetBytes === undefined ? "unassigned"
+    : payload?.initialBytes > initialBudgetBytes ? "over" : "within";
+  requireEvidence(
+    isDeepStrictEqual(report?.observation, receipt) &&
+      ["built", "preexisting", "unknown"].includes(state) &&
+      isDeepStrictEqual(report.execution, { state, repeat: "verified", phase }) &&
+      matchesValue(assess?.inputs?.observation, receipt) &&
+      matchesValue(assess.output, report.execution) &&
+      (measured
+        ? matchesValue(phaseCall?.inputs?.times, receipt.first.phases) && matchesValue(phaseCall.output, phase)
+        : !phaseCall) &&
+      payload?.initialBytes > 0 && payload.totalBytes >= payload.initialBytes &&
+      isDeepStrictEqual(report.payload, { budget, largestInitialInput: largest }) &&
+      matchesValue(payloadReview?.inputs?.payload, payload) &&
+      matchesValue(payloadReview.output, report.payload) &&
+      (largest
+        ? matchesValue(contributor?.inputs?.contributors, payload.largestInitialInputs) && matchesValue(contributor.output, largest)
+        : !contributor) &&
+      report.next?.action === (budget === "over" ? "reduce-initial-payload" : "record-baseline") &&
+      typeof report.next.reason === "string" && report.next.reason.trim() &&
+      matchesValue(followup?.inputs?.observation, receipt) &&
+      matchesValue(followup.output, report.next),
+    "Build performance review requires the measured phase and initial payload decisions"
+  );
+  return {
+    world: { context_id: contextId, state_hash: receipt.stateHash, build_key: runtime.buildKey },
     checks,
     evidence: { workspace: { fixture } },
   };

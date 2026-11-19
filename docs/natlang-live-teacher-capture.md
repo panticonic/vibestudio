@@ -214,6 +214,11 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Build performance review profiles a disposable System workspace panel with
+the native build service. Its cases interpret same-key repeat evidence and
+review initial payload against an assigned budget. Run
+`build-performance-oracle-qualification` for a live model-free check.
+
 Saved log cursor review runs in the System template. It checks the observed
 boot and retained sequence before classifying a bounded window with the
 server-log skill. The cases cover a repeated failure, an earlier boot, and
