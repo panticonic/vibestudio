@@ -1,8 +1,14 @@
 import path from "node:path";
+import { readChronologBuildInput } from "./lib/chronolog-build-input.mjs";
 import { runtimeAppEntrypointSource } from "./lib/runtime-app.mjs";
 
 /** One compiler recipe for the host producer and owned native fixtures. */
-export function runtimeAppBuildOptions({ cwd = process.cwd(), minify = false, sourcemap = false } = {}) {
+export function runtimeAppBuildOptions({
+  cwd = process.cwd(),
+  minify = false,
+  sourcemap = false,
+} = {}) {
+  const chronolog = readChronologBuildInput();
   return {
     absWorkingDir: cwd,
     entryPoints: [{ in: "runtime-app:entry", out: "runtime-app" }],
@@ -23,12 +29,17 @@ export function runtimeAppBuildOptions({ cwd = process.cwd(), minify = false, so
       {
         name: "runtime-app-entrypoint",
         setup(build) {
-          build.onResolve({ filter: /^runtime-app:/ }, ({ path: entry }) => ({
+          if (chronolog) {
+            build.onResolve({ filter: /^runtime-app:chronolog$/ }, () => ({
+              path: chronolog.entry,
+            }));
+          }
+          build.onResolve({ filter: /^runtime-app:entry$/ }, ({ path: entry }) => ({
             path: entry,
             namespace: "runtime-app-entry",
           }));
           build.onLoad({ filter: /.*/, namespace: "runtime-app-entry" }, () => ({
-            contents: runtimeAppEntrypointSource(),
+            contents: runtimeAppEntrypointSource({ chronolog: chronolog !== null }),
             loader: "ts",
             resolveDir: path.resolve(cwd, "src/server/workerdPrograms"),
           }));

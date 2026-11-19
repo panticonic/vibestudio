@@ -13,6 +13,11 @@ function fixture() {
     chronologPublicPrincipal: vi.fn(async () => ({ publicKey })),
   };
   const data = {
+    identity: vi.fn<ChronologWorkspaceData["identity"]>(),
+    list: vi.fn<ChronologWorkspaceData["list"]>(),
+    create: vi.fn<ChronologWorkspaceData["create"]>(),
+    invite: vi.fn<ChronologWorkspaceData["invite"]>(),
+    join: vi.fn<ChronologWorkspaceData["join"]>(),
     reviewProgram: vi.fn(async () => ["INSERT INTO project (name) VALUES ('approved')"]),
     transact: vi.fn(async () => ({ txId })),
     outcome: vi.fn(async () => ({ status: "accepted" as const })),

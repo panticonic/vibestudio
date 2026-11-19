@@ -49,6 +49,12 @@ export interface RuntimeDeploymentInput {
   readonly vars: Readonly<Record<string, unknown>>;
   /** The source namespace of product classes (their binding names). */
   readonly internalSource?: string;
+  /** Optional runtime classes supplied by the immutable host application. */
+  readonly chronolog?: {
+    readonly publicKey: string;
+    readonly signingKey: string;
+    readonly token: string;
+  };
 }
 
 export function buildRuntimeDeployment(input: RuntimeDeploymentInput): RuntimeDeployment {
@@ -112,15 +118,36 @@ export function buildRuntimeDeployment(input: RuntimeDeploymentInput): RuntimeDe
       );
     }
   }
+  const chronolog = input.chronolog;
+  if (chronolog) {
+    bindings.push(
+      { name: "CHRONOLOG_DIRECTORY", class_name: "ChronologWorkspaceDO" },
+      { name: "CHRONOLOG_GROUPS", class_name: "ChronologGroupDO" }
+    );
+    classes["ChronologWorkspaceDO"] = { secrets: ["CHRONOLOG_ROOT_TOKEN"] };
+    classes["ChronologGroupDO"] = { secrets: ["CHRONOLOG_GROUP_TOKEN", "CHRONOLOG_SIGNING_KEY"] };
+    secrets["CHRONOLOG_ROOT_TOKEN"] = chronolog.token;
+    secrets["CHRONOLOG_GROUP_TOKEN"] = chronolog.token;
+    secrets["CHRONOLOG_SIGNING_KEY"] = chronolog.signingKey;
+  }
   const classNames = input.classes
     .filter((cls) => cls.storage !== "dolt")
     .map((cls) => cls.className);
+  if (chronolog) {
+    classNames.push("ChronologWorkspaceDO");
+    doltClasses.push("ChronologGroupDO");
+  }
   return {
     secrets,
     config: {
       name: RUNTIME_SCRIPT,
       compatibility_date: input.compatibility.compatibilityDate,
-      compatibility_flags: [...input.compatibility.compatibilityFlags],
+      compatibility_flags: [
+        ...new Set([
+          ...input.compatibility.compatibilityFlags,
+          ...(chronolog ? ["sqlite_vec"] : []),
+        ]),
+      ],
       worker_loaders: [{ binding: "LOADER" }],
       durable_objects: { bindings },
       migrations: [
@@ -136,8 +163,24 @@ export function buildRuntimeDeployment(input: RuntimeDeploymentInput): RuntimeDe
           entrypoint: "ExecutablePreparation",
         },
       ],
+      ...(chronolog
+        ? {
+            p2p: [
+              {
+                binding: "CHRONOLOG_P2P",
+                alpn: "chronolog/1",
+                accept: { class: "ChronologWorkspaceDO", name: "chronolog" },
+              },
+            ],
+          }
+        : {}),
       celld: { durable_objects: classes },
-      vars: { ...input.vars, RUNTIME_DO_BINDINGS: doBindingNames, INTERNAL_DO_ENV: internalEnv },
+      vars: {
+        ...input.vars,
+        RUNTIME_DO_BINDINGS: doBindingNames,
+        INTERNAL_DO_ENV: internalEnv,
+        ...(chronolog ? { CHRONOLOG_PUBLIC_KEY: chronolog.publicKey } : {}),
+      },
     },
   };
 }

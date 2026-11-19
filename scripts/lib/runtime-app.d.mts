@@ -3,6 +3,7 @@ export interface PublishedRuntimeApp {
   readonly bundle: string;
   readonly buildKey: string;
   readonly internalClasses: readonly string[];
+  readonly chronolog?: true;
 }
 export interface CompiledRuntimeApp {
   readonly bundle: string;
@@ -18,4 +19,4 @@ export const INTERNAL_DO_PROGRAM_ENTRIES: readonly {
 export function readPublishedRuntimeApp(input: unknown): PublishedRuntimeApp;
 export function assertRuntimeAppPublication(input: unknown): PublishedRuntimeApp;
 export function captureRuntimeApp(compiled: CompiledRuntimeApp): PublishedRuntimeApp;
-export function runtimeAppEntrypointSource(): string;
+export function runtimeAppEntrypointSource(options?: { chronolog?: boolean }): string;

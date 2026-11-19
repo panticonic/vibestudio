@@ -136,6 +136,7 @@ const router: ExportedHandler<RouterEnv> = {
       (prefix === "_w" ||
         prefix === "_u" ||
         prefix === "_prepare_executable" ||
+        prefix === "_chronolog" ||
         prefix === "_object") &&
       request.headers.get("X-Vibestudio-Dispatch-Secret") !== env.RUNTIME_DISPATCH_SECRET
     ) {
@@ -147,6 +148,15 @@ const router: ExportedHandler<RouterEnv> = {
     if (prefix === "_object") return objectOperation(env, request);
     if (prefix === "_prepare_executable") {
       return env.EXECUTABLE_PREPARATION.fetch(new Request(request, { headers: strippedHeaders }));
+    }
+    if (prefix === "_chronolog") {
+      const directory = env["CHRONOLOG_DIRECTORY"];
+      if (!isDurableObjectNamespace(directory))
+        return new Response("Chronolog is unavailable", { status: 404 });
+      return fetchDurableObject(
+        directory.get(directory.idFromName("chronolog")),
+        new Request(request, { headers: strippedHeaders })
+      );
     }
     const doLookup = env.RUNTIME_DO_BINDINGS;
     // Semantic DO dispatch carries a complete serialized envelope. Own those

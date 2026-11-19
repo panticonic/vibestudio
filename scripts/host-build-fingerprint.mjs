@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import ignore from "ignore";
+import { readChronologBuildInput } from "./lib/chronolog-build-input.mjs";
 import { updateHashFromFile } from "./lib/file-digest.mjs";
 
 export const HOST_BUILD_FINGERPRINT_PATH = "dist/host-build-fingerprint.json";
@@ -36,6 +37,7 @@ const INPUT_FILES = [
   "scripts/clean-host-build-output.mjs",
   "scripts/runtime-app-build.mjs",
   "scripts/lib/runtime-app.mjs",
+  "scripts/lib/chronolog-build-input.mjs",
   "scripts/collectWorkers.mjs",
   "scripts/ensure-host-build.mjs",
   "scripts/generate-connect-grammar.mjs",
@@ -115,6 +117,8 @@ export function computeHostBuildFingerprint({
 
   const hash = createHash("sha256");
   hash.update(`mode\0${mode}\0`);
+  const chronolog = readChronologBuildInput();
+  if (chronolog) hash.update(`chronolog\0${chronolog.fingerprint}\0`);
   for (const relativePath of files) {
     const filePath = path.resolve(cwd, relativePath);
     hash.update(relativePath);

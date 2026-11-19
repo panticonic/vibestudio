@@ -18,7 +18,7 @@ import {
   readInstalledSchemaProbeEvidence,
   type InstalledSchemaProbeEvidence,
 } from "./services/schemaProbeEvidence.js";
-import { deserializeRpcFailure } from "@vibestudio/rpc";
+import { deserializeRpcFailure, encodeRpcJson } from "@vibestudio/rpc";
 import type { ChildProcess } from "child_process";
 import { parseDurableWorkReady, type DurableWorkQueue } from "@vibestudio/shared/durableWork";
 import * as crypto from "crypto";
@@ -744,6 +744,7 @@ export class RuntimeManager {
   >();
   /** Per-manager secret required by the generated router for direct DO dispatch. */
   private readonly dispatchSecret = crypto.randomBytes(32).toString("hex");
+  private readonly chronologToken = crypto.randomBytes(32).toString("hex");
   /** Per-process secret gating the loopback `/_workercode`
    *  endpoints. Bound only into the static worker-host service, so worker code +
    *  per-instance env (RPC tokens, STATE_ARGS) are unreachable with ordinary
@@ -2500,7 +2501,11 @@ export class RuntimeManager {
    * internal class never changes the deployment, and userland classes load
    * through UniversalDO's Worker Loader.
    */
-  private runtimeDeployment(): RuntimeDeployment {
+  private runtimeDeployment(chronolog?: {
+    publicKey: string;
+    signingKey: string;
+    token: string;
+  }): RuntimeDeployment {
     const programs = this.internalDOPrograms();
     const internalClasses = programs.publication().internalClasses;
     const classes = internalClasses.map((className) => {
@@ -2544,6 +2549,7 @@ export class RuntimeManager {
       };
     });
     return buildRuntimeDeployment({
+      ...(chronolog === undefined ? {} : { chronolog }),
       compatibility: USER_CODE_COMPATIBILITY,
       classes,
       doLoaderSecret: this.doLoaderSecret,
@@ -2630,7 +2636,14 @@ export class RuntimeManager {
   /** Publish this generation's deployment of the runtime application. */
   private async deployGeneration(): Promise<void> {
     const node = await this.ensureCelldNode();
-    const { config, secrets } = this.runtimeDeployment();
+    let chronolog: Parameters<RuntimeManager["runtimeDeployment"]>[0];
+    if (this.hasChronolog) {
+      const { ChronologSigningVault } = await import("./chronolog/signingVault.js");
+      const vault = new ChronologSigningVault(path.join(this.deps.statePath, "chronolog-node"));
+      const { publicKey, pkcs8Hex } = await vault.principal("workspace-runtime");
+      chronolog = { publicKey, signingKey: pkcs8Hex, token: this.chronologToken };
+    }
+    const { config, secrets } = this.runtimeDeployment(chronolog);
     await node.deploy(this.internalDOPrograms().app().bundle, config, secrets);
   }
 
@@ -4319,10 +4332,19 @@ export class RuntimeManager {
     }
   }
 
+  get hasChronolog(): boolean {
+    return this.internalDOPrograms().publication().chronolog === true;
+  }
+
+  async chronologRequest(input: unknown, signal?: AbortSignal): Promise<Response> {
+    if (!this.hasChronolog) throw new Error("Chronolog is unavailable in this host build");
+    return this.nodeFetch("/_chronolog", { chronolog: true, body: input, signal });
+  }
+
   /** A request to the running node's router, authenticated like host dispatch. */
   private async nodeFetch(
     pathname: string,
-    init: { body?: unknown; lifecycle?: boolean; signal?: AbortSignal } = {}
+    init: { body?: unknown; lifecycle?: boolean; chronolog?: boolean; signal?: AbortSignal } = {}
   ): Promise<Response> {
     if (!this.process || this.process.exitCode !== null || !this.port) {
       throw new Error("The runtime node is not running");
@@ -4334,9 +4356,14 @@ export class RuntimeManager {
         Authorization: `Bearer ${this.deps.getWorkerdGatewayToken()}`,
         "X-Vibestudio-Dispatch-Secret": this.dispatchSecret,
         ...(init.lifecycle ? { "X-Vibestudio-Lifecycle-Secret": this.doLoaderSecret } : {}),
+        ...(init.chronolog ? { "X-Chronolog-Node-Token": this.chronologToken } : {}),
         ...(init.body === undefined ? {} : { "Content-Type": "application/json" }),
       },
-      ...(init.body === undefined ? {} : { body: JSON.stringify(init.body) }),
+      ...(init.body === undefined
+        ? {}
+        : {
+            body: init.chronolog ? encodeRpcJson(init.body) : JSON.stringify(init.body),
+          }),
       ...(init.signal ? { signal: init.signal } : {}),
       dispatcher: getWorkerdConnectionDispatcher(origin),
     } as RequestInit);

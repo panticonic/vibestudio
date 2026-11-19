@@ -23,6 +23,7 @@ export const RUNTIME_APP_HOST_EXPORTS = Object.freeze([
   "CodeHost",
   "UniversalDO",
 ]);
+const chronologExports = ["ChronologWorkspaceDO", "ChronologGroupDO"];
 const classes = INTERNAL_DO_PROGRAM_ENTRIES.map(({ className }) => className).sort();
 const digest = /^[a-f0-9]{64}$/u;
 
@@ -39,7 +40,12 @@ function exactKeys(value, keys, label) {
 /** Admit the finite metadata of an already-proved immutable publication.
  * Payload hashes belong exclusively to the producer/publication boundary. */
 export function readPublishedRuntimeApp(input) {
-  exactKeys(input, ["format", "bundle", "buildKey", "internalClasses"], "publication");
+  const chronolog = input?.chronolog === true;
+  exactKeys(
+    input,
+    ["format", "bundle", "buildKey", "internalClasses", ...(chronolog ? ["chronolog"] : [])],
+    "publication"
+  );
   if (input.format !== RUNTIME_APP_FORMAT) throw new Error("Invalid runtime app format");
   if (
     !Array.isArray(input.internalClasses) ||
@@ -58,6 +64,7 @@ export function readPublishedRuntimeApp(input) {
     bundle: input.bundle,
     buildKey: input.buildKey,
     internalClasses: Object.freeze([...classes]),
+    ...(chronolog ? { chronolog: true } : {}),
   });
 }
 
@@ -84,7 +91,14 @@ export function assertRuntimeAppPublication(input) {
 /** Capture the actual compiler output, never invent an export or executable hash. */
 export function captureRuntimeApp(compiled) {
   exactKeys(compiled, ["bundle", "exports"], "compiler output");
-  const expected = [...RUNTIME_APP_HOST_EXPORTS, ...classes].sort();
+  const chronolog =
+    Array.isArray(compiled.exports) &&
+    compiled.exports.some((name) => chronologExports.includes(name));
+  const expected = [
+    ...RUNTIME_APP_HOST_EXPORTS,
+    ...classes,
+    ...(chronolog ? chronologExports : []),
+  ].sort();
   if (
     !Array.isArray(compiled.exports) ||
     [...compiled.exports].sort().join("\n") !== expected.join("\n")
@@ -99,6 +113,7 @@ export function captureRuntimeApp(compiled) {
     bundle: compiled.bundle,
     buildKey: createHash("sha256").update(compiled.bundle).digest("hex"),
     internalClasses: classes,
+    ...(chronolog ? { chronolog: true } : {}),
   });
 }
 
@@ -106,7 +121,7 @@ export function captureRuntimeApp(compiled) {
  * Entry source. Module evaluation order is the contract: every dependency,
  * including each class wrapper, evaluates before the realm is locked down.
  */
-export function runtimeAppEntrypointSource() {
+export function runtimeAppEntrypointSource({ chronolog = false } = {}) {
   const imports = INTERNAL_DO_PROGRAM_ENTRIES.map(
     ({ className, implementation }, index) =>
       `import { ${className} as Internal${index} } from ${JSON.stringify(implementation)};`
@@ -115,12 +130,23 @@ export function runtimeAppEntrypointSource() {
     ({ className }, index) =>
       `export const ${className} = internalDurableObjectClass(Internal${index}, ${JSON.stringify(className)});`
   ).join("\n");
+  const chronologSource = chronolog
+    ? [
+        'import { DurableObject } from "cloudflare:workers";',
+        'import { encodeRpcJson, decodeRpcJson } from "@vibestudio/rpc";',
+        'import { createCelldWorkspaceClasses } from "runtime-app:chronolog";',
+        "export const { ChronologWorkspaceDO, ChronologGroupDO } = createCelldWorkspaceClasses({",
+        "  DurableObject, socketPair: () => new WebSocketPair(), encode: encodeRpcJson, decode: decodeRpcJson,",
+        "});",
+      ].join("\n") + "\n"
+    : "";
   return (
     `import { initializeInternalDORealm } from "../internalDOs/workerdRealm.ts";\n` +
     `import { internalDurableObjectClass } from "./app.ts";\n` +
     `${imports}\n` +
     `export { default, WorkerHost, ExecutablePreparation, CodeHost, UniversalDO } from "./app.ts";\n` +
     `${exports}\n` +
+    chronologSource +
     `initializeInternalDORealm();\n`
   );
 }

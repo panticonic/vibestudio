@@ -2582,6 +2582,18 @@ async function main() {
   container.registerRpc(
     createWorkspaceHubControlService({ workspaceId: entryWorkspaceId, hub: workspaceChildHub })
   );
+  if (getInternalDOPrograms().publication().chronolog === true) {
+    const { chronologNodeData, createChronologService } =
+      await import("./services/chronologService.js");
+    container.registerRpc(
+      createChronologService({
+        hub: workspaceChildHub,
+        data: chronologNodeData((request, signal) =>
+          assertPresent(runtimeManagerForGateway).chronologRequest(request, signal)
+        ),
+      })
+    );
+  }
   const { createWorkspaceTemplateSourceService } =
     await import("./services/workspaceTemplateSourceService.js");
   container.registerRpc(

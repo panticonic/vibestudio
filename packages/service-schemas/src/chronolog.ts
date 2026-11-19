@@ -8,6 +8,9 @@ import {
 
 export const CHRONOLOG_PRINCIPALS = ["user", "code"] as const;
 export const CHRONOLOG_TRANSACTION_RESOLVER = "chronolog.transact.program";
+export const CHRONOLOG_CREATE_RESOLVER = "chronolog.groups.create";
+export const CHRONOLOG_INVITE_RESOLVER = "chronolog.groups.invite";
+export const CHRONOLOG_JOIN_RESOLVER = "chronolog.groups.join";
 export const ChronologDigestSchema = z.string().regex(/^[0-9a-f]{64}$/u);
 const sequence = z.number().int().nonnegative().safe();
 const canonicalProgram = z
@@ -74,7 +77,123 @@ const readAuthority = {
   access: { sensitivity: "read" as const },
 };
 
+const node = z
+  .object({
+    publicKey: ChronologDigestSchema,
+    endpoint: z
+      .object({
+        nodeId: ChronologDigestSchema,
+        addrs: z.array(z.string().min(1).max(512)).max(16).optional(),
+        relay: z.string().min(1).max(512).optional(),
+      })
+      .strict(),
+  })
+  .strict();
+const offer = z
+  .string()
+  .min(1)
+  .max(4 * 1024 * 1024);
+const groupId = z.object({ group }).strict();
+const catalogAuthority = {
+  ...readAuthority,
+  authority: { requirement: readRequirement, resource: { kind: "literal", key: "membership" } },
+} as const;
+
+function groupMutation(
+  resolver: string,
+  resource: typeof groupResource | { kind: "argument"; index: 0; path: ["operationId"] }
+) {
+  return {
+    website,
+    capability: writeCapability,
+    authority: {
+      requirement: writeRequirement,
+      resource,
+      prepared: {
+        resolver,
+        leaves: [
+          {
+            capability: writeCapability,
+            requirement: fixedPreparedAuthorityRequirement(writeRequirement),
+            tier: "gated",
+          },
+        ],
+      },
+    },
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale: "The prepared group operation selects the approved membership change.",
+    },
+    access: { sensitivity: "write" },
+  } as const;
+}
+
 export const chronologMethods = defineServiceMethods({
+  "groups.identity": {
+    ...catalogAuthority,
+    description: "Get the verified account and workspace node keys for an invitation.",
+    args: z.tuple([]),
+    returns: z.object({ publicKey: ChronologDigestSchema, node }).strict(),
+  },
+  "groups.list": {
+    ...catalogAuthority,
+    description: "List the locally installed groups where the account can read.",
+    args: z.tuple([]),
+    returns: z.array(
+      z
+        .object({
+          group,
+          name: z.string(),
+          writer: z.boolean(),
+          publisher: z.boolean(),
+          administrator: z.boolean(),
+        })
+        .strict()
+    ),
+  },
+  "groups.create": {
+    ...groupMutation(CHRONOLOG_CREATE_RESOLVER, {
+      kind: "argument",
+      index: 0,
+      path: ["operationId"],
+    }),
+    description:
+      "Create an independently stored SQL group and admit the initiating account as administrator.",
+    args: z.tuple([
+      z
+        .object({
+          operationId,
+          name: z.string().trim().min(1).max(128),
+          policy: z.literal("eligible-members-v1"),
+          schema: canonicalProgram,
+        })
+        .strict(),
+    ]),
+    returns: groupId,
+  },
+  "groups.invite": {
+    ...groupMutation(CHRONOLOG_INVITE_RESOLVER, groupResource),
+    description: "Sign a group invitation for one account and its workspace node.",
+    args: z.tuple([
+      z
+        .object({
+          group,
+          operationId: operationId.max(120),
+          member: ChronologDigestSchema,
+          role: z.enum(["reader", "writer", "publisher", "administrator"]),
+          node,
+        })
+        .strict(),
+    ]),
+    returns: z.object({ group, offer }).strict(),
+  },
+  "groups.join": {
+    ...groupMutation(CHRONOLOG_JOIN_RESOLVER, groupResource),
+    description: "Install the exact invitation in this workspace and verify current membership.",
+    args: z.tuple([z.object({ group, offer }).strict()]),
+    returns: groupId,
+  },
   transact: {
     website,
     capability: writeCapability,
