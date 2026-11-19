@@ -20,6 +20,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { createDevLogger } from "@vibestudio/dev-log";
 import { canonicalJson } from "@vibestudio/shared/canonicalJson";
+import { isEvalHostRecord } from "@vibestudio/shared/evalRuntimeIdentity";
 import { contextIdForTargetKey } from "@vibestudio/shared/runtime/contextIdentity";
 import type {
   PreparedAuthoritySelection,
@@ -2963,10 +2964,17 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         await destroyContext({ contextId, recursive });
       },
       forkSemanticContext: (ctx, [input]) => {
-        const caller = [ctx.caller, ctx.authorizingCaller].find(
-          (principal) => principal?.runtime.id === input.ownerRuntimeId ||
-            principal?.agentBinding?.entityId === input.ownerRuntimeId
-        );
+        const caller = [ctx.caller, ctx.authorizingCaller].find((principal) => {
+          if (!principal) return false;
+          if (principal.runtime.id === input.ownerRuntimeId ||
+              principal.agentBinding?.entityId === input.ownerRuntimeId) return true;
+          const admission = principal.executionSession;
+          if (admission?.contextId !== input.parentContextId ||
+              admission.executor.runtimeId !== principal.runtime.id) return false;
+          const executor = store.cache.resolveActive(principal.runtime.id);
+          return Boolean(executor && isEvalHostRecord(executor) &&
+            executor.parentId === input.ownerRuntimeId && executor.contextId === input.parentContextId);
+        });
         return forkSemanticContext(input, caller);
       },
       dropSemanticContext: async (_ctx, [{ contextId }]) => {
