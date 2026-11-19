@@ -1,8 +1,27 @@
 import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
 const digest = /^[0-9a-f]{64}$/u;
+
+/** Extract a reviewed release archive and verify its source and every declared file. */
+export function stageChronologBuildArchive(archive, directory, { source, sha256 }) {
+  if (!/^[a-f0-9]{40}$/u.test(source) || !digest.test(sha256)) {
+    throw new Error("Chronolog release requires an exact source and archive SHA-256");
+  }
+  if (createHash("sha256").update(readFileSync(archive)).digest("hex") !== sha256) {
+    throw new Error("Chronolog archive differs from the release pin");
+  }
+  execFileSync("tar", ["-xf", archive, "-C", directory]);
+  const root = path.join(directory, "package");
+  const input = readChronologBuildInput(root, "");
+  const provenance = JSON.parse(readFileSync(path.join(root, "provenance.json"), "utf8"));
+  if (provenance.repository !== "werg/chronolog-db" || provenance.source !== source) {
+    throw new Error("Chronolog archive has a different source from the release pin");
+  }
+  return { root, fingerprint: input.fingerprint };
+}
 
 /** Admit an immutable Chronolog npm package and verify its release pin when supplied. */
 export function readChronologBuildInput(

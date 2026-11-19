@@ -1,5 +1,5 @@
-name: Prepare the pinned celld runtime
-description: Verify and stage the fork artifact for a declared application target
+name: Prepare the pinned workspace runtime
+description: Verify and stage celld and the selected Chronolog package for the application
 inputs:
   target:
     description: The application platform and architecture
@@ -13,3 +13,13 @@ runs:
         CELLD_TARGET: ${{ inputs.target }}
         GH_TOKEN: ${{ github.token }}
       run: node scripts/stage-ci-celld.mjs "$CELLD_TARGET"
+
+    - name: Stage the pinned Chronolog workspace package
+      if: ${{ vars.CHRONOLOG_RELEASE_RUN != '' || vars.CHRONOLOG_RELEASE_SOURCE != '' || vars.CHRONOLOG_RELEASE_SHA256 != '' }}
+      shell: bash
+      env:
+        CHRONOLOG_RELEASE_RUN: ${{ vars.CHRONOLOG_RELEASE_RUN }}
+        CHRONOLOG_RELEASE_SOURCE: ${{ vars.CHRONOLOG_RELEASE_SOURCE }}
+        CHRONOLOG_RELEASE_SHA256: ${{ vars.CHRONOLOG_RELEASE_SHA256 }}
+        GH_TOKEN: ${{ github.token }}
+      run: node scripts/stage-ci-chronolog.mjs

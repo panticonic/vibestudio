@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -13,7 +14,7 @@ import {
   sameHostBuildFingerprint,
   writeHostBuildFingerprint,
 } from "./host-build-fingerprint.mjs";
-import { readChronologBuildInput } from "./lib/chronolog-build-input.mjs";
+import { readChronologBuildInput, stageChronologBuildArchive } from "./lib/chronolog-build-input.mjs";
 
 test("a pinned Chronolog package requires the reviewed manifest and matching files", () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "chronolog-build-input-"));
@@ -37,6 +38,37 @@ test("a pinned Chronolog package requires the reviewed manifest and matching fil
     assert.throws(() => readChronologBuildInput(root, fingerprint), /differs from its manifest/);
     fs.writeFileSync(manifestPath, `${manifest}\n`);
     assert.throws(() => readChronologBuildInput(root, fingerprint), /differs from the release pin/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("stages only the exact archive from the selected Chronolog source", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "chronolog-release-archive-"));
+  try {
+    const hash = (value) => createHash("sha256").update(value).digest("hex");
+    const source = "1".repeat(40);
+    const pkg = path.join(root, "package");
+    const archive = path.join(root, "artifact.tgz");
+    const destination = path.join(root, "destination");
+    fs.mkdirSync(pkg);
+    fs.mkdirSync(destination);
+    const contents = "export const revision = 1;\n";
+    fs.writeFileSync(path.join(pkg, "workspace-celld.mjs"), contents);
+    const provenance = JSON.stringify({
+      repository: "werg/chronolog-db", source, dirty: false,
+      format: "chronolog-peer-session-package/v1",
+      sha256: { "workspace-celld.mjs": hash(contents) },
+    });
+    fs.writeFileSync(path.join(pkg, "provenance.json"), provenance);
+    execFileSync("tar", ["-czf", archive, "-C", root, "package"]);
+    const sha256 = hash(fs.readFileSync(archive));
+    assert.throws(() => stageChronologBuildArchive(archive, destination, { source, sha256: "0".repeat(64) }), /differs from the release pin/);
+    assert.deepEqual(fs.readdirSync(destination), []);
+    assert.throws(() => stageChronologBuildArchive(archive, destination, { source: "2".repeat(40), sha256 }), /different source/);
+    assert.deepEqual(stageChronologBuildArchive(archive, destination, { source, sha256 }), {
+      root: path.join(destination, "package"), fingerprint: hash(provenance),
+    });
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
