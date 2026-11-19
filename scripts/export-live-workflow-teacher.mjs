@@ -211,6 +211,18 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const architectureBoundaryWorkflow = {
+  family: "workspace-live-architecture-boundary",
+  workspace: "examples",
+  namespace: "vibestudio:architecture",
+  group: "provider-resolution-and-state-ownership",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/architecture-boundary-managed.ts",
+  },
+  root: "reviewArchitectureBoundary",
+  evidence: architectureBoundaryEvidence,
+};
 const releaseReviewHandoffWorkflow = {
   family: "workspace-live-release-review-handoff",
   workspace: "examples",
@@ -498,6 +510,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
     { managedClientAdmissionWorlds },
+    { managedArchitectureBoundaryWorlds },
     { managedReleaseReviewHandoffWorlds, releaseReviewHandoffWork },
     { managedExtensionReleaseWorlds },
     { managedAuthorityReviewWorlds },
@@ -544,6 +557,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
       "client-admission-worlds.ts",
+      "architecture-boundary-worlds.ts",
       "release-review-handoff-worlds.ts",
       "extension-release-worlds.ts",
       "authority-review-worlds.ts",
@@ -587,6 +601,12 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of managedArchitectureBoundaryWorlds) {
+    cases.set(`architecture-boundary-live-${assignment.id}`, {
+      ...architectureBoundaryWorkflow,
+      assignment,
+    });
   }
   for (const assignment of managedReleaseReviewHandoffWorlds) {
     const extension = managedExtensionReleaseWorlds.find(({ id }) => id === assignment.extension);
@@ -2556,6 +2576,118 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function architectureBoundaryEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedArchitectureBoundary;
+  const { caseId, contextId, request, route, declaration, ownedTarget, checks } = fixture ?? {};
+  const {
+    id,
+    goal,
+    protocol,
+    name,
+    source,
+    className,
+    creatorScoped,
+    concern,
+    proposedOwner,
+    expectedOwner,
+  } = workflow.assignment;
+  const report = exercise.report;
+  const aligned = proposedOwner === expectedOwner;
+  const decision = aligned ? "retain-boundary" : "move-state-to-owner";
+  const records = exercise.calls.map(({ record }) => record);
+  const child = (parent, name) =>
+    parent &&
+    records.find(
+      (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+    );
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const review = child(root, "reviewArchitectureBoundary");
+  const provider = child(review, "inspectProvider");
+  const resolution = child(provider, "resolveProvider");
+  const declarationRead = child(provider, "readDeclaration");
+  const comparison = child(provider, "matchDeclaration");
+  const ownership = child(review, "reviewOwnership");
+  const owner = child(ownership, "chooseOwner");
+  const next = child(review, "chooseDisposition");
+  const exactEffect = (call, method, args, result) => {
+    const [effect] = call?.effects ?? [];
+    return (
+      call?.effects?.length === 1 &&
+      effect?.service === "architectureProviderRead" &&
+      effect.method === method &&
+      !effect.error &&
+      matchesValue(effect.args, args) &&
+      matchesValue(effect.result, result)
+    );
+  };
+
+  requireEvidence(
+    fixture?.passed === true &&
+      caseId === id &&
+      typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      ["route", "declaration", "unchanged", "report"].every((key) => checks?.[key] === true) &&
+      request?.goal === goal &&
+      request.concern === concern &&
+      request.proposedOwner === proposedOwner &&
+      typeof request.operationId === "string" &&
+      route?.receipt === request.operationId + ":provider" &&
+      route.contextId === contextId &&
+      route.protocol === protocol &&
+      route.name === name &&
+      route.source === source &&
+      route.receiver?.kind === "durable-object" &&
+      route.receiver.className === className &&
+      route.receiver.creatorScoped === creatorScoped &&
+      typeof route.receiver.address === "string" &&
+      route.receiver.address.length > 0 &&
+      (creatorScoped ? route.receiver.address === ownedTarget : ownedTarget === null) &&
+      typeof route.revision === "string" &&
+      declaration?.revision === route.revision &&
+      declaration.routeReceipt === route.receipt &&
+      declaration.name === name &&
+      declaration.source === source &&
+      declaration.className === className &&
+      declaration.creatorScoped === creatorScoped &&
+      declaration.protocols?.includes(protocol) &&
+      typeof declaration.hash === "string" &&
+      declaration.hash.length > 0 &&
+      isDeepStrictEqual(report?.provider, { route, declaration, consistent: true }) &&
+      isDeepStrictEqual(report.ownership, { owner: expectedOwner, proposedOwner, aligned }) &&
+      report.decision === decision &&
+      records.flatMap(({ effects }) => effects ?? []).length === 2 &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      matchesValue(provider?.inputs?.operationId, request.operationId) &&
+      matchesValue(provider.output, report.provider) &&
+      matchesValue(resolution?.inputs?.operationId, request.operationId) &&
+      matchesValue(resolution.output, route) &&
+      exactEffect(resolution, "resolve", [request.operationId], route) &&
+      matchesValue(declarationRead?.inputs?.routeReceipt, route.receipt) &&
+      matchesValue(declarationRead.output, declaration) &&
+      exactEffect(declarationRead, "declaration", [route.receipt], declaration) &&
+      matchesValue(comparison?.inputs?.route, route) &&
+      matchesValue(comparison.inputs.declaration, declaration) &&
+      matchesValue(comparison.output, true) &&
+      matchesValue(ownership?.inputs?.provider, report.provider) &&
+      matchesValue(ownership.inputs.concern, concern) &&
+      matchesValue(ownership.inputs.proposedOwner, proposedOwner) &&
+      matchesValue(ownership.output, report.ownership) &&
+      matchesValue(owner?.inputs?.concern, concern) &&
+      matchesValue(owner.inputs.provider, report.provider) &&
+      matchesValue(owner.output, expectedOwner) &&
+      matchesValue(next?.inputs?.provider, report.provider) &&
+      matchesValue(next.inputs.ownership, report.ownership) &&
+      matchesValue(next.output, decision),
+    "Architecture review needs the actual assigned provider, source declaration and correct durable owner"
+  );
+  return {
+    world: { context_id: contextId, protocol, source, owner: expectedOwner },
     checks,
     evidence: { workspace: { fixture } },
   };

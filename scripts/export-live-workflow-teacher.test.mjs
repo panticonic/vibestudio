@@ -97,6 +97,7 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
       ["client-admission-worlds", "managedClientAdmissionWorlds", []],
+      ["architecture-boundary-worlds", "managedArchitectureBoundaryWorlds", []],
       ["release-review-handoff-worlds", "managedReleaseReviewHandoffWorlds", []],
       ["extension-release-worlds", "managedExtensionReleaseWorlds", []],
       ["authority-review-worlds", "managedAuthorityReviewWorlds", []],
@@ -2926,6 +2927,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       ["client-admission-worlds", "export const managedClientAdmissionWorlds = [];"],
+      ["architecture-boundary-worlds", "export const managedArchitectureBoundaryWorlds = [];"],
       ["release-review-handoff-worlds", "export const managedReleaseReviewHandoffWorlds = [];"],
       ["extension-release-worlds", "export const managedExtensionReleaseWorlds = [];"],
       ["authority-review-worlds", "export const managedAuthorityReviewWorlds = [];"],
@@ -4603,5 +4605,144 @@ test("release review handoff binds each transferred source to its live prerequis
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases }),
     /actual release and authority readbacks/u
+  );
+});
+
+test("architecture export rejects a different creator-scoped provider", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "architecture-boundary-live-creator-scoped-transcript-owner";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+  entry.test.name = name;
+  const {
+    goal,
+    protocol,
+    name: service,
+    source,
+    className,
+    creatorScoped,
+    concern,
+    proposedOwner,
+    expectedOwner,
+  } = assignment;
+  const contextId = "ctx";
+  const request = { goal, operationId: "scope", concern, proposedOwner };
+  const route = {
+    receipt: "scope:provider",
+    contextId,
+    revision: "event:assigned",
+    protocol,
+    name: service,
+    source,
+    receiver: { kind: "durable-object", address: "owned-conversation", className, creatorScoped },
+  };
+  const declaration = {
+    routeReceipt: route.receipt,
+    source,
+    revision: route.revision,
+    hash: "manifest-hash",
+    name: service,
+    protocols: [protocol],
+    className,
+    creatorScoped,
+  };
+  const provider = { route, declaration, consistent: true };
+  const ownership = { owner: expectedOwner, proposedOwner, aligned: false };
+  const report = { provider, ownership, decision: "move-state-to-owner" };
+  diagnostics.managedArchitectureBoundary = {
+    caseId: assignment.id,
+    contextId,
+    request,
+    route,
+    declaration,
+    ownedTarget: route.receiver.address,
+    passed: true,
+    checks: { route: true, declaration: true, unchanged: true, report: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const effect = (method, args, result) => ({
+    service: "architectureProviderRead",
+    method,
+    args: ref(args),
+    result: ref(result),
+  });
+  const resolution = call(
+    "resolveProvider",
+    "inspectProvider",
+    { operationId: request.operationId },
+    route,
+    [effect("resolve", [request.operationId], route)]
+  );
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewArchitectureBoundary", "runWorkflow", { request }, report),
+      call(
+        "inspectProvider",
+        "reviewArchitectureBoundary",
+        { operationId: request.operationId },
+        provider
+      ),
+      resolution,
+      call("readDeclaration", "inspectProvider", { routeReceipt: route.receipt }, declaration, [
+        effect("declaration", [route.receipt], declaration),
+      ]),
+      call("matchDeclaration", "inspectProvider", { route, declaration }, true),
+      call(
+        "reviewOwnership",
+        "reviewArchitectureBoundary",
+        { concern, proposedOwner, provider },
+        ownership
+      ),
+      call("chooseOwner", "reviewOwnership", { concern, provider }, expectedOwner),
+      call(
+        "chooseDisposition",
+        "reviewArchitectureBoundary",
+        { provider, ownership },
+        report.decision
+      ),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  resolution.record.effects[0].result = ref({
+    ...route,
+    receiver: { ...route.receiver, address: "foreign-conversation" },
+  });
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /actual assigned provider/u
   );
 });

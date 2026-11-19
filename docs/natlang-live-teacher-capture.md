@@ -214,6 +214,11 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Architecture boundary cases trace the actual local RPC provider to its
+authored declaration at the assigned semantic revision. They cover semantic
+history, an owned creator-scoped conversation, and durable mission records.
+Run `architecture-boundary-oracle-qualification` for the model-free check.
+
 Release review handoffs compose extension review, authority preflight and scratch
 handoff in one Examples context. The scratch sources are materialized only once
 the upstream reads establish the release and scope findings. The artifact must
