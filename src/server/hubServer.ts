@@ -106,6 +106,7 @@ import { updateAccountProfile } from "./hostCore/accountProfile.js";
 import { workspaceCreationAuthorityPreparation } from "./services/workspaceCreationAuthority.js";
 import {
   WorkspaceChildAgentCredentialMintInputSchema,
+  WorkspaceChildChronologPrincipalInputSchema,
   WorkspaceChildAgentCredentialRevokeEntityInputSchema,
   WorkspaceChildClientCredentialMintInputSchema,
   WorkspaceChildClientPrincipalAttestSchema,
@@ -1650,6 +1651,26 @@ async function handleInternalRoute(
         ...(body.ttlMs !== undefined ? { ttlMs: body.ttlMs } : {}),
       });
       sendJson(res, 200, result);
+      return;
+    }
+    if (route === "chronolog/principal") {
+      const body = WorkspaceChildChronologPrincipalInputSchema.parse(rawBody);
+      const subject = requireTargetUser(state, { userId: body.userId });
+      const caller: HubSubject = {
+        userId: subject.id, handle: subject.handle, role: subject.role,
+        ...(body.deviceId ? { deviceId: body.deviceId } : {}),
+      };
+      requireLiveHubSubject(state, caller);
+      assertWorkspaceMember(state, caller, boundWorkspaceId);
+      const { ChronologSigningVault } = await import("./chronolog/signingVault.js");
+      const principal = await new ChronologSigningVault().principal(caller.userId);
+      if (state.workspaceChildTokens.get(token) !== boundWorkspaceId) {
+        throw authError("EACCES", "Workspace child runtime expired", 403);
+      }
+      requireLiveHubSubject(state, caller);
+      assertWorkspaceMember(state, caller, boundWorkspaceId);
+      res.setHeader("Cache-Control", "no-store");
+      sendJson(res, 200, principal);
       return;
     }
     if (route === "client-principal/attest") {

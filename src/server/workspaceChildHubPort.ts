@@ -36,6 +36,15 @@ export const WorkspaceChildAgentCredentialMintResultSchema = z
   .object({ agentId: z.string().min(1), agentToken: z.string().min(1) })
   .strict();
 
+export const WorkspaceChildChronologPrincipalInputSchema = z.object({
+  userId: z.string().min(1).max(128),
+  deviceId: z.string().regex(DEVICE_ID_PATTERN).optional(),
+}).strict();
+export const WorkspaceChildChronologPrincipalResultSchema = z.object({
+  publicKey: z.string().regex(/^[a-f0-9]{64}$/u),
+  pkcs8Hex: z.string().regex(/^(?:[a-f0-9]{2}){1,256}$/u),
+}).strict();
+
 export const WorkspaceChildAgentCredentialRevokeInputSchema = z
   .object({ agentId: z.string().min(1) })
   .strict();
@@ -219,6 +228,10 @@ export const WorkspaceChildClientPrincipalListResultSchema = z
   .strict();
 
 export interface WorkspaceChildHubPort {
+  /** For a verified workspace session. Secret material stays on the host port. */
+  chronologPrincipal(input: z.infer<typeof WorkspaceChildChronologPrincipalInputSchema>,
+    options?: { signal?: AbortSignal },
+  ): Promise<z.infer<typeof WorkspaceChildChronologPrincipalResultSchema>>;
   /** Non-revoked principals this workspace attested (for startup reconciliation). */
   listClientPrincipals(input: { attesterWorkspaceId: string }): Promise<ClientPrincipalRow[]>;
   attestClientPrincipal(input: WorkspaceChildClientPrincipalAttestation): Promise<void>;
@@ -276,6 +289,7 @@ export function createWorkspaceChildHubPort(
   const post = async <TInput, TResult>(
     route:
       | "agent-credential/mint"
+      | "chronolog/principal"
       | "agent-credential/revoke"
       | "agent-credential/revoke-entity"
       | "client-principal/attest"
@@ -320,6 +334,10 @@ export function createWorkspaceChildHubPort(
   };
 
   return {
+    chronologPrincipal: (input, options) => post(
+      "chronolog/principal", WorkspaceChildChronologPrincipalInputSchema,
+      WorkspaceChildChronologPrincipalResultSchema, input, options,
+    ),
     createWorkspace: (input) =>
       post(
         "workspace/create",

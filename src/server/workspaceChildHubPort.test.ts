@@ -9,6 +9,20 @@ function response(payload: unknown, status = 200): Response {
 }
 
 describe("WorkspaceChildHubPort", () => {
+  it("uses the process-authenticated private port for an account's Chronolog principal", async () => {
+    const fetchImpl = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) =>
+      response({ publicKey: "a".repeat(64), pkcs8Hex: "abcd" })
+    );
+    const port = createWorkspaceChildHubPort({
+      hubUrl: "http://127.0.0.1:7777", runtimeToken: "child-runtime-token", fetchImpl,
+    });
+    await expect(port.chronologPrincipal({ userId: "usr_first" })).resolves.toMatchObject({ publicKey: "a".repeat(64) });
+    const [url, init] = fetchImpl.mock.calls[0]!;
+    expect(String(url)).toBe("http://127.0.0.1:7777/_r/s/internal/chronolog/principal");
+    expect(init?.headers).toMatchObject({ Authorization: "Bearer child-runtime-token" });
+    expect(JSON.parse(String(init?.body))).toEqual({ userId: "usr_first" });
+  });
+
   it("sends the authenticated device observer request and cancellation signal", async () => {
     const controller = new AbortController();
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
