@@ -119,6 +119,7 @@ import {
   openWorkspaceParticipantContext,
   putPreparedWorkspaceContent,
   readWorkspaceCanonicalMain,
+  readWorkspaceHistoryTemplateInstallation,
   readWorkspaceParticipantFileDescriptors,
   readWorkspaceParticipantProjection,
   readWorkspaceParticipantStatus,
@@ -649,6 +650,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   async readTemplateInstallation(eventId: string) {
     await this.whenSemanticReady();
+    if (this.participantHistorySource)
+      return readWorkspaceHistoryTemplateInstallation(this.participantHistorySource, eventId);
     return this.workspaceSourceProvider().readTemplateInstallation({ eventId });
   }
 

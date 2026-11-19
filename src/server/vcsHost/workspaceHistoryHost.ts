@@ -41,6 +41,7 @@ import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
 import type { VerifiedCaller } from "@vibestudio/shared/serviceDispatcher";
 import { WorkspaceMaterializationRepositorySchema } from "@vibestudio/shared/vcs/workspaceProjection";
 import { z } from "zod";
+import { WorkspaceTemplateInstallationSchema } from "@vibestudio/workspace-contracts/workspaceConfigSchema";
 import type { DODispatch } from "../doDispatch.js";
 import { getBytes, putBytes } from "../services/blobstoreService.js";
 import type { CanonicalRefPublication } from "../services/protectedRefStore.js";
@@ -314,6 +315,12 @@ export async function workspaceMainStateReachable(
 ): Promise<boolean> {
   return z.boolean().parse(
     await source.dispatch.dispatch(source.canonical, "readHistoryMainStateVisibility", { state }),
+  );
+}
+
+export async function readWorkspaceHistoryTemplateInstallation(source: WorkspaceHistorySource, eventId: string) {
+  return WorkspaceTemplateInstallationSchema.nullable().parse(
+    await source.dispatch.dispatch(source.canonical, "readHistoryTemplateInstallation", { eventId }),
   );
 }
 
