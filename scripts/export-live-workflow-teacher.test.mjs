@@ -97,6 +97,7 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
       ["client-admission-worlds", "managedClientAdmissionWorlds", []],
+      ["eval-recovery-worlds", "managedEvalRecoveryWorlds", []],
       ["pdf-layout-worlds", "managedPdfLayoutWorlds", []],
       ["offline-dictation-worlds", "managedDictationWorlds", []],
       ["native-suite-worlds", "managedNativeSuiteWorlds", []],
@@ -2933,6 +2934,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       ["client-admission-worlds", "export const managedClientAdmissionWorlds = [];"],
+      ["eval-recovery-worlds", "export const managedEvalRecoveryWorlds = [];"],
       ["pdf-layout-worlds", "export const managedPdfLayoutWorlds = [];"],
       ["offline-dictation-worlds", "export const managedDictationWorlds = [];"],
       ["native-suite-worlds", "export const managedNativeSuiteWorlds = [];"],
@@ -5403,4 +5405,114 @@ test("PDF layout export binds reading order to the actual fragment boxes", async
   arrangement.record.output = ref(fragments.map(({ row, fragment }) => ({ row, fragment })));
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /correct reading order/u);
+});
+
+test("eval recovery export requires the original failed cell and its independently read effect", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "eval-recovery-live-completed-before-failure";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+  entry.test.name = name;
+  const request = { goal: assignment.goal, operationId: "assigned-effect" };
+  const digest = "a".repeat(64);
+  const size = 20;
+  const runId = "system-test-eval-recovery:392f38af-55a1-482d-b074-5ac48bdcce3e";
+  const attempt = {
+    operationId: request.operationId,
+    runId,
+    cell: "failed",
+    journal: "complete",
+    expectedDigest: digest,
+    expectedSize: size,
+    allowReadback: true,
+    stores: [{ digest, contentDigest: digest, size }],
+  };
+  const readback = { digest, observedDigest: digest, size };
+  const decision = {
+    next: assignment.next,
+    reason: "The exact effect was read back after the failure.",
+  };
+  const report = {
+    runId,
+    cell: "failed",
+    journal: "matched",
+    readback,
+    effect: "confirmed",
+    ...decision,
+  };
+  diagnostics.managedEvalRecovery = {
+    caseId: assignment.id,
+    contextId: "ctx",
+    request,
+    passed: true,
+    attempt,
+    readback,
+    checks: { original: true, storage: true, readback: true, recovery: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const observed = {
+    service: "evalRecoveryJournal",
+    method: "observe",
+    args: ref([request.operationId]),
+    result: ref(attempt),
+  };
+  const read = {
+    service: "evalRecoveryReadback",
+    method: "read",
+    args: ref([request.operationId, digest]),
+    result: ref(readback),
+  };
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewEvalRecovery", "runWorkflow", { request }, report, [observed]),
+      call("inspectJournal", "reviewEvalRecovery", { attempt }, "matched"),
+      call("compareReceipts", "inspectJournal", { attempt }, "matched"),
+      call(
+        "verifyEffect",
+        "reviewEvalRecovery",
+        { attempt, finding: "matched" },
+        { readback, effect: "confirmed" },
+        [read]
+      ),
+      call("assessReadback", "verifyEffect", { attempt, read: readback }, "confirmed"),
+      call("chooseRecovery", "reviewEvalRecovery", { attempt }, decision),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  read.args = ref([request.operationId, "b".repeat(64)]);
+  await save();
+  await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact effect readback/u);
 });

@@ -211,6 +211,15 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const evalRecoveryWorkflow = {
+  family: "workspace-live-eval-recovery",
+  workspace: "examples",
+  namespace: "vibestudio:sandbox",
+  group: "native-journal-and-effect-readback",
+  validator: { template: "system-testing", path: "skills/system-testing/eval-recovery-managed.ts" },
+  root: "reviewEvalRecovery",
+  evidence: evalRecoveryEvidence,
+};
 const pdfLayoutWorkflow = {
   family: "workspace-live-pdf-layout",
   workspace: "examples",
@@ -570,6 +579,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
     { managedClientAdmissionWorlds },
+    { managedEvalRecoveryWorlds },
     { managedPdfLayoutWorlds },
     { managedDictationWorlds },
     { managedNativeSuiteWorlds },
@@ -623,6 +633,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
       "client-admission-worlds.ts",
+      "eval-recovery-worlds.ts",
       "pdf-layout-worlds.ts",
       "offline-dictation-worlds.ts",
       "native-suite-worlds.ts",
@@ -673,6 +684,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of managedEvalRecoveryWorlds) {
+    cases.set(`eval-recovery-live-${assignment.id}`, { ...evalRecoveryWorkflow, assignment });
   }
   for (const assignment of managedPdfLayoutWorlds) {
     cases.set(`pdf-layout-live-${assignment.id}`, { ...pdfLayoutWorkflow, assignment });
@@ -2672,6 +2686,108 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function evalRecoveryEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedEvalRecovery;
+  const { caseId, contextId, request, attempt, readback, checks } = fixture ?? {};
+  const { id, goal, stored, fails, allowReadback, next } = workflow.assignment;
+  const expectedCell = fails ? "failed" : "returned";
+  const finding = stored ? "matched" : "absent";
+  const effect = allowReadback ? "confirmed" : "unchecked";
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) =>
+    parent &&
+    records.find(
+      (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+    );
+  const review = child(root, "reviewEvalRecovery");
+  const inspect = child(review, "inspectJournal");
+  const compare = child(inspect, "compareReceipts");
+  const confirm = child(review, "verifyEffect");
+  const assessment = child(confirm, "assessReadback");
+  const decision = child(review, "chooseRecovery");
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const observed = review?.effects?.[0];
+  const read = confirm?.effects?.[0];
+  requireEvidence(
+    fixture?.passed === true &&
+      caseId === id &&
+      contextId === execution.provenance?.contextId &&
+      typeof contextId === "string" &&
+      request?.goal === goal &&
+      typeof request.operationId === "string" &&
+      request.operationId.length > 0 &&
+      ["original", "storage", "readback", "recovery"].every((key) => checks?.[key] === true) &&
+      /^system-test-eval-recovery:[a-f0-9-]{36}$/u.test(attempt?.runId) &&
+      attempt.operationId === request.operationId &&
+      attempt.cell === expectedCell &&
+      attempt.journal === "complete" &&
+      attempt.allowReadback === allowReadback &&
+      /^[a-f0-9]{64}$/u.test(attempt.expectedDigest) &&
+      Number.isSafeInteger(attempt.expectedSize) &&
+      attempt.expectedSize > 0 &&
+      isDeepStrictEqual(
+        attempt.stores,
+        stored
+          ? [
+              {
+                digest: attempt.expectedDigest,
+                contentDigest: attempt.expectedDigest,
+                size: attempt.expectedSize,
+              },
+            ]
+          : []
+      ) &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      effects.length === (allowReadback ? 2 : 1) &&
+      observed?.service === "evalRecoveryJournal" &&
+      observed.method === "observe" &&
+      !observed.error &&
+      matchesValue(observed.args, [request.operationId]) &&
+      matchesValue(observed.result, attempt),
+    "Eval recovery requires the original native journal and exact assigned attempt"
+  );
+  requireEvidence(
+    report?.runId === attempt.runId &&
+      report.cell === expectedCell &&
+      report.journal === finding &&
+      report.effect === effect &&
+      report.next === next &&
+      typeof report.reason === "string" &&
+      report.reason.trim() &&
+      isDeepStrictEqual(report.readback, readback) &&
+      matchesValue(inspect?.inputs?.attempt, attempt) &&
+      matchesValue(inspect.output, finding) &&
+      matchesValue(compare?.output, finding) &&
+      matchesValue(confirm?.inputs?.attempt, attempt) &&
+      matchesValue(confirm.inputs.finding, finding) &&
+      matchesValue(confirm.output, { readback, effect }) &&
+      matchesValue(decision?.inputs?.attempt, attempt) &&
+      matchesValue(decision.output, { next, reason: report.reason }) &&
+      (allowReadback
+        ? isDeepStrictEqual(readback, {
+            digest: attempt.expectedDigest,
+            observedDigest: attempt.expectedDigest,
+            size: attempt.expectedSize,
+          }) &&
+          read?.service === "evalRecoveryReadback" &&
+          read.method === "read" &&
+          !read.error &&
+          matchesValue(read.args, [request.operationId, attempt.expectedDigest]) &&
+          matchesValue(read.result, readback) &&
+          matchesValue(assessment?.output, effect)
+        : readback === null && !read && !assessment),
+    "Eval recovery requires the exact effect readback and nested recovery decision"
+  );
+  return {
+    world: { context_id: contextId, run_id: attempt.runId },
     checks,
     evidence: { workspace: { fixture } },
   };

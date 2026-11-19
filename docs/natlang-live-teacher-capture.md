@@ -214,6 +214,12 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Eval recovery reviews a finite EvalDO result and its native journal. The
+cases cover an effect completed before a later exception, a journal-only
+confirmation, and a success-looking value with an absent store. The binding
+can verify an authorized content digest with independent readback.
+Run `eval-recovery-oracle-qualification` for the model-free check.
+
 PDF layout review runs the installed PDF extension over an assigned document
 snapshot. The cases distinguish row-major tables, column-major narratives,
 and a single sequence, then check exact fragment coordinates and text. Run
