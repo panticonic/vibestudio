@@ -70,7 +70,7 @@ export interface VcsServiceDeps {
     | "revertParticipantContext"
     | "importParticipantSnapshot"
     | "registerParticipantExternalDelta"
-    | "supersedeParticipantExternalDelta"
+    | "setParticipantExternalDeltaStatus"
     | "saveParticipantContext"
     | "discardParticipantContext"
     | "publishParticipantContext"
@@ -476,9 +476,11 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           uploadPrincipal: blobUploadPrincipal(ctx),
         });
       case "supersedeExternalDelta":
-        return workspace.supersedeParticipantExternalDelta({
+      case "finalizeExternalDelta":
+        return workspace.setParticipantExternalDeltaStatus({
           ...common,
-          delta: vcsMethods.supersedeExternalDelta.args.parse([input])[0],
+          delta: vcsMethods[method].args.parse([input])[0],
+          status: method === "supersedeExternalDelta" ? "superseded" : "finalized",
         });
       case "commit":
         return workspace.saveParticipantContext({
@@ -887,7 +889,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
               inspect: async (value) =>
                 vcsMethods.inspect.returns.parse(await invoke(ctx, "inspect", value)),
               compare: async (value) => {
-                if (catalog)
+                if (catalog && value.source.kind !== "external-delta")
                   throw new Error("Participant merge requires a reviewed placement scope");
                 return vcsMethods.compare.returns.parse(await invoke(ctx, "compare", value));
               },

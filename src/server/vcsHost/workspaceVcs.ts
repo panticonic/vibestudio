@@ -1578,18 +1578,19 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     });
   }
 
-  async supersedeParticipantExternalDelta(input: WorkspaceHistoryParticipant & {
+  async setParticipantExternalDeltaStatus(input: WorkspaceHistoryParticipant & {
     head: string;
     delta: VcsExternalDeltaLifecycleInput;
     cause: { parent: RpcCausalParent | null };
+    status: "superseded" | "finalized";
   }): Promise<VcsExternalDeltaResult> {
     requireWorkspaceParticipantOwner(input);
-    const { dispatch, owner, head, delta, cause } = input;
+    const { dispatch, owner, head, delta, cause, status } = input;
     const result = vcsExternalDeltaResultSchema.parse(
-      await dispatch.dispatch(owner, "supersedeHistoryExternalDelta", { head, delta, cause })
+      await dispatch.dispatch(owner, "setHistoryExternalDeltaStatus", { head, delta, cause, status })
     );
-    if (result.deltaId !== delta.deltaId || result.status !== "superseded") {
-      throw new Error("Workspace history superseded a different external delta");
+    if (result.deltaId !== delta.deltaId || result.status !== status) {
+      throw new Error("Workspace history returned a different external delta lifecycle receipt");
     }
     return result;
   }

@@ -796,8 +796,7 @@ export async function mergeWorkspaceParticipantContext(input: WorkspaceHistoryPa
   requireWorkspaceParticipantOwner(input);
   const { dispatch, owner, merge, cause, blobsDir, triggerEvidence } = input;
   let selection = input.selection;
-  if (!selection) {
-    if (merge.source.kind !== "event") throw new Error("Workspace integration requires a saved event");
+  if (!selection && merge.source.kind === "event") {
     const readableContextIds = input.readableContextIds ?? [];
     selection = historyMergeSelection.parse(await dispatch.dispatch(owner, "resolveHistoryMerge", {
       contextId: merge.contextId, target: merge.expectedWorkingHead, source: merge.source, readableContextIds,
@@ -807,12 +806,13 @@ export async function mergeWorkspaceParticipantContext(input: WorkspaceHistoryPa
       throw new Error("Workspace integration selected an unauthorized source context");
     }
   }
-  const method = "main" in selection ? "mergeHistoryMain" : "mergeHistoryContext";
+  const method = merge.source.kind === "external-delta" ? "mergeHistoryExternalDelta"
+    : selection && "main" in selection ? "mergeHistoryMain" : "mergeHistoryContext";
   const send = async (content?: {
     observation: { files: Array<{ contentHash: string; text: string }> };
     contentHashes?: string[];
   }) => mergeReply.parse(await dispatch.dispatch(owner, method, {
-    ...selection,
+    ...(method === "mergeHistoryExternalDelta" ? {} : selection),
     merge,
     cause,
     ...(triggerEvidence === undefined ? {} : { triggerEvidence }),
@@ -830,10 +830,16 @@ export async function mergeWorkspaceParticipantContext(input: WorkspaceHistoryPa
       });
     }
   }
-  if (reply.kind !== "committed" || reply.value.kind !== "application") {
+  if (reply.kind !== "committed") {
     throw new Error("Workspace merge did not return the committed application");
   }
-  if (reply.result.status !== "working" || reply.result.contextId !== merge.contextId || reply.result.commandId !== merge.commandId ||
+  if (reply.result.status === "unchanged" && merge.source.kind === "external-delta" &&
+      reply.result.contextId === merge.contextId &&
+      canonicalJson(reply.result.workingHead) === canonicalJson(merge.expectedWorkingHead) &&
+      canonicalJson(reply.value) === canonicalJson(merge.expectedWorkingHead)) {
+    return { head: reply.head, value: reply.value, result: reply.result };
+  }
+  if (reply.value.kind !== "application" || reply.result.status !== "working" || reply.result.contextId !== merge.contextId || reply.result.commandId !== merge.commandId ||
       reply.result.applicationId !== reply.value.applicationId ||
       reply.result.decisionId !== reply.result.decisionIds[0] ||
       canonicalJson(reply.result.workingHead) !== canonicalJson(reply.value)) {
