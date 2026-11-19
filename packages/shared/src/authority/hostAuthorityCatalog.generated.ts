@@ -2360,6 +2360,8 @@ export const HOST_AUTHORITY_METHODS = {
     tier: {
       tier: "open",
       session: "family",
+      residency: "grant-authority",
+      family: "chronolog.control",
       rationale: "The prepared group operation selects the approved membership change.",
     },
     capability: "chronolog.write",
@@ -2369,6 +2371,8 @@ export const HOST_AUTHORITY_METHODS = {
     tier: {
       tier: "gated",
       session: "family",
+      residency: "transport",
+      family: "chronolog.read",
       rationale: "Group reads use the authenticated account and a group-scoped grant.",
     },
     capability: "chronolog.read",
@@ -2388,6 +2392,8 @@ export const HOST_AUTHORITY_METHODS = {
     tier: {
       tier: "open",
       session: "family",
+      residency: "grant-authority",
+      family: "chronolog.control",
       rationale: "The prepared group operation selects the approved membership change.",
     },
     capability: "chronolog.write",
@@ -2397,6 +2403,8 @@ export const HOST_AUTHORITY_METHODS = {
     tier: {
       tier: "open",
       session: "family",
+      residency: "grant-authority",
+      family: "chronolog.control",
       rationale: "The prepared group operation selects the approved membership change.",
     },
     capability: "chronolog.write",
@@ -2406,6 +2414,8 @@ export const HOST_AUTHORITY_METHODS = {
     tier: {
       tier: "gated",
       session: "family",
+      residency: "transport",
+      family: "chronolog.read",
       rationale: "Group reads use the authenticated account and a group-scoped grant.",
     },
     capability: "chronolog.read",
@@ -2425,6 +2435,8 @@ export const HOST_AUTHORITY_METHODS = {
     tier: {
       tier: "gated",
       session: "family",
+      residency: "transport",
+      family: "chronolog.read",
       rationale: "Group reads use the authenticated account and a group-scoped grant.",
     },
     capability: "chronolog.read",
@@ -2444,6 +2456,8 @@ export const HOST_AUTHORITY_METHODS = {
     tier: {
       tier: "open",
       session: "family",
+      residency: "grant-authority",
+      family: "chronolog.control",
       rationale: "The prepared group operation selects the approved membership change.",
     },
     capability: "chronolog.write",
@@ -2453,6 +2467,8 @@ export const HOST_AUTHORITY_METHODS = {
     tier: {
       tier: "open",
       session: "family",
+      residency: "grant-authority",
+      family: "chronolog.control",
       rationale: "The prepared group operation selects the approved membership change.",
     },
     capability: "chronolog.write",
@@ -2462,6 +2478,8 @@ export const HOST_AUTHORITY_METHODS = {
     tier: {
       tier: "gated",
       session: "family",
+      residency: "transport",
+      family: "chronolog.read",
       rationale: "Group reads use the authenticated account and a group-scoped grant.",
     },
     capability: "chronolog.read",
@@ -2481,6 +2499,8 @@ export const HOST_AUTHORITY_METHODS = {
     tier: {
       tier: "gated",
       session: "family",
+      residency: "transport",
+      family: "chronolog.read",
       rationale: "Group reads use the authenticated account and a group-scoped grant.",
     },
     capability: "chronolog.read",
@@ -2500,6 +2520,8 @@ export const HOST_AUTHORITY_METHODS = {
     tier: {
       tier: "gated",
       session: "family",
+      residency: "transport",
+      family: "chronolog.read",
       rationale: "Group reads use the authenticated account and a group-scoped grant.",
     },
     capability: "chronolog.read",
@@ -2519,6 +2541,8 @@ export const HOST_AUTHORITY_METHODS = {
     tier: {
       tier: "open",
       session: "family",
+      residency: "protected-write",
+      family: "chronolog.transact",
       rationale: "The prepared program selects the exact group and approved contents.",
     },
     capability: "chronolog.write",
@@ -6801,6 +6825,8 @@ export const HOST_AUTHORITY_METHODS = {
     tier: {
       tier: "open",
       session: "family",
+      residency: "transport",
+      family: "runtime.history",
       rationale: "One transfer, sender and remote destination are verified by the host.",
     },
     capability: null,

@@ -74,6 +74,8 @@ const readAuthority = {
   tier: {
     tier: "gated" as const,
     session: "family" as const,
+    residency: "transport" as const,
+    family: "chronolog.read",
     rationale: "Group reads use the authenticated account and a group-scoped grant.",
   },
   presentation: {
@@ -155,6 +157,8 @@ function groupMutation(
     tier: {
       tier: "open",
       session: "family",
+      residency: "grant-authority",
+      family: "chronolog.control",
       rationale: "The prepared group operation selects the approved membership change.",
     },
     access: { sensitivity: "write" },
@@ -278,6 +282,8 @@ export const chronologMethods = defineServiceMethods({
     tier: {
       tier: "open",
       session: "family",
+      residency: "protected-write",
+      family: "chronolog.transact",
       rationale: "The prepared program selects the exact group and approved contents.",
     },
     description: "Submit one canonical change program signed by the initiating account.",
