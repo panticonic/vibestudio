@@ -766,8 +766,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   }) {
     const source = this.participantHistorySource;
     if (!source) return null;
-    return this.locked(`context-lifecycle:${input.ownerContextId}`, () =>
+    return this.lockParticipantContexts(input.ownerContextId, input.contextId, () =>
       this.openAdmittedParticipantScope(source, input)
+    );
+  }
+
+  private lockParticipantContexts<T>(left: string, right: string, operation: () => Promise<T>): Promise<T> {
+    if (left === right) return this.locked(`context-lifecycle:${left}`, operation);
+    const [first, second] = [left, right].sort();
+    return this.locked(`context-lifecycle:${first}`, () =>
+      this.locked(`context-lifecycle:${second}`, operation)
     );
   }
 
@@ -804,14 +812,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (child.ownerContextId !== child.contextId && child.ownerContextId !== parent.contextId) {
       throw new Error("Workspace fork target must belong to one of its admitted lifetimes");
     }
-    const [first, second] = [parent.contextId, child.contextId].sort();
-    return this.locked(`context-lifecycle:${first}`, () => this.locked(`context-lifecycle:${second}`, async () => {
+    return this.lockParticipantContexts(parent.contextId, child.contextId, async () => {
       if (this.contextHeads.get(child.contextId) === null) {
         throw new Error("Workspace participant context has retired");
       }
       const scope = await this.openAdmittedParticipantScope(source, { ...parent, ownerContextId: parent.contextId });
       return forkWorkspaceParticipantContext({ ...scope, child, blobsDir: this.deps.blobsDir });
-    }));
+    });
   }
 
   /**
@@ -2231,9 +2238,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (source) {
         this.contextHeads.set(contextId, null);
         const retired = await retireWorkspaceParticipantContext({ ...source, contextId });
-        for (const owner of retired) {
+        for (const owner of retired.owners) {
           await source.destroyRetiredStorage?.(owner);
           await fsp.rm(this.participantProjection(owner).root, { recursive: true, force: true });
+        }
+        for (const owner of retired.branchOwners) {
+          const { ownerKey, materializer } = this.participantProjection(owner);
+          await this.locked(canonicalJson(["participant-projection", ownerKey, contextId]), () =>
+            materializer.drop(contextId)
+          );
         }
       }
       this.contextHeads.delete(contextId);

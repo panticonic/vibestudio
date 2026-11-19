@@ -366,6 +366,7 @@ export async function forkWorkspaceParticipantContext(input: WorkspaceHistoryPar
   const reservation = reservationSchema.parse(await dispatch.dispatch(canonical, "reserveHistoryParticipant", {
     participantId,
     contextId: participantId === fromParticipant ? input.ownerContextId : child.ownerContextId,
+    workingContextId: child.contextId,
   }));
   if (reservation.targetId !== target.targetId)
     throw new Error("Workspace fork reserved a different storage peer");
@@ -894,6 +895,7 @@ export async function openWorkspaceParticipantContext(input: {
     await dispatch.dispatch(canonical, "reserveHistoryParticipant", {
       participantId,
       contextId: ownerContextId,
+      workingContextId: contextId,
     })
   );
   if (reservation.targetId !== targetId)
@@ -913,14 +915,19 @@ export async function openWorkspaceParticipantContext(input: {
 /** Archive all storage owners whose logical context has finished retiring. */
 export async function retireWorkspaceParticipantContext(input: WorkspaceHistorySource & {
   contextId: string;
-}): Promise<WorkspaceSourceProviderRef[]> {
+}): Promise<{ owners: WorkspaceSourceProviderRef[]; branchOwners: WorkspaceSourceProviderRef[] }> {
   const { dispatch, canonical, contextId } = input;
   const receipt = z.object({
     contextId: z.string().min(1),
     targets: retainedParticipantKeys,
+    branchOwners: retainedParticipantKeys.default([]),
   }).strict().parse(await dispatch.dispatch(canonical, "retireHistoryContext", { contextId }));
-  if (receipt.contextId !== contextId || new Set(receipt.targets).size !== receipt.targets.length) {
+  const members = [...receipt.targets, ...receipt.branchOwners];
+  if (receipt.contextId !== contextId || new Set(members).size !== members.length) {
     throw new Error("Workspace retirement returned a different context or allocation");
   }
-  return receipt.targets.map((objectKey) => ({ ...canonical, objectKey }));
+  return {
+    owners: receipt.targets.map((objectKey) => ({ ...canonical, objectKey })),
+    branchOwners: receipt.branchOwners.map((objectKey) => ({ ...canonical, objectKey })),
+  };
 }

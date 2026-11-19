@@ -124,7 +124,7 @@ it("transfers the selected fork to the destination identity and requires the exa
   });
   await expect(fork()).resolves.toEqual(seed.state);
   expect(dispatch.mock.calls).toEqual([
-    [canonical, "reserveHistoryParticipant", { participantId: childId, contextId: "child-context" }],
+    [canonical, "reserveHistoryParticipant", { participantId: childId, contextId: "child-context", workingContextId: "child-context" }],
     [owner, "offerHistoryContextFork", request],
     [target, "acceptHistoryContextFork", { participantId: childId, origin, request, seed, token: "fork-grant", fromPeer: peer(owner) }],
     [owner, "finishHistoryContextFork", { request, seed }],
