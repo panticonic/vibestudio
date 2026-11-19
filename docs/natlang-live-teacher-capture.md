@@ -173,6 +173,13 @@ its services as the explicit bindings when loading the shared workflow. The prof
 invite, and target remain with the host. The workflow sees only status receipts and the
 verified workspace identity. The local smoke tests a fresh pairing and an existing-profile continuation on a disposable
 managed server. The harness retires the entire instance and its test device.
+To deploy or update and then open that workspace in one call, use
+`remoteAccess/commissionRemoteWorkspace` with `bindRemoteCommission` in
+`src/cli/remoteCommissionWorkflow.ts`. Pass the binding's request and mount its services
+as above. The host consumes the final successful deployment receipt and rechecks the live
+identity before assigning the device route. The caller can supply invite material through
+`pairingFor`. The already-running path uses the same handoff and can create a new device
+profile or reopen a previously paired profile.
 Testkit cleanup cases open real scratch directories, workers, panels, and CDP clients in an
 owned workspace. They retain deferred registration order and probe the remaining resources
 after Testkit finishes. The Natlang review reports test outcome, cleanup acknowledgements, and

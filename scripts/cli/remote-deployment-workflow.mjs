@@ -123,6 +123,7 @@ export function bindRemoteDeployment(
   const receipt = (stage) => `${operationId}:${stage}`;
   let phase = "start";
   let baseline;
+  let verified;
 
   function claim(expectedPhase, supplied, expectedReceipt) {
     signal.throwIfAborted();
@@ -132,6 +133,17 @@ export function bindRemoteDeployment(
   }
   return {
     request: { operationId },
+    /** Trusted caller only. Consume a readiness receipt and verify the same live identity again. */
+    async takeVerifiedIdentity(deploymentReceipt) {
+      const reuse = phase === "observed" && options.verb === "deploy" && baseline.state === "ready";
+      if (reuse) {
+        claim("observed", deploymentReceipt, receipt("baseline"));
+      } else {
+        claim("verified", deploymentReceipt, receipt("verification"));
+      }
+      const current = await observeManagedTarget(options, runCommand, signal);
+      return sameBaseline(reuse ? baseline : verified, current) ? current.identity : null;
+    },
     services: {
       remoteDeploymentRead: {
         async observe(id) {
@@ -186,7 +198,9 @@ export function bindRemoteDeployment(
             return { ...result, state: "identity-changed" };
           if (baseline.identity?.bootId === current.identity.bootId)
             return { ...result, state: "unchanged-boot" };
-          return { ...result, state: "verified", identity: current.identity };
+          verified = current;
+          phase = "verified";
+          return { ...result, state: "verified", identity: { ...current.identity } };
         },
       },
     },

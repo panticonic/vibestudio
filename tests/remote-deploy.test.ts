@@ -117,12 +117,10 @@ describe("Natlang deployment binding", () => {
 
   it("uses the existing update installer without publishing invite material, then checks identity and boot", async () => {
     vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const { installer, run } = fixture([
-      ready,
-      ready,
-      { state: "ready", identity: { ...identity, bootId: "fresh" } },
-    ]);
-    const { request, services } = bindRemoteDeployment(["update", "deploy@example.test"], { run });
+    const successor = { state: "ready", identity: { ...identity, bootId: "fresh" } };
+    const { installer, run } = fixture([ready, ready, successor, successor]);
+    const deployment = bindRemoteDeployment(["update", "deploy@example.test"], { run });
+    const { request, services } = deployment;
     const baseline = await services.remoteDeploymentRead.observe(request.operationId);
     expect(baseline).toMatchObject({ intent: "update", state: "ready" });
     await expect(services.remoteDeploymentApply.apply("foreign")).rejects.toThrow(
@@ -133,10 +131,33 @@ describe("Natlang deployment binding", () => {
     expect(installer.join("\n")).toContain("systemctl --user restart vibestudio-server.service");
     expect(installer.join("\n")).not.toContain("remote deploy pairing local");
     expect(installer.join("\n")).toContain("remote doctor");
-    await expect(services.remoteDeploymentVerify.verify(attempted.receipt)).resolves.toMatchObject({
-      state: "verified",
-      identity: { ...identity, bootId: "fresh" },
-    });
+    await expect(deployment.takeVerifiedIdentity(baseline.receipt)).rejects.toThrow(
+      /current attempt/u
+    );
+    const verified = await services.remoteDeploymentVerify.verify(attempted.receipt);
+    expect(verified).toMatchObject({ state: "verified", identity: successor.identity });
+    await expect(deployment.takeVerifiedIdentity(verified.receipt)).resolves.toEqual(
+      successor.identity
+    );
+    await expect(deployment.takeVerifiedIdentity(verified.receipt)).rejects.toThrow(
+      /current attempt/u
+    );
+  });
+
+  it("uses the healthy deployment baseline only when the identity still matches", async () => {
+    const { installer, run } = fixture([
+      ready,
+      { state: "ready", identity: { ...identity, bootId: "changed" } },
+    ]);
+    const deployment = bindRemoteDeployment(["deploy@example.test"], { run });
+    const baseline = await deployment.services.remoteDeploymentRead.observe(
+      deployment.request.operationId
+    );
+    await expect(deployment.takeVerifiedIdentity(baseline.receipt)).resolves.toBeNull();
+    await expect(deployment.takeVerifiedIdentity(baseline.receipt)).rejects.toThrow(
+      /current attempt/u
+    );
+    expect(installer).toEqual([]);
   });
 
   it("refuses an update if the server changed between observation and installation", async () => {
