@@ -4512,7 +4512,7 @@ function dictationEvidence(execution, exercise, _scenario, workflow) {
 function nativeSuiteEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.managedNativeSuite;
   const { caseId, contextId, request, observed, executed, checks } = fixture ?? {};
-  const { id, goal, target, suite, file, testName, mode, runtime } = workflow.assignment;
+  const { id, goal, target, suite, file, testName, mode, runtime, expectedStatus, expectedOutcome } = workflow.assignment;
   const report = exercise.report;
   const records = exercise.calls.map(({ record }) => record);
   const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
@@ -4526,6 +4526,7 @@ function nativeSuiteEvidence(execution, exercise, _scenario, workflow) {
   const route = child(plan, "interpretRuntime");
   const disposition = child(plan, "chooseRunDisposition");
   const result = child(review, "reviewResult");
+  const receiptCheck = child(result, "checkReceipt");
   const outcome = child(result, "interpretOutcome");
   const followUp = child(result, "planFollowUp");
   const effects = records.flatMap(({ effects }) => effects ?? []);
@@ -4587,19 +4588,27 @@ function nativeSuiteEvidence(execution, exercise, _scenario, workflow) {
           matchesValue(ran.args, [request.operationId, observed.stateHash]) &&
           matchesValue(ran.result, executed) &&
           executed?.current === true &&
-          executed.status === "passed" &&
+          executed.status === expectedStatus &&
+          isDeepStrictEqual(executed.receipt, {
+            operation: "test", target, suite, runtime, contextId,
+            ref: `ctx:${contextId}`, stateHash: observed.stateHash,
+          }) &&
           Number.isSafeInteger(executed.passed) &&
-          executed.passed > 0 &&
+          (expectedStatus === "no-tests" ? executed.passed === 0 : executed.passed > 0) &&
           executed.failed === 0 &&
           typeof executed.artifactKey === "string" &&
           executed.artifactKey.length > 0 &&
           (runtime === "native") === executed.artifactKey.startsWith("native:") &&
           /^[a-f0-9]{64}$/u.test(executed.executionDigest) &&
           /^[a-f0-9]{64}$/u.test(executed.reportDigest) &&
-          report.result?.outcome === "verified" &&
+          report.result?.outcome === expectedOutcome &&
           typeof report.result.followUp === "string" &&
           report.result.followUp.trim() &&
-          matchesValue(result?.inputs?.execution, executed) &&
+          matchesValue(result?.inputs?.plan, observed) &&
+          matchesValue(result.inputs.execution, executed) &&
+          matchesValue(receiptCheck?.inputs?.plan, observed) &&
+          matchesValue(receiptCheck.inputs.execution, executed) &&
+          matchesValue(receiptCheck.output, "matched") &&
           matchesValue(result.output, report.result) &&
           matchesValue(outcome?.output, report.result.outcome) &&
           matchesValue(followUp?.output, report.result.followUp),

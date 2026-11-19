@@ -328,9 +328,10 @@ Run `offline-dictation-oracle-qualification` for the live readiness check.
 
 Declared test-suite review resolves the manifest route in the assigned
 context. The cases cover native declaration inspection, a focused native
-adapter child-process check, and a workerd suite. Both execution cases use the ordinary
-verification entry point. Run `native-suite-oracle-qualification` for the
-model-free check.
+adapter child-process check, a filter that selects no native tests, and a
+workerd suite. The workflow matches the native execution receipt to the
+assigned plan before classifying the outcome. Run
+`native-suite-oracle-qualification` for the model-free check.
 
 Git Bridge review joins the installed provider's upstream status with the
 working and protected-main repository identities. The managed cases exercise

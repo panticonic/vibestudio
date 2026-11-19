@@ -5186,6 +5186,10 @@ test("declared-suite export binds a focused verification to the observed runtime
   };
   const plan = { target, suite, runtime, contextId: "ctx", stateHash: "assigned-state" };
   const execution = {
+    receipt: {
+      operation: "test", target, suite, runtime, contextId: "ctx",
+      ref: "ctx:ctx", stateHash: plan.stateHash,
+    },
     current: true,
     status: "passed",
     artifactKey: "artifact:verified",
@@ -5256,13 +5260,22 @@ test("declared-suite export binds a focused verification to the observed runtime
       call("reviewPlan", "reviewTestSuite", { plan }, decision),
       call("interpretRuntime", "reviewPlan", { plan }, decision.route),
       call("chooseRunDisposition", "reviewPlan", { mode }, decision.next),
-      call("reviewResult", "reviewTestSuite", { execution }, result),
+      call("reviewResult", "reviewTestSuite", { plan, execution }, result),
+      call("checkReceipt", "reviewResult", { plan, execution }, "matched"),
       call("interpretOutcome", "reviewResult", {}, result.outcome),
       call("planFollowUp", "reviewResult", {}, result.followUp),
     ],
   };
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases });
+  const receiptCheck = diagnostics.natlangTeacher.calls.find(({ callId }) => callId === "checkReceipt");
+  receiptCheck.record.output = ref("stale");
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-receipt-mismatch` }),
+    /exact execution receipt/u
+  );
+  receiptCheck.record.output = ref("matched");
   ran.args = ref([request.operationId, "superseded-state"]);
   await save();
   await assert.rejects(
