@@ -1,15 +1,34 @@
 {
   "version": 1,
-  "fork": { "repository": "panticonic/celld", "branch": "unified-fork", "commit": "60f0bf8" },
+  "fork": {
+    "repository": "panticonic/celld",
+    "branch": "unified-fork",
+    "commit": "0410398e2c50dec6bb708d196e15727e7869b68e"
+  },
   "targets": [
     {
       "platform": "linux",
       "arch": "x64",
       "binary": "celld",
-      "sha256": "0435c5fea232dcab42c523cb8a6d308561ee33641f0e96228f1cb3c66870843c"
+      "sha256": "4410b8a3b30a4074ccd5c2e37edfd1ae2eb2661f0e066271155fb8dce5a08bd6"
     },
-    { "platform": "linux", "arch": "arm64", "binary": "celld", "sha256": null },
-    { "platform": "darwin", "arch": "arm64", "binary": "celld", "sha256": null },
-    { "platform": "win32", "arch": "x64", "binary": "celld.exe", "sha256": null }
+    {
+      "platform": "linux",
+      "arch": "arm64",
+      "binary": "celld",
+      "sha256": "04304aad00ba4993165592fa0c8fe9e5a061389b8562d652a47badb76073baa9"
+    },
+    {
+      "platform": "darwin",
+      "arch": "arm64",
+      "binary": "celld",
+      "sha256": "9d793eb794efe4f73798d1bcea9b1e881f0f1e21521b734d509229bd83c7111b"
+    },
+    {
+      "platform": "win32",
+      "arch": "x64",
+      "binary": "celld.exe",
+      "sha256": "1d4b15481ac55bc3c076863c3365e55609be1b2a5efd0b014f7649924ac9faa3"
+    }
   ]
 }
