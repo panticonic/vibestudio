@@ -161,6 +161,11 @@ checkpoint is inspected by the shared workflow's nested replay-review stages.
 The runtime catalog retains the method allowlist for explicitly supplied workflow services.
 Their generated model declarations come from the owning template's TypeScript signatures.
 The generation check verifies catalog membership for every configured skill's service scopes.
+The `remoteAccess/deployRemoteServer` workflow accepts a caller-sealed deployment assignment
+from `bindRemoteDeployment` in `scripts/cli/remote-deployment-workflow.mjs`. It invokes the
+same managed installer as the CLI and independently checks the protected ready record against
+the running hub and workspace. An update must advance the hub boot while retaining the same
+server and workspace identities. The host keeps pairing material outside the workflow.
 The remote workspace workflow is available under `remoteAccess/openRemoteWorkspace`. A
 trusted host caller creates the assignment with `bindRemoteWorkspaceAccess` in
 `src/cli/remoteAccessWorkflow.ts`. Pass its request as the input of a domain work item and

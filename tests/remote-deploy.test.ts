@@ -1,4 +1,5 @@
 import { deploy, main, parseArgs, REQUIRED_NODE_VERSION } from "../scripts/cli/remote-deploy.mjs";
+import { bindRemoteDeployment } from "../scripts/cli/remote-deployment-workflow.mjs";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 type RunCall = { command: string; args: string[]; options?: { input?: string } };
@@ -6,6 +7,13 @@ type RunCall = { command: string; args: string[]; options?: { input?: string } }
 afterEach(() => vi.restoreAllMocks());
 
 describe("remote-deploy CLI", () => {
+  it("requires an explicit file for an artifact argument", async () => {
+    expect(() => parseArgs(["local", "--artifact"])).toThrow(/requires a file path/u);
+    await expect(deploy(parseArgs(["local", "--artifact", "."]))).rejects.toThrow(
+      /artifact is not a file/u
+    );
+  });
+
   it("uses the production relay set unless explicit canonical relays are supplied", () => {
     expect(parseArgs(["host"]).relayUrls).toEqual([
       "https://use1-1.relay.n0.iroh.link/",
@@ -85,4 +93,100 @@ describe("remote-deploy CLI", () => {
     expect(script).toContain("*/reach/iroh/endpoint.key");
     expect(script).not.toContain("server-auth/iroh");
   });
+});
+
+describe("Natlang deployment binding", () => {
+  const identity = { serverId: "server", bootId: "boot", buildId: "build", workspaceId: "child" };
+  const ready = { state: "ready", identity };
+
+  function fixture(observations: unknown[]) {
+    const installer: string[] = [];
+    const run = vi.fn(
+      async (_command: string, args: string[], options?: { capture?: boolean; input?: string }) => {
+        expect(args[0]).toBe("deploy@example.test");
+        if (options?.capture) {
+          expect(options.input).toContain("ActiveState");
+          return JSON.stringify(observations.shift());
+        }
+        installer.push(options?.input ?? "");
+        return undefined;
+      }
+    );
+    return { installer, run };
+  }
+
+  it("uses the existing update installer without publishing invite material, then checks identity and boot", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const { installer, run } = fixture([
+      ready,
+      ready,
+      { state: "ready", identity: { ...identity, bootId: "fresh" } },
+    ]);
+    const { request, services } = bindRemoteDeployment(["update", "deploy@example.test"], { run });
+    const baseline = await services.remoteDeploymentRead.observe(request.operationId);
+    expect(baseline).toMatchObject({ intent: "update", state: "ready" });
+    await expect(services.remoteDeploymentApply.apply("foreign")).rejects.toThrow(
+      /current attempt/u
+    );
+    const attempted = await services.remoteDeploymentApply.apply(baseline.receipt);
+    expect(attempted.state).toBe("applied");
+    expect(installer.join("\n")).toContain("systemctl --user restart vibestudio-server.service");
+    expect(installer.join("\n")).not.toContain("remote deploy pairing local");
+    expect(installer.join("\n")).toContain("remote doctor");
+    await expect(services.remoteDeploymentVerify.verify(attempted.receipt)).resolves.toMatchObject({
+      state: "verified",
+      identity: { ...identity, bootId: "fresh" },
+    });
+  });
+
+  it("refuses an update if the server changed between observation and installation", async () => {
+    const { installer, run } = fixture([
+      ready,
+      { state: "ready", identity: { ...identity, bootId: "raced" } },
+    ]);
+    const { request, services } = bindRemoteDeployment(["update", "deploy@example.test"], { run });
+    const baseline = await services.remoteDeploymentRead.observe(request.operationId);
+    await expect(services.remoteDeploymentApply.apply(baseline.receipt)).resolves.toMatchObject({
+      state: "baseline-changed",
+    });
+    expect(installer).toEqual([]);
+  });
+
+  it("updates a stopped deployment when the protected record identifies the existing server", async () => {
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const stopped = { state: "inactive", identity };
+    const { run } = fixture([
+      stopped,
+      stopped,
+      { state: "ready", identity: { ...identity, bootId: "successor" } },
+    ]);
+    const { request, services } = bindRemoteDeployment(["update", "deploy@example.test"], { run });
+    const baseline = await services.remoteDeploymentRead.observe(request.operationId);
+    expect(baseline).toMatchObject({ state: "inactive", hasPriorIdentity: true });
+    const attempt = await services.remoteDeploymentApply.apply(baseline.receipt);
+    await expect(services.remoteDeploymentVerify.verify(attempt.receipt)).resolves.toMatchObject({
+      state: "verified",
+    });
+  });
+
+  it.each([
+    [identity, "unchanged-boot"],
+    [{ ...identity, bootId: "fresh", serverId: "replacement" }, "identity-changed"],
+    [{ ...identity, bootId: "fresh", workspaceId: "other-child" }, "identity-changed"],
+  ])(
+    "rejects post-update evidence that does not establish a successor (%s)",
+    async (after, state) => {
+      vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const { run } = fixture([ready, ready, { state: "ready", identity: after }]);
+      const { request, services } = bindRemoteDeployment(["update", "deploy@example.test"], {
+        run,
+      });
+      const baseline = await services.remoteDeploymentRead.observe(request.operationId);
+      const attempt = await services.remoteDeploymentApply.apply(baseline.receipt);
+      await expect(services.remoteDeploymentVerify.verify(attempt.receipt)).resolves.toMatchObject({
+        state,
+        identity: null,
+      });
+    }
+  );
 });

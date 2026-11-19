@@ -46,8 +46,12 @@ export function parseArgs(argv) {
   };
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
-    if (arg === "--artifact") options.artifact = path.resolve(args[++i] ?? "");
-    else if (arg === "--relay-url") {
+    if (arg === "--artifact") {
+      const artifact = args[++i];
+      if (!artifact || artifact.startsWith("--"))
+        throw new Error("--artifact requires a file path");
+      options.artifact = path.resolve(artifact);
+    } else if (arg === "--relay-url") {
       const raw = args[++i];
       if (!raw || /[\u0000-\u001f\u007f]/u.test(raw)) {
         throw new Error(`${arg} requires one relay URL without control characters`);
@@ -213,12 +217,27 @@ export function run(command, args, options = {}) {
     const child = spawn(command, args, {
       cwd: options.cwd ?? repoRoot,
       env: process.env,
-      stdio: hasInput ? ["pipe", "inherit", "inherit"] : (options.stdio ?? "inherit"),
+      ...(options.signal ? { signal: options.signal } : {}),
+      stdio: options.capture
+        ? [hasInput ? "pipe" : "ignore", "pipe", "inherit"]
+        : hasInput
+          ? ["pipe", "inherit", "inherit"]
+          : (options.stdio ?? "inherit"),
+    });
+    let output = "";
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk) => {
+      output += chunk;
+      if (output.length > 64 * 1024) {
+        child.stdout.destroy();
+        child.kill();
+        reject(new Error("Deployment observation exceeded its output bound"));
+      }
     });
     child.on("error", reject);
-    child.on("exit", (code) =>
+    child.on("close", (code) =>
       code === 0
-        ? resolve()
+        ? resolve(options.capture ? output : undefined)
         : reject(new Error(`${command} ${args.join(" ")} failed with code ${code}`))
     );
     if (hasInput) {
@@ -242,7 +261,10 @@ export function assertSafeTarget(target) {
 
 export async function ssh(target, script, hooks = {}) {
   assertSafeTarget(target);
-  await (hooks.run ?? run)("ssh", [target, "bash", "-l", "-s"], { input: script });
+  return (hooks.run ?? run)("ssh", [target, "bash", "-l", "-s"], {
+    input: script,
+    ...hooks.runOptions,
+  });
 }
 
 /** Run one deployment script on either this computer or an SSH target. The
@@ -251,10 +273,9 @@ export async function ssh(target, script, hooks = {}) {
 export async function targetShell(target, script, hooks = {}) {
   assertSafeTarget(target);
   if (target === "local") {
-    await (hooks.run ?? run)("bash", ["-l", "-s"], { input: script });
-    return;
+    return (hooks.run ?? run)("bash", ["-l", "-s"], { input: script, ...hooks.runOptions });
   }
-  await ssh(target, script, hooks);
+  return ssh(target, script, hooks);
 }
 
 function systemdQuote(value) {
@@ -297,8 +318,8 @@ esac`;
 
 export async function deploy(options, hooks = {}) {
   assertSafeTarget(options.target);
-  if (options.artifact && !fs.existsSync(options.artifact))
-    throw new Error(`artifact not found: ${options.artifact}`);
+  if (options.artifact && !fs.statSync(options.artifact, { throwIfNoEntry: false })?.isFile())
+    throw new Error(`artifact is not a file: ${options.artifact}`);
   const unitDir = "$HOME/.config/systemd/user";
   const relayEnv = `Environment=${systemdQuote(`VIBESTUDIO_IROH_RELAYS=${options.relayUrls.join(",")}`)}\n`;
   const requiredNodeTuple = JSON.stringify(REQUIRED_NODE_VERSION);
@@ -425,7 +446,7 @@ done
 ${RESOLVE_REMOTE_RUNTIME}
 "$node_bin" "$vibestudio_entry" remote doctor${relayArgs}
 "$node_bin" "$vibestudio_entry" remote doctor${relayArgs} --workspace default
-"$node_bin" "$vibestudio_entry" remote deploy pairing local
+${hooks.showPairing === false ? "" : '"$node_bin" "$vibestudio_entry" remote deploy pairing local'}
 `,
     hooks
   );
