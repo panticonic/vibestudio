@@ -97,6 +97,7 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
       ["client-admission-worlds", "managedClientAdmissionWorlds", []],
+      ["release-review-handoff-worlds", "managedReleaseReviewHandoffWorlds", []],
       ["extension-release-worlds", "managedExtensionReleaseWorlds", []],
       ["authority-review-worlds", "managedAuthorityReviewWorlds", []],
       ["problem-draft-worlds", "managedProblemDraftWorlds", []],
@@ -2925,6 +2926,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       ["client-admission-worlds", "export const managedClientAdmissionWorlds = [];"],
+      ["release-review-handoff-worlds", "export const managedReleaseReviewHandoffWorlds = [];"],
       ["extension-release-worlds", "export const managedExtensionReleaseWorlds = [];"],
       ["authority-review-worlds", "export const managedAuthorityReviewWorlds = [];"],
       ["problem-draft-worlds", "export const managedProblemDraftWorlds = [];"],
@@ -4341,5 +4343,265 @@ test("client admission export rejects substituted host ABI evidence", async (t) 
   await assert.rejects(
     exportLiveTeacherWorkflow({ ...options, cases }),
     /host contract and build catalog/u
+  );
+});
+
+test("release review handoff binds each transferred source to its live prerequisite", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "release-review-handoff-live-code-only-probe-and-status";
+  const workflow = cases.get(name);
+  const { assignment, extension, authority, work } = workflow;
+  for (const id of [
+    "extension-release-live-" + extension.id,
+    "authority-review-live-" + authority.id,
+  ]) {
+    for (const group of workflowSourceGroups(cases.get(id)))
+      assert.ok(workflowSourceGroups(workflow).includes(group));
+  }
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+  entry.test.name = name;
+  const contextId = "ctx";
+  const releaseRequest = {
+    goal: extension.goal,
+    operationId: "pdf-release",
+    method: extension.method,
+  };
+  const manifest = { hash: "same-package", activation: "on-invoke", methods: ["probe"] };
+  const source = {
+    operationId: releaseRequest.operationId,
+    contextId,
+    name: extension.name,
+    source: extension.source,
+    workingRevision: "application:pdf",
+    mainRevision: "event:pdf",
+    workingTree: "a".repeat(64),
+    publishedTree: "b".repeat(64),
+    working: manifest,
+    published: manifest,
+  };
+  const runtime = {
+    operationId: releaseRequest.operationId,
+    name: extension.name,
+    source: extension.source,
+    status: "available",
+    identity: null,
+    activeEv: null,
+    methods: [],
+    pendingApproval: null,
+    hasError: false,
+  };
+  const releaseReport = {
+    source: { observation: source, disposition: "unpublished-candidate" },
+    runtime: { observation: runtime, disposition: "cold" },
+    decision: "verify-and-publish-candidate",
+  };
+  const authorityRequest = {
+    goal: authority.goal,
+    operations: authority.operations.map(({ id, label }) => ({ id, label })),
+    ceiling: [],
+  };
+  const operationId = authority.operations[0].id;
+  const observation = { operationId, decision: "allowed", leaves: [] };
+  const assessment = { observation, outside: [], disposition: "eligible" };
+  const authorityReport = {
+    status: "eligible",
+    protectedLeaves: [],
+    held: [],
+    reviews: [assessment],
+  };
+  const scratchRequest = {
+    goal: "Stage an exact handoff",
+    questions: ["What is the release disposition?", "What was held?"],
+    sources: [
+      { id: "extension", path: "/.tmp/input/extension.txt" },
+      { id: "authority", path: "/.tmp/input/authority.txt" },
+    ],
+  };
+  const artifact = { path: "/.tmp/evidence-handoff-a/handoff.json", bytes: 120 };
+  const handoffReport = { status: "staged", artifact, missingSources: [], unanswered: [] };
+  const request = {
+    goal: assignment.goal + " Complete the reviews in order.",
+    work: work.map((item, index) => ({
+      ...item,
+      input: [releaseRequest, authorityRequest, scratchRequest][index],
+    })),
+  };
+  const report = {
+    results: work.map((item, index) => ({
+      ...item,
+      report: [releaseReport, authorityReport, handoffReport][index],
+    })),
+    remaining: [],
+  };
+  const sources = {
+    extension: `Source disposition: unpublished-candidate; working tree ${source.workingTree}; published tree ${source.publishedTree}.\nRuntime disposition: cold; active version none.\n`,
+    authority: "Authority disposition: eligible.\nHeld operations: none.\n",
+  };
+  const sha = (text) => createHash("sha256").update(text).digest("hex");
+  diagnostics.managedReleaseReviewHandoff = {
+    caseId: assignment.id,
+    contextId,
+    request,
+    sources,
+    passed: true,
+    sourceDigests: Object.entries(sources).map(([id, text]) => ({ id, sha256: sha(text) })),
+    checks: { release: true, scope: true, handoff: true, transfer: true, order: true },
+    release: {
+      caseId: extension.id,
+      contextId,
+      request: releaseRequest,
+      source,
+      runtime,
+      passed: true,
+      checks: { source: true, runtime: true, unchanged: true, report: true },
+    },
+    scope: {
+      caseId: authority.id,
+      contextId,
+      request: authorityRequest,
+      observations: [observation],
+      passed: true,
+      checks: { assigned: true, reviews: true, ceiling: true, decision: true },
+    },
+    handoff: {
+      artifact: { ...artifact, sha256: "d".repeat(64) },
+      passed: true,
+      expectedStatus: "staged",
+      seedRevision: "application:pdf",
+      sourceIds: ["extension", "authority"],
+      checks: {
+        protectedUnchanged: true,
+        originalsUnchanged: true,
+        disposition: true,
+        exactReadback: true,
+      },
+    },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return { complete: true, hash: sha(text), bytes: Buffer.byteLength(text) };
+  };
+  const effect = (service, method, args, result) => ({
+    service,
+    method,
+    args: ref(args),
+    result: ref(result),
+  });
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = [], start = 0) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      started_at: new Date(start * 1000).toISOString(),
+      ended_at: new Date((start + 1) * 1000).toISOString(),
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const readAuthority = call("readAuthorityProof", "assembleHandoff", { id: "authority" }, {}, [
+    effect("scratchHandoffRead", "read", ["authority"], {
+      id: "authority",
+      lines: sources.authority.trimEnd().split("\n"),
+    }),
+  ]);
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, { request }, report),
+      call(
+        "reviewExtensionRelease",
+        "runWorkflow",
+        { request: releaseRequest },
+        releaseReport,
+        [],
+        1
+      ),
+      call(
+        "reviewSource",
+        "reviewExtensionRelease",
+        { operationId: releaseRequest.operationId, method: extension.method },
+        releaseReport.source
+      ),
+      call("readSource", "reviewSource", { operationId: releaseRequest.operationId }, source, [
+        effect("extensionReleaseRead", "source", [releaseRequest.operationId], source),
+      ]),
+      call(
+        "assessSource",
+        "reviewSource",
+        { observation: source, method: extension.method },
+        releaseReport.source.disposition
+      ),
+      call(
+        "reviewRuntime",
+        "reviewExtensionRelease",
+        { operationId: releaseRequest.operationId, method: extension.method },
+        releaseReport.runtime
+      ),
+      call("readRuntime", "reviewRuntime", { operationId: releaseRequest.operationId }, runtime, [
+        effect("extensionReleaseRead", "runtime", [releaseRequest.operationId], runtime),
+      ]),
+      call(
+        "assessRuntime",
+        "reviewRuntime",
+        { observation: runtime, method: extension.method },
+        releaseReport.runtime.disposition
+      ),
+      call(
+        "chooseNext",
+        "reviewExtensionRelease",
+        { source: releaseReport.source, runtime: releaseReport.runtime },
+        releaseReport.decision
+      ),
+      call("reviewAuthority", "runWorkflow", { request: authorityRequest }, authorityReport, [], 3),
+      call("reviewOperation", "reviewAuthority", { operationId, ceiling: [] }, assessment),
+      call("preflight", "reviewOperation", { operationId }, observation, [
+        effect("assignedAuthorityRead", "preflight", [operationId], observation),
+      ]),
+      call("findOutside", "reviewOperation", { leaves: [], ceiling: [] }, []),
+      call(
+        "decideDisposition",
+        "reviewOperation",
+        { decision: "allowed", outside: [] },
+        "eligible"
+      ),
+      call("combineCeiling", "reviewAuthority", { reviews: [assessment] }, authorityReport),
+      call("collectProtected", "combineCeiling", { reviews: [assessment] }, []),
+      call("assembleHandoff", "runWorkflow", { request: scratchRequest }, handoffReport, [], 5),
+      call("readExtensionProof", "assembleHandoff", { id: "extension" }, {}, [
+        effect("scratchHandoffRead", "read", ["extension"], {
+          id: "extension",
+          lines: sources.extension.trimEnd().split("\n"),
+        }),
+      ]),
+      readAuthority,
+      call("commitHandoff", "assembleHandoff", { body: "{}" }, artifact, [
+        effect("scratchHandoffWrite", "stage", ["{}"], artifact),
+      ]),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  readAuthority.record.effects[0].result = ref({
+    id: "authority",
+    lines: ["Authority disposition: held."],
+  });
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /actual release and authority readbacks/u
   );
 });

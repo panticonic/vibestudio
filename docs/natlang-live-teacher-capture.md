@@ -214,6 +214,12 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Release review handoffs compose extension review, authority preflight and scratch
+handoff in one Examples context. The scratch sources are materialized only once
+the upstream reads establish the release and scope findings. The artifact must
+quote the exact source lines. Run `release-review-handoff-oracle-qualification`
+for model-free verification of the dependency gates and persisted artifact.
+
 Extension review cases reconcile the working and protected-main repository
 trees and manifests with the real host status and exposed methods. Two cases
 stage a manifest change or an implementation-only change in a disposable

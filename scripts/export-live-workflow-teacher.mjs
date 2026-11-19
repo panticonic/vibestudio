@@ -211,6 +211,17 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const releaseReviewHandoffWorkflow = {
+  family: "workspace-live-release-review-handoff",
+  workspace: "examples",
+  namespace: "vibestudio:release-review",
+  group: "extension-authority-local-evidence-handoff",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/release-review-handoff-managed.ts",
+  },
+  evidence: releaseReviewHandoffEvidence,
+};
 const extensionReleaseWorkflow = {
   family: "workspace-live-extension-release",
   workspace: "examples",
@@ -487,6 +498,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
     { managedClientAdmissionWorlds },
+    { managedReleaseReviewHandoffWorlds, releaseReviewHandoffWork },
     { managedExtensionReleaseWorlds },
     { managedAuthorityReviewWorlds },
     { managedProblemDraftWorlds },
@@ -532,6 +544,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
       "client-admission-worlds.ts",
+      "release-review-handoff-worlds.ts",
       "extension-release-worlds.ts",
       "authority-review-worlds.ts",
       "problem-draft-worlds.ts",
@@ -574,6 +587,26 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of managedReleaseReviewHandoffWorlds) {
+    const extension = managedExtensionReleaseWorlds.find(({ id }) => id === assignment.extension);
+    const authority = managedAuthorityReviewWorlds.find(({ id }) => id === assignment.authority);
+    if (!extension || !authority)
+      throw new Error("Unknown release review handoff source assignment");
+    cases.set(`release-review-handoff-live-${assignment.id}`, {
+      ...releaseReviewHandoffWorkflow,
+      assignment,
+      work: releaseReviewHandoffWork,
+      skills: releaseReviewHandoffWork.map(({ operation }) => operation),
+      sourceGroups: [
+        releaseReviewHandoffWorkflow,
+        extensionReleaseWorkflow,
+        authorityReviewWorkflow,
+        scratchHandoffWorkflow,
+      ].flatMap(workflowSourceGroups),
+      extension,
+      authority,
+    });
   }
   for (const assignment of managedExtensionReleaseWorlds) {
     cases.set(`extension-release-live-${assignment.id}`, {
@@ -2523,6 +2556,130 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function releaseReviewHandoffEvidence(execution, exercise, scenario, workflow) {
+  const fixture = execution.diagnostics.managedReleaseReviewHandoff;
+  const { caseId, contextId, checks, request, release, scope, handoff, sources, sourceDigests } =
+    fixture ?? {};
+  const results = exercise.report?.results;
+  requireEvidence(
+    fixture?.passed === true &&
+      caseId === workflow.assignment.id &&
+      typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      ["release", "scope", "handoff", "transfer", "order"].every((key) => checks?.[key] === true) &&
+      request?.goal?.startsWith(workflow.assignment.goal + " ") &&
+      request.work?.length === workflow.work.length &&
+      results?.length === workflow.work.length &&
+      exercise.report.remaining?.length === 0 &&
+      request.work.every((item, index) =>
+        ["kind", "domain", "operation"].every(
+          (key) => item[key] === workflow.work[index][key] && results[index]?.[key] === item[key]
+        )
+      ) &&
+      isDeepStrictEqual(request.work[0]?.input, release?.request) &&
+      isDeepStrictEqual(request.work[1]?.input, scope?.request),
+    "Missing the ordered release, authority and scratch assignments in the same owned context"
+  );
+
+  const [extensionReport, scopeReport, scratchReport] = results.map(({ report }) => report);
+  const allCalls = exercise.calls;
+  const rootId = exercise.rootCallIds[0];
+  const direct = (name) =>
+    allCalls.find(
+      (call) => call.record.parent_call_id === rootId && call.record.definition.name === name
+    );
+  const ownerRoot = allCalls.find((call) => call.callId === rootId);
+  requireEvidence(
+    matchesValue(ownerRoot?.record?.inputs?.request, request),
+    "The actual composed workflow request differs from its assigned inputs"
+  );
+  const subtree = (skill, report) => {
+    const ids = new Set([direct(skill).callId]);
+    const frontier = [...ids];
+    for (const parent of frontier) {
+      for (const call of allCalls) {
+        if (call.record.parent_call_id === parent && !ids.has(call.callId)) {
+          ids.add(call.callId);
+          frontier.push(call.callId);
+        }
+      }
+    }
+    return {
+      ...exercise,
+      report,
+      calls: allCalls.filter((call) => call.callId === rootId || ids.has(call.callId)),
+    };
+  };
+  extensionReleaseEvidence(
+    { ...execution, diagnostics: { managedExtensionRelease: release } },
+    subtree("reviewExtensionRelease", extensionReport),
+    scenario,
+    { assignment: workflow.extension }
+  );
+  authorityReviewEvidence(
+    { ...execution, diagnostics: { managedAuthorityReview: scope } },
+    subtree("reviewAuthority", scopeReport),
+    scenario,
+    { assignment: workflow.authority }
+  );
+  scratchHandoffEvidence(
+    {
+      ...execution,
+      diagnostics: {
+        scratchHandoffWorld: { contextId, caseId },
+        scratchHandoffVerification: handoff,
+      },
+    },
+    { ...exercise, report: scratchReport },
+    scenario,
+    { caseId, expectedStatus: "staged" }
+  );
+
+  const { workingTree, publishedTree } = release.source;
+  const expectedSources = {
+    extension:
+      `Source disposition: ${extensionReport.source.disposition}; working tree ${workingTree}; published tree ${publishedTree}.\n` +
+      `Runtime disposition: ${extensionReport.runtime.disposition}; active version ${release.runtime.activeEv ?? "none"}.\n`,
+    authority: `Authority disposition: ${scopeReport.status}.\nHeld operations: ${scopeReport.held.join(", ") || "none"}.\n`,
+  };
+  const scratchTrace = subtree("assembleHandoff", scratchReport);
+  const scratchEffects = scratchTrace.calls
+    .filter(({ callId }) => callId !== rootId)
+    .flatMap(({ record }) => record.effects ?? []);
+  const write = scratchEffects.find(({ service }) => service === "scratchHandoffWrite");
+  const scratchInput = request.work[2].input;
+  requireEvidence(
+    isDeepStrictEqual(sources, expectedSources) &&
+      isDeepStrictEqual(
+        sourceDigests,
+        Object.entries(expectedSources).map(([id, text]) => ({ id, sha256: hash(text) }))
+      ) &&
+      matchesValue(direct("assembleHandoff").record.inputs?.request, scratchInput) &&
+      matchesValue(direct("assembleHandoff").record.output, scratchReport) &&
+      scratchEffects.length === 3 &&
+      Object.entries(expectedSources).every(([id, text]) => {
+        const read = scratchEffects.find(
+          (effect) => effect.service === "scratchHandoffRead" && matchesValue(effect.args, [id])
+        );
+        return (
+          read?.method === "read" &&
+          !read.error &&
+          matchesValue(read.result, { id, lines: text.trimEnd().split("\n") })
+        );
+      }) &&
+      write?.service === "scratchHandoffWrite" &&
+      write.method === "stage" &&
+      !write.error &&
+      matchesValue(write.result, scratchReport.artifact),
+    "The staged handoff must cite the actual release and authority readbacks"
+  );
+  return {
+    world: { context_id: contextId, case_id: caseId },
     checks,
     evidence: { workspace: { fixture } },
   };
