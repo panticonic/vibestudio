@@ -4,11 +4,21 @@ import path from "node:path";
 
 const digest = /^[0-9a-f]{64}$/u;
 
-/** Admit a locally staged, immutable Chronolog npm package as a host build input. */
-export function readChronologBuildInput(root = process.env.VIBESTUDIO_CHRONOLOG_PACKAGE_ROOT) {
+/** Admit an immutable Chronolog npm package and verify its release pin when supplied. */
+export function readChronologBuildInput(
+  root = process.env.VIBESTUDIO_CHRONOLOG_PACKAGE_ROOT,
+  expectedFingerprint = process.env.VIBESTUDIO_CHRONOLOG_PACKAGE_MANIFEST_SHA256
+) {
+  if (expectedFingerprint && (!root || !digest.test(expectedFingerprint))) {
+    throw new Error("A pinned Chronolog package requires a root and a valid manifest SHA-256");
+  }
   if (!root) return null;
   if (!path.isAbsolute(root)) throw new Error("VIBESTUDIO_CHRONOLOG_PACKAGE_ROOT must be absolute");
   const manifest = readFileSync(path.join(root, "provenance.json"));
+  const fingerprint = createHash("sha256").update(manifest).digest("hex");
+  if (expectedFingerprint && expectedFingerprint !== fingerprint) {
+    throw new Error("Chronolog package provenance differs from the release pin");
+  }
   const { format, source, dirty, sha256 } = JSON.parse(manifest);
   if (
     format !== "chronolog-peer-session-package/v1" ||
@@ -35,6 +45,6 @@ export function readChronologBuildInput(root = process.env.VIBESTUDIO_CHRONOLOG_
   }
   return {
     entry: path.join(root, "workspace-celld.mjs"),
-    fingerprint: createHash("sha256").update(manifest).digest("hex"),
+    fingerprint,
   };
 }
