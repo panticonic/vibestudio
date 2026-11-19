@@ -180,6 +180,13 @@ as above. The host consumes the final successful deployment receipt and rechecks
 identity before assigning the device route. The caller can supply invite material through
 `pairingFor`. The already-running path uses the same handoff and can create a new device
 profile or reopen a previously paired profile.
+The Examples integration readiness cases compare a live catalog fetch binding with
+an optional path outside its audience or a required publication transport on the same URL.
+The managed launcher seeds a synthetic binding on a reserved hostname inside the disposable
+instance. The Natlang workflow receives only destination descriptions and lifecycle receipts.
+Export joins each lookup and its interpretation to the coverage decision.
+Run `integration-readiness-oracle-qualification` for the model-free live check.
+
 The Examples terminal cases execute exact caller-assigned process plans through the
 native shell extension. They cover literal argv, an intentional pipeline, unsuccessful
 exit status, output truncation, and held dependent checks. Export joins each bounded

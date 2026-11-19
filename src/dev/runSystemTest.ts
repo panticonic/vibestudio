@@ -25,6 +25,7 @@ import {
   systemTestPreparationFailureDetail,
 } from "./systemTestPreparation.js";
 import { attachDeviceDrivers } from "./deviceExecutors.js";
+import { seedIntegrationReadinessFixture } from "./systemTestIntegrationFixture.js";
 import {
   adoptSelfDevelopmentProjects,
   selfDevelopmentProjects,
@@ -298,6 +299,7 @@ async function runCommand({
     session && commandTakesScope(command) && !command.includes("--session")
       ? [...command, "--session", session]
       : command;
+  await seedIntegrationReadinessFixture(ensured.instance, scopedCommand, signal);
   // Device drivers are scoped to the command: attached once the instance is
   // ready (so they pair into a prepared account), stopped on every exit path.
   const drivers = parsed.devices?.length

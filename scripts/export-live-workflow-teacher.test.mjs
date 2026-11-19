@@ -98,6 +98,7 @@ test("authored template worlds flow into the collector without losing original s
       ["phone-setup-world", "phoneSetupUnavailable", null],
       ["gad-review-worlds", "managedGadReviewWorlds", []],
       ["terminal-check-worlds", "managedTerminalCheckWorlds", []],
+      ["integration-readiness-worlds", "managedIntegrationReadinessWorlds", []],
       ["local-messaging/worlds", "localMessagingWorlds", [{ id: "audience-hold" }]],
       [
         "provenance-history-worlds",
@@ -2920,6 +2921,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       ["gad-review-worlds", "export const managedGadReviewWorlds = [];"],
       ["terminal-check-worlds", "export const managedTerminalCheckWorlds = [];"],
+      ["integration-readiness-worlds", "export const managedIntegrationReadinessWorlds = [];"],
       [
         "owned-operations-worlds",
         "export const ownedOperationsWorlds = [], ownedOperationsComposedWorlds = [];",
@@ -3558,4 +3560,142 @@ test("terminal export rejects substituted check arguments and a missing decision
   diagnostics.natlangTeacher.calls.pop();
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /record every selection/u);
+});
+
+test("integration readiness rejects leaked credential fields and substituted lookup IDs", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "integration-readiness-live-required-transport-unbound";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+  entry.test.name = name;
+  const operationId = "01234567-89ab-4cde-8fab-0123456789ab";
+  const request = { goal: assignment.goal, operationId };
+  const plan = {
+    receipt: operationId + ":integration",
+    destinations: assignment.destinations.map(({ id, purpose, use, required }) => ({
+      id,
+      purpose,
+      use,
+      required,
+    })),
+  };
+  const observations = assignment.destinations.map(({ id, state }) => ({
+    id,
+    receipt: operationId + ":binding:" + id,
+    state,
+    canRefresh: state === "active" ? false : null,
+  }));
+  const destinations = observations.map((observation) => ({
+    observation,
+    disposition: observation.state === "active" ? "ready" : "setup-needed",
+  }));
+  const coverage = {
+    status: assignment.status,
+    guidance: "Identify the publication provider and audience.",
+  };
+  const report = { ...coverage, planReceipt: plan.receipt, destinations, held: [] };
+  diagnostics.managedIntegrationReadiness = {
+    contextId: "ctx",
+    caseId: assignment.id,
+    request,
+    plan,
+    observations,
+    passed: true,
+    checks: { plan: true, bindings: true, report: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (callId, name, parent, inputs, output, effects = []) => ({
+    callId,
+    summary: { ...prototype.summary, call_id: callId },
+    record: {
+      ...prototype.record,
+      call_id: callId,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const effect = (service, method, args, result) => ({
+    service,
+    method,
+    args: ref(args),
+    result: ref(result),
+  });
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", "runWorkflow", null, {}, null),
+      call("review", "reviewIntegration", "runWorkflow", { request }, report),
+      call("plan", "readIntegrationPlan", "review", { operationId }, plan, [
+        effect("integrationPlanRead", "observe", [operationId], plan),
+      ]),
+      ...destinations.flatMap((result, i) => {
+        const { id } = result.observation;
+        const args = { planReceipt: plan.receipt, destinationId: id };
+        return [
+          call("audience-" + i, "reviewAudience", "review", args, result),
+          call("resolve-" + i, "resolveBinding", "audience-" + i, args, result.observation, [
+            effect(
+              "integrationCredentialLookup",
+              "resolve",
+              [plan.receipt, id],
+              result.observation
+            ),
+          ]),
+          call(
+            "interpret-" + i,
+            "interpretBinding",
+            "audience-" + i,
+            { observation: result.observation },
+            result.disposition
+          ),
+        ];
+      }),
+      call(
+        "summary",
+        "summarizeCoverage",
+        "review",
+        { goal: assignment.goal, destinations: plan.destinations, reviews: destinations },
+        coverage
+      ),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  const manifest = JSON.parse(await readFile(path.join(options.out, "manifest.json"), "utf8"));
+  assert.deepEqual(manifest.world.destinations, ["catalog-read", "catalog-publish"]);
+
+  observations[0].credentialId = "private";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /secret-free binding statuses/u
+  );
+  delete observations[0].credentialId;
+  const resolve = diagnostics.natlangTeacher.calls.find(({ callId }) => callId === "resolve-1");
+  resolve.record.effects[0].args = ref([plan.receipt, "catalog-read"]);
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /both scoped host lookups/u
+  );
 });

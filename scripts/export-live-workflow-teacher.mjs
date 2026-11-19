@@ -179,6 +179,18 @@ const authoringWorkflow = {
   root: "reviewProgram",
   evidence: authoringEvidence,
 };
+const integrationReadinessWorkflow = {
+  family: "workspace-live-integration-readiness",
+  workspace: "examples",
+  namespace: "vibestudio:api-integration",
+  group: "host-audience-and-transport-binding",
+  validator: {
+    template: "system-testing",
+    path: "skills/system-testing/integration-readiness-managed.ts",
+  },
+  root: "reviewIntegration",
+  evidence: integrationReadinessEvidence,
+};
 const terminalCheckWorkflow = {
   family: "workspace-live-terminal-checks",
   workspace: "examples",
@@ -423,6 +435,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { phoneSetupUnavailable },
     { managedGadReviewWorlds },
     { managedTerminalCheckWorlds },
+    { managedIntegrationReadinessWorlds },
     { managedMemoryWorlds },
     { managedSetupWorlds },
     { managedChecklistWorlds },
@@ -462,6 +475,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "phone-setup-world.ts",
       "gad-review-worlds.ts",
       "terminal-check-worlds.ts",
+      "integration-readiness-worlds.ts",
       "verified-memory-worlds.ts",
       "onboarding-worlds.ts",
       "checklist-worlds.ts",
@@ -486,6 +500,12 @@ export async function loadLiveTeacherCases(checkouts) {
     })
   );
   const cases = new Map(originalCases);
+  for (const assignment of managedIntegrationReadinessWorlds) {
+    cases.set(`integration-readiness-live-${assignment.id}`, {
+      ...integrationReadinessWorkflow,
+      assignment,
+    });
+  }
   for (const assignment of managedTerminalCheckWorlds) {
     cases.set(`terminal-check-live-${assignment.id}`, { ...terminalCheckWorkflow, assignment });
   }
@@ -2070,6 +2090,117 @@ function matchesValue(ref, value) {
   if (!ref?.complete || value === undefined) return false;
   const bytes = JSON.stringify(value);
   return ref.bytes === Buffer.byteLength(bytes) && ref.hash === hash(bytes);
+}
+
+function integrationReadinessEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedIntegrationReadiness;
+  const { contextId, request, plan, observations } = fixture ?? {};
+  const report = exercise.report;
+  const { id, goal, status, destinations } = workflow.assignment;
+  const descriptors = destinations.map(({ id, purpose, use, required }) => ({
+    id,
+    purpose,
+    use,
+    required,
+  }));
+  const expected = destinations.map(({ id, state }) => ({
+    id,
+    receipt: request?.operationId + ":binding:" + id,
+    state,
+    canRefresh: state === "active" ? false : null,
+  }));
+  const reviews = expected.map((observation) => ({
+    observation,
+    disposition: observation.state === "active" ? "ready" : "setup-needed",
+  }));
+  requireEvidence(
+    typeof contextId === "string" &&
+      contextId === execution.provenance?.contextId &&
+      fixture.caseId === id &&
+      fixture.passed === true &&
+      ["plan", "bindings", "report"].every((name) => fixture.checks?.[name] === true) &&
+      request?.goal === goal &&
+      /^[a-f0-9-]{36}$/u.test(request.operationId) &&
+      isDeepStrictEqual(plan, {
+        receipt: request.operationId + ":integration",
+        destinations: descriptors,
+      }) &&
+      isDeepStrictEqual(observations, expected) &&
+      report?.planReceipt === plan.receipt &&
+      isDeepStrictEqual(report.held, []) &&
+      isDeepStrictEqual(report.destinations, reviews) &&
+      report.status === status &&
+      (typeof report.guidance === "string"
+        ? report.guidance.trim().length > 0
+        : status === "ready" && report.guidance === null),
+    "Integration readiness must use the assigned host lookups and secret-free binding statuses"
+  );
+
+  const calls = exercise.calls.map(({ record }) => record);
+  const children = (parentId, name) =>
+    calls.filter(
+      (record) =>
+        record.parent_call_id === parentId &&
+        record.definition.name === name &&
+        record.outcome === "done"
+    );
+  const [review] = children(exercise.rootCallIds[0], "reviewIntegration");
+  const [readPlan] = children(review?.call_id, "readIntegrationPlan");
+  const [summary] = children(review?.call_id, "summarizeCoverage");
+  const audienceReviews = children(review?.call_id, "reviewAudience");
+  const lookup = (call, service, method, args, output) => {
+    const [effect] = call?.effects ?? [];
+    return (
+      call?.effects?.length === 1 &&
+      effect?.service === service &&
+      effect.method === method &&
+      !effect.error &&
+      matchesValue(effect.args, args) &&
+      matchesValue(effect.result, output) &&
+      matchesValue(call.output, output)
+    );
+  };
+  const reads = [readPlan];
+  requireEvidence(
+    calls.length === 4 + 3 * reviews.length &&
+      audienceReviews.length === reviews.length &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      lookup(readPlan, "integrationPlanRead", "observe", [request.operationId], plan) &&
+      reviews.every((result) => {
+        const { id } = result.observation;
+        const matched = audienceReviews.find((call) =>
+          matchesValue(call.inputs?.destinationId, id)
+        );
+        const [resolved] = children(matched?.call_id, "resolveBinding");
+        const [interpreted] = children(matched?.call_id, "interpretBinding");
+        reads.push(resolved);
+        return (
+          matchesValue(matched?.inputs?.planReceipt, plan.receipt) &&
+          matchesValue(matched.output, result) &&
+          lookup(
+            resolved,
+            "integrationCredentialLookup",
+            "resolve",
+            [plan.receipt, id],
+            result.observation
+          ) &&
+          matchesValue(interpreted?.inputs?.observation, result.observation) &&
+          matchesValue(interpreted.output, result.disposition)
+        );
+      }) &&
+      matchesValue(summary?.inputs?.goal, goal) &&
+      matchesValue(summary.inputs?.destinations, plan.destinations) &&
+      matchesValue(summary.inputs?.reviews, report.destinations) &&
+      matchesValue(summary.output, { status: report.status, guidance: report.guidance }) &&
+      calls.every((record) => record.effects?.length === (reads.includes(record) ? 1 : 0)),
+    "Integration readiness must record both scoped host lookups and the required coverage decision"
+  );
+  return {
+    world: { context_id: contextId, destinations: descriptors.map(({ id }) => id) },
+    checks: { ...fixture.checks, exactCoverageTree: true },
+    evidence: { workspace: { fixture } },
+  };
 }
 
 function terminalCheckEvidence(execution, exercise, _scenario, workflow) {
