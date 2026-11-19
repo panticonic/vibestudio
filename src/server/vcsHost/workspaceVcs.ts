@@ -33,9 +33,13 @@ import type {
   VcsPushResult,
   VcsReadFileResult,
   VcsReadFilesInput,
+  VcsReadMemoryInput,
+  VcsReadMemoryResult,
   VcsSearchInput,
   VcsStateNodeRef,
 } from "@vibestudio/service-schemas/vcs";
+import { z } from "zod";
+import { vcsReadMemoryResultSchema, vcsTrajectoryInvocationRefSchema } from "@vibestudio/service-schemas/vcs";
 import { vcsCommitResultSchema, vcsDiscardResultSchema, vcsImportSnapshotResultSchema, vcsMethods, type VcsMethodName } from "@vibestudio/service-schemas/vcs";
 import type {
   ProtectedPublicationEvent,
@@ -835,6 +839,42 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     if (!source) throw new Error("Participant workspace history is unavailable");
     const main = await readWorkspaceCanonicalMain(source);
     return { kind: "event" as const, eventId: main.eventId };
+  }
+
+  async readParticipantMemory(input: WorkspaceHistoryParticipant & {
+    memory: VcsReadMemoryInput;
+  }): Promise<VcsReadMemoryResult> {
+    requireWorkspaceParticipantOwner(input);
+    const { dispatch, owner, memory } = input;
+    const packet = z.object({
+      memory: vcsReadMemoryResultSchema,
+      invocations: z.array(vcsTrajectoryInvocationRefSchema.nullable()).max(12),
+    }).strict().parse(await dispatch.dispatch(owner, "readHistoryMemory", memory));
+    const result = packet.memory;
+    if (result.path !== memory.path ||
+        (result.status === "stale" && result.expectedContentHash !== memory.expectedContentHash)) {
+      throw new Error("Workspace history returned memory for different content");
+    }
+    if (result.status !== "attached") return result;
+    if (result.contentHash !== memory.expectedContentHash ||
+        result.range.start !== memory.range.start || result.range.end !== memory.range.end ||
+        result.history.length > memory.historyLimit || result.episodes.length > memory.episodeLimit ||
+        result.episodes.length !== packet.invocations.length) {
+      throw new Error("Workspace history returned memory for different content");
+    }
+    const causes = new Map<string, ReturnType<WorkspaceSemanticPort["readHistoryMemoryCause"]>>();
+    const episodes = await Promise.all(result.episodes.map(async (episode, index) => {
+      const invocation = packet.invocations[index];
+      if (episode.stop === "snapshot-boundary" || !invocation) return episode;
+      const key = canonicalJson(invocation);
+      const pending = causes.get(key) ?? this.gad().readHistoryMemoryCause(invocation);
+      causes.set(key, pending);
+      const cause = await pending;
+      if (cause && canonicalJson(cause.invocation) !== key)
+        throw new Error("Workspace trajectory mirror returned a different invocation");
+      return { ...episode, cause };
+    }));
+    return { ...result, episodes };
   }
 
   async searchParticipantHistory(input: WorkspaceHistoryParticipant & {

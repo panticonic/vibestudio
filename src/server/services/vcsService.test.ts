@@ -214,6 +214,7 @@ describe("canonical vcsService", () => {
       }),
       publishParticipantContext: vi.fn().mockResolvedValue(published),
       readParticipantFiles: vi.fn().mockResolvedValue([null]),
+      readParticipantMemory: vi.fn(),
       searchParticipantHistory: vi.fn().mockResolvedValue({
         text: "retained provenance", indexMode: "scan", hits: [], truncated: false,
       }),
@@ -290,6 +291,21 @@ describe("canonical vcsService", () => {
     dispatch.mockResolvedValueOnce(true).mockResolvedValueOnce(timeline);
     await expect(definition.handler(ctx, "history", [history])).resolves.toEqual(timeline);
     expect(dispatch).toHaveBeenCalledWith(owner, "readHistoryTimeline", { contextId: scope.contextId, history });
+
+    const memory = {
+      contextId: scope.contextId, path: "projects/one/file.txt",
+      expectedContentHash: "a".repeat(64), range: { start: 0, end: 1 },
+    };
+    const unmanaged = { status: "unmanaged", path: memory.path };
+    workspace.readParticipantMemory.mockResolvedValue(unmanaged);
+    await expect(definition.handler(ctx, "readMemory", [memory])).resolves.toEqual(unmanaged);
+    expect(workspace.readParticipantMemory).toHaveBeenCalledWith({
+      ...scope, memory: { ...memory, episodeLimit: 4, historyLimit: 3 },
+    });
+    await expect(definition.handler(ctx, "readMemory", [
+      { ...memory, contextId: "context:unrelated" },
+    ])).rejects.toMatchObject({ code: "EACCES" });
+    expect(workspace.readParticipantMemory).toHaveBeenCalledTimes(1);
 
     const search = { contextId: scope.contextId, text: "retained provenance", limit: 2 };
     await expect(withChild.handler(ctx, "search", [

@@ -1,3 +1,4 @@
+import { vcsReadMemoryCauseSchema, vcsTrajectoryInvocationRefSchema } from "@vibestudio/service-schemas/vcs";
 import type { RpcCausalParent } from "@vibestudio/rpc";
 import type {
   InitializeExactWorkspaceSnapshotInput,
@@ -120,6 +121,8 @@ export type WorkspaceSemanticPort = Pick<WorkspaceSemanticClient, SemanticWireMe
   appendLogEvent: WorkspaceSemanticClient["appendLogEvent"];
   getLogEvent: WorkspaceSemanticClient["getLogEvent"];
   inspectInvocationState: WorkspaceSemanticClient["inspectInvocationState"];
+  readHistoryMemoryCause(input: ReturnType<typeof vcsTrajectoryInvocationRefSchema.parse>):
+    Promise<ReturnType<typeof vcsReadMemoryCauseSchema.parse> | null>;
   searchHistoryTrajectory(input: HistoryTrajectorySearchInput):
     Promise<import("@vibestudio/service-schemas/vcs").VcsSearchHit[]>;
 };
@@ -207,6 +210,9 @@ export function createWorkspaceSemanticPort(
     appendLogEvent: (input) => client.appendLogEvent(input),
     getLogEvent: (input) => client.getLogEvent(input),
     inspectInvocationState: (input) => client.inspectInvocationState(input),
+    readHistoryMemoryCause: async (input) => vcsReadMemoryCauseSchema.nullable().parse(
+      await dispatch.dispatch(provider, "readHistoryMemoryCause", vcsTrajectoryInvocationRefSchema.parse(input)),
+    ),
     searchHistoryTrajectory: async (input) => HistoryTrajectorySearchMatchesSchema.parse(
       await dispatch.dispatch(provider, "searchHistoryTrajectory", HistoryTrajectorySearchInputSchema.parse(input)),
     ),
