@@ -207,6 +207,7 @@ describe("canonical vcsService", () => {
       revertParticipantContext: vi.fn(),
       importParticipantSnapshot: vi.fn(),
       registerParticipantExternalDelta: vi.fn(),
+      supersedeParticipantExternalDelta: vi.fn(),
       saveParticipantContext: vi.fn().mockResolvedValue(saved),
       discardParticipantContext: vi.fn().mockResolvedValue({
         contextId: scope.contextId,

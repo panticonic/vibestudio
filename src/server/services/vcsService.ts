@@ -70,6 +70,7 @@ export interface VcsServiceDeps {
     | "revertParticipantContext"
     | "importParticipantSnapshot"
     | "registerParticipantExternalDelta"
+    | "supersedeParticipantExternalDelta"
     | "saveParticipantContext"
     | "discardParticipantContext"
     | "publishParticipantContext"
@@ -473,6 +474,11 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           ...common,
           delta: vcsMethods.registerExternalDelta.args.parse([input])[0],
           uploadPrincipal: blobUploadPrincipal(ctx),
+        });
+      case "supersedeExternalDelta":
+        return workspace.supersedeParticipantExternalDelta({
+          ...common,
+          delta: vcsMethods.supersedeExternalDelta.args.parse([input])[0],
         });
       case "commit":
         return workspace.saveParticipantContext({

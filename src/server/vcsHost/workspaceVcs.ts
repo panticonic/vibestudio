@@ -30,6 +30,7 @@ import type {
   VcsImportSnapshotInput,
   VcsImportSnapshotResult,
   VcsExternalDeltaResult,
+  VcsExternalDeltaLifecycleInput,
   VcsRegisterExternalDeltaInput,
   VcsPushInput,
   VcsPushResult,
@@ -1575,6 +1576,22 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       }
       return result;
     });
+  }
+
+  async supersedeParticipantExternalDelta(input: WorkspaceHistoryParticipant & {
+    head: string;
+    delta: VcsExternalDeltaLifecycleInput;
+    cause: { parent: RpcCausalParent | null };
+  }): Promise<VcsExternalDeltaResult> {
+    requireWorkspaceParticipantOwner(input);
+    const { dispatch, owner, head, delta, cause } = input;
+    const result = vcsExternalDeltaResultSchema.parse(
+      await dispatch.dispatch(owner, "supersedeHistoryExternalDelta", { head, delta, cause })
+    );
+    if (result.deltaId !== delta.deltaId || result.status !== "superseded") {
+      throw new Error("Workspace history superseded a different external delta");
+    }
+    return result;
   }
 
   async saveParticipantContext(input: WorkspaceHistoryParticipant & {
