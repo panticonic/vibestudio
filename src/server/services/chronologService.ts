@@ -364,11 +364,11 @@ export function chronologNodeData(
     }
     return response;
   };
-  const read = async <T>(
+  const read = async <Schema extends z.ZodTypeAny>(
     body: { action: string; [field: string]: unknown },
-    schema: z.ZodType<T>,
+    schema: Schema,
     signal?: AbortSignal
-  ) => schema.parse(decodeRpcJson(await (await call(body, signal)).text()));
+  ): Promise<z.output<Schema>> => schema.parse(decodeRpcJson(await (await call(body, signal)).text()));
   return {
     shareHistory: (publicKey, group, signal) =>
       read(
