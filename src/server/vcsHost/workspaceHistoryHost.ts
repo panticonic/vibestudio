@@ -260,9 +260,10 @@ export async function readWorkspaceParticipantHistory(input: WorkspaceHistoryPar
   const result = vcsHistoryResultSchema.parse(
     await dispatch.dispatch(owner, "readHistoryTimeline", { contextId, history }),
   );
+  const expectedEntryKind = history.root.kind === "event" ? "event" : "change";
   if (canonicalJson(result.root) !== canonicalJson(history.root) ||
       result.entries.length > history.limit ||
-      (history.root.kind === "event" && result.entries.some(({ node }) => node.kind !== "event"))) {
+      result.entries.some(({ node }) => node.kind !== expectedEntryKind)) {
     throw new Error("Workspace history returned a different timeline");
   }
   return result;
