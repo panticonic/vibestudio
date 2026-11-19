@@ -723,7 +723,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { gmailComposeHistoryWorlds },
     { unitIdentityWorlds },
     { transcriptCursorWorlds },
-    { deliveryHistoryWorlds, deliveryOriginByMode },
+    { chatDeliveryWorlds, deliveryHistoryWorlds, deliveryOriginByMode },
     { androidAuditWorlds },
     { androidInstallWorlds },
     { androidPairWorlds },
@@ -866,6 +866,20 @@ export async function loadLiveTeacherCases(checkouts) {
   for (const assignment of deliveryHistoryWorlds) {
     cases.set(`delivery-history-live-${assignment.id}`, {
       ...deliveryHistoryWorkflow,
+      assignment,
+      originVerdict: deliveryOriginByMode[assignment.mode],
+    });
+  }
+  for (const assignment of chatDeliveryWorlds) {
+    cases.set(`chat-delivery-live-${assignment.id}`, {
+      ...deliveryHistoryWorkflow,
+      family: "workspace-live-chat-delivery",
+      group: "receipt-to-visible-chat-panel",
+      sourceGroups: [
+        "vibestudio:conversation:receipt-to-visible-chat-panel",
+        ...workflowSourceGroups(deliveryHistoryWorkflow),
+      ],
+      root: "reviewChatDelivery",
       assignment,
       originVerdict: deliveryOriginByMode[assignment.mode],
     });
@@ -3589,7 +3603,8 @@ function deliveryHistoryEvidence(execution, exercise, _scenario, workflow) {
   const { contextId, caseId, request, observed, canonical, retryId, decoyId, checks } =
     fixture ?? {};
   const { assignment } = workflow;
-  const report = exercise.report;
+  const browser = workflow.root === "reviewChatDelivery";
+  const report = browser ? exercise.report?.delivery : exercise.report;
   const records = exercise.calls.map(({ record }) => record);
   const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
   const child = (parent, name) =>
@@ -3597,7 +3612,8 @@ function deliveryHistoryEvidence(execution, exercise, _scenario, workflow) {
     records.find(
       (record) => record.parent_call_id === parent.call_id && record.definition.name === name
     );
-  const review = child(root, "reviewDeliveryHistory");
+  const browserReview = browser ? child(root, "reviewChatDelivery") : undefined;
+  const review = child(browser ? browserReview : root, "reviewDeliveryHistory");
   const origin = child(review, "checkOrigin");
   const match = child(origin, "matchReceipt");
   const comparison = child(review, "compareConsumer");
@@ -3644,9 +3660,12 @@ function deliveryHistoryEvidence(execution, exercise, _scenario, workflow) {
         text: canonical.text,
       }] : []) &&
       isDeepStrictEqual(report?.observation, observed) &&
-      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(
+        review?.inputs?.request,
+        browser ? { goal: request.goal, operationId: request.operationId } : request,
+      ) &&
       matchesValue(review.output, report) &&
-      records.flatMap(({ effects }) => effects ?? []).length === 1 &&
+      records.flatMap(({ effects }) => effects ?? []).length === (browser && matched ? 2 : 1) &&
       effect?.service === "deliveryHistory" &&
       effect.method === "inspect" &&
       !effect.error &&
@@ -3672,8 +3691,55 @@ function deliveryHistoryEvidence(execution, exercise, _scenario, workflow) {
         : !comparison),
     "Delivery history needs the exact origin and consumer decisions"
   );
+  if (browser) {
+    const { actualPanel, observedPanel, panelReads } = fixture.chat ?? {};
+    const browserReport = exercise.report;
+    const inspectPanel = child(browserReview, "inspectPanel");
+    const checkPanel = child(browserReview, "checkPanel");
+    const checkMessage = child(browserReview, "checkMessage");
+    const visible = [{ messageId: canonical.messageId, text: canonical.text }];
+    requireEvidence(
+      ["livePanel", "browserScope", "chatVerdict", "panelReleased"].every(
+        (key) => checks[key] === true,
+      ) &&
+        request.contextId === contextId &&
+        typeof request.panelId === "string" && !!request.panelId &&
+        isDeepStrictEqual(actualPanel, {
+          contextId, panelId: request.panelId, channelId: observed.channelId,
+          source: "panels/chat", phase: "ready", messages: visible,
+        }) &&
+        matchesValue(browserReview?.inputs?.request, request) &&
+        matchesValue(browserReview.output, browserReport) &&
+        (matched
+          ? panelReads === 1 &&
+            isDeepStrictEqual(observedPanel, actualPanel) &&
+            isDeepStrictEqual(browserReport.panel, actualPanel) &&
+            browserReport.verdict === "verified" &&
+            matchesValue(inspectPanel?.inputs?.panelId, request.panelId) &&
+            matchesValue(inspectPanel.output, actualPanel) &&
+            inspectPanel.effects?.length === 1 &&
+            inspectPanel.effects[0].service === "chatDeliveryPanel" &&
+            inspectPanel.effects[0].method === "inspect" &&
+            !inspectPanel.effects[0].error &&
+            matchesValue(inspectPanel.effects[0].args, [request.panelId]) &&
+            matchesValue(inspectPanel.effects[0].result, actualPanel) &&
+            matchesValue(checkPanel?.inputs?.request, request) &&
+            matchesValue(checkPanel.inputs?.channelId, observed.channelId) &&
+            matchesValue(checkPanel.inputs?.panel, actualPanel) &&
+            matchesValue(checkPanel.output, true) &&
+            matchesValue(checkMessage?.inputs?.retained, canonical) &&
+            matchesValue(checkMessage.inputs?.messages, visible) &&
+            matchesValue(checkMessage.output, "verified")
+          : panelReads === 0 && observedPanel === null && browserReport.panel === null &&
+            browserReport.verdict === "history-unverified" && !inspectPanel && !checkPanel && !checkMessage),
+      "Chat delivery needs the assigned stock panel's observed message, or a stop before browser access",
+    );
+  }
   return {
-    world: { context_id: contextId, channel_id: observed.channelId, message_id: receipt.messageId },
+    world: {
+      context_id: contextId, channel_id: observed.channelId, message_id: receipt.messageId,
+      ...(browser ? { panel_id: request.panelId } : {}),
+    },
     checks,
     evidence: { workspace: { fixture } },
   };

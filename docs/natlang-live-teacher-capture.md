@@ -103,6 +103,14 @@ cases check a claimed sender against the persisted sender and look for an
 absent message ID after reconnect. The exporter requires the exact origin
 verdict and admits consumer comparison only for a matched receipt.
 
+Chat delivery cases reuse that workflow and then inspect the assigned stock chat
+panel through CDP. The verified case joins the visible message ID and text to
+the single durable delivery after a retry. The other case puts the same words
+in a different channel and requires the workflow to stop before a browser
+service call. Both cases check that the panel has been archived. Run
+`chat-delivery-oracle-qualification` to exercise the real workspace and browser
+checks without model calls.
+
 Gmail compose audits run in an owned channel in the Google Workspace template.
 The shared program calls the compose-history skill, projects a typed draft or
 delivery readback from that same native cursor, and calls the Gmail workflow

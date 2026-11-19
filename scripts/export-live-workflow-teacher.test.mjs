@@ -253,6 +253,7 @@ test("authored template worlds flow into the collector without losing original s
       writeFile(
         path.join(casesDir, `${file}.ts`),
         `export const ${name} = ${JSON.stringify(worlds)};
+         ${name === "deliveryHistoryWorlds" ? "export const chatDeliveryWorlds = [];" : ""}
          ${name === "ownedOperationsWorlds" ? 'export const ownedOperationsComposedWorlds = [{ id: "release-readiness-dossier", sourceGroup: "vibestudio:owned-operations:release:pending" }];' : ""}
          ${
            name === "managedPdfWorlds"
@@ -3024,7 +3025,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["gmail-compose-history-worlds", "export const gmailComposeHistoryWorlds = [];"],
       ["unit-identity-worlds", "export const unitIdentityWorlds = [];"],
       ["transcript-cursor-worlds", "export const transcriptCursorWorlds = [];"],
-      ["delivery-history-worlds", "export const deliveryHistoryWorlds = [];"],
+      ["delivery-history-worlds", "export const deliveryHistoryWorlds = []; export const chatDeliveryWorlds = [];"],
       ["android-audit-worlds", "export const androidAuditWorlds = [];"],
       ["android-install-worlds", "export const androidInstallWorlds = [];"],
       ["android-pair-worlds", "export const androidPairWorlds = [];"],
@@ -6367,23 +6368,24 @@ test("publication revision export rejects a review that omits a changed public e
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /exact changed public files/u);
 });
 
-async function checkDeliveryReceiptRejection(t, id, verdict) {
+async function checkDeliveryReceiptExport(t, id, verdict, browser = false) {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
     path.resolve(import.meta.dirname, "..")
   );
   const cases = await loadLiveTeacherCases(checkouts);
-  const name = `delivery-history-live-${id}`;
+  const name = `${browser ? "chat-delivery" : "delivery-history"}-live-${id}`;
   const { assignment } = cases.get(name);
   const pins = JSON.parse(await readFile(options.pins, "utf8"));
   await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "system" }));
   entry.test.name = name;
   const request = { goal: assignment.goal, operationId: "assigned-receipt" };
+  const matched = verdict === "matched";
   const foreign = verdict === "foreign-channel";
   const senderMismatch = verdict === "receipt-mismatch";
   const receipt = { channelId: "original", messageId: "msg-1", senderId: "sender" };
   const canonical = {
-    messageId: senderMismatch ? "msg-1" : "msg-2",
+    messageId: (senderMismatch || matched) ? "msg-1" : "msg-2",
     envelopeId: "envelope",
     sequence: 1,
     senderId: senderMismatch ? "observed-sender" : "sender",
@@ -6392,16 +6394,16 @@ async function checkDeliveryReceiptRejection(t, id, verdict) {
   const observation = {
     channelId: foreign ? "other" : "original",
     receipt,
-    retained: senderMismatch ? [canonical] : [],
-    rendered: senderMismatch ? [{
+    retained: (senderMismatch || matched) ? [canonical] : [],
+    rendered: (senderMismatch || matched) ? [{
       messageId: canonical.messageId, senderId: canonical.senderId, text: canonical.text,
     }] : [],
   };
   const report = {
     observation,
     origin: verdict,
-    consumer: "unreviewed",
-    verified: false,
+    consumer: matched ? "matched" : "unreviewed",
+    verified: matched,
   };
   diagnostics.deliveryHistory = {
     passed: true,
@@ -6410,7 +6412,7 @@ async function checkDeliveryReceiptRejection(t, id, verdict) {
     request,
     observed: observation,
     canonical,
-    retryId: null,
+    retryId: assignment.mode === "retry" ? "msg-1" : null,
     decoyId: foreign ? "msg-2" : null,
     checks: { scope: true, nativeDelivery: true, retained: true, verdict: true },
   };
@@ -6437,7 +6439,7 @@ async function checkDeliveryReceiptRejection(t, id, verdict) {
       effects,
     },
   });
-  const review = call("reviewDeliveryHistory", "runWorkflow", { request }, report, [
+  const review = call("reviewDeliveryHistory", browser ? "reviewChatDelivery" : "runWorkflow", { request }, report, [
     {
       service: "deliveryHistory",
       method: "inspect",
@@ -6454,9 +6456,49 @@ async function checkDeliveryReceiptRejection(t, id, verdict) {
       call("runWorkflow", null, {}, null),
       review,
       call("checkOrigin", "reviewDeliveryHistory", { observation }, report.origin),
-      ...(senderMismatch ? [call("matchReceipt", "checkOrigin", { receipt, row: canonical }, verdict)] : []),
+      ...((senderMismatch || matched) ? [call("matchReceipt", "checkOrigin", { receipt, row: canonical }, verdict)] : []),
+      ...(matched ? [call("compareConsumer", "reviewDeliveryHistory", { retained: canonical, rendered: observation.rendered }, "matched")] : []),
     ],
   };
+  if (browser) {
+    const chatRequest = { ...request, contextId: "ctx", panelId: "assigned-chat" };
+    const panel = {
+      contextId: "ctx", panelId: chatRequest.panelId, channelId: observation.channelId,
+      source: "panels/chat", phase: "ready",
+      messages: [{ messageId: canonical.messageId, text: canonical.text }],
+    };
+    const chatReport = {
+      delivery: report, panel: matched ? panel : null,
+      verdict: matched ? "verified" : "history-unverified",
+    };
+    const verification = diagnostics.deliveryHistory;
+    verification.request = chatRequest;
+    verification.chat = { actualPanel: panel, observedPanel: matched ? panel : null, panelReads: matched ? 1 : 0 };
+    Object.assign(verification.checks, { livePanel: true, browserScope: true, chatVerdict: true, panelReleased: true });
+    const teacher = diagnostics.natlangTeacher;
+    teacher.report = chatReport;
+    teacher.calls.push(call("reviewChatDelivery", "runWorkflow", { request: chatRequest }, chatReport));
+    if (matched) {
+      teacher.calls.push(
+        call("inspectPanel", "reviewChatDelivery", { panelId: chatRequest.panelId }, panel, [{
+          service: "chatDeliveryPanel", method: "inspect", args: ref([chatRequest.panelId]), result: ref(panel),
+        }]),
+        call("checkPanel", "reviewChatDelivery", { request: chatRequest, channelId: observation.channelId, panel }, true),
+        call("checkMessage", "reviewChatDelivery", { retained: canonical, messages: panel.messages }, "verified"),
+      );
+    }
+    await save();
+    await exportLiveTeacherWorkflow({ ...options, cases });
+    if (matched) {
+      const inspection = teacher.calls.find(({ callId }) => callId === "inspectPanel").record;
+      inspection.effects[0].args = ref(["another-panel"]);
+    } else {
+      verification.chat.panelReads = 1;
+    }
+    await save();
+    await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /stop before browser access/u);
+    return;
+  }
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases });
 
@@ -6471,13 +6513,20 @@ async function checkDeliveryReceiptRejection(t, id, verdict) {
 }
 
 test("delivery history export rejects a same-text message from a different channel", (t) =>
-  checkDeliveryReceiptRejection(t, "identical-note-on-other-channel", "foreign-channel")
+  checkDeliveryReceiptExport(t, "identical-note-on-other-channel", "foreign-channel")
 );
 test("delivery history export requires the sender on the native envelope", (t) =>
-  checkDeliveryReceiptRejection(t, "reconcile-sender-from-retained-envelope", "receipt-mismatch")
+  checkDeliveryReceiptExport(t, "reconcile-sender-from-retained-envelope", "receipt-mismatch")
 );
 test("delivery history export rejects a receipt for an absent causal message", (t) =>
-  checkDeliveryReceiptRejection(t, "locate-message-from-reconnect-receipt", "missing-message")
+  checkDeliveryReceiptExport(t, "locate-message-from-reconnect-receipt", "missing-message")
+);
+
+test("chat delivery export joins the visible message to the assigned panel read", (t) =>
+  checkDeliveryReceiptExport(t, "reopened-chat-after-retry", "matched", true)
+);
+test("chat delivery export requires a foreign receipt to stop before a browser read", (t) =>
+  checkDeliveryReceiptExport(t, "wrong-chat-same-reminder", "foreign-channel", true)
 );
 
 test("Android audit export requires the native app observation and keeps workspace readiness unverified", async (t) => {
