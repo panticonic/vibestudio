@@ -64,16 +64,21 @@ export async function migrateWorkspaceHistory(input: {
   dispatch: Pick<DODispatch, "dispatch">;
   source: WorkspaceSourceProviderRef;
   destination: WorkspaceSourceProviderRef;
+  freeze?: { operationId: string; expectedMainEventId: string };
 }): Promise<{
   main: string;
   contexts: Array<{ id: string; committed: string; working: string }>;
 }> {
-  const { dispatch, source, destination } = input;
+  const { dispatch, source, destination, freeze } = input;
   const readPlan = async (): Promise<HistoryReplayPlan> =>
     planSchema.parse(await dispatch.dispatch(source, "exportHistoryReplayPlan"));
-  const plan = await readPlan();
+  const plan = freeze
+    ? planSchema.parse(await dispatch.dispatch(source, "beginHistoryReplayFreeze", freeze))
+    : await readPlan();
   if (plan.main?.kind !== "event")
     throw new Error("Workspace replay requires an initialized source");
+  if (freeze && plan.main.eventId !== freeze.expectedMainEventId)
+    throw new Error("Workspace history froze a different source event");
   const installed = new Map<string, string>();
   for (const ref of plan.steps) {
     const step = await dispatch.dispatch(source, "exportHistoryReplayStep", ref);

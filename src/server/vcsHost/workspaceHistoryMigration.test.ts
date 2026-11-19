@@ -22,7 +22,12 @@ it("replays onto one destination and returns the exact migrated context after a 
   ]);
   let lost = true;
   let receipt: unknown = null;
+  const freeze = { operationId: "cutover", expectedMainEventId: main.eventId };
   const dispatch = vi.fn(async (target, method, input) => {
+    if (target === source && method === "beginHistoryReplayFreeze") {
+      expect(input).toEqual(freeze);
+      return plan;
+    }
     if (target === source && method === "exportHistoryReplayPlan") return plan;
     if (target === source && method === "exportHistoryReplayStep") {
       return { step: { kind: input.kind, record: input } };
@@ -41,7 +46,7 @@ it("replays onto one destination and returns the exact migrated context after a 
     if (target === destination && method === "readHistoryReplayReceipt") return receipt;
     throw new Error(`Unexpected migration operation ${method}`);
   });
-  const args = { dispatch: { dispatch }, source, destination };
+  const args = { dispatch: { dispatch }, source, destination, freeze };
   await expect(migrateWorkspaceHistory(args)).rejects.toThrow("Lost publication reply");
   await expect(migrateWorkspaceHistory(args)).resolves.toEqual({
     main: "installed-main",
