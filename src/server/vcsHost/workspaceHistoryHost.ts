@@ -470,6 +470,10 @@ export function workspaceParticipantCatalog(input: WorkspaceHistoryParticipant &
 }) {
   requireWorkspaceParticipantOwner(input);
   const { dispatch, owner, contextId } = input;
+  const contextForState = (state: VcsStateNodeRef) => workspaceParticipantReferenceContext({
+    ...input, readableContextIds: input.readableContextIds ?? [],
+    reference: { kind: "state-node", value: state },
+  });
   const verify = <T extends { state: VcsStateNodeRef } | null>(result: T, state: VcsStateNodeRef) => {
     if (result && canonicalJson(result.state) !== canonicalJson(state)) {
       throw new Error("Workspace catalog returned a different revision");
@@ -497,11 +501,20 @@ export function workspaceParticipantCatalog(input: WorkspaceHistoryParticipant &
       locations("readHistoryMergeLocations", target, source),
     async repositoryPath(state: VcsStateNodeRef, repositoryId: string) {
       const result = verify(vcsResolveRepositoryResultSchema.parse(
-        await dispatch.dispatch(owner, "readHistoryRepositoryLocation", { contextId, state, repositoryId })
+        await dispatch.dispatch(owner, "readHistoryRepositoryLocation", {
+          contextId: await contextForState(state), state, repositoryId,
+        })
       ), state);
       if (result && result.repositoryId !== repositoryId)
         throw new Error("Workspace catalog returned a different repository identity");
       return result?.repoPath ?? null;
+    },
+    async filePath(state: VcsStateNodeRef, repositoryId: string, fileId: string) {
+      const files = await readWorkspaceParticipantFileDescriptors({
+        ...input, contextId: await contextForState(state),
+        read: { state, files: [{ repositoryId, file: { kind: "id", fileId } }] },
+      });
+      return files[0]?.path ?? null;
     },
     async resolveRepository(repository: VcsResolveRepositoryInput) {
       const result = verify(vcsResolveRepositoryResultSchema.parse(
@@ -590,6 +603,7 @@ interface ParticipantMutationTarget {
   cause: z.infer<typeof causeSchema>;
   triggerEvidence?: { text: string; sender: VcsTrajectorySenderRef } | null;
   blobsDir: string;
+  readableContextIds?: readonly string[];
 }
 
 export type ParticipantTransfer =
@@ -620,7 +634,10 @@ async function mutateWorkspaceParticipant(
   const requestPlan = async (receipt: { files: z.infer<typeof blob>[] } | null) =>
     mutationPlan.parse(method === "edit"
       ? await dispatch.dispatch(owner, "planHistoryEdit", { ...common, edit: value, receipt })
-      : await dispatch.dispatch(owner, "planHistoryTransfer", { ...common, transfer: request })
+      : await dispatch.dispatch(owner, "planHistoryTransfer", {
+          ...common, transfer: request,
+          ...(method === "copy" ? { readableContextIds: input.readableContextIds ?? [] } : {}),
+        })
     );
   const checkResult = (result: VcsWorkingMutationResult) => {
     if (

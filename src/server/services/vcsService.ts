@@ -40,7 +40,6 @@ import {
   hasWorkspaceParticipantDiscardReceipt,
   inspectWorkspaceParticipantProvenance,
   readWorkspaceParticipantBlame,
-  readWorkspaceParticipantFileDescriptors,
   readWorkspaceParticipantHistory,
   readWorkspaceParticipantNeighbors,
   readWorkspaceParticipantStatus,
@@ -423,6 +422,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
           await workspace.transferParticipantContext({
             ...common,
             transfer: { method: "copy", value: vcsMethods.copy.args.parse([input])[0] },
+            readableContextIds: await reachableContextAuthorities(ctx, deps),
           })
         ).result;
       case "commit":
@@ -824,7 +824,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
                 : null;
             const catalog = scope ? workspaceParticipantCatalog({
               ...scope,
-              ...((method === "compare" || method === "merge")
+              ...((method === "compare" || method === "merge" || method === "copy")
                 ? { readableContextIds: await reachableContextAuthorities(ctx, deps) }
                 : {}),
             }) : null;
@@ -853,13 +853,7 @@ export function createVcsService(deps: VcsServiceDeps): ServiceDefinition {
                         discard,
                         cause: { parent: ctx.causalParent ?? null },
                       }),
-                    filePath: async (state, repositoryId, fileId) => {
-                      const files = await readWorkspaceParticipantFileDescriptors({
-                        ...scope,
-                        read: { state, files: [{ repositoryId, file: { kind: "id", fileId } }] },
-                      });
-                      return files[0]?.path ?? null;
-                    },
+                    filePath: catalog.filePath,
                   }
                 : {}),
             };
