@@ -4338,7 +4338,22 @@ export class RuntimeManager {
 
   async chronologRequest(input: unknown, signal?: AbortSignal): Promise<Response> {
     if (!this.hasChronolog) throw new Error("Chronolog is unavailable in this host build");
-    return this.nodeFetch("/_chronolog", { chronolog: true, body: input, signal });
+    let body = input;
+    if (
+      input !== null &&
+      typeof input === "object" &&
+      "action" in input &&
+      (input.action === "identity" || input.action === "invite")
+    ) {
+      const node = this.node;
+      if (!node) throw new Error("The workspace runtime node is unavailable");
+      const localEndpoint = await node.p2pEndpoint(signal);
+      if (this.node !== node) {
+        throw new Error("The workspace runtime changed while reading its endpoint");
+      }
+      body = { ...input, localEndpoint };
+    }
+    return this.nodeFetch("/_chronolog", { chronolog: true, body, signal });
   }
 
   /** A request to the running node's router, authenticated like host dispatch. */

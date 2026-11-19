@@ -19,6 +19,7 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import * as crypto from "node:crypto";
 import * as fs from "node:fs";
+import { isIP } from "node:net";
 import * as path from "node:path";
 import { getPhysicalPathForAsarPath } from "@vibestudio/shared/runtimePaths";
 import { initializeBlobRetentions } from "./storage/blobRetentions.js";
@@ -182,6 +183,41 @@ export class CelldNodeProcess {
     const response = await fetch(`${origin}/reload`, { method: "POST" });
     const body = await response.text();
     if (!response.ok) throw new Error(`celld reload failed (${response.status}): ${body}`);
+  }
+
+  /** Read public route hints from the operator listener of this exact process. */
+  async p2pEndpoint(signal?: AbortSignal): Promise<{ nodeId: string; addrs?: string[] }> {
+    const origin = this.requireInternalOrigin("read Iroh endpoint");
+    const response = await fetch(`${origin}/p2p`, { signal });
+    if (!response.ok) {
+      await response.arrayBuffer();
+      throw new Error("The workspace Iroh endpoint is unavailable");
+    }
+    const status = (await response.json()) as { node_id?: unknown; addrs?: unknown };
+    if (
+      typeof status?.node_id !== "string" ||
+      !/^[0-9a-f]{64}$/u.test(status.node_id) ||
+      !Array.isArray(status.addrs)
+    ) {
+      throw new Error("Invalid workspace Iroh endpoint");
+    }
+    const addrs = status.addrs
+      .filter((value): value is string => {
+        if (typeof value !== "string") return false;
+        const match = /^(?:\[([a-fA-F0-9:]+)\]|([0-9.]+)):(\d{1,5})$/u.exec(value);
+        const address = match?.[1] ?? match?.[2];
+        const port = Number(match?.[3]);
+        return (
+          address !== undefined &&
+          address !== "::" &&
+          address !== "0.0.0.0" &&
+          isIP(address) > 0 &&
+          port > 0 &&
+          port <= 65_535
+        );
+      })
+      .slice(0, 16);
+    return { nodeId: status.node_id, ...(addrs.length === 0 ? {} : { addrs }) };
   }
 
   /**
