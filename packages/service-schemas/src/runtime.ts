@@ -845,6 +845,8 @@ export const runtimeMethods = defineServiceMethods({
     tier: {
       tier: "open",
       session: "family",
+      residency: "transport",
+      family: "runtime.history",
       rationale: "One transfer, sender and remote destination are verified by the host.",
     },
     agentFacing: false,
