@@ -3320,6 +3320,23 @@ interface OwnedContexts {
 }
 
 describe("runtimeService.cloneContext", () => {
+  it("captures the admitted author's working copy before cloning entities", async () => {
+    const forkParticipantContext = vi.fn(async () => ({ kind: "application" as const, applicationId: "private-edit" }));
+    const forkContext = vi.fn(async () => {});
+    const { service, cloneDurableStorage } = await buildDeps({ semanticContexts: { forkParticipantContext, forkContext } });
+    const source = await seedDO(service, "participant-root", "author");
+    const caller = createVerifiedCaller(source.id, "do");
+    const input = [{ sourceContextId: "participant-root", targetKey: "participant-ordinary-clone" }];
+    const cloned = (await service.handler({ caller }, "cloneContext", input)) as CloneResult;
+    expect(forkParticipantContext).toHaveBeenCalledWith({
+      caller, sourceContextId: "participant-root", targetContextId: cloned.contextId, ownerContextId: "participant-root",
+    });
+    expect(forkParticipantContext.mock.invocationCallOrder[0]).toBeLessThan(cloneDurableStorage.mock.invocationCallOrder[0]!);
+    expect(forkContext).not.toHaveBeenCalled();
+    expect(await service.handler({ caller }, "cloneContext", input)).toEqual(cloned);
+    expect(forkParticipantContext).toHaveBeenCalledOnce();
+  });
+
   it("keeps a copied child preparing until initialization joins, then publishes it", async () => {
     let release!: () => void;
     let admitted!: () => void;

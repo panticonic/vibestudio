@@ -303,6 +303,7 @@ export interface RuntimeSemanticContexts {
     caller: VerifiedCaller | undefined;
     sourceContextId: string;
     targetContextId: string;
+    ownerContextId?: string;
   }): Promise<VcsStateNodeRef | null>;
   /** Exact semantic state pointer without materializing a native projection. */
   resolveWorkingState(contextId: string): Promise<VcsStateNodeRef>;
@@ -2178,13 +2179,19 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
         });
         ownsDefinition = true;
       }
+      const semanticCaller = actors.initiatingCaller;
+      const semanticOwner = semanticCaller.agentBinding?.contextId ?? await store.resolveWorkContext(semanticCaller.runtime.id);
       for (const srcCtx of sourceContexts) {
         const isRoot = srcCtx === sourceContextId;
         const targetCtx = newContextIdOf.get(srcCtx) as string;
         // Fork semantic state first so every cloned runtime observes the exact
         // source working frontier and can then diverge independently.
+        const participantFork = await deps.semanticContexts.forkParticipantContext?.({
+          caller: semanticCaller, sourceContextId: srcCtx, targetContextId: targetCtx,
+          ...(semanticOwner ? { ownerContextId: semanticOwner } : {}),
+        });
         if (!existingContexts.has(targetCtx)) {
-          await deps.semanticContexts.forkContext(srcCtx, targetCtx);
+          if (!participantFork) await deps.semanticContexts.forkContext(srcCtx, targetCtx);
           if (isRoot) {
             await store.recordContextEdge({
               contextId: targetCtx,
@@ -2627,7 +2634,11 @@ export function createRuntimeService(deps: RuntimeServiceDeps): RuntimeServiceRe
 
     const contextId = contextIdForTargetKey(args.targetKey);
     // Order mirrors cloneContext: fork semantic state, then materialize its projection.
-    await deps.semanticContexts.forkContext(args.parentContextId, contextId);
+    const admitted = await deps.semanticContexts.forkParticipantContext?.({
+      caller, sourceContextId: args.parentContextId, targetContextId: contextId,
+      ownerContextId: caller.agentBinding?.contextId ?? args.parentContextId,
+    });
+    if (!admitted) await deps.semanticContexts.forkContext(args.parentContextId, contextId);
     await deps.contextFolders.ensureContextFolder(contextId);
     await store.recordContextEdge({
       contextId,

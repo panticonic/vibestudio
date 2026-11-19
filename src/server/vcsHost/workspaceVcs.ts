@@ -1117,7 +1117,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   /** Both scopes are resolved from admitted runtime lifetimes before this call. */
   async forkParticipantContext(input: {
-    parent: { caller: VerifiedCaller; contextId: string };
+    parent: { caller: VerifiedCaller; contextId: string; ownerContextId?: string };
     child: { caller: VerifiedCaller; contextId: string; ownerContextId: string };
   }): Promise<VcsStateNodeRef> {
     const { parent, child } = input;
@@ -1126,14 +1126,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     }
     const source = this.participantHistorySource;
     if (!source) throw new Error("Participant workspace history is unavailable");
-    if (child.ownerContextId !== child.contextId && child.ownerContextId !== parent.contextId) {
+    const ownerContextId = parent.ownerContextId ?? parent.contextId;
+    if (child.ownerContextId !== child.contextId && child.ownerContextId !== ownerContextId) {
       throw new Error("Workspace fork target must belong to one of its admitted lifetimes");
     }
     return this.lockParticipantContexts(parent.contextId, child.contextId, async () => {
       if (this.contextHeads.get(child.contextId) === null) {
         throw new Error("Workspace participant context has retired");
       }
-      const scope = await this.openAdmittedParticipantScope(source, { ...parent, ownerContextId: parent.contextId });
+      const scope = await this.openAdmittedParticipantScope(source, { ...parent, ownerContextId });
       return forkWorkspaceParticipantContext({ ...scope, child, blobsDir: this.deps.blobsDir });
     });
   }

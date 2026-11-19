@@ -4728,14 +4728,14 @@ async function main() {
             forkContext: async (sourceContextId, targetContextId) => {
               await workspaceVcs.forkContext(sourceContextId, targetContextId);
             },
-            forkParticipantContext: ({ caller, sourceContextId, targetContextId }) => {
+            forkParticipantContext: ({ caller, sourceContextId, targetContextId, ownerContextId = sourceContextId }) => {
               if (!workspaceVcs.participantHistoryAttached) return Promise.resolve(null);
               if (!caller) {
                 throw new Error("The verified caller must own the workspace context being forked");
               }
               return workspaceVcs.forkParticipantContext({
-                parent: { caller, contextId: sourceContextId },
-                child: { caller, contextId: targetContextId, ownerContextId: sourceContextId },
+                parent: { caller, contextId: sourceContextId, ownerContextId },
+                child: { caller, contextId: targetContextId, ownerContextId },
               });
             },
             resolveWorkingState: (contextId) =>
