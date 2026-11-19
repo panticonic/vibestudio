@@ -214,6 +214,12 @@ client, a mobile variant on the wrong runtime and a local incompatible ABI.
 Run `client-admission-oracle-qualification` for model-free verification. The
 workflow inspects the platform contract without launching a device client.
 
+Declared test-suite review resolves the manifest route in the assigned
+context. The cases cover native declaration inspection, a focused native
+adapter child-process check, and a workerd suite. Both execution cases use the ordinary
+verification entry point. Run `native-suite-oracle-qualification` for the
+model-free check.
+
 Git Bridge review joins the installed provider's upstream status with the
 working and protected-main repository identities. The managed cases exercise
 an unconfigured upstream with a protected source, a local draft that needs

@@ -211,6 +211,15 @@ const clientAdmissionWorkflow = {
   root: "reviewClientAdmission",
   evidence: clientAdmissionEvidence,
 };
+const nativeSuiteWorkflow = {
+  family: "workspace-live-declared-test-suite",
+  workspace: "examples",
+  namespace: "vibestudio:test-verification",
+  group: "declared-runtime-and-assigned-verification",
+  validator: { template: "system-testing", path: "skills/system-testing/native-suite-managed.ts" },
+  root: "reviewTestSuite",
+  evidence: nativeSuiteEvidence,
+};
 const gitBridgeReviewWorkflow = {
   family: "workspace-live-git-bridge-review",
   workspace: "examples",
@@ -540,6 +549,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTestkitCleanupWorlds = [] },
     { phoneSetupUnavailable },
     { managedClientAdmissionWorlds },
+    { managedNativeSuiteWorlds },
     { managedGitBridgeReviewWorlds },
     { deliveryRepository, managedVcsDeliveryWorlds },
     { managedWebBriefWorlds },
@@ -590,6 +600,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "testkit-cleanup-worlds.ts",
       "phone-setup-world.ts",
       "client-admission-worlds.ts",
+      "native-suite-worlds.ts",
       "git-bridge-review-worlds.ts",
       "vcs-delivery-worlds.ts",
       "web-brief-worlds.ts",
@@ -637,6 +648,9 @@ export async function loadLiveTeacherCases(checkouts) {
   }
   for (const assignment of managedClientAdmissionWorlds) {
     cases.set(`client-admission-live-${assignment.id}`, { ...clientAdmissionWorkflow, assignment });
+  }
+  for (const assignment of managedNativeSuiteWorlds) {
+    cases.set(`native-suite-live-${assignment.id}`, { ...nativeSuiteWorkflow, assignment });
   }
   for (const assignment of managedGitBridgeReviewWorlds) {
     cases.set(`git-bridge-review-live-${assignment.id}`, {
@@ -2627,6 +2641,109 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: contextId, source, host, abi: workingAbi },
+    checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function nativeSuiteEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedNativeSuite;
+  const { caseId, contextId, request, observed, executed, checks } = fixture ?? {};
+  const { id, goal, target, suite, file, testName, mode, runtime } = workflow.assignment;
+  const report = exercise.report;
+  const records = exercise.calls.map(({ record }) => record);
+  const root = records.find(({ call_id }) => call_id === exercise.rootCallIds[0]);
+  const child = (parent, name) =>
+    parent &&
+    records.find(
+      (record) => record.parent_call_id === parent.call_id && record.definition.name === name
+    );
+  const review = child(root, "reviewTestSuite");
+  const plan = child(review, "reviewPlan");
+  const route = child(plan, "interpretRuntime");
+  const disposition = child(plan, "chooseRunDisposition");
+  const result = child(review, "reviewResult");
+  const outcome = child(result, "interpretOutcome");
+  const followUp = child(result, "planFollowUp");
+  const effects = records.flatMap(({ effects }) => effects ?? []);
+  const resolved = review?.effects?.find(
+    ({ service, method }) => service === "testSuitePlanRead" && method === "resolve"
+  );
+  const ran = review?.effects?.find(
+    ({ service, method }) => service === "testSuiteVerificationRun" && method === "run"
+  );
+  const expectedDisposition = mode === "verify" ? "run-assignment" : "report-plan";
+  requireEvidence(
+    fixture?.passed === true &&
+      caseId === id &&
+      contextId === execution.provenance?.contextId &&
+      typeof contextId === "string" &&
+      request?.goal === goal &&
+      request.target === target &&
+      request.suite === suite &&
+      request.file === file &&
+      request.testName === testName &&
+      request.mode === mode &&
+      typeof request.operationId === "string" &&
+      request.operationId.length > 0 &&
+      ["plan", "route", "execution"].every((key) => checks?.[key] === true) &&
+      observed?.target === target &&
+      observed.suite === suite &&
+      observed.runtime === runtime &&
+      observed.contextId === contextId &&
+      typeof observed.stateHash === "string" &&
+      observed.stateHash.length > 0 &&
+      isDeepStrictEqual(observed, report?.plan) &&
+      isDeepStrictEqual(executed, report.execution) &&
+      matchesValue(review?.inputs?.request, request) &&
+      matchesValue(review.output, report) &&
+      effects.length === (mode === "verify" ? 2 : 1) &&
+      resolved &&
+      !resolved.error &&
+      matchesValue(resolved.args, [request.operationId]) &&
+      matchesValue(resolved.result, observed),
+    "Suite review requires the live declared runtime and the exact caller assignment"
+  );
+  requireEvidence(
+    report.decision?.route?.runtime === runtime &&
+      report.decision.route.nativeApproval === (runtime === "native") &&
+      typeof report.decision.route.explanation === "string" &&
+      report.decision.route.explanation.trim() &&
+      report.decision.next === expectedDisposition &&
+      matchesValue(plan?.inputs?.plan, observed) &&
+      matchesValue(plan.output, report.decision) &&
+      matchesValue(route?.output, report.decision.route) &&
+      matchesValue(disposition?.output, expectedDisposition),
+    "Suite review requires the nested route and exact execution disposition"
+  );
+  requireEvidence(
+    mode === "inspect"
+      ? !ran && !result && executed === null && report.result === null
+      : ran &&
+          !ran.error &&
+          matchesValue(ran.args, [request.operationId, observed.stateHash]) &&
+          matchesValue(ran.result, executed) &&
+          executed?.current === true &&
+          executed.status === "passed" &&
+          Number.isSafeInteger(executed.passed) &&
+          executed.passed > 0 &&
+          executed.failed === 0 &&
+          typeof executed.artifactKey === "string" &&
+          executed.artifactKey.length > 0 &&
+          (runtime === "native") === executed.artifactKey.startsWith("native:") &&
+          /^[a-f0-9]{64}$/u.test(executed.executionDigest) &&
+          /^[a-f0-9]{64}$/u.test(executed.reportDigest) &&
+          report.result?.outcome === "verified" &&
+          typeof report.result.followUp === "string" &&
+          report.result.followUp.trim() &&
+          matchesValue(result?.inputs?.execution, executed) &&
+          matchesValue(result.output, report.result) &&
+          matchesValue(outcome?.output, report.result.outcome) &&
+          matchesValue(followUp?.output, report.result.followUp),
+    "Suite verification requires the exact execution receipt and a grounded outcome"
+  );
+  return {
+    world: { context_id: contextId, target, suite, runtime, mode },
     checks,
     evidence: { workspace: { fixture } },
   };

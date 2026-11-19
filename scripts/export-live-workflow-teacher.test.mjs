@@ -97,6 +97,7 @@ test("authored template worlds flow into the collector without losing original s
       ],
       ["phone-setup-world", "phoneSetupUnavailable", null],
       ["client-admission-worlds", "managedClientAdmissionWorlds", []],
+      ["native-suite-worlds", "managedNativeSuiteWorlds", []],
       ["git-bridge-review-worlds", "managedGitBridgeReviewWorlds", []],
       ["vcs-delivery-worlds", "managedVcsDeliveryWorlds", []],
       ["web-brief-worlds", "managedWebBriefWorlds", []],
@@ -2930,6 +2931,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["content-project-worlds", "export const contentProjectWorlds = [];"],
       ["phone-setup-world", "export const phoneSetupUnavailable = undefined;"],
       ["client-admission-worlds", "export const managedClientAdmissionWorlds = [];"],
+      ["native-suite-worlds", "export const managedNativeSuiteWorlds = [];"],
       ["git-bridge-review-worlds", "export const managedGitBridgeReviewWorlds = [];"],
       ["vcs-delivery-worlds", "export const managedVcsDeliveryWorlds = [];"],
       ["web-brief-worlds", "export const managedWebBriefWorlds = [];"],
@@ -5109,4 +5111,112 @@ test("Git Bridge export rejects stale remote facts and a substituted candidate d
   });
   await save();
   await assert.rejects(exportLiveTeacherWorkflow({ ...options, cases }), /nested upstream/u);
+});
+
+test("declared-suite export binds a focused verification to the observed runtime and state", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  const name = "native-suite-live-verify-adventure-engine-workerd";
+  const { assignment } = cases.get(name);
+  const pins = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pins, workspace: "examples" }));
+  entry.test.name = name;
+  const { goal, target, suite, file, mode, runtime } = assignment;
+  const request = {
+    goal,
+    target,
+    suite,
+    file,
+    mode,
+    testName: null,
+    operationId: "assigned-suite-verification",
+  };
+  const plan = { target, suite, runtime, contextId: "ctx", stateHash: "assigned-state" };
+  const execution = {
+    current: true,
+    status: "passed",
+    artifactKey: "artifact:verified",
+    executionDigest: "a".repeat(64),
+    reportDigest: "b".repeat(64),
+    passed: 1,
+    failed: 0,
+    diagnostics: [],
+  };
+  const decision = {
+    route: { runtime, nativeApproval: false, explanation: "Run in the declared workerd runtime" },
+    next: "run-assignment",
+  };
+  const result = { outcome: "verified", followUp: "One test passed" };
+  const report = { plan, decision, execution, result };
+  diagnostics.managedNativeSuite = {
+    caseId: assignment.id,
+    contextId: "ctx",
+    request,
+    passed: true,
+    observed: plan,
+    executed: execution,
+    checks: { plan: true, route: true, execution: true },
+  };
+  const ref = (value) => {
+    const text = JSON.stringify(value);
+    return {
+      complete: true,
+      hash: createHash("sha256").update(text).digest("hex"),
+      bytes: Buffer.byteLength(text),
+    };
+  };
+  const prototype = diagnostics.natlangTeacher.calls[0];
+  const call = (name, parent, inputs, output, effects = []) => ({
+    callId: name,
+    summary: { ...prototype.summary, call_id: name },
+    record: {
+      ...prototype.record,
+      call_id: name,
+      parent_call_id: parent,
+      definition: { name },
+      outcome: "done",
+      inputs: Object.fromEntries(Object.entries(inputs).map(([key, value]) => [key, ref(value)])),
+      output: ref(output),
+      effects,
+    },
+  });
+  const resolved = {
+    service: "testSuitePlanRead",
+    method: "resolve",
+    args: ref([request.operationId]),
+    result: ref(plan),
+  };
+  const ran = {
+    service: "testSuiteVerificationRun",
+    method: "run",
+    args: ref([request.operationId, plan.stateHash]),
+    result: ref(execution),
+  };
+  diagnostics.natlangTeacher = {
+    ...diagnostics.natlangTeacher,
+    programPath: "skills/vibestudio-workflows/runWorkflow.nl",
+    rootCallIds: ["runWorkflow"],
+    report,
+    calls: [
+      call("runWorkflow", null, {}, null),
+      call("reviewTestSuite", "runWorkflow", { request }, report, [resolved, ran]),
+      call("reviewPlan", "reviewTestSuite", { plan }, decision),
+      call("interpretRuntime", "reviewPlan", { plan }, decision.route),
+      call("chooseRunDisposition", "reviewPlan", { mode }, decision.next),
+      call("reviewResult", "reviewTestSuite", { execution }, result),
+      call("interpretOutcome", "reviewResult", {}, result.outcome),
+      call("planFollowUp", "reviewResult", {}, result.followUp),
+    ],
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  ran.args = ref([request.operationId, "superseded-state"]);
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /exact execution receipt/u
+  );
 });
