@@ -2819,7 +2819,7 @@ function terminalCheckEvidence(execution, exercise, _scenario, workflow) {
 function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.managedClientAdmission;
   const { caseId, contextId, request, observation, checks } = fixture ?? {};
-  const { id, goal, source, host, runtime, publishedAbi, workingAbi, abi } = workflow.assignment;
+  const { id, goal, source, host, runtime, publishedAbi, workingAbi, abi, addedCapability } = workflow.assignment;
   const report = exercise.report;
   const calls = exercise.calls.map(({ record }) => record);
   const child = (parent, name) =>
@@ -2832,9 +2832,18 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
   const hostReview = child(review, "reviewHost");
   const abiCheck = child(hostReview, "checkAbi");
   const capsCheck = child(hostReview, "checkCapabilities");
+  const requiredCheck = child(capsCheck, "checkRequired");
+  const optionalCheck = child(capsCheck, "checkOptional");
   const next = child(review, "chooseNext");
   const [effect] = read?.effects ?? [];
-  const changed = publishedAbi !== workingAbi;
+  const changed = publishedAbi !== workingAbi || addedCapability !== undefined;
+  const capabilityListsMatch = ["required", "optional"].every((tier) => {
+    const published = observation?.published?.[tier];
+    return Array.isArray(published) && isDeepStrictEqual(
+      observation?.working?.[tier],
+      addedCapability?.tier === tier ? [...published, addedCapability.name] : published,
+    );
+  });
   requireEvidence(
     caseId === id &&
       typeof contextId === "string" &&
@@ -2862,9 +2871,9 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
       ["available", "building", "ready", "approval-required", "error"].includes(
         observation.catalog.status
       ) &&
-      Array.isArray(observation.working.required) &&
-      Array.isArray(observation.working.optional) &&
+      capabilityListsMatch &&
       Array.isArray(observation.host.capabilities) &&
+      (!addedCapability || !observation.host.capabilities.includes(addedCapability.name)) &&
       calls.flatMap(({ effects }) => effects ?? []).length === 1 &&
       matchesValue(review?.inputs?.request, request) &&
       matchesValue(review.output, report) &&
@@ -2918,6 +2927,10 @@ function clientAdmissionEvidence(execution, exercise, _scenario, workflow) {
       matchesValue(abiCheck.output, abi) &&
       matchesValue(capsCheck?.inputs?.observation, observation) &&
       matchesValue(capsCheck.output, report.host.capabilities) &&
+      matchesValue(requiredCheck?.inputs?.observation, observation) &&
+      matchesValue(requiredCheck.output, { missingRequired, untrustedRequired: [] }) &&
+      matchesValue(optionalCheck?.inputs?.observation, observation) &&
+      matchesValue(optionalCheck.output, deniedOptional) &&
       matchesValue(next?.inputs?.source, report.source) &&
       matchesValue(next.inputs.host, report.host) &&
       matchesValue(next.output, decision),

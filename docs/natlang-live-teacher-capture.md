@@ -265,9 +265,12 @@ qualification is `gad-review-oracle-qualification`.
 Client admission cases run in the System template. They compare the assigned
 working and published client manifests, published trust and live build catalog
 with the selected platform's current contract. They cover a compatible terminal
-client, a mobile variant on the wrong runtime and a local incompatible ABI.
-Run `client-admission-oracle-qualification` for model-free verification. The
-workflow inspects the platform contract without launching a device client.
+client, a mobile variant on the wrong runtime, a local incompatible ABI, an
+unsupported desktop requirement, an Android optional capability denial and
+the published iOS admission path. Required capabilities and optional denials
+have separate Natlang review calls. Run `client-admission-oracle-qualification`
+for model-free verification against the platform contracts. To check one case,
+run its `client-admission-oracle-<case-id>` selector.
 
 Publication revision review compares two packages built from the assigned
 workspace website. Its cases cover repeating an unchanged build, changing

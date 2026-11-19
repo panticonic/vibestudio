@@ -4302,26 +4302,31 @@ test("extension release export rejects treating a local manifest change as the a
   }
 });
 
-test("client admission export rejects substituted host ABI evidence", async (t) => {
+async function checkClientCapabilityCase(t, id, expectedDecision) {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
     path.resolve(import.meta.dirname, "..")
   );
   const cases = await loadLiveTeacherCases(checkouts);
-  const name = "client-admission-live-working-desktop-abi-incompatible";
+  const name = `client-admission-live-${id}`;
   const { assignment } = cases.get(name);
   entry.test.name = name;
-  const { goal, source, host, runtime, workingAbi, publishedAbi, abi } = assignment;
+  const { goal, source, host, runtime, workingAbi, publishedAbi, abi, addedCapability } = assignment;
   const operationId = "client-review";
   const request = { goal, operationId };
-  const working = {
-    hash: "working-manifest",
+  const published = {
+    hash: "published-manifest",
     id: "browser",
     runtime,
-    abi: workingAbi,
+    abi: publishedAbi,
     required: ["device-session"],
     optional: ["notifications"],
   };
+  const working = { ...published, hash: "working-manifest", abi: workingAbi };
+  if (addedCapability) working[addedCapability.tier] = [
+    ...published[addedCapability.tier],
+    addedCapability.name,
+  ];
   const observation = {
     operationId,
     contextId: "ctx",
@@ -4329,7 +4334,7 @@ test("client admission export rejects substituted host ABI evidence", async (t) 
     workingRevision: "application:working-client",
     mainRevision: "event:published-client",
     working,
-    published: { ...working, hash: "published-manifest", abi: publishedAbi },
+    published,
     trusted: true,
     host: {
       kind: host,
@@ -4349,12 +4354,12 @@ test("client admission export rejects substituted host ABI evidence", async (t) 
     host: {
       abi,
       capabilities: {
-        missingRequired: [],
+        missingRequired: addedCapability?.tier === "required" ? [addedCapability.name] : [],
         untrustedRequired: [],
-        deniedOptional: ["notifications"],
+        deniedOptional: working.optional,
       },
     },
-    decision: "resolve-abi",
+    decision: expectedDecision,
   };
   diagnostics.managedClientAdmission = {
     caseId: assignment.id,
@@ -4408,6 +4413,11 @@ test("client admission export rejects substituted host ABI evidence", async (t) 
       call("reviewHost", "reviewClientAdmission", { observation }, report.host),
       call("checkAbi", "reviewHost", { observation }, abi),
       call("checkCapabilities", "reviewHost", { observation }, report.host.capabilities),
+      call("checkRequired", "checkCapabilities", { observation }, {
+        missingRequired: report.host.capabilities.missingRequired,
+        untrustedRequired: [],
+      }),
+      call("checkOptional", "checkCapabilities", { observation }, report.host.capabilities.deniedOptional),
       call(
         "chooseNext",
         "reviewClientAdmission",
@@ -4418,16 +4428,39 @@ test("client admission export rejects substituted host ABI evidence", async (t) 
   };
   await save();
   await exportLiveTeacherWorkflow({ ...options, cases });
-  read.record.effects[0].result = ref({
-    ...observation,
-    host: { ...observation.host, runtimes: { [runtime]: workingAbi } },
-  });
-  await save();
-  await assert.rejects(
-    exportLiveTeacherWorkflow({ ...options, cases }),
-    /host contract and build catalog/u
-  );
-});
+  if (addedCapability) {
+    const leaf = addedCapability.tier === "required" ? "checkRequired" : "checkOptional";
+    diagnostics.natlangTeacher.calls.find(({ callId }) => callId === leaf).record.output =
+      ref(addedCapability.tier === "required"
+        ? { missingRequired: [], untrustedRequired: [] }
+        : ["notifications"]);
+    await save();
+    await assert.rejects(
+      exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-missing-capability` }),
+      /exact host compatibility and capability decisions/u
+    );
+  } else {
+    read.record.effects[0].result = ref({
+      ...observation,
+      host: { ...observation.host, runtimes: { [runtime]: workingAbi } },
+    });
+    await save();
+    await assert.rejects(
+      exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-wrong-abi` }),
+      /host contract and build catalog/u
+    );
+  }
+}
+
+test("client admission export rejects substituted host ABI evidence", (t) =>
+  checkClientCapabilityCase(t, "working-desktop-abi-incompatible", "resolve-abi")
+);
+test("client admission export preserves unavailable required capabilities", (t) =>
+  checkClientCapabilityCase(t, "desktop-candidate-requires-mobile-device-controls", "resolve-required-capabilities")
+);
+test("client admission export preserves denied optional capabilities", (t) =>
+  checkClientCapabilityCase(t, "android-candidate-requests-optional-menu", "review-candidate")
+);
 
 test("release review handoff binds each transferred source to its live prerequisite", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
