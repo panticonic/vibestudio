@@ -6,7 +6,7 @@ on:
 jobs:
   accept-macos-release-candidate:
     name: Install and launch the exact macOS release candidate
-    runs-on: macos-14
+    runs-on: macos-15
     permissions:
       contents: read
     timeout-minutes: 30

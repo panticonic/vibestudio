@@ -70,7 +70,7 @@ jobs:
     if: ${{ inputs.target == 'npm-server-preflight' || inputs.target == 'application-candidate-mac' }}
     uses: ./.github/workflows/native-input.yml
     with:
-      runner: macos-14
+      runner: macos-15
       target: darwin-arm64
     permissions:
       contents: read
@@ -124,7 +124,7 @@ jobs:
     needs: native-input-darwin-arm64
     uses: ./.github/workflows/darwin-production-host.yml
     with:
-      runner: macos-14
+      runner: macos-15
     permissions:
       contents: read
 
@@ -134,7 +134,7 @@ jobs:
     needs: [darwin-production-host, workspace-release]
     uses: ./.github/workflows/application-candidate.yml
     with:
-      runner: macos-14
+      runner: macos-15
       target: darwin-arm64
       package: mac
       release-candidate: true
@@ -149,13 +149,13 @@ jobs:
     permissions:
       contents: read
 
-  packaged-acceptance-macos-14:
-    name: Installed application (darwin-arm64, macos-14)
+  packaged-acceptance-macos-15:
+    name: Installed application (darwin-arm64, macos-15)
     if: ${{ inputs.target == 'application-candidate-mac' }}
     needs: application-candidate-mac
     uses: ./.github/workflows/packaged-acceptance.yml
     with:
-      runner: macos-14
+      runner: macos-15
       target: darwin-arm64
       app: Vibestudio.app
     permissions:

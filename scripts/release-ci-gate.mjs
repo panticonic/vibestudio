@@ -10,9 +10,9 @@ export const requiredResults = [
   "native-isolation-linux-x64",
   "native-isolation-linux-arm64",
   "native-isolation-darwin-arm64",
-  "desktop-source-integration-macos-14",
+  "desktop-source-integration-macos-15",
   "npm-server-preflight",
-  "packaged-acceptance-macos-14",
+  "packaged-acceptance-macos-15",
   "packaged-acceptance-macos-26",
   "packaged-acceptance-windows",
 ];

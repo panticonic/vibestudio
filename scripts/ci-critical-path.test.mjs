@@ -295,7 +295,7 @@ test("diagnostic workflow runs the exact reusable package jobs and only their pr
     const selected = new Set([target, ...transitiveDependencies(jobs, target)]);
     if (target === "application-candidate-mac") {
       for (const name of [
-        "packaged-acceptance-macos-14",
+        "packaged-acceptance-macos-15",
         "packaged-acceptance-macos-26",
         "macos-release-candidate",
         "accept-macos-release-candidate",
@@ -368,7 +368,7 @@ test("diagnostic workflow runs the exact reusable package jobs and only their pr
     "workspace-release",
   ]);
   for (const [name, runner] of [
-    ["packaged-acceptance-macos-14", "macos-14"],
+    ["packaged-acceptance-macos-15", "macos-15"],
     ["packaged-acceptance-macos-26", "macos-26"],
   ]) {
     assert.deepEqual(dependenciesOf(jobs[name]), ["application-candidate-mac"]);
@@ -426,7 +426,7 @@ test("diagnostic workflow runs the exact reusable package jobs and only their pr
     )
   );
   assert.deepEqual(jobs["application-candidate-mac"].with, {
-    runner: "macos-14",
+    runner: "macos-15",
     target: "darwin-arm64",
     package: "mac",
     "release-candidate": true,
@@ -462,7 +462,7 @@ test("native artifact consumers wait for their exact producers without unrelated
   for (const [producer, target, runner] of [
     ["native-input-linux-x64", "linux-x64", "ubuntu-22.04"],
     ["native-input-linux-arm64", "linux-arm64", "ubuntu-22.04-arm"],
-    ["native-input-darwin-arm64", "darwin-arm64", "macos-14"],
+    ["native-input-darwin-arm64", "darwin-arm64", "macos-15"],
   ]) {
     assert.deepEqual(dependenciesOf(jobs[producer]), []);
     assert.equal(jobs[producer].uses, "./.github/workflows/native-input.yml");
@@ -648,7 +648,7 @@ test("native artifact consumers wait for their exact producers without unrelated
     jobs["darwin-production-host"].uses,
     "./.github/workflows/darwin-production-host.yml"
   );
-  assert.deepEqual(jobs["darwin-production-host"].with, { runner: "macos-14" });
+  assert.deepEqual(jobs["darwin-production-host"].with, { runner: "macos-15" });
   assert.deepEqual(dependenciesOf(jobs["application-candidate-mac"]), [
     "darwin-production-host",
     "release-metadata",
@@ -673,17 +673,17 @@ test("native artifact consumers wait for their exact producers without unrelated
     "./.github/workflows/darwin-host-inputs.yml"
   );
   assert.deepEqual(jobs["darwin-development-inputs"].with, {
-    runner: "macos-14",
+    runner: "macos-15",
   });
-  assert.deepEqual(dependenciesOf(jobs["desktop-source-integration-macos-14"]), [
+  assert.deepEqual(dependenciesOf(jobs["desktop-source-integration-macos-15"]), [
     "darwin-development-inputs",
   ]);
   assert.equal(
-    jobs["desktop-source-integration-macos-14"].uses,
+    jobs["desktop-source-integration-macos-15"].uses,
     "./.github/workflows/desktop-source-integration.yml"
   );
   assert.ok(
-    !transitiveDependencies(jobs, "packaged-acceptance-macos-14").has("darwin-development-inputs"),
+    !transitiveDependencies(jobs, "packaged-acceptance-macos-15").has("darwin-development-inputs"),
     "installed-app acceptance must not wait for unrelated development source integration"
   );
   assert.deepEqual(dependenciesOf(jobs["application-candidate-windows"]), ["workspace-release"]);
@@ -857,9 +857,9 @@ test("native artifact consumers wait for their exact producers without unrelated
 
   const acceptanceJobs = [
     [
-      "packaged-acceptance-macos-14",
+      "packaged-acceptance-macos-15",
       "application-candidate-mac",
-      "macos-14",
+      "macos-15",
       "darwin-arm64",
       "Vibestudio.app",
     ],
@@ -1060,7 +1060,7 @@ test("native artifact consumers wait for their exact producers without unrelated
     "${{ vars.RELEASE_MAC == 'true' && needs.release-metadata.outputs.candidate-needed == 'true' }}"
   );
   assert.ok(
-    !transitiveDependencies(ciJobs, "macos-release-candidate").has("packaged-acceptance-macos-14"),
+    !transitiveDependencies(ciJobs, "macos-release-candidate").has("packaged-acceptance-macos-15"),
     "macOS installer packaging starts as soon as the tested app is ready"
   );
   const macAcceptance = await readWorkflow("accept-macos-release-candidate.yml");
@@ -1245,7 +1245,7 @@ test("Darwin production and development host inputs are immutable producer artif
     /steps\.restore-host-inputs\.outcome == 'success'/
   );
   assert.equal(
-    steps.some((step) => step.name.includes("Desktop pairing")),
+    steps.some((step) => step.name?.includes("Desktop pairing")),
     false
   );
   assert.equal(
