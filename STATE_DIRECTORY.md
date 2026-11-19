@@ -194,6 +194,43 @@ link is the only remaining hardlink. The offline boundary is deliberate:
 central CAS and unconverted npm/analysis caches are never recursively deleted
 by the live collector.
 
+### Initializing a workspace from published history
+
+A local operator can seed a newly registered workspace with the exact
+published history of another workspace. Use matching Vibestudio and Base
+builds with native workspace history on both sides. Register the destination
+with `remote create-workspace --json` and keep the returned workspace ID.
+Stage its bundle before opening the workspace for the first time.
+
+In the source workspace state directory, create
+`shared-history-export/request.json` with these fields. Obtain the two
+revision coordinates from `chronolog.history.current`.
+
+```json
+{
+  "version": 1,
+  "sourceWorkspaceId": "ws_source",
+  "destinationWorkspaceId": "ws_destination",
+  "head": "<exact Dolt commit>",
+  "eventId": "<exact published event ID>"
+}
+```
+
+On startup the source produces a private directory under
+`shared-history-export/` named by the request digest. It contains
+`approved.json`, `history.pack`, and `blobs/`. The bundle includes the file
+contents reachable from the selected published history. Copy the complete
+directory into `workspace-history-seeds/{destination workspace ID}/` under
+the destination hub's central data directory, then open the destination
+and complete its workspace creation review. The destination checks the
+exact revision and file digests before publishing its initial history. It
+keeps its own node identity, accounts, and working copies.
+
+The destination records its origin in `state/shared-history-seed/approved.json`.
+Once creation completes, the staged bundle may be removed from the hub.
+Both workspace administrators enable history sharing with the same Chronolog
+group before using the regular signed publication workflow.
+
 ### `workspaces/{name}/state/git-checkouts/`
 
 Operational Git interchange checkouts live at

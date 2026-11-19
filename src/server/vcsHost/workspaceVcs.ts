@@ -418,6 +418,17 @@ const incomingHistory = z.object({
   repositories: z.array(WorkspaceMaterializationRepositorySchema),
   contentHashes: z.array(z.string().regex(/^[a-f0-9]{64}$/u)),
 });
+const sharedHistorySeedSchema = z.object({
+  sourceNodeId: z.string().regex(/^[a-f0-9]{64}$/u),
+  head: incomingHistory.shape.head,
+  eventId: z.string().min(1),
+}).strict();
+const sharedHistorySeedReceipt = z.object({
+  seed: sharedHistorySeedSchema,
+  originalHead: incomingHistory.shape.head,
+  installed: z.boolean(),
+}).strict();
+type SharedHistorySeed = z.infer<typeof sharedHistorySeedSchema>;
 
 export type CallerPublicationGateContext = {
   kind: "caller";
@@ -844,6 +855,88 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     return transfer.send(input.bytes);
   }
 
+  private async withHistoryPacketTransfer<T>(
+    canonical: WorkspaceSourceProviderRef,
+    send: (bytes: Uint8Array) => Promise<Uint8Array>,
+    transfer: (transferId: string) => Promise<T>
+  ): Promise<T> {
+    const transferId = crypto.randomUUID();
+    this.outgoingHistoryPackets.set(transferId, {
+      senderId: canonicalEntityId({
+        kind: "do", source: canonical.source, className: canonical.className, key: canonical.objectKey,
+      }),
+      send,
+    });
+    try {
+      return await transfer(transferId);
+    } finally {
+      this.outgoingHistoryPackets.delete(transferId);
+    }
+  }
+
+  /** The workspace creation owner has verified this source and destination. */
+  async initializeSharedHistory(input: WorkspaceHistorySource & {
+    seed: SharedHistorySeed;
+    offer: { destinationNodeId: string; branch: string; token: string };
+    fetchPack(bytes: Uint8Array): Promise<Uint8Array>;
+    fetchFile(digest: string): Promise<Uint8Array>;
+    confirmSource(): Promise<void>;
+  }): Promise<void> {
+    const { canonical, dispatch, offer } = input;
+    const seed = sharedHistorySeedSchema.parse(input.seed);
+    const publicationId = `workspace-seed:${sha256HexSyncText(canonicalJson(seed))}`;
+    const readReceipt = async () => sharedHistorySeedReceipt.nullable().parse(
+      await dispatch.dispatch(canonical, "readSharedHistorySeedReceipt")
+    );
+    await this.withProtectedMainMutation(async () => {
+      const prior = this.deps.refs.readAppliedPublication(publicationId);
+      if (prior) {
+        await this.replayPublicationObservers(prior);
+        this.deps.refs.acknowledgePublication(publicationId);
+        return;
+      }
+      if (this.deps.refs.readMainSemanticState() || this.deps.refs.listMains().length > 0) {
+        const receipt = await readReceipt();
+        if (receipt?.installed === true && canonicalJson(receipt.seed) === canonicalJson(seed)) return;
+        throw new Error("A workspace seed can only initialize empty protected history");
+      }
+      const received = await this.withHistoryPacketTransfer(canonical, input.fetchPack, (transferId) =>
+        dispatch.dispatch(canonical, "stageSharedHistorySeed", { ...seed, ...offer, transferId })
+      );
+      const candidate = incomingHistory.pick({ state: true, repositories: true, contentHashes: true }).parse(received);
+      if (candidate.state.eventId !== seed.eventId) throw new Error("Workspace seed returned a different event");
+      for (const digest of candidate.contentHashes) {
+        if (await statBlob(this.deps.blobsDir, digest)) continue;
+        const bytes = await input.fetchFile(digest);
+        if (crypto.createHash("sha256").update(bytes).digest("hex") !== digest) {
+          throw new Error("Workspace seed file bytes do not match their digest");
+        }
+        await withBlobContentLock(this.deps.blobsDir, async () => {
+          if (await statBlob(this.deps.blobsDir, digest)) return;
+          markPrivateWorkspaceBlobs(this.deps.blobsDir, [digest]);
+          await putBytes(this.deps.blobsDir, Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength));
+        });
+      }
+      await this.publishMain({ effectId: publicationId, payload: GadJsonRecordSchema.parse({
+        previousEventId: `${publicationId}:empty`,
+        publishedEventId: seed.eventId,
+        repositories: candidate.repositories,
+      }) }, { kind: "workspace-initialization" }, {
+        approved: async () => {
+          const receipt = await readReceipt();
+          return receipt?.installed === true && canonicalJson(receipt.seed) === canonicalJson(seed);
+        },
+        authorize: input.confirmSource,
+        publish: async () => {
+          const installed = sharedHistorySeedSchema.parse(await dispatch.dispatch(canonical, "installSharedHistorySeed", seed));
+          if (canonicalJson(installed) !== canonicalJson(seed)) throw new Error("Workspace installed a different seed");
+        },
+        acknowledge: async () => undefined,
+      });
+      this.deps.refs.acknowledgePublication(publicationId);
+    });
+  }
+
   currentPublishedHistory() {
     const source = this.participantHistorySource;
     if (!source) throw new Error("Workspace history is not ready for synchronization");
@@ -869,23 +962,16 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       throw new Error("Peer reported a different shared history revision");
     if (permit.kind === "applied") return permit.head;
     if (permit.kind === "grant") {
-      const transferId = crypto.randomUUID();
-      this.outgoingHistoryPackets.set(transferId, {
-        senderId: canonicalEntityId({
-          kind: "do", source: canonical.source, className: canonical.className, key: canonical.objectKey,
-        }),
-        send: async (bytes) => ByteArraySchema.parse(await input.request({ kind: "push", bytes })),
-      });
-      try {
-        const result = await dispatch.dispatch(canonical, "pushOutgoingHistory", {
+      const result = await this.withHistoryPacketTransfer(
+        canonical,
+        async (bytes) => ByteArraySchema.parse(await input.request({ kind: "push", bytes })),
+        (transferId) => dispatch.dispatch(canonical, "pushOutgoingHistory", {
           transferId, eventId: input.eventId, head: input.head,
           origin: { ref: permit.ref, token: permit.token },
           branch: permit.branch,
-        });
-        z.object({ hash: z.literal(input.head) }).parse(result);
-      } finally {
-        this.outgoingHistoryPackets.delete(transferId);
-      }
+        })
+      );
+      z.object({ hash: z.literal(input.head) }).parse(result);
     }
     const missing = z.array(z.string().regex(/^[a-f0-9]{64}$/u)).parse(
       await input.request({ kind: "missing" })
@@ -2510,7 +2596,7 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     this.verifiedProjectionStates.set(contextId, canonicalJson(state));
   }
 
-  async activateWorkspaceFromSource(): Promise<{
+  async activateWorkspaceFromSource(sharedHistorySeed?: true): Promise<{
     stateHash: string;
     initialized: boolean;
     timings: WorkspaceActivationTimings;
@@ -2527,6 +2613,12 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       ensureFreshMs: 0,
       totalMs: 0,
     };
+    if (sharedHistorySeed) {
+      if (!this.participantHistoryAttached) throw new Error("Shared workspace history has not been attached");
+      const fresh = await this.ensureFresh();
+      timings.ensureFreshMs = timings.totalMs = performance.now() - activationStartedAt;
+      return { ...fresh, initialized: false, timings };
+    }
     const contextId = `workspace-initialization:${this.deps.workspaceId}`;
     const rootPin = this.deps.rootTemplateBootstrap
       ? await this.deps.rootTemplateBootstrap.prepareSource()

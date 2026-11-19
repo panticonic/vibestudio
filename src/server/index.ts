@@ -7357,6 +7357,14 @@ async function main() {
   });
 
   const { wireVcsDurability } = await import("./bootstrap/vcsDurability.js");
+  const { readSharedHistorySeed, readSharedHistorySeedExport } = await import("./bootstrap/sharedHistorySeed.js");
+  const [sharedHistorySeed, exportSharedHistorySeed] = await Promise.all([
+    readSharedHistorySeed(statePath, workspaceId, path.join(getCentralDataPath(), "workspace-history-seeds", workspaceId)),
+    readSharedHistorySeedExport({
+      statePath, workspaceId, blobsDir: layout.blobsDir,
+      sourceNodeId: async () => (await assertPresent(runtimeManagerForGateway).workspaceNodeEndpoint()).nodeId,
+    }),
+  ]);
   wireVcsDurability({
     container,
     workspaceVcs,
@@ -7368,6 +7376,8 @@ async function main() {
       objectKey: semanticWorkspaceService.objectKey,
     },
     bootstrapStateHash: bootstrapStateHash,
+    ...(sharedHistorySeed ? { sharedHistorySeed } : {}),
+    ...(exportSharedHistorySeed ? { exportSharedHistorySeed } : {}),
     readWorkspaceHistoryOwner: async (targetId) => {
       const owner = await ensureEntityStore(
         container.get<import("./doDispatch.js").DODispatch>("doDispatch")
@@ -7427,13 +7437,13 @@ async function main() {
       if (existing) await store.advanceExecution(activation);
       else await store.activate(activation);
     },
-    activateSemanticWorkspace: async (vcs) => {
+    activateSemanticWorkspace: async (vcs, sharedHistorySeed) => {
       const activationStartedAt = performance.now();
       let spanStartedAt = performance.now();
-      const recovered = await vcs.recoverPendingSemanticEffects();
+      const recovered = sharedHistorySeed ? 0 : await vcs.recoverPendingSemanticEffects();
       if (recovered > 0) console.log(`[Vcs] Recovered ${recovered} pending semantic host effects`);
       const recoverPendingSemanticEffectsMs = performance.now() - spanStartedAt;
-      const activated = await vcs.activateWorkspaceFromSource();
+      const activated = await vcs.activateWorkspaceFromSource(sharedHistorySeed);
       // Activation either created the workspace (and its creation publication
       // recorded the review it owes) or restored one: only now is "nothing to
       // review" a fact rather than a guess.
