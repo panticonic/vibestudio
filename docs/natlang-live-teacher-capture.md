@@ -93,6 +93,10 @@ batches at the interruption.
 PDF handoffs join intake and scratch staging in one workflow. The scratch input files are
 created from the installed extension's verified page receipts. They remain unavailable before
 intake, and the handoff holds its artifact if the resulting files leave a required answer open.
+Terminal checklist target-state cases begin with an existing state in the owned PTY. They ask
+Natlang to choose the necessary toggles in the requested order and preserve unassigned items.
+The oracle checks the exact keys and screens, including cases that need no edits before restart
+or reattachment.
 Personal memory comparisons call the existing verified recall skill once for each assigned
 revision. They retain both original quotations and independently observed endpoint outcomes,
 including when one revision has no recall lead or no source. The exporter requires both nested

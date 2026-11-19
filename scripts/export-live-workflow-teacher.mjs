@@ -438,12 +438,13 @@ export async function loadLiveTeacherCases(checkouts) {
       expectedDecisions: expected,
     });
   }
-  for (const { id, request, expected } of managedChecklistWorlds) {
+  for (const { id, request, expected, keys } of managedChecklistWorlds) {
     cases.set(`terminal-checklist-live-${id}`, {
       ...terminalChecklistWorkflow,
       caseId: id,
       expectedContinuation: request.continuation,
       expectedScreens: expected,
+      ...("target" in request && { expectedKeys: keys }),
     });
   }
   for (const { id, expected } of managedSetupWorlds) {
@@ -1697,6 +1698,10 @@ function terminalChecklistEvidence(execution, exercise, _scenario, workflow) {
       verification.continuation === continuation &&
       report?.status === "verified" &&
       report.continuation === continuation &&
+      (!workflow.expectedKeys ||
+        (isDeepStrictEqual(verification.sent, workflow.expectedKeys) &&
+          verification.checks?.assignedKeys === true &&
+          verification.checks?.finalTarget === true)) &&
       typeof verification.sessionId === "string" &&
       Array.isArray(screens) &&
       screens.length === workflow.expectedScreens.length &&

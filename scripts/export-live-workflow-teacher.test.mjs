@@ -146,7 +146,15 @@ test("authored template worlds flow into the collector without losing original s
       [
         "checklist-worlds",
         "managedChecklistWorlds",
-        [{ id: "restart", request: { continuation: "restart" }, expected: [[], ["1"], ["1"]] }],
+        [
+          { id: "restart", request: { continuation: "restart" }, expected: [[], ["1"], ["1"]] },
+          {
+            id: "keep-on-restart",
+            request: { continuation: "restart", target: { checked: ["1"], unchecked: [] } },
+            expected: [["1"], ["1"]],
+            keys: [],
+          },
+        ],
       ],
       [
         "onboarding-worlds",
@@ -464,6 +472,47 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(checklist.root, "verifyChecklist");
   assert.equal(checklist.expectedContinuation, "restart");
   assert.deepEqual(checklist.expectedScreens, [[], ["1"], ["1"]]);
+  const retainedChecklist = cases.get("terminal-checklist-live-keep-on-restart");
+  assert.deepEqual(retainedChecklist.expectedKeys, []);
+  const checklistScreens = [
+    { sessionId: "owned-session", ptyId: "before", cols: 80, rows: 24, checked: ["1"] },
+    { sessionId: "owned-session", ptyId: "after", cols: 62, rows: 18, checked: ["1"] },
+  ];
+  const checklistVerification = {
+    caseId: retainedChecklist.caseId,
+    passed: true,
+    continuation: "restart",
+    sessionId: "owned-session",
+    screens: checklistScreens,
+    sent: [],
+    checks: Object.fromEntries(
+      [
+        "exactScreenSequence",
+        "sessionPreserved",
+        "terminalIdentity",
+        "viewport",
+        "joinedReport",
+        "retired",
+        "assignedKeys",
+        "finalTarget",
+      ].map((key) => [key, true])
+    ),
+  };
+  const checklistExecution = {
+    provenance: { contextId: "owned" },
+    diagnostics: { managedChecklist: { contextId: "owned", verification: checklistVerification } },
+  };
+  const checklistExercise = {
+    report: { status: "verified", continuation: "restart", screens: checklistScreens },
+  };
+  assert.ok(
+    retainedChecklist.evidence(checklistExecution, checklistExercise, "", retainedChecklist)
+  );
+  checklistVerification.sent = ["1", "1"];
+  assert.throws(
+    () => retainedChecklist.evidence(checklistExecution, checklistExercise, "", retainedChecklist),
+    /live PTY sequence/
+  );
   const setup = cases.get("onboarding-live-retired");
   assert.equal(setup.root, "planSetup");
   assert.equal(setup.workspace, "personal");
