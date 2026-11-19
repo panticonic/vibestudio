@@ -383,7 +383,12 @@ if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === imp
     const scopedRunnable = cases.filter(
       (item) => item.execution === "scoped-fixture" && hasScopedWorkflowAdapter(item.family)
     ).length;
-    console.log(JSON.stringify({ total: cases.length, scopedRunnable, counts }, null, 2));
+    const managedWorkspace = cases.filter(
+      ({ execution }) => execution === "managed-workspace"
+    ).length;
+    console.log(
+      JSON.stringify({ total: cases.length, managedWorkspace, scopedRunnable, counts }, null, 2)
+    );
   } else {
     for (const scenario of cases) console.log(JSON.stringify(scenario));
   }

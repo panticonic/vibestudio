@@ -115,6 +115,8 @@ test("authored template worlds flow into the collector without losing original s
         [{ id: "sample", checks: [], codes: [] }],
       ],
       ["tendril-worlds", "managedTendrilWorlds", []],
+      ["collection-worlds", "managedCollectionWorlds", []],
+      ["browser-library-worlds", "managedBrowserLibraryWorlds", []],
       [
         "news-worlds",
         "managedNewsWorlds",
@@ -1730,6 +1732,146 @@ test("Spectrolite export rejects a preview from another canonical revision", asy
   );
 });
 
+test("Browser library export rejects a bookmark from another origin", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "browser-library-live-hold-ambiguous-runbook";
+  const pinned = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pinned, workspace: "personal" }));
+  const run = diagnostics.natlangTeacher;
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  leaf.record.definition.name = "curateBrowserLibrary";
+  leaf.record.outcome = "done";
+  for (const [id, name, parent] of [
+    ["plan-1", "planLibraryChange", leaf.callId],
+    ["find-1", "findBookmark", "plan-1"],
+    ["plan-2", "planLibraryChange", leaf.callId],
+    ["find-2", "findBookmark", "plan-2"],
+    ["apply", "applyLibraryChange", leaf.callId],
+    ["verify", "verifyLibraryChange", "apply"],
+    ["saved", "verifySavedReference", "verify"],
+  ]) {
+    const call = structuredClone(leaf);
+    call.callId = call.summary.call_id = id;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    run.calls.push(call);
+  }
+  const namespace = "7b1612e9-3165-4279-a9d0-33dc53c36f80";
+  const origin = `https://${namespace}.library.vibestudio.invalid`;
+  const reading = `/System test ${namespace}/Reading`;
+  const followUp = `/System test ${namespace}/Follow-up`;
+  const folders = [reading, followUp];
+  const snapshot = (id, folder) => ({
+    id,
+    availableFolders: folders,
+    bookmarks: [{ id: 11, folder, title: "Runbook", url: origin + "/operations" }],
+    visits: [],
+  });
+  const after = snapshot("after", followUp);
+  run.report = {
+    findings: [
+      { status: "held", bookmarkId: null, evidence: ["before"] },
+      { status: "verified", bookmarkId: 11, evidence: ["before", "after"] },
+    ],
+  };
+  diagnostics.managedBrowserLibrary = {
+    contextId: "ctx",
+    verification: {
+      contextId: "ctx",
+      caseId: "hold-ambiguous-runbook",
+      origin,
+      folders,
+      baseline: snapshot("before", reading),
+      transitions: [{ mutation: { kind: "file", id: 11, folder: followUp }, after }],
+      assignments: { operations: 11 },
+      passed: true,
+      checks: { initial: true, exactEffects: true, report: true, metadata: true, outside: true },
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  after.bookmarks[0].url = "https://outside.invalid/operations";
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-outside-origin` }),
+    /Browser library findings must cite the assigned store observations/u
+  );
+});
+
+test("Collection export rejects a held finding citing an unobserved panel tree", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "collection-live-hold-duplicate-agenda";
+  const pinned = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pinned, workspace: "personal" }));
+  const run = diagnostics.natlangTeacher;
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  leaf.record.definition.name = "organizeCollection";
+  leaf.record.outcome = "done";
+  for (const [id, name, parent] of [
+    ["plan-1", "planCollectionChange", leaf.callId],
+    ["locate-1", "locateCollectionPanel", "plan-1"],
+    ["plan-2", "planCollectionChange", leaf.callId],
+    ["locate-2", "locateCollectionPanel", "plan-2"],
+    ["apply", "applyCollectionChange", leaf.callId],
+    ["verify", "verifyCollectionChange", "apply"],
+  ]) {
+    const call = structuredClone(leaf);
+    call.callId = call.summary.call_id = id;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    run.calls.push(call);
+  }
+  const snapshot = (id, note) => ({
+    id,
+    complete: true,
+    rootId: "owned-root",
+    nodes: [
+      { id: "owned-root", contextId: "ctx" },
+      { id: "reference-panel", contextId: "ctx", note },
+    ],
+  });
+  const mutation = { kind: "note", panelId: "reference-panel", text: "Leave with the project" };
+  run.report = {
+    results: [
+      { status: "held", panelId: null, evidence: ["before"] },
+      { status: "verified", panelId: "reference-panel", evidence: ["before", "after"] },
+    ],
+  };
+  diagnostics.managedCollection = {
+    contextId: "ctx",
+    verification: {
+      contextId: "ctx",
+      rootId: "owned-root",
+      caseId: "hold-duplicate-agenda",
+      baseline: snapshot("before", null),
+      transitions: [{ mutation, after: snapshot("after", mutation.text) }],
+      assignments: { root: "owned-root", reference: "reference-panel" },
+      passed: true,
+      checks: { baseline: true, outsideUnchanged: true, exactEffects: true, reportMatches: true },
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  run.report.results[0].evidence = ["fabricated"];
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-unobserved` }),
+    /Collection findings must cite ordered live snapshots/u
+  );
+});
+
 test("Tendril export rejects a durable change that the live page did not show", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
@@ -2066,6 +2208,8 @@ test("workspace integration binds conflict source and verified state without bro
       ["spectrolite-worlds", "export const managedSpectroliteWorlds = [];"],
       ["news-worlds", "export const managedNewsWorlds = [];"],
       ["tendril-worlds", "export const managedTendrilWorlds = [];"],
+      ["collection-worlds", "export const managedCollectionWorlds = [];"],
+      ["browser-library-worlds", "export const managedBrowserLibraryWorlds = [];"],
       ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
       ["provenance-history-worlds", "export const managedProvenanceHistoryWorlds = [];"],
       ["runtime-program-worlds", "export const managedRuntimeProgramWorlds = [];"],

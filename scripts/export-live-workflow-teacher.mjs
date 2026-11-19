@@ -252,6 +252,24 @@ const tendrilWorkflow = {
   root: "runTendril",
   evidence: tendrilEvidence,
 };
+const browserLibraryWorkflow = {
+  family: "personal-live-browser-library",
+  workspace: "personal",
+  namespace: "vibestudio:personal:browser-library",
+  group: "saved-reference-curation",
+  validator: { template: "personal", path: "skills/browser-library-runtime/managed.ts" },
+  root: "curateBrowserLibrary",
+  evidence: browserLibraryEvidence,
+};
+const collectionWorkflow = {
+  family: "personal-live-collection",
+  workspace: "personal",
+  namespace: "vibestudio:personal:collection",
+  group: "panel-tree-organization",
+  validator: { template: "personal", path: "skills/collection-conductor-runtime/managed.ts" },
+  root: "organizeCollection",
+  evidence: collectionEvidence,
+};
 const terminalChecklistWorkflow = {
   family: "workspace-terminal-checklist",
   namespace: "vibestudio:terminal-apps",
@@ -314,6 +332,8 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedSetupWorlds },
     { managedChecklistWorlds },
     { managedTendrilWorlds },
+    { managedCollectionWorlds },
+    { managedBrowserLibraryWorlds, origin: browserLibraryOrigin },
     { managedGrimoireWorlds },
     { managedSpectroliteWorlds },
     { managedNewsWorlds },
@@ -342,6 +362,8 @@ export async function loadLiveTeacherCases(checkouts) {
       "onboarding-worlds.ts",
       "checklist-worlds.ts",
       "tendril-worlds.ts",
+      "collection-worlds.ts",
+      "browser-library-worlds.ts",
       "grimoire-worlds.ts",
       "spectrolite-worlds.ts",
       "news-worlds.ts",
@@ -453,6 +475,23 @@ export async function loadLiveTeacherCases(checkouts) {
       caseId: id,
       expectedDecisions: expected,
       expectedActions: actions.map((action) => action.toLowerCase()),
+    });
+  }
+  for (const { id, request, expected } of managedBrowserLibraryWorlds) {
+    cases.set(`browser-library-live-${id}`, {
+      ...browserLibraryWorkflow,
+      caseId: id,
+      request,
+      expected,
+      origin: browserLibraryOrigin,
+    });
+  }
+  for (const { id, request, expected } of managedCollectionWorlds) {
+    cases.set(`collection-live-${id}`, {
+      ...collectionWorkflow,
+      caseId: id,
+      request,
+      expected,
     });
   }
   for (const { id, request } of managedTendrilWorlds) {
@@ -2002,6 +2041,250 @@ function tendrilEvidence(execution, exercise, _scenario, workflow) {
       panel_id: presentation.slotId,
     },
     checks: verified.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function browserLibraryEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedBrowserLibrary;
+  const verification = fixture?.verification;
+  const { baseline, transitions, origin, folders, assignments } = verification ?? {};
+  const findings = exercise.report?.findings;
+  const { actions } = workflow.request;
+  const observed = new Set();
+  const validSnapshot = (snapshot) => {
+    const valid =
+      typeof snapshot?.id === "string" &&
+      snapshot.id.length > 0 &&
+      !observed.has(snapshot.id) &&
+      isDeepStrictEqual(snapshot.availableFolders, folders) &&
+      Array.isArray(snapshot.bookmarks) &&
+      snapshot.bookmarks.every(
+        (row) => folders.includes(row.folder) && row.url?.startsWith(origin + "/")
+      ) &&
+      Array.isArray(snapshot.visits) &&
+      snapshot.visits.every((row) => row.url?.startsWith(origin + "/"));
+    if (valid) observed.add(snapshot.id);
+    return valid;
+  };
+  const namespace =
+    typeof origin === "string"
+      ? /^https:\/\/([0-9a-f-]{36})\.library\.vibestudio\.invalid$/u.exec(origin)?.[1]
+      : null;
+  const folderFor = (folder) => `/System test ${namespace}${folder}`;
+  let before = baseline;
+  let applied = 0;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.contextId === fixture.contextId &&
+      verification.caseId === workflow.caseId &&
+      verification.passed === true &&
+      ["initial", "exactEffects", "report", "metadata", "outside"].every(
+        (check) => verification.checks?.[check] === true
+      ) &&
+      typeof namespace === "string" &&
+      Array.isArray(folders) &&
+      folders.every((folder) => folder.startsWith(folderFor("/"))) &&
+      Array.isArray(transitions) &&
+      assignments &&
+      Array.isArray(findings) &&
+      findings.length === actions.length &&
+      validSnapshot(before) &&
+      workflow.expected.every((plan, index) => {
+        const action = actions[index];
+        if (plan.kind === "held") {
+          return isDeepStrictEqual(findings[index], {
+            status: "held",
+            bookmarkId: null,
+            evidence: [before.id],
+          });
+        }
+        const bookmarkId = assignments[plan.kind === "retire" ? plan.keep : plan.key];
+        const id = assignments[plan.key];
+        const mutation =
+          plan.kind === "save"
+            ? {
+                kind: "save",
+                url: plan.url.replace(workflow.origin, origin),
+                folder: folderFor(action.folder),
+                title: plan.title,
+              }
+            : plan.kind === "rename"
+              ? { kind: "rename", id, title: action.title }
+              : plan.kind === "file"
+                ? { kind: "file", id, folder: folderFor(action.folder) }
+                : { kind: "retire", id, keepId: bookmarkId };
+        const receipt = transitions[applied++];
+        if (
+          !Number.isSafeInteger(bookmarkId) ||
+          !isDeepStrictEqual(receipt?.mutation, mutation) ||
+          !validSnapshot(receipt?.after) ||
+          !receipt.after.bookmarks.some((row) => row.id === bookmarkId) ||
+          !isDeepStrictEqual(findings[index], {
+            status: "verified",
+            bookmarkId,
+            evidence: [before.id, receipt.after.id],
+          })
+        )
+          return false;
+        before = receipt.after;
+        return true;
+      }) &&
+      applied === transitions.length,
+    "Browser library findings must cite the assigned store observations and exact bookmark effects"
+  );
+  const children = (parent, name) =>
+    parent
+      ? exercise.calls.filter(
+          ({ record }) =>
+            record.parent_call_id === parent.callId &&
+            record.definition?.name === name &&
+            record.outcome === "done"
+        )
+      : [];
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const skill = children(root, workflow.root)[0];
+  const planning = children(skill, "planLibraryChange");
+  const recovery = planning.flatMap((call) => children(call, "planVisitRecovery"));
+  const retiring = planning.flatMap((call) => children(call, "confirmRetainedReference"));
+  const effects = children(skill, "applyLibraryChange");
+  const verificationCalls = effects.flatMap((call) => children(call, "verifyLibraryChange"));
+  requireEvidence(
+    root?.record.definition?.name === "runWorkflow" &&
+      planning.length === actions.length &&
+      recovery.length === actions.filter((action) => action.kind === "recover").length &&
+      effects.length === transitions.length &&
+      effects.every((call) => children(call, "verifyLibraryChange").length === 1) &&
+      retiring.length >= transitions.filter(({ mutation }) => mutation.kind === "retire").length &&
+      verificationCalls.every(
+        (call) =>
+          children(call, "verifyRetiredCopy").length +
+            children(call, "verifySavedReference").length ===
+          1
+      ),
+    "Browser library capture must include nested planning and verification of each store effect"
+  );
+  return {
+    world: { context_id: fixture.contextId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function collectionEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedCollection;
+  const verification = fixture?.verification;
+  const { baseline, rootId, transitions, assignments } = verification ?? {};
+  const { results } = exercise.report ?? {};
+  const { actions } = workflow.request;
+  const observedIds = new Set();
+  const observe = (snapshot) => {
+    const valid =
+      snapshot?.complete === true &&
+      snapshot.rootId === rootId &&
+      typeof snapshot.id === "string" &&
+      snapshot.id.length > 0 &&
+      !observedIds.has(snapshot.id) &&
+      Array.isArray(snapshot.nodes) &&
+      snapshot.nodes[0]?.id === rootId &&
+      snapshot.nodes.every(({ contextId }) => contextId === fixture.contextId);
+    if (valid) observedIds.add(snapshot.id);
+    return valid;
+  };
+  const checkFinding = (finding, status, panelId, evidence) =>
+    finding?.status === status &&
+    finding.panelId === panelId &&
+    isDeepStrictEqual(finding.evidence, evidence);
+  let current = baseline;
+  let transitionIndex = 0;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.contextId === fixture.contextId &&
+      verification.caseId === workflow.caseId &&
+      verification.passed === true &&
+      ["baseline", "outsideUnchanged", "exactEffects", "reportMatches"].every(
+        (check) => verification.checks?.[check] === true
+      ) &&
+      typeof rootId === "string" &&
+      assignments?.root === rootId &&
+      Array.isArray(transitions) &&
+      Array.isArray(results) &&
+      results.length === actions.length &&
+      observe(current) &&
+      workflow.expected.every((plan, index) => {
+        const action = actions[index];
+        const finding = results[index];
+        if (plan.kind === "held") {
+          return checkFinding(finding, "held", null, [current.id]);
+        }
+        const receipt = transitions[transitionIndex++];
+        const panelId = assignments[plan.key];
+        const mutation =
+          plan.kind === "rename"
+            ? { kind: "rename", panelId, title: action.title }
+            : plan.kind === "note"
+              ? { kind: "note", panelId, text: action.text }
+              : plan.kind === "group"
+                ? { kind: "group", parentId: assignments[plan.parent], title: action.title }
+                : {
+                    kind: "move",
+                    panelId,
+                    parentId: assignments[plan.parent],
+                    afterId: plan.after === null ? null : assignments[plan.after],
+                  };
+        if (
+          typeof panelId !== "string" ||
+          !isDeepStrictEqual(receipt?.mutation, mutation) ||
+          !observe(receipt?.after) ||
+          !receipt.after.nodes.some(({ id }) => id === panelId) ||
+          !checkFinding(finding, "verified", panelId, [current.id, receipt.after.id])
+        )
+          return false;
+        current = receipt.after;
+        return true;
+      }) &&
+      transitionIndex === transitions.length,
+    "Collection findings must cite ordered live snapshots for the exact assigned effects"
+  );
+
+  const children = (parent, name) =>
+    parent
+      ? exercise.calls.filter(
+          ({ record }) =>
+            record.parent_call_id === parent.callId &&
+            record.outcome === "done" &&
+            record.definition?.name === name
+        )
+      : [];
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const skill = children(root, workflow.root)[0];
+  const planned = children(skill, "planCollectionChange");
+  const applied = children(skill, "applyCollectionChange");
+  const placements = planned.flatMap((call) => children(call, "planCollectionPlacement"));
+  const verified = applied.flatMap((call) => children(call, "verifyCollectionChange"));
+  const isPlacement = ({ kind }) => kind === "group" || kind === "move";
+  requireEvidence(
+    root?.record.definition?.name === "runWorkflow" &&
+      planned.length === actions.length &&
+      placements.length === actions.filter(isPlacement).length &&
+      planned.every(
+        (call) =>
+          children(call, "planCollectionPlacement").length +
+            children(call, "locateCollectionPanel").length ===
+          1
+      ) &&
+      placements.every((call) => children(call, "locateCollectionPanel").length > 0) &&
+      applied.length === transitions.length &&
+      applied.every((call) => children(call, "verifyCollectionChange").length === 1) &&
+      verified.filter((call) => children(call, "verifyPlacement").length === 1).length ===
+        transitions.filter(({ mutation }) => isPlacement(mutation)).length,
+    "Collection capture must include nested planning, target resolution and effect verification"
+  );
+  return {
+    world: { context_id: fixture.contextId, panel_id: rootId },
+    checks: verification.checks,
     evidence: { workspace: { fixture } },
   };
 }

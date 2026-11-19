@@ -836,6 +836,13 @@ describe("workspaceStateService — slot-state change hook", () => {
       method: "slotMove",
       args: ["panel:tree/s1", null, { afterSlotId: "panel:tree/s0" }, "user-verified"],
     });
+
+    await svc.handler(ctx as never, "slot.move", ["panel:tree/s1", null]);
+
+    expect(calls).toContainEqual({
+      method: "slotMove",
+      args: ["panel:tree/s1", null, {}, "user-verified"],
+    });
   });
 
   const mutating: Array<[method: string, args: unknown[]]> = [

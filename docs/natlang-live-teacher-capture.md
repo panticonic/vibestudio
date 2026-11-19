@@ -3,6 +3,8 @@
 ## Authored task bank
 
 `pnpm natlang:tasks --summary` counts the tasks in the configured template checkouts.
+The `managedWorkspace` count is the authored bank backed by running VibeStudio workspaces
+and is the count used for the scale target.
 `pnpm natlang:tasks --case CASE` shows the authored task's source lineage and public request when it uses a scoped fixture.
 The command reads source and makes no model calls. Managed-workspace cases have system-test fixtures.
 Scoped-fixture cases use authored observations shaped by the owning template's Vibestudio contracts and have independent verifiers in that template.
@@ -70,6 +72,15 @@ as routing precedence, event ordering and queue admission. Content worlds includ
 inventory migration, consent, event logistics, and dataset release and recall. Operations worlds vary
 restoration and recovery readiness, approval changes, rejected gates, and continuation from durable state.
 Messaging worlds exercise addressed local delivery and holding an ambiguous recipient in synthetic owned channels.
+Personal Browser library cases recover a visited link, organize persisted bookmarks and retire
+an exact duplicate while keeping its assigned copy. The harness uses a fresh browser-data
+namespace and checks surviving bookmark metadata, visit history and an out-of-scope record.
+
+Personal Collection conductor cases organize real panel subtrees. The shared workflow resolves
+references against the latest tree, applies each accepted change, and verifies live titles,
+notes, parentage and sibling order. The outcome checks also cover ambiguous references,
+invalid destinations and preservation of an unrelated panel.
+
 Tendril board cases present the assigned panel on an online headless VibeStudio device. Their
 Natlang stages apply a sequence of shared-state changes and exposed page calls. The evidence joins
 the actual slot and device, rendered fields, durable revisions, and each nested verification.
