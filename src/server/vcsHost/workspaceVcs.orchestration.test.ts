@@ -319,12 +319,7 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     const original = (await putBytes(blobsDir, Buffer.from("shared content"))).digest;
     const privateEdit = (await putBytes(blobsDir, Buffer.from("private edit"))).digest;
     let aliceEdited = false;
-    const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string, input: unknown) => {
-      const edited = aliceEdited && owner.objectKey === owners[0]!.objectKey;
-      if (method === "readHistoryReferenceVisibility") return edited;
-      expect(method).toBe("readHistoryProjection");
-      expect(input).toEqual({ contextId });
-      return {
+    const projection = (edited: boolean) => ({
         head: edited ? "edited" : "initial",
         state: edited
           ? { kind: "application", applicationId: "alice-edit" }
@@ -338,7 +333,25 @@ describe("WorkspaceVcs semantic host orchestration", () => {
             { path: "note.txt", contentHash: edited ? privateEdit : original, mode: 0o644 },
           ] },
         }],
-      };
+    });
+    const receipts = new Set<string>();
+    const dispatch = vi.fn(async (owner: typeof TEST_PROVIDER, method: string, input: unknown) => {
+      const edited = aliceEdited && owner.objectKey === owners[0]!.objectKey;
+      if (method === "readHistoryReferenceVisibility") return edited;
+      if (method === "rememberHistoryContentSource" || method === "readHistoryContentSource") {
+        const { stateHash } = input as { stateHash: string };
+        const receipt = JSON.stringify([owner.objectKey, stateHash, edited]);
+        if (method === "rememberHistoryContentSource") {
+          receipts.add(receipt);
+          return;
+        }
+        if (!receipts.has(receipt)) return null;
+        const { state, repositories } = projection(edited);
+        return { state, repositories };
+      }
+      expect(method).toBe("readHistoryProjection");
+      expect(input).toEqual({ contextId });
+      return projection(edited);
     });
     const project = (owner: typeof TEST_PROVIDER) =>
       vcs.materializeParticipantContext({ dispatch: { dispatch }, owner, contextId });
@@ -360,22 +373,24 @@ describe("WorkspaceVcs semantic host orchestration", () => {
     });
 
     const canonical = { ...TEST_PROVIDER, objectKey: "canonical" };
-    await vcs.attachParticipantHistory({
+    const attachment = {
       canonical,
-      dispatch: { dispatch: vi.fn(async (_owner, method) => {
+      dispatch: { dispatch: vi.fn(async (_owner: typeof TEST_PROVIDER, method: string) => {
         if (method === "readHistoryMain") return { head: "initial", eventId: "genesis" };
         if (method === "readHistoryMainStateVisibility") return false;
         if (method === "readHistoryReplayReceipt") return null;
         if (method === "listHistoryAppliedPublications") return [];
         throw new Error(`Unexpected canonical dispatch ${method}`);
       }) },
-    });
-    const scope = vi.spyOn(vcs, "openParticipantScope").mockImplementation(async (input) => ({
+    };
+    await vcs.attachParticipantHistory(attachment);
+    const resolveScope: WorkspaceVcs["openParticipantScope"] = async (input) => ({
       dispatch: { dispatch }, canonical, contextId, ownerContextId: input.ownerContextId,
       caller: input.caller,
       owner: input.caller === actorA ? owners[0]! : owners[1]!,
       workingHead: input.caller === actorA && aliceEdited ? "edited" : "initial",
-    }));
+    });
+    const scope = vi.spyOn(vcs, "openParticipantScope").mockImplementation(resolveScope);
     const [a] = await vcs.contextRepoTargets(contextId, actorA);
     const [b] = await vcs.contextRepoTargets(contextId, actorB);
     expect(a!.stateHash).not.toBe(b!.stateHash);
@@ -400,8 +415,13 @@ describe("WorkspaceVcs semantic host orchestration", () => {
       .resolves.toEqual(privateSource);
     await expect(vcs.resolveParticipantBuildSource(privateSource.stateHash, actorB, contextId))
       .rejects.toMatchObject({ code: "EACCES" });
+    const reopened = new WorkspaceVcs(deps);
+    await reopened.attachParticipantHistory(attachment);
+    vi.spyOn(reopened, "openParticipantScope").mockImplementation(resolveScope);
+    await expect(reopened.resolveParticipantBuildSource(privateSource.stateHash, actorA, contextId))
+      .resolves.toEqual(privateSource);
     aliceEdited = false;
-    await expect(vcs.resolveParticipantBuildSource(privateSource.stateHash, actorA, contextId))
+    await expect(reopened.resolveParticipantBuildSource(privateSource.stateHash, actorA, contextId))
       .rejects.toMatchObject({ code: "EACCES" });
   });
 

@@ -81,7 +81,6 @@ import type {
   WorkspaceStateFile,
   WorkspaceStateSource,
 } from "../buildV2/stateTrigger.js";
-import { LruMap } from "../buildV2/lruMap.js";
 import type { BuildSourceProvider } from "../buildV2/buildSource.js";
 import { type GraphNode, type PackageGraph } from "../buildV2/packageGraph.js";
 import { discoverPackageGraphAtTree } from "../buildV2/packageGraphTree.js";
@@ -123,12 +122,14 @@ import {
   putPreparedWorkspaceContent,
   readWorkspaceCanonicalMain,
   readWorkspaceHistoryTemplateInstallation,
+  readWorkspaceParticipantContentSource,
   readWorkspaceParticipantFileDescriptors,
   readWorkspaceParticipantProjection,
   readWorkspaceParticipantStatus,
   readWorkspacePublicationApproval,
   readWorkspacePublishedRevision,
   requireWorkspaceParticipantOwner,
+  rememberWorkspaceParticipantContentSource,
   reviewWorkspaceParticipantMerge,
   retireWorkspaceParticipantContext,
   transferWorkspaceParticipant,
@@ -403,7 +404,6 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   private readonly contextHeads = new Map<string, VcsStateNodeRef | null>();
   private readonly contextInitializations = new Map<string, Promise<VcsStateNodeRef>>();
   private readonly semanticStateByContent = new Map<string, VcsStateNodeRef>();
-  private readonly participantBuildSources = new LruMap<string, VcsStateNodeRef>(256);
   /** Exact materialization receipt verified during this host generation. An
    * absent entry (including after restart) requires one disk integrity scan. */
   private readonly verifiedProjectionStates = new Map<string, string>();
@@ -2374,11 +2374,15 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     };
   }
 
-  private async participantContextContent(contextId: string, caller: VerifiedCaller, signal?: AbortSignal) {
+  private async requireParticipantContentScope(contextId: string, caller: VerifiedCaller, signal?: AbortSignal) {
     const scope = await this.openParticipantScope({
       caller, contextId, ownerContextId: contextId, ...(signal ? { signal } : {}),
     });
     if (!scope) throw new Error("Participant workspace history is unavailable");
+    return scope;
+  }
+
+  private async participantContextContent(scope: WorkspaceHistoryParticipant & { contextId: string; workingHead: string }) {
     const key = (head: string) => canonicalJson(["participant", head]);
     const cached = await this.cachedContextContent(key(scope.workingHead));
     if (cached) return cached;
@@ -2395,7 +2399,8 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   ): Promise<Array<{ repoPath: string; stateHash: string }>> {
     if (this.participantHistoryAttached) {
       if (!caller) throw new Error("A verified caller is required to mirror a participant's working copy");
-      const snapshot = await this.participantContextContent(contextId, caller, signal);
+      const scope = await this.requireParticipantContentScope(contextId, caller, signal);
+      const snapshot = await this.participantContextContent(scope);
       return snapshot.repositories.map((repository) => ({ ...repository }));
     }
     const snapshot = await this.exactContextContent(contextId);
@@ -2658,21 +2663,24 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   /** Keep exact content and semantic identity together even when two revisions have identical bytes. */
   async resolveCallerContextState(contextId: string, caller: VerifiedCaller, signal?: AbortSignal) {
-    const { semanticState, repositories } = this.participantHistoryAttached
-      ? await this.participantContextContent(contextId, caller, signal)
-      : await this.exactContextContent(contextId);
-    const { stateHash } = await this.repositories.contentView(repositories);
     if (this.participantHistoryAttached) {
-      const key = this.participantBuildSourceKey(caller, contextId, stateHash);
-      if (key) this.participantBuildSources.set(key, semanticState);
+      const scope = await this.requireParticipantContentScope(contextId, caller, signal);
+      return this.recordParticipantContextSource(scope);
     }
+    const { semanticState, repositories } = await this.exactContextContent(contextId);
+    const { stateHash } = await this.repositories.contentView(repositories);
     return { semanticState, stateHash };
   }
 
-  private participantBuildSourceKey(caller: VerifiedCaller, contextId: string | null, stateHash: string) {
-    if (!contextId || !(caller.nativeInvocation || caller.taskAuthority || caller.subject?.userId))
-      return null;
-    return canonicalJson([workspaceParticipantIdentity(caller, contextId), contextId, stateHash]);
+  private async recordParticipantContextSource(scope: WorkspaceHistoryParticipant & {
+    contextId: string; workingHead: string;
+  }, requestedHash?: string) {
+    const { semanticState, repositories } = await this.participantContextContent(scope);
+    const { stateHash } = await this.repositories.contentView(repositories);
+    if (requestedHash === undefined || requestedHash === stateHash) {
+      await rememberWorkspaceParticipantContentSource({ ...scope, stateHash, state: semanticState });
+    }
+    return { semanticState, stateHash };
   }
 
   async resolveParticipantBuildSource(
@@ -2683,17 +2691,27 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
   ) {
     if (!this.participantHistoryAttached) return null;
     if (/^state:[0-9a-f]{64}$/u.test(stateHash)) {
-      const key = this.participantBuildSourceKey(caller, contextId, stateHash);
-      const exact = key ? this.participantBuildSources.get(key) : undefined;
-      if (exact && await this.participantBuildStateReachable(exact, caller, contextId, signal))
-        return { stateHash, semanticState: exact };
+      const scope = contextId && (caller.nativeInvocation || caller.taskAuthority || caller.subject?.userId)
+        ? await this.requireParticipantContentScope(contextId, caller, signal)
+        : null;
+      if (scope) {
+        const retained = await readWorkspaceParticipantContentSource({ ...scope, stateHash });
+        if (retained) {
+          const snapshot = await this.realizeContextContent({
+            targetState: retained.state, repositories: retained.repositories, blobs: [],
+          });
+          const content = await this.repositories.contentView(snapshot.repositories);
+          if (content.stateHash !== stateHash) throw new Error("Workspace build source proof has different content");
+          return { stateHash, semanticState: retained.state };
+        }
+      }
 
       await this.ensureFresh();
       const remembered = this.executionStateForContent(stateHash);
-      if (remembered && await this.participantBuildStateReachable(remembered, caller, key ? contextId : null, signal))
+      if (remembered && await this.participantBuildStateReachable(remembered, caller, scope ? contextId : null, signal))
         return { stateHash, semanticState: remembered };
-      if (key && contextId) {
-        const current = await this.resolveCallerContextState(contextId, caller, signal);
+      if (scope) {
+        const current = await this.recordParticipantContextSource(scope, stateHash);
         if (current.stateHash === stateHash) return current;
       }
     }

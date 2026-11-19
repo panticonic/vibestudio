@@ -122,6 +122,7 @@ const workspaceProjection = z
     repositories: z.array(WorkspaceMaterializationRepositorySchema),
   })
   .strict();
+const workspaceContentProjection = workspaceProjection.omit({ head: true });
 const changedLocations = z.object({
   target: vcsStateNodeRefSchema,
   source: vcsStateNodeRefSchema,
@@ -137,6 +138,27 @@ export async function readWorkspaceParticipantProjection(input: {
     await input.dispatch.dispatch(input.owner, "readHistoryProjection", {
       contextId: input.contextId,
     })
+  );
+}
+
+export async function rememberWorkspaceParticipantContentSource(input: WorkspaceHistoryParticipant & {
+  contextId: string;
+  stateHash: string;
+  state: VcsStateNodeRef;
+}): Promise<void> {
+  requireWorkspaceParticipantOwner(input);
+  const { dispatch, owner, contextId, stateHash, state } = input;
+  await dispatch.dispatch(owner, "rememberHistoryContentSource", { contextId, stateHash, state });
+}
+
+export async function readWorkspaceParticipantContentSource(input: WorkspaceHistoryParticipant & {
+  contextId: string;
+  stateHash: string;
+}) {
+  requireWorkspaceParticipantOwner(input);
+  const { dispatch, owner, contextId, stateHash } = input;
+  return workspaceContentProjection.nullable().parse(
+    await dispatch.dispatch(owner, "readHistoryContentSource", { contextId, stateHash })
   );
 }
 
