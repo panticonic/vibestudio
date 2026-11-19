@@ -90,6 +90,10 @@ PDF cases use the installed extraction extension and preserve the exact page ord
 geometry. Interruption cases deliver a controlled read error or mismatched digest after a real
 extraction. The report keeps only the verified prefix, names the unread pages, and stops requesting
 batches at the interruption.
+Personal memory comparisons call the existing verified recall skill once for each assigned
+revision. They retain both original quotations and independently observed endpoint outcomes,
+including when one revision has no recall lead or no source. The exporter requires both nested
+recall calls and the comparison judgment.
 Runtime program reviews compile caller-owned scratch source through the installed Natlang loader.
 When a task includes execution, a separate EvalDO run loads and calls the exact typed program.
 The review distinguishes checked output, unchecked output, failure and a receipt from an older

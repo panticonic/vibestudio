@@ -446,11 +446,17 @@ export async function loadLiveTeacherCases(checkouts) {
       expectedRoute: expected.route,
     });
   }
-  for (const { id, expected } of managedMemoryWorlds) {
+  for (const { id, expected, comparison } of managedMemoryWorlds) {
     cases.set(`verified-memory-live-${id}`, {
       ...verifiedMemoryWorkflow,
       caseId: id,
-      expectedStatus: expected.status,
+      expectedStatus: comparison?.status ?? expected.status,
+      ...(comparison && {
+        root: "compareDecisionRevisions",
+        evidence: verifiedMemoryComparisonEvidence,
+        beforeStatus: comparison.expected.status,
+        afterStatus: expected.status,
+      }),
     });
   }
   for (const { id, request, expected } of managedAuthoringWorlds) {
@@ -906,6 +912,57 @@ function verifiedMemoryEvidence(execution, exercise, _scenario, workflow) {
   );
   return {
     world: { context_id: fixture.contextId, selected_event: verification.eventId },
+    checks: verification.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function verifiedMemoryComparisonEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedMemory;
+  const verification = fixture?.verification;
+  const endpoints = verification?.endpoints;
+  const rootId = exercise.rootCallIds[0];
+  const children = (parent) =>
+    exercise.calls.filter(
+      ({ record }) => record?.parent_call_id === parent && record.outcome === "done"
+    );
+  const comparison = children(rootId).find(
+    ({ record }) => record.definition?.name === "compareDecisionRevisions"
+  );
+  const nested = comparison ? children(comparison.callId) : [];
+  const anchored = (endpoint, eventId, status) =>
+    endpoint?.status === status &&
+    endpoint.leadId === (status === "no-lead" ? null : eventId) &&
+    (status === "verified" ? endpoint.citation?.eventId === eventId : endpoint.citation === null);
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.caseId === workflow.caseId &&
+      verification.passed === true &&
+      verification.status === workflow.expectedStatus &&
+      exercise.report?.status === workflow.expectedStatus &&
+      endpoints &&
+      typeof endpoints.beforeEventId === "string" &&
+      typeof endpoints.afterEventId === "string" &&
+      endpoints.beforeEventId !== endpoints.afterEventId &&
+      endpoints.afterEventId === verification.eventId &&
+      anchored(endpoints.before, endpoints.beforeEventId, workflow.beforeStatus) &&
+      anchored(endpoints.after, endpoints.afterEventId, workflow.afterStatus) &&
+      isDeepStrictEqual(exercise.report.before, endpoints.before) &&
+      isDeepStrictEqual(exercise.report.after, endpoints.after) &&
+      nested.filter(({ record }) => record.definition?.name === "recallDecision").length === 2 &&
+      nested.some(({ record }) => record.definition?.name === "classifyComparison") &&
+      ["protectedMainUnchanged", "actualRecall", "observedWorld", "joinedSource"].every(
+        (name) => verification.checks?.[name] === true
+      ),
+    "The comparison must retain both nested recalls and their exact committed source revisions"
+  );
+  return {
+    world: {
+      context_id: fixture.contextId,
+      before_event: endpoints.beforeEventId,
+      after_event: endpoints.afterEventId,
+    },
     checks: verification.checks,
     evidence: { workspace: { fixture } },
   };

@@ -155,7 +155,14 @@ test("authored template worlds flow into the collector without losing original s
       [
         "verified-memory-worlds",
         "managedMemoryWorlds",
-        [{ id: "retired", expected: { status: "missing-source" } }],
+        [
+          { id: "retired", expected: { status: "missing-source" } },
+          {
+            id: "compare-retired",
+            expected: { status: "missing-source" },
+            comparison: { status: "unverified", expected: { status: "verified" } },
+          },
+        ],
       ],
       [
         "authoring-worlds",
@@ -342,6 +349,74 @@ test("authored template worlds flow into the collector without losing original s
   assert.equal(memory.root, "recallDecision");
   assert.equal(memory.workspace, "personal");
   assert.equal(memory.expectedStatus, "missing-source");
+  const comparison = cases.get("verified-memory-live-compare-retired");
+  assert.equal(comparison.root, "compareDecisionRevisions");
+  const before = {
+    status: "verified",
+    leadId: "earlier",
+    citation: {
+      eventId: "earlier",
+      path: "decision.md",
+      contentHash: "digest",
+      line: 1,
+      quote: "Value: A",
+    },
+  };
+  const after = { status: "missing-source", leadId: "later", citation: null };
+  const comparisonExecution = {
+    provenance: { contextId: "owned" },
+    diagnostics: {
+      managedMemory: {
+        contextId: "owned",
+        verification: {
+          caseId: comparison.caseId,
+          status: "unverified",
+          eventId: "later",
+          passed: true,
+          endpoints: { beforeEventId: "earlier", afterEventId: "later", before, after },
+          checks: {
+            protectedMainUnchanged: true,
+            actualRecall: true,
+            observedWorld: true,
+            joinedSource: true,
+          },
+        },
+      },
+    },
+  };
+  const completed = (callId, parent, name) => ({
+    callId,
+    record: { parent_call_id: parent, definition: { name }, outcome: "done" },
+  });
+  const comparisonExercise = {
+    rootCallIds: ["root"],
+    calls: [
+      completed("compare", "root", "compareDecisionRevisions"),
+      completed("before", "compare", "recallDecision"),
+      completed("after", "compare", "recallDecision"),
+      completed("judge", "compare", "classifyComparison"),
+    ],
+    report: { status: "unverified", before, after },
+  };
+  assert.ok(comparison.evidence(comparisonExecution, comparisonExercise, "", comparison));
+  assert.throws(
+    () =>
+      comparison.evidence(
+        comparisonExecution,
+        {
+          ...comparisonExercise,
+          report: { status: "unverified", before: after, after: before },
+        },
+        "",
+        comparison
+      ),
+    /both nested recalls/
+  );
+  comparisonExercise.calls.splice(2, 1);
+  assert.throws(
+    () => comparison.evidence(comparisonExecution, comparisonExercise, "", comparison),
+    /both nested recalls/
+  );
   assert.equal(cases.get("news-live-sample").workspace, "news");
   assert.equal(cases.get("google-setup-live-sample").workspace, "google-workspace");
   assert.equal(cases.get("local-model-compare-live-sample").root, "prepareLocalModel");
