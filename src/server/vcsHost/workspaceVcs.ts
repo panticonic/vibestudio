@@ -910,6 +910,13 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
     const source = this.participantHistorySource;
     if (!source) throw new Error("Workspace history is not ready for synchronization");
     const blobsDir = this.deps.blobsDir;
+    if (method === "stageIncomingHistory") {
+      const receipt = await readWorkspacePublicationApproval({
+        ...source,
+        publicationId: `chronolog-publication:${publication.publicationId}`,
+      });
+      if (receipt?.applied) await this.recoverParticipantPublications(source);
+    }
     if (method === "missingHistoryContent") {
       const received = await source.dispatch.dispatch(source.canonical, "readIncomingHistory", publication);
       const hashes = incomingHistory.parse(received).contentHashes;
