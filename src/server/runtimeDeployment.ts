@@ -171,6 +171,11 @@ export function buildRuntimeDeployment(input: RuntimeDeploymentInput): RuntimeDe
                 alpn: "chronolog/1",
                 accept: { class: "ChronologWorkspaceDO", name: "chronolog" },
               },
+              {
+                binding: "CHRONOLOG_HISTORY_P2P",
+                alpn: "vibestudio/gad/1",
+                accept: { class: "ChronologWorkspaceDO", name: "chronolog" },
+              },
             ],
           }
         : {}),

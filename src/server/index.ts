@@ -2585,12 +2585,34 @@ async function main() {
   if (getInternalDOPrograms().publication().chronolog === true) {
     const { chronologNodeData, createChronologService } =
       await import("./services/chronologService.js");
+    const data = chronologNodeData((request, signal) =>
+      assertPresent(runtimeManagerForGateway).chronologRequest(request, signal)
+    );
     container.registerRpc(
       createChronologService({
         hub: workspaceChildHub,
-        data: chronologNodeData((request, signal) =>
-          assertPresent(runtimeManagerForGateway).chronologRequest(request, signal)
-        ),
+        data,
+        history: {
+          canShare: (userId) => identityDb.getMembership(userId, entryWorkspaceId)?.role === "admin",
+          current: async () => ({ workspaceId: entryWorkspaceId, ...await workspaceVcs.currentPublishedHistory() }),
+          share: data.shareHistory,
+          publish: async (principal, input, signal) => {
+            const { node } = await data.identity(principal.publicKey, signal);
+            const proof = await data.signHistory(principal, input.group, {
+              sourceNodeId: node.endpoint.nodeId,
+              destinationNodeId: input.destination.nodeId,
+              workspaceId: input.workspaceId,
+              previousHead: input.previousHead,
+              proposedHead: input.proposedHead,
+            }, signal);
+            const head = await workspaceVcs.copyPublishedHistory({
+              eventId: input.eventId,
+              head: input.proposedHead,
+              request: (transfer) => data.transferHistory(input.destination, proof, transfer, signal),
+            });
+            return { head };
+          },
+        },
       })
     );
   }
@@ -4663,6 +4685,7 @@ async function main() {
           });
         };
         runtimeResult = createRuntimeService({
+          forwardHistoryPacket: (caller, input) => workspaceVcs.forwardHistoryPacket(caller, input),
           taskAuthorities,
           testPolicyForContext: (contextId) =>
             agentExecutionSessions.testPolicyForContext(contextId),
@@ -8029,6 +8052,33 @@ async function main() {
   const startedAt = Date.now();
   const gateway = new Gateway({
     getRpcHandler: () => rpcServerForGateway,
+    handleChronologHistory: async (req, res) => {
+      const { handleChronologHistoryIngress } = await import("./chronolog/historyIngress.js");
+      await handleChronologHistoryIngress(
+        req,
+        res,
+        runtimeManagerForGateway?.getChronologIngressToken(),
+        (method, publication) =>
+          workspaceVcs.dispatchIncomingHistory(method, publication, async (scope) => {
+            const result = await assertPresent(runtimeManagerForGateway).chronologRequest({
+              action: "verify-publication",
+              group: scope.group,
+              sourceNodeId: scope.sourceNodeId,
+              previousHead: scope.previousHead,
+              proposedHead: scope.proposedHead,
+              proof: scope.proof,
+            });
+            if (!result.ok) {
+              await result.arrayBuffer();
+              throw new Error("The shared workspace publication no longer has Chronolog authority");
+            }
+            const confirmed: unknown = await result.json();
+            if (!confirmed || typeof confirmed !== "object" || !("publisher" in confirmed) ||
+                confirmed.publisher !== scope.publisher)
+              throw new Error("The shared workspace publisher changed");
+          })
+      );
+    },
     getPanelHttpHandler: () => {
       if (!container.has("panelHttpServer")) return null;
       return container.get<{ server: import("./panelHttpServer.js").PanelHttpServer }>(

@@ -5,6 +5,10 @@ import {
   CHRONOLOG_INVITE_RESOLVER,
   CHRONOLOG_JOIN_RESOLVER,
   CHRONOLOG_PRINCIPALS,
+  CHRONOLOG_PUBLISH_HISTORY_RESOLVER,
+  CHRONOLOG_SHARE_HISTORY_RESOLVER,
+  ChronologHistoryProofSchema,
+  ChronologHistoryTransitionSchema,
   CHRONOLOG_TRANSACTION_RESOLVER,
   chronologMethods,
 } from "@vibestudio/service-schemas/chronolog";
@@ -64,6 +68,24 @@ export interface ChronologWorkspaceData {
   subscribe(publicKey: string, input: Input<"subscribe">, signal?: AbortSignal): Promise<Response>;
 }
 
+interface ChronologHistoryData {
+  canShare(userId: string): boolean;
+  current(): Promise<Result<"history.current">>;
+  share(publicKey: string, group: string, signal?: AbortSignal): Promise<Result<"history.share">>;
+  publish(
+    principal: SigningPrincipal,
+    input: Input<"history.publish">,
+    signal?: AbortSignal
+  ): Promise<Result<"history.publish">>;
+}
+
+type HistoryTransition = z.infer<typeof ChronologHistoryTransitionSchema>;
+type HistoryProof = z.infer<typeof ChronologHistoryProofSchema>;
+type HistoryTransfer =
+  | { kind: "grant" | "missing" | "publish" }
+  | { kind: "push"; bytes: Uint8Array }
+  | { kind: "blob"; digest: string; bytes: Uint8Array };
+
 function account(ctx: ServiceContext): string {
   const userId = verifiedInitiatingUserId(ctx);
   if (!userId)
@@ -71,7 +93,13 @@ function account(ctx: ServiceContext): string {
   return userId;
 }
 
-type WriteMethod = "transact" | "groups.create" | "groups.invite" | "groups.join";
+type WriteMethod =
+  | "transact"
+  | "groups.create"
+  | "groups.invite"
+  | "groups.join"
+  | "history.share"
+  | "history.publish";
 interface PreparedWrite<M extends WriteMethod> {
   readonly userId: string;
   readonly input: Input<M>;
@@ -146,13 +174,30 @@ function approvedWrite<M extends WriteMethod>(
 export function createChronologService({
   hub,
   data,
+  history,
 }: {
   hub: Pick<WorkspaceChildHubPort, "chronologPrincipal" | "chronologPublicPrincipal">;
   data: ChronologWorkspaceData;
+  history?: ChronologHistoryData;
 }): ServiceDefinition {
   const publicPrincipal = async (ctx: ServiceContext) =>
     (await hub.chronologPublicPrincipal({ userId: account(ctx) }, { signal: ctx.signal }))
       .publicKey;
+
+  const requireHistory = () => {
+    if (!history)
+      throw new ServiceError("chronolog", "", "Workspace history sharing is unavailable", "EIO");
+    return history;
+  };
+  const requireShareAdmin = (userId: string) => {
+    if (!requireHistory().canShare(userId))
+      throw new ServiceError(
+        "chronolog",
+        "history.share",
+        "Sharing history requires a workspace administrator",
+        "EACCES"
+      );
+  };
 
   return {
     name: "chronolog",
@@ -160,6 +205,26 @@ export function createChronologService({
     authority: { principals: [...CHRONOLOG_PRINCIPALS] },
     methods: chronologMethods,
     authorityPreparation: {
+      [CHRONOLOG_SHARE_HISTORY_RESOLVER]: prepareWrite("history.share", async (input) => ({
+        resourceKey: input.group,
+        resource: groupResource(input.group),
+        title: "Share this workspace's published history",
+        summary: "Allow this group's current publishers to advance this workspace's shared history",
+      })),
+      [CHRONOLOG_PUBLISH_HISTORY_RESOLVER]: prepareWrite("history.publish", async (input) => ({
+        resourceKey: input.group,
+        resource: groupResource(input.group),
+        title: "Send a published workspace update",
+        summary:
+          "Sign and transfer this exact published history revision to the selected workspace",
+        facts: [
+          { label: "Destination workspace", value: input.workspaceId },
+          { label: "Destination node", value: input.destination.nodeId },
+          { label: "Previous head", value: input.previousHead },
+          { label: "Published head", value: input.proposedHead },
+          { label: "Published event", value: input.eventId },
+        ],
+      })),
       [CHRONOLOG_TRANSACTION_RESOLVER]: prepareWrite("transact", async (input, signal) => ({
         resourceKey: input.group,
         resource: groupResource(input.group),
@@ -221,6 +286,33 @@ export function createChronologService({
         const { input } = approvedWrite<"groups.join">(ctx, CHRONOLOG_JOIN_RESOLVER);
         return data.join(await publicPrincipal(ctx), input, ctx.signal);
       },
+      "history.current": async (ctx, [{ group }]) => {
+        const groups = await data.list(await publicPrincipal(ctx), ctx.signal);
+        if (!groups.some((membership) => membership.group === group))
+          throw new ServiceError(
+            "chronolog",
+            "history.current",
+            "The account is not a group member",
+            "EACCES"
+          );
+        return requireHistory().current();
+      },
+      "history.share": async (ctx) => {
+        const { userId, input } = approvedWrite<"history.share">(
+          ctx,
+          CHRONOLOG_SHARE_HISTORY_RESOLVER
+        );
+        requireShareAdmin(userId);
+        return requireHistory().share(await publicPrincipal(ctx), input.group, ctx.signal);
+      },
+      "history.publish": async (ctx) => {
+        const { userId, input } = approvedWrite<"history.publish">(
+          ctx,
+          CHRONOLOG_PUBLISH_HISTORY_RESOLVER
+        );
+        const principal = await hub.chronologPrincipal({ userId }, { signal: ctx.signal });
+        return requireHistory().publish(principal, input, ctx.signal);
+      },
       transact: async (ctx) => {
         const { userId, input } = approvedWrite<"transact">(ctx, CHRONOLOG_TRANSACTION_RESOLVER);
         const signer = await hub.chronologPrincipal({ userId }, { signal: ctx.signal });
@@ -238,7 +330,21 @@ export function createChronologService({
 /** Send only private runtime calls over the node's host-authenticated route. */
 export function chronologNodeData(
   request: (input: unknown, signal?: AbortSignal) => Promise<Response>
-): ChronologWorkspaceData {
+): ChronologWorkspaceData & {
+  shareHistory: ChronologHistoryData["share"];
+  signHistory(
+    principal: SigningPrincipal,
+    group: string,
+    transition: HistoryTransition,
+    signal?: AbortSignal
+  ): Promise<HistoryProof>;
+  transferHistory(
+    destination: Input<"history.publish">["destination"],
+    proof: HistoryProof,
+    input: HistoryTransfer,
+    signal?: AbortSignal
+  ): Promise<unknown>;
+} {
   const call = async (
     input: { action: string; [field: string]: unknown },
     signal?: AbortSignal
@@ -264,6 +370,20 @@ export function chronologNodeData(
     signal?: AbortSignal
   ) => schema.parse(decodeRpcJson(await (await call(body, signal)).text()));
   return {
+    shareHistory: (publicKey, group, signal) =>
+      read(
+        { action: "bind-history", publicKey, group },
+        chronologMethods["history.share"].returns,
+        signal
+      ),
+    signHistory: (principal, group, transition, signal) =>
+      read(
+        { action: "sign-publication", principal, group, transition },
+        ChronologHistoryProofSchema,
+        signal
+      ),
+    transferHistory: (destination, proof, input, signal) =>
+      read({ action: "history-transfer", destination, proof, ...input }, z.unknown(), signal),
     reviewProgram: async (program, signal) => {
       const input = { action: "review", program };
       return read(input, z.array(z.string()), signal);

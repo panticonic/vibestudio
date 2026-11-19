@@ -1,6 +1,6 @@
 import { deserializeRpcFailure } from "@vibestudio/rpc";
 import { intrinsicContentDescriptor } from "@vibestudio/content-addressing";
-import { blobUploadPrincipal, hasBlobUploads } from "../storage/blobUploads.js";
+import { blobUploadPrincipal, hasBlobUploads, markPrivateWorkspaceBlobs } from "../storage/blobUploads.js";
 /**
  * Host boundary for the semantic workspace history.
  *
@@ -22,6 +22,8 @@ import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { TextDecoder } from "node:util";
 
+import { canonicalEntityId } from "@vibestudio/shared/runtime/entitySpec";
+import type { HistoryIngressInput, HistoryIngressMethod } from "../chronolog/historyIngress.js";
 import type {
   VcsCommitInput,
   VcsCommitResult,
@@ -63,6 +65,7 @@ import {
   ContextMaterializationCommandSchema,
   type ContextMaterializationCommand,
   type WorkspaceMaterializationBlob,
+  WorkspaceMaterializationRepositorySchema,
   type WorkspaceMaterializationRepository,
 } from "@vibestudio/shared/vcs/workspaceProjection";
 import { hostRefBasisDigest } from "@vibestudio/shared/vcs/publication";
@@ -73,9 +76,11 @@ import {
   getBytes,
   hasTreeObject,
   materializeTree,
+  putBytes,
   readFileAtTree,
   readTreeDirectory,
   resolveTreePath,
+  statBlob,
   sweepUnreachableBlobs,
   type TreeReachabilityOutcome,
   type TreeDiff,
@@ -393,6 +398,26 @@ async function ownedSemanticCall<T>(operation: () => Promise<T>, signal: AbortSi
   }
 }
 
+const outgoingHistoryGrant = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("applied"), head: z.string() }).strict(),
+  z.object({ kind: z.literal("staged"), head: z.string() }).strict(),
+  z.object({
+    kind: z.literal("grant"),
+    id: z.string(),
+    ref: z.string(),
+    token: z.string(),
+    branch: z.string().regex(/^incoming\/[a-f0-9]{64}$/u),
+  }).strict(),
+]);
+
+const incomingHistory = z.object({
+  head: z.string().regex(/^[a-f0-9]{40}$/u),
+  state: z.object({ kind: z.literal("event"), eventId: z.string().min(1) }).strict(),
+  previousEventId: z.string().min(1),
+  repositories: z.array(WorkspaceMaterializationRepositorySchema),
+  contentHashes: z.array(z.string().regex(/^[a-f0-9]{64}$/u)),
+});
+
 export type CallerPublicationGateContext = {
   kind: "caller";
   caller: VerifiedCaller;
@@ -401,7 +426,10 @@ export type CallerPublicationGateContext = {
   epochTransition?: true;
 };
 
-type PublicationGateContext = CallerPublicationGateContext | { kind: "workspace-initialization" };
+type PublicationGateContext =
+  | CallerPublicationGateContext
+  | { kind: "workspace-initialization" }
+  | { kind: "chronolog" };
 
 type SemanticEffect = Pick<
   WorkspaceSourceSemanticEffect,
@@ -423,6 +451,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private gadCaller: WorkspaceSemanticPort | null = null;
   private sourceProviderCaller: WorkspaceSourceProviderV1 | null = null;
+  private readonly outgoingHistoryPackets = new Map<string, {
+    senderId: string;
+    send(bytes: Uint8Array): Promise<Uint8Array>;
+  }>();
+
   private participantHistorySource: (WorkspaceHistorySource & {
     replayedWorkingHeads: ReadonlyMap<string, { participantId: string; head: string }>;
     infrastructureContextId?: string;
@@ -795,6 +828,194 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
         ...(source.infrastructureContextId ? { infrastructureContextId: source.infrastructureContextId } : {}),
         ...(source.destroyRetiredStorage ? { destroyRetiredStorage: source.destroyRetiredStorage } : {}),
       };
+    });
+  }
+
+  /** Resolve a host-approved transfer to its exact native sender. */
+  async forwardHistoryPacket(
+    caller: VerifiedCaller,
+    input: { transferId: string; bytes: Uint8Array }
+  ): Promise<Uint8Array> {
+    const transfer = this.outgoingHistoryPackets.get(input.transferId);
+    if (!transfer || caller.runtime.kind !== "do" || caller.runtime.id !== transfer.senderId) {
+      throw new Error("Workspace history transport requires its active canonical sender");
+    }
+    return transfer.send(input.bytes);
+  }
+
+  currentPublishedHistory() {
+    const source = this.participantHistorySource;
+    if (!source) throw new Error("Workspace history is not ready for synchronization");
+    return readWorkspaceCanonicalMain(source);
+  }
+
+  async copyPublishedHistory(input: {
+    eventId: string;
+    head: string;
+    request(request:
+      | { kind: "grant" | "missing" | "publish" }
+      | { kind: "push"; bytes: Uint8Array }
+      | { kind: "blob"; digest: string; bytes: Uint8Array }
+    ): Promise<unknown>;
+  }): Promise<string> {
+    const source = this.participantHistorySource;
+    if (!source) throw new Error("Workspace history is not ready for synchronization");
+    const { canonical, dispatch } = source;
+    const published = await readWorkspacePublishedRevision({ dispatch, canonical, eventId: input.eventId });
+    if (published.head !== input.head) throw new Error("The approved shared history revision changed");
+    const permit = outgoingHistoryGrant.parse(await input.request({ kind: "grant" }));
+    if (permit.kind !== "grant" && permit.head !== input.head)
+      throw new Error("Peer reported a different shared history revision");
+    if (permit.kind === "applied") return permit.head;
+    if (permit.kind === "grant") {
+      const transferId = crypto.randomUUID();
+      this.outgoingHistoryPackets.set(transferId, {
+        senderId: canonicalEntityId({
+          kind: "do", source: canonical.source, className: canonical.className, key: canonical.objectKey,
+        }),
+        send: async (bytes) => z.instanceof(Uint8Array).parse(await input.request({ kind: "push", bytes })),
+      });
+      try {
+        const result = await dispatch.dispatch(canonical, "pushOutgoingHistory", {
+          transferId, eventId: input.eventId, head: input.head,
+          origin: { ref: permit.ref, token: permit.token },
+          branch: permit.branch,
+        });
+        z.object({ hash: z.literal(input.head) }).parse(result);
+      } finally {
+        this.outgoingHistoryPackets.delete(transferId);
+      }
+    }
+    const missing = z.array(z.string().regex(/^[a-f0-9]{64}$/u)).parse(
+      await input.request({ kind: "missing" })
+    );
+    for (const digest of missing) {
+      const allowed = await dispatch.dispatch(canonical, "hasOutgoingHistoryContent", {
+        eventId: input.eventId, head: input.head, digest,
+      });
+      if (allowed !== true) throw new Error("The peer requested bytes outside the published history");
+      const bytes = await getBytes(this.deps.blobsDir, digest);
+      if (!bytes) throw new Error("Published history is missing a referenced file");
+      await input.request({ kind: "blob", digest, bytes });
+    }
+    return z.literal(input.head).parse(await input.request({ kind: "publish" }));
+  }
+
+  async dispatchIncomingHistory(
+    method: HistoryIngressMethod,
+    publication: HistoryIngressInput,
+    verifyPublication: (publication: HistoryIngressInput) => Promise<void>
+  ): Promise<unknown> {
+    const source = this.participantHistorySource;
+    if (!source) throw new Error("Workspace history is not ready for synchronization");
+    const blobsDir = this.deps.blobsDir;
+    if (method === "missingHistoryContent") {
+      const received = await source.dispatch.dispatch(source.canonical, "readIncomingHistory", publication);
+      const hashes = incomingHistory.parse(received).contentHashes;
+      const missing: string[] = [];
+      for (const hash of hashes) {
+        if (!(await statBlob(blobsDir, hash))) missing.push(hash);
+      }
+      return missing;
+    }
+    if (method === "checkHistoryContent" || method === "storeHistoryContent") {
+      const { digest, bytes, ...transition } = publication;
+      if (!digest || await source.dispatch.dispatch(source.canonical, "hasIncomingHistoryContent", {
+        ...transition,
+        digest,
+      }) !== true) {
+        throw new Error("This content is outside the staged workspace history");
+      }
+      if (method === "checkHistoryContent") return;
+      if (!bytes || crypto.createHash("sha256").update(bytes).digest("hex") !== digest) {
+        throw new Error("Incoming workspace file bytes do not match their digest");
+      }
+      const buffer = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      await withBlobContentLock(blobsDir, async () => {
+        if (!(await statBlob(blobsDir, digest))) {
+          markPrivateWorkspaceBlobs(blobsDir, [digest]);
+          await putBytes(blobsDir, buffer);
+        }
+      });
+      return;
+    }
+    if (method === "publishIncomingHistory")
+      return this.publishIncomingHistory(source, publication, () => verifyPublication(publication));
+    return source.dispatch.dispatch(source.canonical, method, publication);
+  }
+
+  private async publishIncomingHistory(
+    source: WorkspaceHistorySource,
+    publication: HistoryIngressInput,
+    verifyPublication: () => Promise<void>
+  ) {
+    const { group, publisher, publicationId: transferId, sourceNodeId, previousHead, proposedHead } = publication;
+    const transition = { publicationId: transferId, sourceNodeId, previousHead, proposedHead };
+    if (!group || !publisher) throw new Error("Incoming history has no verified Chronolog signer");
+    const payload = { ...transition, group, publisher };
+    const publicationId = `chronolog-publication:${transition.publicationId}`;
+    const { canonical, dispatch } = source;
+    const approval = () => readWorkspacePublicationApproval({ dispatch, canonical, publicationId });
+    const existing = async () => {
+      const receipt = await approval();
+      if (receipt && (
+        receipt.approval.participantId !== `chronolog:${group}:${publisher}` ||
+        receipt.approval.publication.previousHead !== transition.previousHead ||
+        receipt.approval.publication.proposedHead !== transition.proposedHead
+      )) throw new Error("Incoming history receipt names a different publication");
+      return receipt;
+    };
+    return this.withProtectedMainMutation(async () => {
+      const receipt = await existing();
+      const prior = this.deps.refs.readAppliedPublication(publicationId);
+      if (prior) {
+        await this.replayPublicationObservers(prior);
+        if (receipt) await dispatch.dispatch(canonical, "acknowledgeHistoryPublication", { publicationId });
+        this.deps.refs.acknowledgePublication(publicationId);
+        return transition.proposedHead;
+      }
+      if (receipt?.applied) {
+        await this.recoverParticipantPublications(source);
+        if (!this.deps.refs.readAppliedPublication(publicationId))
+          throw new Error("Incoming history publication could not be recovered");
+        return transition.proposedHead;
+      }
+      const candidate = incomingHistory.parse(await dispatch.dispatch(canonical, "readIncomingHistory", transition));
+      if (candidate.head !== transition.proposedHead) throw new Error("Incoming history head differs from the proof");
+      for (const hash of candidate.contentHashes) {
+        if (!(await statBlob(this.deps.blobsDir, hash))) {
+          throw new Error("Incoming history is missing a referenced file");
+        }
+      }
+      const canonicalPublication: CanonicalRefPublication = {
+        approved: async () => {
+          const recorded = await existing();
+          return recorded !== null && (recorded.applied || recorded.expiresAt > Date.now());
+        },
+        authorize: async () => {
+          await dispatch.dispatch(canonical, "authorizeIncomingHistory", payload);
+        },
+        publish: async () => {
+          await verifyPublication();
+          try {
+            z.object({ head: z.literal(transition.proposedHead) }).parse(
+              await dispatch.dispatch(canonical, "publishIncomingHistory", payload)
+            );
+          } catch (error) {
+            if (!(await existing())?.applied) throw error;
+          }
+        },
+        acknowledge: async () => {
+          await dispatch.dispatch(canonical, "acknowledgeHistoryPublication", { publicationId });
+        },
+      };
+      await this.publishMain({ effectId: publicationId, payload: GadJsonRecordSchema.parse({
+        previousEventId: candidate.previousEventId,
+        publishedEventId: candidate.state.eventId,
+        repositories: candidate.repositories,
+      }) }, { kind: "chronolog" }, canonicalPublication);
+      this.deps.refs.acknowledgePublication(publicationId);
+      return transition.proposedHead;
     });
   }
 

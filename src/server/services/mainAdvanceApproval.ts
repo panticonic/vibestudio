@@ -86,6 +86,10 @@ export type RefAdvanceGateContext =
       getCandidateWorkspaceState: () => Promise<string>;
     }
   | {
+      kind: "chronolog";
+      getCandidateWorkspaceState: () => Promise<string>;
+    }
+  | {
       kind: "caller";
       caller: VerifiedCaller;
       /** The protected-ref wait is part of this request, never detached work. */
@@ -142,7 +146,9 @@ export function createMainRefAdvanceGate(deps: {
 }): RefGate {
   return async (batch: RefGateBatch): Promise<RefGateCompletion | undefined> => {
     const context = batch.gateContext as RefAdvanceGateContext | undefined;
-    if (!context || (context.kind !== "workspace-initialization" && context.kind !== "caller")) {
+    if (!context || (
+      context.kind !== "workspace-initialization" && context.kind !== "caller" && context.kind !== "chronolog"
+    )) {
       // Fail CLOSED: a protected-main update without an explicit advance
       // context is a programming error, never an implicit allow.
       throw new Error(`Protected main update carries no gate context`);
@@ -156,6 +162,17 @@ export function createMainRefAdvanceGate(deps: {
       // admitted by the creation review, held in the new workspace immediately
       // after it opens (§5.2, §7.1). This records that obligation durably.
       deps.onWorkspaceInitialized?.();
+      return;
+    }
+
+    if (context.kind === "chronolog") {
+      if (!deps.validateCandidateWorkspaceState) {
+        throw new Error("Shared workspace candidate validation is unavailable");
+      }
+      await deps.validateCandidateWorkspaceState(
+        await context.getCandidateWorkspaceState(),
+        batch.entries.map(({ repoPath }) => repoPath)
+      );
       return;
     }
 

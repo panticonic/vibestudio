@@ -833,6 +833,23 @@ export const runtimeMethods = defineServiceMethods({
     agentFacing: false,
     access: { sensitivity: "write" },
   },
+  forwardHistoryPacket: {
+    description: "Forward an exact native history packet for an active host-approved workspace transfer.",
+    args: z.tuple([z.object({
+      transferId: z.string().uuid(),
+      bytes: z.instanceof(Uint8Array),
+    }).strict()]),
+    returns: z.instanceof(Uint8Array),
+    authority: { principals: ["code"] },
+    website: { kind: "closed", reason: "Only the host-selected workspace history cell can send packets." },
+    tier: {
+      tier: "open",
+      session: "family",
+      rationale: "One transfer, sender and remote destination are verified by the host.",
+    },
+    agentFacing: false,
+    access: { sensitivity: "write" },
+  },
   retireEntity: {
     website: {
       kind: "eligible",

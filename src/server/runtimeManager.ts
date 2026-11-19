@@ -4336,6 +4336,10 @@ export class RuntimeManager {
     return this.internalDOPrograms().publication().chronolog === true;
   }
 
+  getChronologIngressToken(): string | null {
+    return this.hasChronolog ? this.chronologToken : null;
+  }
+
   async chronologRequest(input: unknown, signal?: AbortSignal): Promise<Response> {
     if (!this.hasChronolog) throw new Error("Chronolog is unavailable in this host build");
     let body = input;
