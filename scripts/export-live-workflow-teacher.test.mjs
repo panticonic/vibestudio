@@ -1801,6 +1801,99 @@ test("Tendril export rejects a durable change that the live page did not show", 
   );
 });
 
+test("Tendril export requires a new native failed history entry for rollback", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "tendril-live-retire-bad-during-intake";
+  const run = diagnostics.natlangTeacher;
+  const slotId = "live-board";
+  const phase = { key: "phase", value: "intake" };
+  const label = { key: "label", value: "Intake receipts" };
+  const presentation = { deviceId: "local:headless-host", slotId, state: "presented" };
+  const observed = [[], [phase], [phase, label], [phase, label], [phase, label]].map(
+    (rows, index) => ({
+      id: `page-${index}`,
+      slotId,
+      build: "board-v1",
+      revision: Math.min(index, 2),
+      stored: rows,
+      displayed: structuredClone(rows),
+      exposed: ["returnToIntake"],
+    })
+  );
+  const working = { entryKey: "entry-old", buildKey: "before-build", state: "proven" };
+  const failed = { entryKey: "entry-new", buildKey: "candidate-build", state: "failed" };
+  const panels = observed.map((_, index) => ({
+    buildKey: working.buildKey,
+    proof: index < 3 ? [working] : [failed, working],
+  }));
+  run.report = {
+    state: "verified",
+    presentation,
+    findings: observed.slice(1).map((page, index) => ({
+      status: index === 2 ? "rolled-back" : "verified",
+      evidence: [observed[index].id, page.id],
+      page: structuredClone(page),
+    })),
+  };
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  leaf.record.definition.name = "runTendril";
+  leaf.record.outcome = "done";
+  for (const [id, name, parent] of [
+    ["present", "openPresentation", leaf.callId],
+    ["select", "selectTendrilDevice", "present"],
+    ["steps", "runSteps", leaf.callId],
+    ...[0, 1, 2, 3].flatMap((index) => {
+      const branch = index === 2 ? "Build" : "Live";
+      return [
+        [`step-${index}`, `review${branch}Step`, "steps"],
+        [`verify-${index}`, `verify${branch}Step`, `step-${index}`],
+      ];
+    }),
+  ]) {
+    const call = structuredClone(leaf);
+    call.callId = call.summary.call_id = id;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    run.calls.push(call);
+  }
+  diagnostics.managedTendril = {
+    contextId: "ctx",
+    verification: {
+      contextId: "ctx",
+      caseId: "retire-bad-during-intake",
+      presentation,
+      observed,
+      passed: true,
+      checks: {
+        presentation: true,
+        baseline: true,
+        exactEffects: true,
+        report: true,
+        nativeBuilds: true,
+      },
+      builds: {
+        panels,
+        outcomes: [{ pageId: observed[3].id, outcome: "failed" }],
+        edits: [{ candidate: "broken-boot", commandId: "owned-source-edit" }],
+      },
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  panels[3].proof = [working];
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-no-failed-entry` }),
+    /Tendril build effects must include native proof/u
+  );
+});
+
 test("terminal checklist export binds the report to a new PTY after restart", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(

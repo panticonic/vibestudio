@@ -3722,7 +3722,7 @@ export class WorkspaceDO extends DurableObjectBase {
     return (
       (this.sql
         .exec(
-          `SELECT cursor, entry_key, entity_id, source, context_id, state_args, options
+          `SELECT slot_id, cursor, entry_key, entity_id, source, context_id, state_args, options, recorded_at
              FROM slot_history
             WHERE slot_id = ? AND entry_key = ?`,
           slotId,

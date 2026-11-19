@@ -1840,6 +1840,68 @@ function grimoireEvidence(execution, exercise, _scenario, workflow) {
   };
 }
 
+function failedTendrilCandidate(step) {
+  return step.kind === "update" && step.candidate === "broken-boot";
+}
+
+function tendrilBuildEvidence(steps, verification) {
+  const { builds, observed } = verification;
+  const edits = steps.flatMap((step) => (step.kind === "update" ? [step.candidate] : []));
+  const transitions = steps.flatMap((step, index) =>
+    ["update", "restore"].includes(step.kind) ? [{ step, index }] : []
+  );
+  if (transitions.length === 0) return true;
+  if (
+    verification.checks.nativeBuilds !== true ||
+    builds?.panels?.length !== observed.length ||
+    builds?.outcomes?.length !== transitions.length ||
+    builds?.edits?.length !== edits.length ||
+    !builds.edits.every(
+      ({ candidate, commandId }, index) =>
+        candidate === edits[index] && typeof commandId === "string" && commandId.length > 0
+    ) ||
+    new Set(builds.edits.map(({ commandId }) => commandId)).size !== edits.length
+  )
+    return false;
+  const proven = (panel, buildKey) =>
+    panel.proof?.some((entry) => entry.buildKey === buildKey && entry.state === "proven");
+  return transitions.every(({ step, index }, sequence) => {
+    const before = builds.panels[index];
+    const after = builds.panels[index + 1];
+    const outcome = builds.outcomes[sequence];
+    if (
+      !before?.buildKey ||
+      !after?.buildKey ||
+      outcome?.pageId !== observed[index + 1].id ||
+      !proven(before, before.buildKey) ||
+      !proven(after, after.buildKey)
+    )
+      return false;
+    if (step.kind === "restore")
+      return (
+        outcome.outcome === "restored" &&
+        before.buildKey !== after.buildKey &&
+        proven(before, after.buildKey)
+      );
+    const previous = new Set(before.proof.map(({ entryKey }) => entryKey));
+    const added = after.proof.filter(({ entryKey }) => !previous.has(entryKey));
+    if (failedTendrilCandidate(step))
+      return (
+        outcome.outcome === "failed" &&
+        before.buildKey === after.buildKey &&
+        added.some(
+          (entry) =>
+            entry.buildKey && entry.buildKey !== before.buildKey && entry.state === "failed"
+        )
+      );
+    return (
+      outcome.outcome === "proven" &&
+      before.buildKey !== after.buildKey &&
+      added.some((entry) => entry.state === "proven" && entry.buildKey === after.buildKey)
+    );
+  });
+}
+
 function tendrilEvidence(execution, exercise, _scenario, workflow) {
   const fixture = execution.diagnostics.managedTendril;
   const verified = fixture?.verification;
@@ -1888,16 +1950,24 @@ function tendrilEvidence(execution, exercise, _scenario, workflow) {
         if (effect) fields.set(effect.key, effect.value);
         return (
           (step.kind !== "invoke" || before.exposed?.includes(step.name)) &&
-          after.build === before.build &&
+          after.build ===
+            (step.kind === "restore" || (step.kind === "update" && !failedTendrilCandidate(step))
+              ? step.expectedBuild
+              : before.build) &&
           after.revision === before.revision + Number(Boolean(effect)) &&
           matchesFields(after.stored) &&
           matchesFields(after.displayed) &&
-          finding?.status === "verified" &&
+          finding?.status === (failedTendrilCandidate(step) ? "rolled-back" : "verified") &&
           isDeepStrictEqual(finding.evidence, [before.id, after.id]) &&
           isDeepStrictEqual(finding.page, after)
         );
       }),
     "Tendril findings must bind each effect to displayed and durable state on the assigned slot"
+  );
+
+  requireEvidence(
+    tendrilBuildEvidence(steps, verified),
+    "Tendril build effects must include native proof of the installed, failed and restored builds"
   );
 
   const children = (parent, name) =>
@@ -1915,9 +1985,13 @@ function tendrilEvidence(execution, exercise, _scenario, workflow) {
   const present = children(skill, "openPresentation")[0];
   const run = children(skill, "runSteps")[0];
   const live = children(run, "reviewLiveStep");
+  const builds = children(run, "reviewBuildStep");
+  const buildCount = steps.filter((step) => ["update", "restore"].includes(step.kind)).length;
   requireEvidence(
     children(present, "selectTendrilDevice").length === 1 &&
-      live.length === steps.length &&
+      live.length === steps.length - buildCount &&
+      builds.length === buildCount &&
+      builds.every((call) => children(call, "verifyBuildStep").length === 1) &&
       live.every((call) => children(call, "verifyLiveStep").length === 1),
     "Tendril capture must include device selection and the verification of each nested live operation"
   );

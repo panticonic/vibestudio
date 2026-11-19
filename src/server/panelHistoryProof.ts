@@ -52,6 +52,7 @@ export interface PanelHistoryProofDeps {
 
 export function createPanelHistoryProof(deps: PanelHistoryProofDeps): PanelHistoryProof {
   const inFlight = new Set<Promise<void>>();
+  const reverting = new Set<string>();
 
   const revertIfCurrent = async (attempt: PanelAttempt): Promise<void> => {
     const { slotId, runtimeEntityId } = attempt;
@@ -86,10 +87,16 @@ export function createPanelHistoryProof(deps: PanelHistoryProofDeps): PanelHisto
       state: "failed",
       failure: attempt.failure,
     });
-    // Revert once, on the transition that disproved a never-proven build.
-    if (result.changed && result.state === "failed") {
-      track(revertIfCurrent(attempt), `revert unproven build of ${attempt.slotId}`);
-    }
+    if (result.state !== "failed") return;
+    // Proof is shared by build key, but every slot that opens the failed build
+    // must return to its own proven history.
+    const key = JSON.stringify([attempt.slotId, attempt.runtimeEntityId]);
+    if (reverting.has(key)) return;
+    reverting.add(key);
+    track(
+      revertIfCurrent(attempt).finally(() => reverting.delete(key)),
+      `revert unproven build of ${attempt.slotId}`
+    );
   });
 
   return {
