@@ -59,6 +59,21 @@ export async function readWorkspaceHistoryReplayReceipt(
     .parse(await dispatch.dispatch(destination, "readHistoryReplayReceipt"));
 }
 
+const replayOwnersSchema = z.array(z.object({
+  contextId: z.string().min(1),
+  participantId: z.string().min(1),
+}).strict());
+
+export async function registerWorkspaceHistoryReplayOwners(
+  dispatch: Pick<DODispatch, "dispatch">,
+  destination: WorkspaceSourceProviderRef,
+  owners: z.infer<typeof replayOwnersSchema>
+) {
+  return replayOwnersSchema.parse(
+    await dispatch.dispatch(destination, "registerHistoryReplayOwners", { owners })
+  );
+}
+
 /** The caller owns source quiescence and admission of the destination's hosted executable. */
 export async function migrateWorkspaceHistory(input: {
   dispatch: Pick<DODispatch, "dispatch">;

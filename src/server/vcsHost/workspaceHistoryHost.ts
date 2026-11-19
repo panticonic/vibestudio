@@ -650,7 +650,7 @@ export async function mergeWorkspaceParticipantContext(input: WorkspaceHistoryPa
   return { head: reply.head, value: reply.value, result: reply.result };
 }
 
-function workspaceParticipant(caller: VerifiedCaller, ownerContextId: string | undefined): string {
+export function workspaceParticipantIdentity(caller: VerifiedCaller, ownerContextId: string | undefined): string {
   const invocation = caller.nativeInvocation;
   if (invocation) {
     // Every tool call in the same authenticated task reuses its working copy.
@@ -666,7 +666,7 @@ function workspaceParticipant(caller: VerifiedCaller, ownerContextId: string | u
 }
 
 export function requireWorkspaceParticipantOwner(input: Omit<WorkspaceHistoryParticipant, "dispatch">): string {
-  const participantId = workspaceParticipant(input.caller, input.ownerContextId);
+  const participantId = workspaceParticipantIdentity(input.caller, input.ownerContextId);
   const expected = { ...input.canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
   if (canonicalJson(input.owner) !== canonicalJson(expected)) {
     throw new Error("Workspace history belongs to a different participant");
@@ -832,7 +832,7 @@ export async function openWorkspaceParticipantContext(input: {
   const { dispatch, canonical, caller, ownerContextId, contextId } = input;
   if (!ownerContextId || !contextId)
     throw new Error("Workspace contexts require durable identities");
-  const participantId = workspaceParticipant(caller, ownerContextId);
+  const participantId = workspaceParticipantIdentity(caller, ownerContextId);
   const owner = { ...canonical, objectKey: `work-${sha256HexSyncText(participantId)}` };
   const targetId = canonicalEntityId({
     kind: "do",

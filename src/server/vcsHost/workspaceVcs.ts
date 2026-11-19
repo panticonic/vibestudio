@@ -117,6 +117,7 @@ import {
   mergeWorkspaceParticipantContext,
   observeAppliedWorkspacePublication,
   openWorkspaceParticipantContext,
+  workspaceParticipantIdentity,
   putPreparedWorkspaceContent,
   readWorkspaceCanonicalMain,
   readWorkspaceHistoryTemplateInstallation,
@@ -136,7 +137,9 @@ import {
   type WorkspaceHistorySource,
 } from "./workspaceHistoryHost.js";
 import type { WorkspaceRootTemplateBootstrap } from "../workspaceRootTemplateBootstrap.js";
-import { readWorkspaceHistoryReplayReceipt } from "./workspaceHistoryMigration.js";
+import {
+  readWorkspaceHistoryReplayReceipt, registerWorkspaceHistoryReplayOwners,
+} from "./workspaceHistoryMigration.js";
 import { retainedBlobDigests, withBlobContentLock } from "../storage/blobRetentions.js";
 
 /**
@@ -215,7 +218,7 @@ const CONTENT_OBSERVATION_CONCURRENCY = 32;
 const SLOW_SEMANTIC_EFFECT_MS = 500;
 
 type ParticipantHistoryAttachment = WorkspaceHistorySource & {
-  replayedWorkingHeads?: ReadonlyMap<string, string>;
+  replayedContextOwners?: ReadonlyMap<string, { caller: VerifiedCaller; ownerContextId: string }>;
   destroyRetiredStorage?: (owner: WorkspaceSourceProviderRef) => Promise<void>;
 };
 
@@ -380,7 +383,10 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
 
   private gadCaller: WorkspaceSemanticPort | null = null;
   private sourceProviderCaller: WorkspaceSourceProviderV1 | null = null;
-  private participantHistorySource: ParticipantHistoryAttachment | null = null;
+  private participantHistorySource: (WorkspaceHistorySource & {
+    replayedWorkingHeads: ReadonlyMap<string, { participantId: string; head: string }>;
+    destroyRetiredStorage?: ParticipantHistoryAttachment["destroyRetiredStorage"];
+  }) | null = null;
   private readonly protectedPublicationListeners = new Set<
     (event: ProtectedPublicationEvent) => void | Promise<void>
   >();
@@ -669,13 +675,37 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       }
       await readWorkspaceCanonicalMain(source);
       await this.recoverParticipantPublications(source);
-      const receipt = source.replayedWorkingHeads ? null
-        : await readWorkspaceHistoryReplayReceipt(source.dispatch, source.canonical);
-      const replayedWorkingHeads = source.replayedWorkingHeads ??
-        new Map(receipt?.contexts.map(({ id, working }) => [id, working]));
+      const receipt = await readWorkspaceHistoryReplayReceipt(source.dispatch, source.canonical);
+      const replayedWorkingHeads = new Map<string, { participantId: string; head: string }>();
+      const suppliedOwners = [...source.replayedContextOwners ?? []].map(
+        ([contextId, { caller, ownerContextId }]) => ({
+          contextId, participantId: workspaceParticipantIdentity(caller, ownerContextId),
+        })
+      );
+      if (!receipt && suppliedOwners.length > 0)
+        throw new Error("Workspace replay owners require an installed receipt");
+      if (receipt) {
+        const recordedOwners = await registerWorkspaceHistoryReplayOwners(
+          source.dispatch, source.canonical, suppliedOwners,
+        );
+        const givenOwners = new Map(suppliedOwners.map(({ contextId, participantId }) => [contextId, participantId]));
+        const tips = new Map(receipt.contexts.map(({ id, working }) => [id, working]));
+        for (const { contextId, participantId } of recordedOwners) {
+          const head = tips.get(contextId);
+          if (!head || replayedWorkingHeads.has(contextId) ||
+            (givenOwners.has(contextId) && givenOwners.get(contextId) !== participantId)) {
+            throw new Error("Workspace history returned an inconsistent replay owner");
+          }
+          replayedWorkingHeads.set(contextId, { participantId, head });
+          givenOwners.delete(contextId);
+        }
+        if (givenOwners.size > 0) throw new Error("Workspace history did not record all replay owners");
+      }
       this.participantHistorySource = {
-        ...source,
-        replayedWorkingHeads: new Map(replayedWorkingHeads),
+        dispatch: source.dispatch,
+        canonical: source.canonical,
+        replayedWorkingHeads,
+        ...(source.destroyRetiredStorage ? { destroyRetiredStorage: source.destroyRetiredStorage } : {}),
       };
     });
   }
@@ -725,10 +755,11 @@ export class WorkspaceVcs implements WorkspaceStateSource, BuildSourceProvider {
       if (this.contextHeads.get(input.ownerContextId) === null || this.contextHeads.get(input.contextId) === null) {
         throw new Error("Workspace participant context has retired");
       }
-      const replayedWorkingHead = source.replayedWorkingHeads?.get(input.contextId);
+      const replayed = source.replayedWorkingHeads.get(input.contextId);
+      const participantId = workspaceParticipantIdentity(input.caller, input.ownerContextId);
       const reservation = await openWorkspaceParticipantContext({
         ...source, ...input,
-        ...(replayedWorkingHead === undefined ? {} : { replayedWorkingHead }),
+        ...(replayed?.participantId === participantId ? { replayedWorkingHead: replayed.head } : {}),
       });
       return {
         dispatch: source.dispatch, canonical: source.canonical, ...reservation,
