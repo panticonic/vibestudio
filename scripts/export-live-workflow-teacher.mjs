@@ -270,6 +270,15 @@ const collectionWorkflow = {
   root: "organizeCollection",
   evidence: collectionEvidence,
 };
+const missionPlanningWorkflow = {
+  family: "personal-live-mission-planning",
+  workspace: "personal",
+  namespace: "vibestudio:personal:mission-planning",
+  group: "revision-bound-project-reconciliation",
+  validator: { template: "personal", path: "skills/mission-planning-runtime/managed.ts" },
+  root: "reconcileMissionPlan",
+  evidence: missionPlanningEvidence,
+};
 const browserHandoffWorkflow = {
   family: "personal-live-browser-handoff",
   workspace: "personal",
@@ -345,6 +354,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedCollectionWorlds },
     { managedBrowserLibraryWorlds, origin: browserLibraryOrigin },
     { managedBrowserHandoffWorlds },
+    { managedMissionPlanningWorlds },
     { managedGrimoireWorlds },
     { managedSpectroliteWorlds },
     { managedNewsWorlds },
@@ -376,6 +386,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "collection-worlds.ts",
       "browser-library-worlds.ts",
       "browser-handoff-worlds.ts",
+      "mission-planning-worlds.ts",
       "grimoire-worlds.ts",
       "spectrolite-worlds.ts",
       "news-worlds.ts",
@@ -501,6 +512,14 @@ export async function loadLiveTeacherCases(checkouts) {
   for (const { id, request, expected } of managedCollectionWorlds) {
     cases.set(`collection-live-${id}`, {
       ...collectionWorkflow,
+      caseId: id,
+      request,
+      expected,
+    });
+  }
+  for (const { id, request, expected } of managedMissionPlanningWorlds) {
+    cases.set(`mission-planning-live-${id}`, {
+      ...missionPlanningWorkflow,
       caseId: id,
       request,
       expected,
@@ -2066,6 +2085,126 @@ function tendrilEvidence(execution, exercise, _scenario, workflow) {
       panel_id: presentation.slotId,
     },
     checks: verified.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function missionPlanningEvidence(execution, exercise, _scenario, workflow) {
+  const fixture = execution.diagnostics.managedMissionPlanning;
+  const verification = fixture?.verification;
+  const { baseline, transitions, assignments, objectKey } = verification ?? {};
+  const findings = exercise.report?.findings;
+  const cards = assignments?.cards;
+  const projects = assignments?.projects;
+  const snapshotIds = new Set();
+  const acceptSnapshot = (snapshot) => {
+    if (
+      snapshot?.complete !== true ||
+      typeof snapshot.id !== "string" ||
+      !snapshot.id ||
+      snapshotIds.has(snapshot.id) ||
+      !Array.isArray(snapshot.cards) ||
+      !isDeepStrictEqual(snapshot.projects, baseline.projects)
+    )
+      return false;
+    snapshotIds.add(snapshot.id);
+    return true;
+  };
+  let before = baseline;
+  let applied = 0;
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification.contextId === fixture.contextId &&
+      verification.caseId === workflow.caseId &&
+      verification.passed === true &&
+      objectKey === `natlang-mission-planning-${fixture.contextId}` &&
+      ["baseline", "outside", "exactEffects", "report"].every(
+        (check) => verification.checks?.[check] === true
+      ) &&
+      cards &&
+      projects &&
+      Array.isArray(transitions) &&
+      Array.isArray(findings) &&
+      findings.length === workflow.expected.length &&
+      acceptSnapshot(before) &&
+      workflow.expected.every((plan, index) => {
+        const finding = findings[index];
+        if (plan.kind === "held") {
+          return isDeepStrictEqual(finding, {
+            status: "held",
+            cardId: null,
+            blockers: plan.codes.map((code) => cards[code] ?? code),
+            evidence: [before.id],
+          });
+        }
+        const cardId = cards[plan.key];
+        const previous = before.cards.find(({ id }) => id === cardId);
+        if (typeof cardId !== "string" || !Number.isInteger(previous?.revision)) return false;
+        const change = { kind: plan.kind, cardId, revision: previous.revision };
+        if (plan.kind === "prerequisites")
+          change.dependencies = plan.requires.map((key) => cards[key]);
+        if (plan.kind === "relocate") change.projectId = projects[plan.project];
+        const receipt = transitions[applied++];
+        if (!isDeepStrictEqual(receipt?.change, change) || !acceptSnapshot(receipt?.after))
+          return false;
+        const { after } = receipt;
+        const updated = after.cards.find(({ id }) => id === cardId);
+        const expected = {
+          ...previous,
+          revision: previous.revision + 1,
+          updatedAt: updated?.updatedAt,
+        };
+        if (plan.kind === "prerequisites") expected.dependencies = change.dependencies;
+        if (plan.kind === "relocate") expected.projectId = change.projectId;
+        if (plan.kind === "ready") expected.status = "ready";
+        const byId = new Map(before.cards.map((card) => [card.id, card]));
+        if (
+          after.cards.length !== before.cards.length ||
+          !after.cards.every((card) =>
+            isDeepStrictEqual(card, card.id === cardId ? expected : byId.get(card.id))
+          ) ||
+          !isDeepStrictEqual(finding, {
+            status: "verified",
+            cardId,
+            blockers: [],
+            evidence: [before.id, after.id],
+          })
+        )
+          return false;
+        before = after;
+        return true;
+      }) &&
+      applied === transitions.length,
+    "Mission planning must link each finding to the assigned live card and observed revision"
+  );
+  const children = (parent, name) =>
+    parent
+      ? exercise.calls.filter(
+          ({ record }) =>
+            record.parent_call_id === parent.callId &&
+            record.definition?.name === name &&
+            record.outcome === "done"
+        )
+      : [];
+  const root = exercise.calls.find(({ callId }) => callId === exercise.rootCallIds[0]);
+  const skill = children(root, workflow.root)[0];
+  const plans = children(skill, "planCardChange");
+  const writes = children(skill, "applyCardChange");
+  requireEvidence(
+    root?.record.definition?.name === "runWorkflow" &&
+      plans.length === workflow.request.proposals.length &&
+      plans.every((call) => children(call, "locateCard").length === 1) &&
+      writes.length === transitions.length &&
+      writes.every((call) => {
+        const verified = children(call, "verifyCardChange");
+        return verified.length === 1 && children(verified[0], "verifyPlanningFields").length === 1;
+      }),
+    "Mission planning capture must include scoped card resolution and nested verification of every write"
+  );
+  return {
+    world: { context_id: fixture.contextId, mission_store: objectKey },
+    checks: verification.checks,
     evidence: { workspace: { fixture } },
   };
 }

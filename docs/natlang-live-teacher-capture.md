@@ -76,6 +76,10 @@ Personal Browser library cases recover a visited link, organize persisted bookma
 an exact duplicate while keeping its assigned copy. The harness uses a fresh browser-data
 namespace and checks surviving bookmark metadata, visit history and an out-of-scope record.
 
+Personal Mission planning cases reconcile dependencies, relocate cards and prepare Inbox work
+for Ready in an assigned Mission Control store. The verifier compares each revision and
+confirms stable card IDs, preserved fields and unchanged unrelated records.
+
 Personal Browser handoffs compose Browser library and Collection conductor in one shared
 workflow. Collection writes require a live readback of the retained bookmark. The exporter
 checks skill order and binds the exact bookmark URL to the persisted note on the assigned panel.

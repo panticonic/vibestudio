@@ -118,6 +118,7 @@ test("authored template worlds flow into the collector without losing original s
       ["collection-worlds", "managedCollectionWorlds", []],
       ["browser-library-worlds", "managedBrowserLibraryWorlds", []],
       ["browser-handoff-worlds", "managedBrowserHandoffWorlds", []],
+      ["mission-planning-worlds", "managedMissionPlanningWorlds", []],
       [
         "news-worlds",
         "managedNewsWorlds",
@@ -1733,6 +1734,85 @@ test("Spectrolite export rejects a preview from another canonical revision", asy
   );
 });
 
+test("Mission planning export rejects a write carrying an earlier card revision", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "mission-planning-live-implement-after-design";
+  const pinned = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pinned, workspace: "personal" }));
+
+  const run = diagnostics.natlangTeacher;
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, leaf] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  leaf.record.definition.name = "reconcileMissionPlan";
+  leaf.record.outcome = "done";
+  for (const [id, name, parent] of [
+    ["plan-1", "planCardChange", leaf.callId],
+    ["locate-1", "locateCard", "plan-1"],
+    ["plan-2", "planCardChange", leaf.callId],
+    ["locate-2", "locateCard", "plan-2"],
+    ["apply", "applyCardChange", leaf.callId],
+    ["verify", "verifyCardChange", "apply"],
+    ["verify-fields", "verifyPlanningFields", "verify"],
+  ]) {
+    const call = structuredClone(leaf);
+    call.callId = call.summary.call_id = id;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    run.calls.push(call);
+  }
+  const cardId = "owned-implementation";
+  const projects = [{ id: "owned-project", name: "Build", archived: false }];
+  const original = {
+    id: cardId,
+    projectId: "owned-project",
+    title: "Implement migration",
+    revision: 3,
+    status: "inbox",
+    dependencies: ["approved-design"],
+    automationId: null,
+    updatedAt: 100,
+  };
+  const snapshot = (id, card) => ({ id, complete: true, projects, cards: [card] });
+  const change = { kind: "ready", cardId, revision: 3 };
+  run.report = {
+    findings: [
+      { status: "verified", cardId, blockers: [], evidence: ["before", "after"] },
+      { status: "held", cardId: null, blockers: [cardId], evidence: ["after"] },
+    ],
+  };
+  diagnostics.managedMissionPlanning = {
+    contextId: "ctx",
+    verification: {
+      contextId: "ctx",
+      caseId: "implement-after-design",
+      objectKey: "natlang-mission-planning-ctx",
+      baseline: snapshot("before", original),
+      transitions: [
+        {
+          change,
+          after: snapshot("after", { ...original, revision: 4, status: "ready", updatedAt: 200 }),
+        },
+      ],
+      assignments: { cards: { implement: cardId }, projects: { build: "owned-project" } },
+      passed: true,
+      checks: { baseline: true, outside: true, exactEffects: true, report: true },
+    },
+  };
+  await save();
+  await exportLiveTeacherWorkflow({ ...options, cases });
+  change.revision = 2;
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases, out: `${options.out}-stale` }),
+    /Mission planning must link each finding to the assigned live card and observed revision/u
+  );
+});
+
 test("Browser handoff rejects a receipt from an earlier library snapshot", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
@@ -2285,6 +2365,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["collection-worlds", "export const managedCollectionWorlds = [];"],
       ["browser-library-worlds", "export const managedBrowserLibraryWorlds = [];"],
       ["browser-handoff-worlds", "export const managedBrowserHandoffWorlds = [];"],
+      ["mission-planning-worlds", "export const managedMissionPlanningWorlds = [];"],
       ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
       ["provenance-history-worlds", "export const managedProvenanceHistoryWorlds = [];"],
       ["runtime-program-worlds", "export const managedRuntimeProgramWorlds = [];"],
