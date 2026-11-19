@@ -158,6 +158,16 @@ Headless session cases reconnect to owned channels and compare the fresh client 
 with the durable message log. They check preserved order, accepted retry identities,
 first-write-wins content, distinct submissions, and wrong-channel continuations. Each
 checkpoint is inspected by the shared workflow's nested replay-review stages.
+The runtime catalog retains the method allowlist for explicitly supplied workflow services.
+Their generated model declarations come from the owning template's TypeScript signatures.
+The generation check verifies catalog membership for every configured skill's service scopes.
+The remote workspace workflow is available under `remoteAccess/openRemoteWorkspace`. A
+trusted host caller creates the assignment with `bindRemoteWorkspaceAccess` in
+`src/cli/remoteAccessWorkflow.ts`. Pass its request as the input of a domain work item and
+its services as the explicit bindings when loading the shared workflow. The profile path,
+invite, and target remain with the host. The workflow sees only status receipts and the
+verified workspace identity. The local smoke tests a fresh pairing and an existing-profile continuation on a disposable
+managed server. The harness retires the entire instance and its test device.
 Testkit cleanup cases open real scratch directories, workers, panels, and CDP clients in an
 owned workspace. They retain deferred registration order and probe the remaining resources
 after Testkit finishes. The Natlang review reports test outcome, cleanup acknowledgements, and
