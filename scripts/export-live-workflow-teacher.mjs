@@ -270,6 +270,16 @@ const collectionWorkflow = {
   root: "organizeCollection",
   evidence: collectionEvidence,
 };
+const browserHandoffWorkflow = {
+  family: "personal-live-browser-handoff",
+  workspace: "personal",
+  namespace: "vibestudio:personal:browser-handoff",
+  group: "verified-reference-to-panel",
+  validator: { template: "personal", path: "skills/browser-handoff-runtime/index.ts" },
+  root: "runWorkflow",
+  skills: ["curateBrowserLibrary", "organizeCollection"],
+  evidence: browserHandoffEvidence,
+};
 const terminalChecklistWorkflow = {
   family: "workspace-terminal-checklist",
   namespace: "vibestudio:terminal-apps",
@@ -334,6 +344,7 @@ export async function loadLiveTeacherCases(checkouts) {
     { managedTendrilWorlds },
     { managedCollectionWorlds },
     { managedBrowserLibraryWorlds, origin: browserLibraryOrigin },
+    { managedBrowserHandoffWorlds },
     { managedGrimoireWorlds },
     { managedSpectroliteWorlds },
     { managedNewsWorlds },
@@ -364,6 +375,7 @@ export async function loadLiveTeacherCases(checkouts) {
       "tendril-worlds.ts",
       "collection-worlds.ts",
       "browser-library-worlds.ts",
+      "browser-handoff-worlds.ts",
       "grimoire-worlds.ts",
       "spectrolite-worlds.ts",
       "news-worlds.ts",
@@ -492,6 +504,19 @@ export async function loadLiveTeacherCases(checkouts) {
       caseId: id,
       request,
       expected,
+    });
+  }
+  for (const assignment of managedBrowserHandoffWorlds) {
+    const library = cases.get(`browser-library-live-${assignment.library}`);
+    if (!library) throw new Error(`Unknown assigned library ${assignment.library}`);
+    cases.set(`browser-handoff-live-${assignment.id}`, {
+      ...browserHandoffWorkflow,
+      caseId: assignment.id,
+      assignment,
+      library,
+      sourceGroups: [browserHandoffWorkflow, browserLibraryWorkflow, collectionWorkflow].flatMap(
+        workflowSourceGroups
+      ),
     });
   }
   for (const { id, request } of managedTendrilWorlds) {
@@ -2041,6 +2066,83 @@ function tendrilEvidence(execution, exercise, _scenario, workflow) {
       panel_id: presentation.slotId,
     },
     checks: verified.checks,
+    evidence: { workspace: { fixture } },
+  };
+}
+
+function browserHandoffEvidence(execution, exercise, scenario, workflow) {
+  const fixture = execution.diagnostics.managedBrowserHandoff;
+  const verification = fixture?.verification;
+  const { browser, collection, receipts } = verification ?? {};
+  const results = exercise.report?.results;
+  const last = browser?.transitions?.at(-1)?.after;
+  const { assignment } = workflow;
+  const url = browser?.origin + assignment.path;
+  const note = `${assignment.heading}: ${url}`;
+  const bookmarkId = browser?.assignments?.[assignment.bookmarkKey];
+  const panelId = collection?.assignments?.[assignment.panel.key];
+  requireEvidence(
+    typeof fixture?.contextId === "string" &&
+      fixture.contextId === execution.provenance?.contextId &&
+      verification?.contextId === fixture.contextId &&
+      verification.caseId === workflow.caseId &&
+      verification.passed === true &&
+      ["browser", "collection", "reports", "dependency"].every(
+        (check) => verification.checks?.[check] === true
+      ) &&
+      Array.isArray(results) &&
+      results.length === 2 &&
+      results[0]?.domain === "browserLibrary" &&
+      results[0]?.operation === "curateBrowserLibrary" &&
+      results[1]?.domain === "collection" &&
+      results[1]?.operation === "organizeCollection" &&
+      isDeepStrictEqual(exercise.report.remaining, []) &&
+      typeof last?.id === "string" &&
+      Number.isSafeInteger(bookmarkId) &&
+      last.bookmarks?.some((row) => row.id === bookmarkId && row.url === url) &&
+      typeof panelId === "string" &&
+      panelId === verification.panelId &&
+      verification.note === note &&
+      Array.isArray(receipts) &&
+      receipts.length === 2 &&
+      receipts.every((receipt) =>
+        isDeepStrictEqual(receipt, { snapshotId: last.id, bookmarkId, url })
+      ) &&
+      collection.transitions
+        ?.at(-1)
+        ?.after?.nodes?.some((node) => node.id === panelId && node.note === note),
+    "Browser handoff must bind the persisted panel note to the verified browser bookmark"
+  );
+  const libraryEvidence = browserLibraryEvidence(
+    {
+      ...execution,
+      diagnostics: {
+        managedBrowserLibrary: { contextId: fixture.contextId, verification: browser },
+      },
+    },
+    { ...exercise, report: results[0].report },
+    scenario,
+    workflow.library
+  );
+  const panelEvidence = collectionEvidence(
+    {
+      ...execution,
+      diagnostics: {
+        managedCollection: { contextId: fixture.contextId, verification: collection },
+      },
+    },
+    { ...exercise, report: results[1].report },
+    scenario,
+    {
+      ...collectionWorkflow,
+      caseId: assignment.id,
+      request: { actions: [{ kind: "note", text: note }] },
+      expected: [{ kind: "note", key: assignment.panel.key }],
+    }
+  );
+  return {
+    world: { ...libraryEvidence.world, ...panelEvidence.world },
+    checks: verification.checks,
     evidence: { workspace: { fixture } },
   };
 }

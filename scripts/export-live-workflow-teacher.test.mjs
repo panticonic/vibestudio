@@ -117,6 +117,7 @@ test("authored template worlds flow into the collector without losing original s
       ["tendril-worlds", "managedTendrilWorlds", []],
       ["collection-worlds", "managedCollectionWorlds", []],
       ["browser-library-worlds", "managedBrowserLibraryWorlds", []],
+      ["browser-handoff-worlds", "managedBrowserHandoffWorlds", []],
       [
         "news-worlds",
         "managedNewsWorlds",
@@ -1732,6 +1733,79 @@ test("Spectrolite export rejects a preview from another canonical revision", asy
   );
 });
 
+test("Browser handoff rejects a receipt from an earlier library snapshot", async (t) => {
+  const { options, diagnostics, entry, save } = await fixture(t);
+  const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
+    path.resolve(import.meta.dirname, "..")
+  );
+  const cases = await loadLiveTeacherCases(checkouts);
+  entry.test.name = "browser-handoff-live-latest-migration";
+  const pinned = JSON.parse(await readFile(options.pins, "utf8"));
+  await writeFile(options.pins, JSON.stringify({ ...pinned, workspace: "personal" }));
+  const world = cases.get(entry.test.name);
+  assert.equal(workflowSourceGroups(world).length, 3);
+
+  const run = diagnostics.natlangTeacher;
+  run.programPath = "skills/vibestudio-workflows/runWorkflow.nl";
+  const [root, sample] = run.calls;
+  root.record.definition.name = "runWorkflow";
+  run.calls = [root];
+  for (const [id, name, parent, start, end] of [
+    ["library", "curateBrowserLibrary", root.callId, 1, 3],
+    ["library-plan", "planLibraryChange", "library", 2, 3],
+    ["collection", "organizeCollection", root.callId, 4, 6],
+    ["collection-plan", "planCollectionChange", "collection", 5, 6],
+  ]) {
+    const call = structuredClone(sample);
+    call.callId = call.summary.call_id = id;
+    call.record.definition.name = name;
+    call.record.parent_call_id = parent;
+    call.record.outcome = "done";
+    call.record.started_at = new Date(start * 1000).toISOString();
+    call.record.ended_at = new Date(end * 1000).toISOString();
+    run.calls.push(call);
+  }
+  run.report = {
+    results: [
+      { kind: "domain", domain: "browserLibrary", operation: "curateBrowserLibrary", report: {} },
+      { kind: "domain", domain: "collection", operation: "organizeCollection", report: {} },
+    ],
+    remaining: [],
+  };
+  const origin = "https://scope.library.vibestudio.invalid";
+  const url = origin + world.assignment.path;
+  const note = `${world.assignment.heading}: ${url}`;
+  diagnostics.managedBrowserHandoff = {
+    contextId: "ctx",
+    verification: {
+      contextId: "ctx",
+      caseId: world.caseId,
+      passed: true,
+      checks: { browser: true, collection: true, reports: true, dependency: true },
+      browser: {
+        origin,
+        assignments: { newNotes: 17 },
+        transitions: [{ after: { id: "latest", bookmarks: [{ id: 17, url }] } }],
+      },
+      collection: {
+        assignments: { inbox: "owned-inbox" },
+        transitions: [{ after: { nodes: [{ id: "owned-inbox", note }] } }],
+      },
+      panelId: "owned-inbox",
+      note,
+      receipts: [
+        { snapshotId: "earlier", bookmarkId: 17, url },
+        { snapshotId: "latest", bookmarkId: 17, url },
+      ],
+    },
+  };
+  await save();
+  await assert.rejects(
+    exportLiveTeacherWorkflow({ ...options, cases }),
+    /Browser handoff must bind the persisted panel note to the verified browser bookmark/u
+  );
+});
+
 test("Browser library export rejects a bookmark from another origin", async (t) => {
   const { options, diagnostics, entry, save } = await fixture(t);
   const { checkouts } = templateConfig.requireDevelopmentTemplateCheckouts(
@@ -2210,6 +2284,7 @@ test("workspace integration binds conflict source and verified state without bro
       ["tendril-worlds", "export const managedTendrilWorlds = [];"],
       ["collection-worlds", "export const managedCollectionWorlds = [];"],
       ["browser-library-worlds", "export const managedBrowserLibraryWorlds = [];"],
+      ["browser-handoff-worlds", "export const managedBrowserHandoffWorlds = [];"],
       ["google-setup-worlds", "export const managedGoogleSetupWorlds = [];"],
       ["provenance-history-worlds", "export const managedProvenanceHistoryWorlds = [];"],
       ["runtime-program-worlds", "export const managedRuntimeProgramWorlds = [];"],

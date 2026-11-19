@@ -76,6 +76,10 @@ Personal Browser library cases recover a visited link, organize persisted bookma
 an exact duplicate while keeping its assigned copy. The harness uses a fresh browser-data
 namespace and checks surviving bookmark metadata, visit history and an out-of-scope record.
 
+Personal Browser handoffs compose Browser library and Collection conductor in one shared
+workflow. Collection writes require a live readback of the retained bookmark. The exporter
+checks skill order and binds the exact bookmark URL to the persisted note on the assigned panel.
+
 Personal Collection conductor cases organize real panel subtrees. The shared workflow resolves
 references against the latest tree, applies each accepted change, and verifies live titles,
 notes, parentage and sibling order. The outcome checks also cover ambiguous references,
